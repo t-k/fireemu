@@ -3870,6 +3870,17 @@ impl<'a> Evaluator<'a> {
             } => self.call(callee, args, compiled_regex.as_ref()),
             ExprKind::Unary { op, expr } => {
                 let v = self.eval(expr)?;
+                let negation_boundary = matches!(v, RulesValue::Int(i) if i == i64::MIN)
+                    || matches!(v, RulesValue::Float(f) if f.to_bits() == (-(2f64.powi(63))).to_bits());
+                if self.query_proof
+                    && *op == UnaryOp::Neg
+                    && negation_boundary
+                    && self.query_numeric_expression_source(expr)
+                {
+                    // `-i64::MIN` raises, while the equivalent double representative can be
+                    // negated successfully. Do not authorize from either representative.
+                    return Err(EvalError::Unknown);
+                }
                 match (op, v) {
                     (_, v) if undetermined(&v) => Err(EvalError::Unknown),
                     (UnaryOp::Not, RulesValue::Bool(b)) => Ok(RulesValue::Bool(!b)),
@@ -4453,6 +4464,26 @@ impl<'a> Evaluator<'a> {
             ExprKind::Member { object, name } => {
                 if let ExprKind::Ident(ns) = object.kind() {
                     if NAMESPACES.contains(&ns.as_str()) && !self.has_binding(ns.as_str()) {
+                        let integer_only_argument = match (ns.as_str(), name.as_str()) {
+                            ("timestamp", "date") => Some([0, 1, 2].as_slice()),
+                            ("timestamp" | "duration", "value") => Some([0].as_slice()),
+                            ("duration", "time") => Some([0, 1, 2, 3].as_slice()),
+                            _ => None,
+                        };
+                        if self.query_proof
+                            && integer_only_argument.is_some_and(|indices| {
+                                indices.iter().any(|&index| {
+                                    args.get(index).is_some_and(|argument| {
+                                        self.query_numeric_expression_source(argument)
+                                    })
+                                })
+                            })
+                        {
+                            // These built-ins require an integer at runtime. A query equality
+                            // representative may be a double with the same numeric value, which
+                            // would raise instead of succeeding with the integer representative.
+                            return Err(EvalError::Unknown);
+                        }
                         if self.query_proof
                             && ns == "math"
                             && args.iter().any(|argument| {

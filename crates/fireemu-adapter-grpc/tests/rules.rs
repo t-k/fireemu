@@ -19,7 +19,9 @@ use fireemu_core_firestore::index::{
     PlanningContext,
 };
 use fireemu_core_firestore::path::DocumentPath;
-use fireemu_core_rules::eval::DocumentAccess;
+use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope};
+use fireemu_core_firestore::value::Value;
+use fireemu_core_rules::eval::{DocumentAccess, NoDocumentAccess};
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_rules::value::RulesValue;
 use fireemu_core_session::clock::VirtualClock;
@@ -208,6 +210,44 @@ fn tenant_tokens_build_a_firestore_rules_principal() {
         enforcer.principal_from_authorization(Some(&format!("Bearer {token}"))),
         Ok(Principal::User(_))
     ));
+}
+
+#[test]
+fn query_authorization_rejects_numeric_error_sensitive_rules() {
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let rules = Arc::new(RulesetSlot::new(
+        LoadedRules::from_source(
+            "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /notes/{id} { allow list: if timestamp.value(resource.data.value) is timestamp; } } }",
+        )
+        .unwrap(),
+    ));
+    let enforcer = RulesEnforcer::new(rules, auth, clock);
+    let project = ProjectId::try_new("demo-app").unwrap();
+    let database = DatabaseId::default_database();
+    let parent = Parent {
+        project,
+        database,
+        document: None,
+    };
+    let mut query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("notes").unwrap(),
+    ));
+    query.filter = Some(FilterExpr::Field {
+        field: FieldPath::parse("value").unwrap(),
+        op: FieldOp::Equal,
+        value: Value::Integer(1),
+    });
+
+    let error = enforcer
+        .authorize_query(&Principal::Anonymous, &parent, &query, &NoDocumentAccess)
+        .expect_err("an integer query representative must not prove an integer-only builtin");
+    assert_eq!(error.code(), tonic::Code::PermissionDenied);
 }
 
 struct Harness {

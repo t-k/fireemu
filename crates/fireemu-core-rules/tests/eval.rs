@@ -1730,6 +1730,62 @@ fn query_derived_numeric_arithmetic_does_not_prove_concrete_result() {
 }
 
 #[test]
+fn query_proof_rejects_numeric_representation_sensitive_integer_builtins() {
+    let rules = |condition: &str| {
+        format!(
+            "rules_version = '2'; service cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {condition}; }} }} }}"
+        )
+    };
+    for (field, condition) in [
+        ("value", "timestamp.value(resource.data.value) is timestamp"),
+        (
+            "year",
+            "timestamp.date(resource.data.year, 1, 1) is timestamp",
+        ),
+        (
+            "magnitude",
+            "duration.value(resource.data.magnitude, 's') is duration",
+        ),
+        (
+            "hours",
+            "duration.time(resource.data.hours, 0, 0, 0) is duration",
+        ),
+    ] {
+        let query = abstract_ctx(
+            "/databases/(default)/documents/notes/fireemu-placeholder",
+            vec![(field, RulesValue::Int(1))],
+        );
+        assert!(
+            !allows(&rules(condition), &query),
+            "{condition} must not use an integer representative for an integer-only builtin"
+        );
+    }
+    let normalized = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::Int(1))],
+    );
+    assert!(allows(
+        &rules("timestamp.value(int(resource.data.value)) is timestamp"),
+        &normalized
+    ));
+    assert!(allows(
+        &rules("duration.time(1, 2, 3, 4) is duration"),
+        &normalized
+    ));
+}
+
+#[test]
+fn query_proof_rejects_unary_negation_at_the_integer_boundary() {
+    let query = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("value", RulesValue::Float(-(2f64.powi(63))))],
+    );
+    let rules = "rules_version = '2'; service cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if (-resource.data.value) == 9223372036854775808.0; } } }";
+
+    assert!(!allows(rules, &query));
+}
+
+#[test]
 fn query_provenance_reuses_repeated_function_declarations() {
     use std::fmt::Write as _;
 

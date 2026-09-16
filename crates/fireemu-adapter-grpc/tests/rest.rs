@@ -2850,6 +2850,7 @@ fn a_phantom_rest_write_succeeds_after_the_query_transaction_finishes() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn rest_retry_transaction_starts_fresh_transaction_and_replay_is_refused() {
     let s = state(None);
     let locked = "projects/demo-app/databases/(default)/documents/retry-contention/locked";

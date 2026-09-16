@@ -360,7 +360,7 @@ def render() -> str:
         + "; ".join(f"{kind}: {count}" for kind, count in sorted(counts.items()))
         + ".",
         "",
-        "The versioned [Firestore v1 gRPC denominator companion](../../denominators/firestore-v1-grpc-2026-09-16.v2.json) is a separate, immutable structural inventory bound to the pinned protobuf source, generator and REST denominator parents. Its 468 Standard/Native rows and 34 Enterprise exclusions remain `waiting-oracle`; these rows do not promote production compatibility evidence.",
+        "The versioned [Firestore v1 gRPC denominator companion](../../spec/compatibility/denominators/firestore-v1-grpc-2026-09-16.v2.json) is a separate, immutable structural inventory bound to the pinned protobuf source, generator and REST denominator parents. Its 468 Standard/Native rows and 34 Enterprise exclusions remain `waiting-oracle`; these rows do not promote production compatibility evidence.",
         "",
         "## Fresh observations",
         "",

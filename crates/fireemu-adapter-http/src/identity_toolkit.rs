@@ -5439,7 +5439,8 @@ fn batch_row_password(row: &Value) -> Result<Option<(String, String)>, JsonRespo
     let Some((salt, password)) = rest.split_once(":password=") else {
         return Ok(None);
     };
-    AuthStore::validate_password(password).map_err(|e| auth_error(&e))?;
+    // A fakeHash is an already-imported credential. Like the trusted export importer, keep
+    // its recorded password intact even when it predates the current creation policy.
     Ok(Some((salt.to_owned(), password.to_owned())))
 }
 
@@ -5702,13 +5703,28 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
             // and a failed import must leave the existing account untouched.
             let mut replacement = store.clone();
             let _ = replacement.delete_user_by_id(&user.local_id);
-            match replacement.import_user(user) {
+            let imported = if row
+                .get("passwordHash")
+                .and_then(Value::as_str)
+                .is_some_and(|hash| hash.starts_with("fakeHash:salt="))
+            {
+                replacement.import_user_trusted(user)
+            } else {
+                replacement.import_user(user)
+            };
+            match imported {
                 Ok(uid) => {
                     *store = replacement;
                     Ok(uid)
                 }
                 Err(error) => Err(error),
             }
+        } else if row
+            .get("passwordHash")
+            .and_then(Value::as_str)
+            .is_some_and(|hash| hash.starts_with("fakeHash:salt="))
+        {
+            store.import_user_trusted(user)
         } else {
             store.import_user(user)
         };

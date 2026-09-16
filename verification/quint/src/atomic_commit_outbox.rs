@@ -658,7 +658,7 @@ fn build_functions_runtime(executor: &tokio::runtime::Runtime) -> Arc<FunctionsR
         command: vec!["python3".to_owned(), script.to_string_lossy().into_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let runner = executor
         .block_on(Runner::spawn_spec(&spawn))

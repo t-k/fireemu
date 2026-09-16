@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "ed7acb486dc950697ef562d645a8091396669812f2d5556001c86121ba87bd6f",
+  "sourceCommit": "1ac61055283018857864efc877d9d7021e255832",
+  "scope": "The 21 auth-password-maximum revision 1 cases, limited to the recorded artifact, configuration and corpus; end-user token REST routes, no tenant, local strict profile and recorded production minimum 6 / maximum 4096 password policy. Approved as redacted observations of a generated 4096-character password update and signin, last-character and prefix signin rejection, 4097-character update refusal, subsequent fixed-credential use, selected account-field preservation and recorded deletion/process termination. This does not approve administrator-only field authorization.",
+  "cases": [
+    "signup",
+    "baseline-signin",
+    "maximum-password-change",
+    "maximum-token-lookup",
+    "old-password-rejected",
+    "maximum-password-signin",
+    "maximum-password-lookup",
+    "maximum-token-refresh",
+    "maximum-refreshed-lookup",
+    "tail-password-rejected",
+    "state-after-tail",
+    "prefix-password-rejected",
+    "state-after-prefix",
+    "oversize-password-rejected",
+    "state-after-oversize",
+    "preserved-maximum-signin",
+    "preserved-maximum-lookup",
+    "preserved-maximum-refresh",
+    "preserved-refreshed-lookup",
+    "delete",
+    "deleted-account-absent"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-10",
+  "decision": "approve"
+}

@@ -1,0 +1,586 @@
+{
+  "kind": "second45-local-admission-v1",
+  "seed": 20260913,
+  "project": "fireemu-35fe6",
+  "projectNumber": "592603257417",
+  "authCases": [
+    {
+      "id": "second/auth/01",
+      "dimension": "selector",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": "$sentinel"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/02",
+      "dimension": "selector",
+      "actor": "b",
+      "selector": "self",
+      "fields": {
+        "displayName": "$sentinel"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/03",
+      "dimension": "selector",
+      "actor": "b",
+      "selector": "other",
+      "fields": {
+        "displayName": "$sentinel"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/04",
+      "dimension": "selector",
+      "actor": "b",
+      "selector": "null",
+      "fields": {
+        "displayName": "$sentinel"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/05",
+      "dimension": "selector",
+      "actor": "b",
+      "selector": "number",
+      "fields": {
+        "displayName": "$sentinel"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/06",
+      "dimension": "selector",
+      "actor": "b",
+      "selector": "object",
+      "fields": {
+        "displayName": "$sentinel"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/07",
+      "dimension": "selector",
+      "actor": "b",
+      "selector": "array",
+      "fields": {
+        "displayName": "$sentinel"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/08",
+      "dimension": "displayName-shape",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": "$missing"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/09",
+      "dimension": "displayName-shape",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": null
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/10",
+      "dimension": "displayName-shape",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": 0
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/11",
+      "dimension": "displayName-shape",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": false
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/12",
+      "dimension": "displayName-shape",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": []
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/13",
+      "dimension": "displayName-shape",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": {}
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/14",
+      "dimension": "verification-shape",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": "$sentinel",
+        "emailVerified": true
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/15",
+      "dimension": "verification-shape",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": "$sentinel",
+        "emailVerified": false
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/16",
+      "dimension": "verification-shape",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": "$sentinel",
+        "emailVerified": null
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/17",
+      "dimension": "verification-shape",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": "$sentinel",
+        "emailVerified": "true"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/18",
+      "dimension": "verification-shape",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": "$sentinel",
+        "emailVerified": {}
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/19",
+      "dimension": "restricted-mix",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": "$sentinel",
+        "emailVerified": true,
+        "customAttributes": "{\"admin\":true}"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/20",
+      "dimension": "restricted-mix",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": "$sentinel",
+        "emailVerified": true,
+        "customAttributes": ""
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/21",
+      "dimension": "restricted-mix",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": "$sentinel",
+        "emailVerified": true,
+        "customAttributes": null
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/22",
+      "dimension": "restricted-mix",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": "$sentinel",
+        "emailVerified": true,
+        "customAttributes": {}
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/23",
+      "dimension": "principal",
+      "actor": "missing",
+      "selector": "other",
+      "fields": {
+        "displayName": "$sentinel"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/24",
+      "dimension": "principal",
+      "actor": "null",
+      "selector": "other",
+      "fields": {
+        "displayName": "$sentinel"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/25",
+      "dimension": "principal",
+      "actor": "number",
+      "selector": "other",
+      "fields": {
+        "displayName": "$sentinel"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/26",
+      "dimension": "principal",
+      "actor": "invalid",
+      "selector": "other",
+      "fields": {
+        "displayName": "$sentinel"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/27",
+      "dimension": "admin-control",
+      "actor": "admin",
+      "selector": "self",
+      "fields": {
+        "displayName": "$sentinel",
+        "emailVerified": true
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/28",
+      "dimension": "admin-control",
+      "actor": "admin",
+      "selector": "self",
+      "fields": {
+        "displayName": "$sentinel",
+        "emailVerified": false
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/29",
+      "dimension": "selector",
+      "actor": "a",
+      "selector": "self",
+      "fields": {
+        "displayName": "$sentinel"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/30",
+      "dimension": "selector",
+      "actor": "a",
+      "selector": "other",
+      "fields": {
+        "displayName": "$sentinel"
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/31",
+      "dimension": "restricted-mix",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": "$sentinel",
+        "disableUser": true
+      },
+      "productionExpectation": null
+    },
+    {
+      "id": "second/auth/32",
+      "dimension": "restricted-mix",
+      "actor": "b",
+      "selector": "missing",
+      "fields": {
+        "displayName": "$sentinel",
+        "disableUser": null
+      },
+      "productionExpectation": null
+    }
+  ],
+  "firestorePrograms": [
+    {
+      "id": "second/masks/ancestor-overlap-state",
+      "area": "masks",
+      "seed": [
+        {
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c",
+          "fields": {
+            "n": {
+              "integerValue": "2"
+            },
+            "g": {
+              "stringValue": "q"
+            },
+            "a": {
+              "mapValue": {
+                "fields": {
+                  "b": {
+                    "integerValue": "7"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "steps": [
+        {
+          "id": "normal",
+          "method": "PATCH",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c?updateMask.fieldPaths=a.b",
+          "body": {
+            "fields": {
+              "n": {
+                "integerValue": "999"
+              },
+              "a": {
+                "mapValue": {
+                  "fields": {
+                    "b": {
+                      "integerValue": "8"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "before",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c"
+        },
+        {
+          "id": "diagnostic",
+          "method": "PATCH",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c?updateMask.fieldPaths=a&updateMask.fieldPaths=a.b",
+          "body": {
+            "fields": {
+              "n": {
+                "integerValue": "999"
+              },
+              "a": {
+                "mapValue": {
+                  "fields": {
+                    "b": {
+                      "integerValue": "9"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "after",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c"
+        }
+      ]
+    },
+    {
+      "id": "second/preconditions/stale-delete-state",
+      "area": "preconditions",
+      "seed": [
+        {
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c",
+          "fields": {
+            "n": {
+              "integerValue": "2"
+            },
+            "g": {
+              "stringValue": "q"
+            },
+            "a": {
+              "mapValue": {
+                "fields": {
+                  "b": {
+                    "integerValue": "7"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "steps": [
+        {
+          "id": "original",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c"
+        },
+        {
+          "id": "normal",
+          "method": "PATCH",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c",
+          "body": {
+            "fields": {
+              "n": {
+                "integerValue": "9"
+              }
+            }
+          }
+        },
+        {
+          "id": "before",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c"
+        },
+        {
+          "id": "diagnostic",
+          "method": "DELETE",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c?currentDocument.updateTime={{original.updateTime}}"
+        },
+        {
+          "id": "after",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c"
+        }
+      ]
+    },
+    {
+      "id": "second/transforms/invalid-path-state",
+      "area": "transforms",
+      "seed": [
+        {
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c",
+          "fields": {
+            "n": {
+              "integerValue": "2"
+            },
+            "g": {
+              "stringValue": "q"
+            },
+            "a": {
+              "mapValue": {
+                "fields": {
+                  "b": {
+                    "integerValue": "7"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "steps": [
+        {
+          "id": "normal",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+          "body": {
+            "writes": [
+              {
+                "transform": {
+                  "document": "projects/PROJECT/databases/(default)/documents/cur/c",
+                  "fieldTransforms": [
+                    {
+                      "fieldPath": "t0",
+                      "increment": {
+                        "integerValue": "1"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "before",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c"
+        },
+        {
+          "id": "diagnostic",
+          "method": "POST",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+          "body": {
+            "writes": [
+              {
+                "transform": {
+                  "document": "projects/PROJECT/databases/(default)/documents/cur/c",
+                  "fieldTransforms": [
+                    {
+                      "fieldPath": "bad..path",
+                      "increment": {
+                        "integerValue": "1"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "after",
+          "method": "GET",
+          "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c"
+        }
+      ]
+    }
+  ],
+  "diagnosticRows": 45,
+  "limits": {
+    "auth": 400,
+    "firestore": 100,
+    "metadata": 100,
+    "recovery": 60,
+    "total": 660
+  },
+  "recoveryReservations": {
+    "auth": 12,
+    "firestore": 12,
+    "metadata": 36
+  },
+  "wallSeconds": 1200,
+  "recoverySeconds": 300,
+  "productionExecutable": false,
+  "productionApproval": null
+}

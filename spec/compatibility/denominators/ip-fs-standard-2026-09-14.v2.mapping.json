@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "evidenceId": "auth-pending-trigger-provider-unlink-2026-09-12",
+  "adapterId": "auth-pending-trigger-provider-unlink.v1",
+  "receipt": {
+    "path": "spec/compatibility/evidence/auth-pending-trigger-provider-unlink/receipt.json",
+    "sha256": "e1f5755e46f7900466f7cfdfc7480f0ab8cbf810ba415d3b662e7fb63411b7b3"
+  },
+  "localComparison": {
+    "path": "spec/compatibility/evidence/auth-pending-trigger-provider-unlink/local-comparison.json",
+    "sha256": "d741ad61fb6110f079fa51dd734a70f5cdee4198f222d488bb17ff336b2121d7"
+  },
+  "comparisonApproval": {
+    "path": "spec/compatibility/evidence/auth-pending-trigger-provider-unlink/comparison-approval.json",
+    "sha256": "65507b1a64717c6b520dd12242c41e97b230a9bf4a4113471d4d2281c12ffdc1"
+  },
+  "sourceReview": {
+    "path": "spec/compatibility/evidence/auth-pending-trigger-provider-unlink/source-review.json",
+    "sha256": "d724e218e2849b7c679c68d8ced7707de1c68921ca01daa4784ce9ecb450dde4"
+  },
+  "corpus": {
+    "revision": 2,
+    "caseIds": [
+      "baseline-fresh-finalize",
+      "trigger",
+      "held-start",
+      "held-finalize",
+      "held-lookup",
+      "held-refresh",
+      "final-fresh-finalize"
+    ],
+    "inputPaths": [
+      "tools/auth-pending-triggers/triggers_contract.py",
+      "tools/auth-pending-triggers/triggers_recorder.py"
+    ]
+  },
+  "bindings": [
+    {
+      "id": "provider-unlink-trigger-update",
+      "caseId": "trigger",
+      "evidenceLevel": "oracle-compared",
+      "comparisonResult": "match",
+      "conditions": {
+        "facts": {
+          "trigger": "provider-unlink",
+          "transport": "REST",
+          "tenant": false,
+          "providerLinkedBeforeTransition": true,
+          "providerAbsentAfterTransition": true,
+          "heldCredentialAndSmsSessionCreatedBeforeTransition": true
+        },
+        "evidencePointers": [
+          "/production/trigger",
+          "/production/providerLinked",
+          "/production/cases/1/checks/providerAbsentAfter"
+        ]
+      },
+      "surfaces": [
+        {
+          "targetId": "identitytoolkit-v1:method:REST:identitytoolkit.accounts.update",
+          "observationPointers": [
+            "/production/cases/1",
+            "/local/cases/1"
+          ],
+          "assertionPointers": [
+            "/production/cases/1/checks/noError",
+            "/local/cases/1/checks/noError"
+          ],
+          "coverage": "partial",
+          "reason": "The trigger row observes one successful REST accounts:update transition under the pinned provider-unlink corpus and its normalized local comparison."
+        },
+        {
+          "targetId": "identitytoolkit-v1:field:REST:schemas/GoogleCloudIdentitytoolkitV1SetAccountInfoRequest/properties/deleteProvider",
+          "observationPointers": [
+            "/production/cases/1",
+            "/local/cases/1"
+          ],
+          "assertionPointers": [
+            "/production/cases/1/checks/providerAbsentAfter",
+            "/local/cases/1/checks/providerAbsentAfter"
+          ],
+          "coverage": "partial",
+          "reason": "The reviewed provider-unlink setup and trigger assertion explicitly remove the linked provider through deleteProvider; related item, tenant and sibling fields are not inferred."
+        }
+      ]
+    }
+  ]
+}

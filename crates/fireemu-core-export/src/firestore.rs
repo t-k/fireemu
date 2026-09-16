@@ -41,9 +41,11 @@
 
 use std::collections::BTreeMap;
 
+use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::value::{GeoPoint, Timestamp, Value};
+use fireemu_core_types::ids::DatabaseId;
 
-use crate::leveldb::{for_each_record, read_log, write_log, LogError, LogWriter};
+use crate::leveldb::{for_each_record, write_log, LogError, LogWriter};
 use crate::wire::{Reader, WireError, WireType, Writer};
 
 /// The partition every emulator export writes: all namespaces, all kinds.
@@ -57,6 +59,7 @@ pub const EXPORT_NAME: &str = "firestore_export";
 
 /// The application id prefix the Firestore emulator gives a project.
 const APP_PREFIX: &str = "dev~";
+const APP_PREFIXES: [&str; 3] = [APP_PREFIX, "s~", "e~"];
 
 // EntityProto field numbers.
 const ENTITY_KEY: u32 = 13;
@@ -103,6 +106,8 @@ const MEANING_GEORSS_POINT: u64 = 9;
 const MEANING_BLOB: u64 = 14;
 const MEANING_ENTITY_PROTO: u64 = 19;
 const MEANING_EMPTY_LIST: u64 = 24;
+
+type ReferenceParts = (String, String, Vec<(String, String)>);
 
 /// One document of a Firestore export.
 #[derive(Debug, Clone, PartialEq)]
@@ -184,47 +189,109 @@ pub struct OverallMetadata {
 
 /// The single byte the emulator writes as the first record of every overall metadata file.
 const OVERALL_PREFIX_RECORD: u8 = 0x33;
+/// Safety bound for the number of partition entries an import may declare.
+///
+/// Official exports normally contain one entry; this bound prevents an adversarial metadata
+/// file from forcing unbounded partition metadata allocation while retaining ample room for
+/// large managed exports.
+pub const MAX_PARTITION_ENTRIES: usize = 10_000;
 
 impl OverallMetadata {
     /// Encodes the file, `LevelDB` framing included.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut entry = Writer::new();
-        entry.write_message(1, |e| {
-            // The constant marker the jar writes ahead of every entry.
-            e.write_message(1, |k| {
-                k.write_varint(1, 2);
-                k.write_varint(3, 3);
+        Self::to_bytes_many(std::slice::from_ref(self))
+    }
+
+    /// Encodes all partition entries in one `LevelDB` log.
+    #[must_use]
+    pub fn to_bytes_many(entries: &[Self]) -> Vec<u8> {
+        let mut records = vec![vec![OVERALL_PREFIX_RECORD]];
+        records.extend(entries.iter().map(|metadata| {
+            let mut entry = Writer::new();
+            entry.write_message(1, |e| {
+                // The constant marker the jar writes ahead of every entry.
+                e.write_message(1, |k| {
+                    k.write_varint(1, 2);
+                    k.write_varint(3, 3);
+                });
+                e.write_string(2, &metadata.metadata_file);
+                e.write_varint(3, metadata.entity_count);
+                e.write_varint(4, metadata.byte_count);
             });
-            e.write_string(2, &self.metadata_file);
-            e.write_varint(3, self.entity_count);
-            e.write_varint(4, self.byte_count);
-        });
-        write_log(&[vec![OVERALL_PREFIX_RECORD], entry.finish()])
+            entry.finish()
+        }));
+        write_log(&records)
     }
 
     /// Decodes the file.
     pub fn parse(bytes: &[u8]) -> Result<Self, FirestoreExportError> {
-        let records = read_log(bytes)?;
-        let entry = records.iter().find(|r| r.len() > 1).ok_or_else(|| {
-            FirestoreExportError::Shape(
-                "the overall export metadata holds no partition entry".to_owned(),
-            )
-        })?;
-        let mut reader = Reader::new(entry);
-        let mut found = None;
-        while let Some((field, wire)) = reader.field()? {
-            if field == 1 && wire == WireType::Delimited {
-                found = Some(parse_overall_entry(reader.delimited()?)?);
-            } else {
-                reader.skip(field, wire)?;
-            }
+        let mut entries = Self::parse_all(bytes)?;
+        if entries.len() != 1 {
+            return shape(format!(
+                "the overall export metadata holds {} partition entries; exactly one is required",
+                entries.len()
+            ));
         }
-        found.ok_or_else(|| {
-            FirestoreExportError::Shape(
-                "the overall export metadata entry names no partition metadata file".to_owned(),
-            )
-        })
+        Ok(entries.remove(0))
+    }
+
+    /// Decodes every partition entry in the file.
+    pub fn parse_all(bytes: &[u8]) -> Result<Vec<Self>, FirestoreExportError> {
+        let mut entries = Vec::new();
+        let mut prefix_seen = false;
+        let visited = for_each_record(std::io::Cursor::new(bytes), |record| {
+            if !prefix_seen {
+                if record != [OVERALL_PREFIX_RECORD] {
+                    return Err(FirestoreExportError::Shape(
+                        "the overall export metadata does not start with its prefix record"
+                            .to_owned(),
+                    ));
+                }
+                prefix_seen = true;
+                return Ok(());
+            }
+            if entries.len() >= MAX_PARTITION_ENTRIES {
+                return Err(FirestoreExportError::Shape(format!(
+                    "the overall export metadata names more than {MAX_PARTITION_ENTRIES} partition entries"
+                )));
+            }
+            let mut reader = Reader::new(record);
+            let entry = {
+                let mut found = None;
+                while let Some((field, wire)) = reader.field()? {
+                    if field == 1 && wire == WireType::Delimited {
+                        if found.is_some() {
+                            return Err(FirestoreExportError::Shape(
+                                "the overall export metadata record names multiple partition entries"
+                                    .to_owned(),
+                            ));
+                        }
+                        found = Some(parse_overall_entry(reader.delimited()?)?);
+                    } else {
+                        reader.skip(field, wire)?;
+                    }
+                }
+                found.ok_or_else(|| {
+                    FirestoreExportError::Shape(
+                        "the overall export metadata entry names no partition metadata file"
+                            .to_owned(),
+                    )
+                })
+            }?;
+            entries.push(entry);
+            Ok(())
+        })?;
+        match visited {
+            Ok(()) => {}
+            Err(error) => return Err(error),
+        }
+        if !prefix_seen || entries.is_empty() {
+            return Err(FirestoreExportError::Shape(
+                "the overall export metadata holds no partition entry".to_owned(),
+            ));
+        }
+        Ok(entries)
     }
 }
 
@@ -432,6 +499,9 @@ pub fn write_entity(document: &ExportDocument) -> Result<Vec<u8>, FirestoreExpor
             "an exported value is nested more than {MAX_VALUE_DEPTH} levels deep, which no Firestore document can be"
         ));
     }
+    for value in document.fields.values() {
+        validate_references(value)?;
+    }
     let mut w = Writer::new();
     w.write_message(ENTITY_KEY, |key| {
         key.write_string(REFERENCE_APP, &format!("{APP_PREFIX}{}", document.project));
@@ -463,6 +533,26 @@ pub fn write_entity(document: &ExportDocument) -> Result<Vec<u8>, FirestoreExpor
         write_path(group, &document.path[..document.path.len().min(1)]);
     });
     Ok(w.finish())
+}
+
+fn validate_references(value: &Value) -> Result<(), FirestoreExportError> {
+    match value {
+        Value::Reference(name) => {
+            split_reference(name)?;
+        }
+        Value::Map(fields) => {
+            for value in fields.values() {
+                validate_references(value)?;
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                validate_references(value)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn write_path(w: &mut Writer, path: &[(String, String)]) {
@@ -512,8 +602,13 @@ fn write_value(w: &mut Writer, value: &Value) {
             p.write_double(POINT_Y, g.longitude());
         }),
         Value::Reference(name) => w.write_group(VALUE_REFERENCE, |r| {
-            let (project, path) = split_reference(name);
+            let (project, database, path) = split_reference(name).expect("validated reference");
             r.write_string(REFERENCE_VALUE_APP, &format!("{APP_PREFIX}{project}"));
+            // The official format leaves namespace empty for the default database. The
+            // fireemu extension reuses this existing field for a named database id.
+            if database != DatabaseId::DEFAULT {
+                r.write_string(REFERENCE_VALUE_NAMESPACE, &database);
+            }
             for (collection, document) in path {
                 r.write_group(REFERENCE_VALUE_ELEMENT, |e| {
                     e.write_string(REFERENCE_ELEMENT_TYPE, &collection);
@@ -575,25 +670,23 @@ fn micros_of(t: Timestamp) -> i64 {
         .saturating_add(i64::from(t.nanos() / 1_000))
 }
 
-/// Splits `projects/p/databases/(default)/documents/a/b` into the project and the path.
-fn split_reference(name: &str) -> (String, Vec<(String, String)>) {
-    let mut segments = name.split('/');
-    let mut project = String::new();
-    if segments.next() == Some("projects") {
-        segments.next().unwrap_or_default().clone_into(&mut project);
-        // databases/{db}/documents
-        let _ = segments.next();
-        let _ = segments.next();
-        let _ = segments.next();
-    }
-    let rest: Vec<&str> = segments.collect();
-    let mut path = Vec::new();
-    for pair in rest.chunks(2) {
-        if pair.len() == 2 {
-            path.push((pair[0].to_owned(), pair[1].to_owned()));
-        }
-    }
-    (project, path)
+/// Splits a full document resource name into the project, database and path.
+fn split_reference(name: &str) -> Result<ReferenceParts, FirestoreExportError> {
+    let Some(path) = DocumentPath::from_resource_name(name) else {
+        return shape(format!(
+            "reference value {name:?} is not a valid Firestore document resource name"
+        ));
+    };
+    Ok((
+        path.project().as_str().to_owned(),
+        path.database().as_str().to_owned(),
+        path.pairs()
+            .iter()
+            .map(|(collection, document)| {
+                (collection.as_str().to_owned(), document.as_str().to_owned())
+            })
+            .collect(),
+    ))
 }
 
 /// Decodes one `EntityProto` record into a document.
@@ -606,9 +699,7 @@ pub fn read_entity(bytes: &[u8]) -> Result<ExportDocument, FirestoreExportError>
         match (field, wire) {
             (ENTITY_KEY, WireType::Delimited) => {
                 let (app, elements) = read_reference(reader.delimited()?)?;
-                app.strip_prefix(APP_PREFIX)
-                    .unwrap_or(&app)
-                    .clone_into(&mut project);
+                strip_app_prefix(&app).clone_into(&mut project);
                 path = elements;
             }
             (ENTITY_PROPERTY | ENTITY_RAW_PROPERTY, WireType::Delimited) => {
@@ -829,12 +920,22 @@ fn read_point(bytes: &[u8]) -> Result<GeoPoint, FirestoreExportError> {
 fn read_reference_value(bytes: &[u8]) -> Result<String, FirestoreExportError> {
     let mut reader = Reader::new(bytes);
     let mut app = String::new();
+    let mut database = DatabaseId::DEFAULT.to_owned();
     let mut path = Vec::new();
     while let Some((field, wire)) = reader.field()? {
         match (field, wire) {
             (REFERENCE_VALUE_APP, WireType::Delimited) => app = reader.string()?,
             (REFERENCE_VALUE_NAMESPACE, WireType::Delimited) => {
-                reader.string()?;
+                let namespace = reader.string()?;
+                if namespace.is_empty() {
+                    continue;
+                }
+                DatabaseId::try_new(namespace.clone()).map_err(|error| {
+                    FirestoreExportError::Shape(format!(
+                        "the exported reference has an invalid database id {namespace:?}: {error}"
+                    ))
+                })?;
+                database = namespace;
             }
             (REFERENCE_VALUE_ELEMENT, WireType::StartGroup) => {
                 let body = reader.group(REFERENCE_VALUE_ELEMENT)?;
@@ -848,8 +949,11 @@ fn read_reference_value(bytes: &[u8]) -> Result<String, FirestoreExportError> {
             _ => reader.skip(field, wire)?,
         }
     }
-    let project = app.strip_prefix(APP_PREFIX).unwrap_or(&app);
-    let mut name = format!("projects/{project}/databases/(default)/documents");
+    if app.is_empty() || path.is_empty() {
+        return shape("the exported reference has no application or document path");
+    }
+    let project = strip_app_prefix(&app);
+    let mut name = format!("projects/{project}/databases/{database}/documents");
     for (collection, document) in path {
         name.push('/');
         name.push_str(&collection);
@@ -857,6 +961,14 @@ fn read_reference_value(bytes: &[u8]) -> Result<String, FirestoreExportError> {
         name.push_str(&document);
     }
     Ok(name)
+}
+
+/// Maps all application id prefixes emitted by Firestore exports to the project id.
+fn strip_app_prefix(app: &str) -> &str {
+    APP_PREFIXES
+        .iter()
+        .find_map(|prefix| app.strip_prefix(prefix))
+        .unwrap_or(app)
 }
 
 /// A nested `EntityProto` carrying a map value (or a vector embedding).
@@ -910,8 +1022,10 @@ fn as_vector(fields: &BTreeMap<String, Value>) -> Option<Value> {
 mod tests {
     use super::{
         read_entity, read_output, read_output_from, write_entity, write_output, write_output_to,
-        ExportDocument, OverallMetadata, PartitionMetadata, Value,
+        ExportDocument, OverallMetadata, PartitionMetadata, Value, MAX_PARTITION_ENTRIES,
+        OVERALL_PREFIX_RECORD,
     };
+    use crate::leveldb::read_log;
     use fireemu_core_firestore::value::{GeoPoint, Timestamp};
     use std::collections::BTreeMap;
 
@@ -1010,6 +1124,77 @@ mod tests {
             round_trip(Value::Reference(name.clone())),
             Value::Reference(name)
         );
+    }
+
+    #[test]
+    fn references_preserve_default_named_and_cross_database_ids() {
+        let references = [
+            "projects/demo-export/databases/(default)/documents/cities/default",
+            "projects/demo-export/databases/analytics/documents/cities/analytics",
+            "projects/demo-export/databases/analytics/documents/cities/default",
+            "projects/demo-export/databases/(default)/documents/cities/analytics",
+        ];
+        for expected in references {
+            assert_eq!(
+                round_trip(Value::Reference(expected.to_owned())),
+                Value::Reference(expected.to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_reference_is_rejected_before_writing() {
+        let malformed = Value::Reference("projects/demo-export/documents/cities/LA".to_owned());
+        let error = write_entity(&document(field("ref", malformed)))
+            .expect_err("a reference without a database must be rejected");
+        assert!(error.to_string().contains("reference"), "{error}");
+    }
+
+    #[test]
+    fn a_reference_with_a_malformed_database_id_is_rejected_when_reading() {
+        let mut bytes = super::Writer::new();
+        bytes.write_string(super::REFERENCE_VALUE_APP, "dev~demo-export");
+        bytes.write_string(super::REFERENCE_VALUE_NAMESPACE, "analytics/invalid");
+        bytes.write_group(super::REFERENCE_VALUE_ELEMENT, |element| {
+            element.write_string(super::REFERENCE_ELEMENT_TYPE, "cities");
+            element.write_string(super::REFERENCE_ELEMENT_NAME, "LA");
+        });
+
+        let error = super::read_reference_value(&bytes.finish())
+            .expect_err("an invalid database id must be rejected");
+        assert!(error.to_string().contains("invalid database id"), "{error}");
+    }
+
+    #[test]
+    fn an_empty_reference_namespace_keeps_the_official_default_database() {
+        let mut bytes = super::Writer::new();
+        bytes.write_string(super::REFERENCE_VALUE_APP, "dev~demo-export");
+        bytes.write_string(super::REFERENCE_VALUE_NAMESPACE, "");
+        bytes.write_group(super::REFERENCE_VALUE_ELEMENT, |element| {
+            element.write_string(super::REFERENCE_ELEMENT_TYPE, "cities");
+            element.write_string(super::REFERENCE_ELEMENT_NAME, "LA");
+        });
+
+        assert_eq!(
+            super::read_reference_value(&bytes.finish()).expect("the official reference decodes"),
+            "projects/demo-export/databases/(default)/documents/cities/LA"
+        );
+    }
+
+    #[test]
+    fn production_application_id_prefixes_map_in_reference_values() {
+        for prefix in ["dev~", "s~", "e~"] {
+            let mut bytes = super::Writer::new();
+            bytes.write_string(super::REFERENCE_VALUE_APP, &format!("{prefix}demo-export"));
+            bytes.write_group(super::REFERENCE_VALUE_ELEMENT, |element| {
+                element.write_string(super::REFERENCE_ELEMENT_TYPE, "cities");
+                element.write_string(super::REFERENCE_ELEMENT_NAME, "SF");
+            });
+            assert_eq!(
+                super::read_reference_value(&bytes.finish()).unwrap(),
+                "projects/demo-export/databases/(default)/documents/cities/SF"
+            );
+        }
     }
 
     #[test]
@@ -1246,6 +1431,104 @@ mod tests {
             &[0xb8, 0x6d, 0x44, 0x4e, 0x01, 0x00, 0x01, 0x33]
         );
         assert_eq!(OverallMetadata::parse(&bytes).expect("it parses"), metadata);
+    }
+
+    #[test]
+    fn every_overall_metadata_partition_entry_is_decoded() {
+        let entries = vec![
+            OverallMetadata {
+                metadata_file: "partition-0/partition.export_metadata".to_owned(),
+                entity_count: 2,
+                byte_count: 10,
+            },
+            OverallMetadata {
+                metadata_file: "partition-1/partition.export_metadata".to_owned(),
+                entity_count: 3,
+                byte_count: 20,
+            },
+        ];
+        assert_eq!(
+            OverallMetadata::parse_all(&OverallMetadata::to_bytes_many(&entries)).unwrap(),
+            entries
+        );
+    }
+
+    #[test]
+    fn corrupt_overall_metadata_records_are_not_discarded() {
+        let metadata = OverallMetadata {
+            metadata_file: "partition/partition.export_metadata".to_owned(),
+            entity_count: 0,
+            byte_count: 0,
+        };
+        let records = read_log(&metadata.to_bytes()).unwrap();
+        for corrupt in [vec![OVERALL_PREFIX_RECORD], vec![0]] {
+            let mut records_with_corruption = records.clone();
+            records_with_corruption.push(corrupt);
+            let error = OverallMetadata::parse_all(&super::write_log(&records_with_corruption))
+                .expect_err("a corrupt trailing record must be refused");
+            assert!(
+                error.to_string().contains("partition metadata file")
+                    || error.to_string().contains("prefix")
+                    || error.to_string().contains("malformed"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_overall_metadata_partition_bound_has_an_exact_acceptance_boundary() {
+        let entries: Vec<_> = (0..MAX_PARTITION_ENTRIES)
+            .map(|index| OverallMetadata {
+                metadata_file: format!("partition-{index}/partition.export_metadata"),
+                entity_count: 0,
+                byte_count: 0,
+            })
+            .collect();
+        assert_eq!(
+            OverallMetadata::parse_all(&OverallMetadata::to_bytes_many(&entries))
+                .unwrap()
+                .len(),
+            MAX_PARTITION_ENTRIES
+        );
+
+        let mut too_many = entries;
+        too_many.push(OverallMetadata {
+            metadata_file: "partition-over-bound/partition.export_metadata".to_owned(),
+            entity_count: 0,
+            byte_count: 0,
+        });
+        let error = OverallMetadata::parse_all(&OverallMetadata::to_bytes_many(&too_many))
+            .expect_err("the partition bound must refuse one entry above its limit");
+        assert!(error.to_string().contains("more than 10000"), "{error}");
+    }
+
+    #[test]
+    fn production_application_id_prefixes_map_to_the_project_id() {
+        let document = document(BTreeMap::new());
+        for prefix in ["s~", "e~"] {
+            let mut writer = super::Writer::new();
+            writer.write_message(super::ENTITY_KEY, |key| {
+                key.write_string(super::REFERENCE_APP, &format!("{prefix}demo-export"));
+                key.write_message(super::REFERENCE_PATH, |path| {
+                    super::write_path(path, &document.path);
+                });
+            });
+            let encoded = writer.finish();
+            assert_eq!(read_entity(&encoded).unwrap(), document);
+        }
+    }
+
+    #[test]
+    fn an_unknown_application_id_prefix_is_preserved_for_import_validation() {
+        let mut writer = super::Writer::new();
+        writer.write_message(super::ENTITY_KEY, |key| {
+            key.write_string(super::REFERENCE_APP, "x~demo-export");
+            key.write_message(super::REFERENCE_PATH, |path| {
+                super::write_path(path, &[("cities".to_owned(), "SF".to_owned())]);
+            });
+        });
+        let decoded = read_entity(&writer.finish()).expect("the entity shape is readable");
+        assert_eq!(decoded.project, "x~demo-export");
     }
 
     #[test]

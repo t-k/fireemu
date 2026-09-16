@@ -5,6 +5,7 @@
 pub mod app_check;
 pub mod control;
 pub mod identity_toolkit;
+pub mod oidc;
 pub mod server;
 pub mod signing;
 pub mod storage;

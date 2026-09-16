@@ -1,0 +1,37 @@
+{
+  "artifactSha256": "18dc3bd69178b344366ae28e78cb66bcaed0a4375f7a40dbfcdb075a9cc0a3ae",
+  "cleanupComplete": true,
+  "completed": true,
+  "configurationDigest": "29c7041f88b9ed1e4e175fe5c3d2a4265e8cc6c71a380c45c299ce1dd4e02eed",
+  "coordinatorRequests": 2,
+  "executionCommit": "f050e9bb84b4202146c8d4d0a741350c73aa0c50",
+  "failure": null,
+  "kind": "production-campaign-auth-list-next-local-artifact-v2",
+  "limitations": [
+    "Loopback-owned fireemu artifact only; no production parity evidence.",
+    "Public summary omits token-bearing response bodies; private receipt retains full rows."
+  ],
+  "listenersClosed": true,
+  "observationRequests": 17,
+  "observedFamilies": [
+    "auth-lookup",
+    "auth-refresh",
+    "auth-sign-in",
+    "auth-sign-up",
+    "firestore-document-create",
+    "firestore-list-collection-ids"
+  ],
+  "observerSha256": "c0a29be4f98e4d2993cb5c283219ce2b48e16bba1027698a2815a59d63ba6594",
+  "parentManifestSha256": "625815db41281288be31cc75f43aa31dd715bcca8e4967f5379011abfd4e4714",
+  "privateReceipt": "docs.local/runs/auth-list-next-v2-shadow-20260916-state-validation/result.json",
+  "processCleanup": true,
+  "productionExecuted": false,
+  "recordingComplete": true,
+  "recoveryRequests": 19,
+  "schemaVersion": 1,
+  "stateValidation": true,
+  "stopReason": "child-completed",
+  "target": "owned-fireemu-artifact",
+  "totalRequests": 38,
+  "totalWireRequests": 38
+}

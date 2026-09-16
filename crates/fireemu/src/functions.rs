@@ -3692,8 +3692,12 @@ mod tests {
                 "FIREEMU_FAKE_BLOCKING_HANG_MS".to_owned(),
                 "5000".to_owned(),
             )],
-            hello_timeout: Duration::from_secs(5),
+            // Runner startup is setup for this blocking-timeout scenario, rather than the
+            // behavior under test. Match the production handshake allowance so a cold macOS
+            // Python launch cannot consume the test's unrelated timeout budget.
+            hello_timeout: Duration::from_secs(60),
         };
+        let replacement_timeout = spec.hello_timeout;
         let runner = Runner::spawn_spec(&spec).await.unwrap();
         let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
         let mut blocking = parse_manifest(&json!({"functions": [{
@@ -3748,7 +3752,11 @@ mod tests {
             .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
             .is_err());
 
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        // A replacement is a fresh process and owns the same bounded hello handshake as the
+        // initial runner. Cold macOS hosts can spend most of that allowance starting Python,
+        // so the assertion must cover the declared spawn contract rather than an unrelated
+        // three-second scheduler assumption.
+        let deadline = tokio::time::Instant::now() + replacement_timeout + Duration::from_secs(1);
         loop {
             let replacement = runtime.runner();
             if !Arc::ptr_eq(&retired, &replacement) && replacement.is_alive() {
@@ -4457,7 +4465,7 @@ mod tests {
             command: vec!["python3".to_owned(), script.display().to_string()],
             cwd: None,
             env: Vec::new(),
-            hello_timeout: Duration::from_secs(20),
+            hello_timeout: Duration::from_secs(60),
         };
         let runner = Runner::spawn_spec(&spawn).await.unwrap();
         let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -4558,7 +4566,7 @@ mod tests {
             command: vec!["python3".to_owned(), script.display().to_string()],
             cwd: None,
             env: Vec::new(),
-            hello_timeout: Duration::from_secs(20),
+            hello_timeout: Duration::from_secs(60),
         };
         let runner = Runner::spawn_spec(&spawn).await.unwrap();
         let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();

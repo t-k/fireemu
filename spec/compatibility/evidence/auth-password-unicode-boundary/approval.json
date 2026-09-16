@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "3b300cebcbddac2db8528f4c9f9ca29b1b767932ce47aede41ee4e6e6946121c",
+  "sourceCommit": "e464affdd06065007cedc1b71a031d9453ff31df",
+  "scope": "Three auth-password-unicode-boundary revision 1 input patterns, limited to the recorded artifact, configuration and generated patterns. End-user token REST routes, no tenant, local strict profile and recorded production minimum 6 / maximum 4096 password policy. Approval covers 4095/4096 UTF-16-unit acceptance, 4097-unit refusal and error, branch-specific credential use, selected account-state checks and recorded account deletion/process termination. It does not cover all Unicode strings, normalization, minimum-length counting, other API routes, SDK, Rules, elapsed expiry or fault recovery.",
+  "cases": [
+    "astral-4095",
+    "astral-4096",
+    "astral-4097"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-11",
+  "decision": "approve"
+}

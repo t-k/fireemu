@@ -1,7 +1,7 @@
 //! Identity Toolkit flows through the pure handlers, plus one socket-level smoke test.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_http::identity_toolkit::{
     handle, AuthBlockingHook, AuthQueryLimits, AuthState, BlockingFunctionCode,
@@ -14,6 +14,7 @@ use fireemu_core_auth::store::AuthStore;
 use fireemu_core_auth::totp::{totp_at, TotpParams};
 use fireemu_core_functions::manifest::BlockingAuthEvent;
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_session::tenancy::Tenancy;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
@@ -35,6 +36,31 @@ struct BeforeSignInTimeoutHook;
 struct FixtureFailureHook(BlockingFunctionFailure);
 
 struct ClearingClaimsHook;
+
+struct OverlappingClaimHook;
+
+impl AuthBlockingHook for OverlappingClaimHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        Ok(match event {
+            BlockingAuthEvent::BeforeCreate => json!({
+                "userRecord": {
+                    "updateMask": "customClaims",
+                    "customClaims": {"role": "persistent", "persistedOnly": true}
+                }
+            }),
+            BlockingAuthEvent::BeforeSignIn => json!({
+                "userRecord": {
+                    "updateMask": "sessionClaims",
+                    "sessionClaims": {"role": "session", "sessionOnly": true}
+                }
+            }),
+        })
+    }
+}
 
 struct MalformedBeforeSignInHook;
 
@@ -718,6 +744,216 @@ fn sign_up_sign_in_lookup_and_refresh() {
 }
 
 #[test]
+fn secure_token_refresh_preserves_authentication_time() {
+    let s = state();
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "auth-time@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({
+            "email": "auth-time@example.com",
+            "password": "hunter22",
+            "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    let initial = fireemu_core_auth::jwt::decode_unsigned(signed_in["idToken"].as_str().unwrap())
+        .unwrap()
+        .payload;
+    let initial_iat = initial
+        .get("iat")
+        .and_then(fireemu_core_types::json::JsonValue::as_i64)
+        .unwrap();
+    assert_eq!(
+        initial
+            .get("auth_time")
+            .and_then(fireemu_core_types::json::JsonValue::as_i64),
+        Some(initial_iat)
+    );
+
+    let refresh = signed_in["refreshToken"].as_str().unwrap();
+    advance(&s, 1);
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    let refreshed_claims =
+        fireemu_core_auth::jwt::decode_unsigned(refreshed["id_token"].as_str().unwrap())
+            .unwrap()
+            .payload;
+    assert_eq!(
+        refreshed_claims
+            .get("auth_time")
+            .and_then(fireemu_core_types::json::JsonValue::as_i64),
+        Some(initial_iat)
+    );
+    assert_eq!(
+        refreshed_claims
+            .get("iat")
+            .and_then(fireemu_core_types::json::JsonValue::as_i64),
+        Some(initial_iat + 1)
+    );
+    assert_eq!(
+        refreshed_claims
+            .get("exp")
+            .and_then(fireemu_core_types::json::JsonValue::as_i64),
+        Some(initial_iat + 1 + 3600)
+    );
+}
+
+#[test]
+fn strict_profile_token_expiration_matrix_preserves_account_state() {
+    for elapsed in [0, 3_600, 3_601] {
+        let s = strict_state();
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({
+                "email": format!("token-expiration-{elapsed}@example.com"),
+                "password": "hunter22",
+                "returnSecureToken": true
+            }),
+        );
+        assert_eq!(status, 200, "elapsed={elapsed}: {signed}");
+        let uid = signed["localId"].as_str().unwrap();
+        let id_token = signed["idToken"].clone();
+        let refresh_token = signed["refreshToken"].clone();
+        let account = || {
+            admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:lookup"),
+                &json!({"localId": [uid]}),
+            )
+        };
+        let (status, before) = account();
+        assert_eq!(status, 200, "elapsed={elapsed}: {before}");
+
+        advance(&s, elapsed);
+        let (lookup_status, lookup_response) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": id_token}),
+        );
+        if elapsed < 3_600 {
+            assert_eq!(lookup_status, 200, "elapsed={elapsed}: {lookup_response}");
+        } else {
+            assert_eq!(lookup_status, 400, "elapsed={elapsed}: {lookup_response}");
+            assert_eq!(lookup_response["error"]["message"], "TOKEN_EXPIRED");
+            let (status, after) = account();
+            assert_eq!(status, 200, "elapsed={elapsed}: {after}");
+            assert_eq!(
+                after, before,
+                "expired lookup mutated account at elapsed={elapsed}"
+            );
+        }
+
+        let (refresh_status, refreshed) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token
+            }),
+        );
+        assert_eq!(refresh_status, 200, "elapsed={elapsed}: {refreshed}");
+        let (refreshed_lookup_status, refreshed_lookup) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": refreshed["id_token"]}),
+        );
+        assert_eq!(
+            refreshed_lookup_status, 200,
+            "elapsed={elapsed}: {refreshed_lookup}"
+        );
+        assert_eq!(refreshed_lookup["users"][0]["localId"], uid);
+    }
+}
+
+#[test]
+fn refresh_authentication_time_remains_revocable_in_both_profiles() {
+    for strict in [false, true] {
+        let s = if strict { strict_state() } else { state() };
+        let (status, signed_in) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "revocable-auth-time@example.com", "password": "hunter22"}),
+        );
+        assert_eq!(status, 200, "{signed_in}");
+        let refresh = signed_in["refreshToken"].as_str().unwrap();
+        let initial =
+            fireemu_core_auth::jwt::decode_unsigned(signed_in["idToken"].as_str().unwrap())
+                .unwrap()
+                .payload;
+        let initial_auth_time = initial
+            .get("auth_time")
+            .and_then(fireemu_core_types::json::JsonValue::as_i64)
+            .unwrap();
+
+        advance(&s, 1);
+        let (status, revoked) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({
+                "localId": signed_in["localId"],
+                "validSince": (initial_auth_time + 1).to_string()
+            }),
+        );
+        assert_eq!(status, 200, "{revoked}");
+
+        let (status, refreshed) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+        );
+        if strict {
+            assert_eq!(status, 400, "{refreshed}");
+            assert!(
+                refreshed["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| {
+                        message.starts_with("TOKEN_EXPIRED") || message == "INVALID_REFRESH_TOKEN"
+                    }),
+                "{refreshed}"
+            );
+        } else {
+            assert_eq!(status, 200, "{refreshed}");
+            let claims =
+                fireemu_core_auth::jwt::decode_unsigned(refreshed["id_token"].as_str().unwrap())
+                    .unwrap()
+                    .payload;
+            assert_eq!(
+                claims
+                    .get("auth_time")
+                    .and_then(fireemu_core_types::json::JsonValue::as_i64),
+                Some(initial_auth_time)
+            );
+            let (status, looked_up) = post(
+                &s,
+                &format!("{V1}/accounts:lookup"),
+                &json!({"idToken": refreshed["id_token"]}),
+            );
+            assert_eq!(status, 400, "{looked_up}");
+            assert!(
+                looked_up["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.starts_with("TOKEN_EXPIRED")),
+                "{looked_up}"
+            );
+        }
+    }
+}
+
+#[test]
 fn custom_claims_via_accounts_update_show_up_in_tokens() {
     let s = state();
     let (_, body) = post(
@@ -726,15 +962,17 @@ fn custom_claims_via_accounts_update_show_up_in_tokens() {
         &json!({"email": "a@example.com", "password": "hunter22"}),
     );
     let uid = body["localId"].as_str().unwrap().to_owned();
-    let (status, _) = post(
+    let (status, _) = admin(
         &s,
-        &format!("{V1}/accounts:update"),
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
         &json!({"localId": uid, "customAttributes": "{\"role\":\"admin\"}"}),
     );
     assert_eq!(status, 200);
-    let (status, bad) = post(
+    let (status, bad) = admin(
         &s,
-        &format!("{V1}/accounts:update"),
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
         &json!({"localId": uid, "customAttributes": "{\"sub\":\"x\"}"}),
     );
     assert_eq!(status, 400);
@@ -753,11 +991,13 @@ fn custom_claims_via_accounts_update_show_up_in_tokens() {
         decoded.payload.get("role").and_then(|v| v.as_str()),
         Some("admin")
     );
-    let (_, users) = post(
+    let (status, users) = admin(
         &s,
-        &format!("{V1}/accounts:lookup"),
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
         &json!({"localId": uid}),
     );
+    assert_eq!(status, 200);
     assert_eq!(
         users["users"][0]["customAttributes"],
         "{\"role\":\"admin\"}"
@@ -1018,9 +1258,10 @@ fn expired_enrollment_session_and_disabled_user() {
     assert_eq!(status, 400);
     assert_eq!(expired["error"]["message"], "SESSION_EXPIRED");
 
-    let (status, _) = post(
+    let (status, _) = admin(
         &s,
-        &format!("{V1}/accounts:update"),
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
         &json!({"localId": uid, "disableUser": true}),
     );
     assert_eq!(status, 200);
@@ -1037,10 +1278,7 @@ fn expired_enrollment_session_and_disabled_user() {
         &json!({"idToken": id_token}),
     );
     assert_eq!(status, 400);
-    assert!(revoked["error"]["message"]
-        .as_str()
-        .unwrap()
-        .starts_with("TOKEN_EXPIRED"));
+    assert_eq!(revoked["error"]["message"], "USER_DISABLED");
 }
 
 #[test]
@@ -1624,8 +1862,6 @@ fn a_poisoned_tenant_operation_gate_fails_closed_before_authentication() {
 #[test]
 fn blocking_auth_dispatch_carries_the_selected_project_and_tenant_namespace() {
     use fireemu_core_auth::store::AuthRegistry;
-    use fireemu_core_session::tenancy::Tenancy;
-    use std::sync::RwLock;
 
     let calls = Arc::new(Mutex::new(Vec::new()));
     let mut state = state();
@@ -1765,6 +2001,666 @@ fn admin_routes_require_the_owner_credential_a_local_origin_and_the_right_projec
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn oidc_provider_config_crud_is_namespaced_and_refusals_do_not_mutate() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer").unwrap();
+    s.registry = Some(registry);
+    let project_collection =
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/oauthIdpConfigs";
+    let project_item = |id: &str| format!("{project_collection}/{id}");
+    let config = json!({
+        "clientId": "project-client",
+        "issuer": "https://issuer.project.example",
+        "displayName": "Project OIDC",
+        "enabled": true,
+        "responseType": {"idToken": true}
+    });
+
+    let created = handle_with(
+        &s,
+        "POST",
+        &format!("{project_collection}?oauthIdpConfigId=oidc.shared"),
+        &owner(),
+        &config,
+    );
+    assert_eq!(created.status, 200, "{}", created.body);
+    assert_eq!(
+        created.body["name"],
+        "projects/demo-app/oauthIdpConfigs/oidc.shared"
+    );
+    assert_eq!(created.body["enabled"], true);
+
+    let refused = handle_with(
+        &s,
+        "PATCH",
+        &format!("{}?updateMask=responseType", project_item("oidc.shared")),
+        &owner(),
+        &json!({"responseType": {"idToken": true, "code": true}}),
+    );
+    assert_eq!(refused.status, 400, "{}", refused.body);
+    let unchanged = handle_with(
+        &s,
+        "GET",
+        &project_item("oidc.shared"),
+        &owner(),
+        &json!({}),
+    );
+    assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+    assert_eq!(unchanged.body["responseType"]["idToken"], true);
+    assert_eq!(unchanged.body["responseType"]["code"], false);
+
+    let tenant_collection =
+        "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/customer/oauthIdpConfigs";
+    let tenant_created = handle_with(
+        &s,
+        "POST",
+        &format!("{tenant_collection}?oauthIdpConfigId=oidc.shared"),
+        &owner(),
+        &json!({
+            "clientId": "tenant-client",
+            "issuer": "https://issuer.tenant.example",
+            "enabled": false
+        }),
+    );
+    assert_eq!(tenant_created.status, 200, "{}", tenant_created.body);
+    assert_eq!(
+        tenant_created.body["name"],
+        "projects/demo-app/tenants/customer/oauthIdpConfigs/oidc.shared"
+    );
+    let tenant_read = handle_with(
+        &s,
+        "GET",
+        &format!("{tenant_collection}/oidc.shared"),
+        &owner(),
+        &json!({}),
+    );
+    assert_eq!(tenant_read.status, 200, "{}", tenant_read.body);
+    assert_eq!(tenant_read.body["clientId"], "tenant-client");
+    let second = handle_with(
+        &s,
+        "POST",
+        &format!("{project_collection}?oauthIdpConfigId=oidc.second"),
+        &owner(),
+        &json!({"clientId": "second", "issuer": "https://issuer.second.example"}),
+    );
+    assert_eq!(second.status, 200, "{}", second.body);
+    let listed = handle_with(&s, "GET", project_collection, &owner(), &json!({}));
+    assert_eq!(listed.status, 200, "{}", listed.body);
+    assert_eq!(listed.body["oauthIdpConfigs"].as_array().unwrap().len(), 2);
+    let first_page = handle_with(
+        &s,
+        "GET",
+        &format!("{project_collection}?pageSize=1"),
+        &owner(),
+        &json!({}),
+    );
+    assert_eq!(first_page.status, 200, "{}", first_page.body);
+    assert_eq!(
+        first_page.body["oauthIdpConfigs"].as_array().unwrap().len(),
+        1
+    );
+    let next_page = handle_with(
+        &s,
+        "GET",
+        &format!(
+            "{project_collection}?pageSize=1&pageToken={}",
+            first_page.body["nextPageToken"].as_str().unwrap()
+        ),
+        &owner(),
+        &json!({}),
+    );
+    assert_eq!(next_page.status, 200, "{}", next_page.body);
+    assert_eq!(
+        next_page.body["oauthIdpConfigs"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        first_page.body["oauthIdpConfigs"][0]["name"],
+        "projects/demo-app/oauthIdpConfigs/oidc.shared"
+    );
+    assert_eq!(
+        next_page.body["oauthIdpConfigs"][0]["name"],
+        "projects/demo-app/oauthIdpConfigs/oidc.second"
+    );
+    assert_ne!(
+        first_page.body["oauthIdpConfigs"][0]["name"],
+        next_page.body["oauthIdpConfigs"][0]["name"]
+    );
+    let deleted = handle_with(
+        &s,
+        "DELETE",
+        &project_item("oidc.shared"),
+        &owner(),
+        &json!({}),
+    );
+    assert_eq!(deleted.status, 200, "{}", deleted.body);
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            &project_item("oidc.shared"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        404
+    );
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            &project_item("oidc.missing"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        404
+    );
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            &format!("{tenant_collection}/oidc.missing"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        404
+    );
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/missing/oauthIdpConfigs",
+            &owner(),
+            &json!({})
+        )
+        .status,
+        404
+    );
+}
+
+#[test]
+fn project_provider_configs_accept_client_v2_paths() {
+    let s = state();
+    let oidc = "/identitytoolkit.googleapis.com/v2/projects/demo-app/oauthIdpConfigs";
+    let saml = "/identitytoolkit.googleapis.com/v2/projects/demo-app/inboundSamlConfigs";
+    let created_oidc = handle_with(
+        &s,
+        "POST",
+        &format!("{oidc}?oauthIdpConfigId=oidc.client"),
+        &owner(),
+        &json!({"clientId": "client", "issuer": "https://issuer.example"}),
+    );
+    assert_eq!(created_oidc.status, 200, "{}", created_oidc.body);
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            &format!("{oidc}/oidc.client"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        200
+    );
+    assert_eq!(
+        handle_with(&s, "GET", oidc, &owner(), &json!({})).body["oauthIdpConfigs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let created_saml = handle_with(
+        &s,
+        "POST",
+        &format!("{saml}?inboundSamlConfigId=saml.client"),
+        &owner(),
+        &json!({
+            "idpConfig": {
+                "idpEntityId": "entity",
+                "ssoUrl": "https://idp.example/sso",
+                "idpCertificates": [{"x509Certificate": "CERT"}]
+            },
+            "spConfig": {
+                "spEntityId": "sp",
+                "callbackUri": "https://sp.example/callback"
+            }
+        }),
+    );
+    assert_eq!(created_saml.status, 200, "{}", created_saml.body);
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            &format!("{saml}/saml.client"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        200
+    );
+}
+
+#[test]
+fn inbound_saml_provider_config_crud_preserves_configuration_and_rejects_bad_ids() {
+    let s = state();
+    let collection =
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/inboundSamlConfigs";
+    let item = |id: &str| format!("{collection}/{id}");
+    let created = handle_with(
+        &s,
+        "POST",
+        &format!("{collection}?inboundSamlConfigId=saml.corp"),
+        &owner(),
+        &json!({
+            "displayName": "Corporate SAML",
+            "enabled": true,
+            "idpConfig": {
+                "idpEntityId": "https://idp.example/entity",
+                "ssoUrl": "https://idp.example/sso",
+                "idpCertificates": [{"x509Certificate": "CERT"}],
+                "signRequest": true
+            },
+            "spConfig": {
+                "spEntityId": "https://sp.example/entity",
+                "callbackUri": "https://sp.example/callback"
+            }
+        }),
+    );
+    assert_eq!(created.status, 200, "{}", created.body);
+    assert_eq!(
+        created.body["name"],
+        "projects/demo-app/inboundSamlConfigs/saml.corp"
+    );
+    assert_eq!(
+        created.body["idpConfig"]["idpEntityId"],
+        "https://idp.example/entity"
+    );
+    assert_eq!(
+        created.body["spConfig"]["callbackUri"],
+        "https://sp.example/callback"
+    );
+
+    let malformed = handle_with(
+        &s,
+        "GET",
+        &format!("{collection}/bad/id"),
+        &owner(),
+        &json!({}),
+    );
+    assert_eq!(malformed.status, 404);
+    let still_there = handle_with(&s, "GET", &item("saml.corp"), &owner(), &json!({}));
+    assert_eq!(still_there.status, 200, "{}", still_there.body);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn inbound_saml_sign_request_mask_defaults_and_is_atomic_for_project_and_tenant() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer").unwrap();
+    s.registry = Some(registry);
+    let collections = [
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/inboundSamlConfigs",
+        "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/customer/inboundSamlConfigs",
+    ];
+    for (index, collection) in collections.into_iter().enumerate() {
+        let id = if index == 0 {
+            "saml.project"
+        } else {
+            "saml.tenant"
+        };
+        let item = format!("{collection}/{id}");
+        let create = handle_with(
+            &s,
+            "POST",
+            &format!("{collection}?inboundSamlConfigId={id}"),
+            &owner(),
+            &json!({
+                "displayName": "Original",
+                "idpConfig": {
+                    "idpEntityId": "entity",
+                    "ssoUrl": "https://idp.example/sso",
+                    "idpCertificates": [{"x509Certificate": "CERT"}],
+                    "signRequest": true
+                },
+                "spConfig": {
+                    "spEntityId": "sp",
+                    "callbackUri": "https://sp.example/callback"
+                }
+            }),
+        );
+        assert_eq!(create.status, 200, "{}", create.body);
+
+        for body in [json!("wrong shape"), json!([]), Value::Null] {
+            let refused = handle_with(
+                &s,
+                "PATCH",
+                &format!("{item}?updateMask=idpConfig.signRequest"),
+                &owner(),
+                &body,
+            );
+            assert_eq!(refused.status, 400, "{body}");
+            let unchanged = handle_with(&s, "GET", &item, &owner(), &json!({}));
+            assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+            assert_eq!(unchanged.body["idpConfig"]["signRequest"], true);
+        }
+
+        let encoded = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=%69dpConfig%2EsignRequest"),
+            &owner(),
+            &json!({"idpConfig": {"signRequest": true}}),
+        );
+        assert_eq!(encoded.status, 200, "{}", encoded.body);
+        for mask in [
+            "%69dpConfig%2EsignRequest%2C%69dpConfig%2EsignRequest",
+            "%ZZ",
+        ] {
+            let refused = handle_with(
+                &s,
+                "PATCH",
+                &format!("{item}?updateMask={mask}"),
+                &owner(),
+                &json!({"idpConfig": {"signRequest": false}}),
+            );
+            assert_eq!(refused.status, 400, "mask={mask}: {}", refused.body);
+            let unchanged = handle_with(&s, "GET", &item, &owner(), &json!({}));
+            assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+            assert_eq!(unchanged.body["idpConfig"]["signRequest"], true);
+        }
+        let repeated = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=idpConfig.signRequest&updateMask=displayName"),
+            &owner(),
+            &json!({
+                "displayName": "Changed",
+                "idpConfig": {"signRequest": false}
+            }),
+        );
+        assert_eq!(repeated.status, 400, "{}", repeated.body);
+        let unchanged = handle_with(&s, "GET", &item, &owner(), &json!({}));
+        assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+        assert_eq!(unchanged.body["displayName"], "Original");
+        assert_eq!(unchanged.body["idpConfig"]["signRequest"], true);
+
+        let parent_no_presence = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=idpConfig"),
+            &owner(),
+            &json!({"idpConfig": {}}),
+        );
+        assert_eq!(
+            parent_no_presence.status, 200,
+            "{}",
+            parent_no_presence.body
+        );
+        assert_eq!(parent_no_presence.body["idpConfig"]["signRequest"], true);
+
+        let omitted_leaf = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=idpConfig.signRequest"),
+            &owner(),
+            &json!({"idpConfig": {}}),
+        );
+        assert_eq!(omitted_leaf.status, 200, "{}", omitted_leaf.body);
+        assert_eq!(omitted_leaf.body["idpConfig"]["signRequest"], false);
+
+        let explicit_true = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=idpConfig.signRequest"),
+            &owner(),
+            &json!({"idpConfig": {"signRequest": true}}),
+        );
+        assert_eq!(explicit_true.status, 200, "{}", explicit_true.body);
+
+        let outside_mask = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=idpConfig.signRequest"),
+            &owner(),
+            &json!({
+                "displayName": "Changed",
+                "idpConfig": {"signRequest": true, "idpEntityId": "changed"}
+            }),
+        );
+        assert_eq!(outside_mask.status, 200, "{}", outside_mask.body);
+        assert_eq!(outside_mask.body["displayName"], "Original");
+        assert_eq!(outside_mask.body["idpConfig"]["idpEntityId"], "entity");
+        assert_eq!(outside_mask.body["idpConfig"]["signRequest"], true);
+
+        let invalid = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=idpConfig.signRequest"),
+            &owner(),
+            &json!({"idpConfig": {"signRequest": "wrong type"}}),
+        );
+        assert_eq!(invalid.status, 400, "{}", invalid.body);
+        let unchanged = handle_with(&s, "GET", &item, &owner(), &json!({}));
+        assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+        assert_eq!(unchanged.body["displayName"], "Original");
+        assert_eq!(unchanged.body["idpConfig"]["idpEntityId"], "entity");
+        assert_eq!(unchanged.body["idpConfig"]["signRequest"], true);
+
+        let explicit_false = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask=idpConfig.signRequest"),
+            &owner(),
+            &json!({"idpConfig": {"signRequest": false}}),
+        );
+        assert_eq!(explicit_false.status, 200, "{}", explicit_false.body);
+        assert_eq!(explicit_false.body["idpConfig"]["signRequest"], false);
+
+        let empty = handle_with(
+            &s,
+            "PATCH",
+            &format!("{item}?updateMask="),
+            &owner(),
+            &json!({"idpConfig": {"signRequest": true}}),
+        );
+        assert_eq!(empty.status, 200, "{}", empty.body);
+        assert_eq!(empty.body["idpConfig"]["signRequest"], false);
+
+        for mask in [
+            "idpConfig.unknown",
+            "idpConfig.signRequest,idpConfig.signRequest",
+            "idpConfig.signRequest,,displayName",
+        ] {
+            let refused = handle_with(
+                &s,
+                "PATCH",
+                &format!("{item}?updateMask={mask}"),
+                &owner(),
+                &json!({
+                    "displayName": "Changed",
+                    "idpConfig": {"signRequest": true}
+                }),
+            );
+            assert_eq!(refused.status, 400, "mask={mask}: {}", refused.body);
+        }
+        let after_bad_masks = handle_with(&s, "GET", &item, &owner(), &json!({}));
+        assert_eq!(after_bad_masks.status, 200, "{}", after_bad_masks.body);
+        assert_eq!(after_bad_masks.body["displayName"], "Original");
+        assert_eq!(after_bad_masks.body["idpConfig"]["signRequest"], false);
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn provider_ids_and_semantic_validation_are_kind_specific_and_atomic() {
+    let s = state();
+    let oidc = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/oauthIdpConfigs";
+    let saml = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/inboundSamlConfigs";
+    assert_eq!(
+        handle_with(&s, "GET", oidc, &RequestHeaders::default(), &json!({})).status,
+        401
+    );
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            &oidc.replace("demo-app", "other-project"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        400
+    );
+    let invalid_ids = [
+        (
+            "oauthIdpConfigId=shared",
+            json!({"clientId": "c", "issuer": "https://idp.example"}),
+        ),
+        (
+            "oauthIdpConfigId=saml.wrong",
+            json!({"clientId": "c", "issuer": "https://idp.example"}),
+        ),
+        (
+            "oauthIdpConfigId=oidc.",
+            json!({"clientId": "c", "issuer": "https://idp.example"}),
+        ),
+        ("inboundSamlConfigId=oidc.wrong", json!({})),
+        ("inboundSamlConfigId=saml.", json!({})),
+    ];
+    for (query, body) in invalid_ids {
+        let path = if query.starts_with("inbound") {
+            saml
+        } else {
+            oidc
+        };
+        assert_eq!(
+            handle_with(&s, "POST", &format!("{path}?{query}"), &owner(), &body).status,
+            400
+        );
+    }
+    let valid = handle_with(
+        &s,
+        "POST",
+        &format!("{oidc}?oauthIdpConfigId=oidc.defaults"),
+        &owner(),
+        &json!({"clientId": "c", "issuer": "https://idp.example", "clientSecret": "secret-value"}),
+    );
+    assert_eq!(valid.status, 200, "{}", valid.body);
+    assert_eq!(valid.body["responseType"]["idToken"], true);
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            &format!("{oidc}/saml.wrong"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        400
+    );
+    assert_eq!(
+        handle_with(
+            &s,
+            "GET",
+            &format!("{oidc}/oidc.%2Fencoded"),
+            &owner(),
+            &json!({})
+        )
+        .status,
+        400
+    );
+
+    let no_mask = handle_with(
+        &s,
+        "PATCH",
+        &format!("{oidc}/oidc.defaults"),
+        &owner(),
+        &json!({"issuer": "not-a-url"}),
+    );
+    assert_eq!(no_mask.status, 200, "{}", no_mask.body);
+    for (mask, body) in [
+        ("responseType", json!({"responseType": {"token": true}})),
+        (
+            "responseType",
+            json!({"responseType": {"idToken": false, "code": false}}),
+        ),
+        (
+            "responseType",
+            json!({"responseType": {"idToken": true, "code": true}}),
+        ),
+        (
+            "responseType,clientSecret",
+            json!({"responseType": {"code": true}, "clientSecret": ""}),
+        ),
+        ("issuer", json!({"issuer": "not-a-url"})),
+    ] {
+        let refused = handle_with(
+            &s,
+            "PATCH",
+            &format!("{oidc}/oidc.defaults?updateMask={mask}"),
+            &owner(),
+            &body,
+        );
+        assert_eq!(refused.status, 400, "{}", refused.body);
+    }
+    let nested_token = handle_with(
+        &s,
+        "PATCH",
+        &format!("{oidc}/oidc.defaults?updateMask=responseType.token"),
+        &owner(),
+        &json!({"responseType": {"token": true}}),
+    );
+    assert_eq!(nested_token.status, 400, "{}", nested_token.body);
+    let nested_all_false = handle_with(
+        &s,
+        "PATCH",
+        &format!("{oidc}/oidc.defaults?updateMask=responseType.idToken"),
+        &owner(),
+        &json!({"responseType": {"idToken": false}}),
+    );
+    assert_eq!(nested_all_false.status, 400, "{}", nested_all_false.body);
+    let valid_partial = handle_with(
+        &s,
+        "PATCH",
+        &format!("{oidc}/oidc.defaults?updateMask=responseType.code"),
+        &owner(),
+        &json!({"responseType": {"code": false}}),
+    );
+    assert_eq!(valid_partial.status, 200, "{}", valid_partial.body);
+    let unchanged = handle_with(
+        &s,
+        "GET",
+        &format!("{oidc}/oidc.defaults"),
+        &owner(),
+        &json!({}),
+    );
+    assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+    assert_eq!(unchanged.body["issuer"], "https://idp.example");
+    assert!(!format!("{:?}", s.store.lock().unwrap()).contains("secret-value"));
+
+    let saml_refused = handle_with(
+        &s,
+        "POST",
+        &format!("{saml}?inboundSamlConfigId=saml.empty"),
+        &owner(),
+        &json!({
+            "idpConfig": {"idpEntityId": "entity", "ssoUrl": "not-a-url", "idpCertificates": []},
+            "spConfig": {"spEntityId": "sp", "callbackUri": "not-a-url"}
+        }),
+    );
+    assert_eq!(saml_refused.status, 400, "{}", saml_refused.body);
+}
+
+#[test]
 fn admin_create_is_atomic_and_typed() {
     let s = state();
     // Weak password: nothing is created (the email / uid are not squatted).
@@ -1805,10 +2701,17 @@ fn admin_create_is_atomic_and_typed() {
         &s,
         "POST",
         &format!("{ADMIN}/accounts"),
-        &json!({"localId": "u-alice", "email": "alice@example.com", "password": "password1", "displayName": "Alice"}),
+        &json!({"localId": "u-alice", "email": "Alice@example.com", "password": "password1", "displayName": "Alice"}),
     );
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["localId"], "u-alice");
+    let (status, duplicate) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "u-alice-duplicate", "email": "alice@example.com"}),
+    );
+    assert_eq!(status, 400, "{duplicate}");
     let (status, _) = admin(
         &s,
         "POST",
@@ -1824,6 +2727,420 @@ fn admin_create_is_atomic_and_typed() {
     );
     assert_eq!(status, 200);
     assert_ne!(body["localId"], "u-alice");
+}
+
+#[test]
+fn batch_import_rejects_malformed_typed_fields_without_creating_rows() {
+    let s = state();
+    for (local_id, field, value) in [
+        ("batch-bad-mfa", "mfaInfo", json!("not-an-array")),
+        ("batch-bad-provider", "providerUserInfo", json!({})),
+        ("batch-bad-mfa-entry", "mfaInfo", json!([null])),
+        (
+            "batch-bad-mfa-string-entry",
+            "mfaInfo",
+            json!(["not-an-object"]),
+        ),
+        (
+            "batch-bad-mfa-array-entry",
+            "mfaInfo",
+            json!([["not-an-object"]]),
+        ),
+        (
+            "batch-bad-provider-entry",
+            "providerUserInfo",
+            json!([null]),
+        ),
+        (
+            "batch-bad-provider-string-entry",
+            "providerUserInfo",
+            json!(["not-an-object"]),
+        ),
+        (
+            "batch-bad-provider-array-entry",
+            "providerUserInfo",
+            json!([["not-an-object"]]),
+        ),
+        ("batch-bad-created", "createdAt", json!("not-a-timestamp")),
+        ("batch-bad-login", "lastLoginAt", json!(false)),
+    ] {
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &json!({"users": [{"localId": local_id, field: value}]}),
+        );
+        assert_eq!(status, 200, "{response}");
+        assert_eq!(
+            response["error"].as_array().map(Vec::len),
+            Some(1),
+            "{response}"
+        );
+        assert!(s.store.lock().unwrap().user_by_id(local_id).is_none());
+    }
+
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"allowOverwrite": "yes", "users": [{"localId": "batch-bad-overwrite"}]}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("batch-bad-overwrite")
+        .is_none());
+
+    // A malformed row is reported by index while neighboring valid rows are still imported.
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({
+            "users": [
+                {"localId": "batch-partial-valid", "email": "partial-valid@example.com"},
+                {"localId": "batch-partial-invalid", "mfaInfo": ["not-an-object"]},
+                {"localId": "batch-partial-valid-after", "email": "partial-valid-after@example.com"}
+            ]
+        }),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(
+        response["error"].as_array().map(Vec::len),
+        Some(1),
+        "{response}"
+    );
+    assert_eq!(response["error"][0]["index"], 1, "{response}");
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("batch-partial-valid")
+        .is_some());
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("batch-partial-invalid")
+        .is_none());
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("batch-partial-valid-after")
+        .is_some());
+}
+
+#[test]
+fn batch_import_treats_null_optional_fields_as_unset() {
+    let s = state();
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({
+            "allowOverwrite": null,
+            "users": [{
+                "localId": "batch-null-fields",
+                "email": "batch-null-fields@example.com",
+                "providerUserInfo": null,
+                "mfaInfo": null,
+                "createdAt": null,
+                "lastLoginAt": null
+            }]
+        }),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(response["error"], json!([]), "{response}");
+
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("batch-null-fields")
+        .is_some());
+    let (status, lookup) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["batch-null-fields"]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    let imported = &lookup["users"][0];
+    assert!(imported.get("providerUserInfo").is_none());
+    assert!(imported.get("mfaInfo").is_none());
+    assert!(imported.get("lastLoginAt").is_none());
+
+    // `allowOverwrite: null` follows the omitted/default false path. A duplicate
+    // localId must be reported without replacing the already imported account.
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({
+            "allowOverwrite": null,
+            "users": [{
+                "localId": "batch-null-fields",
+                "email": "replacement@example.com",
+                "displayName": "must-not-replace"
+            }]
+        }),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(
+        response["error"].as_array().map(Vec::len),
+        Some(1),
+        "{response}"
+    );
+    let (status, lookup) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["batch-null-fields"]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert_eq!(lookup["users"][0]["email"], "batch-null-fields@example.com");
+    assert_ne!(lookup["users"][0]["displayName"], "must-not-replace");
+}
+
+#[test]
+fn batch_import_treats_omitted_null_and_empty_repeated_fields_consistently() {
+    let s = state();
+    for (local_id, extra) in [
+        ("batch-omitted-fields", json!({})),
+        (
+            "batch-null-fields-controls",
+            json!({"providerUserInfo": null, "mfaInfo": null, "createdAt": null, "lastLoginAt": null}),
+        ),
+        (
+            "batch-empty-fields-controls",
+            json!({"providerUserInfo": [], "mfaInfo": [], "createdAt": null, "lastLoginAt": null}),
+        ),
+    ] {
+        let mut row = json!({"localId": local_id, "email": format!("{local_id}@example.com")});
+        row.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &json!({"users": [row]}),
+        );
+        assert_eq!(status, 200, "{response}");
+        assert_eq!(response["error"], json!([]), "{response}");
+    }
+
+    let (status, lookup) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [
+            "batch-omitted-fields",
+            "batch-null-fields-controls",
+            "batch-empty-fields-controls"
+        ]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    for user in lookup["users"].as_array().unwrap() {
+        assert!(user.get("providerUserInfo").is_none(), "{user}");
+        assert!(user.get("mfaInfo").is_none(), "{user}");
+        assert!(user.get("lastLoginAt").is_none(), "{user}");
+        assert!(
+            user.get("createdAt").and_then(Value::as_str).is_some(),
+            "{user}"
+        );
+    }
+}
+
+#[test]
+fn password_policy_admin_create_covers_maximum_and_invalid_password_inputs_atomically() {
+    for (units, expected_status) in [(4095, 200), (4096, 200), (4097, 400)] {
+        let s = state();
+        let uid = format!("admin-create-password-{units}");
+        let email = format!("admin-create-password-{units}@example.com");
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({
+                "localId": uid,
+                "email": email,
+                "password": password_with_utf16_units(units),
+                "displayName": "must-not-apply"
+            }),
+        );
+        assert_eq!(status, expected_status, "{response}");
+        if expected_status == 400 {
+            assert_eq!(
+                response["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+                "{response}"
+            );
+            assert!(s.store.lock().unwrap().user_by_id(&uid).is_none());
+        } else {
+            let (_, lookup) = admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:lookup"),
+                &json!({"localId": [uid]}),
+            );
+            assert_eq!(lookup["users"][0]["displayName"], "must-not-apply");
+        }
+    }
+
+    for (uid, password) in [
+        ("admin-create-control", json!("12345\u{0000}")),
+        ("admin-create-short", json!("12345")),
+        ("admin-create-wrong-type", json!(42)),
+    ] {
+        let s = state();
+        let email = format!("{uid}@example.com");
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": uid, "email": email, "password": password}),
+        );
+        assert_eq!(status, 400, "{response}");
+        if uid == "admin-create-wrong-type" {
+            assert_eq!(
+                response["error"]["message"],
+                "INVALID_ARGUMENT : password must be a string"
+            );
+        } else {
+            assert_eq!(
+                response["error"]["message"],
+                "WEAK_PASSWORD : Password should be at least 6 characters"
+            );
+        }
+        assert!(s.store.lock().unwrap().user_by_id(uid).is_none());
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn account_lifecycle_keeps_admin_and_client_post_state_consistent() {
+    let s = strict_state();
+    let uid = "lifecycle-user";
+    let email = "lifecycle@example.test";
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": uid, "email": email, "password": "lifecycle-password"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    assert_eq!(created["localId"], uid);
+
+    let (status, duplicate) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "other-user", "email": email, "password": "other-password"}),
+    );
+    assert_eq!(status, 400, "{duplicate}");
+    assert_eq!(duplicate["error"]["message"], "EMAIL_EXISTS");
+    let (_, after_duplicate) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [uid, "other-user"]}),
+    );
+    assert_eq!(after_duplicate["users"].as_array().map(Vec::len), Some(1));
+
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": "lifecycle-password", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let (status, updated) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "displayName": "Lifecycle User", "disableUser": true}),
+    );
+    assert_eq!(status, 200, "{updated}");
+    let (_, disabled_view) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [uid]}),
+    );
+    assert_eq!(disabled_view["users"][0]["disabled"], true);
+    let (status, disabled) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": "lifecycle-password"}),
+    );
+    assert_eq!(status, 400, "{disabled}");
+    assert_eq!(disabled["error"]["message"], "USER_DISABLED");
+    let (status, reenabled) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "disableUser": false}),
+    );
+    assert_eq!(status, 200, "{reenabled}");
+    let (_, reenabled_view) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [uid]}),
+    );
+    assert!(reenabled_view["users"][0].get("disabled").is_none());
+    let (status, client_signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": "lifecycle-password"}),
+    );
+    assert_eq!(status, 200, "{client_signed}");
+    let (_, client_view) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": client_signed["idToken"]}),
+    );
+    assert_eq!(client_view["users"][0]["localId"], uid);
+    assert_eq!(client_view["users"][0]["displayName"], "Lifecycle User");
+
+    let (status, listed) = admin(
+        &s,
+        "GET",
+        &format!("{ADMIN}/accounts:batchGet?maxResults=10"),
+        &json!({}),
+    );
+    assert_eq!(status, 200, "{listed}");
+    assert!(listed["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|u| u["localId"] == uid));
+
+    let (status, deleted) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:delete"),
+        &json!({"localId": uid}),
+    );
+    assert_eq!(status, 200, "{deleted}");
+    let (_, missing) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [uid]}),
+    );
+    assert!(missing.get("users").is_none(), "{missing}");
+
+    let (status, recreated) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": uid, "email": "recreated@example.test", "password": "recreated-password"}),
+    );
+    assert_eq!(status, 200, "{recreated}");
+    assert_eq!(recreated["localId"], uid);
 }
 
 #[test]
@@ -2019,6 +3336,43 @@ fn strict_admin_query_applies_the_production_page_contract() {
 }
 
 #[test]
+fn admin_lookup_rejects_malformed_federated_identifiers_without_lookup_results() {
+    let s = state();
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({
+            "localId": "federated-lookup",
+            "email": "federated-lookup@example.test"
+        }),
+    );
+    assert_eq!(status, 200);
+
+    for identifier in [
+        json!({"rawId": "provider-user"}),
+        json!({"providerId": "google.com"}),
+        json!({"providerId": 7, "rawId": "provider-user"}),
+        json!({"providerId": "google.com", "rawId": false}),
+    ] {
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"federatedUserId": [identifier]}),
+        );
+        assert_eq!(status, 400, "{response}");
+        assert_eq!(
+            response["error"]["message"],
+            "INVALID_ARGUMENT : federatedUserId items require string providerId and rawId",
+            "{response}"
+        );
+        assert!(response.get("users").is_none(), "{response}");
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
 fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic() {
     let s = state();
     let (status, signed) = post(
@@ -2064,8 +3418,14 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
         &format!("{V1}/accounts:lookup"),
         &json!({"idToken": refreshed_before_update["id_token"]}),
     );
-    assert_eq!(status, 200, "{looked_up_after_update}");
-    let (status, _) = post(
+    assert_eq!(status, 400, "{looked_up_after_update}");
+    assert!(
+        looked_up_after_update["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("TOKEN_EXPIRED")),
+        "{looked_up_after_update}"
+    );
+    let (status, refreshed_after_update) = post(
         &s,
         "/securetoken.googleapis.com/v1/token",
         &json!({
@@ -2076,6 +3436,18 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
     assert_eq!(
         status, 200,
         "the official emulator keeps refresh tokens usable after an Admin password change"
+    );
+    let (status, looked_up_after_refresh) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": refreshed_after_update["id_token"]}),
+    );
+    assert_eq!(status, 400, "{looked_up_after_refresh}");
+    assert!(
+        looked_up_after_refresh["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("TOKEN_EXPIRED")),
+        "{looked_up_after_refresh}"
     );
     let (status, _) = post(
         &s,
@@ -2110,11 +3482,1796 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
         &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
     );
     assert_eq!(status, 400, "{deleted}");
-    assert_eq!(deleted["error"]["message"], "INVALID_REFRESH_TOKEN");
+    assert_eq!(deleted["error"]["message"], "USER_NOT_FOUND");
 }
 
 #[test]
-fn strict_profile_admin_password_change_revokes_refresh_tokens() {
+#[allow(clippy::too_many_lines)] // The finite authorization matrix shares real account setup.
+fn lookup_authorization_separates_end_user_identity_from_admin_selectors() {
+    for s in [state(), strict_state()] {
+        let mut signed = Vec::new();
+        for email in ["lookup-caller@example.test", "lookup-target@example.test"] {
+            let (status, account) = post(
+                &s,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email": email, "password": "lookup-password", "returnSecureToken": true}),
+            );
+            assert_eq!(status, 200);
+            signed.push(account);
+        }
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({
+                "localId": signed[1]["localId"], "phoneNumber": "+16505550123",
+                "linkProviderUserInfo": {"providerId": "google.com", "rawId": "lookup-target-provider"}
+            }),
+        );
+        assert_eq!(status, 200);
+        for account in &signed {
+            let (status, own) = post(
+                &s,
+                &format!("{V1}/accounts:lookup"),
+                &json!({"idToken": account["idToken"]}),
+            );
+            assert_eq!(status, 200);
+            assert_eq!(own["users"].as_array().unwrap().len(), 1);
+            assert_eq!(own["users"][0]["localId"], account["localId"]);
+        }
+        for (field, selector) in [
+            ("localId", json!([signed[1]["localId"]])),
+            ("email", json!(["lookup-target@example.test"])),
+            ("phoneNumber", json!(["+16505550123"])),
+            (
+                "federatedUserId",
+                json!([{"providerId": "google.com", "rawId": "lookup-target-provider"}]),
+            ),
+        ] {
+            let mut query = json!({});
+            query[field] = selector.clone();
+            let (status, found) = admin(&s, "POST", &format!("{ADMIN}/accounts:lookup"), &query);
+            assert_eq!(status, 200);
+            assert_eq!(found["users"].as_array().unwrap().len(), 1);
+            assert_eq!(found["users"][0]["localId"], signed[1]["localId"]);
+            // Neither a missing Admin credential nor an end-user bearer grants Admin lookup.
+            for authorization in [
+                None,
+                Some(format!("Bearer {}", signed[0]["idToken"].as_str().unwrap())),
+            ] {
+                let headers = RequestHeaders {
+                    authorization,
+                    ..RequestHeaders::default()
+                };
+                let response = handle_with(
+                    &s,
+                    "POST",
+                    &format!("{ADMIN}/accounts:lookup"),
+                    &headers,
+                    &query,
+                );
+                assert_ne!(response.status, 200);
+                assert!(response.body.get("users").is_none());
+            }
+            for value in [selector, json!([]), Value::Null, json!(false)] {
+                for token in [
+                    None,
+                    Some(json!("malformed")),
+                    Some(signed[0]["idToken"].clone()),
+                    Some(signed[1]["idToken"].clone()),
+                ] {
+                    let expected_error = match token.as_ref().and_then(Value::as_str) {
+                        None => "MISSING_ID_TOKEN",
+                        Some("malformed") => "INVALID_ID_TOKEN",
+                        Some(_) => "OPERATION_NOT_ALLOWED",
+                    };
+                    let mut request = json!({"admin": true});
+                    request[field] = value.clone();
+                    if let Some(token) = token {
+                        request["idToken"] = token;
+                    }
+                    let (status, refused) = post(&s, &format!("{V1}/accounts:lookup"), &request);
+                    assert_eq!(
+                        status, 400,
+                        "selector {field} must not bypass end-user identity"
+                    );
+                    assert!(refused.get("users").is_none());
+                    assert_eq!(refused["error"]["message"], expected_error);
+                }
+            }
+            // Even the emulator owner header cannot change an end-user handler's role.
+            query["idToken"] = signed[0]["idToken"].clone();
+            let response = handle_with(
+                &s,
+                "POST",
+                &format!("{V1}/accounts:lookup"),
+                &owner(),
+                &query,
+            );
+            assert_eq!(response.status, 400);
+            assert!(response.body.get("users").is_none());
+        }
+        assert_eq!(
+            post(
+                &s,
+                &format!("{V1}/accounts:delete"),
+                &json!({"idToken": signed[0]["idToken"]})
+            )
+            .0,
+            200
+        );
+        let (status, missing) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed[0]["idToken"]}),
+        );
+        assert_eq!(status, 400);
+        assert_eq!(missing["error"]["message"], "USER_NOT_FOUND");
+    }
+}
+
+#[test]
+fn deleted_account_credentials_are_distinct_from_unknown_inputs() {
+    let s = strict_state();
+    let mut accounts = Vec::new();
+    for email in ["deleted-target@example.com", "deleted-control@example.com"] {
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": "original-password", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200);
+        accounts.push(signed);
+    }
+    for deleted in [false, true] {
+        if deleted {
+            assert_eq!(
+                post(
+                    &s,
+                    &format!("{V1}/accounts:delete"),
+                    &json!({"idToken": accounts[0]["idToken"]})
+                )
+                .0,
+                200
+            );
+        }
+        for (index, fixed) in accounts.iter().enumerate() {
+            for (path, request) in [
+                (
+                    format!("{V1}/accounts:lookup"),
+                    json!({"idToken": fixed["idToken"]}),
+                ),
+                (
+                    "/securetoken.googleapis.com/v1/token".to_owned(),
+                    json!({"grant_type": "refresh_token", "refresh_token": fixed["refreshToken"]}),
+                ),
+            ] {
+                let (status, response) = post(&s, &path, &request);
+                if deleted && index == 0 {
+                    assert_eq!(status, 400);
+                    assert_eq!(response["error"]["message"], "USER_NOT_FOUND", "{path}");
+                } else {
+                    assert_eq!(status, 200);
+                    if path.ends_with("/token") {
+                        assert_eq!(
+                            post(
+                                &s,
+                                &format!("{V1}/accounts:lookup"),
+                                &json!({"idToken": response["id_token"]})
+                            )
+                            .0,
+                            200
+                        );
+                    }
+                }
+            }
+        }
+    }
+    for token in [
+        "unknown-token".to_owned(),
+        format!("{}x", accounts[0]["refreshToken"].as_str().unwrap()),
+    ] {
+        let (status, response) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type": "refresh_token", "refresh_token": token}),
+        );
+        assert_eq!(status, 400);
+        assert_eq!(response["error"]["message"], "INVALID_REFRESH_TOKEN");
+    }
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": "malformed"}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(response["error"]["message"], "INVALID_ID_TOKEN");
+    advance(&s, 3601);
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": accounts[0]["idToken"]}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(response["error"]["message"], "TOKEN_EXPIRED");
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Keep disable, re-enable and revocation controls in one lifecycle.
+fn disabled_account_preserves_fixed_credentials_for_reenable_in_strict_profile() {
+    let s = strict_state();
+    let mut accounts = Vec::new();
+    for email in [
+        "disabled-target@example.com",
+        "disabled-control@example.com",
+    ] {
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({
+                "email": email, "password": "original-password", "returnSecureToken": true
+            }),
+        );
+        assert_eq!(status, 200);
+        accounts.push((email, signed));
+    }
+    for disabled in [false, true, false] {
+        advance(&s, 2);
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({
+                "localId": accounts[0].1["localId"], "disableUser": disabled
+            }),
+        );
+        assert_eq!(status, 200);
+        for (index, (email, fixed)) in accounts.iter().enumerate() {
+            for (path, request) in [
+                (
+                    format!("{V1}/accounts:signInWithPassword"),
+                    json!({"email": email, "password": "original-password", "returnSecureToken": true}),
+                ),
+                (
+                    format!("{V1}/accounts:lookup"),
+                    json!({"idToken": fixed["idToken"]}),
+                ),
+                (
+                    "/securetoken.googleapis.com/v1/token".to_owned(),
+                    json!({"grant_type":"refresh_token", "refresh_token": fixed["refreshToken"]}),
+                ),
+            ] {
+                let (status, response) = post(&s, &path, &request);
+                if disabled && index == 0 {
+                    assert_eq!(status, 400, "{path}");
+                    assert_eq!(response["error"]["message"], "USER_DISABLED", "{path}");
+                } else {
+                    assert_eq!(status, 200, "{path}: {response}");
+                    if path.ends_with("/token") {
+                        let (status, looked) = post(
+                            &s,
+                            &format!("{V1}/accounts:lookup"),
+                            &json!({"idToken": response["id_token"]}),
+                        );
+                        assert_eq!(status, 200);
+                        assert_eq!(looked["users"][0]["localId"], fixed["localId"]);
+                    }
+                }
+            }
+        }
+    }
+    // Re-enabling must not undo a simultaneous password change.
+    advance(&s, 2);
+    for request in [
+        json!({"localId": accounts[1].1["localId"], "disableUser": true, "password": "replacement-password"}),
+        json!({"localId": accounts[1].1["localId"], "disableUser": false}),
+    ] {
+        assert_eq!(
+            admin(&s, "POST", &format!("{ADMIN}/accounts:update"), &request).0,
+            200
+        );
+    }
+    assert_eq!(
+        post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": accounts[1].1["idToken"]})
+        )
+        .0,
+        400
+    );
+    assert_eq!(
+        post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type": "refresh_token", "refresh_token": accounts[1].1["refreshToken"]})
+        )
+        .0,
+        400
+    );
+    assert_eq!(post(&s, &format!("{V1}/accounts:signInWithPassword"), &json!({"email": accounts[1].0, "password": "replacement-password", "returnSecureToken": true})).0, 200);
+    // Re-enabling must not undo a separate explicit revocation.
+    advance(&s, 2);
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({
+            "localId": accounts[0].1["localId"], "validSince": "9999999999", "disableUser": true
+        }),
+    );
+    assert_eq!(status, 200);
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": accounts[0].1["localId"], "disableUser": false}),
+    );
+    assert_eq!(status, 200);
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": accounts[0].1["idToken"]}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type": "refresh_token", "refresh_token": accounts[0].1["refreshToken"]})
+        )
+        .0,
+        400
+    );
+}
+
+#[test]
+fn password_maximum_update_counts_utf16_units_and_preserves_rejected_state() {
+    for (suffix, count, accepted) in [
+        ("a", 4064, true),
+        ("a", 4065, false),
+        ("é", 2032, true),
+        ("é", 2033, true),
+        ("\u{10400}", 2032, true),
+        ("\u{10400}", 2033, false),
+        ("é", 4064, true),
+        ("é", 4065, false),
+    ] {
+        let s = strict_state();
+        let email = "unicode-maximum@example.com";
+        let original = "original-password";
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({
+                "email": email, "password": original, "returnSecureToken": true
+            }),
+        );
+        assert_eq!(status, 200);
+        let (_, before) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed["idToken"]}),
+        );
+        let password = format!("{}{}", "a".repeat(32), suffix.repeat(count));
+        advance(&s, 2);
+        let (status, changed) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({
+                "idToken": signed["idToken"], "password": password,
+                "displayName": "changed", "returnSecureToken": true
+            }),
+        );
+        assert_eq!(
+            status,
+            if accepted { 200 } else { 400 },
+            "suffix={suffix:?}, count={count}"
+        );
+        let credentials = if accepted { &changed } else { &signed };
+        if !accepted {
+            assert_eq!(
+                changed["error"]["message"],
+                "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"
+            );
+        }
+        let (status, after) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": credentials["idToken"]}),
+        );
+        assert_eq!(status, 200);
+        if accepted {
+            assert_eq!(after["users"][0]["displayName"], "changed");
+        } else {
+            assert_eq!(after, before);
+        }
+        let (status, refreshed) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({
+                "grant_type": "refresh_token", "refresh_token": credentials["refreshToken"]
+            }),
+        );
+        assert_eq!(status, 200);
+        let (status, looked) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": refreshed["id_token"]}),
+        );
+        assert_eq!(status, 200);
+        assert_eq!(looked["users"][0]["localId"], signed["localId"]);
+        let (status, logged) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({
+                "email": email, "password": if accepted { password.as_str() } else { original }, "returnSecureToken": true
+            }),
+        );
+        assert_eq!(status, 200);
+        assert_eq!(logged["localId"], signed["localId"]);
+    }
+}
+
+#[test]
+fn password_maximum_update_preserves_credentials_and_full_suffix() {
+    let s = strict_state();
+    let (_, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "email": "maximum@example.com", "password": "original-password", "returnSecureToken": true
+        }),
+    );
+    advance(&s, 2);
+    let maximum = "a".repeat(4096);
+    let (status, changed) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({
+            "idToken": signed["idToken"], "password": maximum, "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200, "{changed}");
+    for password in [
+        maximum.clone(),
+        format!("{}b", "a".repeat(4095)),
+        "a".repeat(4095),
+    ] {
+        let (status, response) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({
+                "email": "maximum@example.com", "password": password, "returnSecureToken": true
+            }),
+        );
+        assert_eq!(
+            status,
+            if password == maximum { 200 } else { 400 },
+            "{response}"
+        );
+    }
+    advance(&s, 2);
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({
+            "idToken": changed["idToken"], "password": "a".repeat(4097), "displayName": "must-not-apply"
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"
+    );
+    let (status, looked) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": changed["idToken"]}),
+    );
+    assert_eq!(status, 200, "{looked}");
+    assert_ne!(looked["users"][0]["displayName"], "must-not-apply");
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({
+            "grant_type": "refresh_token", "refresh_token": changed["refreshToken"]
+        }),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({
+            "email": "maximum@example.com", "password": maximum, "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200, "{response}");
+}
+
+fn password_with_utf16_units(units: usize) -> String {
+    assert!(units >= 2);
+    let mut password = "a".repeat(units - 2);
+    password.push('\u{10400}');
+    assert_eq!(password.encode_utf16().count(), units);
+    password
+}
+
+#[test]
+fn password_policy_boundaries_apply_to_sign_up_without_creating_rejected_accounts() {
+    for (units, expected_status) in [(4095, 200), (4096, 200), (4097, 400)] {
+        let s = state();
+        let email = format!("signup-password-{units}@example.com");
+        let password = password_with_utf16_units(units);
+        let (status, response) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": password, "returnSecureToken": true}),
+        );
+        assert_eq!(status, expected_status, "{response}");
+        if expected_status == 400 {
+            assert_eq!(
+                response["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+                "{response}"
+            );
+        }
+        assert_eq!(
+            s.store.lock().unwrap().user_by_email(&email).is_some(),
+            expected_status == 200
+        );
+    }
+
+    for password in ["12345\u{0000}".to_owned(), "12345".to_owned()] {
+        let s = state();
+        let email = format!("signup-invalid-{}@example.com", password.len());
+        let (status, response) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": password}),
+        );
+        assert_eq!(status, 400, "{response}");
+        assert_eq!(
+            response["error"]["message"],
+            "WEAK_PASSWORD : Password should be at least 6 characters",
+            "{response}"
+        );
+        assert!(s.store.lock().unwrap().user_by_email(&email).is_none());
+    }
+
+    let s = state();
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "signup-malformed@example.com", "password": 42}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"], "INVALID_ARGUMENT : password must be a string",
+        "{response}"
+    );
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("signup-malformed@example.com")
+        .is_none());
+}
+
+#[test]
+fn password_policy_boundaries_apply_to_admin_update_before_any_profile_mutation() {
+    for (units, expected_status) in [(4095, 200), (4096, 200), (4097, 400)] {
+        let s = state();
+        let email = format!("admin-password-{units}@example.com");
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": "original-password"}),
+        );
+        assert_eq!(status, 200, "{signed}");
+        let password = password_with_utf16_units(units);
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({
+                "localId": signed["localId"],
+                "password": password,
+                "displayName": "must-not-apply"
+            }),
+        );
+        assert_eq!(status, expected_status, "{response}");
+        if expected_status == 400 {
+            assert_eq!(
+                response["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+                "{response}"
+            );
+        }
+        let (_, lookup) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [signed["localId"]]}),
+        );
+        if expected_status == 400 {
+            assert_ne!(lookup["users"][0]["displayName"], "must-not-apply");
+            let (status, _) = post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": email, "password": "original-password"}),
+            );
+            assert_eq!(status, 200);
+        } else {
+            assert_eq!(lookup["users"][0]["displayName"], "must-not-apply");
+        }
+    }
+
+    let s = state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "admin-control@example.com", "password": "original-password"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": signed["localId"], "password": "12345\u{0000}", "displayName": "must-not-apply"}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        "WEAK_PASSWORD : Password should be at least 6 characters"
+    );
+    let (_, lookup) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [signed["localId"]]}),
+    );
+    assert_ne!(lookup["users"][0]["displayName"], "must-not-apply");
+
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": signed["localId"], "password": "12345"}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"], "WEAK_PASSWORD : Password should be at least 6 characters",
+        "{response}"
+    );
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": signed["localId"], "password": 42}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"], "INVALID_ARGUMENT : password must be a string",
+        "{response}"
+    );
+}
+
+#[test]
+fn password_policy_client_update_rejects_invalid_values_before_profile_mutation() {
+    for units in [4095, 4096] {
+        let s = state();
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "client-password-boundary@example.com", "password": "original-password"}),
+        );
+        assert_eq!(status, 200, "{signed}");
+        let (status, response) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({
+                "idToken": signed["idToken"],
+                "password": password_with_utf16_units(units),
+                "returnSecureToken": true
+            }),
+        );
+        assert_eq!(status, 200, "{response}");
+    }
+
+    for password in [
+        password_with_utf16_units(4097),
+        "12345".to_owned(),
+        "12345\u{0000}".to_owned(),
+    ] {
+        let s = state();
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "client-password-policy@example.com", "password": "original-password"}),
+        );
+        assert_eq!(status, 200, "{signed}");
+        let (status, response) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({
+                "idToken": signed["idToken"],
+                "password": password,
+                "displayName": "must-not-apply",
+                "returnSecureToken": true
+            }),
+        );
+        assert_eq!(status, 400, "{response}");
+        assert_eq!(
+            response["error"]["message"],
+            if password.encode_utf16().count() > AuthStore::MAX_PASSWORD_UTF16_UNITS {
+                "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"
+            } else {
+                "WEAK_PASSWORD : Password should be at least 6 characters"
+            },
+            "{response}"
+        );
+        let (_, lookup) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed["idToken"]}),
+        );
+        assert_ne!(lookup["users"][0]["displayName"], "must-not-apply");
+        let (status, unchanged) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "client-password-policy@example.com", "password": "original-password"}),
+        );
+        assert_eq!(status, 200, "{unchanged}");
+    }
+
+    let s = state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "client-password-malformed@example.com", "password": "original-password"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let (status, response) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": signed["idToken"], "password": 42, "displayName": "must-not-apply"}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        "INVALID_ARGUMENT : password must be a string"
+    );
+    let (_, lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": signed["idToken"]}),
+    );
+    assert_ne!(lookup["users"][0]["displayName"], "must-not-apply");
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn password_policy_batch_import_validates_raw_password_and_preserves_hash_semantics() {
+    let s = state();
+    for units in [4095, 4096] {
+        let local_id = format!("raw-password-{units}");
+        let email = format!("raw-password-{units}@example.com");
+        let (status, imported) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &json!({"users": [{
+                "localId": local_id,
+                "email": email,
+                "rawPassword": password_with_utf16_units(units)
+            }]}),
+        );
+        assert_eq!(status, 200, "{imported}");
+        assert!(imported["error"].as_array().unwrap().is_empty());
+    }
+    for units in [4095, 4096] {
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({
+                "email": format!("raw-password-{units}@example.com"),
+                "password": password_with_utf16_units(units)
+            }),
+        );
+        assert_eq!(status, 200, "{signed}");
+    }
+
+    let (status, rejected) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{
+            "localId": "raw-password-too-long",
+            "email": "raw-password-too-long@example.com",
+            "rawPassword": password_with_utf16_units(4097)
+        }]}),
+    );
+    assert_eq!(status, 200, "{rejected}");
+    assert_eq!(rejected["error"].as_array().unwrap().len(), 1, "{rejected}");
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("raw-password-too-long")
+        .is_none());
+
+    let (status, imported) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{
+            "localId": "fake-hash-user",
+            "email": "fake-hash-user@example.com",
+            "passwordHash": "fakeHash:salt=fakeSalt:password=imported-password"
+        }]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    assert!(imported["error"].as_array().unwrap().is_empty());
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "fake-hash-user@example.com", "password": "imported-password"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+
+    let (status, unsupported) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{
+            "localId": "unsupported-hash-user",
+            "email": "unsupported-hash-user@example.com",
+            "passwordHash": "scrypt$unreadable"
+        }]}),
+    );
+    assert_eq!(status, 200, "{unsupported}");
+    assert!(unsupported["error"].as_array().unwrap().is_empty());
+    let (status, sign_in) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "unsupported-hash-user@example.com", "password": "anything-valid"}),
+    );
+    assert_eq!(status, 400, "{sign_in}");
+
+    let (status, malformed) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{
+            "localId": "raw-password-malformed",
+            "email": "raw-password-malformed@example.com",
+            "rawPassword": 42
+        }]}),
+    );
+    assert_eq!(status, 200, "{malformed}");
+    assert_eq!(
+        malformed["error"].as_array().unwrap().len(),
+        1,
+        "{malformed}"
+    );
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("raw-password-malformed")
+        .is_none());
+
+    let (status, control) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{
+            "localId": "raw-password-control",
+            "email": "raw-password-control@example.com",
+            "rawPassword": "12345\u{0000}"
+        }]}),
+    );
+    assert_eq!(status, 200, "{control}");
+    assert_eq!(control["error"].as_array().unwrap().len(), 1, "{control}");
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("raw-password-control")
+        .is_none());
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn password_policy_batch_import_validates_supported_fake_hashes_before_overwrite() {
+    let s = state();
+    for units in [4095, 4096, 4097] {
+        let local_id = format!("fake-hash-boundary-{units}");
+        let email = format!("fake-hash-boundary-{units}@example.com");
+        let password = password_with_utf16_units(units);
+        let (status, imported) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &json!({"users": [{
+                "localId": local_id,
+                "email": email,
+                "passwordHash": format!("fakeHash:salt=fakeSalt:password={password}")
+            }]}),
+        );
+        assert_eq!(status, 200, "{imported}");
+        if units == 4097 {
+            assert_eq!(imported["error"].as_array().unwrap().len(), 1, "{imported}");
+            assert_eq!(imported["error"][0]["index"], 0, "{imported}");
+            assert_eq!(
+                imported["error"][0]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+                "{imported}"
+            );
+            assert!(s.store.lock().unwrap().user_by_id(&local_id).is_none());
+        } else {
+            assert!(imported["error"].as_array().unwrap().is_empty());
+            let (status, signed) = post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": email, "password": password}),
+            );
+            assert_eq!(status, 200, "{signed}");
+        }
+    }
+
+    let (status, existing) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "fake-hash-overwrite@example.com", "password": "original-password"}),
+    );
+    assert_eq!(
+        status, 200,
+        "initial account creation failed: status {status}"
+    );
+    let oversized = password_with_utf16_units(4097);
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"allowOverwrite": true, "users": [{
+            "localId": existing["localId"],
+            "email": "fake-hash-overwrite@example.com",
+            "displayName": "must-not-apply",
+            "passwordHash": format!("fakeHash:salt=fakeSalt:password={oversized}")
+        }]}),
+    );
+    assert_eq!(status, 200, "{refused}");
+    assert_eq!(refused["error"].as_array().unwrap().len(), 1, "{refused}");
+    assert_eq!(
+        refused["error"][0]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+        "{refused}"
+    );
+    let (status, unchanged) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "fake-hash-overwrite@example.com", "password": "original-password"}),
+    );
+    assert_eq!(status, 200, "{unchanged}");
+    let (_, lookup) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [existing["localId"]]}),
+    );
+    assert_ne!(lookup["users"][0]["displayName"], "must-not-apply");
+
+    let mixed = state();
+    let (status, response) = admin(
+        &mixed,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [
+            {
+                "localId": "fake-hash-mixed-invalid",
+                "email": "fake-hash-mixed-invalid@example.com",
+                "passwordHash": format!("fakeHash:salt=fakeSalt:password={}", password_with_utf16_units(4097))
+            },
+            {
+                "localId": "fake-hash-mixed-valid",
+                "email": "fake-hash-mixed-valid@example.com",
+                "passwordHash": format!("fakeHash:salt=fakeSalt:password={}", password_with_utf16_units(4096))
+            }
+        ]}),
+    );
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(response["error"].as_array().unwrap().len(), 1, "{response}");
+    assert_eq!(response["error"][0]["index"], 0, "{response}");
+    assert_eq!(
+        response["error"][0]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+        "{response}"
+    );
+    let (status, signed) = post(
+        &mixed,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({
+            "email": "fake-hash-mixed-valid@example.com",
+            "password": password_with_utf16_units(4096)
+        }),
+    );
+    assert_eq!(status, 200, "{signed}");
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn batch_import_failed_overwrite_keeps_the_existing_account() {
+    let s = state();
+    let (status, existing) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "email": "existing-overwrite@example.com",
+            "password": "original-password",
+            "returnSecureToken": true,
+        }),
+    );
+    assert_eq!(
+        status, 200,
+        "initial account creation failed: status {status}"
+    );
+    let uid = existing["localId"].as_str().unwrap();
+    let refresh = existing["refreshToken"].as_str().unwrap().to_owned();
+
+    let (status, _seeded) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({
+            "localId": uid,
+            "emailVerified": true,
+            "linkProviderUserInfo": {"providerId": "google.com", "rawId": "existing-google"},
+            "mfa": {"enrollments": [{
+                "mfaEnrollmentId": "existing-factor",
+                "phoneInfo": "+16505550101"
+            }]}
+        }),
+    );
+    assert_eq!(status, 200, "account state setup failed: status {status}");
+    let (_, before) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [uid]}),
+    );
+
+    let (status, other) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"email": "other-overwrite@example.com"}),
+    );
+    assert_eq!(
+        status, 200,
+        "neighbor account creation failed: status {status}"
+    );
+
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({
+            "allowOverwrite": true,
+            "users": [{
+                "localId": uid,
+                "email": "other-overwrite@example.com",
+                "passwordHash": "fakeHash:salt=fakeSalt:password=replacement-password",
+            }],
+        }),
+    );
+    assert_eq!(
+        status, 200,
+        "failed overwrite request failed: status {status}"
+    );
+    assert!(
+        refused["error"]
+            .as_array()
+            .is_some_and(|errors| errors.len() == 1),
+        "failed overwrite did not return one row error"
+    );
+    assert!(
+        refused["error"][0]["index"] == 0,
+        "failed overwrite error did not identify row zero"
+    );
+
+    let (status, _refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(
+        status, 200,
+        "existing refresh token was rejected: status {status}"
+    );
+    let (_, after) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [uid]}),
+    );
+    assert!(
+        after == before,
+        "a failed overwrite preserves every account index"
+    );
+
+    let (status, unchanged) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({
+            "email": "existing-overwrite@example.com",
+            "password": "original-password",
+        }),
+    );
+    assert_eq!(
+        status, 200,
+        "unchanged password sign-in failed: status {status}"
+    );
+    assert!(
+        unchanged["localId"] == uid,
+        "existing UID changed after failed overwrite"
+    );
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id(other["localId"].as_str().unwrap())
+        .is_some());
+
+    let (status, replaced) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({
+            "allowOverwrite": true,
+            "users": [{
+                "localId": uid,
+                "email": "replacement-overwrite@example.com",
+                "passwordHash": "fakeHash:salt=fakeSalt:password=replacement-password",
+            }],
+        }),
+    );
+    assert_eq!(
+        status, 200,
+        "successful overwrite request failed: status {status}"
+    );
+    assert!(
+        replaced["error"].as_array().is_some_and(Vec::is_empty),
+        "successful overwrite returned row errors"
+    );
+    let (status, _signed_replacement) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({
+            "email": "replacement-overwrite@example.com",
+            "password": "replacement-password",
+        }),
+    );
+    assert_eq!(
+        status, 200,
+        "replacement password sign-in failed: status {status}"
+    );
+    let (status, _old_email) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({
+            "email": "existing-overwrite@example.com",
+            "password": "original-password",
+        }),
+    );
+    assert_eq!(
+        status, 400,
+        "old email remained indexed after overwrite: status {status}"
+    );
+}
+
+#[test]
+fn end_user_update_cannot_select_an_account_by_local_id() {
+    let s = strict_state();
+    let (_, victim) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "email": "victim@example.com", "password": "original-password", "returnSecureToken": true
+        }),
+    );
+    let (_, other) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "email": "other@example.com", "password": "other-password", "returnSecureToken": true
+        }),
+    );
+    for token in [Value::Null, other["idToken"].clone()] {
+        for password in ["replacement".to_owned(), "a".repeat(4097)] {
+            let (status, _) = post(
+                &s,
+                &format!("{V1}/accounts:update"),
+                &json!({
+                    "localId": victim["localId"], "idToken": token, "password": password
+                }),
+            );
+            assert_eq!(
+                status,
+                if token.is_string() && password.len() <= 4096 {
+                    200
+                } else {
+                    400
+                }
+            );
+        }
+    }
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({
+            "email": "victim@example.com", "password": "original-password", "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200);
+    // The authenticated Admin route is a distinct, explicitly privileged operation.
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({
+            "localId": victim["localId"], "displayName": "admin-updated"
+        }),
+    );
+    assert_eq!(status, 200);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn end_user_update_rejects_admin_fields_atomically_by_presence() {
+    for s in [state(), strict_state()] {
+        let (_, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({
+                "email": "field-owner@example.com", "password": "password1", "returnSecureToken": true
+            }),
+        );
+        let uid = &signed["localId"];
+        let (status, seeded) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({
+                "localId": uid, "displayName": "original", "customAttributes": "{\"role\":\"member\"}",
+                "emailVerified": true, "mfa": {"enrollments": [{"phoneInfo": "+16505550101"}]},
+                "linkProviderUserInfo": {"providerId": "google.com", "rawId": "field-owner-google"}
+            }),
+        );
+        assert_eq!(status, 200, "{seeded}");
+        let (_, before) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [uid]}),
+        );
+        assert_eq!(
+            before["users"][0]["customAttributes"],
+            "{\"role\":\"member\"}"
+        );
+        assert_eq!(before["users"][0]["emailVerified"], true);
+        assert_eq!(
+            before["users"][0]["mfaInfo"][0]["phoneInfo"],
+            "+16505550101"
+        );
+        assert!(before["users"][0]["providerUserInfo"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| {
+                provider["providerId"] == "google.com" && provider["rawId"] == "field-owner-google"
+            }));
+        let attempts = [
+            ("customAttributes", json!("{\"role\":\"admin\"}")),
+            ("customAttributes", json!("{}")),
+            ("customAttributes", json!("")),
+            ("mfa", json!({"enrollments": []})),
+            ("mfa", json!({})),
+            (
+                "linkProviderUserInfo",
+                json!({"providerId": "google.com", "rawId": "attacker"}),
+            ),
+            ("linkProviderUserInfo", json!({})),
+            ("mfa", Value::Null),
+            ("linkProviderUserInfo", Value::Null),
+        ];
+        for (field, value) in attempts {
+            let mut request =
+                json!({"idToken": signed["idToken"], "displayName": "must-not-apply"});
+            request[field] = value;
+            let (status, rejected) = post(&s, &format!("{V1}/accounts:update"), &request);
+            assert_eq!(status, 400, "{field}: {rejected}");
+            assert_eq!(
+                rejected["error"]["message"],
+                if field == "customAttributes" {
+                    "INSUFFICIENT_PERMISSION"
+                } else {
+                    "OPERATION_NOT_ALLOWED"
+                },
+                "{field}"
+            );
+            let (_, after) = admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:lookup"),
+                &json!({"localId": [uid]}),
+            );
+            assert_eq!(
+                before, after,
+                "{field} rejection must preserve the entire lookup projection"
+            );
+        }
+        // Production second45 row21: null is absent, never a request to clear claims.
+        let (status, accepted) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": signed["idToken"], "displayName": "null-allowed", "customAttributes": null}),
+        );
+        assert_eq!(status, 200, "{accepted}");
+        let (_, after_null) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [uid]}),
+        );
+        assert_eq!(
+            after_null["users"][0]["customAttributes"],
+            before["users"][0]["customAttributes"]
+        );
+        assert_eq!(after_null["users"][0]["emailVerified"], true);
+        assert_eq!(
+            after_null["users"][0]["mfaInfo"],
+            before["users"][0]["mfaInfo"]
+        );
+        let (status, normal) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({
+                "idToken": signed["idToken"], "displayName": "allowed"
+            }),
+        );
+        assert_eq!(status, 200, "{normal}");
+        assert_eq!(normal["displayName"], "allowed");
+    }
+}
+
+/// AUTH-U03: production refuses a client accounts:update carrying a tampered ID token and
+/// an administrator-only field with `INVALID_ID_TOKEN`, verifying the session before the
+/// field is judged (auth-refusal-precedence revision 1, approved 2026-09-12). The
+/// end-user route now authenticates first. A valid session with customAttributes, mfa or
+/// linkProviderUserInfo is refused by field authorization (second45 observes
+/// `INSUFFICIENT_PERMISSION` for customAttributes strings); emailVerified is ignored
+/// while ordinary displayName changes apply. The OOB route still rejects these fields
+/// before consuming the code, and refusals do not mutate.
+/// AUTH-U03 / GAP-AUTH-003 invariant fence: the end-user accounts:update route
+/// authenticates before it authorizes for EVERY session-failure class, not only the
+/// tampered signature production observed. An expired, revoked, disabled or deleted
+/// session carrying an administrator-only field (or a disableUser flag) is refused with
+/// its own session error, never `OPERATION_NOT_ALLOWED`, and changes nothing. Only the
+/// tampered-signature row is production-observed; the other classes pin local behavior so
+/// a partial revert that moves the field check back before `verify_session` is caught.
+#[test]
+fn end_user_update_session_failure_precedes_admin_field_authorization() {
+    let admin_field = ("customAttributes", json!("{\"role\":\"admin\"}"));
+    // (label, expected error) for a session that fails verification before authorization.
+    for s in [state(), strict_state()] {
+        let lookup = |uid: &str| {
+            admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:lookup"),
+                &json!({"localId": [uid]}),
+            )
+            .1
+        };
+        let fresh = |email: &str| {
+            let (_, signed) = post(
+                &s,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email": email, "password": "password1", "returnSecureToken": true}),
+            );
+            (
+                signed["localId"].as_str().unwrap().to_string(),
+                signed["idToken"].as_str().unwrap().to_string(),
+            )
+        };
+
+        // Expired: the token outlives its one-hour lifetime before the update.
+        let (expired_uid, expired_token) = fresh("expired-field@example.com");
+        advance(&s, 3601);
+        // Revoked: a fresh token, then a privileged password change advances validSince.
+        let (revoked_uid, revoked_token) = fresh("revoked-field@example.com");
+        advance(&s, 2);
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": revoked_uid, "password": "password2"}),
+        );
+        assert_eq!(status, 200);
+        // Disabled: the account is disabled after the token is issued.
+        let (disabled_uid, disabled_token) = fresh("disabled-field@example.com");
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": disabled_uid, "disableUser": true}),
+        );
+        assert_eq!(status, 200);
+        // Deleted: the account is removed after the token is issued.
+        let (deleted_uid, deleted_token) = fresh("deleted-field@example.com");
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:delete"),
+            &json!({"localId": deleted_uid}),
+        );
+        assert_eq!(status, 200);
+
+        let cases = [
+            (
+                "expired",
+                &expired_token,
+                Some(&expired_uid),
+                "TOKEN_EXPIRED",
+            ),
+            (
+                "revoked",
+                &revoked_token,
+                Some(&revoked_uid),
+                "TOKEN_EXPIRED : credentials revoked",
+            ),
+            (
+                "disabled",
+                &disabled_token,
+                Some(&disabled_uid),
+                "USER_DISABLED",
+            ),
+            // A deleted account's token fails verification as an unknown user (INVALID_ID_TOKEN),
+            // not the trailing USER_NOT_FOUND, since the verifier checks the user first.
+            ("deleted", &deleted_token, None, "INVALID_ID_TOKEN"),
+        ];
+        for (label, token, uid, expected) in cases {
+            let before = uid.map(|u| lookup(u));
+            // The administrator-only field and the disableUser flag both come after the
+            // session check, so both must surface the session error, not OPERATION_NOT_ALLOWED.
+            for extra in [admin_field.clone(), ("disableUser", json!(true))] {
+                let mut request = json!({"idToken": token, "displayName": "must-not-apply"});
+                request[extra.0] = extra.1;
+                let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
+                assert_eq!(status, 400, "{label}/{}: {refused}", extra.0);
+                assert_eq!(
+                    refused["error"]["message"], expected,
+                    "{label}/{} must surface the session error, not OPERATION_NOT_ALLOWED",
+                    extra.0
+                );
+            }
+            if let (Some(u), Some(b)) = (uid, before) {
+                assert_eq!(
+                    lookup(u),
+                    b,
+                    "{label}: no rejected update may mutate the account"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn end_user_update_authenticates_before_authorizing_admin_fields() {
+    let admin_fields = [
+        ("customAttributes", json!("{\"role\":\"admin\"}")),
+        (
+            "mfa",
+            json!({"enrollments": [{"phoneInfo": "+16505550111"}]}),
+        ),
+        (
+            "linkProviderUserInfo",
+            json!({"providerId": "google.com", "rawId": "attacker"}),
+        ),
+    ];
+    for s in [state(), strict_state()] {
+        let (_, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "precedence@example.com", "password": "password1", "displayName": "precedence-marker", "returnSecureToken": true}),
+        );
+        let uid = &signed["localId"];
+        let token = signed["idToken"].as_str().unwrap();
+        // A structurally intact JWT whose signature cannot verify. The local emulator
+        // issues unsigned tokens (`alg: none`, empty signature); appending a signature
+        // segment makes verification fail, matching how the production recorder alters a
+        // signed token's signature.
+        let parts: Vec<&str> = token.split('.').collect();
+        let signature = parts[2];
+        let flipped = if signature.is_empty() {
+            "AAAA".to_string()
+        } else {
+            let last = signature.chars().last().unwrap();
+            format!(
+                "{}{}",
+                &signature[..signature.len() - 1],
+                if last == 'A' { 'B' } else { 'A' }
+            )
+        };
+        let tampered = format!("{}.{}.{}", parts[0], parts[1], flipped);
+        let lookup = |s: &AuthState| {
+            admin(
+                s,
+                "POST",
+                &format!("{ADMIN}/accounts:lookup"),
+                &json!({"localId": [uid]}),
+            )
+            .1
+        };
+        let before = lookup(&s);
+
+        // The action-code route rejects the field before consuming a session.
+        let (_, link) = admin(
+            &s,
+            "POST",
+            &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
+            &json!({"requestType": "VERIFY_EMAIL", "idToken": signed["idToken"], "returnOobLink": true}),
+        );
+        let baseline = lookup(&s);
+
+        for (field, value) in &admin_fields {
+            // Tampered session plus an administrator-only field: the token is verified
+            // first, so the refusal names the token, and nothing is applied.
+            let mut request = json!({"idToken": tampered, "displayName": "must-not-apply"});
+            request[*field] = value.clone();
+            let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
+            assert_eq!(status, 400, "{field}: {refused}");
+            assert_eq!(refused["error"]["message"], "INVALID_ID_TOKEN", "{field}");
+            assert_eq!(
+                lookup(&s),
+                baseline,
+                "{field}: tampered update must not mutate"
+            );
+
+            // Valid session plus the same field: authenticated, then refused on the field.
+            let mut request =
+                json!({"idToken": signed["idToken"], "displayName": "must-not-apply"});
+            request[*field] = value.clone();
+            let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
+            assert_eq!(status, 400, "{field}: {refused}");
+            assert_eq!(
+                refused["error"]["message"],
+                if *field == "customAttributes" {
+                    "INSUFFICIENT_PERMISSION"
+                } else {
+                    "OPERATION_NOT_ALLOWED"
+                },
+                "{field}"
+            );
+            assert_eq!(
+                lookup(&s),
+                baseline,
+                "{field}: valid-token update must not mutate"
+            );
+
+            // OOB code plus the same field: refused on the field, code not consumed.
+            let mut request = json!({"oobCode": link["oobCode"], "displayName": "must-not-apply"});
+            request[*field] = value.clone();
+            let (status, refused) = post(&s, &format!("{V1}/accounts:update"), &request);
+            assert_eq!(status, 400, "{field}: {refused}");
+            assert_eq!(
+                refused["error"]["message"], "OPERATION_NOT_ALLOWED",
+                "{field}"
+            );
+        }
+
+        // Production's valid-token client behavior ignores emailVerified while applying
+        // the permitted displayName change. Restore the display name before the remaining
+        // refusal checks so every later state comparison has the original baseline.
+        let (status, applied) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({
+                "idToken": signed["idToken"],
+                "emailVerified": false,
+                "displayName": "email-verified-ignored"
+            }),
+        );
+        assert_eq!(status, 200, "{applied}");
+        assert_eq!(applied["displayName"], "email-verified-ignored");
+        assert_eq!(lookup(&s)["emailVerified"], baseline["emailVerified"]);
+        let (status, restored) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": signed["idToken"], "displayName": "precedence-marker"}),
+        );
+        assert_eq!(status, 200, "{restored}");
+        assert_eq!(lookup(&s), baseline);
+
+        // disableUser is symmetric with the administrator-only fields: a tampered session
+        // is refused on the token, a valid session on the flag, and neither mutates.
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": tampered, "disableUser": true}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_ID_TOKEN");
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": signed["idToken"], "disableUser": true}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED");
+
+        assert_eq!(
+            lookup(&s),
+            before,
+            "no rejected update may change the account"
+        );
+
+        // The unconsumed OOB code still verifies the email on its own.
+        let (status, applied) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"oobCode": link["oobCode"]}),
+        );
+        assert_eq!(status, 200, "{applied}");
+        assert_eq!(applied["emailVerified"], true);
+
+        // A normal profile update over the valid session still succeeds.
+        let (status, normal) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": signed["idToken"], "displayName": "allowed"}),
+        );
+        assert_eq!(status, 200, "{normal}");
+        assert_eq!(normal["displayName"], "allowed");
+
+        // An unprivileged localId selector is still refused, not promoted by a body flag.
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"localId": uid, "displayName": "x", "customAttributes": "{}"}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "MISSING_ID_TOKEN");
+    }
+}
+
+#[test]
+fn admin_fields_rejection_does_not_consume_an_oob_code() {
+    let s = state();
+    let (_, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "email": "oob-field@example.com", "password": "password1", "returnSecureToken": true
+        }),
+    );
+    let (status, link) = admin(
+        &s,
+        "POST",
+        &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
+        &json!({
+            "requestType": "VERIFY_EMAIL", "idToken": signed["idToken"], "returnOobLink": true
+        }),
+    );
+    assert_eq!(status, 200, "{link}");
+    for field in [
+        "customAttributes",
+        "emailVerified",
+        "mfa",
+        "linkProviderUserInfo",
+    ] {
+        let mut request = json!({"oobCode": link["oobCode"], "displayName": "must-not-apply"});
+        request[field] = Value::Null;
+        assert_eq!(post(&s, &format!("{V1}/accounts:update"), &request).0, 400);
+    }
+    let (_, before) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": signed["idToken"]}),
+    );
+    assert_eq!(before["users"][0]["emailVerified"], false);
+    let (status, applied) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"oobCode": link["oobCode"]}),
+    );
+    assert_eq!(status, 200, "{applied}");
+    assert_eq!(applied["emailVerified"], true);
+}
+
+#[test]
+fn strict_password_change_distinguishes_revoked_refresh() {
+    let s = strict_state();
+    let (status, a) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "email": "revoked@example.com", "password": "password1", "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200);
+    advance(&s, 2);
+    let (status, b) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({
+            "email": "revoked@example.com", "password": "password1", "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200);
+    let refresh_path = "/securetoken.googleapis.com/v1/token";
+    for token in [&a["refreshToken"], &b["refreshToken"]] {
+        let (status, response) = post(
+            &s,
+            refresh_path,
+            &json!({
+                "grant_type": "refresh_token", "refresh_token": token
+            }),
+        );
+        assert_eq!(status, 200, "{response}");
+    }
+    advance(&s, 3);
+    let (status, changed) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({
+            "idToken": a["idToken"], "password": "password2", "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200, "{changed}");
+    let lookup = |token: &Value| {
+        post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": token}),
+        )
+    };
+    let baseline = lookup(&changed["idToken"]);
+    assert_eq!(baseline.0, 200);
+    for token in [&a["refreshToken"], &b["refreshToken"]] {
+        let (status, response) = post(
+            &s,
+            refresh_path,
+            &json!({
+                "grant_type": "refresh_token", "refresh_token": token
+            }),
+        );
+        assert_eq!(status, 400);
+        assert_eq!(response["error"]["message"], "TOKEN_EXPIRED");
+    }
+    for token in ["", "rt-unknown", "malformed.token"] {
+        let (status, response) = post(
+            &s,
+            refresh_path,
+            &json!({
+                "grant_type": "refresh_token", "refresh_token": token
+            }),
+        );
+        assert_eq!(status, 400);
+        assert_eq!(response["error"]["message"], "INVALID_REFRESH_TOKEN");
+    }
+    assert_eq!(lookup(&changed["idToken"]), baseline);
+    let (status, fresh) = post(
+        &s,
+        refresh_path,
+        &json!({
+            "grant_type": "refresh_token", "refresh_token": changed["refreshToken"]
+        }),
+    );
+    assert_eq!(status, 200, "{fresh}");
+    assert_eq!(lookup(&fresh["id_token"]), baseline);
+}
+
+#[test]
+fn strict_profile_admin_password_change_rejects_older_refresh_tokens() {
     let s = strict_state();
     let (status, signed) = post(
         &s,
@@ -2122,6 +5279,8 @@ fn strict_profile_admin_password_change_revokes_refresh_tokens() {
         &json!({"email": "strict@example.com", "password": "password1", "returnSecureToken": true}),
     );
     assert_eq!(status, 200, "{signed}");
+    let refresh = signed["refreshToken"].clone();
+    advance(&s, 1);
     let (status, changed) = admin(
         &s,
         "POST",
@@ -2129,17 +5288,203 @@ fn strict_profile_admin_password_change_revokes_refresh_tokens() {
         &json!({"localId": signed["localId"], "password": "password2"}),
     );
     assert_eq!(status, 200, "{changed}");
+    assert!(changed.get("idToken").is_none(), "{changed}");
+    assert!(changed.get("refreshToken").is_none(), "{changed}");
+
+    let (status, expired) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 400, "{expired}");
+    assert_eq!(expired["error"]["message"], "TOKEN_EXPIRED");
+}
+
+#[test]
+fn strict_admin_password_change_keeps_a_same_second_refresh_usable() {
+    let s = strict_state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "same-second@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let uid = signed["localId"].as_str().unwrap();
+    let refresh = signed["refreshToken"].clone();
+
+    let (status, changed) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "password": "password2"}),
+    );
+    assert_eq!(status, 200, "{changed}");
 
     let (status, refreshed) = post(
         &s,
         "/securetoken.googleapis.com/v1/token",
-        &json!({
-            "grant_type": "refresh_token",
-            "refresh_token": signed["refreshToken"]
-        }),
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
     );
-    assert_eq!(status, 400, "{refreshed}");
-    assert_eq!(refreshed["error"]["message"], "INVALID_REFRESH_TOKEN");
+    assert_eq!(status, 200, "{refreshed}");
+}
+
+#[test]
+fn strict_admin_password_change_preserves_account_and_credential_side_effects() {
+    let s = strict_state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "admin-password-side-effects@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let uid = signed["localId"].as_str().unwrap().to_owned();
+
+    let (status, changed) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "password": "password2"}),
+    );
+    assert_eq!(status, 200, "{changed}");
+    assert!(changed.get("idToken").is_none(), "{changed}");
+    assert!(changed.get("refreshToken").is_none(), "{changed}");
+
+    let (status, looked) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [&uid]}),
+    );
+    assert_eq!(status, 200, "{looked}");
+    let user = &looked["users"][0];
+    assert_eq!(user["localId"], uid);
+    assert_eq!(user["passwordHash"], "UkVEQUNURUQ=");
+    assert!(user["passwordUpdatedAt"].is_u64(), "{user}");
+    assert_eq!(user["validSince"], "1788004860");
+
+    let (status, old_password) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "admin-password-side-effects@example.com", "password": "password1"}),
+    );
+    assert_eq!(status, 400, "{old_password}");
+    let (status, new_password) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "admin-password-side-effects@example.com", "password": "password2", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{new_password}");
+    assert_eq!(new_password["localId"], uid);
+}
+
+#[test]
+fn strict_admin_password_change_retained_refresh_reports_disabled_then_deleted() {
+    let s = strict_state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "admin-password-terminal@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let uid = signed["localId"].as_str().unwrap().to_owned();
+    let refresh = signed["refreshToken"].clone();
+
+    let (status, changed) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "password": "password2"}),
+    );
+    assert_eq!(status, 200, "{changed}");
+
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "disableUser": true}),
+    );
+    assert_eq!(status, 200);
+    let (status, disabled) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 400, "{disabled}");
+    assert_eq!(disabled["error"]["message"], "USER_DISABLED");
+
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:delete"),
+        &json!({"localId": uid}),
+    );
+    assert_eq!(status, 200);
+    let (status, deleted) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": signed["refreshToken"]}),
+    );
+    assert_eq!(status, 400, "{deleted}");
+    assert_eq!(deleted["error"]["message"], "USER_NOT_FOUND");
+}
+
+#[test]
+fn strict_admin_credential_removal_keeps_refresh_and_returns_no_replacement_tokens() {
+    let s = strict_state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "admin-credential-removal@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let refresh = signed["refreshToken"].clone();
+
+    let (status, removed) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": signed["localId"], "deleteAttribute": ["PASSWORD"]}),
+    );
+    assert_eq!(status, 200, "{removed}");
+    for field in ["idToken", "refreshToken", "expiresIn"] {
+        assert!(removed.get(field).is_none(), "{field}: {removed}");
+    }
+
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+}
+
+#[test]
+fn strict_self_service_credential_removal_keeps_refresh_and_returns_no_replacement_tokens() {
+    let s = strict_state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "client-credential-removal@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let refresh = signed["refreshToken"].clone();
+
+    let (status, removed) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": signed["idToken"], "deleteAttribute": ["PASSWORD"]}),
+    );
+    assert_eq!(status, 200, "{removed}");
+    for field in ["idToken", "refreshToken", "expiresIn"] {
+        assert!(removed.get(field).is_none(), "{field}: {removed}");
+    }
+
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
 }
 
 #[test]
@@ -2227,6 +5572,137 @@ fn self_service_password_change_invalidates_an_existing_session_cookie() {
     };
     assert!(!valid(old_cookie["sessionCookie"].as_str().unwrap()));
     assert!(valid(new_cookie["sessionCookie"].as_str().unwrap()));
+}
+
+#[test]
+fn session_cookie_rejects_invalid_expired_revoked_deleted_and_disabled_id_tokens() {
+    for transition in ["invalid", "expired", "revoked", "deleted", "disabled"] {
+        let s = state();
+        let (status, signed_up) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "cookie-state@example.com", "password": "password1"}),
+        );
+        assert_eq!(status, 200);
+        let uid = signed_up["localId"].as_str().unwrap();
+        let mut token = signed_up["idToken"].clone();
+        match transition {
+            "invalid" => token = json!("not-a-token"),
+            "expired" => {
+                advance(&s, 3600);
+            }
+            "revoked" => {
+                advance(&s, 1);
+                assert_eq!(
+                    admin(
+                        &s,
+                        "POST",
+                        &format!("{ADMIN}/accounts:update"),
+                        &json!({"localId": uid, "validSince": "1788004861"})
+                    )
+                    .0,
+                    200
+                );
+            }
+            "deleted" => assert_eq!(
+                admin(
+                    &s,
+                    "POST",
+                    &format!("{ADMIN}/accounts:delete"),
+                    &json!({"localId": uid})
+                )
+                .0,
+                200
+            ),
+            "disabled" => assert_eq!(
+                admin(
+                    &s,
+                    "POST",
+                    &format!("{ADMIN}/accounts:update"),
+                    &json!({"localId": uid, "disableUser": true})
+                )
+                .0,
+                200
+            ),
+            _ => unreachable!(),
+        }
+        let before = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [uid]}),
+        );
+        let (status, rejected) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}:createSessionCookie"),
+            &json!({"idToken": token, "validDuration": "300"}),
+        );
+        assert_eq!(status, 400, "case {transition}");
+        assert!(rejected.get("sessionCookie").is_none());
+        let after = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [uid]}),
+        );
+        assert_eq!(before, after, "cookie refusal must preserve account state");
+        if transition == "deleted" {
+            assert!(after.1.get("users").is_none());
+        }
+        if transition == "disabled" {
+            assert_eq!(after.1["users"][0]["disabled"], true);
+        }
+    }
+}
+
+#[test]
+fn session_cookie_rejects_wrong_project_tenant_issuer_and_audience_without_mutation() {
+    let s = state();
+    let (status, signed_up) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "cookie-isolation@example.com", "password": "password1"}),
+    );
+    assert_eq!(status, 200);
+    let decoded =
+        fireemu_core_auth::jwt::decode_unsigned(signed_up["idToken"].as_str().unwrap()).unwrap();
+    let original: Value = serde_json::from_str(&decoded.payload_json).unwrap();
+    let before = s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("cookie-isolation@example.com")
+        .unwrap()
+        .clone();
+    for field in ["project", "tenant", "issuer", "audience"] {
+        let mut payload = original.clone();
+        let mut path = format!("{ADMIN}:createSessionCookie");
+        match field {
+            "project" => path = path.replace("demo-app", "other-project"),
+            "tenant" => payload["firebase"]["tenant"] = json!("other-tenant"),
+            "issuer" => payload["iss"] = json!("https://session.firebase.google.com/demo-app"),
+            "audience" => payload["aud"] = json!("other-project"),
+            _ => unreachable!(),
+        }
+        let token = fireemu_core_auth::jwt::encode_payload_with(&payload.to_string(), None);
+        let (status, refused) = admin(
+            &s,
+            "POST",
+            &path,
+            &json!({"idToken": token, "validDuration": "300"}),
+        );
+        assert_eq!(status, 400, "case {field}");
+        assert!(refused.get("sessionCookie").is_none());
+        assert_eq!(
+            s.store
+                .lock()
+                .unwrap()
+                .user_by_email("cookie-isolation@example.com")
+                .unwrap(),
+            &before
+        );
+    }
 }
 
 #[test]
@@ -2376,6 +5852,224 @@ fn custom_token_from_payload(payload: &Value) -> String {
     format!("{header}.{payload}.")
 }
 
+fn assert_custom_token_claims(body: &Value, tenant: &str, uid: &str) {
+    use fireemu_core_types::json::JsonValue as CoreJsonValue;
+
+    let claims = fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap())
+        .unwrap()
+        .payload;
+    assert_eq!(
+        claims.get("role").and_then(CoreJsonValue::as_str),
+        Some("session")
+    );
+    assert_eq!(
+        claims.get("tokenOnly").and_then(CoreJsonValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        claims.get("persistedOnly").and_then(CoreJsonValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        claims.get("sessionOnly").and_then(CoreJsonValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        claims
+            .get("firebase")
+            .and_then(|v| v.get("tenant"))
+            .and_then(CoreJsonValue::as_str),
+        Some(tenant)
+    );
+    assert_eq!(claims.get("sub").and_then(CoreJsonValue::as_str), Some(uid));
+    assert_eq!(
+        claims.get("user_id").and_then(CoreJsonValue::as_str),
+        Some(uid)
+    );
+    assert_eq!(
+        claims.get("aud").and_then(CoreJsonValue::as_str),
+        Some("worker-alpha")
+    );
+    assert_eq!(
+        claims.get("iss").and_then(CoreJsonValue::as_str),
+        Some("https://securetoken.google.com/worker-alpha")
+    );
+    assert_eq!(
+        claims
+            .get("firebase")
+            .and_then(|v| v.get("sign_in_provider"))
+            .and_then(CoreJsonValue::as_str),
+        Some("custom")
+    );
+}
+
+fn sign_in_custom_token(state: &AuthState, tenant: &str, uid: &str) -> Value {
+    let token = custom_token(
+        uid,
+        &json!({"role": "token", "tokenOnly": true}),
+        1_788_008_460,
+    );
+    let (status, body) = post(
+        state,
+        &format!("{V1}/accounts:signInWithCustomToken?key=worker-key"),
+        &json!({"tenantId": tenant, "token": token, "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_custom_token_claims(&body, tenant, uid);
+    body
+}
+
+fn assert_refreshed_claims(body: &Value, tenant: &str, uid: &str) {
+    use fireemu_core_types::json::JsonValue as CoreJsonValue;
+
+    let claims = fireemu_core_auth::jwt::decode_unsigned(body["id_token"].as_str().unwrap())
+        .unwrap()
+        .payload;
+    assert_eq!(
+        claims.get("role").and_then(CoreJsonValue::as_str),
+        Some("session")
+    );
+    assert_eq!(
+        claims.get("persistedOnly").and_then(CoreJsonValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        claims.get("sessionOnly").and_then(CoreJsonValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        claims
+            .get("firebase")
+            .and_then(|v| v.get("tenant"))
+            .and_then(CoreJsonValue::as_str),
+        Some(tenant)
+    );
+    assert_eq!(
+        claims.get("tokenOnly").and_then(CoreJsonValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(claims.get("sub").and_then(CoreJsonValue::as_str), Some(uid));
+    assert_eq!(
+        claims.get("user_id").and_then(CoreJsonValue::as_str),
+        Some(uid)
+    );
+    assert_eq!(
+        claims.get("aud").and_then(CoreJsonValue::as_str),
+        Some("worker-alpha")
+    );
+    assert_eq!(
+        claims.get("iss").and_then(CoreJsonValue::as_str),
+        Some("https://securetoken.google.com/worker-alpha")
+    );
+    assert_eq!(
+        claims
+            .get("firebase")
+            .and_then(|v| v.get("sign_in_provider"))
+            .and_then(CoreJsonValue::as_str),
+        Some("custom")
+    );
+}
+
+fn refresh_custom_token(state: &AuthState, body: &Value, tenant: &str) -> Value {
+    let (status, refreshed) = post(
+        state,
+        "/securetoken.googleapis.com/v1/token?key=worker-key",
+        &json!({"grant_type": "refresh_token", "refresh_token": body["refreshToken"], "tenantId": tenant}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    assert_refreshed_claims(&refreshed, tenant, body["localId"].as_str().unwrap());
+    refreshed
+}
+
+fn assert_custom_session_cookie_handoff(state: &AuthState, tenant: &str, token: &Value) {
+    let namespace = format!("{V1}/projects/worker-alpha/tenants/{tenant}");
+    let decoded = fireemu_core_auth::jwt::decode_unsigned(token.as_str().unwrap()).unwrap();
+    let mut expected: Value = serde_json::from_str(&decoded.payload_json).unwrap();
+    let uid = expected["sub"].clone();
+    let (status, cookie) = admin(
+        state,
+        "POST",
+        &format!("{namespace}:createSessionCookie"),
+        &json!({"idToken": token, "validDuration": "300"}),
+    );
+    assert_eq!(status, 200);
+    let cookie =
+        fireemu_core_auth::jwt::decode_unsigned(cookie["sessionCookie"].as_str().unwrap()).unwrap();
+    let actual: Value = serde_json::from_str(&cookie.payload_json).unwrap();
+    expected["iss"] = json!("https://session.firebase.google.com/worker-alpha");
+    expected["exp"] = json!(1_788_005_160);
+    assert_eq!(actual, expected);
+    let (status, looked_up) = post(
+        state,
+        &format!("{V1}/accounts:lookup?key=worker-key"),
+        &json!({"tenantId": tenant, "idToken": token}),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(looked_up["users"][0]["localId"], uid);
+    let (status, stored) = admin(
+        state,
+        "POST",
+        &format!("{namespace}/accounts:lookup"),
+        &json!({"localId": [uid]}),
+    );
+    assert_eq!(status, 200);
+    let persisted: Value =
+        serde_json::from_str(stored["users"][0]["customAttributes"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        persisted,
+        json!({"role": "persistent", "persistedOnly": true})
+    );
+    for other in [
+        format!("{V1}/projects/worker-alpha:createSessionCookie"),
+        format!(
+            "{V1}/projects/worker-alpha/tenants/{}:createSessionCookie",
+            if tenant == "customer-a" {
+                "customer-b"
+            } else {
+                "customer-a"
+            }
+        ),
+    ] {
+        let (status, refused) = admin(
+            state,
+            "POST",
+            &other,
+            &json!({"idToken": token, "validDuration": "300"}),
+        );
+        assert_eq!(status, 400);
+        assert!(refused.get("sessionCookie").is_none());
+    }
+}
+
+fn assert_tenant_stores_after_sign_in(
+    registry: &std::sync::Arc<fireemu_core_auth::store::AuthRegistry>,
+) {
+    let stored_a = registry
+        .tenant_store("worker-alpha", "customer-a")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_by_id("custom-a")
+        .unwrap()
+        .custom_claims
+        .clone();
+    assert!(stored_a.entries().contains_key("role"));
+    assert!(stored_a.entries().contains_key("persistedOnly"));
+    assert!(!stored_a.entries().contains_key("tokenOnly"));
+    assert!(!stored_a.entries().contains_key("sessionOnly"));
+    for tenant in ["customer-a", "customer-b"] {
+        assert_eq!(
+            registry
+                .tenant_store("worker-alpha", tenant)
+                .unwrap()
+                .lock()
+                .unwrap()
+                .user_count(),
+            1
+        );
+    }
+}
+
 #[test]
 fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
     let s = state();
@@ -2398,6 +6092,19 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
     assert_eq!(
         decoded.payload.get("sub").and_then(|v| v.as_str()),
         Some("custom-1")
+    );
+    let (status, account) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["custom-1"]}),
+    );
+    assert_eq!(status, 200, "{account}");
+    assert_eq!(account["users"].as_array().unwrap().len(), 1);
+    assert_eq!(account["users"][0]["localId"], "custom-1");
+    assert!(
+        account["users"][0]["customAttributes"].is_null(),
+        "custom-token claims must not become Admin customAttributes"
     );
     // Second sign-in: same user, not new; claims are per token, not stored.
     let again = custom_token("custom-1", &json!({}), now_secs + 3600);
@@ -2453,6 +6160,130 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
         looked.get("users").map(|u| u.as_array().map(Vec::len)),
         None,
         "rejected tokens create nobody"
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_namespace() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    assert!(registry.register(
+        "worker-alpha",
+        AuthStore::new("worker-alpha", SplitMix64::new(7), TotpPolicy::default()),
+    ));
+    for tenant in ["customer-a", "customer-b"] {
+        registry.ensure_tenant("worker-alpha", tenant).unwrap();
+    }
+    s.registry = Some(registry.clone());
+    let mut tenancy = Tenancy::new("demo-app");
+    tenancy
+        .register("worker-alpha", &[], &["worker-key".to_owned()])
+        .unwrap();
+    s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+    s.blocking = Some(Arc::new(OverlappingClaimHook));
+
+    let a = sign_in_custom_token(&s, "customer-a", "custom-a");
+    let b = sign_in_custom_token(&s, "customer-b", "custom-b");
+    assert_tenant_stores_after_sign_in(&registry);
+
+    for (tenant, signed_in) in [("customer-a", &a), ("customer-b", &b)] {
+        assert_custom_session_cookie_handoff(&s, tenant, &signed_in["idToken"]);
+        let refreshed = refresh_custom_token(&s, signed_in, tenant);
+        assert_custom_session_cookie_handoff(&s, tenant, &refreshed["id_token"]);
+    }
+    assert_tenant_stores_after_sign_in(&registry);
+
+    // A tenant-scoped ID token must not be accepted when the client selects a
+    // different tenant, even though both tenants use the same project API key.
+    // Keep this separate from refresh-token routing: it verifies the subject's
+    // namespace binding at the user-facing lookup boundary.
+    let (status, refused_lookup) = post(
+        &s,
+        "/identitytoolkit.googleapis.com/v1/accounts:lookup?key=worker-key",
+        &json!({
+            "tenantId": "customer-b",
+            "idToken": a["idToken"],
+        }),
+    );
+    assert_eq!(status, 400, "{refused_lookup}");
+    assert_eq!(refused_lookup["error"]["message"], "INVALID_ID_TOKEN");
+    assert_tenant_stores_after_sign_in(&registry);
+
+    let before_a = registry
+        .tenant_store("worker-alpha", "customer-a")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_count();
+    let before_b = registry
+        .tenant_store("worker-alpha", "customer-b")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_count();
+    let before_user_a = registry
+        .tenant_store("worker-alpha", "customer-a")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_by_id("custom-a")
+        .unwrap()
+        .clone();
+    let before_user_b = registry
+        .tenant_store("worker-alpha", "customer-b")
+        .unwrap()
+        .lock()
+        .unwrap()
+        .user_by_id("custom-b")
+        .unwrap()
+        .clone();
+    let (status, refused) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token?key=worker-key",
+        &json!({"grant_type": "refresh_token", "refresh_token": a["refreshToken"], "tenantId": "customer-b"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "INVALID_REFRESH_TOKEN");
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-a")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_count(),
+        before_a
+    );
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-a")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_by_id("custom-a")
+            .unwrap(),
+        &before_user_a
+    );
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-b")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_count(),
+        before_b
+    );
+    assert_eq!(
+        registry
+            .tenant_store("worker-alpha", "customer-b")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .user_by_id("custom-b")
+            .unwrap(),
+        &before_user_b
     );
 }
 
@@ -2848,7 +6679,11 @@ fn account_records_follow_production_field_omissions() {
     let record = looked["users"][0].as_object().unwrap();
     let mut keys: Vec<&str> = record.keys().map(String::as_str).collect();
     keys.sort_unstable();
-    assert_eq!(keys, ["createdAt", "lastLoginAt", "localId"], "{looked}");
+    assert_eq!(
+        keys,
+        ["createdAt", "lastLoginAt", "lastRefreshAt", "localId"],
+        "{looked}"
+    );
 
     let (status, signed_up) = post(
         &s,
@@ -2931,4 +6766,169 @@ fn mfa_enrollment_without_an_id_token_is_an_invalid_token() {
     let (status, body) = post(&s, &format!("{V1}/accounts:lookup"), &json!({}));
     assert_eq!(status, 400, "{body}");
     assert_eq!(body["error"]["message"], "MISSING_ID_TOKEN", "{body}");
+}
+
+/// Saved second45 production candidate: malformed inputs never select another user.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn second45_observed_update_shapes_preserve_ownership_and_atomicity() {
+    for s in [state(), strict_state()] {
+        for (index, (field, value, expected_status, expected_name, machine)) in [
+            ("localId", json!({}), 400, "baseline-b", "INVALID_ARGUMENT"),
+            ("localId", json!([]), 400, "baseline-b", "INVALID_ARGUMENT"),
+            ("displayName", json!(0), 200, "0", ""),
+            (
+                "displayName",
+                json!(false),
+                400,
+                "baseline-b",
+                "INVALID_ARGUMENT",
+            ),
+            (
+                "displayName",
+                json!([]),
+                400,
+                "baseline-b",
+                "INVALID_ARGUMENT",
+            ),
+            (
+                "displayName",
+                json!({}),
+                400,
+                "baseline-b",
+                "INVALID_ARGUMENT",
+            ),
+            (
+                "emailVerified",
+                json!({}),
+                400,
+                "baseline-b",
+                "INVALID_ARGUMENT",
+            ),
+            (
+                "customAttributes",
+                json!("{\"admin\":true}"),
+                400,
+                "baseline-b",
+                "INSUFFICIENT_PERMISSION",
+            ),
+            (
+                "customAttributes",
+                json!(""),
+                400,
+                "baseline-b",
+                "INSUFFICIENT_PERMISSION",
+            ),
+            ("customAttributes", Value::Null, 200, "sentinel", ""),
+            (
+                "customAttributes",
+                json!({}),
+                400,
+                "baseline-b",
+                "INVALID_ARGUMENT",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (_, a) = post(
+                &s,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email":format!("a-{index}@example.com"),"password":"password1","returnSecureToken":true}),
+            );
+            let (_, b) = post(
+                &s,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email":format!("b-{index}@example.com"),"password":"password1","returnSecureToken":true}),
+            );
+            for (u, name) in [(&a, "baseline-a"), (&b, "baseline-b")] {
+                let (status, response) = admin(
+                    &s,
+                    "POST",
+                    &format!("{ADMIN}/accounts:update"),
+                    &json!({"localId":u["localId"],"displayName":name,"emailVerified":false}),
+                );
+                assert_eq!(status, 200, "{response}");
+            }
+            let mut request = json!({"idToken":b["idToken"],"localId":a["localId"],"displayName":"sentinel","emailVerified":true});
+            request[field] = value;
+            let (status, response) = post(&s, &format!("{V1}/accounts:update"), &request);
+            assert_eq!(status, expected_status, "{field}: {response}");
+            if machine == "INVALID_ARGUMENT" {
+                assert_eq!(response["error"]["status"], machine, "{response}");
+                assert_eq!(
+                    response["error"]["details"][0]["@type"],
+                    "type.googleapis.com/google.rpc.BadRequest"
+                );
+                assert!(
+                    response["error"]["details"][0]["fieldViolations"][0]["description"]
+                        .is_string()
+                );
+                assert!(response["error"]["errors"][0].get("domain").is_none());
+            } else if !machine.is_empty() {
+                assert_eq!(response["error"]["message"], machine);
+            }
+            for (u, name) in [(&a, "baseline-a"), (&b, expected_name)] {
+                let (status, after) = admin(
+                    &s,
+                    "POST",
+                    &format!("{ADMIN}/accounts:lookup"),
+                    &json!({"localId":[u["localId"]]}),
+                );
+                assert_eq!(status, 200);
+                assert_eq!(after["users"][0]["displayName"], name, "{field}");
+                assert_eq!(after["users"][0]["emailVerified"], false);
+                assert!(after["users"][0].get("customAttributes").is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn second45_missing_or_null_token_update_classifies_observed_input() {
+    let s = state();
+    for token in [None, Some(Value::Null)] {
+        let mut request = json!({"displayName":"sentinel","localId":"unowned"});
+        if let Some(token) = token {
+            request["idToken"] = token;
+        }
+        let (status, response) = post(&s, &format!("{V1}/accounts:update"), &request);
+        assert_eq!(status, 400);
+        assert_eq!(response["error"]["message"], "INVALID_REQ_TYPE");
+    }
+}
+
+/// Local safety contract: decoder errors do not bypass session authentication.
+#[test]
+fn second45_invalid_token_precedes_new_shape_validation_without_mutation() {
+    for s in [state(), strict_state()] {
+        let (_, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email":"precedence@example.com","password":"password1","returnSecureToken":true}),
+        );
+        let lookup = || {
+            admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:lookup"),
+                &json!({"localId":[signed["localId"]]}),
+            )
+            .1
+        };
+        let before = lookup();
+        for (field, value) in [
+            ("localId", json!({})),
+            ("displayName", json!(false)),
+            ("emailVerified", json!({})),
+            ("customAttributes", json!({})),
+        ] {
+            let mut request = json!({"idToken":"invalid","displayName":"must-not-apply"});
+            request[field] = value;
+            let (status, response) = post(&s, &format!("{V1}/accounts:update"), &request);
+            assert_eq!(status, 400);
+            assert_eq!(response["error"]["message"], "INVALID_ID_TOKEN", "{field}");
+            assert_eq!(lookup(), before, "{field}");
+        }
+    }
 }

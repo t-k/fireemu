@@ -1,0 +1,17 @@
+{
+  "kind": "second-broad-local-http-v1",
+  "caseManifestPath": "spec/compatibility/broad-second-candidate.json",
+  "caseManifestDigest": "ea3b5263bcb31cf318c9146d2afcd988be0b5a6cec85108565ae991bdd7b1097",
+  "comparison": {
+    "id": "current-http-legacy-json-v1",
+    "http": "bounded-http-v1",
+    "inputs": {
+      "record-http.mjs": "89d7f395d62637883d200fc3e843b95ae8e40124c9e51e5098bbf86e6aa57ae0",
+      "current-session.mjs": "0a53407b54fa0489af8fe4cceaa105d4dfe4343ed0f5af5ce1e2f60adac12dab",
+      "current_contract.py": "32ecf15b0e612021e05fded540a89d986c4fbc1f3dfccedba2914397af501595"
+    },
+    "nonJsonHistoryComparable": false
+  },
+  "productionExecutable": false,
+  "productionApproval": null
+}

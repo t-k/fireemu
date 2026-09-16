@@ -96,11 +96,24 @@ pub fn parse_indexes(path: &str, text: &str) -> Result<IndexSet, String> {
             let mode = match (
                 f.get("order").and_then(Value::as_str),
                 f.get("arrayConfig").and_then(Value::as_str),
+                f.get("vectorConfig"),
             ) {
-                (Some("ASCENDING"), _) => IndexFieldMode::Ascending,
-                (Some("DESCENDING"), _) => IndexFieldMode::Descending,
-                (_, Some("CONTAINS")) => IndexFieldMode::Contains,
-                _ => return Err(format!("index field {path}: order or arrayConfig required")),
+                (Some("ASCENDING"), None, None) => IndexFieldMode::Ascending,
+                (Some("DESCENDING"), None, None) => IndexFieldMode::Descending,
+                (None, Some("CONTAINS"), None) => IndexFieldMode::Contains,
+                (None, None, Some(config)) => {
+                    let dimension = config
+                        .get("dimension")
+                        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+                        .and_then(|value| u32::try_from(value).ok())
+                        .filter(|dimension| (1..=2048).contains(dimension))
+                        .ok_or_else(|| format!("index field {path}: vectorConfig.dimension must be an integer from 1 through 2048"))?;
+                    if !config.get("flat").is_some_and(Value::is_object) {
+                        return Err(format!("index field {path}: vectorConfig.flat is required"));
+                    }
+                    IndexFieldMode::Vector { dimension }
+                }
+                _ => return Err(format!("index field {path}: exactly one order, arrayConfig, or vectorConfig is required")),
             };
             fields.push(IndexField {
                 path: FieldPath::parse(path).map_err(|e| e.to_string())?,
@@ -262,6 +275,40 @@ mod tests {
                 parse_indexes("test", &config.to_string()).is_ok(),
                 count == 100
             );
+        }
+    }
+
+    #[test]
+    fn parses_vector_index_configuration() {
+        let config = json!({
+            "indexes": [{
+                "collectionGroup": "items",
+                "fields": [{"fieldPath": "category", "order": "ASCENDING"},
+                           {"fieldPath": "embedding", "vectorConfig": {"dimension": 2, "flat": {}}}]
+            }]
+        });
+        let indexes = parse_indexes("test", &config.to_string()).unwrap();
+        assert_eq!(
+            indexes.composites()[0].fields[1].mode,
+            IndexFieldMode::Vector { dimension: 2 }
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_vector_index_configuration() {
+        for vector_config in [
+            json!({"dimension": 0, "flat": {}}),
+            json!({"dimension": 2049, "flat": {}}),
+            json!({"dimension": 2}),
+            json!({"dimension": "not-a-number", "flat": {}}),
+        ] {
+            let config = json!({
+                "indexes": [{
+                    "collectionGroup": "items",
+                    "fields": [{"fieldPath": "embedding", "vectorConfig": vector_config}]
+                }]
+            });
+            assert!(parse_indexes("test", &config.to_string()).is_err());
         }
     }
 

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "generator": "tools/compat-inventory/capture.py",
+  "generatorSha256": "955b8af8f4efa0a884479c9db495cde37be7f535541c639a49487c8893c24848",
+  "files": {
+    "catalog.json": "304ed8aae7677b4391301aa66a6797e848fff34d11a5095fffedf05bc6818124",
+    "discovery.json": "eaa632da268ee815bd87ab0c657033368861475c66240a597b6b348b02dda256",
+    "extracted.json": "e1795b06316ac6012ec576ff4d368fbaf5e29be4d9f1a94e404e62bcd69900f8",
+    "acquisitions.json": "398d9ecd4978050ef4c7ab841cadd00527e986dd3558e25058a5abb7930e7a48"
+  }
+}

@@ -3885,6 +3885,13 @@ impl FunctionsRuntime {
         {
             return None;
         }
+        // Keep a task pending while its codebase runner is restarting. Leasing it first would
+        // turn the expected reset gap into a transport failure and spend the task's retry and
+        // rate budgets before any handler could receive it. A replacement installation wakes
+        // this loop, and healthy codebases remain independently dispatchable.
+        let runners: Vec<Arc<Runner>> = (0..self.codebases.len())
+            .map(|index| self.runner_at(index))
+            .collect();
         let mut attempts = self
             .task_attempts
             .lock()
@@ -3908,7 +3915,14 @@ impl FunctionsRuntime {
             let (dispatches, next_wake) = inner.task_scheduler.dispatch_ready(
                 std::time::Instant::now(),
                 &self.config.project,
-                |function| self.manifest.get(function).map(|spec| spec.region.clone()),
+                |function| {
+                    let spec = self.manifest.get(function)?;
+                    let owner = self.owner.get(function).copied().unwrap_or(0);
+                    runners
+                        .get(owner)
+                        .filter(|runner| runner.is_alive())
+                        .map(|_| spec.region.clone())
+                },
                 room,
             );
             (dispatches, next_wake, epoch)
@@ -4400,7 +4414,7 @@ mod task_completion_tests {
             ],
             cwd: None,
             env: Vec::new(),
-            hello_timeout: Duration::from_secs(20),
+            hello_timeout: Duration::from_secs(60),
         };
         let runner = Runner::spawn_spec(&spec).await.unwrap();
         let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -4829,7 +4843,7 @@ mod task_completion_tests {
             ],
             cwd: None,
             env: Vec::new(),
-            hello_timeout: Duration::from_secs(20),
+            hello_timeout: Duration::from_secs(60),
         };
         let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
         let manifest = runtime.manifest().clone();

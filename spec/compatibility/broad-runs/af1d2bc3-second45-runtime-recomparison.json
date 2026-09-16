@@ -1,0 +1,243 @@
+{
+  "kind": "second45-runtime-recomparison-v2",
+  "status": "candidate",
+  "sourceCommit": "22320fc0a0fc99bff2109f5bdc236bde29de5497",
+  "evaluatorSourceCommit": "ec4e1fa155016c89dcdf0700077c219ae9c80885",
+  "evaluatorCommit": "ec4e1fa155016c89dcdf0700077c219ae9c80885",
+  "runtimeSourceCommit": "22320fc0a0fc99bff2109f5bdc236bde29de5497",
+  "evaluatorAnchorSha256": "71e6948274cc6e33e20ffb9f5bec356e672fd9129be50d86c8623caf9ed2f35b",
+  "comparisonOutputSha256": "725b5a386cdb16fd1e4bb5aeeea2ad4722b658a4a5d2e441af4978ea4ace6e40",
+  "productionSource": "774e9d8b-second45-production-candidate.json",
+  "comparison": {
+    "kind": "second45-production-local-comparison-v2",
+    "mode": "saved-production-versus-local",
+    "comparisonContractDigest": "0625bd76c028de64ff0ae9ae595b1c5f44bd48cc5475c63e806a8060cbf742cb",
+    "historicalObserverDigest": "2bbf234fd2b1543902b9d3c66720b5fb0d9b86d7a83f5675ae5e544b57f0b313",
+    "currentObserverDigest": "d24e3c0f67b15e5bbb62f8a1c7e26d6f505a75dd7085e24ed37e0df88559fc69",
+    "productionObserverDigest": "2bbf234fd2b1543902b9d3c66720b5fb0d9b86d7a83f5675ae5e544b57f0b313",
+    "localObserverDigest": "d24e3c0f67b15e5bbb62f8a1c7e26d6f505a75dd7085e24ed37e0df88559fc69",
+    "productionCandidateSourceSha256": "8938a0c31909a85753916dfeed095d102dfaa9cc4b1f6ebd6b93060b1c9d4d73",
+    "currentLocalSourceSha256": "e56bca1e4386575d3c177021f93c14b947b8934f6081889bf72efdd162a5ebb1",
+    "productionSourceSha256": "8938a0c31909a85753916dfeed095d102dfaa9cc4b1f6ebd6b93060b1c9d4d73",
+    "localSourceSha256": "e56bca1e4386575d3c177021f93c14b947b8934f6081889bf72efdd162a5ebb1",
+    "historicalProductionReceiptSha256": "6ff36c6dc6e482299772b75bb3e0ec183aebd9ac053bcb7e8607b617f26c9cd1",
+    "historicalLocalReceiptSha256": "22d54900eeb1f27ac2780958167e4c475bea997ab92b986a9c0b394c96c90b94",
+    "runtimeSourceCommit": "22320fc0a0fc99bff2109f5bdc236bde29de5497",
+    "evaluatorCommit": "ec4e1fa155016c89dcdf0700077c219ae9c80885",
+    "evaluatorAnchorSha256": "71e6948274cc6e33e20ffb9f5bec356e672fd9129be50d86c8623caf9ed2f35b",
+    "parentManifestSha256": "1e62da98ded06ca800c5fb60ff2be7b784c595ad30c94d4cde31ebc475648d73",
+    "mappedReceiptFileSha256": "b96f63483e8215cd65804ed9d100ff177f60e85153e1e6b50895bde865b265df",
+    "recordingComplete": true,
+    "cleanupComplete": true,
+    "stateValidation": true,
+    "compatibility": "match",
+    "rows": [
+      {
+        "id": "second/auth/01",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/02",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/03",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/04",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/05",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/06",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/07",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/08",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/09",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/10",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/11",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/12",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/13",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/14",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/15",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/16",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/17",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/18",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/19",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/20",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/21",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/22",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/23",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/24",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/25",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/26",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/27",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/28",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/29",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/30",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/31",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/32",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/masks/ancestor-overlap-state/normal",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/masks/ancestor-overlap-state/before",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/masks/ancestor-overlap-state/diagnostic",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/masks/ancestor-overlap-state/after",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/preconditions/stale-delete-state/original",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/preconditions/stale-delete-state/normal",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/preconditions/stale-delete-state/before",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/preconditions/stale-delete-state/diagnostic",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/preconditions/stale-delete-state/after",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/transforms/invalid-path-state/normal",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/transforms/invalid-path-state/before",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/transforms/invalid-path-state/diagnostic",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/transforms/invalid-path-state/after",
+        "compatibility": "match"
+      }
+    ],
+    "errors": [],
+    "limitations": [
+      "Raw historical production receipts are unavailable; comparison uses the pinned normalized candidate production rows."
+    ]
+  },
+  "rowSummary": {
+    "count": 45,
+    "matches": 45,
+    "mismatches": 0,
+    "indeterminate": 0
+  },
+  "runtime": {
+    "executionCommit": "22320fc0a0fc99bff2109f5bdc236bde29de5497",
+    "artifactSha256": "4fa9bce06cc47e148a6eaed936703ad13c2be3d2ed5aa76586fd1632fc0b3a35",
+    "configurationDigest": "e19ec6872c0e06835c92df832a42c2d2e02ffeabdab71d0470aeedf5d68660fd",
+    "exitCode": 0,
+    "recordingComplete": true,
+    "cleanupComplete": true,
+    "ownedProcessStopped": true,
+    "listenersClosed": true,
+    "requestCounts": {
+      "auth": 302,
+      "firestore": 28,
+      "recovery": 17,
+      "total": 330
+    }
+  }
+}

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { constants, tmpdir } from "node:os";
+import { constants, homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
@@ -213,7 +213,10 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
       skip: !unix || !process.env.FIREEMU_TEST_LAUNCHER,
     },
     async (t) => {
-      const dir = mkdtempSync(join(tmpdir(), "fireemu-native-signal-"));
+      // Export publication rejects shared temporary-directory ancestors because Auth exports may
+      // contain secrets. Exercise successful publication from the caller's private home instead.
+      const privateBase = process.platform === "darwin" ? tmpdir() : homedir();
+      const dir = mkdtempSync(join(privateBase, ".fireemu-native-signal-"));
       const project = `demo-npm-signal-${process.pid}-${signal.toLowerCase()}`;
       const exported = join(dir, "export");
       const args = ["up", "--only", "auth", "--project", project, "--export-on-exit", exported];
@@ -268,7 +271,7 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
       assert.equal(alive(nativePid), false, "native PID must not survive launcher shutdown");
       assert.ok(
         existsSync(join(exported, "firebase-export-metadata.json")),
-        "export completes before launcher exit",
+        `export completes before launcher exit: ${run.stderr()}`,
       );
       await assert.rejects(fetch(url, { signal: AbortSignal.timeout(500) }));
     },

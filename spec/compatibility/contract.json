@@ -460,11 +460,11 @@
     "sharedTerms": [
       {
         "term": "ExecutePipeline",
-        "status": "implemented",
+        "status": "partial",
         "owners": [
           "FS-PIPE-RPC-1"
         ],
-        "qualifier": "validation-only: a well-formed pipeline is answered UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY"
+        "qualifier": "finite local latest-read collection / optional single where(equal(top-level field, scalar literal)) / optional top-level field-reference select / optional non-negative int32 offset / optional limit execution; other execution semantics and production parity remain unsupported or unobserved"
       },
       {
         "term": "Storage triggers",
@@ -581,12 +581,17 @@
             {
               "id": "FS-REST-1",
               "status": "implemented"
+            },
+            {
+              "id": "FS-ADMIN-INVENTORY-1",
+              "status": "implemented"
             }
           ],
           "evidence": {
             "tests": [],
             "integration": [
               "crates/fireemu-adapter-grpc/tests/rest.rs",
+              "crates/fireemu-adapter-grpc/src/rest/admin_inventory_tests.rs",
               "conformance/firestore-matrix.json"
             ],
             "conformance": [
@@ -635,6 +640,58 @@
             }
           ],
           "productionOnly": [],
+          "preview": []
+        },
+        {
+          "id": "FS-CLAIM-VECTOR",
+          "statement": "Firestore Standard/Native findNearest vector queries are implemented locally on both the v1 gRPC RunQuery and Firestore REST :runQuery surfaces. The local implementation supports Euclidean, cosine and dot-product distance measures, optional distance-result projection, finite distance thresholds, a result limit from 1 through 1000, ordinary query projection, filters, offsets and limits before nearest ranking, and the declared vector-index policy: strict production planning requires a dimensioned vector index matching the query vector and a matching composite vector index when prefilters are present, while the emulator profile assumes the vector index. This is a local implementation mapping: production parity and SDK execution are unobserved, and findNearest is refused for Listen/WebChannel targets.",
+          "capabilities": [
+            {
+              "id": "FS-QRY-1",
+              "status": "implemented"
+            },
+            {
+              "id": "FS-REST-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [
+              "rest_run_query_supports_standard_find_nearest",
+              "grpc_run_query_supports_standard_find_nearest",
+              "grpc_find_nearest_applies_ordinary_offset_and_limit_before_ranking",
+              "nearest_vector_query_orders_euclidean_cosine_and_dot_product",
+              "nearest_projection_controls_synthesized_distance_field",
+              "nearest_vector_query_limit_and_threshold_are_applied",
+              "vector_queries_require_a_dimensioned_vector_index_in_production",
+              "vector_query_prefilters_require_the_same_composite_vector_index",
+              "emulator_vector_queries_assume_a_vector_index_without_using_name_index"
+            ],
+            "integration": [
+              "crates/fireemu-adapter-grpc/tests/rest.rs",
+              "crates/fireemu-adapter-grpc/tests/local.rs",
+              "crates/fireemu-adapter-grpc/tests/webchannel.rs",
+              "crates/fireemu-core-firestore/tests/execute.rs",
+              "crates/fireemu-core-firestore/tests/index.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the pinned official Firestore emulator refuses findNearest on its REST surface; this contract records fireemu's REST implementation as a local capability rather than official-emulator parity"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "REST and gRPC findNearest execution with projection, Euclidean/cosine/dot-product distance, finite thresholds, limits and ordinary pre-ranking query stages; Listen and WebChannel reject findNearest targets explicitly",
+              "precision": "finite-local-read-subset"
+            },
+            {
+              "behaviour": "Non-document-name explicit ordering materializes at most offset + limit <= 1000 ordinary rows before nearest ranking; unbounded offsets require document-name ordering or a top-level limit",
+              "precision": "resource-safety-divergence"
+            }
+          ],
+          "productionOnly": [
+            "production vector-search execution, index-build/backfill behaviour, and production error or ranking parity"
+          ],
           "preview": []
         },
         {
@@ -833,27 +890,33 @@
         },
         {
           "id": "FS-CLAIM-PIPELINE",
-          "statement": "ExecutePipeline is decoded, identified and validated against the documented stage registry; a well-formed pipeline is answered UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY rather than executed, and an unknown stage is refused rather than skipped.",
+          "statement": "ExecutePipeline validates the documented stage registry and executes a finite Enterprise local latest-read subset: collection, optional single where(equal(top-level field reference, scalar literal)), optional top-level field-reference select aliases, optional non-negative int32 offset and optional limit, in that order. Offset skips matching rows once before limit while reusing the existing paged stream. Unsupported execution stages, expressions and consistency selectors are refused rather than ignored; production execution, ordering and exact production error parity are unobserved.",
           "capabilities": [
             {
               "id": "FS-PIPE-RPC-1",
-              "status": "implemented"
+              "status": "partial"
             }
           ],
           "evidence": {
             "tests": [
-              "pipelines_are_identified_and_misplaced_or_unknown_stages_refused"
+              "pipelines_are_identified_and_misplaced_or_unknown_stages_refused",
+              "execute_pipeline_reads_collection_projects_field_aliases_and_applies_limit",
+              "execute_pipeline_where_equal_executes_scalar_matrix_and_rejects_missing_fields",
+              "execute_pipeline_where_equal_pushes_filter_before_limit",
+              "execute_pipeline_where_equal_refusals_preserve_status_context_and_documents",
+              "execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_preserves_state"
             ],
             "integration": [
-              "crates/fireemu-core-firestore/tests/validation_only.rs"
+              "crates/fireemu-core-firestore/tests/validation_only.rs",
+              "crates/fireemu-adapter-grpc/tests/local.rs"
             ],
             "conformance": []
           },
           "officialLimitations": [],
           "fireemuOnly": [
             {
-              "behaviour": "strict decode-and-validate with a canonical form in the refusal",
-              "precision": "strict-validation-only"
+              "behaviour": "finite latest-read collection / optional single where(equal(top-level field, scalar literal)) / optional top-level field-reference select / optional non-negative int32 offset / optional limit execution with explicit unsupported-operation refusal",
+              "precision": "finite-local-read-subset"
             }
           ],
           "productionOnly": [],
@@ -959,10 +1022,14 @@
       "claims": [
         {
           "id": "AUTH-CLAIM-IDENTITY-TOOLKIT",
-          "statement": "The Identity Toolkit REST subset the Auth emulator serves is reproduced with the official error envelopes, including the Admin account routes real projects use (create, lookup, update, batchGet, batchCreate, batchDelete, query, session cookies, link generators), the client account routes (sign-up, sign-in, update, delete) and the emulator-only routes that read out-of-band codes and verification codes and read or change the project configuration. An unpinned daemon advances Auth request time monotonically, so a self-service credential change in a later second invalidates an earlier session cookie through validSince just as the Admin SDK observes on the official emulator.",
+          "statement": "The Identity Toolkit REST subset the Auth emulator serves is reproduced with the official error envelopes, including the Admin account routes real projects use (create, lookup, update, batchGet, batchCreate, batchDelete, query, session cookies, link generators), the client account routes (sign-up, sign-in, update, delete) and the emulator-only routes that read out-of-band codes and verification codes and read or change the project configuration. The local implementation validates new password policy before mutation on sign-up, client and Admin update, password reset, and batch import, with a six-character minimum, a 4096 UTF-16-unit maximum and control-character rejection; trusted artifact restoration preserves recorded credentials without applying new-password policy. Saved production evidence for these rules is limited to the approved end-user client accounts:update corpus, including finite 4095/4096/4097 UTF-16-unit maximum cases and six/five-character ASCII controls. Other routes and local malformed/control/minimum cases remain production-unobserved, so this claim does not transfer client-update evidence across routes. An unpinned daemon advances Auth request time monotonically, so a self-service credential change in a later second invalidates an earlier session cookie through validSince just as the Admin SDK observes on the official emulator.",
           "capabilities": [
             {
               "id": "AUTH-CORE-1",
+              "status": "implemented"
+            },
+            {
+              "id": "AUTH-ACCOUNT-LIFECYCLE-1",
               "status": "implemented"
             },
             {
@@ -994,7 +1061,7 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "codes are deterministic from the session seed rather than random",
+              "behaviour": "normal daemon starts re-key generated credential handles from a CSPRNG lifecycle incarnation so restart or namespace recreation cannot replay them; tests may inject a fixed incarnation for reproducibility",
               "precision": "exact-for-local-semantics"
             },
             {
@@ -1012,6 +1079,59 @@
           ],
           "productionOnly": [
             "real identity provider round trips and provider-side account state"
+          ],
+          "preview": []
+        },
+        {
+          "id": "AUTH-CLAIM-PROVIDER-CONFIG",
+          "statement": "Project and tenant OAuth IdP and inbound SAML provider configuration resources implement create, get, list, update and delete under the public v2 Identity Platform paths, with owner-only access, namespace and provider-kind isolation, creation-order pagination, validation before mutation and secret-safe snapshots. This is a local implementation contract; production response parity and external identity-provider exchanges are not attested.",
+          "capabilities": [
+            {
+              "id": "AUTH-PROVIDER-CONFIG-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the pinned official Auth emulator does not serve project or tenant OAuth IdP and inbound SAML configuration resources"
+          ],
+          "fireemuOnly": [],
+          "productionOnly": [
+            "live provider discovery, redirects, assertion exchange and production configuration parity"
+          ],
+          "preview": []
+        },
+        {
+          "id": "AUTH-CLAIM-FEDERATION-ASSERTION-LOCAL",
+          "statement": "An opt-in local adapter path verifies one caller-pinned RS256 OIDC key and binds issuer, subject, audience, authorized party, tenant, provider, expiry, issued-at, not-before and nonce before account mutation. Mixed bearer access or refresh credentials are refused before mutation. This is finite local trust-boundary evidence and does not attest production federation parity, provider discovery, hosted redirects, authorization-code exchange, SAML or external identity-provider behavior.",
+          "capabilities": [
+            {
+              "id": "AUTH-FEDERATION-ASSERTION-LOCAL",
+              "status": "partial"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu-adapter-http/tests/auth_oidc_assertions.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [],
+          "fireemuOnly": [
+            {
+              "behaviour": "the opt-in test boundary accepts one explicitly pinned local RS256 JWK and performs no discovery or external identity-provider traffic",
+              "precision": "exact-for-local-semantics"
+            }
+          ],
+          "productionOnly": [
+            "production provider configuration and discovery, hosted redirects, authorization-code exchange, SAML, key rotation and external identity-provider behavior"
           ],
           "preview": []
         },
@@ -1842,7 +1962,7 @@
         },
         {
           "id": "CLI-CLAIM-IMPORT-EXPORT",
-          "statement": "An export directory firebase emulators:export wrote with firebase-tools 15.28.2 imports into fireemu with its Firestore documents, Auth accounts and Storage objects intact, and an export fireemu writes imports back into the official suite the same way: the firebase-export-metadata.json manifest, the Firestore managed export, the Identity Toolkit accounts and config documents and the Storage bucket, blob and metadata files are the pinned formats. --import, --export-on-exit and emulators:export behave as the official commands do, an import across products is all or nothing, and a section of a deferred product is refused rather than silently dropped.",
+          "statement": "An export directory firebase emulators:export wrote with firebase-tools 15.28.2 imports into fireemu with its Firestore documents, Auth accounts and Storage objects intact, and an export fireemu writes imports back into the official suite the same way: the firebase-export-metadata.json manifest, every Firestore managed-export output partition referenced by overall_export_metadata, the Identity Toolkit accounts and config documents and the Storage bucket, blob and metadata files are the pinned formats. --import, --export-on-exit and emulators:export behave as the official commands do, an import across products is all or nothing, and corrupt metadata, duplicate or aliased partition outputs, a partition-count overflow, and a section of a deferred product are refused before any imported state is published rather than silently dropped.",
           "capabilities": [
             {
               "id": "DATA-1",

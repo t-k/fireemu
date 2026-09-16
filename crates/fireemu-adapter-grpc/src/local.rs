@@ -58,25 +58,23 @@ pub const READ_TIME_RETENTION_SECONDS: i64 = 3600;
 /// it, so an operation holds this lock alone and never the catalog's.
 #[derive(Debug, Default)]
 struct DatabaseEntry {
+    /// Never reused within a backend, including across resets and restores.
+    incarnation: u64,
     cell: RwLock<DatabaseCell>,
     /// Wakes writers refused for lock contention when a transaction finishes.
     releases: TransactionReleases,
-    /// When each transaction first blocked a writer (wall clock). A transaction that keeps
-    /// writers blocked for the lock lease is rolled back the way production expires an idle
-    /// transaction, so a virtual clock that does not move cannot hold a lock forever.
-    blocking_since: Mutex<BTreeMap<TransactionId, (std::time::Instant, u64)>>,
 }
 
 impl DatabaseEntry {
     /// A fresh, attached entry holding a restored state.
-    fn restored(state: FirestoreState) -> Self {
+    fn restored(state: FirestoreState, incarnation: u64) -> Self {
         Self {
+            incarnation,
             cell: RwLock::new(DatabaseCell {
                 detached: false,
                 state,
             }),
             releases: TransactionReleases::default(),
-            blocking_since: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -143,6 +141,9 @@ struct DatabaseCell {
 /// [`LocalBackend`]'s own methods instead.
 #[derive(Clone)]
 pub struct DatabaseHandle(Arc<DatabaseEntry>);
+
+/// One attached catalog entry and its non-reused local incarnation.
+pub type DatabaseCatalogEntry = ((String, String), u64);
 
 impl std::fmt::Debug for DatabaseHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -241,6 +242,8 @@ pub struct LocalBackend {
     /// The database catalog. Locked only to locate, create or retire an entry: an
     /// operation clones the entry's handle and releases this lock before it runs.
     databases: Mutex<BTreeMap<(String, String), Arc<DatabaseEntry>>>,
+    /// Allocates identities for database instances independently of delayed wipe notifications.
+    database_incarnations: std::sync::atomic::AtomicU64,
     /// The sessions' fault plans (looked up by project), when shared.
     faults: Mutex<Option<fireemu_core_session::fault::SharedFaultRegistry>>,
     /// Told after a fault plan moved the virtual clock (the functions runtime re-reads
@@ -1204,6 +1207,46 @@ impl DocumentSnapshot {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replace_database_indexes_reports_a_poisoned_catalog_lock() {
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
+        )));
+        let backend = LocalBackend::new(
+            Gateway {
+                enforce_limits: true,
+                ctx: fireemu_core_firestore::index::PlanningContext {
+                    edition: fireemu_core_types::edition::FirestoreEdition::Standard,
+                    api_mode: fireemu_core_types::edition::FirestoreApiMode::Native,
+                    policy: fireemu_core_firestore::index::IndexValidationPolicy::Production,
+                },
+                indexes: fireemu_core_firestore::index::IndexSet::default(),
+            },
+            clock,
+            7,
+        );
+        assert!(backend.replace_database_indexes(
+            "staging",
+            fireemu_core_firestore::index::IndexSet::default(),
+        ));
+        let lock = &backend.indexes;
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = lock.write().unwrap();
+            panic!("poison the index catalog lock");
+        }));
+        assert!(poisoned.is_err());
+
+        assert!(!backend.replace_database_indexes(
+            "staging",
+            fireemu_core_firestore::index::IndexSet::default(),
+        ));
+    }
+}
+
 impl LocalBackend {
     /// Creates a backend with the strict gateway and a shared clock.
     #[must_use]
@@ -1231,6 +1274,7 @@ impl LocalBackend {
             ))),
             tenancy: Mutex::new(None),
             databases: Mutex::new(BTreeMap::new()),
+            database_incarnations: std::sync::atomic::AtomicU64::new(0),
             faults: Mutex::new(None),
             clock_observer: Mutex::new(None),
             generations: Mutex::new(BTreeMap::new()),
@@ -1422,6 +1466,27 @@ impl LocalBackend {
         ));
     }
 
+    /// Clears every database of one project while preserving its catalog entries.
+    ///
+    /// This is the semantics of the emulator's `clearFirestore` route: document data is
+    /// dropped, but an existing database remains discoverable through the Admin inventory.
+    /// The exclusive admission guard makes catalog removal and recreation one operation, and
+    /// the range lookup avoids inspecting databases owned by other projects.
+    pub fn clear_project_documents(&self, project: &str) -> Result<(), Status> {
+        let _exclusive = self.barrier.exclusive();
+        let keys = self.take_project(project);
+        self.bump_generations(&keys);
+        self.announce_wipe(keys.clone());
+        for database in keys.into_iter().map(|(_, database)| database) {
+            let parent = parse_parent(&format!(
+                "projects/{project}/databases/{database}/documents"
+            ))
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            self.database_handle(&parent)?;
+        }
+        Ok(())
+    }
+
     /// Drops every database `scope` owns. The default session's scope also starts a new
     /// epoch (streams opened before it end like on a full reset); a project scope only
     /// bumps the generations of the databases it wiped.
@@ -1458,6 +1523,38 @@ impl LocalBackend {
             Err(_) => Vec::new(),
         };
         let keys: Vec<(String, String)> = removed
+            .into_iter()
+            .map(|(key, handle)| {
+                handle.detach();
+                key
+            })
+            .collect();
+        let mut ledger = self
+            .history_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for key in &keys {
+            ledger.remove_committed(key);
+        }
+        keys
+    }
+
+    fn take_project(&self, project: &str) -> Vec<(String, String)> {
+        let removed: Vec<((String, String), DatabaseHandle)> = match self.databases.lock() {
+            Ok(mut dbs) => {
+                let start = (project.to_owned(), String::new());
+                let keys: Vec<(String, String)> = dbs
+                    .range(start..)
+                    .take_while(|((p, _), _)| p == project)
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                keys.into_iter()
+                    .filter_map(|key| dbs.remove(&key).map(|entry| (key, DatabaseHandle(entry))))
+                    .collect()
+            }
+            Err(_) => Vec::new(),
+        };
+        let keys: Vec<_> = removed
             .into_iter()
             .map(|(key, handle)| {
                 handle.detach();
@@ -1831,6 +1928,8 @@ impl LocalBackend {
                         Arc::new(DatabaseEntry::restored(
                             v.clone()
                                 .with_retained_version_limit(self.history_version_limit),
+                            self.database_incarnations
+                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
                         )),
                     );
                 }
@@ -2158,13 +2257,19 @@ impl LocalBackend {
     }
 
     /// Atomically replaces one database's index catalog.
+    ///
+    /// Returns `false` when the shared catalog lock is poisoned and the replacement is not
+    /// applied.
     pub fn replace_database_indexes(
         &self,
         database: &str,
         indexes: fireemu_core_firestore::index::IndexSet,
-    ) {
+    ) -> bool {
         if let Ok(mut current) = self.indexes.write() {
             current.insert((None, database.to_owned()), indexes);
+            true
+        } else {
+            false
         }
     }
 
@@ -2235,6 +2340,19 @@ impl LocalBackend {
         })
     }
 
+    /// Latest query with captured Rules/epoch admission.
+    pub fn run_query_latest_guarded(
+        &self,
+        parent: &Parent,
+        query: &Query,
+        guard: ReadGuard<'_>,
+    ) -> Result<Vec<Document>, Status> {
+        self.read_db(parent, |db| {
+            guard(db, None, ReadCheck::Query { parent, query })?;
+            db.run_query(query, None).map_err(|e| status_from_error(&e))
+        })
+    }
+
     /// `PartitionQuery`: cursor points that split a collection-group query (ordered by
     /// `__name__`, without filters, other orderings, limits or cursors) into up to
     /// `partition_count + 1` ranges of similar size, paged by `page_size` / `page_token`.
@@ -2260,6 +2378,11 @@ impl LocalBackend {
         };
         self.fault(parent.project.as_str(), "firestore.read")?;
         let query = self.accepted_query(&parent, sq)?.query;
+        if query.find_nearest.is_some() {
+            return Err(Status::unimplemented(
+                "PartitionQuery does not support findNearest",
+            ));
+        }
         let name_ascending_only = query.order_by.iter().all(|o| {
             o.field.is_document_name()
                 && o.direction == fireemu_core_firestore::query::Direction::Ascending
@@ -2450,10 +2573,40 @@ impl LocalBackend {
                         FirestoreState::with_limit_scope(scope)
                             .with_retained_version_limit(self.history_version_limit)
                             .with_transaction_id_offset(offset),
+                        self.database_incarnations
+                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
                     ))
                 })
                 .clone(),
         ))
+    }
+
+    /// Returns the attached database catalog without creating entries or touching database
+    /// state. The adapter uses this for the read-only Admin inventory surface.
+    pub fn database_catalog(&self) -> Result<Vec<DatabaseCatalogEntry>, Status> {
+        self.database_catalog_with_hook(|| {})
+    }
+
+    fn database_catalog_with_hook(
+        &self,
+        after_catalog_lock: impl FnOnce(),
+    ) -> Result<Vec<DatabaseCatalogEntry>, Status> {
+        let dbs = self.databases.lock().map_err(|_| lock_poisoned())?;
+        after_catalog_lock();
+        let entries: Vec<_> = dbs
+            .iter()
+            .map(|(key, entry)| (key.clone(), Arc::clone(entry)))
+            .collect();
+        drop(dbs);
+        entries
+            .into_iter()
+            .map(|(key, entry)| {
+                if entry.cell.read().map_err(|_| lock_poisoned())?.detached {
+                    return Err(Status::unavailable("database catalog entry is detached"));
+                }
+                Ok((key, entry.incarnation))
+            })
+            .collect()
     }
 
     fn with_db<T>(
@@ -2599,6 +2752,15 @@ impl LocalBackend {
         self.database_handle(parent)
             .ok()
             .and_then(|handle| handle.read(|db| db.read_time(now)))
+            .unwrap_or(now)
+    }
+
+    fn read_time_horizon_without_creation(
+        &self,
+        parent: &Parent,
+        now: fireemu_core_types::time::LogicalInstant,
+    ) -> fireemu_core_types::time::LogicalInstant {
+        self.read_unadmitted(parent, |db| db.read_time(now))
             .unwrap_or(now)
     }
 
@@ -3471,72 +3633,39 @@ impl LocalBackend {
             && status.message() == fireemu_core_firestore::store::TOO_MUCH_CONTENTION
     }
 
-    /// Lease bookkeeping for a refused attempt: notes when each holder of a colliding lock
-    /// first blocked a writer and how active it was then, and rolls back a holder that has
-    /// blocked writers for the lock lease without driving its transaction in the meantime
-    /// (production expires an idle transaction; a busy one keeps its locks). `true` when a
-    /// holder was rolled back, so the attempt is worth repeating at once.
+    /// Lease bookkeeping for a refused attempt: rolls back colliding holders that have been
+    /// idle for the lock lease (production expires an idle transaction; a busy one keeps its
+    /// locks). The idle check and rollback share the database write lock, so a transaction that
+    /// resumes cannot be rolled back from a stale observation. `true` when a holder was rolled
+    /// back, so the attempt is worth repeating at once.
     pub fn expire_lock_leases(
         &self,
         handle: &DatabaseHandle,
         lease_writes: &[Write],
         own: Option<&TransactionId>,
     ) -> bool {
-        let holders: Vec<(TransactionId, u64)> = handle
-            .read(|db| {
-                db.lock_holders(lease_writes, own)
+        handle
+            .with(|db| {
+                // Recheck idleness and roll back under the same database write lock. A read
+                // followed by a later write lock could otherwise sample an idle holder, let a
+                // concurrent transaction operation refresh it, then incorrectly roll it back.
+                let expired: Vec<TransactionId> = db
+                    .lock_holders(lease_writes, own)
                     .into_iter()
-                    .filter_map(|id| db.transaction_activity(&id).map(|activity| (id, activity)))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let now = std::time::Instant::now();
-        let expired: Vec<TransactionId> = {
-            let Ok(mut since) = handle.0.blocking_since.lock() else {
-                return false;
-            };
-            // Forget holders that finished; keep the clock of every still-active holder, so
-            // writers with different write sets do not reset each other's lease.
-            let stale: Vec<TransactionId> = since
-                .keys()
-                .filter(|id| {
-                    !handle
-                        .read(|db| db.transaction_is_active(id))
-                        .unwrap_or(false)
-                })
-                .cloned()
-                .collect();
-            for id in stale {
-                since.remove(&id);
-            }
-            holders
-                .iter()
-                .filter(|(id, activity)| {
-                    let entry = since.entry(id.clone()).or_insert((now, *activity));
-                    if entry.1 != *activity {
-                        // The holder drove its transaction since: not idle, the lease restarts.
-                        *entry = (now, *activity);
+                    .filter(|id| db.transaction_idle_for(id, self.lock_lease))
+                    .collect();
+                if expired.is_empty() {
+                    return Ok(false);
+                }
+                let mut rolled_back = false;
+                for id in &expired {
+                    if db.rollback(id).is_ok() {
+                        rolled_back = true;
                     }
-                    now.duration_since(entry.0) >= self.lock_lease
-                })
-                .map(|(id, _)| id.clone())
-                .collect()
-        };
-        if expired.is_empty() {
-            return false;
-        }
-        let _ = handle.with(|db| {
-            for id in &expired {
-                let _ = db.rollback(id);
-            }
-            Ok(())
-        });
-        if let Ok(mut since) = handle.0.blocking_since.lock() {
-            for id in &expired {
-                since.remove(id);
-            }
-        }
-        true
+                }
+                Ok(rolled_back)
+            })
+            .unwrap_or(false)
     }
 
     /// `Rollback`.
@@ -3808,20 +3937,45 @@ impl LocalBackend {
                     query: &authorization.query,
                 },
             )?;
+            let explain_started = std::time::Instant::now();
+            if req
+                .explain_options
+                .as_ref()
+                .is_some_and(|options| !options.analyze)
+            {
+                let mut responses = query_responses(&[], None, access.report(), 0);
+                if let Some(response) = responses.last_mut() {
+                    response.explain_metrics = Some(crate::service::explain_metrics(
+                        &authorization.query,
+                        None,
+                        None,
+                    ));
+                }
+                return Ok((responses, authorization.warnings.clone(), selection));
+            }
             let mut selection_stage = None;
+            let mut selection_matched = None;
             let selection = match selection {
                 Some(selection) => Some(selection),
-                None if execution_present && accepted.query.effective_order_by().len() != 1 => {
+                None if execution_present
+                    && (accepted.query.find_nearest.is_some()
+                        || accepted.query.effective_order_by().len() != 1) =>
+                {
                     let mut selection_query = authorization.query.clone();
-                    let original_offset = selection_query.offset;
-                    selection_query.offset = 0;
-                    selection_query.limit = selection_query
-                        .limit
-                        .map(|limit| limit.saturating_add(original_offset));
+                    if selection_query.find_nearest.is_none() {
+                        let original_offset = selection_query.offset;
+                        selection_query.offset = 0;
+                        selection_query.limit = selection_query
+                            .limit
+                            .map(|limit| limit.saturating_add(original_offset));
+                    }
                     let (paths, stats) = access
                         .db()
                         .run_query_paths_with_stats(&selection_query, version)
                         .map_err(|error| status_from_error(&error))?;
+                    if accepted.query.find_nearest.is_some() {
+                        selection_matched = Some(stats.matched);
+                    }
                     let selection =
                         QuerySelection::from_paths(paths, Arc::clone(&self.query_selection_bytes));
                     selection_stage = Some((
@@ -3866,16 +4020,38 @@ impl LocalBackend {
             let skipped = if after_document.is_some() {
                 0
             } else {
-                let available = selection.as_ref().map_or(stats.matched, |selection| {
-                    u64::try_from(selection.inner.paths.len()).unwrap_or(u64::MAX)
-                });
-                i32::try_from(u64::from(accepted.query.offset).min(available)).unwrap_or(i32::MAX)
+                let available = if accepted.query.find_nearest.is_some() {
+                    selection_matched.unwrap_or(stats.matched)
+                } else {
+                    selection.as_ref().map_or(stats.matched, |selection| {
+                        u64::try_from(selection.inner.paths.len()).unwrap_or(u64::MAX)
+                    })
+                };
+                i32::try_from(u64::from(authorization.query.offset).min(available))
+                    .unwrap_or(i32::MAX)
             };
-            Ok((
-                query_responses(&docs, read_time, access.report(), skipped),
-                authorization.warnings.clone(),
-                selection,
-            ))
+            let mut responses = query_responses(&docs, read_time, access.report(), skipped);
+            if req
+                .explain_options
+                .as_ref()
+                .is_some_and(|options| options.analyze)
+            {
+                let metrics = crate::service::explain_metrics(
+                    &authorization.query,
+                    None,
+                    Some(crate::service::ExplainExecution {
+                        results_returned: i64::try_from(docs.len()).unwrap_or(i64::MAX),
+                        entries: u64::try_from(docs.len())
+                            .unwrap_or(u64::MAX)
+                            .saturating_add(u64::try_from(skipped).unwrap_or(0)),
+                        duration: explain_started.elapsed(),
+                    }),
+                );
+                if let Some(response) = responses.last_mut() {
+                    response.explain_metrics = Some(metrics);
+                }
+            }
+            Ok((responses, authorization.warnings.clone(), selection))
         })
     }
 
@@ -3912,6 +4088,10 @@ impl LocalBackend {
         };
         let (aliases, aggregations) = decode_aggregations(saq)?;
         let accepted = self.accepted_aggregation_query(&parent, sq, &aggregations)?;
+        let plan_only = req
+            .explain_options
+            .as_ref()
+            .is_some_and(|options| !options.analyze);
         let now = self.write_time();
         let selector = match &req.consistency_selector {
             Some(pb::run_aggregation_query_request::ConsistencySelector::Transaction(bytes)) => {
@@ -3940,6 +4120,21 @@ impl LocalBackend {
                     query: &accepted.query,
                 },
             )?;
+            let explain_started = std::time::Instant::now();
+            if plan_only {
+                return Ok((
+                    pb::RunAggregationQueryResponse {
+                        transaction: access.report().to_vec(),
+                        explain_metrics: Some(crate::service::explain_metrics(
+                            &accepted.query,
+                            Some(&aggregations),
+                            None,
+                        )),
+                        ..Default::default()
+                    },
+                    QueryStats::default(),
+                ));
+            }
             // Inside a transaction the aggregation and its conflict observation share one
             // borrowed selection pass, so matching document bodies are never materialized just
             // to record the query.
@@ -3954,7 +4149,24 @@ impl LocalBackend {
                     result: Some(pb::AggregationResult { aggregate_fields }),
                     transaction: access.report().to_vec(),
                     read_time: Some(encode_instant(read_time)),
-                    explain_metrics: None,
+                    explain_metrics: req.explain_options.as_ref().and_then(|options| {
+                        options.analyze.then(|| {
+                            crate::service::explain_metrics(
+                                &accepted.query,
+                                Some(&aggregations),
+                                Some(crate::service::ExplainExecution {
+                                    results_returned: 1,
+                                    entries: accepted.query.limit.map_or(stats.matched, |limit| {
+                                        stats.matched.min(
+                                            u64::from(limit)
+                                                .saturating_add(u64::from(accepted.query.offset)),
+                                        )
+                                    }),
+                                    duration: explain_started.elapsed(),
+                                }),
+                            )
+                        })
+                    }),
                 },
                 stats,
             ))
@@ -3970,6 +4182,11 @@ impl LocalBackend {
         guard: ReadGuard<'_>,
     ) -> Result<pb::ListDocumentsResponse, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
+        if req.show_missing && !req.order_by.is_empty() {
+            return Err(Status::invalid_argument(
+                "show_missing cannot be used with order_by",
+            ));
+        }
         self.fault(parent.project.as_str(), "firestore.read")?;
         let now = self.write_time();
         let (txn, read_at) = match &req.consistency_selector {
@@ -4245,42 +4462,111 @@ impl LocalBackend {
         req: &pb::ListCollectionIdsRequest,
     ) -> Result<pb::ListCollectionIdsResponse, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
-        let after: Option<String> = if req.page_token.is_empty() {
-            None
-        } else {
-            Some(
-                String::from_utf8(
-                    crate::rest::json::base64_decode(&req.page_token)
-                        .map_err(|_| Status::invalid_argument("malformed page_token"))?,
-                )
-                .map_err(|_| Status::invalid_argument("malformed page_token"))?,
+        if req.page_size < 0 {
+            return Err(Status::invalid_argument("page_size must not be negative"));
+        }
+        let now = self.write_time();
+        let read_at = match &req.consistency_selector {
+            Some(pb::list_collection_ids_request::ConsistencySelector::ReadTime(ts)) => {
+                Some(self.read_time_selector(
+                    ts,
+                    now,
+                    self.read_time_horizon_without_creation(&parent, now),
+                )?)
+            }
+            None => None,
+        };
+        // Capture the database instance before validating the token. A raw project reset
+        // may remove its catalog entry before publishing a new generation; incarnation
+        // identity distinguishes a replacement even during that interval.
+        let handle = {
+            let _admitted = self.barrier.admit();
+            let existing = self
+                .databases
+                .lock()
+                .map_err(|_| lock_poisoned())?
+                .get(&database_key(&parent))
+                .cloned()
+                .map(DatabaseHandle);
+            match existing {
+                Some(handle) => Some(handle),
+                None if !req.page_token.is_empty() => {
+                    return Err(Status::invalid_argument(
+                        "page_token was issued for a different listing",
+                    ));
+                }
+                None => None,
+            }
+        };
+        let identity = |handle: &DatabaseHandle| {
+            format!(
+                "{}|{}|{}|{}|{}|{}",
+                req.parent,
+                self.epoch(),
+                self.database_generation(&parent),
+                handle.0.incarnation,
+                match read_at {
+                    Some(at) => format!("rt:{}", at.as_nanos()),
+                    None => "live".to_owned(),
+                },
+                req.request_options
+                    .as_ref()
+                    .map_or_else(String::new, |options| format!("{options:?}")),
             )
         };
+        if let Some(handle) = &handle {
+            list_collection_ids_page_cursor(&req.page_token, &identity(handle))?;
+        }
+        self.fault(parent.project.as_str(), "firestore.read")?;
         let page_size = if req.page_size > 0 {
             usize::try_from(req.page_size).unwrap_or(usize::MAX)
         } else {
             DEFAULT_LIST_PAGE_SIZE
         };
-        self.read_db(&parent, |db| {
-            let mut ids = db.list_collection_ids(parent.document.as_ref());
-            if let Some(after) = &after {
-                ids.retain(|id| id > after);
-            }
-            // As for documents: a token only when a collection id follows the page.
-            let full = ids.len() > page_size;
-            ids.truncate(page_size);
-            let next_page_token = if full {
-                ids.last().map_or(String::new(), |id| {
-                    crate::rest::json::base64_encode(id.as_bytes())
+        let _admitted = self.barrier.admit();
+        // A tokenless request for an absent database creates state only after faults
+        // succeed, leaving the catalog and deterministic generators untouched on error.
+        let handle = match handle {
+            Some(handle) => handle,
+            None => self.database_handle(&parent)?,
+        };
+        // Validation and snapshot selection use this same instance under its read lock.
+        // Retaining the handle across faults prevents a reset from redirecting an accepted
+        // cursor to a replacement database, even when reset bypasses session admission.
+        handle
+            .read_status(|db| {
+                let identity = identity(&handle);
+                let after = list_collection_ids_page_cursor(&req.page_token, &identity)?;
+                let version = match read_at {
+                    Some(at) => Some(Self::retained_read_version(db, at)?),
+                    None => None,
+                };
+                let mut ids = db.list_collection_ids_at(parent.document.as_ref(), version);
+                if let Some(after) = &after {
+                    ids.retain(|id| id > after);
+                }
+                // As for documents: a token only when a collection id follows the page.
+                let full = ids.len() > page_size;
+                ids.truncate(page_size);
+                let next_page_token = if full {
+                    ids.last().map_or(String::new(), |id| {
+                        crate::rest::json::base64_encode(format!("{id}\n{identity}").as_bytes())
+                    })
+                } else {
+                    String::new()
+                };
+                Ok(pb::ListCollectionIdsResponse {
+                    collection_ids: ids,
+                    next_page_token,
                 })
-            } else {
-                String::new()
-            };
-            Ok(pb::ListCollectionIdsResponse {
-                collection_ids: ids,
-                next_page_token,
             })
-        })
+            .map_err(|error| {
+                if !req.page_token.is_empty() && handle.is_detached() {
+                    Status::invalid_argument("page_token belongs to a reset database")
+                } else {
+                    error
+                }
+            })
     }
 
     /// `BatchWrite`: each write is applied independently and reported with its own status.
@@ -4573,6 +4859,27 @@ fn list_page_cursor(page_token: &str, identity: &str) -> Result<Option<String>, 
     Ok(Some(name.to_owned()))
 }
 
+fn list_collection_ids_page_cursor(
+    page_token: &str,
+    identity: &str,
+) -> Result<Option<String>, Status> {
+    if page_token.is_empty() {
+        return Ok(None);
+    }
+    let malformed = || Status::invalid_argument("malformed page_token");
+    let token =
+        String::from_utf8(crate::rest::json::base64_decode(page_token).map_err(|_| malformed())?)
+            .map_err(|_| malformed())?;
+    let (id, token_identity) = token.split_once('\n').ok_or_else(malformed)?;
+    if token_identity != identity || id.is_empty() {
+        return Err(Status::invalid_argument(
+            "page_token was issued for a different listing",
+        ));
+    }
+    CollectionId::try_new(id).map_err(|_| malformed())?;
+    Ok(Some(id.to_owned()))
+}
+
 /// `RunQuery` responses for `docs`: one per document (or one empty response carrying the
 /// read time), preceded by a dedicated response announcing a new transaction.
 fn query_responses(
@@ -4690,6 +4997,298 @@ mod lock_tests {
             ))),
             7,
         ))
+    }
+
+    #[test]
+    fn an_already_idle_transaction_releases_its_lock_before_contention_wait() {
+        let backend = Arc::new(
+            LocalBackend::new(
+                backend().gateway.clone(),
+                Arc::new(Mutex::new(VirtualClock::new(
+                    LogicalInstant::from_unix_seconds(1_788_004_860),
+                ))),
+                7,
+            )
+            .with_lock_lease(Duration::from_millis(40))
+            .with_contention_wait(Duration::from_millis(120)),
+        );
+        let database = "projects/demo-app/databases/(default)";
+        let document = format!("{database}/documents/idle/doc");
+        let transaction = backend
+            .begin_transaction(&pb::BeginTransactionRequest {
+                database: database.to_owned(),
+                ..Default::default()
+            })
+            .unwrap();
+        backend
+            .get_document(
+                &pb::GetDocumentRequest {
+                    name: document.clone(),
+                    consistency_selector: Some(
+                        pb::get_document_request::ConsistencySelector::Transaction(
+                            transaction.clone(),
+                        ),
+                    ),
+                    ..Default::default()
+                },
+                &crate::rules::allow_all_reads,
+            )
+            .unwrap_err();
+
+        std::thread::sleep(Duration::from_millis(80));
+        let result = backend.commit(&pb::CommitRequest {
+            database: database.to_owned(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: document,
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert!(
+            result.is_ok(),
+            "an already-idle holder must be expired: {result:?}"
+        );
+    }
+
+    fn collection_ids_request_with_token(backend: &LocalBackend) -> pb::ListCollectionIdsRequest {
+        let parent = "projects/demo-app/databases/(default)/documents";
+        backend
+            .commit(&pb::CommitRequest {
+                database: "projects/demo-app/databases/(default)".to_owned(),
+                writes: ["a", "b"]
+                    .into_iter()
+                    .map(|id| pb::Write {
+                        operation: Some(pb::write::Operation::Update(pb::Document {
+                            name: format!("{parent}/{id}/doc"),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut request = pb::ListCollectionIdsRequest {
+            parent: parent.to_owned(),
+            page_size: 1,
+            ..Default::default()
+        };
+        request.page_token = backend
+            .list_collection_ids(&request)
+            .unwrap()
+            .next_page_token;
+        assert!(!request.page_token.is_empty());
+        request
+    }
+
+    #[test]
+    fn list_collection_ids_return_error_does_not_create_database() {
+        check_list_collection_ids_fault_leaves_absent_database_unchanged(
+            fireemu_core_session::fault::FaultAction::ReturnError {
+                code: "UNAVAILABLE".into(),
+            },
+            tonic::Code::Unavailable,
+        );
+    }
+
+    #[test]
+    fn list_collection_ids_timeout_does_not_create_database() {
+        check_list_collection_ids_fault_leaves_absent_database_unchanged(
+            fireemu_core_session::fault::FaultAction::Timeout,
+            tonic::Code::DeadlineExceeded,
+        );
+    }
+
+    #[test]
+    fn list_collection_ids_transaction_conflict_does_not_create_database() {
+        check_list_collection_ids_fault_leaves_absent_database_unchanged(
+            fireemu_core_session::fault::FaultAction::TransactionConflict,
+            tonic::Code::Aborted,
+        );
+    }
+
+    #[test]
+    fn list_collection_ids_drop_connection_does_not_create_database() {
+        check_list_collection_ids_fault_leaves_absent_database_unchanged(
+            fireemu_core_session::fault::FaultAction::DropConnection,
+            tonic::Code::Unavailable,
+        );
+    }
+
+    fn check_list_collection_ids_fault_leaves_absent_database_unchanged(
+        action: fireemu_core_session::fault::FaultAction,
+        code: tonic::Code,
+    ) {
+        use fireemu_core_session::fault::{FaultMatch, FaultPlan, FaultRegistry, FaultRule};
+
+        let backend = backend();
+        let before = backend.snapshot_databases();
+        assert!(before.is_empty());
+        let transaction_ids_before = backend.transaction_ids.lock().unwrap().clone();
+        let document_ids_before = backend.ids.lock().unwrap().clone();
+        let incarnations_before = backend
+            .database_incarnations
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let registry = Arc::new(FaultRegistry::new());
+        registry.default_state().lock().unwrap().install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "firestore.read".into(),
+                    nth: None,
+                    function: None,
+                    event_type: None,
+                },
+                action,
+            }],
+        });
+        backend.set_faults(registry);
+        let error = backend
+            .list_collection_ids(&pb::ListCollectionIdsRequest {
+                parent: "projects/demo-app/databases/(default)/documents".to_owned(),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert_eq!(error.code(), code);
+        assert!(backend.snapshot_databases().is_empty());
+        assert_eq!(
+            *backend.transaction_ids.lock().unwrap(),
+            transaction_ids_before
+        );
+        assert_eq!(*backend.ids.lock().unwrap(), document_ids_before);
+        assert_eq!(
+            backend
+                .database_incarnations
+                .load(std::sync::atomic::Ordering::SeqCst),
+            incarnations_before
+        );
+    }
+
+    #[test]
+    fn list_collection_ids_rejects_reset_between_token_validation_and_read() {
+        check_list_collection_ids_reset_during_fault(true);
+    }
+
+    #[test]
+    fn list_collection_ids_rejects_raw_reset_between_token_validation_and_read() {
+        check_list_collection_ids_reset_during_fault(false);
+    }
+
+    fn check_list_collection_ids_reset_during_fault(admitted_reset: bool) {
+        use fireemu_core_session::fault::{
+            FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,
+        };
+
+        let backend = backend();
+        let request = collection_ids_request_with_token(&backend);
+        let registry = Arc::new(FaultRegistry::new());
+        registry.default_state().lock().unwrap().install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "firestore.read".into(),
+                    nth: None,
+                    function: None,
+                    event_type: None,
+                },
+                action: FaultAction::Delay { seconds: 1 },
+            }],
+        });
+        backend.set_faults(registry);
+        let weak = Arc::downgrade(&backend);
+        backend.set_clock_observer(Arc::new(move || {
+            let backend = weak.upgrade().unwrap();
+            // The delay callback runs after request/token validation and before the read.
+            let _exclusive = admitted_reset.then(|| backend.barrier.exclusive());
+            backend.reset_project("demo-app");
+        }));
+        let error = backend.list_collection_ids(&request).unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn list_collection_ids_rejects_replacement_before_raw_reset_publishes_generation() {
+        let backend = backend();
+        let request = collection_ids_request_with_token(&backend);
+        let parent = parse_parent(&request.parent).unwrap();
+        let original = backend.database_handle(&parent).unwrap();
+        // Pin the old database's read lock: reset can remove it from the catalog, but
+        // cannot detach it or publish the generation until this guard is released.
+        let held = original.0.cell.read().unwrap();
+        let resetting = Arc::clone(&backend);
+        let reset = std::thread::spawn(move || resetting.reset_project("demo-app"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while backend
+            .databases
+            .lock()
+            .unwrap()
+            .contains_key(&database_key(&parent))
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "reset did not remove the old database"
+            );
+            std::thread::yield_now();
+        }
+        let replacement = backend.database_handle(&parent).unwrap();
+        assert!(!Arc::ptr_eq(&original.0, &replacement.0));
+        assert_eq!(backend.database_generation(&parent), 0);
+        let result = backend.list_collection_ids(&request);
+        drop(held);
+        reset.join().unwrap();
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn list_collection_ids_rejects_invalid_cursors_with_matching_identity_before_faults() {
+        use fireemu_core_session::fault::{
+            FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,
+        };
+
+        let backend = backend();
+        let mut request = collection_ids_request_with_token(&backend);
+        let token =
+            String::from_utf8(crate::rest::json::base64_decode(&request.page_token).unwrap())
+                .unwrap();
+        let (_, identity) = token.split_once('\n').unwrap();
+        let registry = Arc::new(FaultRegistry::new());
+        registry.default_state().lock().unwrap().install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "firestore.read".into(),
+                    nth: None,
+                    function: None,
+                    event_type: None,
+                },
+                action: FaultAction::ReturnError {
+                    code: "UNAVAILABLE".into(),
+                },
+            }],
+        });
+        backend.set_faults(Arc::clone(&registry));
+        for cursor in [
+            "a/b".to_owned(),
+            "a\u{0001}b".to_owned(),
+            "__reserved__".to_owned(),
+            "a".repeat(1501),
+        ] {
+            request.page_token =
+                crate::rest::json::base64_encode(format!("{cursor}\n{identity}").as_bytes());
+            let error = backend.list_collection_ids(&request).unwrap_err();
+            assert_eq!(
+                error.code(),
+                tonic::Code::InvalidArgument,
+                "cursor: {cursor:?}"
+            );
+        }
+        let state = registry.default_state();
+        let state = state.lock().unwrap();
+        assert!(state.counters().is_empty());
+        assert!(state.fired().is_empty());
     }
 
     #[test]
@@ -5047,7 +5646,7 @@ mod lock_tests {
 
     #[test]
     fn two_readers_enter_the_same_database_concurrently() {
-        let handle = DatabaseHandle(Arc::new(DatabaseEntry::restored(FirestoreState::new())));
+        let handle = DatabaseHandle(Arc::new(DatabaseEntry::restored(FirestoreState::new(), 0)));
         let first = handle.clone();
         let second = handle;
         let (first_entered_tx, first_entered_rx) = mpsc::channel();
@@ -5074,6 +5673,49 @@ mod lock_tests {
         assert!(first_thread.join().unwrap().is_some());
         assert!(second_thread.join().unwrap().is_some());
         assert!(concurrent.is_ok(), "the second reader waited for the first");
+    }
+
+    #[test]
+    fn catalog_does_not_hold_catalog_lock_while_reading_database() {
+        let backend = backend();
+        let parent = parse_parent("projects/demo-app/databases/(default)/documents").unwrap();
+        let handle = backend.database_handle(&parent).unwrap();
+        let (writer_ready_tx, writer_ready_rx) = mpsc::channel();
+        let (start_lookup_tx, start_lookup_rx) = mpsc::channel();
+        let writer_backend = Arc::clone(&backend);
+        let writer = std::thread::spawn(move || {
+            handle.with(|_| {
+                writer_ready_tx.send(()).unwrap();
+                start_lookup_rx.recv().unwrap();
+                let lookup_backend = Arc::clone(&writer_backend);
+                let lookup_parent = parent;
+                let lookup =
+                    std::thread::spawn(move || lookup_backend.database_handle(&lookup_parent));
+                assert!(lookup.join().unwrap().is_ok());
+                Ok(())
+            })
+        });
+        writer_ready_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        let (catalog_locked_tx, catalog_locked_rx) = mpsc::channel();
+        let (continue_catalog_tx, continue_catalog_rx) = mpsc::channel();
+        let catalog_backend = Arc::clone(&backend);
+        let catalog = std::thread::spawn(move || {
+            catalog_backend.database_catalog_with_hook(|| {
+                catalog_locked_tx.send(()).unwrap();
+                continue_catalog_rx.recv().unwrap();
+            })
+        });
+        catalog_locked_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        start_lookup_tx.send(()).unwrap();
+        continue_catalog_tx.send(()).unwrap();
+
+        assert!(writer.join().unwrap().is_ok());
+        assert_eq!(catalog.join().unwrap().unwrap().len(), 1);
     }
 
     #[test]

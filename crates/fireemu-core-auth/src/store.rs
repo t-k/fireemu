@@ -12,6 +12,7 @@ use fireemu_core_limits::evaluate::{
 };
 use fireemu_core_limits::plan::FirestorePlanProfile;
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
+use fireemu_core_types::hash::sha256;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
 use crate::claims::{CustomClaims, FirebaseClaims, IdTokenClaims};
@@ -314,6 +315,8 @@ pub struct UserRecord {
     pub mfa: MfaState,
     /// Creation time.
     pub created_at: LogicalInstant,
+    /// Last successful ID token issuance (never advanced by lookup).
+    pub last_refresh_at: Option<LogicalInstant>,
     /// Last sign-in.
     pub last_sign_in_at: Option<LogicalInstant>,
     /// Tokens issued before this instant are revoked.
@@ -400,6 +403,105 @@ pub struct ProjectAuthConfig {
     pub enable_improved_email_privacy: bool,
 }
 
+/// Validated partial update to inherited project Auth settings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProjectAuthConfigPatch {
+    /// `None` preserves the current duplicate-email setting.
+    pub allow_duplicate_emails: Option<bool>,
+    /// `None` preserves the current email-privacy setting.
+    pub enable_improved_email_privacy: Option<bool>,
+}
+
+impl ProjectAuthConfigPatch {
+    /// Whether the patch has no selected values and must perform no writes.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.allow_duplicate_emails.is_none() && self.enable_improved_email_privacy.is_none()
+    }
+
+    /// Applies validated selected values to the current configuration.
+    #[must_use]
+    pub fn apply_to(self, mut config: ProjectAuthConfig) -> ProjectAuthConfig {
+        if let Some(value) = self.allow_duplicate_emails {
+            config.allow_duplicate_emails = value;
+        }
+        if let Some(value) = self.enable_improved_email_privacy {
+            config.enable_improved_email_privacy = value;
+        }
+        config
+    }
+}
+
+/// The response mode requested from an OAuth/OIDC provider.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OAuthResponseType {
+    /// Whether the provider returns an ID token.
+    pub id_token: bool,
+    /// Whether the provider returns an authorization code.
+    pub code: bool,
+    /// The deprecated implicit token response mode.
+    pub token: bool,
+}
+
+/// A project or tenant OAuth/OIDC provider configuration.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OidcProviderConfig {
+    /// Provider configuration ID.
+    pub id: String,
+    /// Developer supplied display name.
+    pub display_name: Option<String>,
+    /// Whether sign-in with this provider is enabled.
+    pub enabled: bool,
+    /// OAuth client ID.
+    pub client_id: String,
+    /// OIDC issuer URL.
+    pub issuer: String,
+    /// OAuth client secret, when supplied.
+    pub client_secret: Option<String>,
+    /// OAuth response mode.
+    pub response_type: OAuthResponseType,
+}
+
+impl fmt::Debug for OidcProviderConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OidcProviderConfig")
+            .field("id", &self.id)
+            .field("display_name", &self.display_name)
+            .field("enabled", &self.enabled)
+            .field("client_id", &self.client_id)
+            .field("issuer", &self.issuer)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field("response_type", &self.response_type)
+            .finish()
+    }
+}
+
+/// A project or tenant inbound SAML provider configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboundSamlProviderConfig {
+    /// Provider configuration ID.
+    pub id: String,
+    /// Developer supplied display name.
+    pub display_name: Option<String>,
+    /// Whether sign-in with this provider is enabled.
+    pub enabled: bool,
+    /// SAML identity provider entity ID.
+    pub idp_entity_id: String,
+    /// SAML identity provider SSO URL.
+    pub sso_url: String,
+    /// Identity provider certificates used to verify assertions.
+    pub idp_certificates: Vec<String>,
+    /// Whether outbound SAML requests are signed.
+    pub sign_request: bool,
+    /// SAML service provider entity ID.
+    pub sp_entity_id: String,
+    /// SAML assertion callback URI.
+    pub callback_uri: String,
+}
+
 /// Why an account an import artifact recorded was refused.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImportUserError {
@@ -443,6 +545,8 @@ pub struct ImportedUser {
     pub custom_claims: CustomClaims,
     /// When the account was created.
     pub created_at: LogicalInstant,
+    /// Last successful token issuance retained by the import artifact.
+    pub last_refresh_at: Option<LogicalInstant>,
     /// When the account last signed in.
     pub last_sign_in_at: Option<LogicalInstant>,
     /// Tokens minted before this instant are refused.
@@ -469,6 +573,8 @@ pub enum AuthError {
     InvalidEmail,
     /// Password shorter than six characters (Firebase minimum).
     WeakPassword,
+    /// Password exceeds the configured UTF-16 length limit.
+    PasswordTooLong,
     /// Unknown email or wrong password, undistinguished (the improved email privacy mode).
     InvalidCredentials,
     /// Wrong password, or no password credential, for a known email (the default mode of
@@ -476,8 +582,10 @@ pub enum AuthError {
     InvalidPassword,
     /// The user is disabled.
     UserDisabled,
-    /// Unknown or revoked refresh token.
+    /// Unknown or removed refresh token.
     InvalidRefreshToken,
+    /// Known session issued before the user's revocation threshold.
+    ExpiredRefreshToken,
     /// Caller-chosen user ID is malformed.
     InvalidLocalId,
     /// Caller-chosen user ID already exists.
@@ -510,10 +618,12 @@ impl fmt::Display for AuthError {
             Self::EmailExists => f.write_str("email already exists"),
             Self::InvalidEmail => f.write_str("invalid email"),
             Self::WeakPassword => f.write_str("password must be at least 6 characters"),
+            Self::PasswordTooLong => f.write_str("password exceeds the maximum length"),
             Self::InvalidCredentials => f.write_str("invalid email or password"),
             Self::InvalidPassword => f.write_str("invalid password"),
             Self::UserDisabled => f.write_str("user is disabled"),
             Self::InvalidRefreshToken => f.write_str("invalid refresh token"),
+            Self::ExpiredRefreshToken => f.write_str("expired refresh token"),
             Self::InvalidLocalId => f.write_str("invalid local id"),
             Self::LocalIdExists => f.write_str("local id already exists"),
             Self::PhoneNumberExists => f.write_str("phone number already exists"),
@@ -562,10 +672,36 @@ impl PendingSignInId {
     }
 }
 
+/// One opaque fireemu control-session incarnation of an Auth namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AuthLifecycleEpoch([u8; 32]);
+
+impl AuthLifecycleEpoch {
+    fn initial(daemon_incarnation: u128, serial: u64) -> Self {
+        let mut input = Vec::with_capacity(24 + 32);
+        input.extend_from_slice(b"fireemu.auth.lifecycle.v1\0");
+        input.extend_from_slice(&daemon_incarnation.to_be_bytes());
+        input.extend_from_slice(&serial.to_be_bytes());
+        Self(fireemu_core_types::hash::sha256(&input))
+    }
+
+    fn next(self) -> Self {
+        let mut input = Vec::with_capacity(32 + 32);
+        input.extend_from_slice(b"fireemu.auth.lifecycle.next.v1\0");
+        input.extend_from_slice(&self.0);
+        Self(fireemu_core_types::hash::sha256(&input))
+    }
+
+    fn wire_value(self) -> String {
+        fireemu_core_types::hash::hex_lower(&self.0)
+    }
+}
+
 /// Deterministic in-memory auth store for one project.
 #[derive(Debug, Clone)]
 pub struct AuthStore {
     project_id: String,
+    project_number: Option<u64>,
     tenant_id: Option<String>,
     rng: SplitMix64,
     policy: TotpPolicy,
@@ -595,12 +731,22 @@ pub struct AuthStore {
     /// Refresh sessions are copy-on-write so speculative blocking-function stores and session
     /// snapshots share the unchanged registry in O(1).
     refresh_tokens: Arc<BTreeMap<String, RefreshSession>>,
+    /// Rejection-only identities of refresh credentials retired by user deletion. No raw
+    /// tokens, user IDs or claims. Retained until reset (no TTL or silent eviction); memory
+    /// grows with deleted issued credentials and is included in snapshot byte accounting.
+    deleted_refresh_digests: Arc<BTreeSet<[u8; 32]>>,
     /// Refresh-token values owned by each user. Revocation and deletion touch one user's
     /// sessions instead of scanning every live session.
     tokens_by_user: Arc<BTreeMap<LocalId, BTreeSet<String>>>,
     next_id_override: Option<String>,
     next_sequence: u64,
     signer: Option<Arc<dyn crate::jwt::IdTokenSigner>>,
+    /// Hidden lifecycle material for generated credential and action handles. Unlike
+    /// `lifecycle_epoch`, this is never emitted in an ID token.
+    credential_epoch: Option<AuthLifecycleEpoch>,
+    /// Optional fireemu control-session incarnation. It is absent from ordinary stores so
+    /// production-shaped tokens do not gain a local-only claim unless session isolation needs it.
+    lifecycle_epoch: Option<AuthLifecycleEpoch>,
     oob_codes: Arc<BTreeMap<String, OobCode>>,
     verification_codes: Arc<BTreeMap<String, VerificationCode>>,
     /// Which user owns each outstanding pending sign-in (`mfaPendingCredential`), so a
@@ -617,6 +763,14 @@ pub struct AuthStore {
     /// The project-level Auth configuration an import carried, kept so an export can write
     /// it back.
     config: ProjectAuthConfig,
+    /// OAuth/OIDC provider configurations in this namespace.
+    oidc_configs: BTreeMap<String, OidcProviderConfig>,
+    /// OAuth/OIDC configuration IDs in creation order.
+    oidc_order: Vec<String>,
+    /// Inbound SAML provider configurations in this namespace.
+    saml_configs: BTreeMap<String, InboundSamlProviderConfig>,
+    /// Inbound SAML configuration IDs in creation order.
+    saml_order: Vec<String>,
 }
 
 /// What a phone verification code was issued for, as the official emulator names it in
@@ -770,11 +924,34 @@ impl AuthStore {
         self.signer.clone()
     }
 
+    fn rekey_generated_values(&mut self, epoch: AuthLifecycleEpoch) {
+        let mut seed = [0_u8; 8];
+        seed.copy_from_slice(&epoch.0[..8]);
+        // Every generated credential and opaque handle draws from this stream. Re-keying it
+        // before a lifecycle-enabled namespace is published prevents a deleted/recreated
+        // project or tenant from issuing the same refresh token, OOB code, MFA handle, or
+        // verification session merely because its configured deterministic seed repeats.
+        self.rng = SplitMix64::new(u64::from_be_bytes(seed));
+        self.credential_epoch = Some(epoch);
+    }
+
+    fn set_lifecycle_epoch(&mut self, epoch: AuthLifecycleEpoch) {
+        self.rekey_generated_values(epoch);
+        self.lifecycle_epoch = Some(epoch);
+    }
+
+    /// The private control-session incarnation expected in locally issued ID tokens.
+    #[must_use]
+    pub(crate) fn lifecycle_epoch_claim(&self) -> Option<String> {
+        self.lifecycle_epoch.map(AuthLifecycleEpoch::wire_value)
+    }
+
     /// Creates a store for `project_id`.
     #[must_use]
     pub fn new(project_id: &str, rng: SplitMix64, policy: TotpPolicy) -> Self {
         Self {
             project_id: project_id.to_owned(),
+            project_number: None,
             tenant_id: None,
             rng,
             policy,
@@ -786,10 +963,13 @@ impl AuthStore {
             by_sequence: BTreeMap::new(),
             counter: 0,
             refresh_tokens: Arc::new(BTreeMap::new()),
+            deleted_refresh_digests: Arc::new(BTreeSet::new()),
             tokens_by_user: Arc::new(BTreeMap::new()),
             next_id_override: None,
             next_sequence: 0,
             signer: None,
+            credential_epoch: None,
+            lifecycle_epoch: None,
             oob_codes: Arc::new(BTreeMap::new()),
             verification_codes: Arc::new(BTreeMap::new()),
             pending_sign_in_owners: Arc::new(BTreeMap::new()),
@@ -798,6 +978,10 @@ impl AuthStore {
             deleted_users: Vec::new(),
             credential_notices: Vec::new(),
             config: ProjectAuthConfig::default(),
+            oidc_configs: BTreeMap::new(),
+            oidc_order: Vec::new(),
+            saml_configs: BTreeMap::new(),
+            saml_order: Vec::new(),
         }
     }
 
@@ -869,19 +1053,40 @@ impl AuthStore {
         &self.project_id
     }
 
+    /// Explicit numeric identity for API response metadata; JWT audience remains project ID.
+    pub fn set_project_number(&mut self, number: Option<u64>) {
+        self.project_number = number;
+    }
+
+    /// Numeric project identity, when configured by the owning namespace.
+    #[must_use]
+    pub const fn project_number(&self) -> Option<u64> {
+        self.project_number
+    }
+
     /// Looks up a user by its ID text.
     #[must_use]
     pub fn user_by_id(&self, uid: &str) -> Option<&UserRecord> {
         self.users.get(uid).map(Arc::as_ref)
     }
 
+    /// Identity Toolkit treats email addresses case-insensitively and stores their canonical
+    /// lowercase representation. Keep this normalization at the ownership/index boundary so
+    /// every route (including imports and email actions) uses the same key without affecting
+    /// local IDs or other selectors.
+    fn canonicalize_email(email: &str) -> String {
+        email.to_lowercase()
+    }
+
     fn email_owned_by_other(&self, email: &str, uid: Option<&LocalId>) -> bool {
+        let email = Self::canonicalize_email(email);
         self.local_ids_for_email
-            .get(email)
+            .get(&email)
             .is_some_and(|owners| owners.iter().any(|owner| Some(owner) != uid))
     }
 
-    fn add_email_owner(&mut self, email: String, uid: &LocalId) {
+    fn add_email_owner(&mut self, email: &str, uid: &LocalId) {
+        let email = Self::canonicalize_email(email);
         self.local_ids_for_email
             .entry(email.clone())
             .or_default()
@@ -894,24 +1099,26 @@ impl AuthStore {
     /// target of an email lookup.
     fn activate_email_owner(&mut self, uid: &LocalId) {
         if let Some(email) = self.users.get(uid).and_then(|user| user.email.clone()) {
+            let email = Self::canonicalize_email(&email);
             self.local_id_for_email.insert(email, uid.clone());
         }
     }
 
     fn remove_email_owner(&mut self, email: &str, uid: &LocalId) {
-        if let Some(owners) = self.local_ids_for_email.get_mut(email) {
+        let email = Self::canonicalize_email(email);
+        if let Some(owners) = self.local_ids_for_email.get_mut(&email) {
             owners.remove(uid);
         }
         if self
             .local_ids_for_email
-            .get(email)
+            .get(&email)
             .is_some_and(BTreeSet::is_empty)
         {
-            self.local_ids_for_email.remove(email);
+            self.local_ids_for_email.remove(&email);
         }
         // The official Auth Emulator deletes the single active email index entry whenever
         // any duplicate owner is removed; it does not restore another owner automatically.
-        self.local_id_for_email.remove(email);
+        self.local_id_for_email.remove(&email);
     }
 
     fn next_id(&mut self, prefix: &str) -> String {
@@ -990,7 +1197,7 @@ impl AuthStore {
         }
     }
 
-    /// Deletes a user and its refresh tokens, pending sign-ins and phone codes.
+    /// Deletes a user and live refresh sessions, retaining only rejection digests.
     pub fn delete_user_by_id(&mut self, uid: &str) -> Result<(), AuthError> {
         let key = LocalId(uid.to_owned());
         let user = self.users.remove(&key).ok_or(AuthError::UserNotFound)?;
@@ -1005,6 +1212,12 @@ impl AuthStore {
             Self::remove_index_owner(&mut self.local_ids_for_federated, &identity_key, &key);
         }
         self.by_sequence.remove(&user.sequence);
+        if let Some(tokens) = self.tokens_by_user.get(&key) {
+            let deleted = Arc::make_mut(&mut self.deleted_refresh_digests);
+            for token in tokens {
+                deleted.insert(sha256(token.as_bytes()));
+            }
+        }
         self.remove_refresh_tokens_for(&key);
         Arc::make_mut(&mut self.pending_sign_in_owners).retain(|_, owner| *owner != key);
         self.pending_user_ids.remove(&key);
@@ -1027,11 +1240,18 @@ impl AuthStore {
         self.local_ids_for_federated.clear();
         self.by_sequence.clear();
         self.refresh_tokens = Arc::new(BTreeMap::new());
+        self.deleted_refresh_digests = Arc::new(BTreeSet::new());
         self.tokens_by_user = Arc::new(BTreeMap::new());
         self.oob_codes = Arc::new(BTreeMap::new());
         self.verification_codes = Arc::new(BTreeMap::new());
         self.pending_sign_in_owners = Arc::new(BTreeMap::new());
         self.pending_user_ids.clear();
+        if let Some(epoch) = self.credential_epoch {
+            self.rekey_generated_values(epoch.next());
+        }
+        if let Some(epoch) = self.lifecycle_epoch {
+            self.lifecycle_epoch = Some(epoch.next());
+        }
     }
 
     /// Drops every transient credential past its lifetime: email action codes
@@ -1127,6 +1347,88 @@ impl AuthStore {
         self.config = config;
     }
 
+    /// Lists OAuth/OIDC configurations in creation order.
+    pub fn oidc_configs(&self) -> impl Iterator<Item = &OidcProviderConfig> {
+        self.oidc_order
+            .iter()
+            .filter_map(|id| self.oidc_configs.get(id))
+    }
+
+    /// Gets one OAuth/OIDC configuration by ID.
+    #[must_use]
+    pub fn oidc_config(&self, id: &str) -> Option<&OidcProviderConfig> {
+        self.oidc_configs.get(id)
+    }
+
+    /// Creates an OAuth/OIDC configuration. Returns `false` when its ID is already used.
+    pub fn create_oidc_config(&mut self, config: OidcProviderConfig) -> bool {
+        if self.oidc_configs.contains_key(&config.id) {
+            return false;
+        }
+        self.oidc_order.push(config.id.clone());
+        self.oidc_configs.insert(config.id.clone(), config);
+        true
+    }
+
+    /// Replaces an OAuth/OIDC configuration. Returns `false` when its ID is unknown.
+    pub fn replace_oidc_config(&mut self, config: OidcProviderConfig) -> bool {
+        if !self.oidc_configs.contains_key(&config.id) {
+            return false;
+        }
+        self.oidc_configs.insert(config.id.clone(), config);
+        true
+    }
+
+    /// Deletes an OAuth/OIDC configuration. Returns `false` when its ID is unknown.
+    pub fn delete_oidc_config(&mut self, id: &str) -> bool {
+        if self.oidc_configs.remove(id).is_none() {
+            return false;
+        }
+        self.oidc_order.retain(|candidate| candidate != id);
+        true
+    }
+
+    /// Lists inbound SAML configurations in creation order.
+    pub fn saml_configs(&self) -> impl Iterator<Item = &InboundSamlProviderConfig> {
+        self.saml_order
+            .iter()
+            .filter_map(|id| self.saml_configs.get(id))
+    }
+
+    /// Gets one inbound SAML configuration by ID.
+    #[must_use]
+    pub fn saml_config(&self, id: &str) -> Option<&InboundSamlProviderConfig> {
+        self.saml_configs.get(id)
+    }
+
+    /// Creates an inbound SAML configuration. Returns `false` when its ID is already used.
+    pub fn create_saml_config(&mut self, config: InboundSamlProviderConfig) -> bool {
+        if self.saml_configs.contains_key(&config.id) {
+            return false;
+        }
+        self.saml_order.push(config.id.clone());
+        self.saml_configs.insert(config.id.clone(), config);
+        true
+    }
+
+    /// Replaces an inbound SAML configuration. Returns `false` when its ID is unknown.
+    pub fn replace_saml_config(&mut self, config: InboundSamlProviderConfig) -> bool {
+        if !self.saml_configs.contains_key(&config.id) {
+            return false;
+        }
+        self.saml_configs.insert(config.id.clone(), config);
+        true
+    }
+
+    /// Deletes an inbound SAML configuration. Returns `false` when its ID is unknown.
+    pub fn delete_saml_config(&mut self, id: &str) -> bool {
+        if self.saml_configs.remove(id).is_none() {
+            return false;
+        }
+        self.saml_order.retain(|candidate| candidate != id);
+        true
+    }
+
     /// The password credential of a user, when it has one. An export reads it to write the
     /// emulator's `passwordHash` and `salt` back out.
     #[must_use]
@@ -1134,7 +1436,12 @@ impl AuthStore {
         self.users.get(uid).and_then(|u| u.password.as_ref())
     }
 
-    /// Installs a user from an import artifact, exactly as it was recorded.
+    /// Installs a user from an import request, validating any supplied password.
+    pub fn import_user(&mut self, user: ImportedUser) -> Result<LocalId, ImportUserError> {
+        self.import_user_with_password_policy(user, true)
+    }
+
+    /// Restores a user from a previously exported artifact, exactly as it was recorded.
     ///
     /// This is not [`Self::create_user`]: an import restores accounts that already existed,
     /// so the local id, the creation time, the last sign-in, the token revocation instant,
@@ -1145,7 +1452,18 @@ impl AuthStore {
     ///
     /// The listing order stays the artifact's: users keep the sequence they are imported in,
     /// and `next_sequence` moves past them so a later sign-up sorts after the import.
-    pub fn import_user(&mut self, user: ImportedUser) -> Result<LocalId, ImportUserError> {
+    /// Password policy is deliberately not applied here: the artifact already contains a
+    /// credential accepted by an earlier runtime, and restoring it must not rewrite or reject
+    /// that credential as if it were a new password.
+    pub fn import_user_trusted(&mut self, user: ImportedUser) -> Result<LocalId, ImportUserError> {
+        self.import_user_with_password_policy(user, false)
+    }
+
+    fn import_user_with_password_policy(
+        &mut self,
+        mut user: ImportedUser,
+        enforce_password_policy: bool,
+    ) -> Result<LocalId, ImportUserError> {
         if user.local_id.is_empty()
             || user.local_id.chars().count() > 128
             || user.local_id.chars().any(char::is_control)
@@ -1161,7 +1479,8 @@ impl AuthStore {
         }
         // The same checks a sign-up gets: a well-formed email without control characters,
         // unique unless the project allows duplicates, and bounded custom claims.
-        if let Some(email) = &user.email {
+        if let Some(email) = user.email.as_mut() {
+            *email = Self::canonicalize_email(email);
             if !email.contains('@') || email.chars().any(char::is_control) {
                 return Err(ImportUserError::Account(AuthError::InvalidEmail));
             }
@@ -1182,7 +1501,9 @@ impl AuthStore {
             .map_err(|e| ImportUserError::Account(AuthError::LimitExceeded(e)))?;
         let password = match user.password {
             Some((salt, plaintext)) => {
-                Self::validate_password(&plaintext).map_err(ImportUserError::Account)?;
+                if enforce_password_policy {
+                    Self::validate_password(&plaintext).map_err(ImportUserError::Account)?;
+                }
                 // The digest is fireemu's own; the emulator form is kept beside it so an
                 // export can write back exactly what it read.
                 let mut bytes = [0u8; 16];
@@ -1226,6 +1547,7 @@ impl AuthStore {
                 mfa,
                 created_at: user.created_at,
                 last_sign_in_at: user.last_sign_in_at,
+                last_refresh_at: user.last_refresh_at,
                 tokens_valid_after: user.tokens_valid_after,
                 tokens_revoked: user.tokens_valid_after > Self::whole_second(user.created_at),
                 federated: user.federated,
@@ -1234,7 +1556,7 @@ impl AuthStore {
         );
         self.by_sequence.insert(sequence, local_id.clone());
         if let Some(email) = email {
-            self.add_email_owner(email, &local_id);
+            self.add_email_owner(&email, &local_id);
         }
         if let Some(phone) = phone {
             self.local_ids_for_phone
@@ -1282,24 +1604,32 @@ impl AuthStore {
             .map(Arc::as_ref)
     }
 
-    /// Changes the email, enforcing uniqueness unless the project enables duplicate emails.
-    pub fn set_email(&mut self, uid: &LocalId, email: &str) -> Result<(), AuthError> {
+    /// Validates an email update without changing the store.
+    pub fn validate_email_update(&self, uid: &LocalId, email: &str) -> Result<(), AuthError> {
+        let email = Self::canonicalize_email(email);
         if !email.contains('@') || email.chars().any(char::is_control) {
             return Err(AuthError::InvalidEmail);
         }
-        if !self.config.allow_duplicate_emails && self.email_owned_by_other(email, Some(uid)) {
+        if !self.config.allow_duplicate_emails && self.email_owned_by_other(&email, Some(uid)) {
             return Err(AuthError::EmailExists);
         }
+        Ok(())
+    }
+
+    /// Changes the email, enforcing uniqueness unless the project enables duplicate emails.
+    pub fn set_email(&mut self, uid: &LocalId, email: &str) -> Result<(), AuthError> {
+        let email = Self::canonicalize_email(email);
+        self.validate_email_update(uid, &email)?;
         let user = self
             .users
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
-        let old = user.email.replace(email.to_owned());
+        let old = user.email.replace(email.clone());
         if let Some(old) = old {
             self.remove_email_owner(&old, uid);
         }
-        self.add_email_owner(email.to_owned(), uid);
+        self.add_email_owner(&email, uid);
         Ok(())
     }
 
@@ -1435,6 +1765,7 @@ impl AuthStore {
                 total.saturating_add(owner).saturating_add(entries)
             });
         refresh
+            .saturating_add((self.deleted_refresh_digests.len() as u64).saturating_mul(96))
             .saturating_add(oob)
             .saturating_add(verification)
             .saturating_add(refresh_owners)
@@ -1460,12 +1791,16 @@ impl AuthStore {
 
     /// Number of copy-on-write transient registries this store shares with `other`.
     ///
-    /// The five registries are refresh sessions, their per-user index, email action codes,
-    /// phone verification codes, and pending-sign-in owners. A speculative Auth operation
-    /// that only issues a refresh session must leave the other three allocations shared.
+    /// The six registries are refresh sessions, deletion digests, their per-user index,
+    /// email action codes, phone verification codes, and pending-sign-in owners. Issuing
+    /// a refresh session leaves the other four allocations shared.
     #[must_use]
     pub fn transient_registries_shared_with(&self, other: &Self) -> usize {
         usize::from(Arc::ptr_eq(&self.refresh_tokens, &other.refresh_tokens))
+            + usize::from(Arc::ptr_eq(
+                &self.deleted_refresh_digests,
+                &other.deleted_refresh_digests,
+            ))
             + usize::from(Arc::ptr_eq(&self.tokens_by_user, &other.tokens_by_user))
             + usize::from(Arc::ptr_eq(&self.oob_codes, &other.oob_codes))
             + usize::from(Arc::ptr_eq(
@@ -1490,10 +1825,13 @@ impl AuthStore {
 
     fn create_user_with_email_policy(
         &mut self,
-        new: NewUser,
+        mut new: NewUser,
         now: LogicalInstant,
         enforce_unique_email: bool,
     ) -> Result<LocalId, AuthError> {
+        if let Some(email) = new.email.take() {
+            new.email = Some(Self::canonicalize_email(&email));
+        }
         if let Some(email) = &new.email {
             if !email.contains('@') || email.chars().any(char::is_control) {
                 return Err(AuthError::InvalidEmail);
@@ -1536,13 +1874,14 @@ impl AuthStore {
             mfa: MfaState::default(),
             created_at: now,
             last_sign_in_at: None,
+            last_refresh_at: None,
             tokens_valid_after: Self::whole_second(now),
             tokens_revoked: false,
             federated: Vec::new(),
             password: None,
         }));
         if let Some(email) = email {
-            self.add_email_owner(email, &local_id);
+            self.add_email_owner(&email, &local_id);
         }
         self.by_sequence.insert(sequence, local_id.clone());
         self.created_users.push(local_id.clone());
@@ -1561,6 +1900,8 @@ impl AuthStore {
         new_email: Option<String>,
         now: LogicalInstant,
     ) -> Result<String, AuthError> {
+        let email = Self::canonicalize_email(email);
+        let new_email = new_email.map(|value| Self::canonicalize_email(&value));
         self.sweep_transient_credentials(now);
         if self.oob_codes.len() >= MAX_OUTSTANDING_CODES {
             return Err(AuthError::TooManyOutstandingCodes);
@@ -1571,7 +1912,7 @@ impl AuthStore {
             OobCode {
                 code: code.clone(),
                 request_type,
-                email: email.to_owned(),
+                email,
                 uid,
                 new_email,
                 created_at: now,
@@ -1938,6 +2279,7 @@ impl AuthStore {
                             user.password = None;
                             user.phone_number = None;
                             user.federated.clear();
+                            user.provider = Provider::Federated(identity.provider_id.clone());
                             user.tokens_valid_after = Self::whole_second(now);
                             user.tokens_revoked = true;
                         }
@@ -2097,12 +2439,13 @@ impl AuthStore {
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(MfaError::UserNotFound)?;
-        if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
+        if user.mfa.pending_sign_in(&pending.0).is_none() {
             return Err(MfaError::PendingSignInUnknown);
         }
-        Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
-        if user.mfa.pending_count() == 0 {
-            self.pending_user_ids.remove(uid);
+        // Disabled after the first factor: refused before anything is consumed, so the
+        // pending credential and its code survive a later re-enablement.
+        if user.disabled {
+            return Err(MfaError::UserDisabled);
         }
         if !user
             .mfa
@@ -2111,6 +2454,11 @@ impl AuthStore {
             .any(|f| f.mfa_enrollment_id == enrollment_id)
         {
             return Err(MfaError::NoEnrolledFactor);
+        }
+        user.mfa.pending_sign_ins_mut().remove(&pending.0);
+        Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
+        if user.mfa.pending_count() == 0 {
+            self.pending_user_ids.remove(uid);
         }
         user.last_sign_in_at = Some(now);
         self.activate_email_owner(uid);
@@ -2123,11 +2471,16 @@ impl AuthStore {
 
     /// Minimum password length enforced by Firebase.
     pub const MIN_PASSWORD_CHARS: usize = 6;
+    /// Maximum password length enforced by Firebase's default password policy.
+    pub const MAX_PASSWORD_UTF16_UNITS: usize = 4096;
 
     /// Validates a password without storing it (lets callers fail before mutating).
     pub fn validate_password(password: &str) -> Result<(), AuthError> {
         if password.chars().count() < Self::MIN_PASSWORD_CHARS {
             return Err(AuthError::WeakPassword);
+        }
+        if password.encode_utf16().count() > Self::MAX_PASSWORD_UTF16_UNITS {
+            return Err(AuthError::PasswordTooLong);
         }
         if password.chars().any(char::is_control) {
             return Err(AuthError::WeakPassword);
@@ -2205,6 +2558,14 @@ impl AuthStore {
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
         let changed = user.password.take().is_some();
+        if changed && matches!(&user.provider, Provider::Password) {
+            user.provider = user
+                .federated
+                .first()
+                .map(|identity| Provider::Federated(identity.provider_id.clone()))
+                .or_else(|| user.phone_number.as_ref().map(|_| Provider::Phone))
+                .unwrap_or(Provider::Anonymous);
+        }
         self.activate_email_owner(uid);
         Ok(changed)
     }
@@ -2283,8 +2644,9 @@ impl AuthStore {
     /// Looks up a user by email.
     #[must_use]
     pub fn user_by_email(&self, email: &str) -> Option<&UserRecord> {
+        let email = Self::canonicalize_email(email);
         self.local_id_for_email
-            .get(email)
+            .get(&email)
             .and_then(|uid| self.users.get(uid))
             .map(Arc::as_ref)
     }
@@ -2382,10 +2744,25 @@ impl AuthStore {
     }
 
     /// Whether this project issued a refresh token. Routing uses ownership without treating
-    /// revocation or disablement as absence; the selected project returns the precise error.
+    /// disablement or user deletion as absence; ownership never implies acceptance.
     #[must_use]
     pub fn owns_refresh_token(&self, token: &str) -> bool {
         self.refresh_tokens.contains_key(token)
+            || self
+                .deleted_refresh_digests
+                .contains(&sha256(token.as_bytes()))
+    }
+
+    /// Records a completed issuance by its exact refresh session, without activating
+    /// email ownership. Deleted/replaced sessions cannot mutate a reused UID.
+    pub fn record_token_issuance(&mut self, token: &str, at: LogicalInstant) {
+        let Ok(session) = self.stateless_refresh_session(token) else {
+            return;
+        };
+        let uid = session.uid.clone();
+        if let Some(user) = self.users.get_mut(&uid).map(Arc::make_mut) {
+            user.last_refresh_at = Some(user.last_refresh_at.map_or(at, |old| old.max(at)));
+        }
     }
 
     /// ID token claims for a refreshed session.
@@ -2394,7 +2771,12 @@ impl AuthStore {
         session: &RefreshSession,
         now: LogicalInstant,
     ) -> Result<IdTokenClaims, AuthError> {
-        let mut claims = self.id_token_claims(&session.uid, session.second_factor.as_ref(), now)?;
+        let mut claims = self.id_token_claims_with_auth_time(
+            &session.uid,
+            session.second_factor.as_ref(),
+            now,
+            session.issued_at,
+        )?;
         if let Some(p) = &session.provider {
             p.id().clone_into(&mut claims.firebase.sign_in_provider);
         }
@@ -2418,6 +2800,13 @@ impl AuthStore {
         token: &str,
         enforce_revocation: bool,
     ) -> Result<LocalId, AuthError> {
+        // A deletion record is terminal, even if an administrator reuses the same UID.
+        if self
+            .deleted_refresh_digests
+            .contains(&sha256(token.as_bytes()))
+        {
+            return Err(AuthError::UserNotFound);
+        }
         let session = self
             .refresh_tokens
             .get(token)
@@ -2430,7 +2819,7 @@ impl AuthStore {
             return Err(AuthError::UserDisabled);
         }
         if enforce_revocation && session.issued_at < user.tokens_valid_after {
-            return Err(AuthError::InvalidRefreshToken);
+            return Err(AuthError::ExpiredRefreshToken);
         }
         Ok(session.uid.clone())
     }
@@ -2563,6 +2952,12 @@ impl AuthStore {
                 self.pending_user_ids.remove(uid);
             }
             return Err(MfaError::EnrollmentSessionExpired);
+        }
+        // Disabled while the enrollment was pending: refused before the code is matched, so
+        // the pending enrollment survives a later re-enablement. Same class as the sign-in
+        // finalizers.
+        if user.disabled {
+            return Err(MfaError::UserDisabled);
         }
         let step = match match_code(
             &pending.secret,
@@ -2700,6 +3095,11 @@ impl AuthStore {
             if user.mfa.pending_sign_in(&pending.0).is_none() {
                 return Err(MfaError::PendingSignInUnknown);
             }
+            // Disabled after the first factor: refused before the code is matched, so
+            // neither the pending credential nor the code's step is consumed.
+            if user.disabled {
+                return Err(MfaError::UserDisabled);
+            }
 
             let mut replayed = false;
             let mut accepted = None;
@@ -2765,8 +3165,22 @@ impl AuthStore {
         second_factor: Option<&SecondFactorAssertion>,
         now: LogicalInstant,
     ) -> Result<IdTokenClaims, AuthError> {
+        self.id_token_claims_with_auth_time(uid, second_factor, now, now)
+    }
+
+    /// Builds ID token claims with an explicit authentication instant. New sign-ins use their
+    /// issuance time, while refresh sessions retain the instant at which the session started.
+    fn id_token_claims_with_auth_time(
+        &self,
+        uid: &LocalId,
+        second_factor: Option<&SecondFactorAssertion>,
+        now: LogicalInstant,
+        auth_time: LogicalInstant,
+    ) -> Result<IdTokenClaims, AuthError> {
         let user = self.users.get(uid).ok_or(AuthError::UserNotFound)?;
         let iat = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+        let auth_time =
+            i64::try_from(auth_time.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
         let mut identities: BTreeMap<String, Vec<String>> = BTreeMap::new();
         if let Some(email) = &user.email {
             identities.insert("email".to_owned(), vec![email.clone()]);
@@ -2785,7 +3199,7 @@ impl AuthStore {
         Ok(IdTokenClaims {
             iss: format!("https://securetoken.google.com/{}", self.project_id),
             aud: self.project_id.clone(),
-            auth_time: iat,
+            auth_time,
             user_id: uid.as_str().to_owned(),
             sub: uid.as_str().to_owned(),
             iat,
@@ -2802,6 +3216,7 @@ impl AuthStore {
                 second_factor_identifier: second.map(|a| a.second_factor_identifier.clone()),
                 tenant: self.tenant_id.clone(),
                 sign_in_attributes: None,
+                fireemu_session_epoch: self.lifecycle_epoch.map(AuthLifecycleEpoch::wire_value),
             },
             custom: user.custom_claims.clone(),
         })
@@ -2880,6 +3295,12 @@ impl AuthSnapshot {
     #[must_use]
     pub fn capture(store: &AuthStore) -> Self {
         let mut copy = store.clone();
+        // Provider configurations are process-local control-plane state. In particular,
+        // OIDC client secrets must never become transferable snapshot material.
+        copy.oidc_configs.clear();
+        copy.oidc_order.clear();
+        copy.saml_configs.clear();
+        copy.saml_order.clear();
         for user in copy.users.values_mut() {
             if user.mfa.holds_no_totp_secret() && user.mfa.holds_no_inbound_credentials() {
                 continue;
@@ -2926,13 +3347,21 @@ impl AuthSnapshot {
     /// Replaces `live` with the snapshot, rebinding TOTP secrets from what `live` held.
     pub fn restore_into(&self, live: &mut AuthStore) -> RestoreReport {
         let mut restored = self.0.clone();
+        // A snapshot intentionally has no provider configurations. Preserve the destination's
+        // control-plane state instead of allowing a cross-project restore to transfer it.
+        restored.oidc_configs = live.oidc_configs.clone();
+        restored.oidc_order.clone_from(&live.oidc_order);
+        restored.saml_configs = live.saml_configs.clone();
+        restored.saml_order.clone_from(&live.saml_order);
         let namespace_matches =
             restored.project_id == live.project_id && restored.tenant_id == live.tenant_id;
         if !namespace_matches {
             restored.refresh_tokens = Arc::new(BTreeMap::new());
+            restored.deleted_refresh_digests = Arc::new(BTreeSet::new());
             restored.tokens_by_user = Arc::new(BTreeMap::new());
         }
         live.project_id.clone_into(&mut restored.project_id);
+        restored.project_number = live.project_number;
         live.tenant_id.clone_into(&mut restored.tenant_id);
         let mut report = RestoreReport::default();
         for user in restored.users.values_mut() {
@@ -2952,6 +3381,14 @@ impl AuthSnapshot {
         // The signer is process state shared by every copy; keep whichever the live store
         // has (a snapshot taken before a signer was installed must not uninstall it).
         restored.signer = live.signer.clone().or(restored.signer);
+        // A restore creates a new live incarnation. Derive it from the destination session's
+        // epoch rather than importing the snapshot's before restored users reappear.
+        if let Some(epoch) = live.credential_epoch {
+            restored.rekey_generated_values(epoch.next());
+        } else {
+            restored.credential_epoch = None;
+        }
+        restored.lifecycle_epoch = live.lifecycle_epoch.map(AuthLifecycleEpoch::next);
         *live = restored;
         report
     }
@@ -2976,6 +3413,26 @@ pub const MAX_ROUTED_AUTH_PROJECTS: usize = 1_024;
 struct ProjectStores {
     registered: BTreeMap<String, SharedAuthStore>,
     routed: BTreeMap<String, SharedAuthStore>,
+    pending_sessions: BTreeMap<String, PendingSessionRegistration>,
+}
+
+#[derive(Debug)]
+struct PendingSessionRegistration {
+    registered: SharedAuthStore,
+    displaced: Option<SharedAuthStore>,
+}
+
+/// Outcome of rolling back a session registration that has not completed its initial reset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRegistrationRollback {
+    /// No provisional registration exists for this project.
+    NotPending,
+    /// The exact registered store was removed and its displaced routed store was restored.
+    Restored,
+    /// Another store replaced the provisional registration, so rollback refused the ABA change.
+    Conflict,
+    /// The project registry could not be inspected.
+    Unavailable,
 }
 
 /// Result of atomically installing a compatibility-routed project store.
@@ -3025,6 +3482,7 @@ pub enum RefreshTokenStoreMatch {
 #[derive(Debug)]
 pub struct AuthRegistry {
     default_project: String,
+    project_numbers: BTreeMap<String, u64>,
     default: SharedAuthStore,
     scoped_refresh_routing: bool,
     projects: Mutex<ProjectStores>,
@@ -3032,9 +3490,31 @@ pub struct AuthRegistry {
     tenant_metadata: Mutex<BTreeMap<TenantKey, TenantMetadata>>,
     operation_gates: Mutex<BTreeMap<TenantKey, Weak<Mutex<()>>>>,
     membership_generation: AtomicU64,
+    lifecycle_incarnation: Option<u128>,
+    next_lifecycle_serial: AtomicU64,
     next_tenant_id: AtomicU64,
     #[cfg(test)]
     refresh_token_scans: AtomicU64,
+}
+
+/// A project-scoped Auth reset prepared without mutating registry or credential state.
+/// The opaque membership generation and `Arc` identities prevent applying the probe after
+/// another namespace transition changed its meaning.
+#[derive(Debug)]
+pub struct PreparedAuthProjectReset {
+    project: String,
+    membership_generation: u64,
+    parent: SharedAuthStore,
+    tenants: Vec<(TenantKey, SharedAuthStore)>,
+}
+
+/// A default-scope Auth reset prepared without mutating the default, routed, or tenant stores.
+#[derive(Debug)]
+pub struct PreparedAuthDefaultScopeReset {
+    membership_generation: u64,
+    default: SharedAuthStore,
+    routed: Vec<(String, SharedAuthStore)>,
+    tenants: Vec<(TenantKey, SharedAuthStore)>,
 }
 
 /// Mutable Identity Platform tenant settings represented by the Admin v2 surface.
@@ -3069,6 +3549,48 @@ pub struct TenantMetadataPatch {
 }
 
 impl AuthRegistry {
+    fn next_lifecycle_epoch(&self) -> Option<AuthLifecycleEpoch> {
+        let incarnation = self.lifecycle_incarnation?;
+        self.next_lifecycle_serial
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                value.checked_add(1)
+            })
+            .ok()
+            .map(|serial| AuthLifecycleEpoch::initial(incarnation, serial))
+    }
+
+    /// Configured project numbers are isolated by project ID, including routed stores.
+    #[must_use]
+    pub fn with_project_numbers(
+        default_project: &str,
+        default: SharedAuthStore,
+        numbers: BTreeMap<String, u64>,
+    ) -> Self {
+        if let Ok(mut store) = default.lock() {
+            store.set_project_number(numbers.get(default_project).copied());
+        }
+        let mut registry = Self::new(default_project, default);
+        registry.project_numbers = numbers;
+        registry
+    }
+
+    /// A registry whose explicit and compatibility-routed namespaces receive opaque
+    /// credentials tied to this daemon incarnation.
+    #[must_use]
+    pub fn with_project_numbers_and_lifecycle_incarnation(
+        default_project: &str,
+        default: SharedAuthStore,
+        numbers: BTreeMap<String, u64>,
+        lifecycle_incarnation: u128,
+    ) -> Self {
+        let mut registry = Self::with_project_numbers(default_project, default, numbers);
+        registry.lifecycle_incarnation = Some(lifecycle_incarnation);
+        if let Ok(mut default) = registry.default.lock() {
+            default.rekey_generated_values(AuthLifecycleEpoch::initial(lifecycle_incarnation, 0));
+        }
+        registry
+    }
+
     /// A registry around the default project's store.
     #[must_use]
     pub fn new(default_project: &str, default: Arc<Mutex<AuthStore>>) -> Self {
@@ -3077,6 +3599,7 @@ impl AuthRegistry {
         });
         Self {
             default_project: default_project.to_owned(),
+            project_numbers: BTreeMap::new(),
             default,
             scoped_refresh_routing,
             projects: Mutex::new(ProjectStores::default()),
@@ -3084,6 +3607,8 @@ impl AuthRegistry {
             tenant_metadata: Mutex::new(BTreeMap::new()),
             operation_gates: Mutex::new(BTreeMap::new()),
             membership_generation: AtomicU64::new(0),
+            lifecycle_incarnation: None,
+            next_lifecycle_serial: AtomicU64::new(1),
             next_tenant_id: AtomicU64::new(1),
             #[cfg(test)]
             refresh_token_scans: AtomicU64::new(0),
@@ -3124,6 +3649,10 @@ impl AuthRegistry {
         if !valid_routed_project(project) || project == self.default_project {
             return None;
         }
+        let lifecycle_epoch = match self.lifecycle_incarnation {
+            Some(_) => Some(self.next_lifecycle_epoch()?),
+            None => None,
+        };
         let (policy, config, signer) = {
             let default = self.default.lock().ok()?;
             (*default.policy(), default.config(), default.signer_arc())
@@ -3134,7 +3663,11 @@ impl AuthRegistry {
                 hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte)
             });
         let mut store = AuthStore::new(project, SplitMix64::new(seed), policy);
+        if let Some(epoch) = lifecycle_epoch {
+            store.set_lifecycle_epoch(epoch);
+        }
         store.set_config(config);
+        store.set_project_number(self.project_numbers.get(project).copied());
         if let Some(signer) = signer {
             store.set_signer(signer);
         }
@@ -3165,11 +3698,17 @@ impl AuthRegistry {
         {
             return RoutedStoreInstall::InvalidStore;
         }
-        let Ok(candidate) = store.lock() else {
+        let Ok(mut candidate) = store.lock() else {
             return RoutedStoreInstall::InvalidStore;
         };
         if candidate.project_id() != project || candidate.tenant_id().is_some() {
             return RoutedStoreInstall::InvalidStore;
+        }
+        if candidate.lifecycle_epoch.is_none() && self.lifecycle_incarnation.is_some() {
+            let Some(epoch) = self.next_lifecycle_epoch() else {
+                return RoutedStoreInstall::Capacity;
+            };
+            candidate.set_lifecycle_epoch(epoch);
         }
         drop(candidate);
         if projects.routed.len() >= MAX_ROUTED_AUTH_PROJECTS {
@@ -3181,22 +3720,339 @@ impl AuthRegistry {
     }
 
     /// Clears every compatibility namespace owned by the default session.
-    pub fn clear_routed(&self) {
-        let removed = self.projects.lock().map_or_else(
-            |_| Vec::new(),
-            |mut projects| {
-                let removed = projects.routed.keys().cloned().collect::<Vec<_>>();
-                projects.routed.clear();
-                removed
-            },
-        );
-        if let Ok(mut gates) = self.operation_gates.lock() {
-            gates
-                .retain(|(project, _), gate| !removed.contains(project) && gate.strong_count() > 0);
+    pub fn clear_routed(&self) -> Result<(), &'static str> {
+        let mut projects = self
+            .projects
+            .lock()
+            .map_err(|_| "project registry is poisoned")?;
+        if !projects.pending_sessions.is_empty() {
+            return Err("a session registration is still provisional");
         }
+        let mut tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let mut metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let mut gates = self
+            .operation_gates
+            .lock()
+            .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        let removed = projects.routed.keys().cloned().collect::<BTreeSet<_>>();
+        let routed_stores = projects.routed.values().cloned().collect::<Vec<_>>();
+        let tenant_stores = tenants
+            .iter()
+            .filter(|((project, _), _)| removed.contains(project))
+            .map(|(_, store)| store.clone())
+            .collect::<Vec<_>>();
+        let mut guards = Vec::with_capacity(routed_stores.len() + tenant_stores.len());
+        for store in routed_stores.iter().chain(&tenant_stores) {
+            guards.push(store.lock().map_err(|_| "an Auth store is poisoned")?);
+        }
+        for store in &mut guards {
+            store.clear();
+        }
+        projects.routed.clear();
+        tenants.retain(|(project, _), _| !removed.contains(project));
+        metadata.retain(|(project, _), _| !removed.contains(project));
+        gates.retain(|(project, _), gate| !removed.contains(project) && gate.strong_count() > 0);
         if !removed.is_empty() {
             self.membership_generation.fetch_add(1, Ordering::Release);
         }
+        Ok(())
+    }
+
+    /// Probes the default Auth store and every compatibility-routed namespace before a
+    /// default-scope reset. No store or registry membership is changed.
+    pub fn prepare_default_scope_reset(
+        &self,
+    ) -> Result<PreparedAuthDefaultScopeReset, &'static str> {
+        let projects = self
+            .projects
+            .lock()
+            .map_err(|_| "project registry is poisoned")?;
+        if !projects.pending_sessions.is_empty() {
+            return Err("a session registration is still provisional");
+        }
+        let tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let _gates = self
+            .operation_gates
+            .lock()
+            .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        let routed = projects
+            .routed
+            .iter()
+            .map(|(project, store)| (project.clone(), store.clone()))
+            .collect::<Vec<_>>();
+        let mut owned_projects = routed
+            .iter()
+            .map(|(project, _)| project.as_str())
+            .collect::<BTreeSet<_>>();
+        owned_projects.insert(self.default_project.as_str());
+        let owned_tenants = tenants
+            .iter()
+            .filter(|((project, _), _)| owned_projects.contains(project.as_str()))
+            .map(|(key, store)| (key.clone(), store.clone()))
+            .collect::<Vec<_>>();
+        if owned_tenants
+            .iter()
+            .any(|(key, _)| !metadata.contains_key(key))
+            || metadata.keys().any(|(project, tenant)| {
+                owned_projects.contains(project.as_str())
+                    && !tenants.contains_key(&(project.clone(), tenant.clone()))
+            })
+        {
+            return Err("default-scope tenant store and metadata membership differ");
+        }
+        {
+            let _default_probe = self
+                .default
+                .lock()
+                .map_err(|_| "the default Auth store is poisoned")?;
+            for (_, store) in &routed {
+                let _store_probe = store
+                    .lock()
+                    .map_err(|_| "a routed Auth store is poisoned")?;
+            }
+            for (_, store) in &owned_tenants {
+                let _store_probe = store
+                    .lock()
+                    .map_err(|_| "a default-scope tenant Auth store is poisoned")?;
+            }
+        }
+        Ok(PreparedAuthDefaultScopeReset {
+            membership_generation: self.membership_generation.load(Ordering::Acquire),
+            default: self.default.clone(),
+            routed,
+            tenants: owned_tenants,
+        })
+    }
+
+    /// Applies a prepared default-scope reset as one Auth transition.
+    pub fn apply_default_scope_reset(
+        &self,
+        prepared: &PreparedAuthDefaultScopeReset,
+    ) -> Result<(), &'static str> {
+        let mut projects = self
+            .projects
+            .lock()
+            .map_err(|_| "project registry is poisoned")?;
+        if self.membership_generation.load(Ordering::Acquire) != prepared.membership_generation
+            || !Arc::ptr_eq(&self.default, &prepared.default)
+            || !projects.pending_sessions.is_empty()
+            || projects.routed.len() != prepared.routed.len()
+            || prepared.routed.iter().any(|(project, expected)| {
+                !projects
+                    .routed
+                    .get(project)
+                    .is_some_and(|current| Arc::ptr_eq(current, expected))
+            })
+        {
+            return Err("Auth default-scope membership changed after the reset probe");
+        }
+        let mut tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let mut metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let mut gates = self
+            .operation_gates
+            .lock()
+            .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        let mut owned_projects = prepared
+            .routed
+            .iter()
+            .map(|(project, _)| project.as_str())
+            .collect::<BTreeSet<_>>();
+        owned_projects.insert(self.default_project.as_str());
+        let actual_tenant_count = tenants
+            .keys()
+            .filter(|(project, _)| owned_projects.contains(project.as_str()))
+            .count();
+        let actual_metadata_count = metadata
+            .keys()
+            .filter(|(project, _)| owned_projects.contains(project.as_str()))
+            .count();
+        if actual_tenant_count != prepared.tenants.len()
+            || actual_metadata_count != prepared.tenants.len()
+            || prepared.tenants.iter().any(|(key, expected)| {
+                !tenants
+                    .get(key)
+                    .is_some_and(|current| Arc::ptr_eq(current, expected))
+                    || !metadata.contains_key(key)
+            })
+        {
+            return Err("Auth default-scope tenant membership changed after the reset probe");
+        }
+        let mut default = prepared
+            .default
+            .lock()
+            .map_err(|_| "the default Auth store is poisoned")?;
+        let mut routed_guards = Vec::with_capacity(prepared.routed.len());
+        for (_, store) in &prepared.routed {
+            routed_guards.push(
+                store
+                    .lock()
+                    .map_err(|_| "a routed Auth store is poisoned")?,
+            );
+        }
+        let mut tenant_guards = Vec::with_capacity(prepared.tenants.len());
+        for (_, store) in &prepared.tenants {
+            tenant_guards.push(
+                store
+                    .lock()
+                    .map_err(|_| "a default-scope tenant Auth store is poisoned")?,
+            );
+        }
+        default.clear();
+        for store in &mut routed_guards {
+            store.clear();
+        }
+        for store in &mut tenant_guards {
+            store.clear();
+        }
+        projects.routed.clear();
+        tenants.retain(|(project, _), _| !owned_projects.contains(project.as_str()));
+        metadata.retain(|(project, _), _| !owned_projects.contains(project.as_str()));
+        gates.retain(|(project, _), gate| {
+            !owned_projects.contains(project.as_str()) && gate.strong_count() > 0
+        });
+        // The prepared handle is single-use even when the default store was the only member.
+        self.membership_generation.fetch_add(1, Ordering::Release);
+        Ok(())
+    }
+
+    /// Probes a registered project and every tenant store it owns before a reset.
+    pub fn prepare_project_reset(
+        &self,
+        project: &str,
+    ) -> Result<Option<PreparedAuthProjectReset>, &'static str> {
+        let projects = self
+            .projects
+            .lock()
+            .map_err(|_| "project registry is poisoned")?;
+        let Some(parent) = projects.registered.get(project).cloned() else {
+            return Ok(None);
+        };
+        let tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let _gates = self
+            .operation_gates
+            .lock()
+            .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        let owned = tenants
+            .iter()
+            .filter(|((candidate, _), _)| candidate == project)
+            .map(|(key, store)| (key.clone(), store.clone()))
+            .collect::<Vec<_>>();
+        if owned.iter().any(|(key, _)| !metadata.contains_key(key))
+            || metadata.keys().any(|(candidate, tenant)| {
+                candidate == project && !tenants.contains_key(&(candidate.clone(), tenant.clone()))
+            })
+        {
+            return Err("tenant store and metadata membership differ");
+        }
+        {
+            let _parent_probe = parent
+                .lock()
+                .map_err(|_| "the parent Auth store is poisoned")?;
+            for (_, store) in &owned {
+                let _tenant_probe = store
+                    .lock()
+                    .map_err(|_| "a tenant Auth store is poisoned")?;
+            }
+        }
+        Ok(Some(PreparedAuthProjectReset {
+            project: project.to_owned(),
+            membership_generation: self.membership_generation.load(Ordering::Acquire),
+            parent,
+            tenants: owned,
+        }))
+    }
+
+    /// Applies a prepared project reset and removes every tenant namespace atomically.
+    pub fn apply_project_reset(
+        &self,
+        prepared: &PreparedAuthProjectReset,
+    ) -> Result<(), &'static str> {
+        let projects = self
+            .projects
+            .lock()
+            .map_err(|_| "project registry is poisoned")?;
+        if self.membership_generation.load(Ordering::Acquire) != prepared.membership_generation
+            || !projects
+                .registered
+                .get(&prepared.project)
+                .is_some_and(|current| Arc::ptr_eq(current, &prepared.parent))
+        {
+            return Err("Auth project membership changed after the reset probe");
+        }
+        let mut tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let mut metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let mut gates = self
+            .operation_gates
+            .lock()
+            .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        let actual = tenants
+            .iter()
+            .filter(|((project, _), _)| project == &prepared.project)
+            .collect::<Vec<_>>();
+        if actual.len() != prepared.tenants.len()
+            || prepared.tenants.iter().any(|(key, expected)| {
+                !tenants
+                    .get(key)
+                    .is_some_and(|current| Arc::ptr_eq(current, expected))
+                    || !metadata.contains_key(key)
+            })
+        {
+            return Err("Auth tenant membership changed after the reset probe");
+        }
+        let mut parent = prepared
+            .parent
+            .lock()
+            .map_err(|_| "the parent Auth store is poisoned")?;
+        let mut tenant_guards = Vec::with_capacity(prepared.tenants.len());
+        for (_, store) in &prepared.tenants {
+            tenant_guards.push(
+                store
+                    .lock()
+                    .map_err(|_| "a tenant Auth store is poisoned")?,
+            );
+        }
+        parent.clear();
+        for store in &mut tenant_guards {
+            store.clear();
+        }
+        tenants.retain(|(project, _), _| project != &prepared.project);
+        metadata.retain(|(project, _), _| project != &prepared.project);
+        gates.retain(|(project, _), _| project != &prepared.project);
+        self.membership_generation.fetch_add(1, Ordering::Release);
+        drop(projects);
+        Ok(())
     }
 
     /// Number of retained compatibility namespaces.
@@ -3258,7 +4114,7 @@ impl AuthRegistry {
     }
 
     /// Registers a project's store; `false` when the project already has one.
-    pub fn register(&self, project: &str, store: AuthStore) -> bool {
+    pub fn register(&self, project: &str, mut store: AuthStore) -> bool {
         if project == self.default_project
             || store.project_id() != project
             || store.tenant_id().is_some()
@@ -3271,6 +4127,13 @@ impl AuthRegistry {
         if projects.registered.contains_key(project) || projects.routed.contains_key(project) {
             return false;
         }
+        if self.lifecycle_incarnation.is_some() {
+            let Some(epoch) = self.next_lifecycle_epoch() else {
+                return false;
+            };
+            store.set_lifecycle_epoch(epoch);
+        }
+        store.set_project_number(self.project_numbers.get(project).copied());
         projects
             .registered
             .insert(project.to_owned(), Arc::new(Mutex::new(store)));
@@ -3278,26 +4141,154 @@ impl AuthRegistry {
         true
     }
 
+    /// Provisionally registers an explicit session project, atomically displacing a
+    /// compatibility-routed namespace of the same project. The initial reset must call
+    /// [`Self::commit_session`] on success. A failed creation calls [`Self::rollback_session`]
+    /// to restore the exact displaced store. Callers hold the daemon's exclusive transition
+    /// barrier while this registration is pending.
+    pub fn register_session(&self, project: &str, mut store: AuthStore) -> bool {
+        if project == self.default_project
+            || store.project_id() != project
+            || store.tenant_id().is_some()
+        {
+            return false;
+        }
+        let Ok(mut projects) = self.projects.lock() else {
+            return false;
+        };
+        let Ok(tenants) = self.tenants.lock() else {
+            return false;
+        };
+        let Ok(metadata) = self.tenant_metadata.lock() else {
+            return false;
+        };
+        if projects.registered.contains_key(project)
+            || projects.pending_sessions.contains_key(project)
+            || tenants.keys().any(|(candidate, _)| candidate == project)
+            || metadata.keys().any(|(candidate, _)| candidate == project)
+        {
+            return false;
+        }
+        if self.lifecycle_incarnation.is_some() {
+            let Some(epoch) = self.next_lifecycle_epoch() else {
+                return false;
+            };
+            store.set_lifecycle_epoch(epoch);
+        }
+        store.set_project_number(self.project_numbers.get(project).copied());
+        let displaced = projects.routed.remove(project);
+        drop(metadata);
+        drop(tenants);
+        let registered = Arc::new(Mutex::new(store));
+        projects
+            .registered
+            .insert(project.to_owned(), registered.clone());
+        projects.pending_sessions.insert(
+            project.to_owned(),
+            PendingSessionRegistration {
+                registered,
+                displaced,
+            },
+        );
+        self.membership_generation.fetch_add(1, Ordering::Release);
+        true
+    }
+
+    /// Commits a provisional session after its initial reset completed.
+    ///
+    /// `false` means the registered store changed while the caller claimed exclusive control.
+    pub fn commit_session(&self, project: &str) -> bool {
+        let Ok(mut projects) = self.projects.lock() else {
+            return false;
+        };
+        let Some(pending) = projects.pending_sessions.remove(project) else {
+            return true;
+        };
+        if projects
+            .registered
+            .get(project)
+            .is_some_and(|current| Arc::ptr_eq(current, &pending.registered))
+        {
+            true
+        } else {
+            projects
+                .pending_sessions
+                .insert(project.to_owned(), pending);
+            false
+        }
+    }
+
+    /// Rolls back a provisional session without reconstructing any displaced Auth state.
+    pub fn rollback_session(&self, project: &str) -> SessionRegistrationRollback {
+        let Ok(mut projects) = self.projects.lock() else {
+            return SessionRegistrationRollback::Unavailable;
+        };
+        let Some(pending) = projects.pending_sessions.remove(project) else {
+            return SessionRegistrationRollback::NotPending;
+        };
+        if !projects
+            .registered
+            .get(project)
+            .is_some_and(|current| Arc::ptr_eq(current, &pending.registered))
+        {
+            projects
+                .pending_sessions
+                .insert(project.to_owned(), pending);
+            return SessionRegistrationRollback::Conflict;
+        }
+        projects.registered.remove(project);
+        if let Some(displaced) = pending.displaced {
+            projects.routed.insert(project.to_owned(), displaced);
+        }
+        self.membership_generation.fetch_add(1, Ordering::Release);
+        SessionRegistrationRollback::Restored
+    }
+
     /// Removes a registered project; `false` when it was not registered.
     pub fn remove(&self, project: &str) -> bool {
-        let removed = self
-            .projects
-            .lock()
-            .ok()
-            .is_some_and(|mut projects| projects.registered.remove(project).is_some());
-        if removed {
-            if let Ok(mut tenants) = self.tenants.lock() {
-                tenants.retain(|(candidate, _), _| candidate != project);
-            }
-            if let Ok(mut metadata) = self.tenant_metadata.lock() {
-                metadata.retain(|(candidate, _), _| candidate != project);
-            }
-            if let Ok(mut gates) = self.operation_gates.lock() {
-                gates.retain(|(candidate, _), _| candidate != project);
-            }
-            self.membership_generation.fetch_add(1, Ordering::Release);
+        let Ok(mut projects) = self.projects.lock() else {
+            return false;
+        };
+        if projects.pending_sessions.contains_key(project) {
+            return false;
         }
-        removed
+        let Some(parent) = projects.registered.get(project).cloned() else {
+            return false;
+        };
+        let Ok(mut tenants) = self.tenants.lock() else {
+            return false;
+        };
+        let Ok(mut metadata) = self.tenant_metadata.lock() else {
+            return false;
+        };
+        let Ok(mut gates) = self.operation_gates.lock() else {
+            return false;
+        };
+        let tenant_stores = tenants
+            .iter()
+            .filter(|((candidate, _), _)| candidate == project)
+            .map(|(_, store)| store.clone())
+            .collect::<Vec<_>>();
+        let Ok(mut parent) = parent.lock() else {
+            return false;
+        };
+        let mut tenant_guards = Vec::with_capacity(tenant_stores.len());
+        for store in &tenant_stores {
+            let Ok(guard) = store.lock() else {
+                return false;
+            };
+            tenant_guards.push(guard);
+        }
+        parent.clear();
+        for store in &mut tenant_guards {
+            store.clear();
+        }
+        projects.registered.remove(project);
+        tenants.retain(|(candidate, _), _| candidate != project);
+        metadata.retain(|(candidate, _), _| candidate != project);
+        gates.retain(|(candidate, _), _| candidate != project);
+        self.membership_generation.fetch_add(1, Ordering::Release);
+        true
     }
 
     /// Returns an existing tenant store.
@@ -3319,11 +4310,21 @@ impl AuthRegistry {
             .flatten()
     }
 
-    fn build_tenant_store(&self, project: &str, tenant: &str) -> Option<Arc<Mutex<AuthStore>>> {
-        let parent = self.store_for(project)?;
-        let (policy, config, signer) = {
+    fn build_tenant_store(
+        &self,
+        project: &str,
+        tenant: &str,
+        parent: &SharedAuthStore,
+    ) -> Option<Arc<Mutex<AuthStore>>> {
+        let (policy, config, signer, number, lifecycle_enabled) = {
             let parent = parent.lock().ok()?;
-            (*parent.policy(), parent.config(), parent.signer_arc())
+            (
+                *parent.policy(),
+                parent.config(),
+                parent.signer_arc(),
+                parent.project_number(),
+                parent.lifecycle_epoch.is_some(),
+            )
         };
         let seed = project
             .bytes()
@@ -3332,7 +4333,16 @@ impl AuthRegistry {
                 hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte)
             });
         let mut store = AuthStore::new_tenant(project, tenant, SplitMix64::new(seed), policy);
+        if self.lifecycle_incarnation.is_some() {
+            let epoch = self.next_lifecycle_epoch()?;
+            if lifecycle_enabled {
+                store.set_lifecycle_epoch(epoch);
+            } else {
+                store.rekey_generated_values(epoch);
+            }
+        }
         store.set_config(config);
+        store.set_project_number(number);
         if let Some(signer) = signer {
             store.set_signer(signer);
         }
@@ -3363,6 +4373,9 @@ impl AuthRegistry {
                 TenantPublication::Unavailable
             };
         }
+        if tenant_metadata.contains_key(&key) {
+            return TenantPublication::Unavailable;
+        }
         tenant_metadata.insert(key.clone(), metadata);
         tenants.insert(key, store.clone());
         self.membership_generation.fetch_add(1, Ordering::Release);
@@ -3388,11 +4401,19 @@ impl AuthRegistry {
         if tenant.is_empty() || tenant.contains(['/', '\\']) {
             return None;
         }
+        let gate = self.operation_gate(project, None)?;
+        let _operation = gate.lock().ok()?;
+        let projects = self.projects.lock().ok()?;
+        let parent = if project == self.default_project {
+            &self.default
+        } else {
+            projects.registered.get(project)?
+        };
         let key = (project.to_owned(), tenant.to_owned());
         if let Some(store) = self.existing_tenant_with_metadata(&key) {
             return Some(store);
         }
-        let store = self.build_tenant_store(project, tenant)?;
+        let store = self.build_tenant_store(project, tenant, parent)?;
         match self.publish_tenant(
             key,
             store,
@@ -3414,12 +4435,19 @@ impl AuthRegistry {
 
     /// Creates an explicitly configured tenant and returns its generated ID.
     pub fn create_tenant(&self, project: &str, metadata: TenantMetadata) -> Option<String> {
-        self.store_for(project)?;
+        let gate = self.operation_gate(project, None)?;
+        let _operation = gate.lock().ok()?;
+        let projects = self.projects.lock().ok()?;
+        let parent = if project == self.default_project {
+            &self.default
+        } else {
+            projects.registered.get(project)?
+        };
         let mut metadata = metadata;
         loop {
             let sequence = self.next_tenant_id.fetch_add(1, Ordering::Relaxed);
             let tenant = format!("fireemu-{sequence:020}");
-            let store = self.build_tenant_store(project, &tenant)?;
+            let store = self.build_tenant_store(project, &tenant, parent)?;
             match self.publish_tenant((project.to_owned(), tenant.clone()), store, metadata) {
                 TenantPublication::Published(_) => return Some(tenant),
                 TenantPublication::Existing {
@@ -3519,26 +4547,77 @@ impl AuthRegistry {
             .unwrap_or_default()
     }
 
-    /// Applies project-level Auth configuration and propagates inherited switches to tenants.
+    /// Replaces inherited project settings through the same atomic boundary as partial updates.
     pub fn set_project_config(&self, project: &str, config: ProjectAuthConfig) -> bool {
-        let Some(parent) = self.store_for(project) else {
-            return false;
+        self.patch_project_config(
+            project,
+            ProjectAuthConfigPatch {
+                allow_duplicate_emails: Some(config.allow_duplicate_emails),
+                enable_improved_email_privacy: Some(config.enable_improved_email_privacy),
+            },
+        )
+        .is_some()
+    }
+
+    /// Applies selected settings against the current parent and every tenant atomically.
+    ///
+    /// Publication shares the project gate with every tenant creator. Membership and all
+    /// affected stores are retained until commit, so poison or inconsistent tenant metadata
+    /// refuses the entire update before any namespace changes. An empty patch only reads.
+    pub fn patch_project_config(
+        &self,
+        project: &str,
+        patch: ProjectAuthConfigPatch,
+    ) -> Option<ProjectAuthConfig> {
+        let gate = self.operation_gate(project, None)?;
+        let _operation = gate.lock().ok()?;
+        self.patch_project_config_under_gate(project, patch)
+    }
+
+    fn patch_project_config_under_gate(
+        &self,
+        project: &str,
+        patch: ProjectAuthConfigPatch,
+    ) -> Option<ProjectAuthConfig> {
+        let projects = self.projects.lock().ok()?;
+        let parent = if project == self.default_project {
+            &self.default
+        } else {
+            projects
+                .registered
+                .get(project)
+                .or_else(|| projects.routed.get(project))?
         };
-        let Ok(mut parent) = parent.lock() else {
-            return false;
-        };
-        parent.set_config(config);
-        drop(parent);
-        if let Ok(tenants) = self.tenants.lock() {
-            for ((candidate, _), store) in tenants.iter() {
-                if candidate == project {
-                    if let Ok(mut store) = store.lock() {
-                        store.set_config(config);
-                    }
-                }
-            }
+        if patch.is_empty() {
+            return Some(parent.lock().ok()?.config());
         }
-        true
+        let tenants = self.tenants.lock().ok()?;
+        let metadata = self.tenant_metadata.lock().ok()?;
+        if tenants
+            .keys()
+            .filter(|(candidate, _)| candidate == project)
+            .ne(metadata
+                .keys()
+                .filter(|(candidate, _)| candidate == project))
+        {
+            return None;
+        }
+        let tenant_stores = tenants
+            .iter()
+            .filter(|((candidate, _), _)| candidate == project)
+            .map(|(_, store)| store)
+            .collect::<Vec<_>>();
+        let mut parent = parent.lock().ok()?;
+        let mut tenant_guards = Vec::with_capacity(tenant_stores.len());
+        for store in tenant_stores {
+            tenant_guards.push(store.lock().ok()?);
+        }
+        let config = patch.apply_to(parent.config());
+        parent.set_config(config);
+        for tenant in &mut tenant_guards {
+            tenant.set_config(config);
+        }
+        Some(config)
     }
 
     /// Deletes a tenant namespace and its metadata.
@@ -3747,7 +4826,13 @@ mod snapshot_cow_tests {
     //! snapshot stays exactly as it was captured. These tests reach the private `users` map so
     //! they can assert `Arc` identity directly.
 
-    use super::{AuthSnapshot, AuthStore, LocalId, NewUser};
+    use super::{
+        AuthLifecycleEpoch, AuthSnapshot, AuthStore, LocalId, NewUser, OAuthResponseType,
+        OidcProviderConfig,
+    };
+    use crate::jwt::{
+        encode_unsigned, verify_id_token, verify_rules_token, JwtError, TokenAcceptance,
+    };
     use crate::mfa::TotpPolicy;
     use crate::totp::totp_at;
     use fireemu_core_types::determinism::SplitMix64;
@@ -3879,6 +4964,128 @@ mod snapshot_cow_tests {
             destination.redeem_refresh_token(&token),
             Err(super::AuthError::InvalidRefreshToken)
         ));
+    }
+
+    #[test]
+    fn provider_config_credentials_are_never_captured_or_restored_across_namespaces() {
+        let mut source = AuthStore::new("source", SplitMix64::new(1), TotpPolicy::default());
+        assert!(source.create_oidc_config(OidcProviderConfig {
+            id: "oidc.source".to_owned(),
+            display_name: Some("Source".to_owned()),
+            enabled: true,
+            client_id: "client".to_owned(),
+            issuer: "https://issuer.example".to_owned(),
+            client_secret: Some("raw-secret-must-not-travel".to_owned()),
+            response_type: OAuthResponseType {
+                code: true,
+                ..OAuthResponseType::default()
+            },
+        }));
+        let mut destination =
+            AuthStore::new("destination", SplitMix64::new(2), TotpPolicy::default());
+        assert!(destination.create_oidc_config(OidcProviderConfig {
+            id: "oidc.destination".to_owned(),
+            display_name: None,
+            enabled: false,
+            client_id: "destination-client".to_owned(),
+            issuer: "https://destination.example".to_owned(),
+            client_secret: None,
+            response_type: OAuthResponseType::default(),
+        }));
+
+        let snapshot = AuthSnapshot::capture(&source);
+        assert!(snapshot.0.oidc_configs.is_empty());
+        assert!(!format!("{source:?}").contains("raw-secret-must-not-travel"));
+        snapshot.restore_into(&mut destination);
+        assert!(destination.oidc_config("oidc.source").is_none());
+        assert!(destination.oidc_config("oidc.destination").is_some());
+    }
+
+    #[test]
+    fn clearing_a_session_store_invalidates_same_second_id_and_refresh_credentials() {
+        let mut live = store();
+        live.set_lifecycle_epoch(AuthLifecycleEpoch::initial(17, 1));
+        let uid = live
+            .create_user_with_id(
+                NewUser::email("before-reset@example.test"),
+                Some("same-user"),
+                AT,
+            )
+            .unwrap();
+        let stale_id = encode_unsigned(&live.id_token_claims(&uid, None, AT).unwrap());
+        let mut stripped_claims = live.id_token_claims(&uid, None, AT).unwrap();
+        stripped_claims.firebase.fireemu_session_epoch = None;
+        let stripped_mock = encode_unsigned(&stripped_claims);
+        let stale_refresh = live.issue_refresh_token(&uid, AT).unwrap();
+
+        live.clear();
+        let recreated = live
+            .create_user_with_id(
+                NewUser::email("after-reset@example.test"),
+                Some("same-user"),
+                AT,
+            )
+            .unwrap();
+        let fresh_id = encode_unsigned(&live.id_token_claims(&recreated, None, AT).unwrap());
+        let fresh_refresh = live.issue_refresh_token(&recreated, AT).unwrap();
+
+        assert!(matches!(
+            verify_id_token(&stale_id, &live, AT),
+            Err(JwtError::WrongSessionEpoch { .. })
+        ));
+        assert!(
+            verify_rules_token(&stale_id, &live, AT, TokenAcceptance::EmulatorMock).is_ok(),
+            "an unsigned emulator mock is caller-provided identity, not an issued credential"
+        );
+        assert!(matches!(
+            verify_id_token(&stripped_mock, &live, AT),
+            Err(JwtError::WrongSessionEpoch { actual: None, .. })
+        ));
+        assert!(
+            verify_rules_token(&stripped_mock, &live, AT, TokenAcceptance::EmulatorMock).is_ok(),
+            "the mock profile deliberately accepts an unsigned caller-provided identity"
+        );
+        assert!(verify_id_token(&fresh_id, &live, AT).is_ok());
+        assert!(matches!(
+            live.redeem_refresh_token(&stale_refresh),
+            Err(super::AuthError::InvalidRefreshToken)
+        ));
+        assert!(live.redeem_refresh_token(&fresh_refresh).is_ok());
+    }
+
+    #[test]
+    fn restoring_a_session_snapshot_invalidates_every_pre_restore_id_token() {
+        let mut live = store();
+        live.set_lifecycle_epoch(AuthLifecycleEpoch::initial(23, 1));
+        let uid = live
+            .create_user_with_id(
+                NewUser::email("snapshot@example.test"),
+                Some("snapshot-user"),
+                AT,
+            )
+            .unwrap();
+        let snapshot_refresh = live.issue_refresh_token(&uid, AT).unwrap();
+        let snapshot_id = encode_unsigned(&live.id_token_claims(&uid, None, AT).unwrap());
+        let snapshot = AuthSnapshot::capture(&live);
+        let later = AT
+            .checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(1))
+            .unwrap();
+        let live_id = encode_unsigned(&live.id_token_claims(&uid, None, later).unwrap());
+
+        snapshot.restore_into(&mut live);
+
+        for stale in [&snapshot_id, &live_id] {
+            assert!(matches!(
+                verify_id_token(stale, &live, later),
+                Err(JwtError::WrongSessionEpoch { .. })
+            ));
+        }
+        let fresh = encode_unsigned(&live.id_token_claims(&uid, None, later).unwrap());
+        assert!(verify_id_token(&fresh, &live, later).is_ok());
+        assert!(
+            live.redeem_refresh_token(&snapshot_refresh).is_ok(),
+            "a same-namespace snapshot intentionally restores its captured refresh credential"
+        );
     }
 }
 
@@ -4047,9 +5254,12 @@ mod compatibility_routing_tests {
         AuthRegistry, AuthStore, CompatibilityUserStoreMatch, NewUser, RefreshTokenStoreMatch,
         RoutedStoreInstall, TenantMetadata,
     };
+    use crate::jwt::{encode_unsigned, verify_id_token, verify_rules_token, TokenAcceptance};
     use crate::mfa::TotpPolicy;
     use fireemu_core_types::determinism::SplitMix64;
     use fireemu_core_types::time::LogicalInstant;
+    use std::collections::BTreeMap;
+    use std::sync::atomic::Ordering;
     use std::sync::{mpsc, Arc, Mutex, TryLockError};
     use std::time::{Duration, Instant};
 
@@ -4061,6 +5271,243 @@ mod compatibility_routing_tests {
             SplitMix64::new(seed),
             TotpPolicy::default(),
         )))
+    }
+
+    #[test]
+    fn project_config_poisoned_membership_or_store_preserves_every_namespace() {
+        for target in ["projects", "tenants", "metadata", "parent", "tenant"] {
+            let parent = store("demo-app", 1);
+            let registry = Arc::new(AuthRegistry::new("demo-app", parent.clone()));
+            let sibling = registry.ensure_tenant("demo-app", "alpha").unwrap();
+            let tenant = registry.ensure_tenant("demo-app", "zulu").unwrap();
+            let poison = registry.clone();
+            let poisoned_parent = parent.clone();
+            let poisoned_tenant = tenant.clone();
+            assert!(std::thread::spawn(move || {
+                match target {
+                    "projects" => {
+                        let _guard = poison.projects.lock().unwrap();
+                        panic!("poison projects");
+                    }
+                    "tenants" => {
+                        let _guard = poison.tenants.lock().unwrap();
+                        panic!("poison tenants");
+                    }
+                    "metadata" => {
+                        let _guard = poison.tenant_metadata.lock().unwrap();
+                        panic!("poison metadata");
+                    }
+                    "parent" => {
+                        let _guard = poisoned_parent.lock().unwrap();
+                        panic!("poison parent");
+                    }
+                    _ => {
+                        let _guard = poisoned_tenant.lock().unwrap();
+                        panic!("poison tenant");
+                    }
+                }
+            })
+            .join()
+            .is_err());
+            assert!(
+                !registry.set_project_config(
+                    "demo-app",
+                    super::ProjectAuthConfig {
+                        allow_duplicate_emails: true,
+                        enable_improved_email_privacy: true,
+                    }
+                ),
+                "poisoned {target} must refuse the update"
+            );
+            for namespace in [&parent, &sibling, &tenant] {
+                let guard = namespace
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                assert_eq!(
+                    guard.config(),
+                    super::ProjectAuthConfig::default(),
+                    "poisoned {target}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn direct_tenant_publication_obeys_the_project_operation_gate() {
+        for explicit in [false, true] {
+            let registry = Arc::new(AuthRegistry::new("demo-app", store("demo-app", 1)));
+            let gate = registry.operation_gate("demo-app", None).unwrap();
+            let operation = gate.lock().unwrap();
+            let creator_registry = registry.clone();
+            let (started_tx, started_rx) = mpsc::sync_channel(1);
+            let (done_tx, done_rx) = mpsc::sync_channel(1);
+            let creator = std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                let tenant = if explicit {
+                    creator_registry
+                        .create_tenant("demo-app", TenantMetadata::default())
+                        .unwrap()
+                } else {
+                    creator_registry
+                        .ensure_tenant("demo-app", "customer")
+                        .unwrap();
+                    "customer".to_owned()
+                };
+                done_tx.send(tenant).unwrap();
+            });
+            started_rx.recv().unwrap();
+            let early = done_rx.recv_timeout(Duration::from_millis(100));
+            // Model the config commit while publication is excluded by the project gate.
+            registry
+                .default
+                .lock()
+                .unwrap()
+                .set_config(super::ProjectAuthConfig {
+                    allow_duplicate_emails: true,
+                    enable_improved_email_privacy: true,
+                });
+            drop(operation);
+            let tenant = early
+                .as_ref()
+                .ok()
+                .cloned()
+                .unwrap_or_else(|| done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+            creator.join().unwrap();
+            assert!(
+                early.is_err(),
+                "direct tenant publication bypassed the project gate"
+            );
+            assert_eq!(
+                registry
+                    .tenant_store("demo-app", &tenant)
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .config(),
+                registry.default.lock().unwrap().config()
+            );
+        }
+    }
+
+    #[test]
+    fn project_config_patch_waits_for_direct_tenant_publication() {
+        for explicit in [false, true] {
+            let registry = Arc::new(AuthRegistry::new("demo-app", store("demo-app", 1)));
+            let gate = registry.operation_gate("demo-app", None).unwrap();
+            let metadata = registry.tenant_metadata.lock().unwrap();
+            let creator_registry = registry.clone();
+            let creator = std::thread::spawn(move || {
+                if explicit {
+                    creator_registry
+                        .create_tenant("demo-app", TenantMetadata::default())
+                        .unwrap()
+                } else {
+                    creator_registry
+                        .ensure_tenant("demo-app", "customer")
+                        .unwrap();
+                    "customer".to_owned()
+                }
+            });
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                match registry.tenants.try_lock() {
+                    Err(TryLockError::WouldBlock) => break,
+                    Err(TryLockError::Poisoned(_)) => panic!("tenant registry poisoned"),
+                    Ok(guard) => drop(guard),
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "creator did not reach membership boundary"
+                );
+                std::thread::yield_now();
+            }
+            let patch_registry = registry.clone();
+            let patcher = std::thread::spawn(move || {
+                patch_registry.patch_project_config(
+                    "demo-app",
+                    super::ProjectAuthConfigPatch {
+                        allow_duplicate_emails: Some(true),
+                        enable_improved_email_privacy: Some(true),
+                    },
+                )
+            });
+            while Arc::strong_count(&gate) < 3 {
+                assert!(
+                    Instant::now() < deadline,
+                    "patch did not reach the shared project gate"
+                );
+                std::thread::yield_now();
+            }
+            assert_eq!(
+                registry.default.lock().unwrap().config(),
+                super::ProjectAuthConfig::default()
+            );
+            drop(metadata);
+            let tenant = creator.join().unwrap();
+            let config = patcher.join().unwrap().unwrap();
+            assert!(config.enable_improved_email_privacy && config.allow_duplicate_emails);
+            assert_eq!(
+                registry
+                    .tenant_store("demo-app", &tenant)
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .config(),
+                config
+            );
+        }
+    }
+
+    #[test]
+    fn project_config_patch_rejects_inconsistent_tenant_membership_before_writing() {
+        for missing_store in [false, true] {
+            let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+            let tenant = registry.ensure_tenant("demo-app", "customer").unwrap();
+            let key = ("demo-app".to_owned(), "customer".to_owned());
+            if missing_store {
+                registry.tenants.lock().unwrap().remove(&key);
+            } else {
+                registry.tenant_metadata.lock().unwrap().remove(&key);
+            }
+            assert!(registry
+                .patch_project_config(
+                    "demo-app",
+                    super::ProjectAuthConfigPatch {
+                        enable_improved_email_privacy: Some(true),
+                        ..super::ProjectAuthConfigPatch::default()
+                    }
+                )
+                .is_none());
+            assert_eq!(
+                registry.default.lock().unwrap().config(),
+                super::ProjectAuthConfig::default()
+            );
+            assert_eq!(
+                tenant.lock().unwrap().config(),
+                super::ProjectAuthConfig::default()
+            );
+        }
+    }
+
+    #[test]
+    fn project_config_empty_patch_reads_without_rewriting_tenants() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        let tenant = registry.ensure_tenant("demo-app", "customer").unwrap();
+        tenant.lock().unwrap().set_config(super::ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: true,
+        });
+        assert_eq!(
+            registry.patch_project_config("demo-app", super::ProjectAuthConfigPatch::default()),
+            Some(super::ProjectAuthConfig::default())
+        );
+        assert!(
+            tenant
+                .lock()
+                .unwrap()
+                .config()
+                .enable_improved_email_privacy
+        );
     }
 
     #[test]
@@ -4321,6 +5768,235 @@ mod compatibility_routing_tests {
     }
 
     #[test]
+    fn session_registration_replaces_only_the_exact_routed_namespace() {
+        let default = store("demo-app", 1);
+        let registry = AuthRegistry::with_project_numbers(
+            "demo-app",
+            default,
+            BTreeMap::from([("worker-alpha".to_owned(), 222)]),
+        );
+        let mut routed = registry.routed_candidate("worker-alpha").unwrap();
+        let uid = routed
+            .create_user(NewUser::email("routed@example.test"), NOW)
+            .unwrap();
+        let routed_token = routed.issue_refresh_token(&uid, NOW).unwrap();
+        assert!(matches!(
+            registry.install_routed("worker-alpha", Arc::new(Mutex::new(routed))),
+            RoutedStoreInstall::Installed(_)
+        ));
+
+        assert!(!registry.register_session(
+            "worker-alpha",
+            AuthStore::new("worker-beta", SplitMix64::new(3), TotpPolicy::default())
+        ));
+        assert!(registry.routed_store_for("worker-alpha").is_some());
+
+        assert!(registry.register_session(
+            "worker-alpha",
+            AuthStore::new("worker-alpha", SplitMix64::new(4), TotpPolicy::default())
+        ));
+        assert!(registry.commit_session("worker-alpha"));
+        assert!(registry.routed_store_for("worker-alpha").is_none());
+        assert_eq!(registry.routed_count(), 0);
+        let registered = registry.store_for("worker-alpha").unwrap();
+        let registered = registered.lock().unwrap();
+        assert_eq!(registered.project_number(), Some(222));
+        assert_eq!(registered.user_count(), 0);
+        drop(registered);
+        assert!(matches!(
+            registry.store_for_refresh_token(&routed_token),
+            RefreshTokenStoreMatch::NotFound
+        ));
+    }
+
+    #[test]
+    fn session_registration_rejects_a_routed_id_token_for_a_recreated_uid_in_the_same_second() {
+        let default = store("demo-app", 1);
+        let registry = AuthRegistry::with_project_numbers_and_lifecycle_incarnation(
+            "demo-app",
+            default,
+            BTreeMap::new(),
+            41,
+        );
+        let mut routed = registry.routed_candidate("worker-alpha").unwrap();
+        let uid = routed
+            .create_user_with_id(
+                NewUser::email("routed@example.test"),
+                Some("same-user"),
+                NOW,
+            )
+            .unwrap();
+        let old_token = encode_unsigned(&routed.id_token_claims(&uid, None, NOW).unwrap());
+        let old_refresh = routed.issue_refresh_token(&uid, NOW).unwrap();
+        assert!(matches!(
+            registry.install_routed("worker-alpha", Arc::new(Mutex::new(routed))),
+            RoutedStoreInstall::Installed(_)
+        ));
+
+        assert!(registry.register_session(
+            "worker-alpha",
+            AuthStore::new("worker-alpha", SplitMix64::new(2), TotpPolicy::default())
+        ));
+        assert!(registry.commit_session("worker-alpha"));
+        let registered = registry.store_for("worker-alpha").unwrap();
+        let mut registered = registered.lock().unwrap();
+        let recreated = registered
+            .create_user_with_id(NewUser::email("new@example.test"), Some("same-user"), NOW)
+            .unwrap();
+        let new_token =
+            encode_unsigned(&registered.id_token_claims(&recreated, None, NOW).unwrap());
+
+        assert!(matches!(
+            verify_id_token(&old_token, &registered, NOW),
+            Err(crate::jwt::JwtError::WrongSessionEpoch { .. })
+        ));
+        assert!(
+            verify_rules_token(&old_token, &registered, NOW, TokenAcceptance::EmulatorMock).is_ok(),
+            "unsigned EmulatorMock identity is not an issued credential"
+        );
+        assert!(verify_id_token(&new_token, &registered, NOW).is_ok());
+        let new_refresh = registered.issue_refresh_token(&recreated, NOW).unwrap();
+        drop(registered);
+        assert!(matches!(
+            registry.store_for_refresh_token(&old_refresh),
+            RefreshTokenStoreMatch::NotFound
+        ));
+        assert!(matches!(
+            registry.store_for_refresh_token(&new_refresh),
+            RefreshTokenStoreMatch::Unique(_)
+        ));
+        assert_eq!(
+            registry.rollback_session("worker-alpha"),
+            super::SessionRegistrationRollback::NotPending
+        );
+    }
+
+    #[test]
+    fn lifecycle_serial_exhaustion_refuses_before_publishing_a_namespace() {
+        let default = store("demo-app", 1);
+        let registry = AuthRegistry::with_project_numbers_and_lifecycle_incarnation(
+            "demo-app",
+            default,
+            BTreeMap::new(),
+            41,
+        );
+        registry
+            .next_lifecycle_serial
+            .store(u64::MAX, Ordering::Release);
+
+        assert!(registry.routed_candidate("worker-alpha").is_none());
+        assert!(!registry.register(
+            "worker-alpha",
+            AuthStore::new("worker-alpha", SplitMix64::new(2), TotpPolicy::default())
+        ));
+        assert!(registry.store_for("worker-alpha").is_none());
+        assert_eq!(registry.routed_count(), 0);
+    }
+
+    #[test]
+    fn poisoned_tenant_refuses_project_reset_before_mutating_any_namespace() {
+        let registry = Arc::new(
+            AuthRegistry::with_project_numbers_and_lifecycle_incarnation(
+                "demo-app",
+                store("demo-app", 1),
+                BTreeMap::new(),
+                41,
+            ),
+        );
+        assert!(registry.register(
+            "worker-alpha",
+            AuthStore::new("worker-alpha", SplitMix64::new(2), TotpPolicy::default())
+        ));
+        let parent = registry.store_for("worker-alpha").unwrap();
+        parent
+            .lock()
+            .unwrap()
+            .create_user(NewUser::email("parent@example.test"), NOW)
+            .unwrap();
+        let poisoned = registry
+            .ensure_tenant("worker-alpha", "customer-a")
+            .unwrap();
+        let sibling = registry
+            .ensure_tenant("worker-alpha", "customer-b")
+            .unwrap();
+        sibling
+            .lock()
+            .unwrap()
+            .create_user(NewUser::email("sibling@example.test"), NOW)
+            .unwrap();
+        let generation = registry.membership_generation.load(Ordering::Acquire);
+
+        let poison = poisoned.clone();
+        assert!(std::thread::spawn(move || {
+            let _guard = poison.lock().unwrap();
+            panic!("poison tenant store");
+        })
+        .join()
+        .is_err());
+
+        assert_eq!(
+            registry.prepare_project_reset("worker-alpha").unwrap_err(),
+            "a tenant Auth store is poisoned"
+        );
+        assert_eq!(parent.lock().unwrap().user_count(), 1);
+        assert_eq!(sibling.lock().unwrap().user_count(), 1);
+        assert!(Arc::ptr_eq(
+            &registry.tenant_store("worker-alpha", "customer-a").unwrap(),
+            &poisoned
+        ));
+        assert!(registry
+            .tenant_metadata("worker-alpha", "customer-a")
+            .is_some());
+        assert!(registry
+            .tenant_metadata("worker-alpha", "customer-b")
+            .is_some());
+        assert_eq!(
+            registry.membership_generation.load(Ordering::Acquire),
+            generation
+        );
+    }
+
+    #[test]
+    fn session_rollback_refuses_an_aba_replacement_and_retains_the_recovery_handle() {
+        let default = store("demo-app", 1);
+        let registry = AuthRegistry::new("demo-app", default);
+        let routed = Arc::new(Mutex::new(
+            registry.routed_candidate("worker-alpha").unwrap(),
+        ));
+        assert!(matches!(
+            registry.install_routed("worker-alpha", routed),
+            RoutedStoreInstall::Installed(_)
+        ));
+        assert!(registry.register_session(
+            "worker-alpha",
+            AuthStore::new("worker-alpha", SplitMix64::new(2), TotpPolicy::default())
+        ));
+        let replacement = store("worker-alpha", 3);
+        registry
+            .projects
+            .lock()
+            .unwrap()
+            .registered
+            .insert("worker-alpha".to_owned(), replacement.clone());
+
+        assert_eq!(
+            registry.rollback_session("worker-alpha"),
+            super::SessionRegistrationRollback::Conflict
+        );
+        assert!(Arc::ptr_eq(
+            &registry.store_for("worker-alpha").unwrap(),
+            &replacement
+        ));
+        assert!(registry.routed_store_for("worker-alpha").is_none());
+        assert!(registry
+            .projects
+            .lock()
+            .unwrap()
+            .pending_sessions
+            .contains_key("worker-alpha"));
+    }
+
+    #[test]
     fn scoped_refresh_token_routing_revalidates_a_revoked_token() {
         let default = store("demo-app", 1);
         let registry = AuthRegistry::new("demo-app", default.clone());
@@ -4447,6 +6123,41 @@ mod compatibility_routing_tests {
     }
 
     #[test]
+    fn a_poisoned_operation_gate_registry_refuses_project_reset_during_preflight() {
+        let registry = Arc::new(
+            AuthRegistry::with_project_numbers_and_lifecycle_incarnation(
+                "demo-app",
+                store("demo-app", 1),
+                BTreeMap::new(),
+                41,
+            ),
+        );
+        assert!(registry.register(
+            "worker-alpha",
+            AuthStore::new("worker-alpha", SplitMix64::new(2), TotpPolicy::default())
+        ));
+        let parent = registry.store_for("worker-alpha").unwrap();
+        parent
+            .lock()
+            .unwrap()
+            .create_user(NewUser::email("parent@example.test"), NOW)
+            .unwrap();
+        let poison = registry.clone();
+        assert!(std::thread::spawn(move || {
+            let _guard = poison.operation_gates.lock().unwrap();
+            panic!("poison operation gate registry");
+        })
+        .join()
+        .is_err());
+
+        assert_eq!(
+            registry.prepare_project_reset("worker-alpha").unwrap_err(),
+            "tenant operation-gate registry is poisoned"
+        );
+        assert_eq!(parent.lock().unwrap().user_count(), 1);
+    }
+
+    #[test]
     fn operation_gates_are_shared_by_namespace_and_prune_inactive_entries() {
         let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
         let default = registry.operation_gate("demo-app", None).unwrap();
@@ -4514,7 +6225,7 @@ mod compatibility_routing_tests {
             registry.store_for_refresh_token(&tenant_token),
             RefreshTokenStoreMatch::NotFound
         ));
-        registry.clear_routed();
+        registry.clear_routed().unwrap();
         assert!(matches!(
             registry.store_for_refresh_token(&routed_token),
             RefreshTokenStoreMatch::NotFound
@@ -4545,6 +6256,48 @@ mod compatibility_routing_tests {
         ));
     }
 
+    #[test]
+    fn deleted_refresh_routing_retains_exact_namespace_and_legacy_ambiguity() {
+        let default = store("demo-app", 1);
+        let registry = AuthRegistry::new("demo-app", default.clone());
+        let routed = store("worker-alpha", 2);
+        assert!(matches!(
+            registry.install_routed("worker-alpha", routed.clone()),
+            RoutedStoreInstall::Installed(_)
+        ));
+        let tenant = registry.ensure_tenant("demo-app", "customer").unwrap();
+        for owned in [&default, &routed, &tenant] {
+            let token = issue_token(owned, "deleted@example.test");
+            {
+                let mut source = owned.lock().unwrap();
+                let uid = source.redeem_refresh_token(&token).unwrap();
+                source.delete_user_by_id(uid.as_str()).unwrap();
+                assert!(!source.refresh_tokens.contains_key(&token));
+                assert!(!source.tokens_by_user.contains_key(&uid));
+                assert_eq!(source.deleted_refresh_digests.len(), 1);
+                assert_eq!(
+                    source.redeem_refresh_token(&token),
+                    Err(super::AuthError::UserNotFound)
+                );
+            }
+            assert!(
+                matches!(registry.store_for_refresh_token(&token), RefreshTokenStoreMatch::Unique(found) if Arc::ptr_eq(&found, owned))
+            );
+        }
+        assert_eq!(registry.refresh_token_scan_count(), 0);
+        install_legacy_refresh_token(&default, "legacy-a@example.test", "legacy-duplicate");
+        install_legacy_refresh_token(&routed, "legacy-b@example.test", "legacy-duplicate");
+        {
+            let mut source = default.lock().unwrap();
+            let uid = source.redeem_refresh_token("legacy-duplicate").unwrap();
+            source.delete_user_by_id(uid.as_str()).unwrap();
+        }
+        assert!(matches!(
+            registry.store_for_refresh_token("legacy-duplicate"),
+            RefreshTokenStoreMatch::Ambiguous
+        ));
+    }
+
     fn issue_token(store: &Arc<Mutex<AuthStore>>, email: &str) -> String {
         let mut store = store.lock().unwrap();
         let uid = store.create_user(NewUser::email(email), NOW).unwrap();
@@ -4564,5 +6317,96 @@ mod compatibility_routing_tests {
             .unwrap();
         owned.remove(&generated);
         owned.insert(legacy.to_owned());
+    }
+}
+
+#[cfg(test)]
+mod broad_project_number_tests {
+    use super::*;
+
+    #[test]
+    fn configured_numbers_follow_namespace_not_default_or_snapshot_source() {
+        let default = Arc::new(Mutex::new(AuthStore::new(
+            "demo-one",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let registry = AuthRegistry::with_project_numbers(
+            "demo-one",
+            default.clone(),
+            BTreeMap::from([("demo-one".to_owned(), 111), ("demo-two".to_owned(), 222)]),
+        );
+        assert_eq!(default.lock().unwrap().project_number(), Some(111));
+        let second = registry.routed_candidate("demo-two").unwrap();
+        assert_eq!(second.project_number(), Some(222));
+        assert_eq!(
+            registry
+                .routed_candidate("demo-unset")
+                .unwrap()
+                .project_number(),
+            None
+        );
+        assert!(registry.register("demo-two", second));
+        let tenant = registry.ensure_tenant("demo-two", "tenant").unwrap();
+        assert_eq!(tenant.lock().unwrap().project_number(), Some(222));
+        let snapshot = AuthSnapshot::capture(&default.lock().unwrap());
+        snapshot.restore_into(&mut tenant.lock().unwrap());
+        assert_eq!(tenant.lock().unwrap().project_number(), Some(222));
+        assert_eq!(tenant.lock().unwrap().project_id(), "demo-two");
+    }
+    #[test]
+    fn issuance_metadata_does_not_activate_email_owner_or_touch_recreated_uid() {
+        let mut store = AuthStore::new("demo-one", SplitMix64::new(1), TotpPolicy::default());
+        store.set_config(ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            ..ProjectAuthConfig::default()
+        });
+        let at = LogicalInstant::from_unix_seconds(100);
+        let a = store
+            .create_user_with_id(NewUser::email("shared@example.com"), Some("a"), at)
+            .unwrap();
+        let token = store
+            .issue_refresh_session(&a, at, None, CustomClaims::default(), None)
+            .unwrap();
+        let b = store
+            .create_user_with_id(NewUser::email("shared@example.com"), Some("b"), at)
+            .unwrap();
+        assert_eq!(
+            store.user_by_email("shared@example.com").unwrap().local_id,
+            b
+        );
+        store.record_token_issuance(&token, at);
+        assert_eq!(store.user(&a).unwrap().last_refresh_at, Some(at));
+        assert_eq!(
+            store.user_by_email("shared@example.com").unwrap().local_id,
+            b
+        );
+        store.delete_user_by_id("a").unwrap();
+        let replacement = store
+            .create_user_with_id(NewUser::anonymous(), Some("a"), at)
+            .unwrap();
+        store.record_token_issuance(&token, at);
+        assert_eq!(store.user(&replacement).unwrap().last_refresh_at, None);
+    }
+
+    #[test]
+    fn mutable_user_reactivation_keeps_email_index_canonical() {
+        let mut store = AuthStore::new("demo-one", SplitMix64::new(1), TotpPolicy::default());
+        let at = LogicalInstant::from_unix_seconds(100);
+        let uid = store
+            .create_user_with_id(NewUser::email("owner@example.com"), Some("owner"), at)
+            .unwrap();
+        {
+            let user = store.user_mut(&uid).unwrap();
+            user.email = Some("MixedCase@example.com".to_owned());
+        }
+        let _ = store.user_mut(&uid);
+        assert_eq!(
+            store.local_id_for_email.get("mixedcase@example.com"),
+            Some(&uid)
+        );
+        assert!(!store
+            .local_id_for_email
+            .contains_key("MixedCase@example.com"));
     }
 }

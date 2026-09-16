@@ -1,0 +1,1348 @@
+{
+  "executionCommit": "a35f85b464743d62344a3a58763d382b5b3838ce",
+  "artifactSha256": "babe0222de91fcbf35993592799196cab7fca37da129dfa8c7adbf8249660f03",
+  "configurationSha256": "3b3dba2b7c98a0152a2bc0f87c2283e5db93e4051b4ce2bd37bd89b7a8396d0e",
+  "ownedProcess": {
+    "pid": 15133,
+    "stopped": true,
+    "listenersClosed": true
+  },
+  "batch": {
+    "completed": true,
+    "failure": null,
+    "unrecovered": [],
+    "productionExecuted": false,
+    "sharedConstraints": true,
+    "wireHistoryMatchesReservations": true,
+    "jobs": {
+      "partial": {
+        "recordingComplete": true,
+        "cleanupComplete": true,
+        "safety": true,
+        "compatibility": "not-observed",
+        "failure": null,
+        "rows": [
+          {
+            "index": 0,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 404,
+            "body": {
+              "error": {
+                "code": 404,
+                "message": "Document not found: projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+                "status": "NOT_FOUND"
+              }
+            }
+          },
+          {
+            "index": 1,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 404,
+            "body": {
+              "error": {
+                "code": 404,
+                "message": "Document not found: projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+                "status": "NOT_FOUND"
+              }
+            }
+          },
+          {
+            "index": 2,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 404,
+            "body": {
+              "error": {
+                "code": 404,
+                "message": "Document not found: projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last",
+                "status": "NOT_FOUND"
+              }
+            }
+          },
+          {
+            "index": 3,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing?currentDocument.exists=false",
+              "method": "PATCH",
+              "body": {
+                "fields": {
+                  "a": {
+                    "integerValue": "7"
+                  }
+                }
+              },
+              "privileged": true,
+              "form": false
+            },
+            "status": 200,
+            "body": {
+              "createTime": "2026-09-13T06:01:53.056268Z",
+              "fields": {
+                "a": {
+                  "integerValue": "7"
+                }
+              },
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+              "updateTime": "2026-09-13T06:01:53.056268Z"
+            }
+          },
+          {
+            "index": 4,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:batchWrite",
+              "method": "POST",
+              "body": {
+                "writes": [
+                  {
+                    "update": {
+                      "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+                      "fields": {
+                        "a": {
+                          "integerValue": "1"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "update": {
+                      "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+                      "fields": {
+                        "a": {
+                          "integerValue": "8"
+                        }
+                      }
+                    },
+                    "currentDocument": {
+                      "exists": false
+                    }
+                  },
+                  {
+                    "update": {
+                      "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last",
+                      "fields": {
+                        "a": {
+                          "integerValue": "9"
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "privileged": true,
+              "form": false
+            },
+            "status": 200,
+            "body": {
+              "status": [
+                {
+                  "code": 0,
+                  "message": ""
+                },
+                {
+                  "code": 6,
+                  "message": "Document already exists: projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing"
+                },
+                {
+                  "code": 0,
+                  "message": ""
+                }
+              ],
+              "writeResults": [
+                {
+                  "updateTime": "2026-09-13T06:01:53.352273Z"
+                },
+                {},
+                {
+                  "updateTime": "2026-09-13T06:01:53.352372Z"
+                }
+              ]
+            }
+          },
+          {
+            "index": 5,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 200,
+            "body": {
+              "createTime": "2026-09-13T06:01:53.352273Z",
+              "fields": {
+                "a": {
+                  "integerValue": "1"
+                }
+              },
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+              "updateTime": "2026-09-13T06:01:53.352273Z"
+            }
+          },
+          {
+            "index": 6,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 200,
+            "body": {
+              "createTime": "2026-09-13T06:01:53.056268Z",
+              "fields": {
+                "a": {
+                  "integerValue": "7"
+                }
+              },
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+              "updateTime": "2026-09-13T06:01:53.056268Z"
+            }
+          },
+          {
+            "index": 7,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 200,
+            "body": {
+              "createTime": "2026-09-13T06:01:53.352372Z",
+              "fields": {
+                "a": {
+                  "integerValue": "9"
+                }
+              },
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last",
+              "updateTime": "2026-09-13T06:01:53.352372Z"
+            }
+          }
+        ],
+        "cleanup": [
+          {
+            "index": 0,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 200,
+            "body": {
+              "createTime": "2026-09-13T06:01:53.352273Z",
+              "fields": {
+                "a": {
+                  "integerValue": "1"
+                }
+              },
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+              "updateTime": "2026-09-13T06:01:53.352273Z"
+            }
+          },
+          {
+            "index": 1,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first?currentDocument.updateTime=2026-09-13T06%3A01%3A53.352273Z",
+              "method": "DELETE",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 200,
+            "body": {}
+          },
+          {
+            "index": 2,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 404,
+            "body": {
+              "error": {
+                "code": 404,
+                "message": "Document not found: projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+                "status": "NOT_FOUND"
+              }
+            }
+          },
+          {
+            "index": 3,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 200,
+            "body": {
+              "createTime": "2026-09-13T06:01:53.056268Z",
+              "fields": {
+                "a": {
+                  "integerValue": "7"
+                }
+              },
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+              "updateTime": "2026-09-13T06:01:53.056268Z"
+            }
+          },
+          {
+            "index": 4,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing?currentDocument.updateTime=2026-09-13T06%3A01%3A53.056268Z",
+              "method": "DELETE",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 200,
+            "body": {}
+          },
+          {
+            "index": 5,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 404,
+            "body": {
+              "error": {
+                "code": 404,
+                "message": "Document not found: projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+                "status": "NOT_FOUND"
+              }
+            }
+          },
+          {
+            "index": 6,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 200,
+            "body": {
+              "createTime": "2026-09-13T06:01:53.352372Z",
+              "fields": {
+                "a": {
+                  "integerValue": "9"
+                }
+              },
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last",
+              "updateTime": "2026-09-13T06:01:53.352372Z"
+            }
+          },
+          {
+            "index": 7,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last?currentDocument.updateTime=2026-09-13T06%3A01%3A53.352372Z",
+              "method": "DELETE",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 200,
+            "body": {}
+          },
+          {
+            "index": 8,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 404,
+            "body": {
+              "error": {
+                "code": 404,
+                "message": "Document not found: projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last",
+                "status": "NOT_FOUND"
+              }
+            }
+          }
+        ],
+        "adapterCounts": {
+          "total": 17,
+          "auth": 0,
+          "firestore": 17,
+          "metadata": 0,
+          "recovery": 9
+        },
+        "stateVerified": true
+      },
+      "transaction-field": {
+        "recordingComplete": true,
+        "cleanupComplete": true,
+        "safety": true,
+        "compatibility": "not-observed",
+        "failure": null,
+        "rows": [
+          {
+            "index": 0,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 404,
+            "body": {
+              "error": {
+                "code": 404,
+                "message": "Document not found: projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+                "status": "NOT_FOUND"
+              }
+            }
+          },
+          {
+            "index": 1,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard?currentDocument.exists=false",
+              "method": "PATCH",
+              "body": {
+                "fields": {
+                  "a": {
+                    "integerValue": "3"
+                  }
+                }
+              },
+              "privileged": true,
+              "form": false
+            },
+            "status": 200,
+            "body": {
+              "createTime": "2026-09-13T06:01:50.436960Z",
+              "fields": {
+                "a": {
+                  "integerValue": "3"
+                }
+              },
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+              "updateTime": "2026-09-13T06:01:50.436960Z"
+            }
+          },
+          {
+            "index": 2,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:batchWrite",
+              "method": "POST",
+              "body": {
+                "writes": [
+                  {
+                    "update": {
+                      "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+                      "fields": {
+                        "a": {
+                          "integerValue": "4"
+                        }
+                      }
+                    }
+                  }
+                ],
+                "transaction": "AA=="
+              },
+              "privileged": true,
+              "form": false
+            },
+            "status": 400,
+            "body": {
+              "error": {
+                "code": 400,
+                "message": "Payload isn't valid for request.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          },
+          {
+            "index": 3,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 200,
+            "body": {
+              "createTime": "2026-09-13T06:01:50.436960Z",
+              "fields": {
+                "a": {
+                  "integerValue": "3"
+                }
+              },
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+              "updateTime": "2026-09-13T06:01:50.436960Z"
+            }
+          }
+        ],
+        "cleanup": [
+          {
+            "index": 0,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 200,
+            "body": {
+              "createTime": "2026-09-13T06:01:50.436960Z",
+              "fields": {
+                "a": {
+                  "integerValue": "3"
+                }
+              },
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+              "updateTime": "2026-09-13T06:01:50.436960Z"
+            }
+          },
+          {
+            "index": 1,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard?currentDocument.updateTime=2026-09-13T06%3A01%3A50.436960Z",
+              "method": "DELETE",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 200,
+            "body": {}
+          },
+          {
+            "index": 2,
+            "request": {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            "status": 404,
+            "body": {
+              "error": {
+                "code": 404,
+                "message": "Document not found: projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+                "status": "NOT_FOUND"
+              }
+            }
+          }
+        ],
+        "adapterCounts": {
+          "total": 7,
+          "auth": 0,
+          "firestore": 7,
+          "metadata": 0,
+          "recovery": 3
+        },
+        "stateVerified": true
+      }
+    },
+    "gate": {
+      "plan": {
+        "contract": "shared-local-v1",
+        "nonce": "0c194055ef7b48fb82a4da0107f63cd3",
+        "jobs": {
+          "partial": {
+            "resources": [
+              "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+              "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+              "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last"
+            ],
+            "observation": [
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing?currentDocument.exists=false",
+                "method": "PATCH",
+                "body": {
+                  "fields": {
+                    "a": {
+                      "integerValue": "7"
+                    }
+                  }
+                },
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:batchWrite",
+                "method": "POST",
+                "body": {
+                  "writes": [
+                    {
+                      "update": {
+                        "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+                        "fields": {
+                          "a": {
+                            "integerValue": "1"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "update": {
+                        "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+                        "fields": {
+                          "a": {
+                            "integerValue": "8"
+                          }
+                        }
+                      },
+                      "currentDocument": {
+                        "exists": false
+                      }
+                    },
+                    {
+                      "update": {
+                        "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last",
+                        "fields": {
+                          "a": {
+                            "integerValue": "9"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              }
+            ],
+            "recovery": [
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+                "method": "DELETE",
+                "body": null,
+                "privileged": true,
+                "form": false,
+                "versionFrom": 0
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+                "method": "DELETE",
+                "body": null,
+                "privileged": true,
+                "form": false,
+                "versionFrom": 3
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last",
+                "method": "DELETE",
+                "body": null,
+                "privileged": true,
+                "form": false,
+                "versionFrom": 6
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              }
+            ]
+          },
+          "transaction-field": {
+            "resources": [
+              "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard"
+            ],
+            "observation": [
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard?currentDocument.exists=false",
+                "method": "PATCH",
+                "body": {
+                  "fields": {
+                    "a": {
+                      "integerValue": "3"
+                    }
+                  }
+                },
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:batchWrite",
+                "method": "POST",
+                "body": {
+                  "writes": [
+                    {
+                      "update": {
+                        "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+                        "fields": {
+                          "a": {
+                            "integerValue": "4"
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "transaction": "AA=="
+                },
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              }
+            ],
+            "recovery": [
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+                "method": "DELETE",
+                "body": null,
+                "privileged": true,
+                "form": false,
+                "versionFrom": 0
+              },
+              {
+                "service": "firestore",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard",
+                "method": "GET",
+                "body": null,
+                "privileged": true,
+                "form": false
+              }
+            ]
+          }
+        },
+        "wallSeconds": 300,
+        "recoverySeconds": 180,
+        "observationRequests": 12,
+        "intervalSeconds": 0.25,
+        "requestCostMicrousd": 100,
+        "costMicrousd": 42600,
+        "fixedCostMicrousd": 40000,
+        "coordinatorRequests": 2,
+        "accounts": 0,
+        "configurationChanges": 0,
+        "metadataRequests": 0,
+        "observerSha256": "1045d0940439fdcb3d6ac228b1c408a49a98893785cd89ce13851e5096acaee5",
+        "transport": "local-only",
+        "collector": "existing-batch-adapter-shared-v1",
+        "localOrigins": {
+          "auth": "http://127.0.0.1:62312",
+          "firestore": "http://127.0.0.1:62311"
+        }
+      },
+      "planDigest": "68d44e99d22b7b46f50013175053cad3f3002ac1478b3534bf0f7c0b393ebc65",
+      "started": 1482150.987430333,
+      "total": 26,
+      "observation": 12,
+      "recovery": 12,
+      "reservedRecovery": 0,
+      "costMicrousd": 42600,
+      "lastSent": 1482158.237774,
+      "stopped": false,
+      "coordinatorPid": 15134,
+      "coordinatorDone": 2,
+      "managementUsed": [],
+      "managementEvents": [],
+      "coordinatorInflight": false,
+      "events": [
+        {
+          "job": "transaction-field",
+          "phase": "observation",
+          "index": 0,
+          "started": 1482151.513068666,
+          "requestDigest": "b6dfec1684748f4632821d1b12ba1f41cca68c74f7e0026b543ca4ce1052dc8e",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 404,
+          "responseDigest": "c1cfa2f2642be29e4c38188dbcb2d9a9266de5f06cc0c20a92f0801957d3f14e",
+          "ended": 1482151.547868208
+        },
+        {
+          "job": "transaction-field",
+          "phase": "observation",
+          "index": 1,
+          "started": 1482151.797964125,
+          "requestDigest": "0369c3c90d839782e2f1da83a3d48ff2115187f7f16bea532634837bca06ef43",
+          "service": "firestore",
+          "method": "PATCH",
+          "completed": true,
+          "status": 200,
+          "responseDigest": "66d2145fad1946b1de0329374c82d1d69f1970ea72c9c4b9b539f850556b3963",
+          "ended": 1482151.83574925
+        },
+        {
+          "job": "transaction-field",
+          "phase": "observation",
+          "index": 2,
+          "started": 1482152.095762333,
+          "requestDigest": "d64203549fe43f52e4ee1c788b45c8e4fef2874e553438f5e38a2b0747ae2973",
+          "service": "firestore",
+          "method": "POST",
+          "completed": true,
+          "status": 400,
+          "responseDigest": "4dcdf0eeddd1eb1ff599b7f0a4dae07186fc57fa38c874bb0300d03a65341638",
+          "ended": 1482152.130007125
+        },
+        {
+          "job": "transaction-field",
+          "phase": "observation",
+          "index": 3,
+          "started": 1482152.381379125,
+          "requestDigest": "b6dfec1684748f4632821d1b12ba1f41cca68c74f7e0026b543ca4ce1052dc8e",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 200,
+          "responseDigest": "66d2145fad1946b1de0329374c82d1d69f1970ea72c9c4b9b539f850556b3963",
+          "ended": 1482152.41516225
+        },
+        {
+          "job": "transaction-field",
+          "phase": "recovery",
+          "index": 0,
+          "started": 1482152.675176,
+          "requestDigest": "b6dfec1684748f4632821d1b12ba1f41cca68c74f7e0026b543ca4ce1052dc8e",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 200,
+          "responseDigest": "66d2145fad1946b1de0329374c82d1d69f1970ea72c9c4b9b539f850556b3963",
+          "ended": 1482152.709197583
+        },
+        {
+          "job": "transaction-field",
+          "phase": "recovery",
+          "index": 1,
+          "started": 1482152.969211708,
+          "requestDigest": "990d0da3668aff54506e37390ed9fc42336754acc8a60af7c38921a1559e99b2",
+          "service": "firestore",
+          "method": "DELETE",
+          "completed": true,
+          "status": 200,
+          "responseDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "ended": 1482153.002430958
+        },
+        {
+          "job": "transaction-field",
+          "phase": "recovery",
+          "index": 2,
+          "started": 1482153.255647166,
+          "requestDigest": "b6dfec1684748f4632821d1b12ba1f41cca68c74f7e0026b543ca4ce1052dc8e",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 404,
+          "responseDigest": "c1cfa2f2642be29e4c38188dbcb2d9a9266de5f06cc0c20a92f0801957d3f14e",
+          "ended": 1482153.288908166
+        },
+        {
+          "job": "partial",
+          "phase": "observation",
+          "index": 0,
+          "started": 1482153.539969125,
+          "requestDigest": "10a3ba9a86b6d88bd11ca7b10c846c7ec92cf02fe4610916499de3d735b434ac",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 404,
+          "responseDigest": "df9e9c772d3f5f39b55a1baccb8889438c4b4d8b73096f4dc4a2b56e6f51f879",
+          "ended": 1482153.574071666
+        },
+        {
+          "job": "partial",
+          "phase": "observation",
+          "index": 1,
+          "started": 1482153.8340855,
+          "requestDigest": "dbb538087d08989ddb62a1e4b4a9e91eb6b47412e67746f5ec5c536b6ada08fc",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 404,
+          "responseDigest": "a5194a8c5cf3f09de260d2d0d59fd4dbc80f94ebff1f2e684be34e1de918dc08",
+          "ended": 1482153.868951166
+        },
+        {
+          "job": "partial",
+          "phase": "observation",
+          "index": 2,
+          "started": 1482154.127895041,
+          "requestDigest": "2292d1ce2672a0a045aeee0e1de23e717a6ea5d77c46882683473d25362720b4",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 404,
+          "responseDigest": "5b181b9dd10da41eb472e44dd6a9ee21f4e9a0282f025924c0fc9c8b7ccc1507",
+          "ended": 1482154.161998375
+        },
+        {
+          "job": "partial",
+          "phase": "observation",
+          "index": 3,
+          "started": 1482154.420566916,
+          "requestDigest": "cb3deda375c2859a08ca770bf65e23f66f37f9d9d198dd7e156fd601a0abf776",
+          "service": "firestore",
+          "method": "PATCH",
+          "completed": true,
+          "status": 200,
+          "responseDigest": "2d841d2c96014370907ffd3b81797373befed70745e69400e15536303d05d17f",
+          "ended": 1482154.454704416
+        },
+        {
+          "job": "partial",
+          "phase": "observation",
+          "index": 4,
+          "started": 1482154.714718625,
+          "requestDigest": "4e686e4d8a17d66bce87e2f207fd49d59012aa26e20d55b6f3e8934f10ca78ed",
+          "service": "firestore",
+          "method": "POST",
+          "completed": true,
+          "status": 200,
+          "responseDigest": "d068e08cbda115eb4e357cd0b83bb865e9bfee2903755f70438be60f084908b2",
+          "ended": 1482154.750620625
+        },
+        {
+          "job": "partial",
+          "phase": "observation",
+          "index": 5,
+          "started": 1482155.010636958,
+          "requestDigest": "10a3ba9a86b6d88bd11ca7b10c846c7ec92cf02fe4610916499de3d735b434ac",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 200,
+          "responseDigest": "2b9fa0b32fc77f22466fd0b39d847bddca596c6dc38fd3f7ef8ccd9337098c49",
+          "ended": 1482155.044966125
+        },
+        {
+          "job": "partial",
+          "phase": "observation",
+          "index": 6,
+          "started": 1482155.303467916,
+          "requestDigest": "dbb538087d08989ddb62a1e4b4a9e91eb6b47412e67746f5ec5c536b6ada08fc",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 200,
+          "responseDigest": "2d841d2c96014370907ffd3b81797373befed70745e69400e15536303d05d17f",
+          "ended": 1482155.33838
+        },
+        {
+          "job": "partial",
+          "phase": "observation",
+          "index": 7,
+          "started": 1482155.598399083,
+          "requestDigest": "2292d1ce2672a0a045aeee0e1de23e717a6ea5d77c46882683473d25362720b4",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 200,
+          "responseDigest": "b7e999c2cdde95017fefe00e484b474082ead31febf232707f218ff122924e26",
+          "ended": 1482155.632640083
+        },
+        {
+          "job": "partial",
+          "phase": "recovery",
+          "index": 0,
+          "started": 1482155.887375125,
+          "requestDigest": "10a3ba9a86b6d88bd11ca7b10c846c7ec92cf02fe4610916499de3d735b434ac",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 200,
+          "responseDigest": "2b9fa0b32fc77f22466fd0b39d847bddca596c6dc38fd3f7ef8ccd9337098c49",
+          "ended": 1482155.921656041
+        },
+        {
+          "job": "partial",
+          "phase": "recovery",
+          "index": 1,
+          "started": 1482156.1776015,
+          "requestDigest": "c1bc9200cf0f2b188862efce280107213235609b7f206e4cb4a1056aa41104af",
+          "service": "firestore",
+          "method": "DELETE",
+          "completed": true,
+          "status": 200,
+          "responseDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "ended": 1482156.212338583
+        },
+        {
+          "job": "partial",
+          "phase": "recovery",
+          "index": 2,
+          "started": 1482156.468611791,
+          "requestDigest": "10a3ba9a86b6d88bd11ca7b10c846c7ec92cf02fe4610916499de3d735b434ac",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 404,
+          "responseDigest": "df9e9c772d3f5f39b55a1baccb8889438c4b4d8b73096f4dc4a2b56e6f51f879",
+          "ended": 1482156.502906833
+        },
+        {
+          "job": "partial",
+          "phase": "recovery",
+          "index": 3,
+          "started": 1482156.761155833,
+          "requestDigest": "dbb538087d08989ddb62a1e4b4a9e91eb6b47412e67746f5ec5c536b6ada08fc",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 200,
+          "responseDigest": "2d841d2c96014370907ffd3b81797373befed70745e69400e15536303d05d17f",
+          "ended": 1482156.79656075
+        },
+        {
+          "job": "partial",
+          "phase": "recovery",
+          "index": 4,
+          "started": 1482157.046833625,
+          "requestDigest": "f3fab65df1be9c4cc2a5c64acbbcebf94b90c40ae479b17a45de7ba6c3b68c56",
+          "service": "firestore",
+          "method": "DELETE",
+          "completed": true,
+          "status": 200,
+          "responseDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "ended": 1482157.081647458
+        },
+        {
+          "job": "partial",
+          "phase": "recovery",
+          "index": 5,
+          "started": 1482157.331767541,
+          "requestDigest": "dbb538087d08989ddb62a1e4b4a9e91eb6b47412e67746f5ec5c536b6ada08fc",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 404,
+          "responseDigest": "a5194a8c5cf3f09de260d2d0d59fd4dbc80f94ebff1f2e684be34e1de918dc08",
+          "ended": 1482157.366934708
+        },
+        {
+          "job": "partial",
+          "phase": "recovery",
+          "index": 6,
+          "started": 1482157.617505958,
+          "requestDigest": "2292d1ce2672a0a045aeee0e1de23e717a6ea5d77c46882683473d25362720b4",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 200,
+          "responseDigest": "b7e999c2cdde95017fefe00e484b474082ead31febf232707f218ff122924e26",
+          "ended": 1482157.651391291
+        },
+        {
+          "job": "partial",
+          "phase": "recovery",
+          "index": 7,
+          "started": 1482157.910478625,
+          "requestDigest": "043edf7b64ced07b7f49ed932ebdc922680807727618fac308f846e04ea39812",
+          "service": "firestore",
+          "method": "DELETE",
+          "completed": true,
+          "status": 200,
+          "responseDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "ended": 1482157.944921708
+        },
+        {
+          "job": "partial",
+          "phase": "recovery",
+          "index": 8,
+          "started": 1482158.203516333,
+          "requestDigest": "2292d1ce2672a0a045aeee0e1de23e717a6ea5d77c46882683473d25362720b4",
+          "service": "firestore",
+          "method": "GET",
+          "completed": true,
+          "status": 404,
+          "responseDigest": "5b181b9dd10da41eb472e44dd6a9ee21f4e9a0282f025924c0fc9c8b7ccc1507",
+          "ended": 1482158.237774
+        }
+      ],
+      "jobs": {
+        "partial": {
+          "resources": [
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last"
+          ],
+          "pid": 15160,
+          "stopped": true,
+          "inflight": false,
+          "observation": 8,
+          "recovery": 9,
+          "owned": [
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last"
+          ],
+          "absent": [
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/first",
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/existing",
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-partial/docs/last"
+          ],
+          "captures": {
+            "0": {
+              "status": 200,
+              "updateTime": "2026-09-13T06:01:53.352273Z"
+            },
+            "1": {
+              "status": 200,
+              "updateTime": null
+            },
+            "2": {
+              "status": 404,
+              "updateTime": null
+            },
+            "3": {
+              "status": 200,
+              "updateTime": "2026-09-13T06:01:53.056268Z"
+            },
+            "4": {
+              "status": 200,
+              "updateTime": null
+            },
+            "5": {
+              "status": 404,
+              "updateTime": null
+            },
+            "6": {
+              "status": 200,
+              "updateTime": "2026-09-13T06:01:53.352372Z"
+            },
+            "7": {
+              "status": 200,
+              "updateTime": null
+            },
+            "8": {
+              "status": 404,
+              "updateTime": null
+            }
+          },
+          "complete": true
+        },
+        "transaction-field": {
+          "resources": [
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard"
+          ],
+          "pid": 15161,
+          "stopped": true,
+          "inflight": false,
+          "observation": 4,
+          "recovery": 3,
+          "owned": [
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard"
+          ],
+          "absent": [
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/0c194055ef7b48fb82a4da0107f63cd3-transaction-field/docs/guard"
+          ],
+          "captures": {
+            "0": {
+              "status": 200,
+              "updateTime": "2026-09-13T06:01:50.436960Z"
+            },
+            "1": {
+              "status": 200,
+              "updateTime": null
+            },
+            "2": {
+              "status": 404,
+              "updateTime": null
+            }
+          },
+          "complete": true
+        }
+      },
+      "coordinatorResults": [
+        {
+          "index": 0,
+          "status": 200,
+          "ended": 1482150.997777333
+        },
+        {
+          "index": 1,
+          "status": 403,
+          "ended": 1482151.261836458
+        }
+      ]
+    },
+    "manifestSha256": "68d44e99d22b7b46f50013175053cad3f3002ac1478b3534bf0f7c0b393ebc65",
+    "processExitCodes": [
+      0,
+      0
+    ],
+    "elapsedSeconds": 6.984442542074248
+  },
+  "kind": "shared-two-local-reference-v1",
+  "acceptance": "candidate",
+  "observerSha256": "1045d0940439fdcb3d6ac228b1c408a49a98893785cd89ce13851e5096acaee5",
+  "productionExecuted": false
+}

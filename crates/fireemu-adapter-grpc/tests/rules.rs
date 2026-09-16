@@ -33,6 +33,9 @@ use tokio_stream::StreamExt;
 use tonic::metadata::MetadataValue;
 use tonic::Request;
 
+#[path = "rules/auth_atomicity.rs"]
+mod auth_atomicity;
+
 const DB: &str = "projects/demo-app/databases/(default)";
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
@@ -207,6 +210,8 @@ struct Harness {
     client: FirestoreClient<tonic::transport::Channel>,
     auth: Arc<Mutex<AuthStore>>,
     rules: Arc<RulesetSlot>,
+    backend: Arc<LocalBackend>,
+    registry: Arc<AuthRegistry>,
     handle: tokio::task::JoinHandle<()>,
 }
 
@@ -234,10 +239,14 @@ async fn start_with(acceptance: TokenAcceptance) -> Harness {
         TotpPolicy::default(),
     )));
     let rules = Arc::new(RulesetSlot::new(LoadedRules::from_source(RULES).unwrap()));
+    let registry = Arc::new(AuthRegistry::new("demo-app", auth.clone()));
     let enforcer = Arc::new(
-        RulesEnforcer::new(rules.clone(), auth.clone(), clock).with_token_acceptance(acceptance),
+        RulesEnforcer::new(rules.clone(), auth.clone(), clock)
+            .with_token_acceptance(acceptance)
+            .with_registry(registry.clone()),
     );
-    let svc = FirestoreServer::new(GatewayService::local(gateway, backend).with_rules(enforcer));
+    let svc =
+        FirestoreServer::new(GatewayService::local(gateway, backend.clone()).with_rules(enforcer));
     let handle = tokio::spawn(async move {
         tonic::transport::Server::builder()
             .add_service(svc)
@@ -254,6 +263,8 @@ async fn start_with(acceptance: TokenAcceptance) -> Harness {
         client: FirestoreClient::new(channel),
         auth,
         rules,
+        backend,
+        registry,
         handle,
     }
 }
@@ -386,6 +397,71 @@ service cloud.firestore {
         .unwrap_err();
     assert_eq!(error.code(), tonic::Code::PermissionDenied);
     assert!(!error.message().contains("FIREEMU-REGEX"), "{error}");
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn firestore_grpc_request_shape_has_anonymous_auth_and_omits_inapplicable_members() {
+    let mut h = start().await;
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /shape/{id} {
+      allow get: if request.auth == null
+                 && request.keys().hasOnly(['auth', 'method', 'path', 'time']);
+    }
+  }
+}",
+        )
+        .unwrap();
+
+    // The request passes Rules and reaches Firestore's not-found response, proving that
+    // anonymous auth is explicit null and that resource/query are absent from request.keys().
+    let error = h
+        .client
+        .get_document(get("shape/missing"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::NotFound, "{error}");
+
+    // Missing members are evaluation errors, rather than values equal to null.
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /shape/{id} { allow get: if request.resource == null; }
+  }
+}",
+        )
+        .unwrap();
+    let error = h
+        .client
+        .get_document(get("shape/missing"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::PermissionDenied, "{error}");
+
+    // A missing member must not be coerced to boolean false. If it were, this
+    // rule would allow the read and Firestore would return NotFound instead.
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /shape/{id} { allow get: if request.resource == false; }
+  }
+}",
+        )
+        .unwrap();
+    let error = h
+        .client
+        .get_document(get("shape/missing"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::PermissionDenied, "{error}");
     h.handle.abort();
 }
 
@@ -1330,6 +1406,252 @@ service cloud.firestore {
             .unwrap_err();
         assert_eq!(err.code(), code, "page_size {page_size}");
     }
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn aggregation_implicit_order_does_not_change_security_rules_query_metadata() {
+    let mut h = start().await;
+    let (_, token) = h.user("aggregation@example.com");
+    h.rules.replace_source("rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /ordered/{id} { allow list: if request.query.orderBy == null; } } }").unwrap();
+    for explicit in [false, true] {
+        let Some(pb::run_query_request::QueryType::StructuredQuery(mut query)) =
+            list("ordered").query_type
+        else {
+            panic!("structured query required")
+        };
+        if explicit {
+            query.order_by.push(sq::Order {
+                field: Some(sq::FieldReference {
+                    field_path: "x".into(),
+                }),
+                direction: sq::Direction::Ascending as i32,
+            });
+        }
+        let request = pb::RunAggregationQueryRequest {
+            parent: DOCS.into(),
+            query_type: Some(
+                pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+                    pb::StructuredAggregationQuery {
+                        query_type: Some(
+                            pb::structured_aggregation_query::QueryType::StructuredQuery(query),
+                        ),
+                        aggregations: vec![pb::structured_aggregation_query::Aggregation {
+                            alias: "sum".into(),
+                            operator: Some(
+                                pb::structured_aggregation_query::aggregation::Operator::Sum(
+                                    pb::structured_aggregation_query::aggregation::Sum {
+                                        field: Some(sq::FieldReference {
+                                            field_path: "x".into(),
+                                        }),
+                                    },
+                                ),
+                            ),
+                        }],
+                    },
+                ),
+            ),
+            ..Default::default()
+        };
+        let result = h
+            .client
+            .run_aggregation_query(with_bearer(request, &token))
+            .await
+            .map(|_| ())
+            .map_err(|error| error.code());
+        assert_eq!(
+            result,
+            if explicit {
+                Err(tonic::Code::PermissionDenied)
+            } else {
+                Ok(())
+            }
+        );
+    }
+    h.handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn query_proof_preserves_same_field_range_with_negation_filters() {
+    use sq::field_filter::Operator as Op;
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /scores/{id} { allow list: if resource.data.score > 0; }
+    match /excluded/{id} { allow list: if resource.data.score != 20; }
+    match /exact/{id} { allow list: if resource.data.score == 20; }
+    match /membership/{id} { allow list: if resource.data.score in [20, 30]; }
+    match /not-membership/{id} { allow list: if !(resource.data.score in [20, 30]); }
+    match /unknown-membership/{id} { allow list: if !(resource.data.score in [resource.data.other]); }
+  }
+}",
+        )
+        .unwrap();
+    let int = |value: i64| pb::Value {
+        value_type: Some(pb::value::ValueType::IntegerValue(value)),
+    };
+    let query = |collection: &str, range_value: i64, negation: sq::Filter| {
+        let mut request = list(collection);
+        if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+            &mut request.query_type
+        {
+            query.r#where = Some(sq::Filter {
+                filter_type: Some(sq::filter::FilterType::CompositeFilter(
+                    sq::CompositeFilter {
+                        op: sq::composite_filter::Operator::And as i32,
+                        filters: vec![
+                            sq::Filter {
+                                filter_type: Some(sq::filter::FilterType::FieldFilter(
+                                    sq::FieldFilter {
+                                        field: Some(sq::FieldReference {
+                                            field_path: "score".to_owned(),
+                                        }),
+                                        op: Op::GreaterThan as i32,
+                                        value: Some(int(range_value)),
+                                    },
+                                )),
+                            },
+                            negation,
+                        ],
+                    },
+                )),
+            });
+        }
+        request
+    };
+    let not_equal = |value| sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "score".to_owned(),
+            }),
+            op: Op::NotEqual as i32,
+            value: Some(int(value)),
+        })),
+    };
+    let not_in = sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "score".to_owned(),
+            }),
+            op: Op::NotIn as i32,
+            value: Some(arr(vec![int(20), int(30)])),
+        })),
+    };
+    let equal = |value| sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "score".to_owned(),
+            }),
+            op: Op::Equal as i32,
+            value: Some(int(value)),
+        })),
+    };
+    let in_values = sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "score".to_owned(),
+            }),
+            op: Op::In as i32,
+            value: Some(arr(vec![int(20), int(30)])),
+        })),
+    };
+
+    // The range proves score > 0; the negation only removes values from that range.
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query("scores", 10, not_equal(20)),
+            &alice_token
+        ))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query("scores", 10, not_in.clone()),
+            &alice_token
+        ))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query("excluded", 10, not_equal(20)),
+            &alice_token
+        ))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(query("exact", 10, equal(20)), &alice_token))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query("membership", 10, in_values),
+            &alice_token
+        ))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query("not-membership", 10, not_in.clone()),
+            &alice_token
+        ))
+        .await
+        .is_ok());
+
+    // A range that still includes non-positive values cannot prove the rule.
+    assert_eq!(
+        h.client
+            .run_query(with_bearer(
+                query("scores", -10, not_equal(20)),
+                &alice_token
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    let nonexcluded = sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "score".to_owned(),
+            }),
+            op: Op::NotIn as i32,
+            value: Some(arr(vec![int(20), int(40)])),
+        })),
+    };
+    assert_eq!(
+        h.client
+            .run_query(with_bearer(
+                query("not-membership", 10, nonexcluded),
+                &alice_token
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    // An unknown member in the membership RHS stays undecidable and must not panic.
+    assert_eq!(
+        h.client
+            .run_query(with_bearer(
+                query("unknown-membership", 10, not_in.clone()),
+                &alice_token,
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
     h.handle.abort();
 }
 

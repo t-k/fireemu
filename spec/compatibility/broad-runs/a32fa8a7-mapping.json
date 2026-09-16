@@ -1,0 +1,257 @@
+{
+  "productionComparison": false,
+  "rows": [
+    {
+      "id": "firestore:writes/transforms#server-timestamp-and-increments",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-increments",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#maximum-and-minimum-invalid-field-path",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-invalid-max-min",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#maximum-and-minimum",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-max-min",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#array-transforms",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-array-transforms",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#transform-only-write-creates",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-transform-created",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#transform-write-with-exists-precondition",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#increment-with-non-numeric-operand",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#server-timestamp-on-a-delete",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#set-and-transform-same-field",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-set-and-transform",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#integer-increment-saturates",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-saturated",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#increment-on-nan",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#two-transforms-on-one-field-in-one-write",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-dup",
+      "basis": "same-current-sequence-local-mapping-comparison",
+      "passed": true,
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/create-a",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/create-b",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/short-password-refused",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/refused-create-absent",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/self-admin-field",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/other-user-selector",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/unauthenticated-update",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/refusal-state-a",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/refusal-state-b",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/admin-update",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/self-sees-admin-state",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/password-change",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/old-password",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/new-password",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/refresh-after-change",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/delete-a",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/deleted-absent-a",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/delete-b",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "auth:broad/deleted-absent-b",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#read-normal",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#refused-overwrite",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#read-after-refusal",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#empty-commit",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#zero-limit",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#negative-limit",
+      "basis": "local-invariant",
+      "passed": true
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#read-after-query-refusal",
+      "basis": "local-invariant",
+      "passed": true
+    }
+  ],
+  "passed": 46,
+  "total": 46
+}

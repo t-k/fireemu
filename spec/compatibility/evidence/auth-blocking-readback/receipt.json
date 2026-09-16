@@ -1,0 +1,215 @@
+{
+  "acceptance": "candidate",
+  "corpus": {
+    "cases": [
+      "control-z-signin",
+      "x-readback-before",
+      "x-first-signin",
+      "x-readback-immediate",
+      "x-readback-after-5s",
+      "x-readback-after-30s",
+      "x-second-signin",
+      "y-first-signin",
+      "y-readback-after-30s-unread",
+      "y-second-signin",
+      "control-z-final-signin"
+    ],
+    "revision": 1,
+    "slice": "auth-blocking-readback"
+  },
+  "production": {
+    "cases": [
+      {
+        "checks": {
+          "derivedLookup": true,
+          "emailMatches": true,
+          "expiryIsPositiveInteger": true,
+          "expiryMatchesOneHour": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "elapsedMs": 7238,
+        "httpStatus": 200,
+        "id": "control-z-signin",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "disabledPersisted": false,
+          "secondsSinceRefusal": null
+        },
+        "elapsedMs": 7583,
+        "httpStatus": 200,
+        "id": "x-readback-before",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 7915,
+        "httpStatus": 400,
+        "id": "x-first-signin",
+        "observedError": "USER_DISABLED",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "disabledPersisted": false,
+          "secondsSinceRefusal": 0
+        },
+        "elapsedMs": 8234,
+        "httpStatus": 200,
+        "id": "x-readback-immediate",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "disabledPersisted": false,
+          "secondsSinceRefusal": 5
+        },
+        "elapsedMs": 13608,
+        "httpStatus": 200,
+        "id": "x-readback-after-5s",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "disabledPersisted": false,
+          "secondsSinceRefusal": 31
+        },
+        "elapsedMs": 38944,
+        "httpStatus": 200,
+        "id": "x-readback-after-30s",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 39301,
+        "httpStatus": 400,
+        "id": "x-second-signin",
+        "observedError": "USER_DISABLED",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 39659,
+        "httpStatus": 400,
+        "id": "y-first-signin",
+        "observedError": "USER_DISABLED",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "disabledPersisted": false,
+          "secondsSinceRefusal": 30
+        },
+        "elapsedMs": 69984,
+        "httpStatus": 200,
+        "id": "y-readback-after-30s-unread",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 70337,
+        "httpStatus": 400,
+        "id": "y-second-signin",
+        "observedError": "USER_DISABLED",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "derivedLookup": true,
+          "emailMatches": true,
+          "expiryIsPositiveInteger": true,
+          "expiryMatchesOneHour": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "elapsedMs": 70942,
+        "httpStatus": 200,
+        "id": "control-z-final-signin",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      }
+    ],
+    "cleanup": {
+      "emailAbsent": true,
+      "uidAbsent": true
+    },
+    "configDigestMatches": true,
+    "configRestored": true,
+    "configRestoredReadback": {
+      "blockingFunctions": {
+        "forwardInboundCredentials": {}
+      },
+      "mfa": {
+        "state": "DISABLED"
+      },
+      "phoneNumber": {},
+      "smsRegionConfig": {
+        "allowlistOnly": {}
+      }
+    },
+    "configuration": {
+      "adminPasswordPolicyAbsent": true,
+      "blockingTriggersAbsent": true,
+      "emailEnabled": true,
+      "improvedEmailPrivacy": true,
+      "passwordRequired": true,
+      "sha256": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2"
+    },
+    "functionRemoved": true,
+    "hook": {
+      "deployed": true,
+      "triggerReadback": true
+    },
+    "privateReceiptSha256": "6c5c02fa803e986bb24232cd7053e4833ff2af683da0b49b333ebd088234c2c9",
+    "probeSourceCommit": "483e157937a267e6be07ae800badb390406d7d56",
+    "recordedAt": "2026-09-11T16:07:22.730214+00:00",
+    "recordedWith": {
+      "probeSourceCommit": "483e157937a267e6be07ae800badb390406d7d56",
+      "recorderCommit": "512b043559ecce10a2614c5cf3ea43f816dab347",
+      "recorderInputs": {
+        "tools/auth-blocking-disable/function/firebase.json": "49c19d130e80e61431e32150379d650f97d706787f2e7d2c8ded0e8bef91c9e0",
+        "tools/auth-blocking-disable/function/index.js": "b425a5ce1af740d0e29e2e4fde895f41907c7920a11bf2697c6bb56a654e9cc6",
+        "tools/auth-blocking-disable/function/package.json": "3b28694d57dfcaab702636e02212728502a9a6063991c89ffddb92ac6413564b",
+        "tools/auth-blocking-readback/readback_contract.py": "3afaf7191eca3fbf8e8c68cf88fa708165225f6a7a40f5de9a117d0b3eb2433e",
+        "tools/auth-blocking-readback/readback_recorder.py": "0ea007781fe25186c389a2d881aaf5bc5b40931e518d125db8e76b7910070151"
+      }
+    },
+    "reevaluatedWith": {
+      "commit": "483e157937a267e6be07ae800badb390406d7d56",
+      "contractSha256": "3afaf7191eca3fbf8e8c68cf88fa708165225f6a7a40f5de9a117d0b3eb2433e"
+    },
+    "setup": {
+      "x": true,
+      "y": true,
+      "z": true
+    },
+    "target": "production"
+  },
+  "publicationContractSha256": "cd277e63540649cdae850cfec4cb5115402e832df99fe593ba8a7c193e616ad0",
+  "schemaVersion": 1,
+  "scope": "Eleven sequential REST observations in production only with the disabling beforeSignIn function (the one recorded in auth-blocking-disable) deployed for the run. Two claimed accounts X and Y are refused on sign-in; the disabled flag is read back through privileged lookup for X before, immediately after, five and thirty seconds after the refusal, and for Y only after thirty seconds with no earlier read; a control Z signs in first and last. Readback rows record the flag as seen with the seconds since the refusal. The function was removed and the trigger registration restored with a digest comparison; the three accounts were deleted with absence confirmation. No MFA, phone or SMS configuration was touched. No human approval, no local artifact comparison in this record, and no claim beyond these points on one run's time axis.",
+  "sourceReviewSha256": "504f7a933f38b2acf74f87097ba743f34b26922b016e3c4524fdce94634f08d2"
+}

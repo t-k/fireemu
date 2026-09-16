@@ -143,9 +143,18 @@ pub enum JwtError {
         /// Tenant carried by the token.
         actual: Option<String>,
     },
+    /// A locally issued token belongs to a different fireemu control-session incarnation.
+    WrongSessionEpoch {
+        /// Epoch required by the selected Auth store.
+        expected: String,
+        /// Epoch carried by the token, or `None` when absent.
+        actual: Option<String>,
+    },
     /// `sub` is not a known user.
     UnknownUser,
-    /// Tokens for this user were revoked after `auth_time`, or the user is disabled.
+    /// The authenticated token belongs to a disabled user.
+    UserDisabled,
+    /// Tokens for this user were revoked after `auth_time`.
     Revoked,
     /// The signing mode cannot be used by this binary.
     SigningUnsupported(SigningMode),
@@ -168,8 +177,12 @@ impl fmt::Display for JwtError {
             Self::WrongTenant { expected, actual } => {
                 write!(f, "tenant {actual:?} != {expected:?}")
             }
+            Self::WrongSessionEpoch { expected, actual } => {
+                write!(f, "fireemu session epoch {actual:?} != {expected:?}")
+            }
             Self::UnknownUser => f.write_str("token subject is not a known user"),
             Self::Revoked => f.write_str("token revoked"),
+            Self::UserDisabled => f.write_str("user is disabled"),
             Self::SigningUnsupported(m) => write!(f, "signing mode {m:?} is not implemented"),
             Self::BadSignature => f.write_str("token signature does not verify"),
             Self::UnknownKeyId => f.write_str("token kid does not name the session key"),
@@ -491,6 +504,17 @@ pub fn verify_id_token_decoded(
             actual: actual_tenant,
         });
     }
+    if let Some(expected) = store.lifecycle_epoch_claim() {
+        let actual = decoded
+            .payload
+            .get("firebase")
+            .and_then(|firebase| firebase.get("fireemu_session_epoch"))
+            .and_then(JsonValue::as_str)
+            .map(str::to_owned);
+        if actual.as_deref() != Some(expected.as_str()) {
+            return Err(JwtError::WrongSessionEpoch { expected, actual });
+        }
+    }
     let exp = decoded.exp().ok_or(JwtError::Malformed)?;
     let now_secs = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
     if now_secs >= exp {
@@ -503,7 +527,10 @@ pub fn verify_id_token_decoded(
         .get("auth_time")
         .and_then(JsonValue::as_i64)
         .ok_or(JwtError::Malformed)?;
-    if user.disabled || LogicalInstant::from_unix_seconds(auth_time) < user.tokens_valid_after {
+    if user.disabled {
+        return Err(JwtError::UserDisabled);
+    }
+    if LogicalInstant::from_unix_seconds(auth_time) < user.tokens_valid_after {
         return Err(JwtError::Revoked);
     }
     let second_factor = decoded

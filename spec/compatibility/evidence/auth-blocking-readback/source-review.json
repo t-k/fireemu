@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "kind": "blocking-readback-case-mapping",
+  "reviewer": "Claude (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-12",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "blocking",
+      "url": "https://firebase.google.com/docs/functions/auth-blocking-events",
+      "locators": [
+        "modifying_a_user"
+      ]
+    },
+    {
+      "id": "admin-lookup",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/projects.accounts/lookup",
+      "locators": [
+        "request-body"
+      ]
+    },
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "locators": [
+        "section-sign-in-email-password"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "The control signs in.",
+      "case": "control-z-signin"
+    },
+    {
+      "source": "admin-lookup",
+      "basis": "observation",
+      "condition": "The disabled flag as read through privileged lookup at this point, true or false, with the seconds since the refused sign-in.",
+      "case": "x-readback-before"
+    },
+    {
+      "source": "blocking",
+      "basis": "diagnostic",
+      "condition": "Password sign-in of a claimed account under the registered function; accepted and refused are both valid, and the time axis is anchored on a refusal.",
+      "case": "x-first-signin"
+    },
+    {
+      "source": "admin-lookup",
+      "basis": "observation",
+      "condition": "The disabled flag as read through privileged lookup at this point, true or false, with the seconds since the refused sign-in.",
+      "case": "x-readback-immediate"
+    },
+    {
+      "source": "admin-lookup",
+      "basis": "observation",
+      "condition": "The disabled flag as read through privileged lookup at this point, true or false, with the seconds since the refused sign-in.",
+      "case": "x-readback-after-5s"
+    },
+    {
+      "source": "admin-lookup",
+      "basis": "observation",
+      "condition": "The disabled flag as read through privileged lookup at this point, true or false, with the seconds since the refused sign-in.",
+      "case": "x-readback-after-30s"
+    },
+    {
+      "source": "blocking",
+      "basis": "diagnostic",
+      "condition": "Password sign-in of a claimed account under the registered function; accepted and refused are both valid, and the time axis is anchored on a refusal.",
+      "case": "x-second-signin"
+    },
+    {
+      "source": "blocking",
+      "basis": "diagnostic",
+      "condition": "Password sign-in of a claimed account under the registered function; accepted and refused are both valid, and the time axis is anchored on a refusal.",
+      "case": "y-first-signin"
+    },
+    {
+      "source": "admin-lookup",
+      "basis": "observation",
+      "condition": "The disabled flag as read through privileged lookup at this point, true or false, with the seconds since the refused sign-in.",
+      "case": "y-readback-after-30s-unread"
+    },
+    {
+      "source": "blocking",
+      "basis": "diagnostic",
+      "condition": "Password sign-in of a claimed account under the registered function; accepted and refused are both valid, and the time axis is anchored on a refusal.",
+      "case": "y-second-signin"
+    },
+    {
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "The control signs in.",
+      "case": "control-z-final-signin"
+    }
+  ],
+  "limitations": [
+    "URLs were read during design; no new frozen full-body source snapshot or completed page-review claim is made by this mapping.",
+    "The sources say a blocking function may set disabled; they do not say when the change is visible through Admin lookup. The observation answers that for one run and five points only.",
+    "Seconds are recorder-side; no execution approval, independent signature verification, SDK or Rules claim follows."
+  ]
+}

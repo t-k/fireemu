@@ -2,12 +2,14 @@
 //! deny-by-default, budgets from the catalog, unsupported built-ins fail closed.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use fireemu_core_rules::eval::{
     evaluate_request, evaluate_request_traced_owned, Decision, DenyReason, Method, RequestContext,
     RulesService,
 };
 use fireemu_core_rules::parse::parse_ruleset;
+use fireemu_core_rules::runtime::LoadedRules;
 use fireemu_core_rules::value::{AuthContext, RulesValue};
 
 const RULES: &str = r"
@@ -93,6 +95,725 @@ fn balanced_and(leaves: usize) -> String {
     )
 }
 
+fn rules_with_expensive_nonmatches(service: &str, allow: Option<&str>, allow_last: bool) -> String {
+    let mut source = format!("rules_version = '2'; service {service} {{\n");
+    if service == "cloud.firestore" {
+        source.push_str("  match /databases/{database}/documents {\n");
+    } else {
+        source.push_str("  match /b/{bucket}/o {\n");
+    }
+    let exact_path = (0..90)
+        .map(|segment| format!("segment{segment}"))
+        .collect::<Vec<_>>()
+        .join("/");
+    let exact = |source: &mut String| {
+        writeln!(source, "    match /{exact_path} {{").unwrap();
+        if let Some(condition) = allow {
+            writeln!(source, "      allow read{condition};").unwrap();
+        }
+        source.push_str("    }\n");
+    };
+    if !allow_last {
+        exact(&mut source);
+    }
+    for index in 0..750 {
+        writeln!(
+            source,
+            "    match /{{rest{index}=**}}/never{index} {{ allow read; }}"
+        )
+        .unwrap();
+    }
+    if allow_last {
+        exact(&mut source);
+    }
+    source.push_str("  }\n}\n");
+    source
+}
+
+fn long_request_path(service: RulesService) -> String {
+    let prefix = match service {
+        RulesService::Firestore => "/databases/(default)/documents",
+        RulesService::Storage => "/b/demo/o",
+    };
+    format!(
+        "{prefix}/{}",
+        (0..90)
+            .map(|index| format!("segment{index}"))
+            .collect::<Vec<_>>()
+            .join("/")
+    )
+}
+
+fn rules_with_over_budget_no_allow(service: &str) -> String {
+    let mut source = format!("rules_version = '2'; service {service} {{\n");
+    if service == "cloud.firestore" {
+        source.push_str("  match /databases/{database}/documents {\n");
+    } else {
+        source.push_str("  match /b/{bucket}/o {\n");
+    }
+    for index in 0..750 {
+        writeln!(
+            source,
+            "    match /{{rest{index}=**}} {{ allow read: if false; }}"
+        )
+        .unwrap();
+    }
+    source.push_str("  }\n}\n");
+    source
+}
+
+#[test]
+fn loaded_rules_allow_survives_later_match_path_work_budget() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let source = rules_with_expensive_nonmatches(service_name, Some(""), false);
+        let loaded = LoadedRules::from_source(&source).unwrap();
+        let ruleset = loaded.ruleset.as_ref().unwrap();
+        let report = evaluate_request(
+            ruleset,
+            &RequestContext {
+                service,
+                method: Method::Get,
+                path: long_request_path(service),
+                auth: None,
+                resource: None,
+                request_resource: None,
+                time_unix_nanos: 0,
+                abstract_path: false,
+                request_query: None,
+            },
+        );
+        assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+    }
+}
+
+#[test]
+fn loaded_rules_allow_after_expensive_siblings_is_still_reachable() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let source = rules_with_expensive_nonmatches(service_name, Some(""), true);
+        let loaded = LoadedRules::from_source(&source).unwrap();
+        let ruleset = loaded.ruleset.as_ref().unwrap();
+        let report = evaluate_request(
+            ruleset,
+            &RequestContext {
+                service,
+                method: Method::Get,
+                path: long_request_path(service),
+                auth: None,
+                resource: None,
+                request_resource: None,
+                time_unix_nanos: 0,
+                abstract_path: false,
+                request_query: None,
+            },
+        );
+        assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+    }
+}
+
+#[test]
+fn loaded_rules_allow_after_structurally_impossible_siblings_is_reachable() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let root = if service == RulesService::Firestore {
+            "match /databases/{database}/documents {"
+        } else {
+            "match /b/{bucket}/o {"
+        };
+        let mut source = format!("rules_version = '2'; service {service_name} {{\n  {root}\n");
+        for index in 0..750 {
+            writeln!(
+                source,
+                "    match /{{rest{index}=**}}/segment89/{{tail{index}}} {{ allow read: if false; }}"
+            )
+            .unwrap();
+        }
+        let allow_path = (0..90)
+            .map(|index| format!("segment{index}"))
+            .collect::<Vec<_>>()
+            .join("/");
+        writeln!(
+            source,
+            "    match /{allow_path} {{ allow read; }}\n  }}\n}}\n"
+        )
+        .unwrap();
+
+        let loaded = LoadedRules::from_source(&source).unwrap();
+        let report = evaluate_request(
+            loaded.ruleset.as_ref().unwrap(),
+            &RequestContext {
+                service,
+                method: Method::Get,
+                path: long_request_path(service),
+                auth: None,
+                resource: None,
+                request_resource: None,
+                time_unix_nanos: 0,
+                abstract_path: false,
+                request_query: None,
+            },
+        );
+        assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+    }
+}
+
+#[test]
+fn loaded_rules_allow_after_equivalent_parent_children_is_reachable() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let root = if service == RulesService::Firestore {
+            "match /databases/{database}/documents {"
+        } else {
+            "match /b/{bucket}/o {"
+        };
+        for version in ["1", "2"] {
+            let mut source =
+                format!("rules_version = '{version}'; service {service_name} {{\n  {root}\n");
+            if version == "2" {
+                for index in 0..750 {
+                    writeln!(
+                        source,
+                        "    match /{{prefix{index}=**}} {{ match /{{suffix{index}=**}}/segment40 {{ allow read; }} }}"
+                    )
+                    .unwrap();
+                }
+            } else {
+                // Version 1 requires recursive wildcards to be the final path segment, so use
+                // valid bounded parent/child patterns that cannot consume the full request.
+                let parent_path = (0..8)
+                    .map(|index| format!("segment{index}"))
+                    .collect::<Vec<_>>()
+                    .join("/");
+                for index in 0..128 {
+                    writeln!(
+                        source,
+                        "    match /{parent_path} {{ match /{{tail{index}}} {{ allow read; }} }}"
+                    )
+                    .unwrap();
+                }
+            }
+            let allow_path = (0..90)
+                .map(|index| format!("segment{index}"))
+                .collect::<Vec<_>>()
+                .join("/");
+            writeln!(
+                source,
+                "    match /{allow_path} {{ allow read; }}\n  }}\n}}\n"
+            )
+            .unwrap();
+
+            let loaded = LoadedRules::from_source(&source).unwrap();
+            let report = evaluate_request(
+                loaded.ruleset.as_ref().unwrap(),
+                &RequestContext {
+                    service,
+                    method: Method::Get,
+                    path: long_request_path(service),
+                    auth: None,
+                    resource: None,
+                    request_resource: None,
+                    time_unix_nanos: 0,
+                    abstract_path: false,
+                    request_query: None,
+                },
+            );
+            assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+        }
+    }
+}
+
+#[test]
+fn loaded_rules_skip_partial_leaf_siblings_before_a_reachable_allow() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let root = if service == RulesService::Firestore {
+            "match /databases/{database}/documents {"
+        } else {
+            "match /b/{bucket}/o {"
+        };
+        let mut source = format!("rules_version = '2'; service {service_name} {{\n  {root}\n");
+        for index in 0..750 {
+            writeln!(
+                source,
+                "    match /{{rest{index}=**}}/segment0 {{ allow read; }}"
+            )
+            .unwrap();
+        }
+        let allow_path = (0..90)
+            .map(|index| format!("segment{index}"))
+            .collect::<Vec<_>>()
+            .join("/");
+        writeln!(
+            source,
+            "    match /{allow_path} {{ allow read; }}\n  }}\n}}\n"
+        )
+        .unwrap();
+
+        let loaded = LoadedRules::from_source(&source).unwrap();
+        let report = evaluate_request(
+            loaded.ruleset.as_ref().unwrap(),
+            &RequestContext {
+                service,
+                method: Method::Get,
+                path: long_request_path(service),
+                auth: None,
+                resource: None,
+                request_resource: None,
+                time_unix_nanos: 0,
+                abstract_path: false,
+                request_query: None,
+            },
+        );
+        assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+    }
+}
+
+#[test]
+fn loaded_rules_skip_partial_leaf_siblings_that_match_an_early_prefix() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let allow_path = (0..90)
+            .map(|index| format!("segment{index}"))
+            .collect::<Vec<_>>()
+            .join("/");
+        for allow_last in [false, true] {
+            for allow in [false, true] {
+                let root = if service == RulesService::Firestore {
+                    "match /databases/{database}/documents {"
+                } else {
+                    "match /b/{bucket}/o {"
+                };
+                let allow_clause = if allow {
+                    "allow read;"
+                } else {
+                    "allow read: if false;"
+                };
+                let mut source =
+                    format!("rules_version = '2'; service {service_name} {{\n  {root}\n");
+                if !allow_last {
+                    writeln!(source, "    match /{allow_path} {{ {allow_clause} }}").unwrap();
+                }
+                for index in 0..750 {
+                    writeln!(
+                        source,
+                        "    match /{{rest{index}=**}}/segment40/{{tail{index}}} {{ allow read; }}"
+                    )
+                    .unwrap();
+                }
+                if allow_last {
+                    writeln!(source, "    match /{allow_path} {{ {allow_clause} }}").unwrap();
+                }
+                writeln!(source, "  }}\n}}\n").unwrap();
+
+                let loaded = LoadedRules::from_source(&source).unwrap();
+                let report = evaluate_request(
+                    loaded.ruleset.as_ref().unwrap(),
+                    &RequestContext {
+                        service,
+                        method: Method::Get,
+                        path: long_request_path(service),
+                        auth: None,
+                        resource: None,
+                        request_resource: None,
+                        time_unix_nanos: 0,
+                        abstract_path: false,
+                        request_query: None,
+                    },
+                );
+                if allow {
+                    assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+                } else {
+                    assert!(
+                        matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+                        "{report:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn loaded_rules_skip_partial_parent_siblings_before_a_reachable_allow() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let root = if service == RulesService::Firestore {
+            "match /databases/{database}/documents {"
+        } else {
+            "match /b/{bucket}/o {"
+        };
+        let allow_path = (0..90)
+            .map(|index| format!("segment{index}"))
+            .collect::<Vec<_>>()
+            .join("/");
+        for allow_last in [false, true] {
+            for allow in [false, true] {
+                let allow_clause = if allow {
+                    "allow read;"
+                } else {
+                    "allow read: if false;"
+                };
+                let mut source =
+                    format!("rules_version = '2'; service {service_name} {{\n  {root}\n");
+                if !allow_last {
+                    writeln!(source, "    match /{allow_path} {{ {allow_clause} }}").unwrap();
+                }
+                for index in 0..750 {
+                    writeln!(
+                        source,
+                        "    match /{{rest{index}=**}}/segment40 {{ match /{{tail{index}}} {{ allow read: if false; }} }}"
+                    )
+                    .unwrap();
+                }
+                if allow_last {
+                    writeln!(source, "    match /{allow_path} {{ {allow_clause} }}").unwrap();
+                }
+                writeln!(source, "  }}\n}}\n").unwrap();
+
+                let loaded = LoadedRules::from_source(&source).unwrap();
+                let report = evaluate_request(
+                    loaded.ruleset.as_ref().unwrap(),
+                    &RequestContext {
+                        service,
+                        method: Method::Get,
+                        path: long_request_path(service),
+                        auth: None,
+                        resource: None,
+                        request_resource: None,
+                        time_unix_nanos: 0,
+                        abstract_path: false,
+                        request_query: None,
+                    },
+                );
+                if allow {
+                    assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+                } else {
+                    assert!(
+                        matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+                        "{report:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn loaded_rules_skip_parent_subtrees_with_only_partial_child_endpoints() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let root = if service == RulesService::Firestore {
+            "match /databases/{database}/documents {"
+        } else {
+            "match /b/{bucket}/o {"
+        };
+        let allow_path = (0..90)
+            .map(|index| format!("segment{index}"))
+            .collect::<Vec<_>>()
+            .join("/");
+        for version in ["1", "2"] {
+            for allow in [false, true] {
+                let allow_clause = if allow {
+                    "allow read;"
+                } else {
+                    "allow read: if false;"
+                };
+                let mut source =
+                    format!("rules_version = '{version}'; service {service_name} {{\n  {root}\n");
+                for index in 0..750 {
+                    writeln!(
+                        source,
+                        "    match /{{prefix{index}=**}} {{ match /segment89 {{ allow read: if false; }} }}"
+                    )
+                    .unwrap();
+                }
+                writeln!(source, "    match /{allow_path} {{ {allow_clause} }}").unwrap();
+                writeln!(source, "  }}\n}}\n").unwrap();
+
+                let loaded = LoadedRules::from_source(&source).unwrap();
+                let report = evaluate_request(
+                    loaded.ruleset.as_ref().unwrap(),
+                    &RequestContext {
+                        service,
+                        method: Method::Get,
+                        path: long_request_path(service),
+                        auth: None,
+                        resource: None,
+                        request_resource: None,
+                        time_unix_nanos: 0,
+                        abstract_path: false,
+                        request_query: None,
+                    },
+                );
+                if allow {
+                    assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+                } else {
+                    assert!(
+                        matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+                        "{report:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn loaded_rules_skip_partial_parent_children_before_a_valid_nested_allow() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let root = if service == RulesService::Firestore {
+            "match /databases/{database}/documents {"
+        } else {
+            "match /b/{bucket}/o {"
+        };
+        for version in ["1", "2"] {
+            for allow_last in [false, true] {
+                for allow in [false, true] {
+                    let allow_clause = if allow {
+                        "allow read;"
+                    } else {
+                        "allow read: if false;"
+                    };
+                    let valid_child =
+                        format!("match /{{prefix=**}} {{ match /segment89 {{ {allow_clause} }} }}");
+                    let mut source = format!(
+                        "rules_version = '{version}'; service {service_name} {{\n  {root}\n"
+                    );
+                    if !allow_last {
+                        writeln!(source, "    {valid_child}").unwrap();
+                    }
+                    for index in 0..750 {
+                        writeln!(
+                            source,
+                            "    match /{{prefix{index}=**}} {{ match /wrong{index}/{{tail{index}}} {{ allow read; }} }}"
+                        )
+                        .unwrap();
+                    }
+                    if allow_last {
+                        writeln!(source, "    {valid_child}").unwrap();
+                    }
+                    writeln!(source, "  }}\n}}\n").unwrap();
+
+                    let loaded = LoadedRules::from_source(&source).unwrap();
+                    let report = evaluate_request(
+                        loaded.ruleset.as_ref().unwrap(),
+                        &RequestContext {
+                            service,
+                            method: Method::Get,
+                            path: long_request_path(service),
+                            auth: None,
+                            resource: None,
+                            request_resource: None,
+                            time_unix_nanos: 0,
+                            abstract_path: false,
+                            request_query: None,
+                        },
+                    );
+                    if allow {
+                        assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+                    } else {
+                        assert!(
+                            matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+                            "{report:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn partial_subtree_prefilter_preserves_covered_path_denial() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let root = if service == RulesService::Firestore {
+            "match /databases/{database}/documents/{document=**} {"
+        } else {
+            "match /b/{bucket}/o/{path=**} {"
+        };
+        for version in ["1", "2"] {
+            let source = format!(
+                "rules_version = '{version}'; service {service_name} {{\n  {root}\n    match /never {{ allow read; }}\n  }}\n}}\n"
+            );
+            let loaded = LoadedRules::from_source(&source).unwrap();
+            let report = evaluate_request(
+                loaded.ruleset.as_ref().unwrap(),
+                &RequestContext {
+                    service,
+                    method: Method::Get,
+                    path: long_request_path(service),
+                    auth: None,
+                    resource: None,
+                    request_resource: None,
+                    time_unix_nanos: 0,
+                    abstract_path: false,
+                    request_query: None,
+                },
+            );
+            assert!(
+                matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+                "{report:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_parent_reachability_preserves_abstract_query_matches() {
+    let rules = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents/{prefix=**} {\n    match /notes/{id} { allow list; }\n  }\n}";
+    let path = "/databases/(default)/documents/fireemu-any-prefix/notes/fireemu-placeholder";
+    assert!(allows(rules, &abstract_ctx(path, vec![])));
+}
+
+#[test]
+fn loaded_rules_leaf_prefilter_preserves_v1_and_parent_children() {
+    for service_name in ["cloud.firestore", "firebase.storage"] {
+        let service = if service_name == "cloud.firestore" {
+            RulesService::Firestore
+        } else {
+            RulesService::Storage
+        };
+        let root = if service == RulesService::Firestore {
+            "match /databases/{database}/documents {"
+        } else {
+            "match /b/{bucket}/o {"
+        };
+        let mut source = format!("rules_version = '1'; service {service_name} {{\n  {root}\n");
+        for index in 0..750 {
+            writeln!(
+                source,
+                "    match /segment0/{{tail{index}}} {{ allow read; }}"
+            )
+            .unwrap();
+        }
+        writeln!(
+            source,
+            "    match /segment0 {{ match /segment1/{{rest=**}} {{ allow read; }} }}"
+        )
+        .unwrap();
+        writeln!(source, "  }}\n}}\n").unwrap();
+
+        let loaded = LoadedRules::from_source(&source).unwrap();
+        let report = evaluate_request(
+            loaded.ruleset.as_ref().unwrap(),
+            &RequestContext {
+                service,
+                method: Method::Get,
+                path: long_request_path(service),
+                auth: None,
+                resource: None,
+                request_resource: None,
+                time_unix_nanos: 0,
+                abstract_path: false,
+                request_query: None,
+            },
+        );
+        assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+    }
+}
+
+#[test]
+fn loaded_rules_false_or_unresolved_expensive_matches_remain_denied() {
+    let false_allow = rules_with_expensive_nonmatches("cloud.firestore", Some(": if false"), false);
+    let loaded = LoadedRules::from_source(&false_allow).unwrap();
+    let ruleset = loaded.ruleset.as_ref().unwrap();
+    let report = evaluate_request(
+        ruleset,
+        &RequestContext {
+            service: RulesService::Firestore,
+            method: Method::Get,
+            path: long_request_path(RulesService::Firestore),
+            auth: None,
+            resource: None,
+            request_resource: None,
+            time_unix_nanos: 0,
+            abstract_path: false,
+            request_query: None,
+        },
+    );
+    assert!(
+        matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+        "{report:?}"
+    );
+
+    for service in [RulesService::Firestore, RulesService::Storage] {
+        let service_name = match service {
+            RulesService::Firestore => "cloud.firestore",
+            RulesService::Storage => "firebase.storage",
+        };
+        let source = rules_with_over_budget_no_allow(service_name);
+        let loaded = LoadedRules::from_source(&source).unwrap();
+        let ruleset = loaded.ruleset.as_ref().unwrap();
+        let report = evaluate_request(
+            ruleset,
+            &RequestContext {
+                service,
+                method: Method::Get,
+                path: long_request_path(service),
+                auth: None,
+                resource: None,
+                request_resource: None,
+                time_unix_nanos: 0,
+                abstract_path: false,
+                request_query: None,
+            },
+        );
+        assert!(
+            matches!(
+                report.decision,
+                Decision::Deny(DenyReason::BudgetExceeded {
+                    limit_id: "FIREEMU-RULES-MATCH-WORK",
+                    ..
+                })
+            ),
+            "{report:?}"
+        );
+    }
+}
+
 fn doc(entries: &[(&str, RulesValue)]) -> RulesValue {
     let mut m = BTreeMap::new();
     m.insert(
@@ -105,6 +826,173 @@ fn doc(entries: &[(&str, RulesValue)]) -> RulesValue {
         ),
     );
     RulesValue::Map(m)
+}
+
+#[test]
+fn user_function_calls_resolve_in_the_definition_scope() {
+    let ruleset = parse_ruleset(
+        "rules_version = '2';\nservice cloud.firestore {\n  function decision() { return false; }\n  function gate() { return decision(); }\n  match /databases/{db}/documents {\n    function decision() { return true; }\n    match /notes/{id} { allow read: if gate(); }\n  }\n}",
+    )
+    .unwrap();
+    let report = evaluate_request(
+        &ruleset,
+        &ctx(Method::Get, "/databases/(default)/documents/notes/n1", None),
+    );
+
+    assert!(
+        matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn user_function_does_not_capture_caller_match_bindings() {
+    let ruleset = parse_ruleset(
+        "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents/users/{uid} {\n    function owner() { return request.auth.uid == uid; }\n    function delegate(uid) { return owner(); }\n    allow read: if delegate(request.auth.uid);\n  }\n}",
+    )
+    .unwrap();
+    let report = evaluate_request(
+        &ruleset,
+        &ctx(
+            Method::Get,
+            "/databases/(default)/documents/users/victim",
+            Some(auth("attacker", false, None)),
+        ),
+    );
+
+    assert!(
+        matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+        "{report:?}"
+    );
+
+    let owner_report = evaluate_request(
+        &ruleset,
+        &ctx(
+            Method::Get,
+            "/databases/(default)/documents/users/victim",
+            Some(auth("victim", false, None)),
+        ),
+    );
+    assert!(
+        matches!(owner_report.decision, Decision::Allow),
+        "{owner_report:?}"
+    );
+}
+
+#[test]
+fn user_function_lexical_capture_survives_caller_parameter_and_let() {
+    let ruleset = parse_ruleset(
+        "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents/users/{owner} {\n    function isOwner() { return request.auth.uid == owner; }\n    function gate(owner) { let owner = request.auth.uid; return isOwner(); }\n    allow get: if gate(request.auth.uid);\n  }\n}",
+    )
+    .unwrap();
+    let path = "/databases/(default)/documents/users/alice";
+    let alice = evaluate_request(
+        &ruleset,
+        &ctx(Method::Get, path, Some(auth("alice", false, None))),
+    );
+    let bob = evaluate_request(
+        &ruleset,
+        &ctx(Method::Get, path, Some(auth("bob", false, None))),
+    );
+
+    assert!(matches!(alice.decision, Decision::Allow), "{alice:?}");
+    assert!(
+        matches!(bob.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+        "{bob:?}"
+    );
+}
+
+#[test]
+fn nested_function_call_uses_each_declaration_scope_after_caller_shadowing() {
+    let ruleset = parse_ruleset(
+        "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents/users/{owner} {\n    function isOwner() { return request.auth.uid == owner; }\n    match /notes/{note} {\n      function gate(owner) { let owner = 'bob'; return isOwner(); }\n      allow get: if gate('bob');\n    }\n  }\n}",
+    )
+    .unwrap();
+    let path = "/databases/(default)/documents/users/alice/notes/n1";
+    let alice = evaluate_request(
+        &ruleset,
+        &ctx(Method::Get, path, Some(auth("alice", false, None))),
+    );
+    let bob = evaluate_request(
+        &ruleset,
+        &ctx(Method::Get, path, Some(auth("bob", false, None))),
+    );
+
+    assert!(matches!(alice.decision, Decision::Allow), "{alice:?}");
+    assert!(
+        matches!(bob.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+        "{bob:?}"
+    );
+}
+
+#[test]
+fn nested_recursive_match_keeps_parent_function_environment() {
+    let ruleset = parse_ruleset(
+        "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents/{prefix=**} {\n    function decision() { return false; }\n    function gate() { return decision(); }\n    match /users/{owner=**} {\n      function decision() { return true; }\n      allow read: if gate();\n    }\n  }\n}",
+    )
+    .unwrap();
+    let report = evaluate_request(
+        &ruleset,
+        &ctx(
+            Method::Get,
+            "/databases/(default)/documents/users/alice/profile",
+            Some(auth("alice", false, None)),
+        ),
+    );
+
+    assert!(
+        matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn storage_function_calls_resolve_in_the_definition_scope() {
+    let ruleset = parse_ruleset(
+        "rules_version = '2';\nservice firebase.storage {\n  function decision() { return false; }\n  function gate() { return decision(); }\n  match /b/{bucket}/o/{path=**} {\n    function decision() { return true; }\n    allow read: if gate();\n  }\n}",
+    )
+    .unwrap();
+    let mut request = ctx(Method::Get, "/b/example/o/file.txt", None);
+    request.service = RulesService::Storage;
+    let report = evaluate_request(&ruleset, &request);
+
+    assert!(
+        matches!(report.decision, Decision::Deny(DenyReason::NoMatchingAllow)),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn nested_recursive_wildcards_are_bounded_by_match_work_budget() {
+    let mut source = String::from("rules_version = '2';\nservice cloud.firestore {\n");
+    for index in 0..8 {
+        let _ = writeln!(source, "  match /{{part{index}=**}} {{");
+    }
+    source.push_str("    match /segment19 { allow write; }\n");
+    for _ in 0..8 {
+        source.push_str("  }\n");
+    }
+    source.push('}');
+    let ruleset = parse_ruleset(&source).unwrap();
+    let path = format!(
+        "/{}",
+        (0..20)
+            .map(|index| format!("segment{index}"))
+            .collect::<Vec<_>>()
+            .join("/")
+    );
+    let report = evaluate_request(&ruleset, &ctx(Method::Get, &path, None));
+
+    assert!(
+        matches!(
+            report.decision,
+            Decision::Deny(DenyReason::BudgetExceeded {
+                limit_id: "FIREEMU-RULES-MATCH-WORK",
+                ..
+            })
+        ),
+        "{report:?}"
+    );
 }
 
 #[test]
@@ -404,6 +1292,7 @@ fn auth_context_is_built_from_id_token_claims() {
             second_factor_identifier: Some("mfa-1".into()),
             tenant: None,
             sign_in_attributes: None,
+            fireemu_session_epoch: None,
         },
         custom,
     };
@@ -1131,6 +2020,55 @@ fn integers_and_doubles_compare_exactly_beyond_2_to_the_53() {
     assert!(allows(
         &rules("resource.data.n > -9223372036854775808.0"),
         &extreme
+    ));
+}
+
+#[test]
+fn firestore_request_shape_distinguishes_missing_members_from_null() {
+    let request = ctx(
+        Method::Get,
+        "/databases/(default)/documents/notes/one",
+        None,
+    );
+    let decision = |condition: &str| {
+        let source = format!(
+            "rules_version = '2'; service cloud.firestore {{ match /databases/{{database}}/documents/notes/{{id}} {{ allow get: if {condition}; }} }}"
+        );
+        evaluate_request(&parse_ruleset(&source).unwrap(), &request).decision
+    };
+
+    // A missing request member is an evaluation error. It must not behave like null.
+    assert!(matches!(
+        decision("request.resource == null"),
+        Decision::Deny(DenyReason::NoMatchingAllow)
+    ));
+    assert!(matches!(
+        decision("request.query == null"),
+        Decision::Deny(DenyReason::NoMatchingAllow)
+    ));
+    // A missing member must not be materialized as a boolean false either. This
+    // control would allow if the evaluator substituted false for the missing map
+    // entry, so it distinguishes an evaluation error from an ordinary false value.
+    assert!(matches!(
+        decision("request.resource == false"),
+        Decision::Deny(DenyReason::NoMatchingAllow)
+    ));
+    assert!(matches!(
+        decision("request.query == false"),
+        Decision::Deny(DenyReason::NoMatchingAllow)
+    ));
+
+    // Anonymous callers have an explicitly present null auth member.
+    assert!(matches!(decision("request.auth == null"), Decision::Allow));
+
+    // The absent members are also absent from the request map's key set.
+    assert!(matches!(
+        decision("request.keys() == ['auth', 'method', 'path', 'time']"),
+        Decision::Allow
+    ));
+    assert!(matches!(
+        decision("request.keys().hasAny(['resource', 'query'])"),
+        Decision::Deny(DenyReason::NoMatchingAllow)
     ));
 }
 

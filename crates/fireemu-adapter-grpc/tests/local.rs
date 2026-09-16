@@ -1302,6 +1302,295 @@ async fn collect_docs(
     }
     out
 }
+async fn collect_responses(
+    client: &mut FirestoreClient<tonic::transport::Channel>,
+    req: pb::RunQueryRequest,
+) -> Vec<pb::RunQueryResponse> {
+    let mut stream = client.run_query(req).await.unwrap().into_inner();
+    let mut out = Vec::new();
+    while let Some(response) = stream.next().await {
+        out.push(response.unwrap());
+    }
+    out
+}
+
+fn vector(values: &[f64]) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+            fields: [
+                ("__type__".to_owned(), s("__vector__")),
+                (
+                    "value".to_owned(),
+                    pb::Value {
+                        value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue {
+                            values: values
+                                .iter()
+                                .map(|value| pb::Value {
+                                    value_type: Some(pb::value::ValueType::DoubleValue(*value)),
+                                })
+                                .collect(),
+                        })),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        })),
+    }
+}
+
+#[tokio::test]
+async fn grpc_find_nearest_without_a_source_is_rejected_before_kindless_scan() {
+    let (mut client, _, handle) = start().await;
+    let error = client
+        .run_query(pb::RunQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    find_nearest: Some(sq::FindNearest {
+                        vector_field: Some(sq::FieldReference {
+                            field_path: "embedding".to_owned(),
+                        }),
+                        query_vector: Some(vector(&[0.0, 1.0])),
+                        distance_measure: sq::find_nearest::DistanceMeasure::Cosine as i32,
+                        limit: Some(1),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Unimplemented);
+    assert!(error.message().contains("collection source"));
+    handle.abort();
+}
+
+#[tokio::test]
+async fn grpc_run_query_supports_standard_find_nearest() {
+    let (mut client, _, handle) =
+        start_with_write_time_and_policy(false, IndexValidationPolicy::Emulator).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write("items/near", &[("embedding", vector(&[1.0, 0.0]))]),
+                update_write("items/far", &[("embedding", vector(&[-1.0, 0.0]))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let documents = collect_docs(
+        &mut client,
+        pb::RunQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![sq::CollectionSelector {
+                        collection_id: "items".to_owned(),
+                        ..Default::default()
+                    }],
+                    find_nearest: Some(sq::FindNearest {
+                        vector_field: Some(sq::FieldReference {
+                            field_path: "embedding".to_owned(),
+                        }),
+                        query_vector: Some(vector(&[1.0, 0.0])),
+                        distance_measure: sq::find_nearest::DistanceMeasure::Euclidean as i32,
+                        limit: Some(1),
+                        distance_result_field: "distance".to_owned(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(documents.len(), 1);
+    assert!(documents[0].name.ends_with("/items/near"));
+    assert!(matches!(
+        documents[0].fields["distance"].value_type,
+        Some(pb::value::ValueType::DoubleValue(value)) if value == 0.0
+    ));
+    handle.abort();
+}
+
+#[tokio::test]
+async fn grpc_find_nearest_applies_ordinary_offset_and_limit_before_ranking() {
+    let (mut client, _, handle) =
+        start_with_write_time_and_policy(false, IndexValidationPolicy::Emulator).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write("items/a", &[("embedding", vector(&[1.0, 0.0]))]),
+                update_write("items/b", &[("embedding", vector(&[-1.0, 0.0]))]),
+                update_write("items/c", &[("embedding", vector(&[0.0, 1.0]))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let responses = collect_responses(
+        &mut client,
+        pb::RunQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![sq::CollectionSelector {
+                        collection_id: "items".to_owned(),
+                        ..Default::default()
+                    }],
+                    offset: 1,
+                    limit: Some(2),
+                    find_nearest: Some(sq::FindNearest {
+                        vector_field: Some(sq::FieldReference {
+                            field_path: "embedding".to_owned(),
+                        }),
+                        query_vector: Some(vector(&[1.0, 0.0])),
+                        distance_measure: sq::find_nearest::DistanceMeasure::Euclidean as i32,
+                        limit: Some(2),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        responses
+            .iter()
+            .map(|response| response.skipped_results)
+            .sum::<i32>(),
+        1,
+        "the original offset is reported in skipped_results"
+    );
+    let ids = responses
+        .iter()
+        .filter_map(|response| response.document.as_ref())
+        .map(|document| document.name.rsplit('/').next().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["c", "b"]);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn grpc_find_nearest_skipped_results_use_pre_offset_matches() {
+    let (mut client, _, handle) =
+        start_with_write_time_and_policy(false, IndexValidationPolicy::Emulator).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write("items/a", &[("embedding", vector(&[1.0, 0.0]))]),
+                update_write("items/b", &[("embedding", vector(&[-1.0, 0.0]))]),
+                update_write("items/c", &[("embedding", vector(&[0.0, 1.0]))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    for (offset, expected_skipped, expected_ids) in [(2, 2, vec!["c"]), (5, 3, vec![])] {
+        let responses = collect_responses(
+            &mut client,
+            pb::RunQueryRequest {
+                parent: DOCS.to_owned(),
+                query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                    pb::StructuredQuery {
+                        from: vec![sq::CollectionSelector {
+                            collection_id: "items".to_owned(),
+                            ..Default::default()
+                        }],
+                        offset,
+                        limit: Some(2),
+                        find_nearest: Some(sq::FindNearest {
+                            vector_field: Some(sq::FieldReference {
+                                field_path: "embedding".to_owned(),
+                            }),
+                            query_vector: Some(vector(&[1.0, 0.0])),
+                            distance_measure: sq::find_nearest::DistanceMeasure::Euclidean as i32,
+                            limit: Some(2),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(
+            responses
+                .iter()
+                .map(|response| response.skipped_results)
+                .sum::<i32>(),
+            expected_skipped,
+            "offset {offset}"
+        );
+        let ids = responses
+            .iter()
+            .filter_map(|response| response.document.as_ref())
+            .map(|document| document.name.rsplit('/').next().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, expected_ids, "offset {offset}");
+    }
+    handle.abort();
+}
+
+#[tokio::test]
+async fn grpc_find_nearest_pages_from_one_snapshot() {
+    let (mut client, _, handle) =
+        start_with_write_time_and_policy(false, IndexValidationPolicy::Emulator).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..40)
+                .map(|index| {
+                    update_write(
+                        &format!("items/{index:02}"),
+                        &[("embedding", vector(&[1.0, 0.0]))],
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let documents = collect_docs(
+        &mut client,
+        pb::RunQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![sq::CollectionSelector {
+                        collection_id: "items".to_owned(),
+                        ..Default::default()
+                    }],
+                    find_nearest: Some(sq::FindNearest {
+                        vector_field: Some(sq::FieldReference {
+                            field_path: "embedding".to_owned(),
+                        }),
+                        query_vector: Some(vector(&[1.0, 0.0])),
+                        distance_measure: sq::find_nearest::DistanceMeasure::Euclidean as i32,
+                        limit: Some(40),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(documents.len(), 40);
+    handle.abort();
+}
 
 #[tokio::test]
 async fn kindless_all_descendants_query_is_scoped_to_its_parent() {
@@ -1603,6 +1892,278 @@ async fn commit_get_query_and_delete_round_trip() {
         .unwrap()
         .into_inner();
     assert_eq!(ids.collection_ids, vec!["users"]);
+    handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn grpc_field_filter_enum_values_are_executable_and_unknown_values_refused() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write(
+                    "enum/one",
+                    &[
+                        ("n", i(1)),
+                        (
+                            "tags",
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::ArrayValue(
+                                    pb::ArrayValue {
+                                        values: vec![s("a")],
+                                    },
+                                )),
+                            },
+                        ),
+                    ],
+                ),
+                update_write(
+                    "enum/two",
+                    &[
+                        ("n", i(2)),
+                        (
+                            "tags",
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::ArrayValue(
+                                    pb::ArrayValue {
+                                        values: vec![s("b")],
+                                    },
+                                )),
+                            },
+                        ),
+                    ],
+                ),
+                update_write(
+                    "enum/three",
+                    &[
+                        ("n", i(3)),
+                        (
+                            "tags",
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::ArrayValue(
+                                    pb::ArrayValue {
+                                        values: vec![s("a"), s("b")],
+                                    },
+                                )),
+                            },
+                        ),
+                    ],
+                ),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let array = |values: Vec<pb::Value>| pb::Value {
+        value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue { values })),
+    };
+    let cases = [
+        ("n", sq::field_filter::Operator::LessThan, i(2), vec!["one"]),
+        (
+            "n",
+            sq::field_filter::Operator::LessThanOrEqual,
+            i(2),
+            vec!["one", "two"],
+        ),
+        (
+            "n",
+            sq::field_filter::Operator::GreaterThan,
+            i(2),
+            vec!["three"],
+        ),
+        (
+            "n",
+            sq::field_filter::Operator::GreaterThanOrEqual,
+            i(2),
+            vec!["three", "two"],
+        ),
+        ("n", sq::field_filter::Operator::Equal, i(2), vec!["two"]),
+        (
+            "n",
+            sq::field_filter::Operator::NotEqual,
+            i(2),
+            vec!["one", "three"],
+        ),
+        (
+            "n",
+            sq::field_filter::Operator::In,
+            array(vec![i(1), i(3)]),
+            vec!["one", "three"],
+        ),
+        (
+            "n",
+            sq::field_filter::Operator::NotIn,
+            array(vec![i(2)]),
+            vec!["one", "three"],
+        ),
+        (
+            "tags",
+            sq::field_filter::Operator::ArrayContains,
+            s("a"),
+            vec!["one", "three"],
+        ),
+        (
+            "tags",
+            sq::field_filter::Operator::ArrayContainsAny,
+            array(vec![s("b")]),
+            vec!["three", "two"],
+        ),
+    ];
+    for (field, operator, value, expected) in cases {
+        let mut rows = collect_docs(
+            &mut client,
+            query("enum", Some(field_op(field, operator, value))),
+        )
+        .await;
+        rows.sort_by(|a, b| a.name.cmp(&b.name));
+        let names = rows
+            .into_iter()
+            .map(|document| document.name.rsplit('/').next().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(names, expected, "operator {operator:?}");
+    }
+
+    let mut invalid = query(
+        "enum",
+        Some(field_op("n", sq::field_filter::Operator::Equal, i(1))),
+    );
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) = &mut invalid.query_type
+    {
+        if let Some(sq::filter::FilterType::FieldFilter(filter)) = query
+            .r#where
+            .as_mut()
+            .and_then(|filter| filter.filter_type.as_mut())
+        {
+            filter.op = 99;
+        }
+    }
+    assert_eq!(
+        client.run_query(invalid).await.unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+    handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn list_collection_ids_supports_read_time_and_rejects_negative_page_size() {
+    use fireemu_core_session::fault::{
+        FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,
+    };
+
+    let (mut client, clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
+    let first = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("first/doc", &[("value", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let read_time = first.commit_time.unwrap();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(1))
+        .unwrap();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("second/doc", &[("value", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let historical = client
+        .list_collection_ids(pb::ListCollectionIdsRequest {
+            parent: DOCS.to_owned(),
+            consistency_selector: Some(
+                pb::list_collection_ids_request::ConsistencySelector::ReadTime(read_time),
+            ),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(historical.collection_ids, vec!["first"]);
+
+    let token = client
+        .list_collection_ids(pb::ListCollectionIdsRequest {
+            parent: DOCS.to_owned(),
+            page_size: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .next_page_token;
+    assert!(!token.is_empty());
+    let cross_parent = client
+        .list_collection_ids(pb::ListCollectionIdsRequest {
+            parent: "projects/other/databases/(default)/documents".to_owned(),
+            page_size: 1,
+            page_token: token.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(cross_parent.code(), tonic::Code::InvalidArgument);
+    backend.reset_project("demo-app");
+    let after_reset = client
+        .list_collection_ids(pb::ListCollectionIdsRequest {
+            parent: DOCS.to_owned(),
+            page_size: 1,
+            page_token: token,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(after_reset.code(), tonic::Code::InvalidArgument);
+
+    let invalid = client
+        .list_collection_ids(pb::ListCollectionIdsRequest {
+            parent: DOCS.to_owned(),
+            page_size: -1,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(invalid.code(), tonic::Code::InvalidArgument);
+    let registry = Arc::new(FaultRegistry::new());
+    registry.default_state().lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![FaultRule {
+            matches: FaultMatch {
+                operation: "firestore.read".into(),
+                nth: None,
+                function: None,
+                event_type: None,
+            },
+            action: FaultAction::ReturnError {
+                code: "UNAVAILABLE".into(),
+            },
+        }],
+    });
+    backend.set_faults(Arc::clone(&registry));
+    let invalid_again = client
+        .list_collection_ids(pb::ListCollectionIdsRequest {
+            parent: DOCS.to_owned(),
+            page_token: "eg==".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(invalid_again.code(), tonic::Code::InvalidArgument);
+    let state = registry.default_state();
+    let state = state.lock().unwrap();
+    assert!(state.counters().is_empty());
+    assert!(state.fired().is_empty());
     handle.abort();
 }
 
@@ -2070,6 +2631,276 @@ async fn aggregation_batch_write_and_gateway_rejections_in_local_mode() {
     );
     let err = client.run_query(needs_index).await.unwrap_err();
     assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    handle.abort();
+}
+
+/// The local adapter validates every write before publishing any of them. A late precondition
+/// failure therefore leaves both the existing document and the missing target unchanged. This
+/// records local behavior; production parity is unobserved here.
+#[tokio::test]
+async fn commit_late_precondition_failure_is_atomic() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("atomic/existing", &[("value", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let mut missing_precondition = update_write("atomic/missing", &[("value", i(2))]);
+    missing_precondition.current_document = Some(pb::Precondition {
+        condition_type: Some(pb::precondition::ConditionType::Exists(true)),
+    });
+    let first_write = update_write("atomic/existing", &[("value", i(9))]);
+    let error = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![first_write.clone(), missing_precondition],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::NotFound);
+
+    let existing = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/atomic/existing"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(existing.fields.get("value"), Some(&i(1)));
+    assert_eq!(
+        client
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/atomic/missing"),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+    handle.abort();
+}
+
+/// The local adapter keeps a failed transactional commit available for rollback. Rollback
+/// releases its read locks so the same document can then be written by another request. This
+/// records local behavior; production parity is unobserved here.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn failed_transaction_commit_can_be_rolled_back_and_releases_ownership() {
+    let (mut client, handle) = start_with_contention_wait(std::time::Duration::ZERO).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("txn-failure/doc", &[("value", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let transaction = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    client
+        .batch_get_documents(pb::BatchGetDocumentsRequest {
+            database: DB.to_owned(),
+            documents: vec![format!("{DOCS}/txn-failure/doc")],
+            consistency_selector: Some(
+                pb::batch_get_documents_request::ConsistencySelector::Transaction(
+                    transaction.clone(),
+                ),
+            ),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let mut missing_precondition = update_write("txn-failure/missing", &[("value", i(2))]);
+    missing_precondition.current_document = Some(pb::Precondition {
+        condition_type: Some(pb::precondition::ConditionType::Exists(true)),
+    });
+    let failed = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            transaction: transaction.clone(),
+            writes: vec![
+                update_write("txn-failure/doc", &[("value", i(9))]),
+                missing_precondition,
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(failed.code(), tonic::Code::NotFound);
+
+    // The failed transaction published neither staged write before rollback.
+    let unchanged = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/txn-failure/doc"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(unchanged.fields.get("value"), Some(&i(1)));
+    assert_eq!(
+        client
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/txn-failure/missing"),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+
+    let blocked = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("txn-failure/doc", &[("value", i(3))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(blocked.code(), tonic::Code::Aborted);
+
+    client
+        .rollback(pb::RollbackRequest {
+            database: DB.to_owned(),
+            transaction,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("txn-failure/doc", &[("value", i(3))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let document = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/txn-failure/doc"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(document.fields.get("value"), Some(&i(3)));
+    handle.abort();
+}
+
+/// The local adapter's `BatchWrite` reports a precondition failure for one write while
+/// publishing an independent later write, preserving its per-write status and result alignment.
+/// Production parity is unobserved here.
+#[tokio::test]
+async fn batch_write_precondition_failure_is_per_write_and_later_writes_commit() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("batch-failure/existing", &[("value", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut wrong_precondition = update_write("batch-failure/existing", &[("value", i(9))]);
+    wrong_precondition.current_document = Some(pb::Precondition {
+        condition_type: Some(pb::precondition::ConditionType::Exists(false)),
+    });
+    let response = client
+        .batch_write(pb::BatchWriteRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                wrong_precondition,
+                update_write("batch-failure/later", &[("value", i(2))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.status.len(), 2);
+    assert_eq!(response.write_results.len(), 2);
+    assert_eq!(
+        response.status[0].code,
+        i32::from(tonic::Code::AlreadyExists)
+    );
+    assert_eq!(response.status[1].code, 0);
+    assert!(response.write_results[0].update_time.is_none());
+    assert!(response.write_results[1].update_time.is_some());
+
+    let existing = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/batch-failure/existing"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(existing.fields.get("value"), Some(&i(1)));
+    let later = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/batch-failure/later"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(later.fields.get("value"), Some(&i(2)));
+    handle.abort();
+}
+
+#[tokio::test]
+async fn batch_write_keeps_valid_rows_around_an_unspecified_operation() {
+    let (mut client, _clock, handle) = start().await;
+    let response = client
+        .batch_write(pb::BatchWriteRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write("rows/prefix", &[("value", i(1))]),
+                pb::Write::default(),
+                update_write("rows/suffix", &[("value", i(3))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(response.status.len(), 3);
+    assert_eq!(response.status[0].code, 0);
+    assert_eq!(
+        response.status[1].code,
+        i32::from(tonic::Code::InvalidArgument)
+    );
+    assert_eq!(response.status[2].code, 0);
+
+    for (name, value) in [("rows/prefix", 1), ("rows/suffix", 3)] {
+        let document = client
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/{name}"),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(document.fields.get("value"), Some(&i(value)));
+    }
+
     handle.abort();
 }
 
@@ -3206,7 +4037,121 @@ async fn list_documents_pages_by_name_with_opaque_tokens() {
 }
 
 #[tokio::test]
-async fn ordered_list_pages_continue_across_present_and_missing_rows() {
+#[allow(clippy::too_many_lines)]
+async fn grpc_batch_get_and_list_apply_masks_without_confusing_missing_and_null() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write(
+                "types/doc",
+                &[
+                    ("present", i(1)),
+                    (
+                        "nullable",
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::NullValue(0)),
+                        },
+                    ),
+                ],
+            )],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let mask = pb::DocumentMask {
+        field_paths: vec!["nullable".to_owned(), "missing".to_owned()],
+    };
+    let got = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/types/doc"),
+            mask: Some(mask.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        got.fields
+            .get("nullable")
+            .and_then(|value| value.value_type.as_ref()),
+        Some(&pb::value::ValueType::NullValue(0))
+    );
+    assert!(!got.fields.contains_key("missing"));
+    assert!(!got.fields.contains_key("present"));
+
+    let mut stream = client
+        .batch_get_documents(pb::BatchGetDocumentsRequest {
+            database: DB.to_owned(),
+            documents: vec![format!("{DOCS}/types/doc"), format!("{DOCS}/types/missing")],
+            mask: Some(mask.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let mut results = Vec::new();
+    while let Some(response) = stream.next().await {
+        if let Some(result) = response.unwrap().result {
+            results.push(result);
+        }
+    }
+    assert_eq!(results.len(), 2);
+    let found = results
+        .iter()
+        .find_map(|result| match result {
+            pb::batch_get_documents_response::Result::Found(document) => Some(document),
+            pb::batch_get_documents_response::Result::Missing(_) => None,
+        })
+        .expect("one found response");
+    assert_eq!(found.name, format!("{DOCS}/types/doc"));
+    assert_eq!(
+        found
+            .fields
+            .get("nullable")
+            .and_then(|value| value.value_type.as_ref()),
+        Some(&pb::value::ValueType::NullValue(0))
+    );
+    assert!(!found.fields.contains_key("missing"));
+    assert!(!found.fields.contains_key("present"));
+    let missing_name = results
+        .iter()
+        .find_map(|result| match result {
+            pb::batch_get_documents_response::Result::Missing(name) => Some(name),
+            pb::batch_get_documents_response::Result::Found(_) => None,
+        })
+        .expect("one missing response");
+    let expected_missing = format!("{DOCS}/types/missing");
+    assert_eq!(missing_name, &expected_missing);
+
+    let page = client
+        .list_documents(pb::ListDocumentsRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "types".to_owned(),
+            mask: Some(mask),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(page.documents.len(), 1);
+    assert_eq!(page.documents[0].name, format!("{DOCS}/types/doc"));
+    assert_eq!(
+        page.documents[0]
+            .fields
+            .get("nullable")
+            .and_then(|value| value.value_type.as_ref()),
+        Some(&pb::value::ValueType::NullValue(0))
+    );
+    assert!(page.documents[0].fields.contains_key("nullable"));
+    assert!(!page.documents[0].fields.contains_key("missing"));
+    assert!(!page.documents[0].fields.contains_key("present"));
+    handle.abort();
+}
+
+#[tokio::test]
+async fn list_pages_include_missing_parents_in_name_order() {
     let (mut client, _clock, handle) = start().await;
     let mut writes = (0..5i64)
         .map(|value| update_write(&format!("mixed/d{value}"), &[("v", i(value))]))
@@ -3231,7 +4176,6 @@ async fn ordered_list_pages_continue_across_present_and_missing_rows() {
                 collection_id: "mixed".to_owned(),
                 page_size: 2,
                 page_token: token,
-                order_by: "v desc".to_owned(),
                 show_missing: true,
                 ..Default::default()
             })
@@ -3245,9 +4189,32 @@ async fn ordered_list_pages_continue_across_present_and_missing_rows() {
         token = page.next_page_token;
     }
 
-    let expected = ["d4", "d3", "d2", "d1", "d0", "m0", "m1", "m2"]
+    let expected = ["d0", "d1", "d2", "d3", "d4", "m0", "m1", "m2"]
         .map(|document| format!("{DOCS}/mixed/{document}"));
     assert_eq!(seen, expected);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn list_documents_rejects_show_missing_with_order_by() {
+    let (mut client, _clock, handle) = start().await;
+
+    for (order_by, page_token) in [("v desc", ""), ("   ", ""), ("v desc", "%%%INVALID%%%")] {
+        let error = client
+            .list_documents(pb::ListDocumentsRequest {
+                parent: DOCS.to_owned(),
+                collection_id: "mixed".to_owned(),
+                order_by: order_by.to_owned(),
+                page_token: page_token.to_owned(),
+                show_missing: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(error.message(), "show_missing cannot be used with order_by");
+    }
+
     handle.abort();
 }
 
@@ -4493,7 +5460,7 @@ async fn fault_plans_fail_the_nth_commit_and_time_out_reads() {
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn execute_pipeline_is_validated_strictly_and_never_executed() {
+async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_subset() {
     // Typed arguments: a collection path, a boolean function, an integer.
     let stage = |name: &str, args: usize| pb::pipeline::Stage {
         name: name.to_owned(),
@@ -4504,7 +5471,7 @@ async fn execute_pipeline_is_validated_strictly_and_never_executed() {
                 },
                 "where" => pb::Value {
                     value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
-                        name: "eq".to_owned(),
+                        name: "equal".to_owned(),
                         args: vec![
                             pb::Value {
                                 value_type: Some(pb::value::ValueType::FieldReferenceValue(
@@ -4546,25 +5513,18 @@ async fn execute_pipeline_is_validated_strictly_and_never_executed() {
         "FS_PIPE_EDITION"
     );
     handle.abort();
-    // Enterprise: decoded, canonicalized, refused explicitly or answered validation-only.
+    // Enterprise: supported reads execute; other shapes retain explicit refusals.
     let (mut client, _, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
-    let valid = client
+    let mut valid = client
         .execute_pipeline(request(vec![
             stage("collection", 1),
             stage("where", 1),
             stage("limit", 1),
         ]))
         .await
-        .unwrap_err();
-    assert_eq!(valid.code(), tonic::Code::Unimplemented);
-    assert_eq!(
-        valid.metadata().get("fireemu-pipeline").unwrap(),
-        "collection(1) | where(1) | limit(1)"
-    );
-    assert_eq!(
-        valid.metadata().get("fireemu-code").unwrap(),
-        "FS_PIPE_VALIDATION_ONLY"
-    );
+        .unwrap()
+        .into_inner();
+    assert_eq!(valid.message().await.unwrap().unwrap().results.len(), 0);
     let unknown = client
         .execute_pipeline(request(vec![stage("collection", 1), stage("explode", 1)]))
         .await
@@ -4677,6 +5637,1135 @@ async fn execute_pipeline_is_validated_strictly_and_never_executed() {
         );
     }
     handle.abort();
+}
+
+async fn drain_pipeline(
+    mut stream: tonic::Streaming<pb::ExecutePipelineResponse>,
+    messages: usize,
+) -> Vec<pb::Document> {
+    let mut documents = Vec::new();
+    let mut received = 0;
+    while let Some(response) = stream.next().await {
+        let response = response.unwrap();
+        assert!(
+            response.results.len() <= 1,
+            "one document per wire response"
+        );
+        for doc in &response.results {
+            assert!(doc.name.is_empty());
+            assert!(doc.create_time.is_none());
+            assert!(doc.update_time.is_none());
+        }
+        documents.extend(response.results);
+        received += 1;
+    }
+    assert_eq!(received, messages);
+    documents
+}
+
+fn pipeline_stage(name: &str, value: pb::Value) -> pb::pipeline::Stage {
+    pb::pipeline::Stage {
+        name: name.to_owned(),
+        args: vec![value],
+        ..Default::default()
+    }
+}
+
+fn pipeline_request(stages: Vec<pb::pipeline::Stage>) -> pb::ExecutePipelineRequest {
+    pb::ExecutePipelineRequest {
+        database: DB.to_owned(),
+        pipeline_type: Some(
+            pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                pb::StructuredPipeline {
+                    pipeline: Some(pb::Pipeline { stages }),
+                    ..Default::default()
+                },
+            ),
+        ),
+        ..Default::default()
+    }
+}
+
+fn pipeline_field(field: &str) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::FieldReferenceValue(field.to_owned())),
+    }
+}
+
+fn pipeline_function(name: &str, args: Vec<pb::Value>) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
+            name: name.to_owned(),
+            args,
+            ..Default::default()
+        })),
+    }
+}
+
+fn pipeline_equal(field: &str, value: pb::Value) -> pb::pipeline::Stage {
+    pipeline_stage(
+        "where",
+        pipeline_function("equal", vec![pipeline_field(field), value]),
+    )
+}
+
+fn pipeline_select(field: &str) -> pb::pipeline::Stage {
+    pipeline_stage(
+        "select",
+        pb::Value {
+            value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                fields: [("label".to_owned(), pipeline_field(field))]
+                    .into_iter()
+                    .collect(),
+            })),
+        },
+    )
+}
+
+fn pipeline_offset(value: i64) -> pb::pipeline::Stage {
+    pipeline_stage("offset", i(value))
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_where_equal_executes_scalar_matrix_and_rejects_missing_fields() {
+    use pb::value::ValueType as V;
+    let value = |v| pb::Value {
+        value_type: Some(v),
+    };
+    let cases = [
+        (
+            "bool",
+            V::BooleanValue(true),
+            V::BooleanValue(true),
+            V::BooleanValue(false),
+        ),
+        (
+            "integer",
+            V::IntegerValue(7),
+            V::IntegerValue(7),
+            V::IntegerValue(8),
+        ),
+        (
+            "integer-double",
+            V::IntegerValue(7),
+            V::DoubleValue(7.0),
+            V::DoubleValue(8.0),
+        ),
+        (
+            "double-integer",
+            V::DoubleValue(7.0),
+            V::IntegerValue(7),
+            V::DoubleValue(8.0),
+        ),
+        (
+            "timestamp",
+            V::TimestampValue(prost_types::Timestamp {
+                seconds: 123,
+                nanos: 456_000,
+            }),
+            V::TimestampValue(prost_types::Timestamp {
+                seconds: 123,
+                nanos: 456_000,
+            }),
+            V::TimestampValue(prost_types::Timestamp {
+                seconds: 123,
+                nanos: 457_000,
+            }),
+        ),
+        (
+            "string",
+            V::StringValue("keep".into()),
+            V::StringValue("keep".into()),
+            V::StringValue("drop".into()),
+        ),
+        (
+            "bytes",
+            V::BytesValue(vec![0, 255]),
+            V::BytesValue(vec![0, 255]),
+            V::BytesValue(vec![0, 254]),
+        ),
+        (
+            "reference",
+            V::ReferenceValue(format!("{DOCS}/refs/one")),
+            V::ReferenceValue(format!("{DOCS}/refs/one")),
+            V::ReferenceValue(format!("{DOCS}/refs/two")),
+        ),
+        (
+            "geo",
+            V::GeoPointValue(fireemu_proto_firestore::google::r#type::LatLng {
+                latitude: 1.0,
+                longitude: 2.0,
+            }),
+            V::GeoPointValue(fireemu_proto_firestore::google::r#type::LatLng {
+                latitude: 1.0,
+                longitude: 2.0,
+            }),
+            V::GeoPointValue(fireemu_proto_firestore::google::r#type::LatLng {
+                latitude: 1.0,
+                longitude: 3.0,
+            }),
+        ),
+        (
+            "infinity",
+            V::DoubleValue(f64::INFINITY),
+            V::DoubleValue(f64::INFINITY),
+            V::DoubleValue(f64::NEG_INFINITY),
+        ),
+        (
+            "null",
+            V::NullValue(0),
+            V::NullValue(0),
+            V::BooleanValue(false),
+        ),
+        (
+            "nan",
+            V::DoubleValue(f64::NAN),
+            V::DoubleValue(f64::NAN),
+            V::DoubleValue(0.0),
+        ),
+    ];
+    let (mut client, _, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    for (label, stored, literal, nonmatch) in cases {
+        let collection = format!("scalar-{label}");
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![
+                    update_write(
+                        &format!("{collection}/a"),
+                        &[("score", value(nonmatch)), ("name", s("drop"))],
+                    ),
+                    update_write(
+                        &format!("{collection}/b"),
+                        &[("score", value(stored)), ("name", s("keep"))],
+                    ),
+                    update_write(&format!("{collection}/c"), &[("name", s("missing"))]),
+                ],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        // No limit or projection: every result must be the matching document, including null/NaN.
+        let docs = drain_pipeline(
+            client
+                .execute_pipeline(pipeline_request(vec![
+                    pipeline_stage("collection", s(&collection)),
+                    pipeline_equal("score", value(literal)),
+                ]))
+                .await
+                .unwrap()
+                .into_inner(),
+            1,
+        )
+        .await;
+        assert_eq!(docs.len(), 1, "{label}");
+        assert_eq!(docs[0].fields.get("name"), Some(&s("keep")), "{label}");
+        assert_eq!(docs[0].fields.len(), 2, "{label}");
+    }
+    handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_documents() {
+    use pb::value::ValueType as V;
+    let collection = || pipeline_stage("collection", s("where-refusals"));
+    let predicate = || pipeline_equal("score", i(7));
+    let unsupported = tonic::Code::Unimplemented;
+    let invalid = tonic::Code::InvalidArgument;
+    let expression = |name: &str, args| pipeline_stage("where", pipeline_function(name, args));
+    let mut options = pipeline_function("equal", vec![pipeline_field("score"), i(7)]);
+    let Some(V::FunctionValue(function)) = options.value_type.as_mut() else {
+        unreachable!()
+    };
+    function.options.insert("unexpected".into(), i(1));
+    let cases = [
+        (
+            "duplicate where",
+            vec![predicate(), predicate()],
+            unsupported,
+        ),
+        (
+            "where after select",
+            vec![pipeline_select("score"), predicate()],
+            unsupported,
+        ),
+        (
+            "where after limit",
+            vec![pipeline_stage("limit", i(1)), predicate()],
+            unsupported,
+        ),
+        (
+            "other function",
+            vec![expression("less_than", vec![pipeline_field("score"), i(7)])],
+            unsupported,
+        ),
+        (
+            "eq alias",
+            vec![expression("eq", vec![pipeline_field("score"), i(7)])],
+            unsupported,
+        ),
+        (
+            "reversed operands",
+            vec![expression("equal", vec![i(7), pipeline_field("score")])],
+            unsupported,
+        ),
+        (
+            "expression left",
+            vec![expression(
+                "equal",
+                vec![
+                    pipeline_function("abs", vec![pipeline_field("score")]),
+                    i(7),
+                ],
+            )],
+            unsupported,
+        ),
+        (
+            "nested field",
+            vec![pipeline_equal("profile.score", i(7))],
+            unsupported,
+        ),
+        (
+            "document name",
+            vec![pipeline_equal("__name__", s("x"))],
+            unsupported,
+        ),
+        (
+            "array literal",
+            vec![pipeline_equal(
+                "score",
+                pb::Value {
+                    value_type: Some(V::ArrayValue(pb::ArrayValue { values: vec![i(7)] })),
+                },
+            )],
+            unsupported,
+        ),
+        (
+            "map literal",
+            vec![pipeline_equal(
+                "score",
+                pb::Value {
+                    value_type: Some(V::MapValue(pb::MapValue {
+                        fields: [("n".into(), i(7))].into_iter().collect(),
+                    })),
+                },
+            )],
+            unsupported,
+        ),
+        (
+            "expression right",
+            vec![pipeline_equal(
+                "score",
+                pipeline_function("abs", vec![i(7)]),
+            )],
+            unsupported,
+        ),
+        (
+            "field right",
+            vec![pipeline_equal("score", pipeline_field("other"))],
+            unsupported,
+        ),
+        ("zero arity", vec![expression("equal", vec![])], invalid),
+        (
+            "one argument",
+            vec![expression("equal", vec![pipeline_field("score")])],
+            invalid,
+        ),
+        (
+            "three arguments",
+            vec![expression(
+                "equal",
+                vec![pipeline_field("score"), i(7), i(8)],
+            )],
+            invalid,
+        ),
+        (
+            "function options",
+            vec![pipeline_stage("where", options)],
+            invalid,
+        ),
+        ("empty field", vec![pipeline_equal("", i(7))], invalid),
+        ("invalid field", vec![pipeline_equal("a..b", i(7))], invalid),
+        (
+            "missing literal",
+            vec![pipeline_equal("score", pb::Value::default())],
+            invalid,
+        ),
+        (
+            "missing left operand",
+            vec![expression("equal", vec![pb::Value::default(), i(7)])],
+            invalid,
+        ),
+    ];
+    let (mut client, _, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write(
+                "where-refusals/a",
+                &[("score", i(7)), ("name", s("original"))],
+            )],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let get = pb::GetDocumentRequest {
+        name: format!("{DOCS}/where-refusals/a"),
+        ..Default::default()
+    };
+    let before = client.get_document(get.clone()).await.unwrap().into_inner();
+    for (label, tail, code) in cases {
+        let stages = std::iter::once(collection())
+            .chain(tail)
+            .collect::<Vec<_>>();
+        let canonical = stages
+            .iter()
+            .map(|stage| format!("{}({})", stage.name, stage.args.len()))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        let err = client
+            .execute_pipeline(pipeline_request(stages))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), code, "{label}: {err}");
+        assert_eq!(
+            err.metadata()
+                .get("fireemu-code")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            if code == unsupported {
+                "FS_PIPE_UNSUPPORTED_STAGE"
+            } else {
+                "FS_PIPE_INVALID"
+            },
+            "{label}"
+        );
+        assert_eq!(
+            err.metadata()
+                .get("fireemu-pipeline")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            canonical,
+            "{label}"
+        );
+        assert_eq!(
+            client.get_document(get.clone()).await.unwrap().into_inner(),
+            before,
+            "{label}"
+        );
+    }
+    handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+async fn execute_pipeline_where_equal_pushes_filter_before_limit() {
+    let (mut client, _clock, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: [
+                update_write("where-equal/a", &[("kind", s("drop")), ("name", s("drop"))]),
+                update_write("where-equal/b", &[("kind", s("keep")), ("name", s("keep"))]),
+                update_write("where-equal/c", &[("kind", s("keep")), ("name", s("keep"))]),
+                update_write("where-equal/d", &[("name", s("missing"))]),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let function = pb::Value {
+        value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
+            name: "equal".to_owned(),
+            args: vec![
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::FieldReferenceValue("kind".to_owned())),
+                },
+                s("keep"),
+            ],
+            options: std::collections::HashMap::default(),
+        })),
+    };
+    let request = pb::ExecutePipelineRequest {
+        database: DB.to_owned(),
+        pipeline_type: Some(
+            pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                pb::StructuredPipeline {
+                    pipeline: Some(pb::Pipeline {
+                        stages: vec![
+                            pb::pipeline::Stage {
+                                name: "collection".to_owned(),
+                                args: vec![s("/where-equal")],
+                                ..Default::default()
+                            },
+                            pb::pipeline::Stage {
+                                name: "where".to_owned(),
+                                args: vec![function],
+                                ..Default::default()
+                            },
+                            pipeline_select("name"),
+                            pb::pipeline::Stage {
+                                name: "limit".to_owned(),
+                                args: vec![i(1)],
+                                ..Default::default()
+                            },
+                        ],
+                    }),
+                    ..Default::default()
+                },
+            ),
+        ),
+        ..Default::default()
+    };
+    let documents = drain_pipeline(
+        client.execute_pipeline(request).await.unwrap().into_inner(),
+        1,
+    )
+    .await;
+    assert_eq!(documents.len(), 1);
+    assert_eq!(
+        documents[0].fields,
+        [("label".to_owned(), s("keep"))].into_iter().collect()
+    );
+    handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
+    let (mut client, _clock, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    let collection = "pipeline-scale";
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..65)
+                .map(|index| {
+                    update_write(
+                        &format!("{collection}/{index:03}"),
+                        &[("value", i(index)), ("extra", s("retained"))],
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let request = |limit: i64| pb::ExecutePipelineRequest {
+        database: DB.to_owned(),
+        pipeline_type: Some(
+            pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                pb::StructuredPipeline {
+                    pipeline: Some(pb::Pipeline {
+                        stages: vec![
+                            pb::pipeline::Stage {
+                                name: "collection".to_owned(),
+                                args: vec![pb::Value {
+                                    value_type: Some(pb::value::ValueType::StringValue(format!(
+                                        "/{collection}"
+                                    ))),
+                                }],
+                                ..Default::default()
+                            },
+                            pb::pipeline::Stage {
+                                name: "select".to_owned(),
+                                args: vec![pb::Value {
+                                    value_type: Some(pb::value::ValueType::MapValue(
+                                        pb::MapValue {
+                                            fields: [(
+                                                "out".to_owned(),
+                                                pb::Value {
+                                                    value_type: Some(
+                                                        pb::value::ValueType::FieldReferenceValue(
+                                                            "value".to_owned(),
+                                                        ),
+                                                    ),
+                                                },
+                                            )]
+                                            .into_iter()
+                                            .collect(),
+                                        },
+                                    )),
+                                }],
+                                ..Default::default()
+                            },
+                            pb::pipeline::Stage {
+                                name: "limit".to_owned(),
+                                args: vec![i(limit)],
+                                ..Default::default()
+                            },
+                        ],
+                    }),
+                    ..Default::default()
+                },
+            ),
+        ),
+        ..Default::default()
+    };
+    let docs = drain_pipeline(
+        client
+            .execute_pipeline(request(65))
+            .await
+            .unwrap()
+            .into_inner(),
+        65,
+    )
+    .await;
+    assert_eq!(docs.len(), 65);
+    assert_eq!(
+        docs.iter()
+            .map(|doc| doc.fields["out"].clone())
+            .collect::<Vec<_>>(),
+        (0..65).map(i).collect::<Vec<_>>()
+    );
+    assert!(docs.iter().all(|doc| doc.fields.len() == 1));
+    let docs = drain_pipeline(
+        client
+            .execute_pipeline(request(33))
+            .await
+            .unwrap()
+            .into_inner(),
+        33,
+    )
+    .await;
+    assert_eq!(
+        docs.iter()
+            .map(|doc| doc.fields["out"].clone())
+            .collect::<Vec<_>>(),
+        (0..33).map(i).collect::<Vec<_>>()
+    );
+    let docs = drain_pipeline(
+        client
+            .execute_pipeline(request(i64::from(i32::MAX) + 1))
+            .await
+            .unwrap()
+            .into_inner(),
+        65,
+    )
+    .await;
+    assert_eq!(docs.len(), 65);
+    let docs = drain_pipeline(
+        client
+            .execute_pipeline(request(0))
+            .await
+            .unwrap()
+            .into_inner(),
+        1,
+    )
+    .await;
+    assert!(docs.is_empty());
+    let mut empty = request(65);
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        &mut empty.pipeline_type
+    else {
+        unreachable!()
+    };
+    structured.pipeline.as_mut().unwrap().stages[0].args[0] = s("/empty-scale");
+    let mut stream = client.execute_pipeline(empty).await.unwrap().into_inner();
+    assert_eq!(
+        stream.message().await.unwrap(),
+        Some(pb::ExecutePipelineResponse::default())
+    );
+    assert!(stream.message().await.unwrap().is_none());
+    handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_preserves_state() {
+    let (mut client, _clock, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    let collection = "pipeline-offset";
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..67)
+                .map(|index| {
+                    let mut fields = vec![
+                        ("group", s(if index % 2 == 0 { "match" } else { "other" })),
+                        ("value", i(index)),
+                    ];
+                    if index != 4 {
+                        fields.push(("label", s(&format!("row-{index:03}"))));
+                    }
+                    update_write(&format!("{collection}/{index:03}"), &fields)
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let mut source_before = Vec::new();
+    for index in 0..67 {
+        source_before.push(
+            client
+                .get_document(pb::GetDocumentRequest {
+                    name: format!("{DOCS}/{collection}/{index:03}"),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner(),
+        );
+    }
+
+    let collection_stage = || pipeline_stage("collection", s(collection));
+    let limit = |value| pipeline_stage("limit", i(value));
+    let execute = |stages| pipeline_request(stages);
+
+    let baseline = drain_pipeline(
+        client
+            .execute_pipeline(execute(vec![collection_stage(), pipeline_select("value")]))
+            .await
+            .unwrap()
+            .into_inner(),
+        67,
+    )
+    .await;
+    for (offset, limit_value) in [
+        (0, None),
+        (1, Some(33)),
+        (31, Some(33)),
+        (32, Some(33)),
+        (33, Some(33)),
+        (64, None),
+        (65, None),
+        (66, None),
+        (67, None),
+        (68, None),
+        (i64::from(i32::MAX), None),
+    ] {
+        let mut stages = vec![
+            collection_stage(),
+            pipeline_select("value"),
+            pipeline_offset(offset),
+        ];
+        if let Some(limit_value) = limit_value {
+            stages.push(limit(limit_value));
+        }
+        let expected = baseline
+            .iter()
+            .skip(usize::try_from(offset).unwrap())
+            .take(limit_value.map_or(usize::MAX, |value| usize::try_from(value).unwrap()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let messages = expected.len().max(1);
+        let actual = drain_pipeline(
+            client
+                .execute_pipeline(execute(stages))
+                .await
+                .unwrap()
+                .into_inner(),
+            messages,
+        )
+        .await;
+        assert_eq!(actual, expected, "offset={offset}, limit={limit_value:?}");
+    }
+
+    let filtered_baseline = drain_pipeline(
+        client
+            .execute_pipeline(execute(vec![
+                collection_stage(),
+                pipeline_equal("group", s("match")),
+                pipeline_select("label"),
+            ]))
+            .await
+            .unwrap()
+            .into_inner(),
+        34,
+    )
+    .await;
+    let filtered = drain_pipeline(
+        client
+            .execute_pipeline(execute(vec![
+                collection_stage(),
+                pipeline_equal("group", s("match")),
+                pipeline_select("label"),
+                pipeline_offset(1),
+                limit(33),
+            ]))
+            .await
+            .unwrap()
+            .into_inner(),
+        33,
+    )
+    .await;
+    assert_eq!(filtered, filtered_baseline[1..]);
+    assert!(filtered.iter().any(|document| document.fields.is_empty()));
+
+    for (label, stages) in [
+        (
+            "duplicate offset",
+            vec![collection_stage(), pipeline_offset(1), pipeline_offset(2)],
+        ),
+        (
+            "offset after limit",
+            vec![collection_stage(), limit(1), pipeline_offset(1)],
+        ),
+        (
+            "where after offset",
+            vec![
+                collection_stage(),
+                pipeline_offset(1),
+                pipeline_equal("group", s("match")),
+            ],
+        ),
+        (
+            "select after offset",
+            vec![
+                collection_stage(),
+                pipeline_offset(1),
+                pipeline_select("value"),
+            ],
+        ),
+    ] {
+        let error = client.execute_pipeline(execute(stages)).await.unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unimplemented, "{label}: {error}");
+        assert_eq!(
+            error.metadata().get("fireemu-code").unwrap(),
+            "FS_PIPE_UNSUPPORTED_STAGE",
+            "{label}: {error}"
+        );
+        assert!(error.metadata().get("fireemu-pipeline").is_some());
+    }
+    let too_large = client
+        .execute_pipeline(execute(vec![
+            collection_stage(),
+            pipeline_offset(i64::from(i32::MAX) + 1),
+        ]))
+        .await
+        .unwrap_err();
+    assert_eq!(too_large.code(), tonic::Code::Unimplemented);
+    assert_eq!(
+        too_large.metadata().get("fireemu-code").unwrap(),
+        "FS_PIPE_UNSUPPORTED_STAGE"
+    );
+    assert!(too_large.metadata().get("fireemu-pipeline").is_some());
+
+    for (label, value) in [
+        ("negative", i(-1)),
+        (
+            "double",
+            pb::Value {
+                value_type: Some(pb::value::ValueType::DoubleValue(1.0)),
+            },
+        ),
+        ("unset", pb::Value::default()),
+    ] {
+        let error = client
+            .execute_pipeline(execute(vec![
+                collection_stage(),
+                pipeline_stage("offset", value),
+            ]))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.code(),
+            tonic::Code::InvalidArgument,
+            "{label}: {error}"
+        );
+        assert_eq!(
+            error.metadata().get("fireemu-code").unwrap(),
+            "FS_PIPE_INVALID",
+            "{label}: {error}"
+        );
+        assert!(error.metadata().get("fireemu-pipeline").is_none());
+    }
+    for (label, offset) in [
+        (
+            "missing argument",
+            pb::pipeline::Stage {
+                name: "offset".to_owned(),
+                ..Default::default()
+            },
+        ),
+        (
+            "extra argument",
+            pb::pipeline::Stage {
+                name: "offset".to_owned(),
+                args: vec![i(1), i(2)],
+                ..Default::default()
+            },
+        ),
+        (
+            "stage option",
+            pb::pipeline::Stage {
+                name: "offset".to_owned(),
+                args: vec![i(1)],
+                options: [("mode".to_owned(), s("ignored"))].into_iter().collect(),
+            },
+        ),
+    ] {
+        let error = client
+            .execute_pipeline(execute(vec![collection_stage(), offset]))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.code(),
+            tonic::Code::InvalidArgument,
+            "{label}: {error}"
+        );
+        assert_eq!(
+            error.metadata().get("fireemu-code").unwrap(),
+            "FS_PIPE_INVALID",
+            "{label}: {error}"
+        );
+        assert!(error.metadata().get("fireemu-pipeline").is_none());
+    }
+
+    let after = drain_pipeline(
+        client
+            .execute_pipeline(execute(vec![collection_stage(), pipeline_select("value")]))
+            .await
+            .unwrap()
+            .into_inner(),
+        67,
+    )
+    .await;
+    assert_eq!(after, baseline);
+    let mut source_after = Vec::new();
+    for index in 0..67 {
+        source_after.push(
+            client
+                .get_document(pb::GetDocumentRequest {
+                    name: format!("{DOCS}/{collection}/{index:03}"),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner(),
+        );
+    }
+    assert_eq!(source_after, source_before);
+    handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_limit() {
+    use pb::execute_pipeline_request::ConsistencySelector;
+
+    let (mut client, _, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write(
+                    "items/one",
+                    &[
+                        ("name", s("one")),
+                        ("ignored", i(1)),
+                        ("literal.dot", s("literal")),
+                    ],
+                ),
+                update_write("items/two", &[("name", s("two")), ("ignored", i(2))]),
+                update_write("rooms/r1/messages/m1", &[("name", s("nested"))]),
+                update_write("rooms/r2/messages/m1", &[("name", s("sibling"))]),
+                update_write("messages/m1", &[("name", s("root"))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let stage = |name: &str, value: pb::Value| pb::pipeline::Stage {
+        name: name.to_owned(),
+        args: vec![value],
+        options: HashMap::new(),
+    };
+    let select = |field: &str| {
+        stage(
+            "select",
+            pb::Value {
+                value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                    fields: [(
+                        "label".to_owned(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::FieldReferenceValue(
+                                field.to_owned(),
+                            )),
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                })),
+            },
+        )
+    };
+    let request = |stages: Vec<pb::pipeline::Stage>| pb::ExecutePipelineRequest {
+        database: DB.to_owned(),
+        pipeline_type: Some(
+            pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                pb::StructuredPipeline {
+                    pipeline: Some(pb::Pipeline { stages }),
+                    options: HashMap::new(),
+                },
+            ),
+        ),
+        ..Default::default()
+    };
+    let collection = |name: &str| stage("collection", s(name));
+    let limit = |n| stage("limit", i(n));
+    let projected = drain_pipeline(
+        client
+            .execute_pipeline(request(vec![collection("items"), select("name"), limit(1)]))
+            .await
+            .unwrap()
+            .into_inner(),
+        1,
+    )
+    .await;
+    assert_eq!(projected.len(), 1);
+    assert_eq!(
+        projected[0].fields,
+        [("label".to_owned(), s("one"))].into_iter().collect()
+    );
+    // Drain both responses, preserving multiplicity; collection input does not promise ordering.
+    let all = drain_pipeline(
+        client
+            .execute_pipeline(request(vec![collection("items"), select("name")]))
+            .await
+            .unwrap()
+            .into_inner(),
+        2,
+    )
+    .await;
+    assert_eq!(all.len(), 2);
+    assert_eq!(
+        all.iter()
+            .filter(|doc| doc.fields.get("label") == Some(&s("one")))
+            .count(),
+        1
+    );
+    assert_eq!(
+        all.iter()
+            .filter(|doc| doc.fields.get("label") == Some(&s("two")))
+            .count(),
+        1
+    );
+    for (path, count, expected) in [
+        ("items", 0, None),
+        ("empty", 10, None),
+        ("rooms/r1/messages", 10, Some("nested")),
+        ("rooms/r2/messages", 10, Some("sibling")),
+        ("messages", 10, Some("root")),
+    ] {
+        let docs = drain_pipeline(
+            client
+                .execute_pipeline(request(vec![collection(path), limit(count)]))
+                .await
+                .unwrap()
+                .into_inner(),
+            1,
+        )
+        .await;
+        match expected {
+            None => assert!(docs.is_empty()),
+            Some(name) => {
+                assert_eq!(docs.len(), 1);
+                assert_eq!(
+                    docs[0].fields,
+                    [("name".to_owned(), s(name))].into_iter().collect()
+                );
+            }
+        }
+    }
+    // A quoted literal dot is one field, unlike the unsupported nested extraction below.
+    let literal = drain_pipeline(
+        client
+            .execute_pipeline(request(vec![
+                collection("items"),
+                select("`literal.dot`"),
+                limit(1),
+            ]))
+            .await
+            .unwrap()
+            .into_inner(),
+        1,
+    )
+    .await;
+    assert_eq!(literal[0].fields.get("label"), Some(&s("literal")));
+    for (label, stages) in [
+        (
+            "duplicate limit",
+            vec![collection("items"), limit(1), limit(2)],
+        ),
+        (
+            "duplicate select",
+            vec![collection("items"), select("name"), select("label")],
+        ),
+        (
+            "limit before select",
+            vec![collection("items"), limit(1), select("name")],
+        ),
+        (
+            "nested reference",
+            vec![collection("items"), select("profile.name")],
+        ),
+        (
+            "document metadata",
+            vec![collection("items"), select("__name__")],
+        ),
+    ] {
+        let err = client.execute_pipeline(request(stages)).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
+    }
+    for selector in [
+        ConsistencySelector::Transaction(vec![1]),
+        ConsistencySelector::NewTransaction(pb::TransactionOptions::default()),
+        ConsistencySelector::ReadTime(prost_types::Timestamp {
+            seconds: 1_700_000_000,
+            nanos: 0,
+        }),
+    ] {
+        let mut req = request(vec![collection("items")]);
+        req.consistency_selector = Some(selector);
+        assert_eq!(
+            client.execute_pipeline(req).await.unwrap_err().code(),
+            tonic::Code::Unimplemented
+        );
+    }
+    let mut req = request(vec![collection("items")]);
+    req.consistency_selector = Some(ConsistencySelector::NewTransaction(
+        pb::TransactionOptions::default(),
+    ));
+    req.auto_commit_transaction = true;
+    assert_eq!(
+        client.execute_pipeline(req).await.unwrap_err().code(),
+        tonic::Code::Unimplemented
+    );
+    let mut req = request(vec![collection("items")]);
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        req.pipeline_type.as_mut()
+    else {
+        panic!("structured request")
+    };
+    structured
+        .options
+        .insert("index_mode".to_owned(), s("recommended"));
+    assert_eq!(
+        client.execute_pipeline(req).await.unwrap_err().code(),
+        tonic::Code::Unimplemented
+    );
+    // Refusals do not consume or alter the source data.
+    let after = drain_pipeline(
+        client
+            .execute_pipeline(request(vec![collection("items"), select("name")]))
+            .await
+            .unwrap()
+            .into_inner(),
+        2,
+    )
+    .await;
+    assert_eq!(after, all);
+    handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
 }
 
 #[tokio::test]
@@ -5542,4 +7631,396 @@ fn assert_selection_then_pages(stats: &QueryExecutionStats, context: &str) {
     assert_eq!(stats.pages.cloned_documents, 35, "{context}");
     assert_eq!(stats.pages.matched, 35, "{context}");
     assert!(stats.pages.cloned_field_bytes > 0, "{context}");
+}
+
+#[tokio::test]
+async fn batch_write_continues_after_decode_and_execution_failures() {
+    let (mut client, _clock, handle) = start().await;
+    for decode_failure in [false, true] {
+        for failure_index in [0, 1] {
+            let collection = format!("batch-continuation-{decode_failure}-{failure_index}");
+            let mut writes = (0..3)
+                .map(|index| update_write(&format!("{collection}/{index}"), &[("v", i(index))]))
+                .collect::<Vec<_>>();
+            writes[failure_index] = if decode_failure {
+                pb::Write {
+                    operation: Some(pb::write::Operation::Update(pb::Document {
+                        name: "bad name".to_owned(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }
+            } else {
+                pb::Write {
+                    operation: Some(pb::write::Operation::Delete(format!(
+                        "{DOCS}/{collection}/{failure_index}"
+                    ))),
+                    current_document: Some(pb::Precondition {
+                        condition_type: Some(pb::precondition::ConditionType::Exists(true)),
+                    }),
+                    ..Default::default()
+                }
+            };
+            let response = client
+                .batch_write(pb::BatchWriteRequest {
+                    database: DB.to_owned(),
+                    writes,
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(response.status.len(), 3);
+            assert_eq!(response.write_results.len(), 3);
+            for index in 0..3 {
+                let document = client
+                    .get_document(pb::GetDocumentRequest {
+                        name: format!("{DOCS}/{collection}/{index}"),
+                        ..Default::default()
+                    })
+                    .await;
+                if index == failure_index {
+                    assert_ne!(response.status[index].code, 0);
+                    assert_eq!(response.write_results[index], pb::WriteResult::default());
+                    assert_eq!(document.unwrap_err().code(), tonic::Code::NotFound);
+                } else {
+                    assert_eq!(response.status[index].code, 0);
+                    let document = document.unwrap().into_inner();
+                    assert_eq!(
+                        document.fields,
+                        [("v".to_owned(), i(i64::try_from(index).unwrap()))].into()
+                    );
+                    assert_eq!(
+                        document.update_time,
+                        response.write_results[index].update_time
+                    );
+                    assert!(document.update_time.is_some());
+                }
+            }
+        }
+    }
+    handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn batch_write_reports_lock_contention_per_item_and_preserves_suffix() {
+    let (mut client, _clock, handle) = start().await;
+    for contended_index in [0, 1] {
+        let collection = format!("batch-contention-{contended_index}");
+        let locked = format!("{collection}/locked");
+        let prefix = format!("{collection}/prefix");
+        let suffix = format!("{collection}/suffix");
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(&locked, &[("v", i(1))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let transaction = client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        let mut reads = client
+            .batch_get_documents(pb::BatchGetDocumentsRequest {
+                database: DB.to_owned(),
+                documents: vec![format!("{DOCS}/{locked}")],
+                consistency_selector: Some(
+                    pb::batch_get_documents_request::ConsistencySelector::Transaction(
+                        transaction.clone(),
+                    ),
+                ),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let read = reads.next().await.unwrap().unwrap();
+        assert!(matches!(
+            read.result,
+            Some(pb::batch_get_documents_response::Result::Found(_))
+        ));
+
+        let (writes, ordered_paths, ordered_values) = if contended_index == 0 {
+            (
+                vec![
+                    update_write(&locked, &[("v", i(3))]),
+                    update_write(&prefix, &[("v", i(2))]),
+                    update_write(&suffix, &[("v", i(4))]),
+                ],
+                [&locked, &prefix, &suffix],
+                [3, 2, 4],
+            )
+        } else {
+            (
+                vec![
+                    update_write(&prefix, &[("v", i(2))]),
+                    update_write(&locked, &[("v", i(3))]),
+                    update_write(&suffix, &[("v", i(4))]),
+                ],
+                [&prefix, &locked, &suffix],
+                [2, 3, 4],
+            )
+        };
+        let response = client
+            .batch_write(pb::BatchWriteRequest {
+                database: DB.to_owned(),
+                writes,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.status.len(), 3);
+        assert_eq!(response.write_results.len(), 3);
+        // BatchWrite contention is a per-item local result; it is not retried or promoted to a
+        // whole-request error. The exact wording is the core's local contention contract.
+        assert_eq!(
+            response.status[contended_index].code,
+            i32::from(tonic::Code::Aborted)
+        );
+        assert_eq!(
+            response.status[contended_index].message,
+            "Too much contention on these documents. Please try again."
+        );
+        assert_eq!(
+            response.write_results[contended_index],
+            pb::WriteResult::default()
+        );
+        for index in 0..3 {
+            if index == contended_index {
+                continue;
+            }
+            assert_eq!(response.status[index].code, 0);
+            assert!(response.write_results[index].update_time.is_some());
+        }
+
+        let get = |path: &str| pb::GetDocumentRequest {
+            name: format!("{DOCS}/{path}"),
+            ..Default::default()
+        };
+        let locked_after_batch = client
+            .get_document(get(&locked))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(locked_after_batch.fields, [("v".to_owned(), i(1))].into());
+        for (index, (path, value)) in ordered_paths.iter().zip(ordered_values).enumerate() {
+            if index == contended_index {
+                continue;
+            }
+            let document = client.get_document(get(path)).await.unwrap().into_inner();
+            assert_eq!(document.fields, [("v".to_owned(), i(value))].into());
+            assert_eq!(
+                document.update_time,
+                response.write_results[index].update_time
+            );
+        }
+
+        // The refused BatchWrite item leaves its holder active. Its own commit can finish and
+        // release the lock, after which an out-of-band write to the same path succeeds.
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(&locked, &[("v", i(5))])],
+                transaction,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(&locked, &[("v", i(6))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .get_document(get(&locked))
+                .await
+                .unwrap()
+                .into_inner()
+                .fields,
+            [("v".to_owned(), i(6))].into()
+        );
+    }
+    handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn transaction_commit_late_precondition_failure_preserves_documents_and_versions() {
+    let (mut client, clock, handle) = start().await;
+    for verify in [false, true] {
+        let collection = format!("late-precondition-{verify}");
+        let original_path = format!("{collection}/original");
+        let created_path = format!("{collection}/created");
+        let guard_path = format!("{DOCS}/{collection}/guard");
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![
+                    update_write(&original_path, &[("v", i(7)), ("label", s("preserved"))]),
+                    update_write(&format!("{collection}/guard"), &[("v", i(9))]),
+                ],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let get = |path: &str| pb::GetDocumentRequest {
+            name: format!("{DOCS}/{path}"),
+            ..Default::default()
+        };
+        let original = client
+            .get_document(get(&original_path))
+            .await
+            .unwrap()
+            .into_inner();
+        let guard = client
+            .get_document(get(&format!("{collection}/guard")))
+            .await
+            .unwrap()
+            .into_inner();
+        let transaction = client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        let mut read = get(&original_path);
+        read.consistency_selector = Some(
+            pb::get_document_request::ConsistencySelector::Transaction(transaction.clone()),
+        );
+        assert_eq!(
+            client.get_document(read).await.unwrap().into_inner(),
+            original
+        );
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(1))
+            .unwrap();
+        let writes = |exists| {
+            vec![
+                pb::Write {
+                    operation: Some(pb::write::Operation::Delete(format!(
+                        "{DOCS}/{original_path}"
+                    ))),
+                    ..Default::default()
+                },
+                update_write(&created_path, &[("v", i(11))]),
+                pb::Write {
+                    operation: Some(if verify {
+                        pb::write::Operation::Verify(guard_path.clone())
+                    } else {
+                        pb::write::Operation::Delete(guard_path.clone())
+                    }),
+                    current_document: Some(pb::Precondition {
+                        condition_type: Some(pb::precondition::ConditionType::Exists(exists)),
+                    }),
+                    ..Default::default()
+                },
+            ]
+        };
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: writes(false),
+                transaction: transaction.clone(),
+                ..Default::default()
+            })
+            .await
+            .expect_err("a late failing precondition rejects the entire transaction");
+        assert_eq!(
+            client
+                .get_document(get(&original_path))
+                .await
+                .unwrap()
+                .into_inner(),
+            original
+        );
+        assert_eq!(
+            client
+                .get_document(get(&format!("{collection}/guard")))
+                .await
+                .unwrap()
+                .into_inner(),
+            guard
+        );
+        assert_eq!(
+            client
+                .get_document(get(&created_path))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::NotFound
+        );
+        client
+            .rollback(pb::RollbackRequest {
+                database: DB.to_owned(),
+                transaction,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        // The same write sequence succeeds with the guard's actual existence condition.
+        let transaction = client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .transaction;
+        let response = client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: writes(true),
+                transaction,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.write_results.len(), 3);
+        assert_eq!(
+            client
+                .get_document(get(&original_path))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::NotFound
+        );
+        let created = client
+            .get_document(get(&created_path))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(created.fields, [("v".to_owned(), i(11))].into());
+        assert_eq!(created.update_time, response.write_results[1].update_time);
+        assert_ne!(created.update_time, original.update_time);
+        let after_guard = client
+            .get_document(get(&format!("{collection}/guard")))
+            .await;
+        if verify {
+            assert_eq!(after_guard.unwrap().into_inner(), guard);
+        } else {
+            assert_eq!(after_guard.unwrap_err().code(), tonic::Code::NotFound);
+        }
+    }
+    handle.abort();
 }

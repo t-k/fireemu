@@ -1,0 +1,81 @@
+{
+  "kind": "production-batch-candidate-result-v1",
+  "sourceCommit": "0cbedb4bbcb64bb4599acaeffd3f0ac6cc636462",
+  "project": "fireemu-35fe6",
+  "projectNumber": "592603257417",
+  "quotaProject": "fireemu-35fe6",
+  "database": "(default)",
+  "edition": "STANDARD",
+  "manifestSha256": "6f0fa73a8fe494709b883c440266c721157d8ec44252fb81c331f2a10642d534",
+  "observerSha256": "d3c86963fb3d5e919b16e37dc6117c309f4129096a2398a9b3a086d281ceb520",
+  "comparisonContractDigest": "467df4b222eec0b35a800c5cddc434413711c26400668cd4fddb57bdfed09cea",
+  "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
+  "permissionReference": "conversation-2026-09-15-autonomous-production-under-usd10",
+  "executionNonce": "b7936d69e87646f696b6942a35aa7a06",
+  "planningCostEstimateUsd": 0.3051264453125,
+  "authorizationCostCeilingUsd": 10,
+  "production": {
+    "productionExecuted": true,
+    "recordingComplete": true,
+    "cleanupComplete": true,
+    "configurationUnchanged": true,
+    "rows": 46,
+    "rowStatusCounts": {
+      "200": 21,
+      "400": 4,
+      "404": 1,
+      "409": 1,
+      "fail": 1,
+      "pass": 18
+    },
+    "authRows": 19,
+    "firestoreRows": 27,
+    "requestCounts": {
+      "total": 101,
+      "auth": 31,
+      "firestore": 60,
+      "metadata": 10,
+      "recovery": 33
+    },
+    "unrecovered": [],
+    "databaseObservationProjectionDigests": [
+      "31957f98b7ec76e9c2e7a04803772f7270763a8ed62037fbdefa74c2c8f71d33",
+      "31957f98b7ec76e9c2e7a04803772f7270763a8ed62037fbdefa74c2c8f71d33"
+    ],
+    "databaseObservationResponseDigests": [
+      "3b4fd1136ecc48202267403f95f58e3332656b9736ed35f42e65c45cf1da80df",
+      "be7716fddf831aa4cab7421eb72fe147e66c078036bcf0803e17808b732adfcb"
+    ]
+  },
+  "local": {
+    "productionExecuted": false,
+    "recordingComplete": true,
+    "cleanupComplete": true,
+    "rows": 46,
+    "artifactSha256": "bec17daee9e68f1efa77c71dce0eeb87cf8e1c005352038895648c5ca652ce6e",
+    "executionCommit": "0cbedb4bbcb64bb4599acaeffd3f0ac6cc636462"
+  },
+  "comparison": {
+    "mode": "production-versus-local",
+    "recordingComplete": true,
+    "bindingsValid": true,
+    "cleanupComplete": true,
+    "compatibility": "match",
+    "rows": 46,
+    "statusCounts": {
+      "match": 46
+    }
+  },
+  "privateEvidenceSha256": {
+    "permission": "34f911d07e0753511124a929a3d5e67ebe698c8542303759c5345588e1b466aa",
+    "productionResult": "db7756355c6265bc8e35345e45a3e2c3fce64b3bccbb9cb289d34a597169290e",
+    "localResult": "74c8c9b5769be7e07d12a23de94280247e0107f4763544777721f09b6fa6eabd",
+    "comparison": "0e9705675fb86da9154d590ab5795a90159c5f6b0bcaa759737553310cf892c2"
+  },
+  "limitations": [
+    "The planning estimate is not an invoice hard cap; actual billing was not measured by the adapter.",
+    "The result is candidate evidence from one bounded production execution and does not close the broader Identity Platform/Firestore parent groups.",
+    "The production collector and local runtime are bound separately; the local artifact hash is recorded above.",
+    "Structured API refusals are compared semantically only when transport, lifecycle, ownership and configuration evidence are complete; auth/quota/transient or malformed responses remain indeterminate."
+  ]
+}

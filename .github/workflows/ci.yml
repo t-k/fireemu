@@ -151,6 +151,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
+      # Cargo authority resolves the locked Linux projection with `--offline`. A host build does
+      # not populate another target's registry sources, so fetch the whole locked graph first.
+      - name: fetch locked dependency graph for offline authority checks
+        if: runner.os == 'macOS'
+        run: cargo fetch --locked
       # The process-census integration suites shell out to `ps` and `kill` to prove that a
       # daemon leaves nothing running; they are POSIX-only by construction, so Windows runs the
       # in-crate unit tests. Making them portable is tracked in the distribution issue.
@@ -158,7 +163,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cargo nextest run --workspace --lib --profile pr
+            # The private Quint authority and its traceability CLI supervise Unix process groups;
+            # production libraries remain in this native Windows test run.
+            cargo nextest run --workspace --exclude fireemu-verification-quint --exclude traceability-check --lib --profile pr
           else
             cargo nextest run --workspace --profile pr
           fi
@@ -209,6 +216,8 @@ jobs:
           cache-dependency-path: ui/pnpm-lock.yaml
       - name: install UI dependencies
         run: pnpm -C ui install --frozen-lockfile
+      - name: install Functions fixture dependencies
+        run: npm ci --prefix tools/sdk-smoke --ignore-scripts
       - name: lint
         run: pnpm -C ui lint
       - name: format

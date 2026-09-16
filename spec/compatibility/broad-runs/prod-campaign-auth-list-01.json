@@ -1,0 +1,23 @@
+{
+  "kind": "production-campaign-auth-list-01-v1",
+  "status": "prepared-offline",
+  "sourceCommit": "aad1a41de926fae244b42ac1bd2baa57bf2bcdde",
+  "cases": [
+    "auth/refresh/changed-refresh@0",
+    "auth/refresh/reference-refresh",
+    "firestore/list-collection-ids/root",
+    "firestore/list-collection-ids/missing-document-parent",
+    "firestore/list-collection-ids/page-size-one"
+  ],
+  "transport": "local-only",
+  "productionExecuted": false,
+  "maxConcurrency": 1,
+  "costMicrousd": 8000,
+  "ownerInputs": {
+    "owner": null,
+    "permissionReference": null,
+    "startsAt": null,
+    "endsAt": null,
+    "nonce": null
+  }
+}

@@ -213,6 +213,57 @@ function canonical(value) {
   return JSON.stringify(sort(value));
 }
 
+/** A transport result is not an observation that can establish an HTTP comparison. */
+function isCompletedHttpObservation(step) {
+  return (
+    step &&
+    step.missing !== true &&
+    Number.isInteger(step.status) &&
+    step.status >= 100 &&
+    step.status <= 599 &&
+    typeof step.code === "string" &&
+    step.code.length > 0 &&
+    (step.code !== "OK" || Object.hasOwn(step, "body"))
+  );
+}
+
+/** Compare saved production decisions with a current normalized fireemu response. */
+export function compareProductionToFireemu({ production, fireemu, programDefinitions = PROGRAMS }) {
+  const savedPrograms = Array.isArray(production)
+    ? Object.fromEntries(production.map((program) => [program.id, program]))
+    : production.programs
+      ? Object.fromEntries(production.programs.map((program) => [program.id, program]))
+      : production;
+  const rows = [];
+  for (const program of programDefinitions) {
+    for (const step of program.steps) {
+      const saved = savedPrograms[program.id]?.steps?.[step.id]?.production ?? { missing: true };
+      const actual = fireemu[program.id]?.steps?.[step.id] ?? { missing: true };
+      const savedDecision = decision(saved);
+      const localDecision = decision(actual);
+      const comparison =
+        isCompletedHttpObservation(saved) && isCompletedHttpObservation(actual)
+          ? canonical(savedDecision) === canonical(localDecision)
+            ? "match"
+            : "mismatch"
+          : "indeterminate";
+      rows.push({
+        id: step.id,
+        comparison,
+        production: savedDecision,
+        local: localDecision,
+      });
+    }
+  }
+  const matches = rows.filter((row) => row.comparison === "match").length;
+  return {
+    rowCount: rows.length,
+    matches,
+    mismatches: rows.length - matches,
+    rows,
+  };
+}
+
 const rowKey = (programId, stepId) => `${programId}#${stepId}`;
 
 /**
@@ -391,6 +442,7 @@ async function check() {
   let failures = 0;
   let diverged = 0;
   let messageDrift = 0;
+  let localOnlyRows = 0;
   const drift = [];
   for (const program of matrix.programs) {
     const mine = got[program.id] ?? { missing: true };
@@ -401,11 +453,25 @@ async function check() {
     }
     for (const [stepId, recorded] of Object.entries(program.steps)) {
       rows += 1;
+      const definition = PROGRAMS.find((candidate) => candidate.id === program.id)?.steps.find(
+        (candidate) => candidate.id === stepId,
+      );
+      const actual = mine.steps?.[stepId];
+      if (definition?.localOnly) {
+        // Local-only extensions are not official-emulator compatibility claims. They still need
+        // a complete HTTP observation so a failed local run cannot disappear as a skip.
+        if (!isCompletedHttpObservation(actual)) {
+          failures += 1;
+          console.error(`\n${rowKey(program.id, stepId)} local-only observation is incomplete`);
+        } else {
+          localOnlyRows += 1;
+        }
+        continue;
+      }
       // The register in `divergences.mjs` is the source of truth; the copy stamped into
       // the matrix at record time is for the reader of the JSON.
       const row = { ...recorded, divergence: DIVERGENCES[rowKey(program.id, stepId)] };
       const expected = row.divergence ? row.divergence.fireemu : row.oracle;
-      const actual = mine.steps?.[stepId];
       // A divergence may pin a success by the digest of its body (the document names it
       // returns) rather than by the whole body, which keeps the register readable while
       // still pinning the result set.
@@ -451,8 +517,9 @@ async function check() {
   await writeFile(join(RUN_DIR, "message-drift.json"), `${JSON.stringify(drift, null, 2)}\n`);
   if (failures === 0) {
     console.log(
-      `ok: ${rows} rows agree with the recorded oracle ` +
+      `ok: ${rows - localOnlyRows} gated rows agree with the recorded oracle ` +
         `(${diverged} documented divergence${diverged === 1 ? "" : "s"}, ` +
+        `${localOnlyRows} local-only rows observed, ` +
         `${messageDrift} error messages differ; see .runs/firestore-probe/message-drift.json)`,
     );
     return 0;

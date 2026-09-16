@@ -1,0 +1,92 @@
+{
+  "kind": "saved-database-responses-offline-fixture",
+  "productionDataRowsExecuted": 0,
+  "sourceCommit": "7be6cf08f1e9b1620eb0b7675b8352470b0968f5",
+  "sourceResponseJournalSha256": "7553e29bc28edc03cb5827613f62b9edd3343b44d8a7f1fac2f892fb7c92bfa2",
+  "v1Contract": {
+    "version": "database-settings-v1",
+    "excludedResponseFields": [
+      "earliestVersionTime"
+    ],
+    "retainedFields": "all other fields, including unknown fields and field presence/types",
+    "requiredIdentityFields": [
+      "name",
+      "uid",
+      "databaseEdition",
+      "type",
+      "locationId"
+    ],
+    "hashEncoding": "canonical typed JSON SHA256"
+  },
+  "observations": [
+    {
+      "phase": "approved",
+      "body": {
+        "name": "projects/fireemu-35fe6/databases/(default)",
+        "uid": "dc7a48b3-ee80-4d2e-964b-0d475c35a47a",
+        "createTime": "2026-09-02T12:56:28.522410Z",
+        "updateTime": "2026-09-02T12:56:28.522410Z",
+        "locationId": "us-central1",
+        "type": "FIRESTORE_NATIVE",
+        "concurrencyMode": "PESSIMISTIC",
+        "versionRetentionPeriod": "3600s",
+        "earliestVersionTime": "2026-09-12T12:57:54.467054Z",
+        "appEngineIntegrationMode": "DISABLED",
+        "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+        "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+        "databaseEdition": "STANDARD",
+        "freeTier": true,
+        "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+        "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
+        "etag": "INvzo7OZ6ZYDMODt3eb7z5YD"
+      },
+      "rawResponseSha256": "05fc90573f9cff8a92d9e8ddd031d47a408e255bf836a24ca9a2dff5980852d3"
+    },
+    {
+      "phase": "observation",
+      "body": {
+        "name": "projects/fireemu-35fe6/databases/(default)",
+        "uid": "dc7a48b3-ee80-4d2e-964b-0d475c35a47a",
+        "createTime": "2026-09-02T12:56:28.522410Z",
+        "updateTime": "2026-09-02T12:56:28.522410Z",
+        "locationId": "us-central1",
+        "type": "FIRESTORE_NATIVE",
+        "concurrencyMode": "PESSIMISTIC",
+        "versionRetentionPeriod": "3600s",
+        "earliestVersionTime": "2026-09-12T13:33:04.408066Z",
+        "appEngineIntegrationMode": "DISABLED",
+        "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+        "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+        "databaseEdition": "STANDARD",
+        "freeTier": true,
+        "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+        "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
+        "etag": "ILi9sKGh6ZYDMODt3eb7z5YD"
+      },
+      "journalObservationDigest": "7721d4efbde6d45832c59aa69f7d333c8266e64e6c1a74e62a1eb26924efbfef"
+    },
+    {
+      "phase": "recovery",
+      "body": {
+        "name": "projects/fireemu-35fe6/databases/(default)",
+        "uid": "dc7a48b3-ee80-4d2e-964b-0d475c35a47a",
+        "createTime": "2026-09-02T12:56:28.522410Z",
+        "updateTime": "2026-09-02T12:56:28.522410Z",
+        "locationId": "us-central1",
+        "type": "FIRESTORE_NATIVE",
+        "concurrencyMode": "PESSIMISTIC",
+        "versionRetentionPeriod": "3600s",
+        "earliestVersionTime": "2026-09-12T13:33:06.331728Z",
+        "appEngineIntegrationMode": "DISABLED",
+        "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+        "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+        "databaseEdition": "STANDARD",
+        "freeTier": true,
+        "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+        "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
+        "etag": "INTxpaKh6ZYDMODt3eb7z5YD"
+      },
+      "journalObservationDigest": "ab2c8dd6f916963c66f7f787426419b86278a9a1c68e1a8044f46bc69c316b3d"
+    }
+  ]
+}

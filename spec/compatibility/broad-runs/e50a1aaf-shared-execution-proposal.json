@@ -1,0 +1,158 @@
+{
+  "schema": "shared-production-frame-proposal-v1",
+  "status": "unapproved-proposal-not-production-admission",
+  "localValidationCommit": "e50a1aaf562560d91ba67f4288438737edd2c590",
+  "collectorSha256": "5825b1c2e30aee42e287a28a7016f0601e84fc1908d51fba3271f014510da8be",
+  "localManifestSha256": "9de2952a561e5e69f916882fea9e6374cad8b7f4272ec4ac650a365c2412b2e4",
+  "localEvidence": "spec/compatibility/broad-runs/e50a1aaf-shared-local.json",
+  "scenarios": [
+    {
+      "id": "partial",
+      "recipeSha256": "1ee8f710214e33cccd5c9d8acde7fb5ad66ccd0d567569cbbed0e4ab72fa2e98",
+      "observationRequests": 8,
+      "recoveryRequests": 9,
+      "documents": 3
+    },
+    {
+      "id": "transaction-field",
+      "recipeSha256": "95d03b4431f5c0fa18ec704853a8eb7aa8154c4b4d9cb92ab3a5ba16e86d2d23",
+      "observationRequests": 4,
+      "recoveryRequests": 3,
+      "documents": 1
+    }
+  ],
+  "target": {
+    "project": "fireemu-35fe6",
+    "projectNumber": "592603257417",
+    "quotaProject": "fireemu-35fe6",
+    "database": "(default)",
+    "edition": "STANDARD",
+    "location": null
+  },
+  "configurationConditions": {
+    "databaseProjection": {
+      "version": "database-settings-v2",
+      "excludedResponseFields": [
+        "earliestVersionTime",
+        "etag"
+      ],
+      "retainedFields": "all other fields, including unknown fields and field presence/types",
+      "requiredIdentityFields": [
+        "name",
+        "uid",
+        "databaseEdition",
+        "type",
+        "locationId"
+      ],
+      "hashEncoding": "canonical typed JSON SHA256"
+    },
+    "databaseProjectionDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
+    "acceptedDatabaseProjection": null,
+    "acceptedAuthDigest": null,
+    "apiKeyOwnership": "independent lookup to same project, no fallback",
+    "configurationWrites": 0,
+    "rulesWrites": 0,
+    "indexWrites": 0
+  },
+  "frame": {
+    "hosts": 1,
+    "coordinators": 1,
+    "scenarioSlots": 2,
+    "simultaneousHttpRequests": 1,
+    "globalMaxRequestsPerSecond": 4,
+    "observationRequests": 18,
+    "recoveryRequests": 16,
+    "totalRequests": 34,
+    "recoveryIsSubsetOfTotal": true,
+    "wallSeconds": 1200,
+    "recoverySeconds": 300,
+    "documents": 4,
+    "accounts": 0,
+    "accountCreations": 0,
+    "reobservations": 0,
+    "automaticRetries": 0,
+    "metadataBreakdown": {
+      "initialAccessCommand": 1,
+      "initialTokeninfo": 1,
+      "projectRead": 1,
+      "databasePreflight": 1,
+      "authPreflight": 1,
+      "apiKeyLookup": 1,
+      "recoveryAccessCommand": 1,
+      "recoveryTokeninfo": 1,
+      "databasePostflight": 1,
+      "authPostflight": 1
+    },
+    "dataObservationRequests": 12,
+    "dataRecoveryRequests": 12,
+    "recoveryTiming": {
+      "httpOperationReservationSeconds": 13.25,
+      "httpOperations": 15,
+      "credentialCommandSeconds": 60,
+      "credentialCommands": 1,
+      "reservedMaximumSeconds": 258.75,
+      "condition": "One coordinator-owned recovery credential command globally; per-worker refresh forbidden. Additional attempts require a new frame."
+    },
+    "perOperationRateCeilings": {
+      "allAdmittedHttpCombined": 4,
+      "firestoreGet": 4,
+      "firestorePatch": 4,
+      "firestoreBatchWrite": 4,
+      "firestoreDelete": 4,
+      "authAccountCreation": 0
+    },
+    "ownership": "Two disjoint new-nonce namespaces;4document paths; never reassign uncertain resources; no account, collection-group or configuration operations"
+  },
+  "cost": {
+    "units": {
+      "documentReads": 16,
+      "documentWrites": 6,
+      "documentDeletes": 4,
+      "indexEntryReads": 0,
+      "storageGiBMonths": 0.03131103515625,
+      "egressGiB": 0.0020751953125
+    },
+    "planningCeilingRatesUsd": {
+      "documentReads": 1e-05,
+      "documentWrites": 2e-05,
+      "documentDeletes": 1e-05,
+      "indexEntryReads": 1e-05,
+      "storageGiBMonths": 1,
+      "egressGiB": 1
+    },
+    "calculatedPlanningUsd": 0.03370623046875,
+    "fixedReservationUsd": 0.04,
+    "perRequestReservationUsd": 0.0001,
+    "plannedReservationUsd": 0.0434,
+    "proposedOwnerBudgetUsd": 1,
+    "acceptedBudgetUsd": null,
+    "locationTariffsConfirmed": false,
+    "freeQuotaDeducted": false,
+    "retention": "24-hour manual recovery obligation; conservative one-month storage calculation",
+    "actualInvoiceHardCap": false,
+    "sources": [
+      "https://firebase.google.com/docs/firestore/pricing",
+      "https://firebase.google.com/docs/firestore/quotas",
+      "https://firebase.google.com/docs/auth/limits"
+    ],
+    "publicReferenceReadDate": "2026-09-13"
+  },
+  "stopAndRecovery": {
+    "localFailure": "stop that scenario observations; retain independent recovery",
+    "sharedUncertainDispatch": "stop all dispatch including recovery until transport is quiesced; never infer completion from worker exit",
+    "cleanup": "owned journal only; conditional updateTime DELETE only after valid read; skip unsafe delete; final absence required",
+    "unrecovered": "retain private journals and ownership; no TTL/reassignment; designated owner recovers under separate applicable permission within24hours",
+    "settingsDrift": "stop; never adopt live values as approved baseline"
+  },
+  "owner": null,
+  "permissionReference": null,
+  "startsAt": null,
+  "endsAt": null,
+  "productionNonce": null,
+  "recoveryOwner": null,
+  "executionActivation": {
+    "productionEnabled": false,
+    "remainingTechnicalStep": "Bind this distinct production admission and metadata operations to the existing credential/preflight adapter and shared gate; local-only rejection must not simply be removed. Review activation delta before execution.",
+    "ownerDecision": "Accept explicit settings baseline, current location/rate conditions, budget, period, one execution per listed scenario and named recovery responsibility together; no old approvals inherited"
+  }
+}

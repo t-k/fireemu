@@ -160,6 +160,7 @@
   "AUTH-CORE-1": {
     "implemented": [
       "accounts:signUp (email, anonymous)",
+      "local password policy validation across accounts:signUp, client and Admin accounts:update, accounts:resetPassword, and Admin batchCreate rawPassword/fakeHash imports: minimum 6 scalar characters, maximum 4096 UTF-16 units, and control-character rejection happen before account or credential mutation; trusted artifact restoration preserves the recorded credential without applying new-password policy; saved production evidence is limited to the approved end-user client accounts:update corpus (including finite 4095/4096/4097 UTF-16-unit maximum cases and six/five-character ASCII controls), so the other routes and local malformed/control/minimum cases remain production-unobserved",
       "accounts:signInWithPassword",
       "accounts:signInWithCustomToken (unsigned JWT or strict JSON fake token, uid or user_id)",
       "accounts:lookup",
@@ -172,11 +173,14 @@
       "GET /v1/projects and /v1/recaptchaParams (the fixed documents the official emulator serves)",
       "securetoken token (JSON and form)",
       "Admin: projects/{p}/accounts create/lookup/update/delete/batchGet/batchCreate/batchDelete/query/sendOobCode and projects/{p}:createSessionCookie; mfaInfo / mfa.enrollments (phone), linkProviderUserInfo / deleteProvider",
+      "local session-cookie handoff: inclusive 300..1209600-second duration boundaries, ID-token issuer/audience/project/tenant isolation, expired/revoked/deleted/disabled-user refusal, and signature refusal in session-rsa mode; tenant custom-token developer claims, persisted custom attributes and blocking session claims survive cookie issuance and Secure Token refresh without persisting session-only claims",
+      "Admin provider configuration: project and tenant OAuth IdP and inbound SAML create/get/list/update/delete under the public v2 namespaces, with project/tenant and OIDC/SAML isolation, bounded creation-order pagination, validation and atomic refusal; no external IdP traffic",
       "GET /emulator/action: the printed email action link acts on its code like the official emulator (verifyEmail, verifyAndChangeEmail, resetPassword with newPassword, signIn forwarding to continueUrl) and answers authEmulator JSON or a 303 to continueUrl",
       "Emulator routes: /emulator/v1/projects/{p}/oobCodes, verificationCodes, accounts (DELETE), their tenant-scoped forms under /tenants/{t}, config (GET and PATCH: signIn.allowDuplicateEmails changes password-account uniqueness and lookup/sign-in selection, emailPrivacyConfig.enableImprovedEmailPrivacy changes what signInWithPassword, sendOobCode PASSWORD_RESET and createAuthUri reveal)"
     ],
     "notes": [
-      "nothing is mailed or texted: codes are read from the emulator routes and are deterministic from the session seed",
+      "nothing is mailed or texted: codes are read from the emulator routes; normal daemon starts re-key generated credential handles from a CSPRNG lifecycle incarnation so restart or namespace recreation cannot replay them, while tests may inject a fixed incarnation for reproducibility",
+      "session-cookie/custom-token coverage is local and documentation-backed, not production parity: saved auth-basic and auth-session observations cover adjacent client/refresh paths only; tools/sdk-smoke/auth.mjs exercises real Admin SDK unsigned-emulator cookie verification after password change, revocation, disable and deletion; session-rsa uses a local trust root, not Google's production certificate trust root; strict Rules accepts ID tokens only, while unsigned EmulatorMock Rules decoding is deliberately more permissive and is not cookie verification",
       "reCAPTCHA tokens are accepted unchecked",
       "error envelopes measured against firebase-tools 15.28.2: EMAIL_NOT_FOUND / INVALID_PASSWORD by default and INVALID_LOGIN_CREDENTIALS under improved email privacy, MISSING_EMAIL before MISSING_PASSWORD, the Not Found envelope with status NOT_FOUND for an unknown path, kind fields on every response, absent rather than null optional fields, 28-character generated local ids",
       "one route table (crates/fireemu-adapter-http/src/identity_toolkit/routes.rs) drives dispatch, the App Check bypass classification and the bounded operation labels; a route cannot be dispatched without a label",
@@ -185,6 +189,23 @@
       "Admin accounts:query preserves the official emulator's unbounded, ignored-limit behavior under the emulator profile; strict applies the documented Identity Platform default and maximum page size of 500, offset ordering, count semantics and field validation as an explicit production-oriented boundary",
       "conformance: auth/sign-up-and-sign-in-errors, auth/identity-toolkit-error-shapes, auth/oob-code-shapes, auth/admin-account-lifecycle, auth/client-account-flows (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"
     ],
+    "status": "implemented"
+  },
+  "AUTH-ACCOUNT-LIFECYCLE-1": {
+    "implemented": [
+      "Admin account create, get, list, update and delete through the projects/{project}/accounts routes",
+      "client account create, get, update and delete through the Identity Toolkit accounts routes",
+      "duplicate email refusal without mutating either account, and UID reuse after delete",
+      "disable and re-enable: disabled accounts remain readable and retain their credentials while client sign-in is refused",
+      "anonymous upgrade to an email/password account while retaining the anonymous UID, and federated provider linking through linkProviderUserInfo",
+      "post-state checks from both Admin selectors and the authenticated client subject"
+    ],
+    "notes": [
+      "conformance: auth/admin-account-lifecycle and auth/client-account-flows (conformance/README.md); these are pinned official Local Emulator Suite references, never production evidence",
+      "production candidate: account lifecycle observations require a project/API-key run with matching inputs and observer identity before any production compatibility claim is promoted",
+      "session cookies, out-of-band actions, MFA and external federation protocol exchange are separate capabilities"
+    ],
+    "precision": "boundary-conformance",
     "status": "implemented"
   },
   "AUTH-MFA-SMS-0": {
@@ -206,6 +227,24 @@
     ],
     "precision": "boundary-conformance",
     "status": "implemented"
+  },
+  "AUTH-FEDERATION-ASSERTION-LOCAL": {
+    "status": "partial",
+    "precision": "exact-for-local-semantics",
+    "implemented": [
+      "Opt-in Rust adapter handler configuration, handle_with_oidc_trust, preserves the standard accounts:signInWithIdp REST request and injects one caller-pinned public RS256 JWK; no new client HTTP API or network traffic",
+      "Enabled provider and project/tenant/provider/issuer/client trust binding; real compact RS256 signature verification; issuer, subject, audience/authorized-party, expiry, issued-at, not-before and SDK raw-nonce SHA-256 checks before account mutation; nonempty accompanying access_token or refresh_token is refused before response or blocking credential forwarding",
+      "Signed assertion account creation, repeated sign-in, explicit account linking, cross-account identity collision refusal, unverified-email confirmation without tokens, tenant routing/pin isolation and populated refusal-state preservation"
+    ],
+    "notes": [
+      "Local evidence: crates/fireemu-adapter-http/tests/auth_oidc_assertions.rs; public contract and remaining limits: docs/compatibility/auth-federation-assertion-local.md",
+      "The default daemon, handle and handle_with remain emulator fixture mode. This entry is not a claim that provider-config CRUD enables signed assertion verification in the shipped daemon",
+      "Finite local policy: single pinned key, RS256 only, required matching kid, 2048-8192-bit RSA, 64 KiB token bound, integer timestamps with no clock skew; exact production error precedence and boundary policies remain unmeasured"
+    ],
+    "unsupported": [
+      "Daemon trust configuration, discovery/JWKS retrieval and rotation, hosted redirects, authorization-code exchange, external IdP traffic and SDK end-to-end execution",
+      "SAML XMLDSig, assertion replay consumption and production parity; a repeated valid bearer ID token may sign in again"
+    ]
   },
   "AUTH-OAUTH-0": {
     "implemented": [
@@ -234,6 +273,19 @@
     "precision": "fixture-idp",
     "status": "implemented"
   },
+  "AUTH-PROVIDER-CONFIG-1": {
+    "implemented": [
+      "project and tenant OAuth IdP and inbound SAML provider configuration create/get/list/update/delete under the public v2 namespaces",
+      "project, tenant, OIDC and SAML stores are isolated; validation completes before mutation and snapshots never export provider configuration or OIDC client secrets",
+      "bounded creation-order pagination uses a namespace-local provider cursor and rejects unknown cursors"
+    ],
+    "notes": [
+      "this is a production-oriented local API implementation; it has no production or external-IdP round trip yet",
+      "the pinned official emulator does not serve these configuration resources, so official-emulator fixture assertions cannot establish this capability"
+    ],
+    "precision": "boundary-conformance",
+    "status": "implemented"
+  },
   "AUTH-RULES-1": {
     "notes": [
       "request.auth from verified ID tokens on every Firestore surface; Bearer owner bypasses",
@@ -257,7 +309,7 @@
   },
   "CTL-1": {
     "implemented": [
-      "sessions: POST /v1/sessions {project, buckets?, apiKeys?} creates a session that owns its project (Firestore databases, its default and declared Storage buckets, an Auth store, a fault plan, snapshots, text indexes); the default session owns everything not registered; GET lists, DELETE removes; project-scoped Auth routes, declared API keys, token audiences and refresh tokens pick the project's store; ID tokens are accepted only by the project of their audience",
+      "sessions: POST /v1/sessions {project, buckets?, apiKeys?} creates a session that owns its project (Firestore databases, its default and declared Storage buckets, an Auth store, a fault plan, snapshots, text indexes); a compatibility-routed Auth namespace is provisionally displaced, the fresh session store is committed only after the initial reset, and a failed transition restores the exact displaced store; explicit and routed Auth namespaces receive an opaque daemon-incarnation lifecycle claim, project reset clears their tenant namespaces, and their issued ID tokens cannot revive across namespace reset or replacement, daemon restart, or a snapshot restore of the parent Auth store; lifecycle transitions also re-key generated refresh tokens, OOB codes, MFA handles and verification sessions so deletion and recreation cannot make stale strings designate fresh state; ordinary production-shaped stores omit the private claim, while the documented unsigned EmulatorMock profile remains caller-provided identity rather than an issued-credential lifecycle guarantee; the default session owns everything not registered; GET lists, DELETE removes; project-scoped Auth routes, declared API keys, token audiences and refresh tokens pick the project's store; ID tokens are accepted only by the project of their audience",
       "clock:set",
       "clock:advance",
       "clock:advanceTo",
@@ -447,22 +499,27 @@
   },
   "FS-PIPE-RPC-1": {
     "implemented": [
-      "ExecutePipeline / StructuredPipeline decode",
+      "StructuredPipeline wire decoding",
       "database name, consistency selector (non-empty transaction; auto_commit_transaction only with new_transaction) and pipeline option (index_mode) checks",
       "stage identification against the documented registry (collection, collection_group, database, documents, select, add_fields, remove_fields, where, sort, limit, offset, distinct, aggregate, find_nearest, sample, union, unnest, replace_with)",
       "input stage placement, arity, argument shape (paths, integers, boolean expressions, ascending / descending orderings, alias maps, vectors and distance measures, modes) and per-stage option checks (find_nearest limit / distance_field, sample mode, unnest index_field)",
       "write stages (update, delete) refused as FS-PIPE-WRITE-0",
-      "unknown stages refused (FS_PIPE_UNSUPPORTED_STAGE), never skipped"
+      "unknown stages refused (FS_PIPE_UNSUPPORTED_STAGE), never skipped",
+      "local latest-read collection input (root or nested), optional single where(equal(top-level field reference, scalar literal)), optional top-level field-reference select aliases, optional non-negative int32 offset, then optional non-negative limit; no repeated or reordered stages",
+      "exact equal accepts boolean, integer/double numeric equality, timestamp, string, bytes, reference, geo point, infinity, null and NaN; missing fields do not match; filtering precedes projection, offset and limit",
+      "offset skips matching rows once before the existing limit and paged stream; zero, past-end and empty results preserve the existing finite response shape",
+      "malformed exact equal or offset arity/options, field paths and missing values return INVALID_ARGUMENT FS_PIPE_INVALID; well-formed unsupported operand arrangements and offsets above int32 return UNIMPLEMENTED FS_PIPE_UNSUPPORTED_STAGE, with canonical pipeline context"
     ],
     "notes": [
       "Standard edition answers FAILED_PRECONDITION FS_PIPE_EDITION",
-      "owner-only while rules are enforced"
+      "owner-only while rules are enforced",
+      "The finite local read subset is tested through tonic. Enterprise production execution and exact production error parity remain unobserved. Unsupported consistency selectors, metadata expressions and execution stages are refused, never silently ignored."
     ],
-    "precision": "strict-validation-only",
-    "status": "implemented",
+    "precision": "finite-local-read-subset",
+    "status": "partial",
     "unimplemented": [
-      "local execution (a valid pipeline is answered with UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY carrying its canonical form)",
-      "function name and return type checking inside expressions (a where takes any function)",
+      "execution outside collection / optional single where(equal(top-level field, scalar literal)) / optional select / optional offset / optional limit latest reads; transaction and read_time execution, nested field extraction and metadata expressions",
+      "all functions other than exact equal in the finite where shape (including eq), general expressions, reversed operands, array/map literals and all other execution stages",
       "text search functions against the text index catalog",
       "proxy / record-only modes"
     ]
@@ -479,10 +536,26 @@
   "FS-REST-1": {
     "notes": [
       "served on the Firestore port next to gRPC",
-      "readTime selectors are validated and served through REST, while findNearest is refused explicitly",
+      "readTime selectors are validated and served through REST, and local Standard/Native findNearest is served through REST :runQuery with projection, Euclidean/cosine/dot-product distance, finite thresholds and limits",
+      "the pinned official Firestore emulator refuses findNearest on REST; fireemu's local REST implementation is therefore not an official-emulator or production-parity claim",
       "conformance: firestore/rest-error-shapes, firestore/lite-rest-transport (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
       "REST wire shapes follow the measured production-compatible JSON: empty fields are left out, timestamps carry 0/3/6/9 fraction digits, the last RunQuery and RunAggregationQuery responses arrive without a synthetic done marker, the first carries skippedResults when an offset is applied, and an unknown route or method answers the plain-text 404 the official adapter answers"
     ],
+    "status": "implemented"
+  },
+  "FS-ADMIN-INVENTORY-1": {
+    "implemented": [
+      "read-only Firestore Admin REST GET projects/{project}/databases and projects/{project}/databases/{database} for locally registered Standard/Native databases",
+      "exact project/name validation, owner credential authorization before catalog lookup, deterministic name ordering, Discovery-compatible showDeleted validation, stable documented database projection and healthy unreachable: []",
+      "unknown databases return NOT_FOUND and catalog reads never create, mutate or detach database state"
+    ],
+    "notes": [
+      "local-only bounded adapter surface; it does not claim production parity",
+      "Enterprise databases, create/update/delete, indexes, TTL, backups, import/export and long-running operations are outside this capability",
+      "database metadata projection is the stable local field subset documented in docs/compatibility/firestore-admin-inventory.md; unsupported identity and billing fields are omitted",
+      "conformance input: spec/compatibility/upstream/2026-09-09-retry/discovery.json and the historical database projection v2 reference"
+    ],
+    "precision": "bounded-local-semantics",
     "status": "implemented"
   },
   "FS-RPC-1": {
@@ -501,6 +574,7 @@
       "ListCollectionIds",
       "BatchWrite",
       "Write",
+      "Write stream handshake, ordered atomic request batches, active-stream acknowledgement continuity and local refusal/reopen lifecycle (FS-WRITE-STREAM-LOCAL); closed-stream resumption is unsupported",
       "Listen",
       "verify writes",
       "read_time snapshots (microsecond precision, within the past hour)",
@@ -508,7 +582,7 @@
       "ListDocuments inside transactions"
     ],
     "notes": [
-      "ExecutePipeline is not served by this entry: FS-PIPE-RPC-1 owns it and decodes, identifies and validates a pipeline, then answers a well-formed one with UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY rather than executing it",
+      "ExecutePipeline is owned by FS-PIPE-RPC-1: registry validation plus a finite Enterprise local latest-read subset; other execution semantics remain explicitly unsupported",
       "history retention: a version is kept while any retention root can still reach it, namely the one-hour read_time window (READ_TIME_RETENTION_SECONDS), the read version of every transaction that is still inside its budget, and the newest version or tombstone of every path; everything older is compacted away at the end of the commit that makes it unreachable, and a read_time below the retained history is FAILED_PRECONDITION instead of an answer from another version. Named snapshots are independent copies: restoring one reproduces exactly what it captured, whatever the live database compacted since.",
       "conformance: the Firestore semantics matrix also gates preconditions, update masks, field transforms, batched writes and the transaction lifecycle; conformance/divergences.json pins every deliberate difference from the official emulator, each with the production observation (conformance/firestore-production-matrix.json) that justifies following production instead: no `done` marker and a leading readTime/skippedResults element over REST, production's validation codes, and the redacted marker fields production serves"
     ],
@@ -559,6 +633,7 @@
       "the language is measured rather than assumed: conformance/src/rules-probe installs the same bounded Rules programs into the pinned official Firestore emulator and into fireemu and compares every verdict (680 claims in conformance/rules-matrix.json, 22 whole-program probes in conformance/rules-programs.json)",
       "query proofs are sound, not complete: a rule that reads an unconstrained field denies the query",
       "the principal request.auth is built from follows the compatibility profile on both the Firestore and the Storage Rules surfaces (see AUTH-RULES-1); the rules themselves are evaluated identically under both profiles",
+      "bounded local Standard/Native gRPC regression coverage: tests/rules/auth_atomicity.rs checks anonymous/user switching, same-UID tenant and custom claims, before/final document access in atomic commits, and unchanged document contents/timestamps/database versions after denied single, multiwrite and transaction commits; strict local revoked/disabled-token admission is covered separately, with production observations and browser/SDK parity still required",
       "request.query.orderBy is a map from field path to \"ASC\" / \"DESC\", request.query.limit is null without a limit, and request.resource and request.query are absent rather than null on a request that has neither",
       "string.matches() / replace(): the RE2 surface the official runtime has -- capturing groups with $0 / $1 expansion, the inline flags (?i) (?s) (?m), POSIX and Unicode classes, hex escapes -- and, as in RE2, no lookarounds and no backreferences; a literal pattern is compiled while the ruleset is, so an unusable one fails the load",
       "capture-free alternatives whose branches each consume one character repeat iteratively at constant match depth; every attempted branch remains charged to the regex step budget, and patterns with captures or multi-character branches keep the general matcher",
@@ -771,16 +846,17 @@
     "precision": "boundary-conformance",
     "implemented": [
       "the pinned firebase-export-metadata.json manifest of firebase-tools 15.28.2: the version, the per-product sections with their version, path and (Firestore) metadata_file, in the official product order",
-      "the Firestore managed export the emulator jar writes: the LevelDB log framing with its masked CRC-32C, and the apphosting.datastore.v3 EntityProto encoding of a document, covering null, boolean, integer (two's complement), double (exact bits, so NaN and negative zero survive), string, bytes, microsecond timestamps, geo points, references, maps, arrays, the empty array as an indexed EMPTY_LIST property, the empty map as a nested EntityProto, and paths of any subcollection depth",
+      "the Firestore managed export the emulator jar writes: every output partition named by overall_export_metadata is preflighted and imported exactly once, with a 10,000-partition safety bound, strict LevelDB record framing and masked CRC-32C validation, and the apphosting.datastore.v3 EntityProto encoding of a document, covering null, boolean, integer (two's complement), double (exact bits, so NaN and negative zero survive), string, bytes, microsecond timestamps, geo points, references, maps, arrays, the empty array as an indexed EMPTY_LIST property, the empty map as a nested EntityProto, and paths of any subcollection depth",
       "auth_export/accounts.json as the identitytoolkit#DownloadAccountResponse the CLI streams to disk, with providers, custom claims, phone second factors, the reversible fakeHash:salt=<salt>:password=<plaintext> convention and auth_export/config.json",
       "Identity Platform tenant accounts in auth_export/accounts-<tenant>.json, imported and exported in isolated namespaces without mixing them into accounts.json",
       "storage_export/buckets.json, blobs/<id> and metadata/<id>.json, with the object bytes byte for byte and the recorded generation, metageneration, times, hashes, download tokens and custom metadata",
-      "a member the model does not know is carried through an import and written out again unchanged, so a newer emulator's field is never silently dropped",
+      "a member the model does not know is parsed and retained by the export-format model; live Auth import refuses an account containing that member before startup because the running store cannot retain it, so it is never silently dropped or partially imported",
       "a malformed section is refused with the byte offset or the member that caused it, never read short"
     ],
     "unimplemented": [
       "database_export (Realtime Database) and dataconnect_export (SQL Connect) are detected and refused with their deferred status; fireemu serves neither product",
-      "a passwordHash that is not the emulator's own reversible form (a real scrypt hash from a production export) is refused rather than installed as a credential nothing can sign in with"
+      "a passwordHash that is not the emulator's own reversible form (a real scrypt hash from a production export) is refused rather than installed as a credential nothing can sign in with",
+      "an account, providerUserInfo entry, MFA/TOTP entry or Auth config containing an unknown member is refused before startup because the live Auth store cannot preserve that member; the export-format parser retains it for diagnostics"
     ],
     "notes": [
       "the format is pinned by fixtures recorded from real runs of the official suite (crates/fireemu/tests/fixtures/export/, recorded by conformance/src/record-export.mjs)",
@@ -793,7 +869,7 @@
     "status": "implemented",
     "precision": "boundary-conformance",
     "implemented": [
-      "--import <dir> reads every section of the products --only selected into memory and installs them together under the exclusive admission barrier, so a failure in any product leaves the empty start state and exits 1 naming the product and the path",
+      "--import <dir> reads every section of the products --only selected into memory, including every distinct Firestore output partition referenced by overall_export_metadata, and installs them together under the exclusive admission barrier, so a corrupt record, duplicate or aliased output reference, missing partition, partition-count overflow or failure in any product leaves the empty start state and exits 1 naming the product and the path",
       "a section of a product --only did not select is skipped with a notice rather than refused",
       "--export-on-exit [dir] writes the export on a clean exit, on the command's failure and on SIGINT or SIGTERM; an omitted directory resolves to the --import one, and the working directory or a parent is refused",
       "emulators:export <dir> finds the running suite through its Emulator Hub locator file and drives POST /_admin/export, whose body is the official {\"path\", \"initiatedBy\"} and which refuses a request carrying an Origin header",

@@ -18,6 +18,104 @@ use fireemu_proto_firestore::google::firestore::v1::structured_query as sq;
 use tokio_stream::wrappers::TcpListenerStream;
 
 #[test]
+fn aggregation_order_normalization_preserves_invalid_argument_and_index_direction() {
+    use fireemu_core_firestore::query::{Direction, OrderClause, Query, QueryScope};
+    use fireemu_core_firestore::store::Aggregation;
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Emulator,
+        },
+        indexes: IndexSet::default(),
+    };
+    let mut query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("items").unwrap(),
+    ));
+    let x = FieldPath::parse("x").unwrap();
+    let y = FieldPath::parse("y").unwrap();
+    query.order_by = vec![OrderClause {
+        field: FieldPath::document_name(),
+        direction: Direction::Ascending,
+    }];
+    let rejection = gateway
+        .validate_aggregation_query_with_indexes(
+            &query,
+            &[Aggregation::Sum(x.clone())],
+            &gateway.indexes,
+        )
+        .unwrap_err();
+    assert_eq!(rejection.to_status().code(), tonic::Code::InvalidArgument);
+    query.order_by = vec![OrderClause {
+        field: x.clone(),
+        direction: Direction::Descending,
+    }];
+    let accepted = gateway
+        .validate_aggregation_query_with_indexes(
+            &query,
+            &[Aggregation::Avg(y.clone()), Aggregation::Sum(x.clone())],
+            &gateway.indexes,
+        )
+        .unwrap();
+    assert_eq!(
+        accepted.query, query,
+        "authorization must retain caller-supplied order metadata"
+    );
+    let fireemu_core_firestore::index::IndexDecision::AssumedIndex { requirement } =
+        accepted.decision
+    else {
+        panic!("missing composite must remain explicit")
+    };
+    assert_eq!(
+        requirement
+            .fields
+            .iter()
+            .map(|field| (&field.path, field.mode))
+            .collect::<Vec<_>>(),
+        vec![
+            (&x, IndexFieldMode::Descending),
+            (&y, IndexFieldMode::Descending),
+            (&FieldPath::document_name(), IndexFieldMode::Descending)
+        ]
+    );
+}
+
+#[test]
+fn aggregation_array_contains_target_requires_the_production_index_but_count_does_not() {
+    use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope};
+    use fireemu_core_firestore::store::Aggregation;
+    use fireemu_core_firestore::value::Value;
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Production,
+        },
+        indexes: IndexSet::default(),
+    };
+    let field = FieldPath::parse("x").unwrap();
+    let mut query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("items").unwrap(),
+    ));
+    query.filter = Some(FilterExpr::Field {
+        field: field.clone(),
+        op: FieldOp::ArrayContains,
+        value: Value::Integer(10),
+    });
+    assert!(gateway
+        .validate_aggregation_query(&query, &[Aggregation::Count { up_to: None }])
+        .is_ok());
+    let error = gateway
+        .validate_aggregation_query(&query, &[Aggregation::Sum(field)])
+        .unwrap_err();
+    assert_eq!(error.to_status().code(), tonic::Code::FailedPrecondition);
+}
+
+#[test]
 #[allow(clippy::too_many_lines)] // Keep the bounded operator/boolean/policy matrix together.
 fn key_equalities_and_other_inequalities_follow_production_constraints() {
     use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope, UnaryOp};

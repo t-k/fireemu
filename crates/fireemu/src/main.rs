@@ -1519,11 +1519,13 @@ fn watched_file(path: &str) -> Result<(WatchedFileStamp, u64, Vec<u8>), String> 
     Ok((watched_file_stamp(path)?, signature, bytes))
 }
 
-async fn watched_file_stamp_off_thread(path: &str) -> Result<WatchedFileStamp, String> {
-    let path = path.to_owned();
-    tokio::task::spawn_blocking(move || watched_file_stamp(&path))
-        .await
-        .map_err(|error| format!("watch worker failed: {error}"))?
+fn watched_file_changed(
+    observed_stamp: Option<WatchedFileStamp>,
+    observed_signature: Option<u64>,
+    candidate_stamp: WatchedFileStamp,
+    candidate_signature: u64,
+) -> bool {
+    observed_stamp != Some(candidate_stamp) || observed_signature != Some(candidate_signature)
 }
 
 async fn watched_file_off_thread(path: &str) -> Result<(WatchedFileStamp, u64, Vec<u8>), String> {
@@ -1531,6 +1533,29 @@ async fn watched_file_off_thread(path: &str) -> Result<(WatchedFileStamp, u64, V
     tokio::task::spawn_blocking(move || watched_file(&path))
         .await
         .map_err(|error| format!("watch worker failed: {error}"))?
+}
+
+#[cfg(test)]
+fn rules_reload_scan_counts() -> &'static Mutex<std::collections::BTreeMap<String, u64>> {
+    static SCANS: std::sync::OnceLock<Mutex<std::collections::BTreeMap<String, u64>>> =
+        std::sync::OnceLock::new();
+    SCANS.get_or_init(|| Mutex::new(std::collections::BTreeMap::new()))
+}
+
+#[cfg(test)]
+fn note_rules_reload_scan(path: &str) {
+    if let Ok(mut scans) = rules_reload_scan_counts().lock() {
+        *scans.entry(path.to_owned()).or_default() += 1;
+    }
+}
+
+#[cfg(test)]
+fn rules_reload_scan_count(path: &str) -> u64 {
+    rules_reload_scan_counts()
+        .lock()
+        .ok()
+        .and_then(|scans| scans.get(path).copied())
+        .unwrap_or_default()
 }
 
 fn start_rules_reload_supervisor(
@@ -1542,41 +1567,68 @@ fn start_rules_reload_supervisor(
     let weak = Arc::downgrade(rules);
     let barrier = barrier.clone();
     let initial = watched_file(&path).ok();
-    let mut observed_stamp = initial.as_ref().map(|(stamp, _, _)| *stamp);
-    let mut observed_signature = initial.as_ref().map(|(_, signature, _)| *signature);
+    let initial_differs = initial
+        .as_ref()
+        .and_then(|(_, _, bytes)| std::str::from_utf8(bytes).ok())
+        .is_some_and(|source| {
+            rules
+                .snapshot()
+                .ok()
+                .and_then(|snapshot| snapshot.source.clone())
+                .as_deref()
+                != Some(source)
+        });
+    let mut observed_stamp = initial
+        .as_ref()
+        .map(|(stamp, _, _)| *stamp)
+        .filter(|_| !initial_differs);
+    let mut observed_signature = initial
+        .as_ref()
+        .map(|(_, signature, _)| *signature)
+        .filter(|_| !initial_differs);
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(750)).await;
             let Some(rules) = weak.upgrade() else {
                 return;
             };
-            let stamp = match watched_file_stamp_off_thread(&path).await {
-                Ok(stamp) if observed_stamp != Some(stamp) => stamp,
-                Ok(_) => continue,
-                Err(reason) => {
-                    eprintln!("warning: {label} reload scan failed: {reason}");
-                    continue;
-                }
-            };
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            let (candidate_stamp, candidate_signature, bytes) =
+            let (candidate_stamp, candidate_signature, _) =
                 match watched_file_off_thread(&path).await {
                     Ok(candidate) => candidate,
-                    Err(error) => {
-                        eprintln!(
-                        "warning: {label} reload failed; keeping the last-known-good rules: {error}"
-                    );
+                    Err(reason) => {
+                        eprintln!("warning: {label} reload scan failed: {reason}");
                         continue;
                     }
                 };
-            if candidate_stamp != stamp {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let (stable_stamp, stable_signature, bytes) = match watched_file_off_thread(&path).await
+            {
+                Ok(candidate) => candidate,
+                Err(error) => {
+                    eprintln!(
+                        "warning: {label} reload failed; keeping the last-known-good rules: {error}"
+                    );
+                    continue;
+                }
+            };
+            if stable_stamp != candidate_stamp || stable_signature != candidate_signature {
                 continue;
             }
-            observed_stamp = Some(candidate_stamp);
-            if observed_signature == Some(candidate_signature) {
+            if !watched_file_changed(
+                observed_stamp,
+                observed_signature,
+                stable_stamp,
+                stable_signature,
+            ) {
                 continue;
             }
-            observed_signature = Some(candidate_signature);
+            #[cfg(test)]
+            note_rules_reload_scan(&path);
+            observed_stamp = Some(stable_stamp);
+            if observed_signature == Some(stable_signature) {
+                continue;
+            }
+            observed_signature = Some(stable_signature);
             let source = match String::from_utf8(bytes) {
                 Ok(source) => source,
                 Err(error) => {
@@ -1615,17 +1667,16 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
             let Some(backend) = weak.upgrade() else {
                 return;
             };
-            let stamp = match watched_file_stamp_off_thread(&path).await {
-                Ok(stamp) if observed_stamp != Some(stamp) => stamp,
-                Ok(_) => continue,
-                Err(reason) => {
-                    eprintln!("warning: Firestore index reload scan failed: {reason}");
-                    continue;
-                }
-            };
+            let (candidate_stamp, candidate_signature, _) =
+                match watched_file_off_thread(&path).await {
+                    Ok(candidate) => candidate,
+                    Err(reason) => {
+                        eprintln!("warning: Firestore index reload scan failed: {reason}");
+                        continue;
+                    }
+                };
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            let (candidate_stamp, candidate_signature, bytes) = match watched_file_off_thread(&path)
-                .await
+            let (stable_stamp, stable_signature, bytes) = match watched_file_off_thread(&path).await
             {
                 Ok(candidate) => candidate,
                 Err(error) => {
@@ -1635,14 +1686,17 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
                     continue;
                 }
             };
-            if candidate_stamp != stamp {
+            if stable_stamp != candidate_stamp || stable_signature != candidate_signature {
                 continue;
             }
-            observed_stamp = Some(candidate_stamp);
-            if observed_signature == Some(candidate_signature) {
+            if !watched_file_changed(
+                observed_stamp,
+                observed_signature,
+                stable_stamp,
+                stable_signature,
+            ) {
                 continue;
             }
-            observed_signature = Some(candidate_signature);
             let text = match String::from_utf8(bytes) {
                 Ok(text) => text,
                 Err(error) => {
@@ -1654,8 +1708,15 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
             };
             match control::parse_indexes(&path, &text) {
                 Ok(indexes) => {
-                    backend.replace_database_indexes(&database, indexes);
-                    eprintln!("note: reloaded Firestore indexes for {database} from {path}");
+                    if backend.replace_database_indexes(&database, indexes) {
+                        observed_stamp = Some(stable_stamp);
+                        observed_signature = Some(stable_signature);
+                        eprintln!("note: reloaded Firestore indexes for {database} from {path}");
+                    } else {
+                        eprintln!(
+                            "warning: Firestore index reload failed; keeping the last-known-good indexes: index catalog lock poisoned"
+                        );
+                    }
                 }
                 Err(error) => eprintln!(
                     "warning: Firestore index reload failed; keeping the last-known-good indexes: {error}"
@@ -2133,12 +2194,15 @@ fn random_secret() -> Result<String, String> {
     }))
 }
 
+/// An unpredictable 128-bit daemon-local incarnation from the operating system CSPRNG.
+fn random_u128() -> Result<u128, String> {
+    let hex = random_secret()?;
+    u128::from_str_radix(&hex, 16).map_err(|e| format!("cannot build a daemon incarnation: {e}"))
+}
+
 /// An unpredictable 128-bit project session epoch from the operating system CSPRNG (spec 7.2).
 fn random_epoch() -> Result<fireemu_core_app_check::ProjectEpoch, String> {
-    let hex = random_secret()?;
-    let value = u128::from_str_radix(&hex, 16)
-        .map_err(|e| format!("cannot build an App Check epoch: {e}"))?;
-    Ok(fireemu_core_app_check::ProjectEpoch::new(value))
+    random_u128().map(fireemu_core_app_check::ProjectEpoch::new)
 }
 
 /// Builds the App Check state from canonical configuration: the registry, a fresh epoch per
@@ -2353,9 +2417,12 @@ mod config_reload_tests {
 
     const RULES_ONE: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
     const RULES_TWO: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow write: if false; } } }";
+    const RULES_DENY_READ: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if false; } } }";
     const STORAGE_ALLOW: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if true; } } }";
     const STORAGE_DENY: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if false; } } }";
     const STORAGE_WRITE: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow write: if true; } } }";
+    const INDEXES_ONE: &str = r#"{"indexes":[{"collectionGroup":"items","queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
+    const INDEXES_TWO: &str = r#"{"indexes":[{"collectionGroup":"other","queryScope":"COLLECTION","fields":[{"fieldPath":"c","order":"ASCENDING"},{"fieldPath":"d","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir =
@@ -2363,6 +2430,85 @@ mod config_reload_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn write_rules_generation(
+        path: &std::path::Path,
+        source: &str,
+        modified: std::time::SystemTime,
+    ) {
+        std::fs::write(path, source).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+    }
+
+    fn index_backend(indexes: &str) -> Arc<LocalBackend> {
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        let backend = Arc::new(LocalBackend::new(
+            gateway,
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+            7,
+        ));
+        backend.replace_database_indexes(
+            "staging",
+            control::parse_indexes("indexes", indexes).unwrap(),
+        );
+        backend
+    }
+
+    fn write_index_generation(
+        path: &std::path::Path,
+        bytes: &[u8],
+        modified: std::time::SystemTime,
+    ) {
+        std::fs::write(path, bytes).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+    }
+
+    async fn wait_for_index_collection(backend: &Arc<LocalBackend>, collection: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if backend
+                    .indexes_for_database("staging")
+                    .composites()
+                    .first()
+                    .is_some_and(|index| index.collection_group.as_str() == collection)
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the valid index generation should reload");
+    }
+
+    #[test]
+    fn rules_reload_checks_content_when_file_metadata_is_unchanged() {
+        let stamp = WatchedFileStamp {
+            len: 42,
+            modified_nanos: 7,
+        };
+
+        assert!(watched_file_changed(Some(stamp), Some(1), stamp, 2));
+        assert!(!watched_file_changed(Some(stamp), Some(1), stamp, 1));
     }
 
     #[test]
@@ -2688,6 +2834,36 @@ mod config_reload_tests {
     }
 
     #[tokio::test]
+    async fn rules_reload_reconciles_file_changed_before_supervisor_start() {
+        let dir = scratch("rules-before-supervisor");
+        let path = dir.join("firestore.rules");
+        std::fs::write(&path, RULES_TWO).unwrap();
+        let rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ONE).unwrap(),
+        ));
+        let barrier = Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
+        start_rules_reload_supervisor(
+            path.to_string_lossy().into_owned(),
+            "Firestore rules",
+            &rules,
+            &barrier,
+        );
+
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if rules.snapshot().unwrap().source.as_deref() == Some(RULES_TWO) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the file present before supervisor start should reconcile");
+        drop(rules);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
     async fn storage_target_reload_changes_only_its_own_bucket_group() {
         let dir = scratch("storage-target-isolation");
         let public_path = dir.join("public.rules");
@@ -2755,6 +2931,183 @@ mod config_reload_tests {
         );
     }
 
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test]
+    async fn named_firestore_rules_reload_isolated_from_default_database() {
+        let dir = scratch("named-rules-isolation");
+        let default_path = dir.join("default.rules");
+        let named_path = dir.join("named.rules");
+        std::fs::write(&default_path, RULES_ONE).unwrap();
+        std::fs::write(&named_path, RULES_ONE).unwrap();
+
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        let backend = Arc::new(LocalBackend::new(
+            gateway,
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+            7,
+        ));
+        let default_rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ONE).unwrap(),
+        ));
+        let named_rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ONE).unwrap(),
+        ));
+        let database_rules =
+            std::collections::BTreeMap::from([("staging".to_owned(), named_rules.clone())]);
+        let cfg = RuntimeConfig {
+            firestore_databases: std::collections::BTreeMap::from([
+                (
+                    fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned(),
+                    crate::config::FirestoreDatabaseFiles {
+                        rules: Some(default_path.display().to_string()),
+                        indexes: None,
+                    },
+                ),
+                (
+                    "staging".to_owned(),
+                    crate::config::FirestoreDatabaseFiles {
+                        rules: Some(named_path.display().to_string()),
+                        indexes: None,
+                    },
+                ),
+            ]),
+            ..RuntimeConfig::default()
+        };
+        let loaded_storage = LoadedStorageRules {
+            registry: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::global(
+                Arc::new(RulesetSlot::default()),
+            )),
+            watched: Vec::new(),
+        };
+        let barrier = Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
+        start_firestore_config_reload_supervisors(
+            &cfg,
+            &backend,
+            &default_rules,
+            &database_rules,
+            &loaded_storage,
+            &barrier,
+        );
+        let auth = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            fireemu_core_types::determinism::SplitMix64::new(7),
+            fireemu_core_auth::mfa::TotpPolicy::default(),
+        )));
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let enforcer =
+            fireemu_adapter_grpc::rules::RulesEnforcer::new(default_rules.clone(), auth, clock)
+                .with_database_rules(database_rules);
+        let project = fireemu_core_types::ids::ProjectId::try_new("demo-app").unwrap();
+        let authorize = |database: &str| {
+            let database_id = fireemu_core_types::ids::DatabaseId::try_new(database).unwrap();
+            let path = fireemu_core_firestore::path::DocumentPath::parse(
+                &project,
+                &database_id,
+                "items/a",
+            )
+            .unwrap();
+            let reader = fireemu_adapter_grpc::rules::LatestReader {
+                backend: backend.clone(),
+                parent: fireemu_adapter_grpc::decode::Parent {
+                    project: project.clone(),
+                    database: database_id,
+                    document: None,
+                },
+            };
+            enforcer
+                .authorize_get(
+                    &fireemu_adapter_grpc::rules::Principal::Anonymous,
+                    &path,
+                    None,
+                    &reader,
+                )
+                .is_ok()
+        };
+
+        assert!(authorize("(default)"));
+        assert!(authorize("staging"));
+        std::fs::write(&named_path, RULES_DENY_READ).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if named_rules.snapshot().unwrap().source.as_deref() == Some(RULES_DENY_READ) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("named rules should reload");
+        assert!(authorize("(default)"));
+        assert!(!authorize("staging"));
+
+        let deny_generation = named_rules.snapshot().unwrap().generation();
+        let deny_mtime = std::fs::metadata(&named_path).unwrap().modified().unwrap();
+        let named_path_string = named_path.display().to_string();
+        let scans_before_malformed = rules_reload_scan_count(&named_path_string);
+        std::fs::write(&named_path, "malformed rules").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&named_path)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(deny_mtime + std::time::Duration::from_secs(1)),
+            )
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if rules_reload_scan_count(&named_path_string) > scans_before_malformed {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the malformed named generation should be scanned");
+        assert!(authorize("(default)"));
+        assert!(!authorize("staging"));
+
+        write_rules_generation(&named_path, RULES_DENY_READ, deny_mtime);
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if named_rules.snapshot().unwrap().generation() > deny_generation {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the malformed named generation should be observed and retained");
+        assert!(!authorize("staging"));
+
+        std::fs::write(&named_path, RULES_ONE).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if named_rules.snapshot().unwrap().source.as_deref() == Some(RULES_ONE) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("named rules should recover");
+        assert!(authorize("(default)"));
+        assert!(authorize("staging"));
+        drop(enforcer);
+        drop(default_rules);
+        drop(named_rules);
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[tokio::test]
     async fn global_storage_file_keeps_reloading_after_a_control_update() {
         let dir = scratch("storage-global-control-reload");
@@ -2809,6 +3162,88 @@ mod config_reload_tests {
                 .as_deref(),
             Some(STORAGE_WRITE)
         );
+    }
+
+    #[tokio::test]
+    async fn index_reload_retries_equal_length_malformed_json_and_recovers() {
+        assert_eq!(INDEXES_ONE.len(), INDEXES_TWO.len());
+        let dir = scratch("indexes-equal-length-malformed-json");
+        let path = dir.join("firestore.indexes.json");
+        std::fs::write(&path, INDEXES_ONE).unwrap();
+        let original_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let backend = index_backend(INDEXES_ONE);
+        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+
+        let mut malformed = INDEXES_TWO.as_bytes().to_vec();
+        let array_start = malformed.iter().position(|byte| *byte == b'[').unwrap();
+        malformed[array_start] = b'{';
+        write_index_generation(&path, &malformed, original_mtime);
+        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+        assert_eq!(
+            backend.indexes_for_database("staging").composites()[0]
+                .collection_group
+                .as_str(),
+            "items"
+        );
+
+        write_index_generation(&path, INDEXES_TWO.as_bytes(), original_mtime);
+        wait_for_index_collection(&backend, "other").await;
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn index_reload_retries_equal_length_invalid_utf8_and_recovers() {
+        assert_eq!(INDEXES_ONE.len(), INDEXES_TWO.len());
+        let dir = scratch("indexes-equal-length-invalid-utf8");
+        let path = dir.join("firestore.indexes.json");
+        std::fs::write(&path, INDEXES_ONE).unwrap();
+        let original_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let backend = index_backend(INDEXES_ONE);
+        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+
+        let mut invalid_utf8 = INDEXES_TWO.as_bytes().to_vec();
+        invalid_utf8[0] = 0xff;
+        write_index_generation(&path, &invalid_utf8, original_mtime);
+        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+        assert_eq!(
+            backend.indexes_for_database("staging").composites()[0]
+                .collection_group
+                .as_str(),
+            "items"
+        );
+
+        write_index_generation(&path, INDEXES_TWO.as_bytes(), original_mtime);
+        wait_for_index_collection(&backend, "other").await;
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn index_reload_recovers_from_malformed_json_with_changed_metadata() {
+        assert_eq!(INDEXES_ONE.len(), INDEXES_TWO.len());
+        let dir = scratch("indexes-malformed-json");
+        let path = dir.join("firestore.indexes.json");
+        std::fs::write(&path, INDEXES_ONE).unwrap();
+        let backend = index_backend(INDEXES_ONE);
+        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+
+        let mut malformed = INDEXES_TWO.as_bytes().to_vec();
+        let array_start = malformed.iter().position(|byte| *byte == b'[').unwrap();
+        malformed[array_start] = b'{';
+        std::fs::write(&path, malformed).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+        assert_eq!(
+            backend.indexes_for_database("staging").composites()[0]
+                .collection_group
+                .as_str(),
+            "items"
+        );
+
+        std::fs::write(&path, INDEXES_TWO).unwrap();
+        wait_for_index_collection(&backend, "other").await;
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

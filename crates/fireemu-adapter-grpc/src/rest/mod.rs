@@ -9,6 +9,11 @@
 pub mod coverage;
 pub mod json;
 
+#[cfg(test)]
+mod admin_inventory_tests;
+#[cfg(test)]
+mod transaction_tests;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -22,9 +27,10 @@ use crate::local::LocalBackend;
 use crate::rules::{self, Principal, RulesEnforcer};
 use json::{
     aggregation_query_from_json, base64_decode, base64_encode, commit_to_json, document_from_json,
-    document_to_json, mask_from_json, mask_from_paths, optional_timestamp_to_json,
-    precondition_from_json, structured_query_from_json, transaction_options_from_json,
-    value_to_json, write_from_json, write_result_to_json, JsonError,
+    document_to_json, explain_options_from_json, mask_from_json, mask_from_paths,
+    optional_timestamp_to_json, precondition_from_json, request_options_from_json,
+    structured_query_from_json, transaction_options_from_json, value_to_json, write_from_json,
+    write_result_to_json, JsonError,
 };
 
 /// Shared REST state.
@@ -156,6 +162,50 @@ fn bad(e: &JsonError) -> Status {
     Status::invalid_argument(e.to_string())
 }
 
+fn batch_write_status_to_json(status: &fireemu_proto_firestore::google::rpc::Status) -> Value {
+    let mut out = json!({});
+    if status.code != 0 {
+        out["code"] = json!(status.code);
+    }
+    if !status.message.is_empty() {
+        out["message"] = json!(status.message);
+    }
+    if !status.details.is_empty() {
+        out["details"] = Value::Array(
+            status
+                .details
+                .iter()
+                .map(|detail| {
+                    json!({
+                        "@type": detail.type_url,
+                        "value": json::base64_encode(&detail.value),
+                    })
+                })
+                .collect(),
+        );
+    }
+    out
+}
+
+fn batch_write_unknown_field_response(field: &str) -> RestResponse {
+    let message =
+        format!("Invalid JSON payload received. Unknown name \"{field}\": Cannot find field.");
+    RestResponse {
+        status: 400,
+        body: json!({
+            "error": {
+                "code": 400,
+                "message": message.clone(),
+                "status": "INVALID_ARGUMENT",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [{"description": message}]
+                }]
+            }
+        }),
+    }
+}
+
 /// Parsed query parameters (repeated keys keep every value).
 fn query_params(query: &str) -> BTreeMap<String, Vec<String>> {
     fn decode(s: &str) -> String {
@@ -190,6 +240,37 @@ fn first<'a>(params: &'a BTreeMap<String, Vec<String>>, key: &str) -> Option<&'a
     params.get(key).and_then(|v| v.first()).map(String::as_str)
 }
 
+fn admin_database_json(project: &str, database: &str) -> Value {
+    json!({
+        "name": format!("projects/{project}/databases/{database}"),
+        "locationId": "us-central1",
+        "type": "FIRESTORE_NATIVE",
+        "concurrencyMode": "PESSIMISTIC",
+        "versionRetentionPeriod": "3600s",
+        "appEngineIntegrationMode": "DISABLED",
+        "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+        "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+        "databaseEdition": "STANDARD",
+        "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+        "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED"
+    })
+}
+
+fn single<'a>(
+    params: &'a BTreeMap<String, Vec<String>>,
+    key: &str,
+) -> Result<Option<&'a str>, Status> {
+    let Some(values) = params.get(key) else {
+        return Ok(None);
+    };
+    if values.len() != 1 {
+        return Err(Status::invalid_argument(format!(
+            "{key} must be specified at most once"
+        )));
+    }
+    Ok(values.first().map(String::as_str))
+}
+
 /// What a REST path names.
 enum Target {
     /// `.../documents` (database root) or a document path.
@@ -202,31 +283,45 @@ enum Target {
 }
 
 fn classify(resource: &str) -> Result<Target, Status> {
-    let Some((db, rest)) = resource.split_once("/documents") else {
+    let mut segments = resource.split('/');
+    let Some("projects") = segments.next() else {
         return Err(Status::not_found(format!("unknown resource {resource}")));
     };
-    let rest = rest.trim_start_matches('/');
+    let Some(project) = segments.next().filter(|segment| !segment.is_empty()) else {
+        return Err(Status::not_found(format!("unknown resource {resource}")));
+    };
+    if segments.next() != Some("databases") {
+        return Err(Status::not_found(format!("unknown resource {resource}")));
+    }
+    let Some(database) = segments.next().filter(|segment| !segment.is_empty()) else {
+        return Err(Status::not_found(format!("unknown resource {resource}")));
+    };
+    if segments.next() != Some("documents") {
+        return Err(Status::not_found(format!("unknown resource {resource}")));
+    }
+    let db = format!("projects/{project}/databases/{database}");
+    let mut rest: Vec<&str> = segments.collect();
+    // Preserve the existing acceptance of a trailing slash on the database root.
+    if rest == [""] {
+        rest.clear();
+    }
+    if rest.iter().any(|segment| segment.is_empty()) {
+        return Err(Status::invalid_argument("empty path segment"));
+    }
     if rest.is_empty() {
         return Ok(Target::Resource(format!("{db}/documents")));
     }
-    let segments: Vec<&str> = rest.split('/').collect();
-    if segments.iter().any(|s| s.is_empty()) {
-        return Err(Status::invalid_argument("empty path segment"));
-    }
-    if segments.len() % 2 == 0 {
+    if rest.len() % 2 == 0 {
         Ok(Target::Resource(resource.to_owned()))
     } else {
-        let parent = if segments.len() == 1 {
+        let parent = if rest.len() == 1 {
             format!("{db}/documents")
         } else {
-            format!(
-                "{db}/documents/{}",
-                segments[..segments.len() - 1].join("/")
-            )
+            format!("{db}/documents/{}", rest[..rest.len() - 1].join("/"))
         };
         Ok(Target::Collection {
             parent,
-            collection_id: segments[segments.len() - 1].to_owned(),
+            collection_id: rest[rest.len() - 1].to_owned(),
         })
     }
 }
@@ -371,8 +466,9 @@ impl RestState {
             ));
         }
         // The wipe is per project: fireemu isolates a session's databases by project, so
-        // clearing one never touches another session's data.
-        self.local.reset_project(project);
+        // clearing one never touches another session's data. ClearFirestore drops documents
+        // while the Admin database catalog remains available for the existing databases.
+        self.local.clear_project_documents(project)?;
         Ok(ok(Value::Object(serde_json::Map::new())))
     }
 
@@ -481,6 +577,78 @@ impl RestState {
         }
     }
 
+    fn admin_inventory_route(
+        &self,
+        req: &RestRequest,
+        path: &str,
+        params: &BTreeMap<String, Vec<String>>,
+    ) -> Result<RestResponse, Status> {
+        if !rules::is_owner_credential(req.authorization.as_deref()) {
+            return Err(Status::permission_denied(
+                "Admin database inventory requires owner credentials",
+            ));
+        }
+        if self.gateway.ctx.edition != fireemu_core_types::edition::FirestoreEdition::Standard
+            || self.gateway.ctx.api_mode != fireemu_core_types::edition::FirestoreApiMode::Native
+        {
+            return Err(Status::unimplemented(
+                "database inventory is supported only for Standard Native databases",
+            ));
+        }
+        let segments: Vec<&str> = path.split('/').collect();
+        if segments.len() < 3
+            || segments[0] != "projects"
+            || segments[2] != "databases"
+            || segments[1].is_empty()
+            || (req.method == "GET" && !matches!(segments.len(), 3 | 4))
+            || (req.method == "GET" && segments.len() == 4 && segments[3].is_empty())
+        {
+            return Err(Status::invalid_argument(
+                "database resource must be projects/{project}/databases/{database}",
+            ));
+        }
+        let project = segments[1];
+        let barrier = self.local.barrier();
+        let _admitted = barrier.admit();
+        let catalog = self.local.database_catalog()?;
+        match (req.method.as_str(), segments.as_slice()) {
+            ("GET", ["projects", project_name, "databases"]) if *project_name == project => {
+                match single(params, "showDeleted")? {
+                    None | Some("false" | "true") => (),
+                    Some(_) => {
+                        return Err(Status::invalid_argument(
+                            "showDeleted must be true or false",
+                        ))
+                    }
+                }
+                if params.contains_key("pageSize") || params.contains_key("pageToken") {
+                    return Err(Status::invalid_argument(
+                        "pageSize and pageToken are not supported",
+                    ));
+                }
+                let databases: Vec<Value> = catalog
+                    .into_iter()
+                    .filter(|((p, _), _)| p == project)
+                    .map(|((_, d), _incarnation)| admin_database_json(project, &d))
+                    .collect();
+                Ok(ok(json!({"databases": databases, "unreachable": []})))
+            }
+            ("GET", ["projects", project_name, "databases", database])
+                if *project_name == project && !database.is_empty() && !database.contains('/') =>
+            {
+                let Some((_, incarnation)) = catalog
+                    .into_iter()
+                    .find(|((p, d), _)| p == project && d == database)
+                else {
+                    return Err(Status::not_found("database not found"));
+                };
+                let _ = incarnation;
+                Ok(ok(admin_database_json(project, database)))
+            }
+            _ => Ok(not_found_text()),
+        }
+    }
+
     fn dispatch(&self, req: &RestRequest) -> Result<RestResponse, Status> {
         // The custom-method suffix is recognised on the raw path (an encoded colon inside a
         // document ID is data, not routing syntax); segments are decoded afterwards.
@@ -499,13 +667,20 @@ impl RestState {
         let Some(path) = decoded.strip_prefix("/v1/") else {
             return Ok(not_found_text());
         };
-        // Only the documents surface is served: `/v1/projects/{p}/databases` and the
-        // database resources are the Admin API, which the official emulator has no route
-        // for either.
+        let params = query_params(&req.query);
+        let segments: Vec<&str> = path.split('/').collect();
+        if req.method == "GET"
+            && action.is_none()
+            && matches!(
+                segments.as_slice(),
+                ["projects", _, "databases"] | ["projects", _, "databases", _]
+            )
+        {
+            return self.admin_inventory_route(req, path, &params);
+        }
         if !path.contains("/documents") {
             return Ok(not_found_text());
         }
-        let params = query_params(&req.query);
         // App Check, once the route and the target project are resolved and before the
         // Firebase Auth credential, Security Rules and every mutation (spec 7.4).
         self.admit_app_check(req, path, action)?;
@@ -587,17 +762,40 @@ impl RestState {
         collection_id: &str,
         params: &BTreeMap<String, Vec<String>>,
     ) -> Result<RestResponse, Status> {
+        let page_size = single(params, "pageSize")?.map_or(Ok(0), |value| {
+            value
+                .parse::<i32>()
+                .map_err(|_| Status::invalid_argument("pageSize must be an int32"))
+        })?;
+        if page_size < 0 {
+            return Err(Status::invalid_argument("pageSize must not be negative"));
+        }
+        let show_missing = match single(params, "showMissing")? {
+            None | Some("false") => false,
+            Some("true") => true,
+            Some(_) => {
+                return Err(Status::invalid_argument(
+                    "showMissing must be true or false",
+                ))
+            }
+        };
+        let order_by = single(params, "orderBy")?.unwrap_or("");
+        let transaction = single(params, "transaction")?;
+        let read_time = single(params, "readTime")?;
+        if show_missing && !order_by.is_empty() {
+            return Err(Status::invalid_argument(
+                "showMissing cannot be used with orderBy",
+            ));
+        }
         let req = pb::ListDocumentsRequest {
             parent: parent.to_owned(),
             collection_id: collection_id.to_owned(),
-            page_size: first(params, "pageSize")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0),
-            page_token: first(params, "pageToken").unwrap_or("").to_owned(),
-            order_by: first(params, "orderBy").unwrap_or("").to_owned(),
+            page_size,
+            page_token: single(params, "pageToken")?.unwrap_or("").to_owned(),
+            order_by: order_by.to_owned(),
             mask: mask_from_paths(params.get("mask.fieldPaths").map_or(&[][..], Vec::as_slice)),
-            show_missing: first(params, "showMissing") == Some("true"),
-            consistency_selector: match (first(params, "transaction"), first(params, "readTime")) {
+            show_missing,
+            consistency_selector: match (transaction, read_time) {
                 (Some(_), Some(_)) => {
                     return Err(Status::invalid_argument(
                         "transaction and readTime are mutually exclusive",
@@ -711,6 +909,7 @@ impl RestState {
             "batchWrite" => self.batch_write(principal, resource, body),
             "batchGet" => self.batch_get(principal, resource, body),
             "beginTransaction" => {
+                json::strict_keys(body, &["options", "requestOptions"]).map_err(|e| bad(&e))?;
                 let database = database_of(resource)?;
                 self.check_database_audience(principal, &database)?;
                 let token = self.local.begin_transaction(&pb::BeginTransactionRequest {
@@ -718,7 +917,8 @@ impl RestState {
                     options: Some(
                         transaction_options_from_json(body.get("options")).map_err(|e| bad(&e))?,
                     ),
-                    request_options: None,
+                    request_options: request_options_from_json(body.get("requestOptions"))
+                        .map_err(|e| bad(&e))?,
                 })?;
                 Ok(ok(json!({"transaction": base64_encode(&token)})))
             }
@@ -736,9 +936,22 @@ impl RestState {
             "runAggregationQuery" => self.run_aggregation_query(principal, resource, body),
             "partitionQuery" => self.partition_query(principal, resource, body),
             "listCollectionIds" => {
+                json::strict_keys(
+                    body,
+                    &["pageSize", "pageToken", "readTime", "requestOptions"],
+                )
+                .map_err(|e| bad(&e))?;
                 if let Some(rules) = &self.rules {
                     rules.require_owner(principal, "listCollectionIds")?;
                 }
+                let read_time = body
+                    .get("readTime")
+                    .map(|value| json::read_time_from_json(&json!({"readTime": value})))
+                    .transpose()
+                    .map_err(|e| bad(&e))?
+                    .flatten();
+                let request_options =
+                    request_options_from_json(body.get("requestOptions")).map_err(|e| bad(&e))?;
                 let response = self
                     .local
                     .list_collection_ids(&pb::ListCollectionIdsRequest {
@@ -748,11 +961,17 @@ impl RestState {
                             .unwrap_or(0),
                         page_token: body
                             .get("pageToken")
-                            .and_then(Value::as_str)
+                            .map(|value| {
+                                value.as_str().ok_or_else(|| {
+                                    bad(&json::JsonError("pageToken must be a string".into()))
+                                })
+                            })
+                            .transpose()?
                             .unwrap_or_default()
                             .to_owned(),
-                        request_options: None,
-                        consistency_selector: None,
+                        request_options,
+                        consistency_selector: read_time
+                            .map(pb::list_collection_ids_request::ConsistencySelector::ReadTime),
                     })?;
                 let mut out = json!({"collectionIds": response.collection_ids});
                 if !response.next_page_token.is_empty() {
@@ -859,18 +1078,23 @@ impl RestState {
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {
+        if let Some(field) = json::first_unknown_key(body, &["writes", "labels"])
+            .filter(|field| *field == "transaction")
+        {
+            return Ok(batch_write_unknown_field_response(field));
+        }
         json::strict_keys(body, &["writes", "labels"]).map_err(|e| bad(&e))?;
         let req = pb::BatchWriteRequest {
             database: database_of(resource)?,
             writes: writes_from_json(body)?,
-            labels: std::collections::HashMap::new(),
+            labels: labels_from_json(body)?,
             request_options: None,
         };
         let guard = self.write_guard(principal);
         let response = self.local.batch_write_with(&req, &*guard)?;
         Ok(ok(json::without_empty(json!({
             "writeResults": response.write_results.iter().map(write_result_to_json).collect::<Vec<_>>(),
-            "status": response.status.iter().map(|s| json!({"code": s.code, "message": s.message})).collect::<Vec<_>>(),
+            "status": response.status.iter().map(batch_write_status_to_json).collect::<Vec<_>>(),
         }))))
     }
 
@@ -891,36 +1115,39 @@ impl RestState {
             ],
         )
         .map_err(|e| bad(&e))?;
-        let documents: Vec<String> = body
-            .get("documents")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default();
-        exclusive_selectors(body)?;
-        let consistency_selector = if let Some(t) = body.get("transaction") {
-            Some(
-                pb::batch_get_documents_request::ConsistencySelector::Transaction(
-                    transaction_bytes(Some(t))?,
-                ),
-            )
-        } else if let Some(rt) = json::read_time_from_json(body).map_err(|e| bad(&e))? {
-            Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(rt))
-        } else {
-            match body.get("newTransaction") {
-                Some(o) => Some(
-                    pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
-                        transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
-                    ),
-                ),
-                None => None,
-            }
+        let documents: Vec<String> = match body.get("documents") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(items)) => items
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    value.as_str().map(str::to_owned).ok_or_else(|| {
+                        Status::invalid_argument(format!("documents[{index}] must be a string"))
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+            Some(_) => return Err(Status::invalid_argument("documents must be an array")),
         };
+        exclusive_selectors(body)?;
+        let consistency_selector =
+            if let Some(t) = body.get("transaction").filter(|value| !value.is_null()) {
+                Some(
+                    pb::batch_get_documents_request::ConsistencySelector::Transaction(
+                        transaction_bytes(Some(t))?,
+                    ),
+                )
+            } else if let Some(rt) = json::read_time_from_json(body).map_err(|e| bad(&e))? {
+                Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(rt))
+            } else {
+                match body.get("newTransaction").filter(|value| !value.is_null()) {
+                    Some(o) => Some(
+                        pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
+                            transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
+                        ),
+                    ),
+                    None => None,
+                }
+            };
         let req = pb::BatchGetDocumentsRequest {
             database: database_of(resource)?,
             documents,
@@ -973,24 +1200,27 @@ impl RestState {
             return Err(Status::invalid_argument("structuredQuery is required"));
         };
         let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
+        let explain_options =
+            explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;
         exclusive_selectors(body)?;
-        let consistency_selector = if let Some(t) = body.get("transaction") {
-            Some(pb::run_query_request::ConsistencySelector::Transaction(
-                transaction_bytes(Some(t))?,
-            ))
-        } else if let Some(rt) = json::read_time_from_json(body).map_err(|e| bad(&e))? {
-            Some(pb::run_query_request::ConsistencySelector::ReadTime(rt))
-        } else {
-            match body.get("newTransaction") {
-                Some(o) => Some(pb::run_query_request::ConsistencySelector::NewTransaction(
-                    transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
-                )),
-                None => None,
-            }
-        };
+        let consistency_selector =
+            if let Some(t) = body.get("transaction").filter(|value| !value.is_null()) {
+                Some(pb::run_query_request::ConsistencySelector::Transaction(
+                    transaction_bytes(Some(t))?,
+                ))
+            } else if let Some(rt) = json::read_time_from_json(body).map_err(|e| bad(&e))? {
+                Some(pb::run_query_request::ConsistencySelector::ReadTime(rt))
+            } else {
+                match body.get("newTransaction").filter(|value| !value.is_null()) {
+                    Some(o) => Some(pb::run_query_request::ConsistencySelector::NewTransaction(
+                        transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
+                    )),
+                    None => None,
+                }
+            };
         let req = pb::RunQueryRequest {
             parent: resource.to_owned(),
-            explain_options: None,
+            explain_options,
             request_options: None,
             query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
                 structured,
@@ -998,7 +1228,22 @@ impl RestState {
             consistency_selector,
         };
         let guard = self.read_guard(principal);
-        let (responses, _warnings) = self.local.run_query(&req, &*guard)?;
+        let (responses, _warnings) = match self.local.run_query(&req, &*guard) {
+            Ok(result) => result,
+            // Observed production negative-limit error is a stream element. Keep
+            // other validation/authentication errors on their existing paths.
+            Err(status)
+                if status.code() == Code::InvalidArgument
+                    && status.message() == "invalid query: negative limit" =>
+            {
+                let response = error_response(&status);
+                return Ok(RestResponse {
+                    status: response.status,
+                    body: json!([response.body]),
+                });
+            }
+            Err(status) => return Err(status),
+        };
         let out: Vec<Value> = responses
             .iter()
             .map(|r| {
@@ -1014,6 +1259,9 @@ impl RestState {
                 }
                 if r.skipped_results != 0 {
                     v["skippedResults"] = json!(r.skipped_results);
+                }
+                if let Some(metrics) = &r.explain_metrics {
+                    v["explainMetrics"] = json::explain_metrics_to_json(metrics);
                 }
                 // Production Firestore sends no `done` marker over REST (the official emulator
                 // does); the last element is simply the last element of the array.
@@ -1046,6 +1294,8 @@ impl RestState {
             ));
         };
         let aggregation = aggregation_query_from_json(saq).map_err(|e| bad(&e))?;
+        let explain_options =
+            explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;
         if !matches!(
             aggregation.query_type,
             Some(pb::structured_aggregation_query::QueryType::StructuredQuery(_))
@@ -1055,27 +1305,28 @@ impl RestState {
             ));
         }
         exclusive_selectors(body)?;
-        let consistency_selector = if let Some(t) = body.get("transaction") {
-            Some(
-                pb::run_aggregation_query_request::ConsistencySelector::Transaction(
-                    transaction_bytes(Some(t))?,
-                ),
-            )
-        } else if let Some(rt) = json::read_time_from_json(body).map_err(|e| bad(&e))? {
-            Some(pb::run_aggregation_query_request::ConsistencySelector::ReadTime(rt))
-        } else {
-            match body.get("newTransaction") {
-                Some(o) => Some(
-                    pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
-                        transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
+        let consistency_selector =
+            if let Some(t) = body.get("transaction").filter(|value| !value.is_null()) {
+                Some(
+                    pb::run_aggregation_query_request::ConsistencySelector::Transaction(
+                        transaction_bytes(Some(t))?,
                     ),
-                ),
-                None => None,
-            }
-        };
+                )
+            } else if let Some(rt) = json::read_time_from_json(body).map_err(|e| bad(&e))? {
+                Some(pb::run_aggregation_query_request::ConsistencySelector::ReadTime(rt))
+            } else {
+                match body.get("newTransaction").filter(|value| !value.is_null()) {
+                    Some(o) => Some(
+                        pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
+                            transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
+                        ),
+                    ),
+                    None => None,
+                }
+            };
         let req = pb::RunAggregationQueryRequest {
             parent: resource.to_owned(),
-            explain_options: None,
+            explain_options,
             request_options: None,
             query_type: Some(
                 pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
@@ -1096,7 +1347,16 @@ impl RestState {
                     .collect()
             })
             .unwrap_or_default();
-        let mut v = json!({"result": {"aggregateFields": fields}, "readTime": optional_timestamp_to_json(response.read_time.as_ref())});
+        let mut v = json!({});
+        if response.read_time.is_some() {
+            v["readTime"] = optional_timestamp_to_json(response.read_time.as_ref());
+        }
+        if response.result.is_some() {
+            v["result"] = json!({"aggregateFields": fields});
+        }
+        if let Some(metrics) = &response.explain_metrics {
+            v["explainMetrics"] = json::explain_metrics_to_json(metrics);
+        }
         if !response.transaction.is_empty() {
             v["transaction"] = Value::String(base64_encode(&response.transaction));
         }
@@ -1189,17 +1449,36 @@ fn transaction_bytes(v: Option<&Value>) -> Result<Vec<u8>, Status> {
 }
 
 fn writes_from_json(body: &Value) -> Result<Vec<pb::Write>, Status> {
-    body.get("writes")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(write_from_json)
-                .collect::<Result<Vec<_>, _>>()
+    match body.get("writes") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(write_from_json)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| bad(&e)),
+        Some(_) => Err(Status::invalid_argument("writes must be an array")),
+    }
+}
+
+fn labels_from_json(body: &Value) -> Result<std::collections::HashMap<String, String>, Status> {
+    let Some(labels) = body.get("labels") else {
+        return Ok(std::collections::HashMap::new());
+    };
+    if labels.is_null() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let Some(labels) = labels.as_object() else {
+        return Err(Status::invalid_argument("labels must be an object"));
+    };
+    labels
+        .iter()
+        .map(|(key, value)| {
+            value
+                .as_str()
+                .map(|value| (key.clone(), value.to_owned()))
+                .ok_or_else(|| Status::invalid_argument("labels values must be strings"))
         })
-        .transpose()
-        .map_err(|e| bad(&e))
-        .map(Option::unwrap_or_default)
+        .collect()
 }
 
 fn precondition_from_params(

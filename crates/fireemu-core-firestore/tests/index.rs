@@ -195,6 +195,118 @@ fn decide(q: &Query, indexes: &IndexSet, ctx: PlanningContext) -> IndexDecision 
     fireemu_core_firestore::index::decide(&q.canonicalize().unwrap(), indexes, &ctx)
 }
 
+fn nearest_query() -> Query {
+    tasks().with_find_nearest(fireemu_core_firestore::query::FindNearest {
+        vector_field: fp("embedding"),
+        query_vector: vec![0.0, 1.0],
+        distance_measure: fireemu_core_firestore::query::DistanceMeasure::Cosine,
+        limit: 5,
+        distance_result_field: None,
+        distance_threshold: None,
+    })
+}
+
+#[test]
+fn vector_queries_without_a_collection_source_are_unsupported_in_production() {
+    let query = Query::new(QueryScope::kindless_all_descendants(None)).with_find_nearest(
+        fireemu_core_firestore::query::FindNearest {
+            vector_field: fp("embedding"),
+            query_vector: vec![0.0, 1.0],
+            distance_measure: fireemu_core_firestore::query::DistanceMeasure::Cosine,
+            limit: 5,
+            distance_result_field: None,
+            distance_threshold: None,
+        },
+    );
+    assert!(matches!(
+        decide(&query, &IndexSet::default(), standard()),
+        IndexDecision::Unsupported {
+            feature: "findNearest requires a collection source"
+        }
+    ));
+}
+
+#[test]
+fn vector_queries_require_a_dimensioned_vector_index_in_production() {
+    let query = nearest_query();
+    let missing = decide(&query, &IndexSet::default(), standard());
+    let requirement = match missing {
+        IndexDecision::MissingRequired { requirement } => requirement,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(requirement.fields.len(), 1);
+    assert_eq!(requirement.fields[0].path, fp("embedding"));
+    assert_eq!(
+        requirement.fields[0].mode,
+        IndexFieldMode::Vector { dimension: 2 }
+    );
+    assert!(requirement
+        .indexes_json_fragment()
+        .contains(r#"vectorConfig": {"dimension": 2, "flat": {}}"#));
+
+    let mut wrong_dimension = IndexSet::default();
+    wrong_dimension.add_composite(composite(&[(
+        "embedding",
+        IndexFieldMode::Vector { dimension: 3 },
+    )]));
+    assert!(matches!(
+        decide(&query, &wrong_dimension, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+
+    let mut configured = IndexSet::default();
+    configured.add_composite(composite(&[(
+        "embedding",
+        IndexFieldMode::Vector { dimension: 2 },
+    )]));
+    assert!(matches!(
+        decide(&query, &configured, standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+}
+
+#[test]
+fn vector_query_prefilters_require_the_same_composite_vector_index() {
+    let query = nearest_query().with_filter(field(
+        "category",
+        FieldOp::Equal,
+        Value::String("book".to_owned()),
+    ));
+    let mut only_vector = IndexSet::default();
+    only_vector.add_composite(composite(&[(
+        "embedding",
+        IndexFieldMode::Vector { dimension: 2 },
+    )]));
+    assert!(matches!(
+        decide(&query, &only_vector, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+
+    let mut configured = IndexSet::default();
+    configured.add_composite(composite(&[
+        ("category", IndexFieldMode::Ascending),
+        ("embedding", IndexFieldMode::Vector { dimension: 2 }),
+    ]));
+    assert!(matches!(
+        decide(&query, &configured, standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+}
+
+#[test]
+fn emulator_vector_queries_assume_a_vector_index_without_using_name_index() {
+    let query = nearest_query();
+    let mut indexes = IndexSet::default();
+    indexes.add_composite(composite(&[("__name__", IndexFieldMode::Ascending)]));
+    let mut emulator = standard();
+    emulator.policy = IndexValidationPolicy::Emulator;
+    assert!(matches!(
+        decide(&query, &indexes, emulator),
+        IndexDecision::AssumedIndex { requirement }
+            if requirement.fields[0].mode == IndexFieldMode::Vector { dimension: 2 }
+    ));
+}
+
 #[test]
 fn single_field_queries_use_automatic_indexes() {
     let idx = IndexSet::default();
@@ -928,6 +1040,27 @@ fn collection_group_scope_is_not_ignored() {
     assert!(matches!(
         decide(&q, &group, standard()),
         IndexDecision::UseIndex { .. }
+    ));
+}
+
+#[test]
+fn collection_group_index_does_not_serve_collection_query() {
+    let q = tasks().with_filter(FilterExpr::And(vec![
+        field("done", FieldOp::Equal, Value::Boolean(false)),
+        field("owner", FieldOp::Equal, Value::String("u".to_owned())),
+    ]));
+    let mut group = IndexSet::default();
+    let mut index = composite(&[
+        ("done", IndexFieldMode::Ascending),
+        ("owner", IndexFieldMode::Ascending),
+    ]);
+    index.query_scope = IndexQueryScope::CollectionGroup;
+    group.set_default_single_field_indexes(&CollectionId::try_new("tasks").unwrap(), vec![]);
+    group.add_composite(index);
+
+    assert!(matches!(
+        decide(&q, &group, standard()),
+        IndexDecision::MissingRequired { .. }
     ));
 }
 

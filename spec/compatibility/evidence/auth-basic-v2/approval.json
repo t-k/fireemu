@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "0eb3689e1eb636f4166d3f296bba2fea2cf2ac70bf6ab6901d1077575a2a60cb",
+  "sourceCommit": "29378b6f25fdad1e44e08114f5b684aeff4de808",
+  "scope": "Email/password Auth REST using end-user tokens; no tenant; local strict profile and recorded production configuration; only the recorded artifact, configuration and corpus revision 2 twelve cases; approved as redacted semantic observations matching the published checks.",
+  "cases": [
+    "signup",
+    "signup-token-lookup",
+    "signup-token-refresh",
+    "signup-refreshed-lookup",
+    "signin",
+    "lookup",
+    "wrong-password",
+    "unchanged-state",
+    "refresh",
+    "refreshed-lookup",
+    "delete",
+    "deleted-account-absent"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-10",
+  "decision": "approve"
+}

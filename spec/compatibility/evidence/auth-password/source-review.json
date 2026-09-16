@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 1,
+  "kind": "agent-authored-source-review",
+  "reviewer": "Codex (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-10",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "rawSha256": "c3454bcf8f4e565422657ba8d55ea0d23bb3d82a2bfbc0a3c6aaabdcfc888af8",
+      "bodySha256": "a9b8129d0d42db1aa1b7eed2121ac7dc2be6d5b53c3976502ecf6b753b09c0c9",
+      "fetchedAt": "2026-09-10T04:04:29.598062+00:00",
+      "locators": [
+        "section-create-email-password",
+        "section-sign-in-email-password",
+        "section-change-password",
+        "section-get-account-info",
+        "section-refresh-token",
+        "section-delete-account"
+      ]
+    },
+    {
+      "id": "password-policy",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/TopLevel/getPasswordPolicy",
+      "rawSha256": "e0358d44836900cf88704efeb032ea23674afa1be5f60badd618631aae9319e6",
+      "bodySha256": "32ee1fa52b8d6dcdeb7c051dcd34d22378ed5e6fac51aed65092f26879ee26fe",
+      "fetchedAt": "2026-09-10T05:41:19.870929+00:00",
+      "locators": [
+        "response-body",
+        "customstrengthoptions",
+        "enforcementstate"
+      ]
+    },
+    {
+      "id": "email-privacy",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/admin/email-enumeration-protection",
+      "rawSha256": "0ae2cb918d4d56d047a2b928a5eb66d96a80127fb60a7ed55e5389f5551a8834",
+      "bodySha256": "6457558a31c25b2f770f277c29839eecc1fa2f5e0c3878f2e3df3911e2a3061a",
+      "fetchedAt": "2026-09-10T05:41:20.751654+00:00",
+      "locators": [
+        "overview",
+        "example_of_an_error_response"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "id": "AUTH-PASSWORD-SIGNUP",
+      "case": "signup",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-create-email-password",
+      "condition": "Create a dedicated account with a generated password. Check returned same-account tokens, positive-integer expiry and the separate 3600-second expectation. Verify ownership by marker/email and independent UID lookup, then persist/reread UID before mutation.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-BASELINE-SIGNIN",
+      "case": "baseline-signin",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "Prove the original password authenticates as the same UID and obtain a fresh ID token for the password change.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-CHANGE-PASSWORD",
+      "case": "change-password",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-change-password",
+      "condition": "Use the baseline signin ID token to set a distinct password with returnSecureToken=true. Check same UID/email, both token fields and expiry.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-CHANGED-TOKEN-LOOKUP",
+      "case": "changed-token-lookup",
+      "basis": "derived-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Use the update response ID token and compare selected account fields with pre-change lookup.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-OLD-PASSWORD-REJECTED",
+      "case": "old-password-rejected",
+      "basis": "derived-control",
+      "source": "email-privacy",
+      "locator": "overview",
+      "condition": "Under recorded improved email privacy, original-password signin must return HTTP400 INVALID_LOGIN_CREDENTIALS. An arbitrary error, disabled-account error or throttling is not equivalent.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-UNCHANGED-STATE",
+      "case": "unchanged-state",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "After old-password rejection, use the update ID token to compare selected fields with the pre-rejection lookup, preserving missing/null/type distinctions.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-NEW-PASSWORD-SIGNIN",
+      "case": "new-password-signin",
+      "basis": "derived-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "The replacement password authenticates as the original UID/email and returns usable credentials.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-NEW-PASSWORD-LOOKUP",
+      "case": "new-password-lookup",
+      "basis": "derived-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Use the new-password signin ID token and compare selected fields to the original account.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-CHANGED-TOKEN-REFRESH",
+      "case": "changed-token-refresh",
+      "basis": "derived-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Use the password update response refresh token with grant_type=refresh_token. Check same UID, token fields, bearer type and expiry.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-REFRESHED-LOOKUP",
+      "case": "refreshed-lookup",
+      "basis": "derived-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Use the refreshed ID token and compare selected fields to the original account.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-DELETE",
+      "case": "delete",
+      "basis": "source-derived",
+      "source": "auth-rest",
+      "locator": "section-delete-account",
+      "condition": "Delete the dedicated account using the refreshed end-user ID token after verified UID ownership confirmation.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-PASSWORD-DELETED-ACCOUNT-ABSENT",
+      "case": "deleted-account-absent",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-delete-account",
+      "condition": "Exact UID and email Admin selectors both confirm account absence. Unknown UID remains unresolved; recovered identity is persisted before any cleanup deletion.",
+      "existingRequirement": null
+    }
+  ],
+  "limitations": [
+    "No human approval. Twelve bounded end-user email/password REST cases, no tenant, strict owned local artifact and recorded production configuration.",
+    "Official REST snapshot reuses the earlier immutable acquisition; raw/body hashes and original fetchedAt are preserved. Selected sections reviewed 2026-09-10. Policy and privacy references acquired separately for this slice.",
+    "Selected-state comparisons cover localId, email, emailVerified, displayName, photoUrl and disabled. No password hash, passwordUpdatedAt, validSince, lastLoginAt or provider synchronization comparison.",
+    "Five token-returning cases check positive-integer expiry and 3600 seconds separately. Actual immediate use is checked for change-password ID/refresh tokens and new-password login ID token; not every returned token is independently exercised.",
+    "No old-token revocation timing, elapsed-expiry enforcement, recent-login time boundary, weak-password/policy boundary, password reset, SDK, MFA, Rules or public npm/full Auth claim.",
+    "Normal verified cleanup does not prove injected network-loss or forced-termination recovery. Raw responses and credentials are not published; public booleans are recorder testimony, not independent JWT verification."
+  ],
+  "preconditions": [
+    {
+      "source": "password-policy",
+      "locator": "response-body",
+      "condition": "Require exact client schemaVersion 1, enforcementState ENFORCE, minPasswordLength 6 and maxPasswordLength 4096; admin config must omit passwordPolicyConfig. This explicit readback is not inferred OFF. Distinct 47-character generated passwords have uppercase/lowercase/numeric/non-alphanumeric characters; no configuration is changed."
+    }
+  ]
+}

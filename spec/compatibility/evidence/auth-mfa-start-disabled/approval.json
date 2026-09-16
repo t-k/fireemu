@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "e0fdb84012734f99533f84e7fab173d26e1f0f0a9112f4703d990f1a968df442",
+  "sourceCommit": "aef95ad3e6f623d6ce8263f52ce20791b67afe68",
+  "scope": "Six production-only observations projected without secrets from the saved 2026-09-12 run of auth-mfa-start-disabled, recorded from a committed checkout. mfaSignIn:start on an account disabled after its pending credential is accepted and returns a session; its finalize is refused USER_DISABLED; after re-enablement the same pending credential starts and finalizes; a baseline and final fresh finalize are controls; the configuration was restored with a matching whole-configuration digest and the account deleted with UID/email absence. The approval does not extend to a production/local comparison of this corpus, to TOTP, tenants, blocking functions, SDK, Rules or the credential's expiry.",
+  "cases": [
+    "baseline-fresh-finalize",
+    "disabled-start",
+    "disabled-finalize",
+    "reenabled-start",
+    "reenabled-finalize",
+    "final-fresh-finalize"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-12",
+  "decision": "approve"
+}

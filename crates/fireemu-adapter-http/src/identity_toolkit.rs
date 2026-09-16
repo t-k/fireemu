@@ -15,7 +15,7 @@
 //!
 //! Error bodies use the Firebase shape `{"error": {"code": 400, "message": "EMAIL_EXISTS"}}`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use fireemu_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, ServiceAdmission};
@@ -25,8 +25,9 @@ use fireemu_core_auth::claims::{ClaimValue, CustomClaims};
 use fireemu_core_auth::jwt::{base64url_decode, encode_payload_with, encode_with, JwtError};
 use fireemu_core_auth::mfa::{MfaError, PendingSignInContext, PendingSignInCredentials};
 use fireemu_core_auth::store::{
-    AuthError, AuthStore, CredentialNotice, FederatedIdentity, LocalId, NewUser, OobRequestType,
-    PendingSignInId, PhoneCodeUse, RoutedStoreInstall, SecondFactorAssertion, VerificationCode,
+    AuthError, AuthStore, CredentialNotice, FederatedIdentity, InboundSamlProviderConfig, LocalId,
+    NewUser, OAuthResponseType, OidcProviderConfig, OobRequestType, PendingSignInId, PhoneCodeUse,
+    ProjectAuthConfigPatch, RoutedStoreInstall, SecondFactorAssertion, VerificationCode,
     VerificationPurpose,
 };
 use fireemu_core_session::clock::VirtualClock;
@@ -628,6 +629,32 @@ fn sign_response_tokens(
     response
 }
 
+/// Commit the issuance timestamp only after a successful response has been signed.
+fn finish_token_response(
+    response: JsonResponse,
+    signer: Option<&dyn fireemu_core_auth::jwt::IdTokenSigner>,
+    store: &Arc<Mutex<AuthStore>>,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let response = sign_response_tokens(response, signer);
+    if response.status == 200
+        && (response.body.get("idToken").is_some() || response.body.get("id_token").is_some())
+    {
+        if let Some(refresh) = response
+            .body
+            .get("refreshToken")
+            .or_else(|| response.body.get("refresh_token"))
+            .and_then(Value::as_str)
+        {
+            let Ok(mut store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            store.record_token_issuance(refresh, at);
+        }
+    }
+    response
+}
+
 /// The envelope of a path the official emulator does not serve (measured:
 /// `auth/identity-toolkit-error-shapes#unknown-method`). It carries `status` and no `domain`,
 /// unlike the `BadRequestError` shape every 400 uses.
@@ -677,10 +704,12 @@ fn auth_error(e: &AuthError) -> JsonResponse {
             400,
             "WEAK_PASSWORD : Password should be at least 6 characters",
         ),
+        AuthError::PasswordTooLong => error(400, "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"),
         AuthError::InvalidCredentials => error(400, "INVALID_LOGIN_CREDENTIALS"),
         AuthError::InvalidPassword => error(400, "INVALID_PASSWORD"),
         AuthError::UserDisabled => error(400, "USER_DISABLED"),
         AuthError::InvalidRefreshToken => error(400, "INVALID_REFRESH_TOKEN"),
+        AuthError::ExpiredRefreshToken => error(400, "TOKEN_EXPIRED"),
         AuthError::UserNotFound => error(400, "USER_NOT_FOUND"),
         AuthError::InvalidLocalId => error(400, "INVALID_LOCAL_ID"),
         AuthError::LocalIdExists => error(400, "DUPLICATE_LOCAL_ID"),
@@ -723,6 +752,7 @@ fn jwt_error(e: &JwtError) -> JsonResponse {
     match e {
         JwtError::Expired => error(400, "TOKEN_EXPIRED"),
         JwtError::Revoked => error(400, "TOKEN_EXPIRED : credentials revoked"),
+        JwtError::UserDisabled => error(400, "USER_DISABLED"),
         _ => error(400, "INVALID_ID_TOKEN"),
     }
 }
@@ -881,13 +911,22 @@ fn verify_session(
     body: &Value,
     at: LogicalInstant,
 ) -> Result<Session, JsonResponse> {
+    verify_session_with_error(store, body, at, jwt_error)
+}
+
+fn verify_session_with_error(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    map_error: fn(&fireemu_core_auth::jwt::JwtError) -> JsonResponse,
+) -> Result<Session, JsonResponse> {
     let token = match body.get("idToken") {
         None | Some(Value::Null) => return Err(error(400, "MISSING_ID_TOKEN")),
         Some(Value::String(t)) => t.as_str(),
         Some(_) => return Err(error(400, "INVALID_ID_TOKEN")),
     };
     let (v, decoded) = fireemu_core_auth::jwt::verify_id_token_decoded(token, store, at)
-        .map_err(|e| jwt_error(&e))?;
+        .map_err(|e| map_error(&e))?;
     let provider = decoded
         .payload
         .get("firebase")
@@ -1872,6 +1911,38 @@ fn dispatch_with_blocking_hook(
                     Err(reason) => return error(400, &reason),
                 }
             }
+            // A hook response that disables the account refuses the very request that
+            // ran it with USER_DISABLED and no tokens (production, recorded 2026-09-11
+            // and 2026-09-12). What persists depends on the request, as recorded: a
+            // sign-up keeps its created, disabled record (a second sign-up is
+            // EMAIL_EXISTS); an MFA finalize persists the response on the record; a
+            // first-factor sign-in of an existing account persists nothing (the flag
+            // read back as not disabled before, immediately after, and up to thirty
+            // seconds after the refusal, while sign-ins stayed refused under the
+            // registered function; the same account after the function's removal was
+            // not observed in production). Paths other than password sign-in, sign-up
+            // and phone MFA finalize are unobserved and follow the existing-account
+            // rule.
+            if issued_session.is_some() && committed.user(&uid).is_some_and(|u| u.disabled) {
+                if live.user(&uid).is_none() {
+                    committed.revoke_refresh_tokens(&uid);
+                    *live = committed;
+                } else if handler == routes::Handler::MfaSignInFinalize {
+                    // Applied to a working copy so that a response that passed on the
+                    // committed copy but fails against the live record (claims size)
+                    // leaves no partial update; the refusal is USER_DISABLED either way.
+                    let mut updated = live.clone();
+                    let applied = blocking_responses.iter().all(|(event, value)| {
+                        apply_blocking_response(&mut updated, &uid, *event, value).is_ok()
+                    });
+                    if applied {
+                        *live = updated;
+                    }
+                }
+                // Do not call `discard_pending_inbound_credentials` here: it takes the
+                // store lock that this closure already holds.
+                return error(400, "USER_DISABLED");
+            }
             if let Some(mut session) = issued_session.take() {
                 for name in &persisted_claim_names {
                     session.extra_claims.remove(name);
@@ -1943,12 +2014,31 @@ fn dispatch_with_blocking_hook(
     }
 }
 
-/// Routes one request with its headers (privileged routes check them).
+/// Handles standard REST requests with caller-pinned local OIDC verification enabled.
+///
+/// This embedder/test configuration is not a new HTTP API. Every `signInWithIdp` request
+/// must match this single trust pin and an enabled provider configuration in the selected
+/// namespace; refusal never falls back to fixture parsing. No discovery or network calls
+/// occur. The daemon and [`handle_with`] retain fixture mode until explicitly wired here.
 ///
 /// The order is fixed: the store of the target project is selected, App Check decides, the
 /// route's privilege class is checked (owner credential, control token, project match), and
 /// only then does the handler run. Every step reads the same route table
 /// (`AUTH-ROUTE-03`).
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn handle_with_oidc_trust(
+    state: &AuthState,
+    method: &str,
+    path: &str,
+    headers: &RequestHeaders,
+    body: &Value,
+    trust: &crate::oidc::LocalOidcTrust,
+) -> JsonResponse {
+    handle_with_policy(state, method, path, headers, body, Some(trust))
+}
+
+/// Handles a request using the emulator fixture assertion policy.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn handle_with(
@@ -1957,6 +2047,18 @@ pub fn handle_with(
     path: &str,
     headers: &RequestHeaders,
     body: &Value,
+) -> JsonResponse {
+    handle_with_policy(state, method, path, headers, body, None)
+}
+
+#[allow(clippy::too_many_lines)]
+fn handle_with_policy(
+    state: &AuthState,
+    method: &str,
+    path: &str,
+    headers: &RequestHeaders,
+    body: &Value,
+    oidc_trust: Option<&crate::oidc::LocalOidcTrust>,
 ) -> JsonResponse {
     let (path, query) = match path.split_once('?') {
         Some((p, q)) => (p, Some(q)),
@@ -1970,6 +2072,7 @@ pub fn handle_with(
             route,
             project: Some(project),
             tenant: None,
+            ..
         } if state.allow_routed_projects && route.class == routes::RouteClass::Admin => {
             Some(project)
         }
@@ -1999,7 +2102,7 @@ pub fn handle_with(
     } else {
         None
     };
-    let _routed_operation = match routed_gate.as_ref() {
+    let routed_operation = match routed_gate.as_ref() {
         Some(gate) => match gate.lock() {
             Ok(operation) => Some(operation),
             Err(_) => return error(500, "INTERNAL"),
@@ -2038,13 +2141,14 @@ pub fn handle_with(
             store.tenant_id().map(str::to_owned),
         )
     };
-    let operation_gate = if state.blocking.as_deref().is_some_and(|blocking| {
+    let blocking_auth = state.blocking.as_deref().is_some_and(|blocking| {
         matches!(
             resolution,
             routes::Resolution::Matched { route, .. }
                 if handler_may_invoke_blocking_auth(blocking, route.handler)
         )
-    }) {
+    });
+    let operation_gate = if blocking_auth {
         let gate = match state.registry.as_ref() {
             Some(registry) => {
                 let Some(gate) = registry.operation_gate(&store_project, store_tenant.as_deref())
@@ -2103,6 +2207,7 @@ pub fn handle_with(
             route,
             project,
             tenant,
+            resource: _,
         } => (route, project, tenant),
         routes::Resolution::MethodNotAllowed { class, project, .. } => {
             if let Err(r) = privilege_check(state, class, project, headers, method, &store) {
@@ -2120,7 +2225,65 @@ pub fn handle_with(
         routes::Handler::AdminGetProjectConfig | routes::Handler::AdminUpdateProjectConfig
     ) {
         drop(store);
-        return project_config_management(state, route.handler, project, body);
+        // Existing namespaces commit through the core-owned gate. A pending candidate remains
+        // isolated under the routed gate until a successful write installs it.
+        if pending_routed_project.is_none() {
+            drop(routed_operation);
+        }
+        return project_config_management(
+            state,
+            route.handler,
+            project,
+            &store_arc,
+            pending_routed_project.as_deref(),
+            query,
+            body,
+        );
+    }
+    if matches!(
+        route.handler,
+        routes::Handler::ProviderCreate
+            | routes::Handler::ProviderList
+            | routes::Handler::ProviderGet
+            | routes::Handler::ProviderUpdate
+            | routes::Handler::ProviderDelete
+    ) {
+        if tenant.is_some() && store.tenant_id() != tenant {
+            return error(404, "TENANT_NOT_FOUND");
+        }
+        let resource = match resolution {
+            routes::Resolution::Matched { resource, .. } => resource,
+            _ => None,
+        };
+        let provider_kind = if path.contains("/oauthIdpConfigs") {
+            ProviderKind::Oidc
+        } else {
+            ProviderKind::Saml
+        };
+        drop(store);
+        let response = provider_config_management(
+            &store_arc,
+            route.handler,
+            provider_kind,
+            project,
+            tenant,
+            resource,
+            query,
+            body,
+        );
+        if response.status == 200
+            && matches!(
+                route.handler,
+                routes::Handler::ProviderCreate | routes::Handler::ProviderUpdate
+            )
+        {
+            if let Some(project) = pending_routed_project.as_deref() {
+                if let Err(response) = install_routed_candidate(state, project, &store_arc) {
+                    return response;
+                }
+            }
+        }
+        return response;
     }
     if matches!(
         route.handler,
@@ -2134,6 +2297,7 @@ pub fn handle_with(
         // project's configuration. Release the request's selected store before that registry
         // operation so initialization never attempts to reacquire the same non-reentrant lock.
         drop(store);
+        drop(routed_operation);
         return tenant_management(state, route.handler, project, tenant, query, body);
     }
     if tenant.is_some() && store.tenant_id() != tenant {
@@ -2144,6 +2308,18 @@ pub fn handle_with(
             tenant_policy_denial_with_metadata(route.handler, tenant_metadata.as_ref(), body)
         {
             return denial;
+        }
+    }
+    // Verify the selected namespace and assertion before any account or transient mutation.
+    if route.handler == routes::Handler::SignInWithIdp {
+        if let Some(trust) = oidc_trust {
+            let params = normalized_idp_params(
+                str_field(body, "requestUri").unwrap_or_default(),
+                str_field(body, "postBody"),
+            );
+            if !trust.accepts(&store, &params, at) {
+                return error(400, "INVALID_IDP_RESPONSE");
+            }
         }
     }
     // Expired transient credentials are swept before every request is served, so nothing
@@ -2170,19 +2346,8 @@ pub fn handle_with(
         drop(store);
         if retain_candidate {
             let project = pending_routed_project.expect("checked above");
-            let Some(registry) = state.registry.as_ref() else {
-                return error(500, "INTERNAL");
-            };
-            match registry.install_routed(&project, store_arc.clone()) {
-                RoutedStoreInstall::Installed(_) => {}
-                RoutedStoreInstall::Existing(_) => {
-                    return error(409, "CONCURRENT_PROJECT_OWNERSHIP");
-                }
-                RoutedStoreInstall::RegisteredConflict => {
-                    return error(400, "INVALID_PROJECT_ID");
-                }
-                RoutedStoreInstall::Capacity => return error(429, "RESOURCE_EXHAUSTED"),
-                RoutedStoreInstall::InvalidStore => return error(500, "INTERNAL"),
+            if let Err(response) = install_routed_candidate(state, &project, &store_arc) {
+                return response;
             }
         }
         let response = if response.status == 200 {
@@ -2193,7 +2358,7 @@ pub fn handle_with(
         } else {
             response
         };
-        return sign_response_tokens(response, signer.as_deref());
+        return finish_token_response(response, signer.as_deref(), &store_arc, at);
     }
     let signer = store.signer_arc();
     let response = if let Some(blocking) = state
@@ -2233,7 +2398,7 @@ pub fn handle_with(
     } else {
         response
     };
-    sign_response_tokens(response, signer.as_deref())
+    finish_token_response(response, signer.as_deref(), &store_arc, at)
 }
 
 /// The credential and project checks of a route class.
@@ -2293,6 +2458,7 @@ impl From<&AuthState> for DispatchOptions {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn dispatch(
     handler: routes::Handler,
     store: &mut AuthStore,
@@ -2330,11 +2496,15 @@ fn dispatch(
             options.fake_custom_token_expiry == FakeCustomTokenExpiry::Reject,
         ),
         Handler::Lookup => lookup(store, body, at, false),
-        Handler::Update | Handler::AdminUpdate => {
-            update(store, body, at, options.stateless_refresh_tokens)
-        }
+        Handler::Update | Handler::AdminUpdate => update(
+            store,
+            body,
+            at,
+            options.stateless_refresh_tokens,
+            handler == Handler::AdminUpdate,
+        ),
         Handler::Delete => delete_account(store, body, at, false),
-        Handler::SendOobCode => send_oob_code(store, body, at, headers),
+        Handler::SendOobCode => send_oob_code(store, body, at, headers, false),
         Handler::ResetPassword => reset_password(store, body, at, options.stateless_refresh_tokens),
         Handler::SignInWithEmailLink => sign_in_with_email_link(store, body, at),
         Handler::SendVerificationCode => send_verification_code(store, body, at),
@@ -2372,9 +2542,12 @@ fn dispatch(
         Handler::AdminQuery => admin_query(store, body, options.query_limits),
         // Admin link generators: the code and link come back to the caller.
         Handler::AdminSendOobCode => {
+            if let Err(response) = opt_bool(body, "returnOobLink") {
+                return response;
+            }
             let mut with_link = body.clone();
             with_link["returnOobLink"] = json!(true);
-            send_oob_code(store, &with_link, at, headers)
+            send_oob_code(store, &with_link, at, headers, true)
         }
         Handler::AdminCreateSessionCookie => create_session_cookie(store, body, at),
         Handler::TenantCreate
@@ -2382,6 +2555,11 @@ fn dispatch(
         | Handler::TenantGet
         | Handler::TenantUpdate
         | Handler::TenantDelete
+        | Handler::ProviderCreate
+        | Handler::ProviderList
+        | Handler::ProviderGet
+        | Handler::ProviderUpdate
+        | Handler::ProviderDelete
         | Handler::AdminGetProjectConfig
         | Handler::AdminUpdateProjectConfig => error(500, "INTERNAL"),
         Handler::EmulatorOobCodes => emulator_route(store, "GET", "oobCodes", headers, body),
@@ -2399,64 +2577,869 @@ fn dispatch(
     }
 }
 
+fn install_routed_candidate(
+    state: &AuthState,
+    project: &str,
+    store: &Arc<Mutex<AuthStore>>,
+) -> Result<(), JsonResponse> {
+    let Some(registry) = state.registry.as_ref() else {
+        return Err(error(500, "INTERNAL"));
+    };
+    match registry.install_routed(project, store.clone()) {
+        RoutedStoreInstall::Installed(_) => Ok(()),
+        RoutedStoreInstall::Existing(_) => Err(error(409, "CONCURRENT_PROJECT_OWNERSHIP")),
+        RoutedStoreInstall::RegisteredConflict => Err(error(400, "INVALID_PROJECT_ID")),
+        RoutedStoreInstall::Capacity => Err(error(429, "RESOURCE_EXHAUSTED")),
+        RoutedStoreInstall::InvalidStore => Err(error(500, "INTERNAL")),
+    }
+}
+
+fn apply_project_config_fields(
+    config: &mut ProjectAuthConfigPatch,
+    body: &Value,
+    fields: &[String],
+) -> Result<(), JsonResponse> {
+    for field in fields {
+        match field.as_str() {
+            "signIn" => apply_project_config_parent(
+                body,
+                "signIn",
+                "allowDuplicateEmails",
+                &mut config.allow_duplicate_emails,
+            )?,
+            "signIn.allowDuplicateEmails" => {
+                config.allow_duplicate_emails = Some(nested_bool_default_false(
+                    body,
+                    "signIn",
+                    "allowDuplicateEmails",
+                )?);
+            }
+            "emailPrivacyConfig" => apply_project_config_parent(
+                body,
+                "emailPrivacyConfig",
+                "enableImprovedEmailPrivacy",
+                &mut config.enable_improved_email_privacy,
+            )?,
+            "emailPrivacyConfig.enableImprovedEmailPrivacy" => {
+                config.enable_improved_email_privacy = Some(nested_bool_default_false(
+                    body,
+                    "emailPrivacyConfig",
+                    "enableImprovedEmailPrivacy",
+                )?);
+            }
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        }
+    }
+    Ok(())
+}
+
+fn apply_project_config_parent(
+    body: &Value,
+    parent: &str,
+    child: &str,
+    current: &mut Option<bool>,
+) -> Result<(), JsonResponse> {
+    let Some(value) = body.get(parent) else {
+        return Ok(());
+    };
+    let Some(object) = value.as_object() else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    if let Some(value) = object.get(child) {
+        *current = Some(
+            value
+                .as_bool()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
+        );
+    }
+    Ok(())
+}
+
+fn nested_bool_default_false(
+    body: &Value,
+    parent: &str,
+    child: &str,
+) -> Result<bool, JsonResponse> {
+    let Some(value) = body.get(parent) else {
+        return Ok(false);
+    };
+    let Some(object) = value.as_object() else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    match object.get(child) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    }
+}
+
 fn project_config_management(
     state: &AuthState,
     handler: routes::Handler,
     project: Option<&str>,
+    selected_store: &Arc<Mutex<AuthStore>>,
+    pending_project: Option<&str>,
+    query: Option<&str>,
     body: &Value,
 ) -> JsonResponse {
     use routes::Handler;
     let Some(project) = project else {
         return error(400, "INVALID_PROJECT_ID");
     };
-    let store = state
-        .registry
-        .as_ref()
-        .and_then(|registry| registry.store_for(project))
-        .or_else(|| {
-            (project == state.store.lock().ok()?.project_id()).then(|| state.store.clone())
-        });
-    let Some(store) = store else {
-        return error(400, "INVALID_PROJECT_ID");
-    };
-    let Ok(store) = store.lock() else {
-        return error(500, "INTERNAL");
-    };
-    let mut config = store.config();
     if handler == Handler::AdminGetProjectConfig {
+        let Ok(store) = selected_store.lock() else {
+            return error(500, "INTERNAL");
+        };
         return JsonResponse {
             status: 200,
-            body: project_config_json(config),
+            body: project_config_json(store.config()),
         };
     }
-    if let Some(value) = body
-        .get("signIn")
-        .and_then(|sign_in| sign_in.get("allowDuplicateEmails"))
-        .and_then(Value::as_bool)
-    {
-        config.allow_duplicate_emails = value;
+    if !body.is_object() {
+        return error(400, "INVALID_ARGUMENT");
     }
-    if let Some(value) = body
-        .get("emailPrivacyConfig")
-        .and_then(|privacy| privacy.get("enableImprovedEmailPrivacy"))
-        .and_then(Value::as_bool)
-    {
-        config.enable_improved_email_privacy = value;
+    let fields = match update_mask(query) {
+        Ok(Some(fields)) => fields,
+        Ok(None) => vec![
+            "signIn.allowDuplicateEmails".to_owned(),
+            "emailPrivacyConfig.enableImprovedEmailPrivacy".to_owned(),
+        ],
+        Err(response) => return response,
+    };
+    let mut patch = ProjectAuthConfigPatch::default();
+    if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
+        return response;
     }
-    drop(store);
-    if let Some(registry) = &state.registry {
-        if !registry.set_project_config(project, config) {
+    let config = if let Some(registry) = state
+        .registry
+        .as_ref()
+        .filter(|_| pending_project.is_none())
+    {
+        let Some(config) = registry.patch_project_config(project, patch) else {
             return error(500, "INTERNAL");
-        }
-    } else if let Ok(mut store) = state.store.lock() {
-        store.set_config(config);
+        };
+        config
     } else {
-        return error(500, "INTERNAL");
+        let Ok(mut store) = selected_store.lock() else {
+            return error(500, "INTERNAL");
+        };
+        let config = patch.apply_to(store.config());
+        if !patch.is_empty() {
+            store.set_config(config);
+        }
+        config
+    };
+    if !patch.is_empty() {
+        if let Some(project) = pending_project {
+            if let Err(response) = install_routed_candidate(state, project, selected_store) {
+                return response;
+            }
+        }
     }
     JsonResponse {
         status: 200,
         body: project_config_json(config),
     }
+}
+
+#[derive(Clone, Copy)]
+enum ProviderKind {
+    Oidc,
+    Saml,
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn provider_config_management(
+    store: &Arc<Mutex<AuthStore>>,
+    handler: routes::Handler,
+    kind: ProviderKind,
+    project: Option<&str>,
+    tenant: Option<&str>,
+    resource: Option<&str>,
+    query: Option<&str>,
+    body: &Value,
+) -> JsonResponse {
+    use routes::Handler;
+    let Some(project) = project else {
+        return error(400, "INVALID_PROJECT_ID");
+    };
+    let path_prefix = format!("projects/{project}/");
+    let path_prefix = if let Some(tenant) = tenant {
+        format!("{path_prefix}tenants/{tenant}/")
+    } else {
+        path_prefix
+    };
+    let (collection, collection_key) = match kind {
+        ProviderKind::Oidc => ("oauthIdpConfigs", "oauthIdpConfigs"),
+        ProviderKind::Saml => ("inboundSamlConfigs", "inboundSamlConfigs"),
+    };
+    let name = |id: &str| format!("{path_prefix}{collection}/{id}");
+    let response = match (kind, handler) {
+        (ProviderKind::Oidc, Handler::ProviderCreate) => {
+            let Some(id) = query_params(query)
+                .get("oauthIdpConfigId")
+                .filter(|id| valid_provider_id(id, ProviderKind::Oidc))
+                .cloned()
+            else {
+                return error(400, "INVALID_ARGUMENT");
+            };
+            let config = match parse_oidc(body, id) {
+                Ok(config) => config,
+                Err(response) => return response,
+            };
+            let Ok(mut store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            if !store.create_oidc_config(config.clone()) {
+                return error(409, "ALREADY_EXISTS");
+            }
+            JsonResponse {
+                status: 200,
+                body: oidc_json(&name(&config.id), &config),
+            }
+        }
+        (ProviderKind::Saml, Handler::ProviderCreate) => {
+            let Some(id) = query_params(query)
+                .get("inboundSamlConfigId")
+                .filter(|id| valid_provider_id(id, ProviderKind::Saml))
+                .cloned()
+            else {
+                return error(400, "INVALID_ARGUMENT");
+            };
+            let config = match parse_saml(body, id) {
+                Ok(config) => config,
+                Err(response) => return response,
+            };
+            let Ok(mut store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            if !store.create_saml_config(config.clone()) {
+                return error(409, "ALREADY_EXISTS");
+            }
+            JsonResponse {
+                status: 200,
+                body: saml_json(&name(&config.id), &config),
+            }
+        }
+        (ProviderKind::Oidc, Handler::ProviderList) => {
+            let Ok(store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let params = query_params(query);
+            let page_size = params
+                .get("pageSize")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(20)
+                .clamp(1, 1_000);
+            let page_token = params.get("pageToken").map(String::as_str);
+            let mut configs = store
+                .oidc_configs()
+                .map(|config| oidc_json(&name(&config.id), config))
+                .collect::<Vec<_>>();
+            if let Some(token) = page_token {
+                let Some(index) = configs.iter().position(|config| {
+                    config["name"]
+                        .as_str()
+                        .and_then(|value| value.rsplit('/').next())
+                        == Some(token)
+                }) else {
+                    configs.clear();
+                    return JsonResponse {
+                        status: 400,
+                        body: json!({"error": "INVALID_ARGUMENT"}),
+                    };
+                };
+                configs = configs.into_iter().skip(index + 1).collect();
+            }
+            let next = (configs.len() > page_size)
+                .then(|| {
+                    configs
+                        .get(page_size - 1)
+                        .and_then(|config| config["name"].as_str())
+                        .and_then(|name| name.rsplit('/').next())
+                        .map(str::to_owned)
+                })
+                .flatten();
+            configs.truncate(page_size);
+            let mut body = json!({});
+            body[collection_key] = json!(configs);
+            if let Some(next) = next {
+                body["nextPageToken"] = json!(next);
+            }
+            JsonResponse { status: 200, body }
+        }
+        (ProviderKind::Saml, Handler::ProviderList) => {
+            let Ok(store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let params = query_params(query);
+            let page_size = params
+                .get("pageSize")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(20)
+                .clamp(1, 1_000);
+            let page_token = params.get("pageToken").map(String::as_str);
+            let mut configs = store
+                .saml_configs()
+                .map(|config| saml_json(&name(&config.id), config))
+                .collect::<Vec<_>>();
+            if let Some(token) = page_token {
+                let Some(index) = configs.iter().position(|config| {
+                    config["name"]
+                        .as_str()
+                        .and_then(|value| value.rsplit('/').next())
+                        == Some(token)
+                }) else {
+                    configs.clear();
+                    return JsonResponse {
+                        status: 400,
+                        body: json!({"error": "INVALID_ARGUMENT"}),
+                    };
+                };
+                configs = configs.into_iter().skip(index + 1).collect();
+            }
+            let next = (configs.len() > page_size)
+                .then(|| {
+                    configs
+                        .get(page_size - 1)
+                        .and_then(|config| config["name"].as_str())
+                        .and_then(|name| name.rsplit('/').next())
+                        .map(str::to_owned)
+                })
+                .flatten();
+            configs.truncate(page_size);
+            let mut body = json!({});
+            body[collection_key] = json!(configs);
+            if let Some(next) = next {
+                body["nextPageToken"] = json!(next);
+            }
+            JsonResponse { status: 200, body }
+        }
+        (
+            ProviderKind::Oidc,
+            Handler::ProviderGet | Handler::ProviderUpdate | Handler::ProviderDelete,
+        ) => {
+            let Some(id) = resource.filter(|id| valid_provider_id(id, ProviderKind::Oidc)) else {
+                return error(400, "INVALID_ARGUMENT");
+            };
+            let Ok(mut store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let Some(existing) = store.oidc_config(id).cloned() else {
+                return error(404, "NOT_FOUND");
+            };
+            match handler {
+                Handler::ProviderGet => JsonResponse {
+                    status: 200,
+                    body: oidc_json(&name(id), &existing),
+                },
+                Handler::ProviderDelete => {
+                    store.delete_oidc_config(id);
+                    JsonResponse {
+                        status: 200,
+                        body: json!({}),
+                    }
+                }
+                Handler::ProviderUpdate => {
+                    let updated = match patch_oidc(existing, body, query) {
+                        Ok(updated) => updated,
+                        Err(response) => return response,
+                    };
+                    store.replace_oidc_config(updated.clone());
+                    JsonResponse {
+                        status: 200,
+                        body: oidc_json(&name(id), &updated),
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        (
+            ProviderKind::Saml,
+            Handler::ProviderGet | Handler::ProviderUpdate | Handler::ProviderDelete,
+        ) => {
+            let Some(id) = resource.filter(|id| valid_provider_id(id, ProviderKind::Saml)) else {
+                return error(400, "INVALID_ARGUMENT");
+            };
+            let Ok(mut store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let Some(existing) = store.saml_config(id).cloned() else {
+                return error(404, "NOT_FOUND");
+            };
+            match handler {
+                Handler::ProviderGet => JsonResponse {
+                    status: 200,
+                    body: saml_json(&name(id), &existing),
+                },
+                Handler::ProviderDelete => {
+                    store.delete_saml_config(id);
+                    JsonResponse {
+                        status: 200,
+                        body: json!({}),
+                    }
+                }
+                Handler::ProviderUpdate => {
+                    let updated = match patch_saml(existing, body, query) {
+                        Ok(updated) => updated,
+                        Err(response) => return response,
+                    };
+                    store.replace_saml_config(updated.clone());
+                    JsonResponse {
+                        status: 200,
+                        body: saml_json(&name(id), &updated),
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        _ => error(500, "INTERNAL"),
+    };
+    response
+}
+
+fn valid_provider_id(id: &str, kind: ProviderKind) -> bool {
+    let prefix = match kind {
+        ProviderKind::Oidc => "oidc.",
+        ProviderKind::Saml => "saml.",
+    };
+    id.starts_with(prefix)
+        && (prefix.len() + 1..=128).contains(&id.len())
+        && id[prefix.len()..].chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
+}
+
+fn required_string(body: &Value, field: &str) -> Result<String, JsonResponse> {
+    body.get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+}
+
+fn optional_string(body: &Value, field: &str) -> Result<Option<String>, JsonResponse> {
+    match body.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    }
+}
+
+fn optional_bool(body: &Value, field: &str, default: bool) -> Result<bool, JsonResponse> {
+    match body.get(field) {
+        None => Ok(default),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    }
+}
+
+fn parse_response_type(value: Option<&Value>) -> Result<OAuthResponseType, JsonResponse> {
+    let Some(value) = value else {
+        return Ok(OAuthResponseType {
+            id_token: true,
+            ..OAuthResponseType::default()
+        });
+    };
+    let Some(object) = value.as_object() else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    let read = |field: &str| match object.get(field) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let response = OAuthResponseType {
+        id_token: read("idToken")?,
+        code: read("code")?,
+        token: read("token")?,
+    };
+    validate_response_type(response)?;
+    Ok(response)
+}
+
+fn validate_response_type(response: OAuthResponseType) -> Result<(), JsonResponse> {
+    if response.token
+        || (!response.id_token && !response.code)
+        || (response.id_token && response.code)
+    {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    Ok(())
+}
+
+fn parse_oidc(body: &Value, id: String) -> Result<OidcProviderConfig, JsonResponse> {
+    let config = OidcProviderConfig {
+        id,
+        display_name: optional_string(body, "displayName")?,
+        enabled: optional_bool(body, "enabled", false)?,
+        client_id: required_string(body, "clientId")?,
+        issuer: required_string(body, "issuer")?,
+        client_secret: optional_string(body, "clientSecret")?,
+        response_type: parse_response_type(body.get("responseType"))?,
+    };
+    validate_oidc(&config)?;
+    Ok(config)
+}
+
+fn valid_url(value: &str) -> bool {
+    let Some((scheme, host)) = value.split_once("://") else {
+        return false;
+    };
+    matches!(scheme, "http" | "https")
+        && !host.is_empty()
+        && !host
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+}
+
+fn validate_oidc(config: &OidcProviderConfig) -> Result<(), JsonResponse> {
+    if !valid_url(&config.issuer)
+        || (config.response_type.code && config.client_secret.as_deref().is_none_or(str::is_empty))
+    {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    Ok(())
+}
+
+fn parse_saml(body: &Value, id: String) -> Result<InboundSamlProviderConfig, JsonResponse> {
+    let Some(idp) = body.get("idpConfig").and_then(Value::as_object) else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    let Some(sp) = body.get("spConfig").and_then(Value::as_object) else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    let required_object_string = |object: &serde_json::Map<String, Value>, field: &str| {
+        object
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+    };
+    let certificates = match idp.get("idpCertificates") {
+        None => Vec::new(),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value
+                    .get("x509Certificate")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    if certificates.is_empty() {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let config = InboundSamlProviderConfig {
+        id,
+        display_name: optional_string(body, "displayName")?,
+        enabled: optional_bool(body, "enabled", false)?,
+        idp_entity_id: required_object_string(idp, "idpEntityId")?,
+        sso_url: required_object_string(idp, "ssoUrl")?,
+        idp_certificates: certificates,
+        sign_request: match idp.get("signRequest") {
+            None => Ok(false),
+            Some(Value::Bool(value)) => Ok(*value),
+            Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+        }?,
+        sp_entity_id: required_object_string(sp, "spEntityId")?,
+        callback_uri: required_object_string(sp, "callbackUri")?,
+    };
+    if !valid_url(&config.sso_url) || !valid_url(&config.callback_uri) {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    Ok(config)
+}
+
+fn update_mask(query: Option<&str>) -> Result<Option<Vec<String>>, JsonResponse> {
+    let mut value = None;
+    for pair in query
+        .unwrap_or_default()
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+    {
+        let (key, candidate) = pair.split_once('=').unwrap_or((pair, ""));
+        if malformed_query_component(key) || malformed_query_component(candidate) {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        let decoded_key = decode_query_component(key);
+        if decoded_key != "updateMask" {
+            continue;
+        }
+        if value.is_some() {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        value = Some(decode_query_component(candidate));
+    }
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    let mut fields = Vec::new();
+    let mut seen = BTreeSet::new();
+    for field in value.split(',') {
+        if field.is_empty()
+            || field.split('.').any(|part| {
+                part.is_empty()
+                    || !part.chars().enumerate().all(|(index, character)| {
+                        (index == 0 && (character.is_ascii_alphabetic() || character == '_'))
+                            || (index > 0
+                                && (character.is_ascii_alphanumeric() || character == '_'))
+                    })
+            })
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        if !seen.insert(field.to_owned()) {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        fields.push(field.to_owned());
+    }
+    Ok(Some(fields))
+}
+
+fn malformed_query_component(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len()
+                || !bytes[index + 1].is_ascii_hexdigit()
+                || !bytes[index + 2].is_ascii_hexdigit()
+            {
+                return true;
+            }
+            index += 3;
+        } else {
+            index += 1;
+        }
+    }
+    false
+}
+
+fn selected_fields(query: Option<&str>) -> Vec<String> {
+    query_params(query)
+        .get("updateMask")
+        .map_or_else(Vec::new, |mask| {
+            mask.split(',')
+                .filter(|field| !field.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+}
+
+fn patch_oidc(
+    mut current: OidcProviderConfig,
+    body: &Value,
+    query: Option<&str>,
+) -> Result<OidcProviderConfig, JsonResponse> {
+    for field in selected_fields(query) {
+        match field.as_str() {
+            "displayName" => current.display_name = optional_string(body, "displayName")?,
+            "enabled" => current.enabled = optional_bool(body, "enabled", false)?,
+            "clientId" => current.client_id = required_string(body, "clientId")?,
+            "issuer" => current.issuer = required_string(body, "issuer")?,
+            "clientSecret" => current.client_secret = optional_string(body, "clientSecret")?,
+            "responseType" => {
+                current.response_type = parse_response_type(body.get("responseType"))?;
+            }
+            "responseType.idToken" => {
+                current.response_type.id_token = nested_bool(body, "responseType", "idToken")?;
+            }
+            "responseType.code" => {
+                current.response_type.code = nested_bool(body, "responseType", "code")?;
+            }
+            "responseType.token" => {
+                current.response_type.token = nested_bool(body, "responseType", "token")?;
+            }
+            "name" => {}
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        }
+    }
+    validate_response_type(current.response_type)?;
+    validate_oidc(&current)?;
+    Ok(current)
+}
+
+fn nested_bool(body: &Value, parent: &str, field: &str) -> Result<bool, JsonResponse> {
+    body.get(parent)
+        .and_then(Value::as_object)
+        .and_then(|object| object.get(field))
+        .and_then(Value::as_bool)
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+}
+
+fn patch_saml(
+    mut current: InboundSamlProviderConfig,
+    body: &Value,
+    query: Option<&str>,
+) -> Result<InboundSamlProviderConfig, JsonResponse> {
+    if !body.is_object() {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let fields = update_mask(query)?.unwrap_or_default();
+    for field in fields {
+        match field.as_str() {
+            "displayName" => current.display_name = optional_string(body, "displayName")?,
+            "enabled" => current.enabled = optional_bool(body, "enabled", false)?,
+            "idpConfig" => {
+                let Some(idp) = body.get("idpConfig").and_then(Value::as_object) else {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                };
+                if let Some(value) = idp.get("idpEntityId") {
+                    current.idp_entity_id = value
+                        .as_str()
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned)
+                        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                }
+                if let Some(value) = idp.get("ssoUrl") {
+                    current.sso_url = value
+                        .as_str()
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned)
+                        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                }
+                if let Some(value) = idp.get("idpCertificates") {
+                    current.idp_certificates = parse_saml_certificates(value)?;
+                }
+                if let Some(value) = idp.get("signRequest") {
+                    current.sign_request = value
+                        .as_bool()
+                        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                }
+            }
+            "idpConfig.idpEntityId" | "idpConfig.ssoUrl" | "idpConfig.idpCertificates" => {
+                let Some(idp) = body.get("idpConfig").and_then(Value::as_object) else {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                };
+                if field == "idpConfig.idpEntityId" {
+                    if let Some(value) = idp.get("idpEntityId") {
+                        current.idp_entity_id = value
+                            .as_str()
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_owned)
+                            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                    }
+                }
+                if field == "idpConfig.ssoUrl" {
+                    if let Some(value) = idp.get("ssoUrl") {
+                        current.sso_url = value
+                            .as_str()
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_owned)
+                            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                    }
+                }
+                if field == "idpConfig.idpCertificates" {
+                    if let Some(value) = idp.get("idpCertificates") {
+                        current.idp_certificates = parse_saml_certificates(value)?;
+                    }
+                }
+            }
+            "idpConfig.signRequest" => {
+                current.sign_request = nested_bool_default_false(body, "idpConfig", "signRequest")?;
+            }
+            "spConfig" | "spConfig.spEntityId" | "spConfig.callbackUri" => {
+                let Some(sp) = body.get("spConfig").and_then(Value::as_object) else {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                };
+                if field == "spConfig" || field == "spConfig.spEntityId" {
+                    if let Some(value) = sp.get("spEntityId") {
+                        current.sp_entity_id = value
+                            .as_str()
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_owned)
+                            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                    }
+                }
+                if field == "spConfig" || field == "spConfig.callbackUri" {
+                    if let Some(value) = sp.get("callbackUri") {
+                        current.callback_uri = value
+                            .as_str()
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_owned)
+                            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                    }
+                }
+            }
+            "name" => {}
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        }
+    }
+    if current.idp_certificates.is_empty()
+        || !valid_url(&current.sso_url)
+        || !valid_url(&current.callback_uri)
+    {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    Ok(current)
+}
+
+fn parse_saml_certificates(value: &Value) -> Result<Vec<String>, JsonResponse> {
+    let Some(values) = value.as_array() else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    values
+        .iter()
+        .map(|value| {
+            value
+                .get("x509Certificate")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+        })
+        .collect()
+}
+
+fn oidc_json(name: &str, config: &OidcProviderConfig) -> Value {
+    let mut body = json!({
+        "name": name,
+        "enabled": config.enabled,
+        "clientId": config.client_id,
+        "issuer": config.issuer,
+        "responseType": {
+            "idToken": config.response_type.id_token,
+            "code": config.response_type.code,
+            "token": config.response_type.token,
+        },
+    });
+    if let Some(display_name) = &config.display_name {
+        body["displayName"] = json!(display_name);
+    }
+    if let Some(client_secret) = &config.client_secret {
+        body["clientSecret"] = json!(client_secret);
+    }
+    body
+}
+
+fn saml_json(name: &str, config: &InboundSamlProviderConfig) -> Value {
+    let mut body = json!({
+        "name": name,
+        "enabled": config.enabled,
+        "idpConfig": {
+            "idpEntityId": config.idp_entity_id,
+            "ssoUrl": config.sso_url,
+            "idpCertificates": config.idp_certificates.iter().map(|certificate| json!({"x509Certificate": certificate})).collect::<Vec<_>>(),
+            "signRequest": config.sign_request,
+        },
+        "spConfig": {
+            "spEntityId": config.sp_entity_id,
+            "callbackUri": config.callback_uri,
+        },
+    });
+    if let Some(display_name) = &config.display_name {
+        body["displayName"] = json!(display_name);
+    }
+    body
 }
 
 fn tenant_metadata(body: &Value) -> fireemu_core_auth::store::TenantMetadata {
@@ -2851,8 +3834,14 @@ fn sign_up(
     if body.get("localId").is_some_and(|v| !v.is_null()) {
         return error(400, "UNEXPECTED_PARAMETER : User ID");
     }
-    let email = str_field(body, "email");
-    let password = str_field(body, "password");
+    let email = match opt_str(body, "email") {
+        Ok(email) => email,
+        Err(r) => return r,
+    };
+    let password = match opt_str(body, "password") {
+        Ok(password) => password,
+        Err(r) => return r,
+    };
     // With an `idToken` the request upgrades that session's account (the client SDK's
     // `linkWithCredential` for an email credential) instead of creating one.
     let has_session = body.get("idToken").is_some_and(|t| !t.is_null());
@@ -2912,6 +3901,9 @@ fn sign_up(
             u.display_name = Some(name.to_owned());
         }
     }
+    // `photoUrl` is listed on the sign-up request but production does not persist it
+    // (recorded 2026-09-12, tools/auth-blocking-create-disable: the control's photo URL
+    // was absent on lookup and invisible to a blocking hook); it stays ignored here.
     store.record_sign_in(&uid, at);
     let display_name = store.user(&uid).and_then(|u| u.display_name.clone());
     match issue_tokens(store, &uid, None, at) {
@@ -2930,6 +3922,7 @@ pub const CUSTOM_TOKEN_AUDIENCE: &str =
 
 /// `accounts:signInWithCustomToken`: the Admin SDK mints unsigned (`alg: none`) custom
 /// tokens against an emulator; the user is created on first sign-in.
+#[allow(clippy::too_many_lines)]
 fn sign_in_with_custom_token(
     store: &mut AuthStore,
     body: &Value,
@@ -2960,6 +3953,14 @@ fn sign_in_with_custom_token(
         }
         decoded.payload
     };
+    if let Some(tenant_id) = payload.get("tenant_id") {
+        let Some(tenant_id) = tenant_id.as_str() else {
+            return error(400, "INVALID_CUSTOM_TOKEN : tenant_id must be a string");
+        };
+        if store.tenant_id() != Some(tenant_id) {
+            return error(400, "TENANT_ID_MISMATCH");
+        }
+    }
     let uid = payload
         .get("uid")
         .or_else(|| payload.get("user_id"))
@@ -2983,7 +3984,10 @@ fn sign_in_with_custom_token(
         return error(400, "TOKEN_EXPIRED");
     }
     let mut extra = CustomClaims::default();
-    if let Some(JsonValue::Object(claims)) = payload.get("claims") {
+    if let Some(claims) = payload.get("claims") {
+        let JsonValue::Object(claims) = claims else {
+            return error(400, "INVALID_CUSTOM_TOKEN : claims must be an object");
+        };
         for (k, v) in claims {
             let Some(cv) = claims_from_json(v) else {
                 return error(400, "INVALID_CUSTOM_TOKEN : unsupported claim value");
@@ -2992,6 +3996,9 @@ fn sign_in_with_custom_token(
                 return error(400, &format!("INVALID_CUSTOM_TOKEN : {e}"));
             }
         }
+    }
+    if let Err(e) = extra.check_size() {
+        return error(400, &format!("INVALID_CUSTOM_TOKEN : {e}"));
     }
     let (uid, is_new) = if let Some(u) = store.user_by_id(uid) {
         (u.local_id.clone(), false)
@@ -3215,6 +4222,7 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         "passwordHash": has_password.then_some(REDACTED_PASSWORD_HASH),
         "passwordUpdatedAt": store.password_updated_at(uid).map(|t| t.as_nanos() / 1_000_000),
         "createdAt": (u.created_at.as_nanos() / 1_000_000).to_string(),
+        "lastRefreshAt": u.last_refresh_at.and_then(|t| LogicalInstant::to_rfc3339(t).ok()),
         "lastLoginAt": u.last_sign_in_at.map(|t| (t.as_nanos() / 1_000_000).to_string()),
         "validSince": valid_since.map(|t| (t.as_nanos() / 1_000_000_000).to_string()),
     })
@@ -3287,25 +4295,73 @@ fn id_list(body: &Value, key: &str) -> Result<Vec<String>, JsonResponse> {
     Ok(items)
 }
 
-fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> JsonResponse {
-    let lists = (|| -> Result<_, JsonResponse> {
-        let federated: Vec<(String, String)> =
-            match body.get("federatedUserId") {
-                None | Some(Value::Null) => Vec::new(),
-                Some(Value::Array(items)) if items.iter().all(Value::is_object) => items
-                    .iter()
-                    .map(|i| {
-                        (
-                            str_field(i, "providerId").unwrap_or("").to_owned(),
-                            str_field(i, "rawId").unwrap_or("").to_owned(),
+fn federated_identifiers(body: &Value) -> Result<Vec<(String, String)>, JsonResponse> {
+    match body.get("federatedUserId") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                let object = item.as_object().ok_or_else(|| {
+                    error(
+                        400,
+                        "INVALID_ARGUMENT : federatedUserId must be an array of {providerId, rawId}",
+                    )
+                })?;
+                let provider_id = object
+                    .get("providerId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        error(
+                            400,
+                            "INVALID_ARGUMENT : federatedUserId items require string providerId and rawId",
                         )
-                    })
-                    .collect(),
-                Some(_) => return Err(error(
-                    400,
-                    "INVALID_ARGUMENT : federatedUserId must be an array of {providerId, rawId}",
-                )),
-            };
+                    })?;
+                let raw_id = object
+                    .get("rawId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        error(
+                            400,
+                            "INVALID_ARGUMENT : federatedUserId items require string providerId and rawId",
+                        )
+                    })?;
+                Ok((provider_id.to_owned(), raw_id.to_owned()))
+            })
+            .collect(),
+        Some(_) => Err(error(
+            400,
+            "INVALID_ARGUMENT : federatedUserId must be an array of {providerId, rawId}",
+        )),
+    }
+}
+
+fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> JsonResponse {
+    if !admin {
+        // Select the trust boundary before parsing any administrator search criteria.
+        // End-user lookup always verifies a token and can return only its subject.
+        let session = match verify_session_with_error(store, body, at, |e| {
+            if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
+                error(400, "USER_NOT_FOUND")
+            } else {
+                jwt_error(e)
+            }
+        }) {
+            Ok(session) => session,
+            Err(response) => return response,
+        };
+        if ["localId", "email", "phoneNumber", "federatedUserId"]
+            .iter()
+            .any(|field| body.get(*field).is_some())
+        {
+            return error(400, "OPERATION_NOT_ALLOWED");
+        }
+        return JsonResponse {
+            status: 200,
+            body: json!({"kind": "identitytoolkit#GetAccountInfoResponse", "users": [user_json(store, &session.uid)]}),
+        };
+    }
+    let lists = (|| -> Result<_, JsonResponse> {
+        let federated = federated_identifiers(body)?;
         Ok((
             id_list(body, "localId")?,
             id_list(body, "email")?,
@@ -3325,22 +4381,12 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
         );
     }
     if total == 0 {
-        if admin {
-            return error(
-                400,
-                "MISSING_IDENTIFIER : localId, email, phoneNumber or federatedUserId",
-            );
-        }
-        return match verify(store, body, at) {
-            Ok(uid) => JsonResponse {
-                status: 200,
-                body: json!({"kind": "identitytoolkit#GetAccountInfoResponse", "users": [user_json(store, &uid)]}),
-            },
-            Err(r) => r,
-        };
+        return error(
+            400,
+            "MISSING_IDENTIFIER : localId, email, phoneNumber or federatedUserId",
+        );
     }
-    // Resolve every identifier, in request order, without duplicates. Federated
-    // identities are never linked in this runtime, so they match nobody.
+    // Authenticated Admin lookup resolves identifiers in request order without duplicates.
     let mut found: Vec<LocalId> = Vec::new();
     let mut push = |uid: LocalId| {
         if !found.contains(&uid) {
@@ -3671,21 +4717,114 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     })
 }
 
+// A verified client may update normal profile fields, but email verification remains
+// server-controlled. OOB and Admin planning do not use this projection.
+// Second45 observed client scalar decoding. Keep session error precedence and the
+// Admin/OOB routes separate; no mutation is planned before this check succeeds.
+fn validate_client_update_shapes(body: &Value) -> Result<(), JsonResponse> {
+    for (field, proto) in [
+        ("localId", "local_id"),
+        ("displayName", "display_name"),
+        ("emailVerified", "email_verified"),
+        ("customAttributes", "custom_attributes"),
+    ] {
+        let Some(value) = body.get(field) else {
+            continue;
+        };
+        let (description, field_path) = if value.is_object() {
+            (
+                format!("Invalid value ({proto}), Starting an object on a scalar field"),
+                false,
+            )
+        } else if value.is_array() {
+            (format!("Invalid JSON payload received. Unknown name \"{field}\": Proto field is not repeating, cannot start list."), false)
+        } else if field == "displayName" && value.is_boolean() {
+            (
+                format!("Invalid value at '{proto}' (TYPE_STRING), {value}"),
+                true,
+            )
+        } else {
+            continue;
+        };
+        let mut violation = json!({"description": description});
+        if field_path {
+            violation["field"] = json!(proto);
+        }
+        return Err(JsonResponse {
+            status: 400,
+            body: json!({"error": {
+                "code": 400, "message": description,
+                "errors": [{"message": description, "reason": "invalid"}],
+                "status": "INVALID_ARGUMENT",
+                "details": [{"@type": "type.googleapis.com/google.rpc.BadRequest", "fieldViolations": [violation]}]
+            }}),
+        });
+    }
+    Ok(())
+}
+
+fn parse_client_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
+    let mut client = body.clone();
+    if let Some(fields) = client.as_object_mut() {
+        fields.remove("emailVerified");
+        if fields.get("customAttributes").is_some_and(Value::is_null) {
+            fields.remove("customAttributes");
+        }
+        if let Some(Value::Number(number)) = fields.get("displayName") {
+            fields.insert("displayName".to_owned(), Value::String(number.to_string()));
+        }
+    }
+    parse_update(&client)
+}
+
 #[allow(clippy::too_many_lines)]
 fn update(
     store: &mut AuthStore,
     body: &Value,
     at: LogicalInstant,
     stateless_refresh_tokens: bool,
+    privileged: bool,
 ) -> JsonResponse {
+    // Account ownership does not authorize administrative field changes. Presence
+    // includes false/empty/null. On the OOB route the field is rejected before the code
+    // is consumed; on the end-user session route the session is authenticated first and
+    // the field authorized after (see the session branch below).
+    let has_admin_field = !privileged
+        && [
+            "customAttributes",
+            "emailVerified",
+            "mfa",
+            "linkProviderUserInfo",
+        ]
+        .iter()
+        .any(|field| body.get(*field).is_some());
     // `applyActionCode`: an email verification / change code instead of a session.
     if let Some(code) = str_field(body, "oobCode") {
+        if has_admin_field {
+            return error(400, "OPERATION_NOT_ALLOWED");
+        }
         return apply_oob_code(store, code, at);
     }
-    let local_id = match opt_str(body, "localId") {
-        Ok(v) => v,
-        Err(r) => return r,
+    let self_service = !privileged;
+    let local_id = if privileged {
+        match opt_str(body, "localId") {
+            Ok(v) => v,
+            Err(r) => return r,
+        }
+    } else {
+        None
     };
+    // The observed missing/null token profile family does not change shared token errors.
+    if self_service
+        && body.as_object().is_some_and(|o| {
+            o.contains_key("displayName")
+                && o.keys()
+                    .all(|k| matches!(k.as_str(), "displayName" | "localId" | "idToken"))
+                && o.get("idToken").is_none_or(Value::is_null)
+        })
+    {
+        return error(400, "INVALID_REQ_TYPE");
+    }
     // The provider the request's session signed in with, when it carries one: the official
     // emulator re-issues tokens for a session whose credentials it just changed.
     let mut session_provider: Option<fireemu_core_auth::store::Provider> = None;
@@ -3695,12 +4834,29 @@ fn update(
             None => return error(400, "USER_NOT_FOUND"),
         }
     } else {
+        // Authenticate the client before planning any mutation. A supplied localId is
+        // never a client selector, and does not change self-service invalidation rules.
         match verify_session(store, body, at) {
             Ok(session) => {
+                if self_service {
+                    if let Err(response) = validate_client_update_shapes(body) {
+                        return response;
+                    }
+                    if body.get("customAttributes").is_some_and(|v| !v.is_null()) {
+                        return error(400, "INSUFFICIENT_PERMISSION");
+                    }
+                }
+                if has_admin_field
+                    && ["mfa", "linkProviderUserInfo"]
+                        .iter()
+                        .any(|key| body.get(*key).is_some())
+                {
+                    return error(400, "OPERATION_NOT_ALLOWED");
+                }
                 if body.get("disableUser").is_some_and(|v| !v.is_null()) {
                     return error(400, "OPERATION_NOT_ALLOWED");
                 }
-                session_provider = Some(provider_from_id(&session.provider));
+                session_provider = self_service.then(|| provider_from_id(&session.provider));
                 session.uid
             }
             Err(r) => return r,
@@ -3708,7 +4864,11 @@ fn update(
     };
     // Validate the whole request before touching the store (a rejected request changes
     // nothing); email / phone uniqueness is part of the validation.
-    let plan = match parse_update(body) {
+    let plan = match if self_service {
+        parse_client_update(body)
+    } else {
+        parse_update(body)
+    } {
         Ok(p) => p,
         Err(r) => return r,
     };
@@ -3716,7 +4876,7 @@ fn update(
     // It also removes the legacy setAccountInfo email/password linking path; clients link
     // through accounts:signUp with the current ID token instead. Privileged Admin updates
     // remain available for account administration.
-    if local_id.is_none()
+    if self_service
         && store.config().enable_improved_email_privacy
         && (plan.email.is_some() || plan.clear_email)
     {
@@ -3771,7 +4931,9 @@ fn update(
     // address also ends the existing sessions, as a password change does.
     let mut email_changed = false;
     if let Some(email) = &plan.email {
-        email_changed = store.user(&uid).and_then(|u| u.email.as_deref()) != Some(email);
+        let canonical_email = canonicalize_email(email);
+        email_changed =
+            store.user(&uid).and_then(|u| u.email.as_deref()) != Some(canonical_email.as_str());
         if let Err(e) = store.set_email(&uid, email) {
             return auth_error(&e);
         }
@@ -3808,8 +4970,14 @@ fn update(
         if let Err(e) = store.set_password(&uid, password, at) {
             return auth_error(&e);
         }
-        // Setting a password makes the session a password session.
-        session_provider = Some(fireemu_core_auth::store::Provider::Password);
+        // Setting a password over a session makes it a password session, so the session's
+        // own credential change re-issues tokens. A privileged administrative update
+        // (localId, no session) issues nothing: production returns no tokens for an
+        // administrative password update, of an enabled account as of a disabled one
+        // (auth-pending-trigger admin-password-update, recorded and approved 2026-09-12).
+        if self_service {
+            session_provider = Some(fireemu_core_auth::store::Provider::Password);
+        }
     }
     if let Some(u) = store.user_mut(&uid) {
         plan.display_name.apply(&mut u.display_name);
@@ -3821,22 +4989,20 @@ fn update(
             u.disabled = disable;
         }
     }
-    // A password change, an email change, an explicit `validSince` and a disablement all
-    // move `validSince`, so ID tokens issued before this second are refused (what the
-    // official emulator does). Under the emulator profile, refresh tokens remain stateless
-    // and usable after these mutations, matching the official emulator. The strict profile
-    // revokes them after privileged revocation, disablement and privileged credential changes.
-    // Self-service credential changes keep the current refresh token in both profiles.
+    // Disable-only strict updates suspend use without destroying existing credentials,
+    // matching the recorded disable/re-enable flow. Preserve the emulator's validSince
+    // behavior, and keep credential changes and explicit revocation independent of disablement.
     let credentials_changed = plan.password.is_some() || email_changed || plan.revoke_at.is_some();
-    if credentials_changed || plan.disable == Some(true) {
+    if credentials_changed || (stateless_refresh_tokens && plan.disable == Some(true)) {
         let _ = store.revoke_tokens(&uid, plan.revoke_at.unwrap_or(at));
     }
-    let self_service = local_id.is_none();
-    if !stateless_refresh_tokens
-        && (plan.revoke_at.is_some()
-            || plan.disable == Some(true)
-            || (credentials_changed && !self_service))
-    {
+    // A privileged password replacement advances `validSince` but keeps the refresh-session
+    // record. This preserves the same-second boundary: a session issued in the replacement
+    // second is not older than the floored revocation instant. Older sessions fail as
+    // TOKEN_EXPIRED. Explicit revocation and administrative email changes still retire the
+    // session immediately. Credential-removal flags retain their existing session behavior.
+    let removes_refresh_credential = plan.revoke_at.is_some() || (email_changed && !self_service);
+    if !stateless_refresh_tokens && removes_refresh_credential {
         store.revoke_refresh_tokens(&uid);
     }
     let mut response =
@@ -3856,7 +5022,11 @@ fn update(
             response[key] = value.clone();
         }
     }
-    if credentials_changed && plan.disable != Some(true) {
+    // Tokens follow a credential change only for an account that is enabled after this
+    // update: production (recorded 2026-09-12) applies an administrative password
+    // replacement to a disabled account without returning tokens.
+    let enabled_after = store.user(&uid).is_some_and(|u| !u.disabled);
+    if credentials_changed && enabled_after {
         if let Some(provider) = session_provider {
             match issue_tokens_with(store, &uid, None, at, None, Some(provider)) {
                 Ok(tokens) => {
@@ -4204,44 +5374,45 @@ fn create_session_cookie(store: &AuthStore, body: &Value, at: LogicalInstant) ->
 }
 
 /// Minimal `application/x-www-form-urlencoded` query decoding (ASCII percent escapes).
-fn query_params(query: Option<&str>) -> BTreeMap<String, String> {
-    fn decode(s: &str) -> String {
-        let bytes = s.as_bytes();
-        let mut out = Vec::with_capacity(bytes.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            match bytes[i] {
-                b'%' if i + 2 < bytes.len() => {
-                    if let Some(b) = s
-                        .get(i + 1..i + 3)
-                        .and_then(|hex| u8::from_str_radix(hex, 16).ok())
-                    {
-                        out.push(b);
-                        i += 3;
-                    } else {
-                        out.push(b'%');
-                        i += 1;
-                    }
-                }
-                b'+' => {
-                    out.push(b' ');
-                    i += 1;
-                }
-                b => {
+fn decode_query_component(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                if let Some(b) = s
+                    .get(i + 1..i + 3)
+                    .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+                {
                     out.push(b);
+                    i += 3;
+                } else {
+                    out.push(b'%');
                     i += 1;
                 }
             }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
         }
-        String::from_utf8_lossy(&out).into_owned()
     }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn query_params(query: Option<&str>) -> BTreeMap<String, String> {
     query
         .unwrap_or("")
         .split('&')
         .filter(|kv| !kv.is_empty())
         .map(|kv| match kv.split_once('=') {
-            Some((k, v)) => (decode(k), decode(v)),
-            None => (decode(kv), String::new()),
+            Some((k, v)) => (decode_query_component(k), decode_query_component(v)),
+            None => (decode_query_component(kv), String::new()),
         })
         .collect()
 }
@@ -4268,9 +5439,7 @@ fn batch_row_password(row: &Value) -> Result<Option<(String, String)>, JsonRespo
     let Some((salt, password)) = rest.split_once(":password=") else {
         return Ok(None);
     };
-    if AuthStore::validate_password(password).is_err() {
-        return Ok(None);
-    }
+    AuthStore::validate_password(password).map_err(|e| auth_error(&e))?;
     Ok(Some((salt.to_owned(), password.to_owned())))
 }
 
@@ -4282,6 +5451,46 @@ fn millis_field(row: &Value, key: &str) -> Option<LogicalInstant> {
         _ => return None,
     };
     Some(LogicalInstant::from_nanos(i128::from(millis) * 1_000_000))
+}
+
+fn validate_batch_row_shapes(row: &Value) -> Result<(), JsonResponse> {
+    for key in ["mfaInfo", "providerUserInfo"] {
+        match row.get(key) {
+            None | Some(Value::Null) => {}
+            Some(Value::Array(items)) => {
+                if items.iter().any(|item| !item.is_object()) {
+                    return Err(error(
+                        400,
+                        &format!("INVALID_ARGUMENT : {key} entries must be objects"),
+                    ));
+                }
+            }
+            Some(_) => {
+                return Err(error(
+                    400,
+                    &format!("INVALID_ARGUMENT : {key} must be an array"),
+                ));
+            }
+        }
+    }
+    for key in ["createdAt", "lastLoginAt"] {
+        let Some(value) = row.get(key) else {
+            continue;
+        };
+        let valid = match value {
+            Value::Null => true,
+            Value::String(value) => value.parse::<i64>().is_ok(),
+            Value::Number(value) => value.as_i64().is_some(),
+            _ => false,
+        };
+        if !valid {
+            return Err(error(
+                400,
+                &format!("INVALID_ARGUMENT : {key} must be a millisecond timestamp"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The second factors of a `batchCreate` row: phone factors as the official emulator
@@ -4364,6 +5573,7 @@ fn batch_row_user(
     at: LogicalInstant,
 ) -> Result<fireemu_core_auth::store::ImportedUser, JsonResponse> {
     use fireemu_core_auth::store::{ImportedUser, Provider};
+    validate_batch_row_shapes(row)?;
     let local_id = opt_str(row, "localId")?
         .filter(|id| !id.is_empty())
         .ok_or_else(|| error(400, "localId is missing"))?;
@@ -4430,6 +5640,8 @@ fn batch_row_user(
         custom_claims,
         created_at: millis_field(row, "createdAt").unwrap_or(at),
         last_sign_in_at: millis_field(row, "lastLoginAt"),
+        last_refresh_at: str_field(row, "lastRefreshAt")
+            .and_then(|v| LogicalInstant::parse_rfc3339(v).ok()),
         tokens_valid_after: at,
         federated,
         password,
@@ -4450,10 +5662,11 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
     else {
         return error(400, "MISSING_USER_ACCOUNT");
     };
-    let allow_overwrite = body
-        .get("allowOverwrite")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let allow_overwrite = match body.get("allowOverwrite") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return error(400, "INVALID_ARGUMENT : allowOverwrite must be a boolean"),
+    };
     if !allow_overwrite {
         let mut seen = std::collections::BTreeSet::new();
         for row in rows {
@@ -4477,16 +5690,29 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
                 continue;
             }
         };
-        if store.user_by_id(&user.local_id).is_some() {
+        let import_result = if store.user_by_id(&user.local_id).is_some() {
             if !allow_overwrite {
                 errors.push(refused(
                     "localId belongs to an existing account - can not overwrite.".to_owned(),
                 ));
                 continue;
             }
-            let _ = store.delete_user_by_id(&user.local_id);
-        }
-        if let Err(e) = store.import_user(user) {
+            // Validate and install a replacement on a copy first. A row can fail after the
+            // UID collision check (for example because its email belongs to another account),
+            // and a failed import must leave the existing account untouched.
+            let mut replacement = store.clone();
+            let _ = replacement.delete_user_by_id(&user.local_id);
+            match replacement.import_user(user) {
+                Ok(uid) => {
+                    *store = replacement;
+                    Ok(uid)
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            store.import_user(user)
+        };
+        if let Err(e) = import_result {
             errors.push(refused(e.to_string()));
         }
     }
@@ -4822,7 +6048,7 @@ fn refresh(
                     "expires_in": "3600",
                     "token_type": "Bearer",
                     "user_id": session.uid.as_str(),
-                    "project_id": store.project_id(),
+                    "project_id": store.project_number().map_or_else(|| store.project_id().to_owned(), |number| number.to_string()),
                 }),
             }
         }
@@ -4903,12 +6129,25 @@ fn percent_encode(s: &str) -> String {
 /// `EMAIL_SIGNIN` (email), `VERIFY_AND_CHANGE_EMAIL` (idToken + newEmail). Nothing is
 /// mailed: the code is kept for `/emulator/v1/projects/{p}/oobCodes`, and returned here
 /// with its link when `returnOobLink` is set (the Admin SDK's link generators).
+// Keep authorization, target selection and credential issuance in one auditable flow.
+#[allow(clippy::too_many_lines)]
 fn send_oob_code(
     store: &mut AuthStore,
     body: &Value,
     at: LogicalInstant,
     headers: &RequestHeaders,
+    privileged: bool,
 ) -> JsonResponse {
+    let return_oob_link = match opt_bool(body, "returnOobLink") {
+        Ok(Some(value)) => value,
+        Ok(None) => false,
+        Err(response) => return response,
+    };
+    // Only the authenticated Admin route may return a credential to the caller.
+    // Check before creating a code or emitting a delivery notice.
+    if !privileged && return_oob_link {
+        return error(400, "OPERATION_NOT_ALLOWED");
+    }
     let request_type = match str_field(body, "requestType") {
         None | Some("" | "OOB_REQ_TYPE_UNSPECIFIED") => return error(400, "MISSING_REQ_TYPE"),
         Some(t) => match OobRequestType::parse(t) {
@@ -4923,11 +6162,11 @@ fn send_oob_code(
     };
     let (email, uid, new_email) = match request_type {
         OobRequestType::PasswordReset => {
-            let Some(email) = str_field(body, "email") else {
+            let Some(email) = str_field(body, "email").map(canonicalize_email) else {
                 return error(400, "MISSING_EMAIL");
             };
-            match store.user_by_email(email) {
-                Some(u) => (email.to_owned(), Some(u.local_id.clone()), None),
+            match store.user_by_email(&email) {
+                Some(u) => (email.clone(), Some(u.local_id.clone()), None),
                 // Improved email privacy: an unknown address is answered as if a mail had
                 // been sent, and no code is created.
                 None if store.config().enable_improved_email_privacy => {
@@ -4940,43 +6179,47 @@ fn send_oob_code(
             }
         }
         OobRequestType::EmailSignIn => {
-            let Some(email) = str_field(body, "email") else {
+            let Some(email) = str_field(body, "email").map(canonicalize_email) else {
                 return error(400, "MISSING_EMAIL");
             };
             if !email.contains('@') {
                 return error(400, "INVALID_EMAIL");
             }
-            let uid = store.user_by_email(email).map(|u| u.local_id.clone());
-            (email.to_owned(), uid, None)
+            let uid = store.user_by_email(&email).map(|u| u.local_id.clone());
+            (email.clone(), uid, None)
         }
         OobRequestType::VerifyEmail | OobRequestType::VerifyAndChangeEmail => {
-            // A session, or (Admin link generators) the email itself.
-            let uid = match (str_field(body, "idToken"), str_field(body, "email")) {
-                (Some(_), _) => match verify(store, body, at) {
+            // Email-based target selection is reserved for authenticated Admin generators.
+            let uid = match (
+                privileged,
+                str_field(body, "idToken"),
+                str_field(body, "email"),
+            ) {
+                (false, _, _) | (true, Some(_), _) => match verify(store, body, at) {
                     Ok(uid) => uid,
                     Err(r) => return r,
                 },
-                (None, Some(email)) => match store.user_by_email(email) {
+                (true, None, Some(email)) => match store.user_by_email(email) {
                     Some(u) => u.local_id.clone(),
                     None => return error(400, "EMAIL_NOT_FOUND"),
                 },
-                (None, None) => return error(400, "MISSING_ID_TOKEN"),
+                (true, None, None) => return error(400, "MISSING_ID_TOKEN"),
             };
             let Some(email) = store.user(&uid).and_then(|u| u.email.clone()) else {
                 return error(400, "MISSING_EMAIL : the user has no email");
             };
             let new_email = if request_type == OobRequestType::VerifyAndChangeEmail {
-                let Some(new_email) = str_field(body, "newEmail") else {
+                let Some(new_email) = str_field(body, "newEmail").map(canonicalize_email) else {
                     return error(400, "MISSING_NEW_EMAIL");
                 };
                 if !store.config().allow_duplicate_emails
                     && store
-                        .user_by_email(new_email)
+                        .user_by_email(&new_email)
                         .is_some_and(|u| u.local_id != uid)
                 {
                     return error(400, "EMAIL_EXISTS");
                 }
-                Some(new_email.to_owned())
+                Some(new_email.clone())
             } else {
                 None
             };
@@ -4989,7 +6232,7 @@ fn send_oob_code(
     };
     let mut response =
         json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email});
-    if body.get("returnOobLink").and_then(Value::as_bool) == Some(true) {
+    if return_oob_link {
         response["oobCode"] = json!(code);
         response["oobLink"] = json!(oob_link(
             headers,
@@ -5033,11 +6276,15 @@ fn reset_password(
     let Some(uid) = entry.uid.clone() else {
         return error(400, "INVALID_OOB_CODE");
     };
-    let Some(new_password) = str_field(body, "newPassword") else {
-        return JsonResponse {
-            status: 200,
-            body: json!({"kind": "identitytoolkit#ResetPasswordResponse", "email": entry.email, "requestType": "PASSWORD_RESET"}),
-        };
+    let new_password = match opt_str(body, "newPassword") {
+        Ok(Some(new_password)) => new_password,
+        Ok(None) => {
+            return JsonResponse {
+                status: 200,
+                body: json!({"kind": "identitytoolkit#ResetPasswordResponse", "email": entry.email, "requestType": "PASSWORD_RESET"}),
+            };
+        }
+        Err(r) => return r,
     };
     if let Err(e) = AuthStore::validate_password(new_password) {
         return auth_error(&e);
@@ -5078,6 +6325,9 @@ fn apply_oob_code(store: &mut AuthStore, code: &str, at: LogicalInstant) -> Json
     };
     match entry.request_type {
         OobRequestType::VerifyEmail => {
+            if store.user(&uid).is_none() {
+                return error(400, "INVALID_OOB_CODE");
+            }
             if let Err(e) = store.consume_oob_code(code, None, at) {
                 return auth_error(&e);
             }
@@ -5089,6 +6339,12 @@ fn apply_oob_code(store: &mut AuthStore, code: &str, at: LogicalInstant) -> Json
             let Some(new_email) = entry.new_email.clone() else {
                 return error(400, "INVALID_OOB_CODE");
             };
+            if store.user(&uid).is_none() {
+                return error(400, "INVALID_OOB_CODE");
+            }
+            if let Err(e) = store.validate_email_update(&uid, &new_email) {
+                return auth_error(&e);
+            }
             if let Err(e) = store.consume_oob_code(code, None, at) {
                 return auth_error(&e);
             }
@@ -5189,6 +6445,7 @@ fn emulator_action(
         Some("verifyEmail") => action_apply(
             store,
             code,
+            OobRequestType::VerifyEmail,
             continue_url,
             at,
             ("verify your email", "Try verifying your email again."),
@@ -5197,6 +6454,7 @@ fn emulator_action(
         Some("verifyAndChangeEmail") => action_apply(
             store,
             code,
+            OobRequestType::VerifyAndChangeEmail,
             continue_url,
             at,
             ("change your email", "Try changing your email again."),
@@ -5281,11 +6539,18 @@ fn action_reset_password(
 fn action_apply(
     store: &mut AuthStore,
     code: &str,
+    expected: OobRequestType,
     continue_url: Option<&str>,
     at: LogicalInstant,
     (what, retry): (&str, &str),
     success: impl FnOnce(&Value) -> Value,
 ) -> JsonResponse {
+    if store
+        .oob_code(code)
+        .is_none_or(|entry| entry.request_type != expected)
+    {
+        return action_expired(what, retry);
+    }
     let response = apply_oob_code(store, code, at);
     if response.status != 200 {
         return if response.body["error"]["message"].as_str() == Some("INVALID_OOB_CODE") {
@@ -5413,6 +6678,7 @@ fn sign_in_with_email_link(
     let (Some(email), Some(code)) = (str_field(body, "email"), str_field(body, "oobCode")) else {
         return error(400, "MISSING_OOB_CODE");
     };
+    let email = canonicalize_email(email);
     let matches = store
         .oob_code(code)
         .is_some_and(|c| c.request_type == OobRequestType::EmailSignIn && c.email == email);
@@ -5428,7 +6694,7 @@ fn sign_in_with_email_link(
         };
         if !store.config().allow_duplicate_emails
             && store
-                .user_by_email(email)
+                .user_by_email(&email)
                 .is_some_and(|u| u.local_id != uid)
         {
             return error(400, "EMAIL_EXISTS");
@@ -5436,7 +6702,7 @@ fn sign_in_with_email_link(
         if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::EmailSignIn), at) {
             return auth_error(&e);
         }
-        if let Err(e) = store.set_email(&uid, email) {
+        if let Err(e) = store.set_email(&uid, &email) {
             return auth_error(&e);
         }
         if let Some(u) = store.user_mut(&uid) {
@@ -5456,7 +6722,7 @@ fn sign_in_with_email_link(
     if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::EmailSignIn), at) {
         return auth_error(&e);
     }
-    let (uid, is_new) = match store.sign_in_with_email_link(email, at) {
+    let (uid, is_new) = match store.sign_in_with_email_link(&email, at) {
         Ok(r) => r,
         Err(e) => return auth_error(&e),
     };
@@ -5714,6 +6980,7 @@ fn idp_response_base(
     info: &IdpUserInfo,
     oauth_id_token: Option<&String>,
     oauth_access_token_out: &str,
+    oauth_refresh_token: Option<&String>,
 ) -> IdpBase {
     vec![
         ("kind", json!("identitytoolkit#VerifyAssertionResponse")),
@@ -5732,6 +6999,7 @@ fn idp_response_base(
         ("emailVerified", json!(info.email_verified)),
         ("photoUrl", json!(info.photo_url)),
         ("rawUserInfo", json!(info.raw_user_info)),
+        ("oauthRefreshToken", json!(oauth_refresh_token.cloned())),
     ]
 }
 
@@ -5793,11 +7061,11 @@ fn validate_saml_response(raw: Option<&String>) -> Result<Option<Value>, JsonRes
 
 /// Parses and validates a `signInWithIdp` credential, or the error the official emulator raises.
 fn resolve_idp_credential(body: &Value) -> Result<ResolvedIdp, JsonResponse> {
-    if body.get("returnRefreshToken").is_some_and(|v| !v.is_null()) {
-        return Err(not_implemented(
-            "returnRefreshToken is not implemented yet.",
-        ));
-    }
+    let return_refresh_token = match body.get("returnRefreshToken") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
     if body.get("pendingIdToken").is_some_and(|v| !v.is_null()) {
         return Err(not_implemented("pendingIdToken is not implemented yet."));
     }
@@ -5844,7 +7112,21 @@ fn resolve_idp_credential(body: &Value) -> Result<ResolvedIdp, JsonResponse> {
         || format!("FirebaseAuthEmulatorFakeAccessToken_{provider_id}"),
         String::clone,
     );
-    let base = idp_response_base(&provider_id, &info, oauth_id_token, &oauth_access_token_out);
+    let oauth_refresh_token = return_refresh_token
+        .then(|| {
+            params
+                .get("refresh_token")
+                .filter(|token| !token.is_empty())
+                .cloned()
+        })
+        .flatten();
+    let base = idp_response_base(
+        &provider_id,
+        &info,
+        oauth_id_token,
+        &oauth_access_token_out,
+        oauth_refresh_token.as_ref(),
+    );
     Ok(ResolvedIdp {
         provider_id,
         info,
@@ -6177,6 +7459,11 @@ fn mfa_sign_in_start(store: &mut AuthStore, body: &Value, at: LogicalInstant) ->
     let Some(uid) = store.pending_sign_in_user(&pending_id) else {
         return error(400, "INVALID_MFA_PENDING_CREDENTIAL");
     };
+    // A disabled account is not refused here: production accepts mfaSignIn:start on an
+    // account disabled after its pending credential and issues the code, enforcing
+    // USER_DISABLED only at mfaSignIn:finalize (auth-mfa-start-disabled, recorded and
+    // approved 2026-09-12, GAP-AUTH-005). The finalize path already refuses a disabled
+    // account, so the sign-in still cannot complete.
     if body.get("phoneSignInInfo").is_none() {
         return error(
             400,
@@ -6222,7 +7509,7 @@ fn finalize_phone_sign_in(
     else {
         return error(400, "INVALID_CODE : missing sessionInfo or code");
     };
-    let verified = match store.verify_phone_code(session, code, at) {
+    let verified = match store.check_phone_code(session, code, at) {
         Ok(v) => v,
         Err(e) => return auth_error(&e),
     };
@@ -6239,23 +7526,26 @@ fn finalize_phone_sign_in(
     }
     let first_factor = store.pending_sign_in_context(&pending_id).cloned();
     match store.finalize_phone_mfa_sign_in(&uid, &pending_id, &enrollment_id, at) {
-        Ok(assertion) => match issue_tokens_with_sign_in_attributes(
-            store,
-            &uid,
-            Some(&assertion),
-            at,
-            None,
-            first_factor
-                .as_ref()
-                .and_then(PendingSignInContext::sign_in_provider)
-                .map(provider_from_id),
-            first_factor
-                .as_ref()
-                .and_then(PendingSignInContext::sign_in_attributes),
-        ) {
-            Ok(tokens) => token_only_response(&tokens, false),
-            Err(r) => r,
-        },
+        Ok(assertion) => {
+            store.consume_phone_code(session);
+            match issue_tokens_with_sign_in_attributes(
+                store,
+                &uid,
+                Some(&assertion),
+                at,
+                None,
+                first_factor
+                    .as_ref()
+                    .and_then(PendingSignInContext::sign_in_provider)
+                    .map(provider_from_id),
+                first_factor
+                    .as_ref()
+                    .and_then(PendingSignInContext::sign_in_attributes),
+            ) {
+                Ok(tokens) => token_only_response(&tokens, false),
+                Err(r) => r,
+            }
+        }
         Err(e) => mfa_error(&e),
     }
 }

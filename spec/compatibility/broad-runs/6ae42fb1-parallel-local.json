@@ -1,0 +1,88 @@
+{
+  "schema": "local-parallel-exploration-v1",
+  "executionCommit": "6ae42fb170857b324e7d4b271011e5ef505d9a05",
+  "runtimeChanged": false,
+  "productionRequests": 0,
+  "testArtifacts": [
+    {
+      "binaryId": "fireemu-adapter-grpc::local",
+      "sha256": "ea6bb90a6acd69d693c4f7faeda9976776722c233dd6fa0275e6de8f08aefd13",
+      "identitySource": "nextest list after successful run; not a prelaunch artifact receipt"
+    },
+    {
+      "binaryId": "fireemu-adapter-http::auth_flows",
+      "sha256": "4eead850d6a79149c197039b9f22969aed3fe99e6f40f98e34cc0c807ee42f7b",
+      "identitySource": "nextest list after successful run; not a prelaunch artifact receipt"
+    },
+    {
+      "binaryId": "fireemu-adapter-http::identity_toolkit",
+      "sha256": "6e58f46bc73c6459e8f48b5fd61191ecc2ecf5b23e43c9570f6ca5aebb3d8cb9",
+      "identitySource": "nextest list after successful run; not a prelaunch artifact receipt"
+    }
+  ],
+  "verification": {
+    "command": "cargo nextest run -p fireemu-adapter-http -p fireemu-adapter-grpc --profile pr",
+    "nextestRunId": "dc5ead08-6c61-455a-ac2e-e5f37a9600a9",
+    "passed": 535,
+    "failed": 0,
+    "skipped": 1,
+    "testWallSeconds": 19.818,
+    "compileReportedSeconds": 1.27,
+    "clippy": "passed",
+    "mutation": "not-run",
+    "first46Second45": "not-rerun; runtime and comparison contracts unchanged"
+  },
+  "initialFailures": [
+    "Test compilation: API-key registration required owned String",
+    "Test setup: AuthRegistry project missing before tenant creation"
+  ],
+  "review": {
+    "scope": "three changed test files; independent reviewer",
+    "mustFix": [],
+    "shouldFix": [],
+    "result": "approved after setup and positive-identity assertion corrections"
+  },
+  "coverage": [
+    {
+      "family": "auth-tenants",
+      "condition": "Both directions of cross-tenant refresh preserve populated namespace snapshots; rightful refresh remains usable",
+      "basis": "local stateless-refresh profile; error precedence and strict profile unobserved"
+    },
+    {
+      "family": "auth-custom-token",
+      "condition": "Session claims appear in issued token but do not become persistent Admin customAttributes; lookup verifies identity",
+      "basis": "local token/account isolation; not a new production comparison"
+    },
+    {
+      "family": "fs-writes",
+      "condition": "First/middle BatchWrite lock contention preserves other writes, versions, holder transaction and subsequent lock release",
+      "basis": "local gRPC invariant; production mixed-contention response unobserved"
+    }
+  ],
+  "parallelism": {
+    "model": "gpt-5.6-luna",
+    "explorationLanes": 4,
+    "maxConcurrentExplorers": 3,
+    "reason": "four total session slots including coordinator",
+    "isolatedWriterWorktrees": 2,
+    "heavyBuildOwner": "coordinator"
+  },
+  "timeAccountingSeconds": {
+    "casePreparation": null,
+    "approvalWaiting": 0,
+    "productionCommunication": 0,
+    "build": 1.27,
+    "analysis": null,
+    "fix": null,
+    "review": null
+  },
+  "timingLimit": "Only final Cargo-reported compile and nextest wall times measured; agent estimates are not measurements. No end-to-end bottleneck claim.",
+  "sharedProductionQueue": {
+    "status": "not-implemented",
+    "proposalConcurrency": 2,
+    "proposalGlobalRequestsPerSecond": 4,
+    "owner": null,
+    "permissionWindow": null,
+    "nonce": null
+  }
+}

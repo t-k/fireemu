@@ -16,6 +16,7 @@ import { appState } from "../state";
 import { AsyncButton, ConfirmButton, ErrorBanner, FetchState, Notice } from "../components/common";
 import { decodeSplat, firestoreHref } from "../lib/hrefs";
 import { createPagedList } from "../lib/pagedList";
+import { selectReloadDocument } from "../lib/reloadedDocument";
 import { createLeaveGuard, LeavePrompt } from "../lib/unsaved";
 import { settle, subscribe } from "../api/client";
 import {
@@ -438,9 +439,16 @@ const DocumentView: Component<{
   onDeleted: () => void;
 }> = (props) => {
   const navigate = useNavigate();
-  const [doc, { refetch }] = createResource(
+  let readGeneration = 0;
+  const readGenerations = new WeakMap<object, number>();
+  const [doc, { refetch, mutate }] = createResource(
     () => [props.root, props.path, props.version] as const,
-    ([root, path]) => settle(getDocument(root, path)),
+    async ([root, path]) => {
+      const generation = ++readGeneration;
+      const result = await settle(getDocument(root, path));
+      readGenerations.set(result, generation);
+      return result;
+    },
   );
   const [editing, setEditing] = createSignal(false);
   const [fields, setFields] = createFieldsStore([]);
@@ -457,7 +465,22 @@ const DocumentView: Component<{
   const [notice, setNotice] = createSignal<string | null>(null);
   const [showJson, setShowJson] = createSignal(false);
   const [newCollection, setNewCollection] = createSignal(false);
-  const current = createMemo<FsDocument | null>(() => doc()?.unwrapOr(null) ?? null);
+  const current = createMemo<FsDocument | null>((previous) => {
+    const result = doc();
+    const name = `${props.root}/${props.path}`;
+    if (result?.isOk()) return result.value.name === name ? result.value : null;
+    const session = editSession();
+    // A failed refresh must not remove an active editor or its last successful document.
+    // Actual deletion and scope changes still clear the displayed document.
+    return result?.isErr() &&
+      result.error.status !== 404 &&
+      editing() &&
+      session?.root === props.root &&
+      session.path === props.path &&
+      previous?.name === name
+      ? previous
+      : null;
+  }, null);
   const loadError = () =>
     doc()?.match(
       () => null,
@@ -562,8 +585,9 @@ const DocumentView: Component<{
     if (parsedDraft.isErr()) return;
     const draftChanges = diffFields(session.fields, parsedDraft.value);
     const operation = ++editOperation;
+    const reloadGeneration = ++readGeneration;
     setEditBusy(true);
-    await refetch();
+    const reloaded = await getDocument(session.root, session.path);
     if (
       editSession()?.generation !== session.generation ||
       editOperation !== operation ||
@@ -572,15 +596,45 @@ const DocumentView: Component<{
     )
       return;
     setEditBusy(false);
-    const latest = current();
-    if (!latest?.updateTime) {
+    // A live refresh can supersede the view resource while this read is pending.
+    // Rebase from this operation's response, not the resource's previously rendered value.
+    if (reloaded.isErr()) {
+      setError(
+        reloaded.error.status === 404 ? t("firestore.editConflictDeleted") : reloaded.error.message,
+      );
+      return;
+    }
+    const observed = doc();
+    const observedGeneration = observed ? (readGenerations.get(observed) ?? 0) : 0;
+    if (
+      observedGeneration > reloadGeneration &&
+      observed?.isErr() &&
+      observed.error.status === 404
+    ) {
       setError(t("firestore.editConflictDeleted"));
       return;
     }
+    // Publication order alone cannot distinguish an older read held across this operation.
+    // Read issuance also permits an authoritative restore to decrease updateTime.
+    const selected = selectReloadDocument(
+      { document: reloaded.value, generation: reloadGeneration },
+      observed?.isOk() ? { document: observed.value, generation: observedGeneration } : null,
+    );
+    if (selected.isErr()) {
+      setError(t("firestore.editConflict"));
+      return;
+    }
+    const latest = selected.value;
+    const published = reloaded.map(() => latest);
+    readGenerations.set(published, Math.max(reloadGeneration, observedGeneration));
+    mutate(published);
+    // Supersede older pending view reads, then converge to the current server state.
+    // Ordering is local to this reload so a later snapshot restore can still move time back.
+    void refetch();
     setEditSession({
       ...session,
       fields: latest.fields ?? {},
-      updateTime: latest.updateTime,
+      updateTime: latest.updateTime!,
     });
     setFields(toEditable(applyFieldDiff(latest.fields ?? {}, draftChanges)));
     setConflict(false);
@@ -625,7 +679,8 @@ const DocumentView: Component<{
       <Notice message={notice()} />
       <FetchState
         loading={doc.loading && !current()}
-        error={loadError()}
+        error={current() ? null : loadError()}
+        stale={current() ? loadError() : null}
         onRetry={async () => {
           await refetch();
         }}

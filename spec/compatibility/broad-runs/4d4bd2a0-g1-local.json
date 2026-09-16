@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "kind": "feature-goal-local-result-v1",
+  "goal": "G1-local",
+  "state": "done",
+  "ownerModel": "gpt-5.6-luna",
+  "execution": {
+    "command": [
+      "cargo",
+      "nextest",
+      "run",
+      "-p",
+      "fireemu-adapter-http",
+      "--test",
+      "auth_flows",
+      "--test",
+      "identity_toolkit",
+      "--profile",
+      "pr"
+    ],
+    "commit": "4d4bd2a0053b026cc593c17e9ac30f47bff53542",
+    "start": "2026-09-13T06:52:00.220673+00:00",
+    "end": "2026-09-13T06:52:04.473721+00:00",
+    "exitCode": 0
+  },
+  "tests": {
+    "passed": 143,
+    "failed": 0,
+    "skipped": 0
+  },
+  "artifacts": [
+    {
+      "suite": "fireemu-adapter-http::auth_flows",
+      "sha256": "6a0f14ec9aab292b7c2d290968d4bc1dd7481ef2d1fb89b086b0cdab0fe77028",
+      "timing": "hashed and copied after successful run on unchanged checkout"
+    },
+    {
+      "suite": "fireemu-adapter-http::identity_toolkit",
+      "sha256": "190710d4b5bd6cb58bea4eb77352b9374a533b76196faede03c3788a87b9966a",
+      "timing": "hashed and copied after successful run on unchanged checkout"
+    }
+  ],
+  "conditions": [
+    "Unsigned emulator custom-token claims combined with persistent and blocking-hook session claims in two tenants of a nondefault project",
+    "Rightful refresh binds tokenOnly and composed claims to sub/user_id, tenant, audience and issuer",
+    "Rejected cross-tenant refresh preserves both namespace snapshots and is followed by a rightful positive control"
+  ],
+  "runtimeChanged": false,
+  "productionExecuted": false,
+  "productionCompatibility": "unobserved for these combinations",
+  "review": {
+    "independent": true,
+    "scope": "principal binding, stored claims, refresh and cross-tenant state invariance",
+    "initialSource": "d7d68d83",
+    "acceptedSource": "3c9f0bef",
+    "mustFixRemaining": 0
+  },
+  "limitations": [
+    "Unsigned emulator-token tests do not prove signed custom-token verification or strict production behavior.",
+    "This local child is complete; parent claims/tenant production questions remain waiting-oracle.",
+    "Artifact hashes were collected after execution on the unchanged fixed checkout, not recorded as a prelaunch receipt."
+  ],
+  "preserved": [
+    "Initial and corrected45/46 observations and contracts",
+    "Prepared a35f85b4 shared production frame",
+    "All previous Goal results"
+  ]
+}

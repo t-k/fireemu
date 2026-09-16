@@ -141,6 +141,99 @@ pub fn strict_keys(v: &Value, allowed: &[&str]) -> Result<(), JsonError> {
     Ok(())
 }
 
+fn struct_to_json(value: &prost_types::Struct) -> Value {
+    Value::Object(
+        value
+            .fields
+            .iter()
+            .map(|(key, value)| (key.clone(), struct_value_to_json(value)))
+            .collect(),
+    )
+}
+
+fn struct_value_to_json(value: &prost_types::Value) -> Value {
+    use prost_types::value::Kind;
+    match &value.kind {
+        Some(Kind::StringValue(value)) => Value::String(value.clone()),
+        Some(Kind::NumberValue(value)) => serde_json::json!(value),
+        Some(Kind::BoolValue(value)) => Value::Bool(*value),
+        Some(Kind::StructValue(value)) => struct_to_json(value),
+        Some(Kind::ListValue(value)) => {
+            Value::Array(value.values.iter().map(struct_value_to_json).collect())
+        }
+        Some(Kind::NullValue(_)) | None => Value::Null,
+    }
+}
+
+/// Serialize Explain's protobuf messages, including implicit-presence defaults and Struct values.
+pub(crate) fn explain_metrics_to_json(metrics: &pb::ExplainMetrics) -> Value {
+    let mut out = serde_json::json!({});
+    if let Some(plan) = &metrics.plan_summary {
+        out["planSummary"] = serde_json::json!({});
+        if !plan.indexes_used.is_empty() {
+            out["planSummary"]["indexesUsed"] =
+                Value::Array(plan.indexes_used.iter().map(struct_to_json).collect());
+        }
+    }
+    if let Some(stats) = &metrics.execution_stats {
+        let mut execution = serde_json::json!({});
+        if stats.results_returned != 0 {
+            execution["resultsReturned"] = Value::String(stats.results_returned.to_string());
+        }
+        if stats.read_operations != 0 {
+            execution["readOperations"] = Value::String(stats.read_operations.to_string());
+        }
+        if let Some(duration) = &stats.execution_duration {
+            execution["executionDuration"] = Value::String(duration.to_string());
+        }
+        if let Some(debug) = &stats.debug_stats {
+            execution["debugStats"] = struct_to_json(debug);
+        }
+        out["executionStats"] = execution;
+    }
+    out
+}
+
+/// Parses the finite local `ExplainOptions` contract.
+pub fn explain_options_from_json(
+    v: Option<&Value>,
+) -> Result<Option<pb::ExplainOptions>, JsonError> {
+    let Some(v) = v else { return Ok(None) };
+    strict_keys(v, &["analyze"])?;
+    let Some(analyze) = v.get("analyze") else {
+        return Ok(Some(pb::ExplainOptions::default()));
+    };
+    let Some(analyze) = analyze.as_bool() else {
+        return err("explainOptions.analyze must be a boolean");
+    };
+    Ok(Some(pb::ExplainOptions { analyze }))
+}
+
+#[cfg(test)]
+mod explain_tests {
+    use super::*;
+
+    #[test]
+    fn explain_options_accepts_only_boolean_analyze() {
+        assert!(
+            explain_options_from_json(Some(&json!({"analyze": true})))
+                .unwrap()
+                .unwrap()
+                .analyze
+        );
+        assert!(explain_options_from_json(Some(&json!({"analyze": "true"}))).is_err());
+        assert!(explain_options_from_json(Some(&json!({"unknown": false}))).is_err());
+    }
+}
+
+/// Returns the first request key that is not part of the endpoint's accepted key set.
+pub fn first_unknown_key<'a>(v: &'a Value, allowed: &[&str]) -> Option<&'a str> {
+    v.as_object()?
+        .keys()
+        .find(|key| !allowed.contains(&key.as_str()))
+        .map(String::as_str)
+}
+
 fn timestamp_from_json(v: &Value) -> Result<prost_types::Timestamp, JsonError> {
     let Some(s) = v.as_str() else {
         return err("timestamp must be an RFC 3339 string");
@@ -395,7 +488,9 @@ fn fields_from_json_at(
     parent_depth: u32,
 ) -> Result<HashMap<String, pb::Value>, JsonError> {
     let mut out = HashMap::new();
-    let Some(v) = v else { return Ok(out) };
+    let Some(v) = v.filter(|value| !value.is_null()) else {
+        return Ok(out);
+    };
     let Some(obj) = v.as_object() else {
         return err("fields must be an object");
     };
@@ -446,19 +541,23 @@ pub fn document_from_json(v: &Value) -> Result<pb::Document, JsonError> {
 
 /// `{"fieldPaths": [...]}` → mask.
 pub fn mask_from_json(v: Option<&Value>) -> Result<Option<pb::DocumentMask>, JsonError> {
-    let Some(v) = v else { return Ok(None) };
-    let paths = v
-        .get("fieldPaths")
-        .and_then(Value::as_array)
-        .ok_or_else(|| JsonError("mask.fieldPaths must be an array".into()))?;
-    let field_paths = paths
-        .iter()
-        .map(|p| {
-            p.as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| JsonError("field paths must be strings".into()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let Some(v) = v.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    strict_keys(v, &["fieldPaths"])?;
+    let field_paths = match v.get("fieldPaths") {
+        None => Vec::new(),
+        Some(paths) => paths
+            .as_array()
+            .ok_or_else(|| JsonError("mask.fieldPaths must be an array".into()))?
+            .iter()
+            .map(|p| {
+                p.as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| JsonError("field paths must be strings".into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    };
     Ok(Some(pb::DocumentMask { field_paths }))
 }
 
@@ -476,7 +575,9 @@ pub fn mask_from_paths(paths: &[String]) -> Option<pb::DocumentMask> {
 
 /// `{"exists": bool}` / `{"updateTime": ts}` → precondition.
 pub fn precondition_from_json(v: Option<&Value>) -> Result<Option<pb::Precondition>, JsonError> {
-    let Some(v) = v else { return Ok(None) };
+    let Some(v) = v.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
     strict_keys(v, &["exists", "updateTime"])?;
     if v.get("exists").is_some() && v.get("updateTime").is_some() {
         // A oneof carries one member.
@@ -555,30 +656,29 @@ pub fn write_from_json(v: &Value) -> Result<pb::Write, JsonError> {
             "currentDocument",
         ],
     )?;
-    if ["update", "delete", "verify", "transform"]
+    let operation_count = ["update", "delete", "verify", "transform"]
         .iter()
-        .filter(|k| v.get(**k).is_some())
-        .count()
-        > 1
-    {
+        .filter(|k| v.get(**k).is_some_and(|value| !value.is_null()))
+        .count();
+    if operation_count > 1 {
         // A oneof carries one member.
         return err("Payload isn't valid for request.");
     }
-    let operation = if let Some(d) = v.get("update") {
+    let operation = if let Some(d) = v.get("update").filter(|value| !value.is_null()) {
         Some(pb::write::Operation::Update(document_from_json(d)?))
-    } else if let Some(n) = v.get("delete") {
+    } else if let Some(n) = v.get("delete").filter(|value| !value.is_null()) {
         Some(pb::write::Operation::Delete(
             n.as_str()
                 .ok_or_else(|| JsonError("delete must be a document name".into()))?
                 .to_owned(),
         ))
-    } else if let Some(n) = v.get("verify") {
+    } else if let Some(n) = v.get("verify").filter(|value| !value.is_null()) {
         Some(pb::write::Operation::Verify(
             n.as_str()
                 .ok_or_else(|| JsonError("verify must be a document name".into()))?
                 .to_owned(),
         ))
-    } else if let Some(t) = v.get("transform") {
+    } else if let Some(t) = v.get("transform").filter(|value| !value.is_null()) {
         Some(pb::write::Operation::Transform(pb::DocumentTransform {
             document: t
                 .get("document")
@@ -688,6 +788,9 @@ fn unary_operator(name: &str) -> Result<i32, JsonError> {
 
 fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
     let filter_type = if let Some(c) = v.get("compositeFilter") {
+        if !c.is_object() {
+            return err("compositeFilter must be an object");
+        }
         let op = match c.get("op").and_then(Value::as_str) {
             Some("AND") => sq::composite_filter::Operator::And,
             Some("OR") => sq::composite_filter::Operator::Or,
@@ -695,12 +798,15 @@ fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
         };
         sq::filter::FilterType::CompositeFilter(sq::CompositeFilter {
             op: op as i32,
-            filters: c
-                .get("filters")
-                .and_then(Value::as_array)
-                .map(|items| items.iter().map(filter_from_json).collect::<Result<_, _>>())
-                .transpose()?
-                .unwrap_or_default(),
+            filters: match c.get("filters") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(filters) => filters
+                    .as_array()
+                    .ok_or_else(|| JsonError("compositeFilter.filters must be an array".into()))?
+                    .iter()
+                    .map(filter_from_json)
+                    .collect::<Result<_, _>>()?,
+            },
         })
     } else if let Some(f) = v.get("fieldFilter") {
         sq::filter::FilterType::FieldFilter(sq::FieldFilter {
@@ -724,15 +830,28 @@ fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
 
 fn cursor_from_json(v: Option<&Value>) -> Result<Option<pb::Cursor>, JsonError> {
     let Some(v) = v else { return Ok(None) };
-    Ok(Some(pb::Cursor {
-        values: v
-            .get("values")
-            .and_then(Value::as_array)
-            .map(|items| items.iter().map(value_from_json).collect::<Result<_, _>>())
-            .transpose()?
-            .unwrap_or_default(),
-        before: v.get("before").and_then(Value::as_bool).unwrap_or(false),
-    }))
+    if v.is_null() {
+        return Ok(None);
+    }
+    let Some(v) = v.as_object() else {
+        return err("cursor must be an object");
+    };
+    let values = match v.get("values") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(values) => values
+            .as_array()
+            .ok_or_else(|| JsonError("cursor.values must be an array".into()))?
+            .iter()
+            .map(value_from_json)
+            .collect::<Result<_, _>>()?,
+    };
+    let before = match v.get("before") {
+        None | Some(Value::Null) => false,
+        Some(before) => before
+            .as_bool()
+            .ok_or_else(|| JsonError("cursor.before must be a boolean".into()))?,
+    };
+    Ok(Some(pb::Cursor { values, before }))
 }
 
 /// Int32 from a JSON number, numeric string or `{"value": n}` wrapper.
@@ -753,25 +872,128 @@ pub fn int32(v: Option<&Value>, what: &str) -> Result<Option<i32>, JsonError> {
     }
 }
 
+/// Parses the optional server request options object. Tags are currently accepted for wire
+/// compatibility and intentionally have no local execution effect.
+pub fn request_options_from_json(
+    v: Option<&Value>,
+) -> Result<Option<pb::RequestOptions>, JsonError> {
+    let Some(v) = v else { return Ok(None) };
+    if v.is_null() {
+        return Ok(None);
+    }
+    strict_keys(v, &["requestTags"])?;
+    let request_tags = match v.get("requestTags") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| JsonError("requestOptions.requestTags must be strings".into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => return err("requestOptions.requestTags must be an array"),
+    };
+    Ok(Some(pb::RequestOptions { request_tags }))
+}
+
+fn find_nearest_from_json(raw: &Value) -> Result<pb::structured_query::FindNearest, JsonError> {
+    strict_keys(
+        raw,
+        &[
+            "vectorField",
+            "queryVector",
+            "distanceMeasure",
+            "limit",
+            "distanceResultField",
+            "distanceThreshold",
+        ],
+    )?;
+    let vector_field = field_reference(raw.get("vectorField"))?
+        .ok_or_else(|| JsonError("findNearest.vectorField is required".into()))?;
+    let query_vector = value_from_json(
+        raw.get("queryVector")
+            .ok_or_else(|| JsonError("findNearest.queryVector is required".into()))?,
+    )?;
+    let distance_measure = match raw
+        .get("distanceMeasure")
+        .and_then(Value::as_str)
+        .ok_or_else(|| JsonError("findNearest.distanceMeasure is required".into()))?
+    {
+        "EUCLIDEAN" => sq::find_nearest::DistanceMeasure::Euclidean,
+        "COSINE" => sq::find_nearest::DistanceMeasure::Cosine,
+        "DOT_PRODUCT" => sq::find_nearest::DistanceMeasure::DotProduct,
+        other => return err(format!("unknown distance measure {other:?}")),
+    };
+    let limit = int32(raw.get("limit"), "findNearest.limit")?
+        .ok_or_else(|| JsonError("findNearest.limit is required".into()))?;
+    let distance_result_field = raw
+        .get("distanceResultField")
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| JsonError("findNearest.distanceResultField must be a string".into()))
+                .map(str::to_owned)
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let distance_threshold = raw
+        .get("distanceThreshold")
+        .map(|value| {
+            value
+                .as_f64()
+                .ok_or_else(|| JsonError("findNearest.distanceThreshold must be a number".into()))
+        })
+        .transpose()?;
+    Ok(pb::structured_query::FindNearest {
+        vector_field: Some(vector_field),
+        query_vector: Some(query_vector),
+        distance_measure: distance_measure as i32,
+        limit: Some(limit),
+        distance_result_field,
+        distance_threshold,
+    })
+}
+
 /// JSON → structured query.
+#[allow(clippy::too_many_lines)]
 pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, JsonError> {
+    if !v.is_object() {
+        return err("structuredQuery must be an object");
+    }
     let from = v
         .get("from")
-        .and_then(Value::as_array)
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            value
+                .as_array()
+                .ok_or_else(|| JsonError("from must be an array".into()))
+        })
+        .transpose()?
         .map(|items| {
             items
                 .iter()
                 .map(|f| {
+                    if !f.is_object() {
+                        return err("from elements must be objects");
+                    }
                     Ok(sq::CollectionSelector {
-                        collection_id: f
-                            .get("collectionId")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned(),
-                        all_descendants: f
-                            .get("allDescendants")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
+                        collection_id: match f.get("collectionId") {
+                            None | Some(Value::Null) => String::new(),
+                            Some(value) => value
+                                .as_str()
+                                .ok_or_else(|| {
+                                    JsonError("from.collectionId must be a string".into())
+                                })?
+                                .to_owned(),
+                        },
+                        all_descendants: match f.get("allDescendants") {
+                            None | Some(Value::Null) => false,
+                            Some(value) => value.as_bool().ok_or_else(|| {
+                                JsonError("from.allDescendants must be a boolean".into())
+                            })?,
+                        },
                     })
                 })
                 .collect::<Result<Vec<_>, JsonError>>()
@@ -780,17 +1002,39 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
         .unwrap_or_default();
     let order_by = v
         .get("orderBy")
-        .and_then(Value::as_array)
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            value
+                .as_array()
+                .ok_or_else(|| JsonError("orderBy must be an array".into()))
+        })
+        .transpose()?
         .map(|items| {
             items
                 .iter()
                 .map(|o| {
-                    let direction = match o.get("direction").and_then(Value::as_str) {
-                        None | Some("ASCENDING" | "DIRECTION_UNSPECIFIED") => {
-                            sq::Direction::Ascending
-                        }
-                        Some("DESCENDING") => sq::Direction::Descending,
-                        Some(other) => return err(format!("unknown order direction {other:?}")),
+                    if !o.is_object() {
+                        return err("orderBy elements must be objects");
+                    }
+                    let direction = match o.get("direction") {
+                        None | Some(Value::Null) => sq::Direction::Ascending,
+                        Some(value) => match value.as_str() {
+                            Some("ASCENDING" | "DIRECTION_UNSPECIFIED") => sq::Direction::Ascending,
+                            Some("DESCENDING") => sq::Direction::Descending,
+                            Some(other) => {
+                                return err(format!("unknown order direction {other:?}"))
+                            }
+                            None => match value.as_i64() {
+                                Some(0 | 1) => sq::Direction::Ascending,
+                                Some(2) => sq::Direction::Descending,
+                                Some(other) => {
+                                    return err(format!("unknown order direction {other}"))
+                                }
+                                None => {
+                                    return err("orderBy.direction must be a string or enum number")
+                                }
+                            },
+                        },
                     };
                     Ok(sq::Order {
                         field: field_reference(o.get("field"))?,
@@ -802,34 +1046,42 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
         .transpose()?
         .unwrap_or_default();
     let select = match v.get("select") {
-        None => None,
-        Some(s) => Some(sq::Projection {
-            fields: s
-                .get("fields")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .map(|f| field_reference(Some(f)).map(Option::unwrap_or_default))
-                        .collect::<Result<Vec<_>, _>>()
-                })
-                .transpose()?
-                .unwrap_or_default(),
-        }),
+        None | Some(Value::Null) => None,
+        Some(s) => {
+            let Some(s) = s.as_object() else {
+                return err("select must be an object");
+            };
+            let fields = match s.get("fields") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(fields) => fields
+                    .as_array()
+                    .ok_or_else(|| JsonError("select.fields must be an array".into()))?
+                    .iter()
+                    .map(|f| field_reference(Some(f)).map(Option::unwrap_or_default))
+                    .collect::<Result<Vec<_>, _>>()?,
+            };
+            Some(sq::Projection { fields })
+        }
     };
-    if v.get("findNearest").is_some() {
-        return err("findNearest (vector search) is not implemented");
-    }
+    let find_nearest = v
+        .get("findNearest")
+        .filter(|value| !value.is_null())
+        .map(find_nearest_from_json)
+        .transpose()?;
     Ok(pb::StructuredQuery {
         select,
         from,
-        r#where: v.get("where").map(filter_from_json).transpose()?,
+        r#where: v
+            .get("where")
+            .filter(|value| !value.is_null())
+            .map(filter_from_json)
+            .transpose()?,
         order_by,
         start_at: cursor_from_json(v.get("startAt"))?,
         end_at: cursor_from_json(v.get("endAt"))?,
         offset: int32(v.get("offset"), "offset")?.unwrap_or(0),
         limit: int32(v.get("limit"), "limit")?,
-        find_nearest: None,
+        find_nearest,
     })
 }
 
@@ -888,11 +1140,21 @@ pub fn aggregation_query_from_json(v: &Value) -> Result<pb::StructuredAggregatio
 pub fn transaction_options_from_json(
     v: Option<&Value>,
 ) -> Result<pb::TransactionOptions, JsonError> {
-    let mode = match v {
-        Some(o) if o.get("readOnly").is_some() => {
-            let read_time = o
-                .get("readOnly")
-                .and_then(|r| r.get("readTime"))
+    let Some(v) = v.filter(|v| !v.is_null()) else {
+        return Ok(pb::TransactionOptions::default());
+    };
+    strict_keys(v, &["readOnly", "readWrite"])?;
+    let read_only = v.get("readOnly").filter(|value| !value.is_null());
+    let read_write = v.get("readWrite").filter(|value| !value.is_null());
+    if read_only.is_some() && read_write.is_some() {
+        return err("readOnly and readWrite are mutually exclusive");
+    }
+    let mode = match (read_only, read_write) {
+        (Some(read_only), None) => {
+            strict_keys(read_only, &["readTime"])?;
+            let read_time = read_only
+                .get("readTime")
+                .filter(|value| !value.is_null())
                 .map(timestamp_from_json)
                 .transpose()?;
             Some(pb::transaction_options::Mode::ReadOnly(
@@ -902,18 +1164,49 @@ pub fn transaction_options_from_json(
                 },
             ))
         }
-        Some(o) if o.get("readWrite").is_some() => {
-            let retry = o
-                .get("readWrite")
-                .and_then(|r| r.get("retryTransaction"))
-                .and_then(Value::as_str)
-                .map(base64_decode)
-                .transpose()?
-                .unwrap_or_default();
+        (None, Some(read_write)) => {
+            strict_keys(read_write, &["retryTransaction", "concurrencyMode"])?;
+            let retry = match read_write
+                .get("retryTransaction")
+                .filter(|value| !value.is_null())
+            {
+                Some(value) => value
+                    .as_str()
+                    .ok_or_else(|| JsonError("readWrite.retryTransaction must be a string".into()))
+                    .and_then(base64_decode)?,
+                None => Vec::new(),
+            };
+            let concurrency_mode = match read_write
+                .get("concurrencyMode")
+                .filter(|value| !value.is_null())
+            {
+                None => 0,
+                Some(Value::String(value)) => {
+                    pb::transaction_options::ConcurrencyMode::from_str_name(value)
+                        .map(|mode| mode as i32)
+                        .ok_or_else(|| {
+                            JsonError("readWrite.concurrencyMode must be a valid enum".into())
+                        })?
+                }
+                Some(Value::Number(value)) => {
+                    let value = value
+                        .as_i64()
+                        .and_then(|value| i32::try_from(value).ok())
+                        .ok_or_else(|| {
+                            JsonError("readWrite.concurrencyMode must be a valid enum".into())
+                        })?;
+                    pb::transaction_options::ConcurrencyMode::try_from(value)
+                        .map(|mode| mode as i32)
+                        .map_err(|_| {
+                            JsonError("readWrite.concurrencyMode must be a valid enum".into())
+                        })?
+                }
+                Some(_) => return err("readWrite.concurrencyMode must be a string or integer"),
+            };
             Some(pb::transaction_options::Mode::ReadWrite(
                 pb::transaction_options::ReadWrite {
                     retry_transaction: retry,
-                    ..Default::default()
+                    concurrency_mode,
                 },
             ))
         }
@@ -924,7 +1217,10 @@ pub fn transaction_options_from_json(
 
 /// `readTime` consistency selector value, if the request carries one.
 pub fn read_time_from_json(v: &Value) -> Result<Option<prost_types::Timestamp>, JsonError> {
-    v.get("readTime").map(timestamp_from_json).transpose()
+    v.get("readTime")
+        .filter(|value| !value.is_null())
+        .map(timestamp_from_json)
+        .transpose()
 }
 
 /// Optional RFC 3339 timestamp field → JSON (used for `readTime` / `commitTime`).
@@ -1147,5 +1443,58 @@ mod tests {
         let error = value_from_json(&nested_map_with_vector(MAX_NESTING_DEPTH + 1))
             .expect_err("one enclosing map past the limit is rejected");
         assert!(error.0.contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH"));
+    }
+
+    #[test]
+    fn structured_query_json_decodes_find_nearest() {
+        let query = structured_query_from_json(&json!({
+            "from": [{"collectionId": "items"}],
+            "findNearest": {
+                "vectorField": {"fieldPath": "embedding"},
+                "queryVector": {"mapValue": {"fields": {
+                    "__type__": {"stringValue": "__vector__"},
+                    "value": {"arrayValue": {"values": [{"doubleValue": 1.0}]}}
+                }}},
+                "distanceMeasure": "COSINE",
+                "limit": 2,
+                "distanceResultField": "distance",
+                "distanceThreshold": 0.5
+            }
+        }))
+        .unwrap();
+        let nearest = query.find_nearest.unwrap();
+        assert_eq!(
+            nearest.distance_measure,
+            sq::find_nearest::DistanceMeasure::Cosine as i32
+        );
+        assert_eq!(nearest.limit, Some(2));
+        assert_eq!(nearest.distance_result_field, "distance");
+        assert_eq!(nearest.distance_threshold, Some(0.5));
+        assert!(query_vector_is_vector(
+            nearest.query_vector.as_ref().unwrap()
+        ));
+    }
+
+    #[test]
+    fn structured_query_rejects_non_array_from_and_order_by() {
+        for (field, value) in [("from", json!("items")), ("orderBy", json!({}))] {
+            let error = structured_query_from_json(&json!({field: value}))
+                .expect_err("a present query list must be an array");
+            assert!(error.0.contains(&format!("{field} must be an array")));
+        }
+        for (field, value) in [("from", json!([null])), ("orderBy", json!([1]))] {
+            let error = structured_query_from_json(&json!({field: value}))
+                .expect_err("a query list element must be an object");
+            assert!(error
+                .0
+                .contains(&format!("{field} elements must be objects")));
+        }
+    }
+
+    fn query_vector_is_vector(value: &pb::Value) -> bool {
+        matches!(
+            &value.value_type,
+            Some(pb::value::ValueType::MapValue(map)) if map.fields.contains_key("__type__")
+        )
     }
 }

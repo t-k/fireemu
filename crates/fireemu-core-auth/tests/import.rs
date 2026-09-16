@@ -40,6 +40,7 @@ fn account(local_id: &str) -> ImportedUser {
         custom_claims: CustomClaims::default(),
         created_at: t(-1_000),
         last_sign_in_at: None,
+        last_refresh_at: None,
         tokens_valid_after: t(-1_000),
         federated: Vec::new(),
         password: None,
@@ -92,6 +93,35 @@ fn an_imported_account_keeps_its_recorded_identity_and_times() {
 }
 
 #[test]
+fn imported_email_uses_the_same_canonical_ownership_key_as_sign_up() {
+    let mut store = store();
+    let imported = store
+        .import_user(ImportedUser {
+            email: Some("MixedCase@example.com".to_owned()),
+            ..account("mixed")
+        })
+        .expect("the import succeeds");
+    assert_eq!(
+        store.user(&imported).and_then(|user| user.email.as_deref()),
+        Some("mixedcase@example.com")
+    );
+    assert_eq!(
+        store
+            .user_by_email("MIXEDCASE@example.com")
+            .unwrap()
+            .local_id,
+        imported
+    );
+    assert_eq!(
+        store.import_user(ImportedUser {
+            email: Some("mixedcase@example.com".to_owned()),
+            ..account("duplicate")
+        }),
+        Err(ImportUserError::Account(AuthError::EmailExists))
+    );
+}
+
+#[test]
 fn an_imported_password_signs_in_and_is_written_back_in_the_emulator_form() {
     let mut store = store();
     let uid = store
@@ -116,6 +146,31 @@ fn an_imported_password_signs_in_and_is_written_back_in_the_emulator_form() {
         digest.emulator_form(),
         Some(("fakeSaltAbc", "s3cret-password")),
         "an export writes back exactly the hash the artifact carried"
+    );
+}
+
+#[test]
+fn trusted_artifact_import_preserves_a_password_longer_than_the_new_password_limit() {
+    let mut store = store();
+    let password = "a".repeat(AuthStore::MAX_PASSWORD_UTF16_UNITS + 1);
+    let imported = ImportedUser {
+        email: Some("legacy-long-password@example.com".to_owned()),
+        provider: Provider::Password,
+        password: Some(("legacy-salt".to_owned(), password.clone())),
+        ..account("legacy-long-password")
+    };
+    assert_eq!(
+        store.import_user(imported.clone()),
+        Err(ImportUserError::Account(AuthError::PasswordTooLong))
+    );
+    let uid = store
+        .import_user_trusted(imported)
+        .expect("a previously exported artifact restores exactly");
+    assert_eq!(
+        store
+            .verify_password("legacy-long-password@example.com", &password, t(0))
+            .expect("the restored long password signs in"),
+        uid
     );
 }
 

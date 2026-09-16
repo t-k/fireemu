@@ -17,6 +17,7 @@
 //!   `firestore.get()` / `firestore.exists()` namespace of Storage rules.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use fireemu_core_limits::catalogs::FIREBASE_RULES_2026_08_25;
@@ -264,7 +265,28 @@ impl Budget {
 
 struct Scope<'a> {
     functions: Vec<&'a FunctionDecl>,
+    /// Functions visible from each declaration's lexical scope. The active `functions` stack
+    /// tracks the call site, while this map restores the declaration environment for a call.
+    /// Environments are shared by declarations in the same lexical scope so the static table
+    /// does not retain a separate copy for every function.
+    function_scopes: BTreeMap<usize, Arc<FunctionEnvironment<'a>>>,
+    /// Value bindings captured at each declaration site. Match captures are dynamic values, so
+    /// this is populated while walking the matching block and restored for every call. Functions
+    /// declared in one block share the immutable request-local table.
+    function_bindings: BTreeMap<usize, FunctionBindings>,
     bindings: Vec<Binding<'a>>,
+    /// The lexical function environment of the function currently being evaluated. `None`
+    /// means that resolution follows the active match/call-site stack in `functions`.
+    lexical_functions: Option<Arc<FunctionEnvironment<'a>>>,
+}
+
+type FunctionBindings = Arc<Vec<(String, RulesValue)>>;
+
+/// Immutable lexical function declarations for one scope. Parent environments are linked rather
+/// than flattened so nested scopes do not copy all ancestor declarations.
+struct FunctionEnvironment<'a> {
+    parent: Option<Arc<FunctionEnvironment<'a>>>,
+    own: Vec<&'a FunctionDecl>,
 }
 
 struct Binding<'a> {
@@ -343,9 +365,29 @@ struct Evaluator<'a> {
     /// The innermost expression that raised while the current error propagates, so an
     /// `undefined` value names the cause rather than the outermost node.
     cause: Option<UndefinedCause>,
+    /// Path matcher work is bounded independently from expression evaluation.
+    match_path_work: Arc<AtomicU64>,
+    /// Reachability prefilter work is bounded independently from the matcher. Exhaustion keeps
+    /// the candidate conservative and lets the bounded matcher make the final decision.
+    match_prefilter_work: Arc<AtomicU64>,
+    /// Reachability results shared by structurally equivalent match paths in one request.
+    pattern_reachability_cache: BTreeMap<(String, Vec<String>, bool), Vec<bool>>,
 }
 
 const DYNAMIC_REGEX_CACHE_CAPACITY: usize = 16;
+
+/// Maximum path-matcher steps charged to one request. Recursive wildcards are valid and may
+/// backtrack, but their work must be bounded independently from expression evaluation so a
+/// deeply nested set cannot allocate or recurse without limit. This is an evaluator safety
+/// bound, not a Firebase compatibility claim.
+const MATCH_PATH_WORK_MAX: u64 = 65_536;
+/// Maximum structural reachability transitions charged to one request. If this conservative
+/// prefilter bound is exhausted, the candidate is treated as unknown and evaluated by the
+/// bounded matcher instead of being rejected solely by the prefilter.
+const MATCH_PATH_PREFILTER_WORK_MAX: u64 = 1_000_000;
+/// A request-local reachability cache must not grow without bound when a ruleset contains many
+/// distinct path shapes. Once full, the evaluator simply recomputes the bounded prefilter.
+const MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES: usize = 4_096;
 
 /// Evaluates a request against a ruleset without document access (`get()` / `exists()` are
 /// unsupported and fail closed).
@@ -461,15 +503,25 @@ fn evaluate_prepared(
         if service.name != ctx.service.name() {
             continue;
         }
-        let mut scope = Scope {
-            functions: Vec::new(),
+        let mut function_scopes = BTreeMap::new();
+        collect_function_scopes(&service.items, None, &mut function_scopes);
+        let mut function_bindings = BTreeMap::new();
+        initialize_function_bindings(&service.items, &mut function_bindings);
+        let functions = service
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Function(function) => Some(function),
+                Item::Match(_) => None,
+            })
+            .collect();
+        let scope = Scope {
+            functions,
+            function_scopes,
+            function_bindings,
             bindings: Vec::new(),
+            lexical_functions: None,
         };
-        for item in &service.items {
-            if let Item::Function(f) = item {
-                scope.functions.push(f);
-            }
-        }
         let mut ev = Evaluator {
             nesting: 0,
             request: Arc::clone(request),
@@ -491,6 +543,9 @@ fn evaluate_prepared(
             scope,
             coverage,
             cause: None,
+            match_path_work: Arc::new(AtomicU64::new(0)),
+            match_prefilter_work: Arc::new(AtomicU64::new(0)),
+            pattern_reachability_cache: BTreeMap::new(),
         };
         let outcome = walk_items(&service.items, &segments, ctx, &mut ev, &mut matched_any);
         absent_resource_used |= ev.absent_resource_used.get();
@@ -620,6 +675,8 @@ fn walk_items<'a>(
             match walk_match(block, remaining, ctx, ev, matched_any) {
                 Ok(true) => allowed = true,
                 Ok(false) | Err(EvalError::Soft(_) | EvalError::Unknown) => {}
+                Err(EvalError::Budget { limit_id, .. })
+                    if allowed && limit_id == "FIREEMU-RULES-MATCH-WORK" => {}
                 Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => return Err(e),
             }
         }
@@ -627,6 +684,198 @@ fn walk_items<'a>(
     Ok(allowed)
 }
 
+fn function_key(function: &FunctionDecl) -> usize {
+    std::ptr::from_ref(function) as usize
+}
+
+fn collect_function_scopes<'a>(
+    items: &'a [Item],
+    parent: Option<Arc<FunctionEnvironment<'a>>>,
+    scopes: &mut BTreeMap<usize, Arc<FunctionEnvironment<'a>>>,
+) {
+    let own: Vec<&'a FunctionDecl> = items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(function),
+            Item::Match(_) => None,
+        })
+        .collect();
+    let visible = Arc::new(FunctionEnvironment { parent, own });
+    for function in &visible.own {
+        scopes.insert(function_key(function), Arc::clone(&visible));
+    }
+    for item in items {
+        if let Item::Match(block) = item {
+            collect_function_scopes(&block.items, Some(Arc::clone(&visible)), scopes);
+        }
+    }
+}
+
+/// Returns every segment offset that `match_path` can reach after consuming `pattern`.
+///
+/// This is a rejection-only filter: every transition mirrors the corresponding transition in
+/// `match_path`, so an empty result never skips a potentially matching rule. The offsets are
+/// retained so a parent can prove that one of its descendants consumes the complete request,
+/// instead of treating every prefix-capable parent as a candidate.
+fn pattern_reachable_offsets(
+    pattern: &[PathSegment],
+    segments: &[String],
+    zero_or_more: bool,
+    work: &AtomicU64,
+    cache: &mut BTreeMap<(String, Vec<String>, bool), Vec<bool>>,
+) -> Option<Vec<bool>> {
+    let shape = pattern
+        .iter()
+        .map(|segment| match segment {
+            PathSegment::Literal(value) => Some(format!("l:{value}")),
+            PathSegment::Capture { .. } => Some("c".to_owned()),
+            PathSegment::RecursiveWildcard { .. } => Some("r".to_owned()),
+            PathSegment::Binding(_) => None,
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|parts| parts.join("/"));
+    if let Some(shape) = shape {
+        let key = (shape, segments.to_vec(), zero_or_more);
+        if let Some(cached) = cache.get(&key) {
+            return Some(cached.clone());
+        }
+        let result = pattern_reachable_offsets_uncached(pattern, segments, zero_or_more, work);
+        if let Some(reachable) = &result {
+            if cache.len() >= MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES {
+                return result;
+            }
+            cache.insert(key, reachable.clone());
+        }
+        return result;
+    }
+    pattern_reachable_offsets_uncached(pattern, segments, zero_or_more, work)
+}
+
+fn pattern_reachable_offsets_uncached(
+    pattern: &[PathSegment],
+    segments: &[String],
+    zero_or_more: bool,
+    work: &AtomicU64,
+) -> Option<Vec<bool>> {
+    let mut reachable = vec![false; segments.len() + 1];
+    reachable[0] = true;
+
+    for segment in pattern {
+        let mut next = vec![false; segments.len() + 1];
+        for (offset, reachable) in reachable.iter().enumerate() {
+            if !reachable {
+                continue;
+            }
+            let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+            if current > MATCH_PATH_PREFILTER_WORK_MAX {
+                return None;
+            }
+            match segment {
+                PathSegment::Literal(literal) => {
+                    if segments
+                        .get(offset)
+                        .is_some_and(|candidate| candidate == literal)
+                        && !is_abstract_segment(literal)
+                    {
+                        next[offset + 1] = true;
+                    }
+                }
+                PathSegment::Capture { .. } => {
+                    if segments
+                        .get(offset)
+                        .is_some_and(|candidate| candidate != ABSTRACT_PREFIX)
+                    {
+                        next[offset + 1] = true;
+                    }
+                }
+                PathSegment::RecursiveWildcard { .. } => {
+                    let minimum = usize::from(!zero_or_more);
+                    for (target, next) in next
+                        .iter_mut()
+                        .enumerate()
+                        .skip(offset.saturating_add(minimum))
+                    {
+                        let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+                        if current > MATCH_PATH_PREFILTER_WORK_MAX {
+                            return None;
+                        }
+                        if segments
+                            .get(target)
+                            .is_none_or(|candidate| candidate != ABSTRACT_PREFIX)
+                        {
+                            *next = true;
+                        }
+                    }
+                }
+                // Match headers do not permit bindings. Preserve the runtime matcher behavior
+                // for manually constructed ASTs by treating one as unreachable here as well.
+                PathSegment::Binding(_) => {}
+            }
+        }
+        reachable = next;
+    }
+
+    Some(reachable)
+}
+
+struct BlockReachability {
+    /// The block or a descendant has a structurally reachable complete allow path.
+    can_reach_allow: bool,
+    /// The block's own path can consume the complete request, regardless of its items.
+    covers_path: bool,
+    /// Offsets after the block path where an allow in this block's subtree can consume the rest.
+    /// Parent matchers use this to avoid exploring wildcard splits that cannot reach a complete
+    /// descendant path.
+    complete_offsets: Vec<bool>,
+}
+
+/// Returns whether a match block or one of its descendants can consume the complete request.
+///
+/// A block with direct `allow` statements needs a complete path match. A block with nested
+/// matches may consume a prefix, but only when a child subtree can consume the remainder. This
+/// avoids spending the bounded matcher budget on parent branches that can never reach an
+/// applicable allow, while preserving partial matching for valid parent/child rules.
+fn block_reachability(
+    block: &MatchBlock,
+    segments: &[String],
+    zero_or_more: bool,
+    work: &AtomicU64,
+    cache: &mut BTreeMap<(String, Vec<String>, bool), Vec<bool>>,
+) -> Option<BlockReachability> {
+    let reachable =
+        pattern_reachable_offsets(block.path.as_slice(), segments, zero_or_more, work, cache)?;
+    let covers_path = reachable.get(segments.len()).copied().unwrap_or(false);
+    let mut complete_offsets = vec![false; segments.len() + 1];
+    if !block.allows.is_empty() && covers_path {
+        complete_offsets[segments.len()] = true;
+    }
+
+    for item in &block.items {
+        let Item::Match(child) = item else {
+            continue;
+        };
+        for (offset, can_reach) in reachable.iter().copied().enumerate() {
+            if can_reach {
+                let child_reachability =
+                    block_reachability(child, &segments[offset..], zero_or_more, work, cache)?;
+                if child_reachability.can_reach_allow {
+                    complete_offsets[offset] = true;
+                }
+            }
+            if can_reach && work.load(Ordering::Relaxed) > MATCH_PATH_PREFILTER_WORK_MAX {
+                return None;
+            }
+        }
+    }
+    let can_reach_allow = complete_offsets.iter().copied().any(|reachable| reachable);
+    Some(BlockReachability {
+        can_reach_allow,
+        covers_path,
+        complete_offsets,
+    })
+}
+
+#[allow(clippy::too_many_lines)]
 fn walk_match<'a>(
     block: &'a MatchBlock,
     remaining: &[String],
@@ -634,9 +883,35 @@ fn walk_match<'a>(
     ev: &mut Evaluator<'a>,
     matched_any: &mut bool,
 ) -> Result<bool, EvalError> {
-    // Every way the pattern can consume the path is tried (`**` backtracks).
+    let reachability = block_reachability(
+        block,
+        remaining,
+        ev.wildcard_zero_or_more,
+        &ev.match_prefilter_work,
+        &mut ev.pattern_reachability_cache,
+    );
+    if let Some(ref reachability) = reachability {
+        if !reachability.can_reach_allow {
+            if reachability.covers_path {
+                // Preserve the distinction between a covered path with no successful allow and a
+                // path for which no match block applies, even when its subtree is pruned.
+                *matched_any = true;
+            }
+            return Ok(false);
+        }
+    }
+    let endpoint_mask = reachability.as_ref().and_then(|reachability| {
+        block
+            .items
+            .iter()
+            .any(|item| matches!(item, Item::Match(_)))
+            .then_some(reachability.complete_offsets.as_slice())
+    });
     let mut outcome: Result<bool, EvalError> = Ok(false);
-    for (rest, captures) in match_path(&block.path, remaining, ev.wildcard_zero_or_more) {
+    let zero_or_more = ev.wildcard_zero_or_more;
+    let match_work = Arc::clone(&ev.match_path_work);
+    let prefilter_work = Arc::clone(&ev.match_prefilter_work);
+    let mut visit = |rest: Vec<String>, captures: Vec<(String, RulesValue)>| {
         // In a query proof only the segments standing for potential results are
         // undetermined; the database and any concrete ancestor segments stay known.
         let captures: Vec<(String, RulesValue)> = if ctx.abstract_path {
@@ -666,6 +941,26 @@ fn walk_match<'a>(
                 .into_iter()
                 .map(|(name, value)| Binding::value(name, value)),
         );
+        let captured_bindings: FunctionBindings = Arc::new(
+            ev.scope
+                .bindings
+                .iter()
+                .filter_map(|binding| match &binding.state {
+                    BindingState::Value(value)
+                    | BindingState::Resolved {
+                        result: Ok(value), ..
+                    } => Some((binding.name.clone(), value.clone())),
+                    BindingState::Lazy(_)
+                    | BindingState::Evaluating
+                    | BindingState::Resolved { .. } => None,
+                })
+                .collect(),
+        );
+        bind_function_captures(
+            &block.items,
+            &captured_bindings,
+            &mut ev.scope.function_bindings,
+        );
         let mut result: Result<bool, EvalError> = Ok(false);
         if rest.is_empty() {
             *matched_any = true;
@@ -677,6 +972,13 @@ fn walk_match<'a>(
         ) {
             let nested = walk_items(&block.items, &rest, ctx, ev, matched_any);
             result = match (result, nested) {
+                (
+                    Ok(true),
+                    Err(EvalError::Budget {
+                        limit_id: "FIREEMU-RULES-MATCH-WORK",
+                        ..
+                    }),
+                ) => Ok(true),
                 (Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))), _)
                 | (_, Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_)))) => Err(e),
                 (Ok(true), _) | (_, Ok(true)) => Ok(true),
@@ -687,50 +989,192 @@ fn walk_match<'a>(
         ev.scope.functions.truncate(functions_before);
         ev.scope.bindings.truncate(bindings_before);
         match result {
-            Ok(true) => outcome = Ok(true),
-            Ok(false) => {}
-            Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => return Err(e),
+            Ok(true) => {
+                outcome = Ok(true);
+                Ok(true)
+            }
+            Ok(false) => Ok(false),
+            Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => Err(e),
             Err(e) => {
                 if matches!(outcome, Ok(false)) {
                     outcome = Err(e);
                 }
+                Ok(false)
+            }
+        }
+    };
+    let matched = match_path(
+        &block.path,
+        remaining,
+        zero_or_more,
+        &match_work,
+        endpoint_mask,
+        &prefilter_work,
+        &mut visit,
+    )?;
+    if matched {
+        Ok(true)
+    } else {
+        outcome
+    }
+}
+
+/// Computes, for every pattern position and input offset, whether the suffix can reach one of
+/// the complete offsets supplied by the subtree prefilter. This is a bounded dynamic program;
+/// recursive wildcards use suffix aggregation instead of enumerating every split.
+fn endpoint_reachability(
+    pattern: &[PathSegment],
+    segments: &[String],
+    zero_or_more: bool,
+    endpoints: &[bool],
+    work: &AtomicU64,
+) -> Option<Vec<Vec<bool>>> {
+    let segment_count = segments.len();
+    let mut table = vec![vec![false; segment_count + 1]; pattern.len() + 1];
+    for (offset, allowed) in endpoints
+        .iter()
+        .copied()
+        .enumerate()
+        .take(segment_count + 1)
+    {
+        table[pattern.len()][offset] = allowed;
+    }
+
+    for (index, segment) in pattern.iter().enumerate().rev() {
+        let next_row = table[index + 1].clone();
+        match segment {
+            PathSegment::RecursiveWildcard { .. } => {
+                let mut eligible = vec![false; segment_count + 1];
+                for offset in (0..=segment_count).rev() {
+                    let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+                    if current > MATCH_PATH_PREFILTER_WORK_MAX {
+                        return None;
+                    }
+                    eligible[offset] = next_row[offset]
+                        && (offset == segment_count || segments[offset] != ABSTRACT_PREFIX);
+                }
+                let mut suffix_any = vec![false; segment_count + 2];
+                for offset in (0..=segment_count).rev() {
+                    suffix_any[offset] = eligible[offset] || suffix_any[offset + 1];
+                }
+                let minimum = usize::from(!zero_or_more);
+                for (offset, value) in table[index].iter_mut().enumerate() {
+                    let target = offset.saturating_add(minimum);
+                    *value = target <= segment_count && suffix_any[target];
+                }
+            }
+            PathSegment::Literal(literal) => {
+                for offset in (0..=segment_count).rev() {
+                    let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+                    if current > MATCH_PATH_PREFILTER_WORK_MAX {
+                        return None;
+                    }
+                    table[index][offset] = offset < segment_count
+                        && segments[offset] == *literal
+                        && !is_abstract_segment(literal)
+                        && next_row[offset + 1];
+                }
+            }
+            PathSegment::Capture { .. } => {
+                for offset in (0..=segment_count).rev() {
+                    let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+                    if current > MATCH_PATH_PREFILTER_WORK_MAX {
+                        return None;
+                    }
+                    table[index][offset] = segments
+                        .get(offset)
+                        .is_some_and(|candidate| candidate != ABSTRACT_PREFIX)
+                        && offset < segment_count
+                        && next_row[offset + 1];
+                }
+            }
+            PathSegment::Binding(_) => {
+                for offset in (0..=segment_count).rev() {
+                    let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+                    if current > MATCH_PATH_PREFILTER_WORK_MAX {
+                        return None;
+                    }
+                    table[index][offset] = false;
+                }
             }
         }
     }
-    outcome
+    Some(table)
 }
-
-/// Unmatched remainder and captured bindings of a path match.
-type PathMatch = (Vec<String>, Vec<(String, RulesValue)>);
 
 /// Every way `pattern` matches the start of `segments` (a recursive wildcard consumes zero or
 /// more segments under rules version 2, one or more under version 1), each with its
 /// unmatched remainder and captured bindings.
-fn match_path(pattern: &[PathSegment], segments: &[String], zero_or_more: bool) -> Vec<PathMatch> {
+#[allow(clippy::too_many_lines)]
+fn match_path(
+    pattern: &[PathSegment],
+    segments: &[String],
+    zero_or_more: bool,
+    work: &AtomicU64,
+    endpoints: Option<&[bool]>,
+    prefilter_work: &AtomicU64,
+    visit: &mut impl FnMut(Vec<String>, Vec<(String, RulesValue)>) -> Result<bool, EvalError>,
+) -> Result<bool, EvalError> {
+    #[allow(clippy::too_many_arguments)]
     fn go(
         pattern: &[PathSegment],
         segments: &[String],
         zero_or_more: bool,
         captures: &mut Vec<(String, RulesValue)>,
-        out: &mut Vec<PathMatch>,
-    ) {
+        pattern_index: usize,
+        consumed: usize,
+        endpoint_table: Option<&[Vec<bool>]>,
+        work: &AtomicU64,
+        visit: &mut impl FnMut(Vec<String>, Vec<(String, RulesValue)>) -> Result<bool, EvalError>,
+    ) -> Result<bool, EvalError> {
+        if endpoint_table.is_some_and(|table| !table[pattern_index][consumed]) {
+            return Ok(false);
+        }
+        let current = work.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+        if current > MATCH_PATH_WORK_MAX {
+            return Err(EvalError::Budget {
+                limit_id: "FIREEMU-RULES-MATCH-WORK",
+                current,
+                maximum: MATCH_PATH_WORK_MAX,
+            });
+        }
         let Some((seg, tail)) = pattern.split_first() else {
-            out.push((segments.to_vec(), captures.clone()));
-            return;
+            return visit(segments.to_vec(), captures.clone());
         };
         match seg {
             PathSegment::Literal(l) => {
                 // An undetermined segment is never equal to a literal.
                 if segments.first() == Some(l) && !is_abstract_segment(l) {
-                    go(tail, &segments[1..], zero_or_more, captures, out);
+                    return go(
+                        tail,
+                        &segments[1..],
+                        zero_or_more,
+                        captures,
+                        pattern_index + 1,
+                        consumed + 1,
+                        endpoint_table,
+                        work,
+                        visit,
+                    );
                 }
             }
             PathSegment::Capture { name, .. } => {
                 // The "any prefix" marker stands for zero or more segments: only `**` fits.
                 if let Some(v) = segments.first().filter(|v| v.as_str() != ABSTRACT_PREFIX) {
                     captures.push((name.clone(), RulesValue::String(v.clone())));
-                    go(tail, &segments[1..], zero_or_more, captures, out);
+                    let result = go(
+                        tail,
+                        &segments[1..],
+                        zero_or_more,
+                        captures,
+                        pattern_index + 1,
+                        consumed + 1,
+                        endpoint_table,
+                        work,
+                        visit,
+                    );
                     captures.pop();
+                    return result;
                 }
             }
             PathSegment::RecursiveWildcard { name, .. } => {
@@ -743,17 +1187,47 @@ fn match_path(pattern: &[PathSegment], segments: &[String], zero_or_more: bool) 
                     {
                         continue;
                     }
+                    let next_consumed = consumed + take;
+                    if endpoint_table.is_some_and(|table| !table[pattern_index + 1][next_consumed])
+                    {
+                        continue;
+                    }
                     captures.push((name.clone(), RulesValue::Path(segments[..take].to_vec())));
-                    go(tail, &segments[take..], zero_or_more, captures, out);
+                    let stop = go(
+                        tail,
+                        &segments[take..],
+                        zero_or_more,
+                        captures,
+                        pattern_index + 1,
+                        next_consumed,
+                        endpoint_table,
+                        work,
+                        visit,
+                    )?;
                     captures.pop();
+                    if stop {
+                        return Ok(true);
+                    }
                 }
             }
             PathSegment::Binding(_) => {}
         }
+        Ok(false)
     }
-    let mut out = Vec::new();
-    go(pattern, segments, zero_or_more, &mut Vec::new(), &mut out);
-    out
+    let endpoint_table = endpoints.and_then(|endpoints| {
+        endpoint_reachability(pattern, segments, zero_or_more, endpoints, prefilter_work)
+    });
+    go(
+        pattern,
+        segments,
+        zero_or_more,
+        &mut Vec::new(),
+        0,
+        0,
+        endpoint_table.as_deref(),
+        work,
+        visit,
+    )
 }
 
 fn evaluate_allows<'a>(
@@ -833,6 +1307,7 @@ fn undetermined(v: &RulesValue) -> bool {
         | RulesValue::PartialList(_)
         | RulesValue::PartialListAny(_)
         | RulesValue::Range(_)
+        | RulesValue::RangeExcluding { .. }
         | RulesValue::OneOf(_)
         | RulesValue::NotOneOf(_) => true,
         RulesValue::List(items) | RulesValue::Set(items) => items.iter().any(undetermined),
@@ -1133,12 +1608,16 @@ impl<'a> Evaluator<'a> {
     }
 
     fn function(&self, name: &str) -> Option<&'a FunctionDecl> {
-        self.scope
-            .functions
-            .iter()
-            .rev()
-            .find(|f| f.name == name)
-            .copied()
+        if let Some(functions) = &self.scope.lexical_functions {
+            function_in_environment(functions, name)
+        } else {
+            self.scope
+                .functions
+                .iter()
+                .rev()
+                .find(|f| f.name == name)
+                .copied()
+        }
     }
 
     /// Evaluates `expr` behind a recursion guard: a tree deeper than
@@ -1225,6 +1704,8 @@ impl<'a> Evaluator<'a> {
                 | RulesValue::PartialListAny(_)
                 | RulesValue::OneOf(_)
                 | RulesValue::NotOneOf(_)
+                | RulesValue::Range(_)
+                | RulesValue::RangeExcluding { .. }
         ) {
             return None;
         }
@@ -1390,7 +1871,7 @@ impl<'a> Evaluator<'a> {
                 if matches!(v, RulesValue::Unknown) {
                     return Err(EvalError::Unknown);
                 }
-                if let RulesValue::Range(r) = &v {
+                if let RulesValue::Range(r) | RulesValue::RangeExcluding { range: r, .. } = &v {
                     // Every member shares the range's class; `int` vs `float` stays open.
                     let class = r.class().ok_or(EvalError::Unknown)?;
                     return match type_name.as_str() {
@@ -1411,6 +1892,7 @@ impl<'a> Evaluator<'a> {
                 if matches!(
                     v,
                     RulesValue::NotOneOf(_)
+                        | RulesValue::RangeExcluding { .. }
                         | RulesValue::PartialMap(_)
                         | RulesValue::PartialList(_)
                         | RulesValue::PartialListAny(_)
@@ -1547,6 +2029,49 @@ impl<'a> Evaluator<'a> {
                 };
                 V::Bool(range_relation(r, mirrored, c)?)
             }
+            (
+                BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge,
+                V::RangeExcluding { range, excluded },
+                c,
+            ) if !undetermined(c) => {
+                if matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+                    && excluded.iter().any(|e| values_equal(e, c))
+                {
+                    V::Bool(op == BinaryOp::Ne)
+                } else {
+                    V::Bool(range_relation(range, op, c)?)
+                }
+            }
+            (
+                BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge,
+                c,
+                V::RangeExcluding { range, excluded },
+            ) if !undetermined(c) => {
+                if matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+                    && excluded.iter().any(|e| values_equal(e, c))
+                {
+                    V::Bool(op == BinaryOp::Ne)
+                } else {
+                    let mirrored = match op {
+                        BinaryOp::Lt => BinaryOp::Gt,
+                        BinaryOp::Le => BinaryOp::Ge,
+                        BinaryOp::Gt => BinaryOp::Lt,
+                        BinaryOp::Ge => BinaryOp::Le,
+                        other => other,
+                    };
+                    V::Bool(range_relation(range, mirrored, c)?)
+                }
+            }
             // A set of candidates: decided when every candidate answers the same.
             (_, V::OneOf(members), c) if !undetermined(c) => V::Bool(unanimous(
                 members.iter().map(|m| binary_concrete(op, m, c)),
@@ -1566,6 +2091,18 @@ impl<'a> Evaluator<'a> {
                 }
             }
             (BinaryOp::In, V::NotOneOf(excluded), V::List(items)) if !undetermined(&r) => {
+                if items
+                    .iter()
+                    .all(|i| excluded.iter().any(|e| values_equal(e, i)))
+                {
+                    V::Bool(false)
+                } else {
+                    return Err(EvalError::Unknown);
+                }
+            }
+            (BinaryOp::In, V::RangeExcluding { excluded, .. }, V::List(items))
+                if !undetermined(&r) =>
+            {
                 if items
                     .iter()
                     .all(|i| excluded.iter().any(|e| values_equal(e, i)))
@@ -1773,8 +2310,21 @@ impl<'a> Evaluator<'a> {
                 f.params.len()
             )));
         }
+        let definition_functions = required_function_scope(&self.scope.function_scopes, f)?;
+        let Some(definition_bindings) = self.scope.function_bindings.get(&function_key(f)).cloned()
+        else {
+            return Err(EvalError::Unsupported(
+                "function declaration bindings metadata missing".to_owned(),
+            ));
+        };
         self.budget.enter_call()?;
-        let bindings_before = self.scope.bindings.len();
+        let caller_lexical_functions = self.scope.lexical_functions.take();
+        self.scope.lexical_functions = Some(definition_functions);
+        let caller_bindings = std::mem::take(&mut self.scope.bindings);
+        self.scope.bindings = definition_bindings
+            .iter()
+            .map(|(name, value)| Binding::value(name.clone(), value.clone()))
+            .collect();
         for (p, v) in f.params.iter().zip(values) {
             self.scope.bindings.push(Binding::value(p.clone(), v));
         }
@@ -1789,9 +2339,71 @@ impl<'a> Evaluator<'a> {
             }
             self.eval(&f.body)
         };
-        self.scope.bindings.truncate(bindings_before);
+        self.scope.bindings = caller_bindings;
+        self.scope.lexical_functions = caller_lexical_functions;
         self.budget.leave_call();
         result
+    }
+}
+
+fn function_in_environment<'a>(
+    environment: &FunctionEnvironment<'a>,
+    name: &str,
+) -> Option<&'a FunctionDecl> {
+    environment
+        .own
+        .iter()
+        .rev()
+        .find(|function| function.name == name)
+        .copied()
+        .or_else(|| {
+            environment
+                .parent
+                .as_deref()
+                .and_then(|parent| function_in_environment(parent, name))
+        })
+}
+
+fn required_function_scope<'a>(
+    scopes: &BTreeMap<usize, Arc<FunctionEnvironment<'a>>>,
+    function: &FunctionDecl,
+) -> Result<Arc<FunctionEnvironment<'a>>, EvalError> {
+    scopes.get(&function_key(function)).cloned().ok_or_else(|| {
+        EvalError::Unsupported("function declaration scope metadata missing".to_owned())
+    })
+}
+
+fn bind_function_captures(
+    items: &[Item],
+    captures: &FunctionBindings,
+    bindings: &mut BTreeMap<usize, FunctionBindings>,
+) {
+    for item in items {
+        if let Item::Function(function) = item {
+            bindings.insert(function_key(function), Arc::clone(captures));
+        }
+    }
+}
+
+fn initialize_function_bindings(items: &[Item], bindings: &mut BTreeMap<usize, FunctionBindings>) {
+    let empty = Arc::new(Vec::new());
+    initialize_function_bindings_with_empty(items, bindings, &empty);
+}
+
+fn initialize_function_bindings_with_empty(
+    items: &[Item],
+    bindings: &mut BTreeMap<usize, FunctionBindings>,
+    empty: &FunctionBindings,
+) {
+    for item in items {
+        match item {
+            Item::Function(function) => {
+                bindings.insert(function_key(function), Arc::clone(empty));
+            }
+            Item::Match(block) => {
+                initialize_function_bindings_with_empty(&block.items, bindings, empty);
+            }
+        }
     }
 }
 
@@ -2575,4 +3187,114 @@ fn haversine_metres(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
     let (dp, dl) = ((lat2 - lat1).to_radians(), (lng2 - lng1).to_radians());
     let a = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
     2.0 * EARTH_RADIUS_KM * a.sqrt().asin()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        bind_function_captures, collect_function_scopes, function_key, pattern_reachable_offsets,
+        required_function_scope, EvalError, FunctionBindings,
+        MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES,
+    };
+    use crate::ast::PathSegment;
+    use crate::parse::parse_ruleset;
+    use std::collections::BTreeMap;
+    use std::fmt::Write as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn declarations_in_one_lexical_scope_share_their_function_environment() {
+        let mut source = String::from("rules_version = '2';\nservice cloud.firestore {\n");
+        for index in 0..256 {
+            let _ = writeln!(source, "  function helper{index}() {{ return false; }}");
+        }
+        source.push_str(
+            "  match /databases/{db}/documents/{document=**} { allow read: if false; }\n}",
+        );
+        let ruleset = parse_ruleset(&source).expect("generated rules should parse");
+        let service = &ruleset.services[0];
+        let mut scopes = BTreeMap::new();
+        collect_function_scopes(service.items.as_slice(), None, &mut scopes);
+
+        assert_eq!(scopes.len(), 256);
+        let first = scopes
+            .values()
+            .next()
+            .expect("generated declarations should be indexed");
+        assert!(scopes.values().all(|scope| Arc::ptr_eq(scope, first)));
+        assert!(service
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                crate::ast::Item::Function(function) => Some(function),
+                crate::ast::Item::Match(_) => None,
+            })
+            .all(|function| scopes.contains_key(&function_key(function))));
+    }
+
+    #[test]
+    fn declarations_in_one_match_share_their_request_capture_table() {
+        let mut source = String::from(
+            "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents/{owner} {\n",
+        );
+        for index in 0..256 {
+            let _ = writeln!(source, "    function helper{index}() {{ return false; }}");
+        }
+        source.push_str("    allow read: if true;\n  }\n}");
+        let ruleset = parse_ruleset(&source).expect("generated rules should parse");
+        let service = &ruleset.services[0];
+        let crate::ast::Item::Match(block) = &service.items[0] else {
+            panic!("generated scope should be a match block");
+        };
+        let captures: FunctionBindings = Arc::new(vec![(
+            "owner".to_owned(),
+            crate::value::RulesValue::String("alice".to_owned()),
+        )]);
+        let mut bindings = BTreeMap::new();
+        bind_function_captures(block.items.as_slice(), &captures, &mut bindings);
+
+        assert_eq!(bindings.len(), 256);
+        assert!(bindings.values().all(|table| Arc::ptr_eq(table, &captures)));
+    }
+
+    #[test]
+    fn missing_function_scope_metadata_is_fail_closed() {
+        let ruleset = parse_ruleset(
+            "service cloud.firestore { function helper() { return true; } match /databases/{db}/documents { allow read: if helper(); } }",
+        )
+        .expect("rules should parse");
+        let service = &ruleset.services[0];
+        let crate::ast::Item::Function(function) = &service.items[0] else {
+            panic!("generated declaration should be a function");
+        };
+        let mut scopes = BTreeMap::new();
+        collect_function_scopes(service.items.as_slice(), None, &mut scopes);
+        scopes.clear();
+
+        assert!(matches!(
+            required_function_scope(&scopes, function),
+            Err(EvalError::Unsupported(message)) if message == "function declaration scope metadata missing"
+        ));
+    }
+
+    #[test]
+    fn path_reachability_cache_has_a_request_local_entry_cap() {
+        let mut cache = BTreeMap::new();
+        let work = AtomicU64::new(0);
+        for index in 0..(MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES + 512) {
+            let pattern = [PathSegment::Literal(format!("segment-{index}"))];
+            let reachable = pattern_reachable_offsets(
+                &pattern,
+                &["target".to_owned()],
+                true,
+                &work,
+                &mut cache,
+            )
+            .expect("literal reachability should remain decidable");
+            assert_eq!(reachable.len(), 2);
+        }
+        assert_eq!(cache.len(), MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES);
+        assert!(work.load(Ordering::Relaxed) > 0);
+    }
 }

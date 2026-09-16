@@ -929,6 +929,20 @@
       }
     },
     {
+      "id": "AUTH-REFRESH-001",
+      "statement": "A well-formed Secure Token refresh request for a project- or tenant-owned refresh session issues a new ID token without changing the session authentication time, preserves the session claims and provider, advances issuance and expiry timestamps under the virtual clock, reports the configured project identifier, and rejects malformed, unknown, revoked, disabled or deleted credentials without mutating the account or session.",
+      "criticality": "important",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+          "crates/fireemu-adapter-http/tests/auth_flows.rs"
+        ]
+      },
+      "note": "The strict and official-emulator profiles are exercised separately. Local tests cover malformed and unknown tokens, revocation, disabled/deleted users, project/tenant routing, claim preservation and virtual-clock timestamp progression. Production Secure Token response and exact verifier-path parity remain unobserved."
+    },
+    {
       "id": "AC-CFG-001",
       "statement": "App Check defaults preserve current behaviour, and invalid keys, types, service modes, token TTLs, app IDs, project numbers and debug-token digests fail closed in both the canonical JSON Schema and the Rust loader.",
       "criticality": "important",
@@ -1534,6 +1548,7 @@
       "artifacts": {
         "integration": [
           "crates/fireemu-adapter-grpc/tests/rules.rs",
+          "crates/fireemu-core-rules/tests/eval.rs",
           "crates/fireemu-adapter-http/tests/storage.rs"
         ],
         "conformance": "conformance/rules-programs.json"
@@ -1869,6 +1884,32 @@
           "crates/fireemu/tests/capabilities.rs"
         ]
       }
+    },
+    {
+      "id": "AUTH-CONFIG-MASK-001",
+      "statement": "The Identity Toolkit projects.updateConfig PATCH applies only the project configuration fields named by updateMask, validates every selected value before mutation, applies multiple selected fields atomically, preserves unselected fields and follows the endpoint-specific empty or omitted-mask behavior.",
+      "criticality": "important",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-http/tests/auth_flows.rs"
+        ]
+      },
+      "note": "The real Admin v2 handler covers mask-scoped updates, type rejection with unchanged state, multiple fields, reset-to-default values, empty/omitted masks and disjoint concurrent updates. Production projects.updateConfig response and configuration parity remain unobserved."
+    },
+    {
+      "id": "AUTH-SAML-MASK-001",
+      "statement": "An inbound SAML PATCH treats idpConfig.signRequest as a selected boolean leaf: an omitted JSON presence under that mask resets it to false, an explicit boolean is applied, unselected provider fields remain unchanged and invalid selected values leave the whole configuration unchanged.",
+      "criticality": "important",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
+        ]
+      },
+      "note": "The project and tenant Admin v2 handlers exercise parent-mask versus leaf-mask semantics, omitted/default and explicit values, validation-before-mutation and provider-field isolation. Production SAML configuration PATCH parity remains unobserved."
     }
   ]
 }

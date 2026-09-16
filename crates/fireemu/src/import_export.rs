@@ -685,9 +685,7 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
         })?;
         if let Err(error) = blocking.update_blocking_auth_settings(settings) {
             let restore_error = blocking_snapshot.as_ref().and_then(|snapshot| {
-                blocking
-                    .restore_blocking_auth_settings_snapshot(snapshot)
-                    .err()
+                restore_blocking_settings_if_unchanged(blocking, snapshot, settings).err()
             });
             let message = match restore_error {
                 Some(restore_error) => {
@@ -705,7 +703,13 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
         tenant_candidates,
     ) {
         if let (Some(snapshot), Some(blocking)) = (blocking_snapshot.as_ref(), endpoints.blocking) {
-            if let Err(restore_error) = blocking.restore_blocking_auth_settings_snapshot(snapshot) {
+            if let Err(restore_error) = restore_blocking_settings_if_unchanged(
+                blocking,
+                snapshot,
+                imported_project_blocking
+                    .as_ref()
+                    .expect("blocking settings are present when a snapshot is captured"),
+            ) {
                 return Err(ArtifactError::new(
                     "auth",
                     PathBuf::from(AUTH_PATH),
@@ -718,6 +722,93 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
         return Err(ArtifactError::new("auth", PathBuf::from(AUTH_PATH), error));
     }
     Ok(())
+}
+
+/// Restores an import's previous Blocking Auth projection only while the imported projection is
+/// still current. [`AuthBlockingHook`] exposes snapshots and unconditional restore, but no
+/// generation or compare-and-swap operation. The comparison avoids overwriting a concurrent
+/// settings update in the usual interleaving; a hook implementation needs a generation-aware
+/// API to make this boundary fully atomic against a writer that races after the comparison.
+fn restore_blocking_settings_if_unchanged(
+    blocking: &dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook,
+    snapshot: &serde_json::Value,
+    imported: &serde_json::Value,
+) -> Result<(), String> {
+    let current = blocking
+        .blocking_auth_settings_snapshot()?
+        .ok_or_else(|| "blocking settings have no rollback snapshot".to_owned())?;
+    if current == *snapshot {
+        return Ok(());
+    }
+    if current != *imported {
+        return Err(
+            "blocking settings changed during import; refusing a stale rollback".to_owned(),
+        );
+    }
+    blocking.restore_blocking_auth_settings_snapshot(snapshot)
+}
+
+#[cfg(test)]
+mod blocking_rollback_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    use fireemu_adapter_http::identity_toolkit::{AuthBlockingHook, BlockingFunctionFailure};
+    use serde_json::Value;
+
+    struct MutableBlockingHook {
+        settings: Mutex<Value>,
+        restore_calls: AtomicUsize,
+    }
+
+    impl AuthBlockingHook for MutableBlockingHook {
+        fn invoke(
+            &self,
+            _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+            _user: &fireemu_core_auth::store::UserRecord,
+        ) -> Result<Value, BlockingFunctionFailure> {
+            Err(BlockingFunctionFailure::unhandled())
+        }
+
+        fn blocking_auth_settings(&self) -> Option<Value> {
+            self.settings.lock().ok().map(|settings| settings.clone())
+        }
+
+        fn blocking_auth_settings_snapshot(&self) -> Result<Option<Value>, String> {
+            Ok(self.blocking_auth_settings())
+        }
+
+        fn restore_blocking_auth_settings_snapshot(&self, snapshot: &Value) -> Result<(), String> {
+            self.restore_calls.fetch_add(1, Ordering::Relaxed);
+            *self
+                .settings
+                .lock()
+                .map_err(|_| "settings poisoned".to_owned())? = snapshot.clone();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn stale_blocking_rollback_does_not_overwrite_a_concurrent_update() {
+        let hook = MutableBlockingHook {
+            settings: Mutex::new(serde_json::json!({"version": "concurrent"})),
+            restore_calls: AtomicUsize::new(0),
+        };
+        let snapshot = serde_json::json!({"version": "before-import"});
+        let imported = serde_json::json!({"version": "imported"});
+
+        let error = super::restore_blocking_settings_if_unchanged(&hook, &snapshot, &imported)
+            .expect_err("a concurrent update must prevent a stale rollback");
+
+        assert!(error.contains("changed during import"), "{error}");
+        assert_eq!(
+            hook.blocking_auth_settings(),
+            Some(serde_json::json!({
+                "version": "concurrent"
+            }))
+        );
+        assert_eq!(hook.restore_calls.load(Ordering::Relaxed), 0);
+    }
 }
 
 fn install_auth_users(
@@ -3893,6 +3984,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn auth_import_blocking_update_failure_preserves_auth_and_blocking_state() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::{Arc, Mutex};
@@ -4072,7 +4164,7 @@ mod tests {
             "{error:?}"
         );
         assert_eq!(blocking.update_calls.load(Ordering::Relaxed), 1);
-        assert_eq!(blocking.restore_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(blocking.restore_calls.load(Ordering::Relaxed), 0);
         assert_eq!(
             blocking.blocking_auth_settings(),
             Some(serde_json::json!({

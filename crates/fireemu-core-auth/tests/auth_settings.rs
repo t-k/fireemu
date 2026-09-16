@@ -287,3 +287,71 @@ fn empty_or_invalid_config_overrides_do_not_create_namespaces() {
     assert!(registry.store_for("future-project").is_none());
     assert!(registry.tenant_store("demo-app", "tenant-a").is_none());
 }
+
+#[test]
+fn project_patch_preserves_tenant_permissions_and_admin_bypass() {
+    let registry = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app"))));
+    let tenant = registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+
+    registry
+        .patch_tenant(
+            "demo-app",
+            "tenant-a",
+            TenantMetadataPatch {
+                disabled_user_signup: Some(true),
+                disabled_user_deletion: Some(true),
+                ..TenantMetadataPatch::default()
+            },
+        )
+        .expect("tenant permission patch succeeds");
+
+    let existing = tenant
+        .lock()
+        .unwrap()
+        .create_user_as(
+            AuthPrincipal::Admin,
+            NewUser::email("existing@example.test"),
+            NOW,
+        )
+        .expect("admin can create a tenant user");
+    let _ = tenant.lock().unwrap().take_user_events();
+
+    registry
+        .patch_project_config(
+            "demo-app",
+            ProjectAuthConfigPatch {
+                allow_duplicate_emails: Some(true),
+                ..ProjectAuthConfigPatch::default()
+            },
+        )
+        .expect("unrelated project patch succeeds");
+
+    let config = tenant.lock().unwrap().config();
+    assert!(config.allow_duplicate_emails);
+    assert!(config.disabled_user_signup);
+    assert!(config.disabled_user_deletion);
+    let metadata = registry
+        .tenant_metadata("demo-app", "tenant-a")
+        .expect("tenant metadata remains published");
+    assert!(metadata.disabled_user_signup);
+    assert!(metadata.disabled_user_deletion);
+
+    let mut tenant = tenant.lock().unwrap();
+    assert_eq!(
+        tenant.create_user_as(
+            AuthPrincipal::EndUser,
+            NewUser::email("new@example.test"),
+            NOW,
+        ),
+        Err(AuthError::UserSignupDisabled)
+    );
+    assert!(tenant.user_by_email("new@example.test").is_none());
+    assert_eq!(
+        tenant.delete_user_by_id_as(AuthPrincipal::EndUser, existing.as_str()),
+        Err(AuthError::UserDeletionDisabled)
+    );
+    assert!(tenant.user_by_id(existing.as_str()).is_some());
+    assert!(tenant
+        .delete_user_by_id_as(AuthPrincipal::Admin, existing.as_str())
+        .is_ok());
+}

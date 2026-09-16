@@ -647,21 +647,75 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
         tenant_candidates.push((tenant.clone(), candidate, metadata));
     }
     let _ = default_candidate.take_user_events();
-    endpoints
-        .auth
-        .replace_default_scope(endpoints.project, default_candidate, tenant_candidates)
-        .map_err(|error| ArtifactError::new("auth", PathBuf::from(AUTH_PATH), error))?;
-    if let Some(settings) = imported_project_blocking {
-        let Some(blocking) = endpoints.blocking else {
-            return Err(ArtifactError::new(
+
+    // Blocked Auth settings and imported accounts share one publication boundary. Capture the
+    // bridge state before making either side visible so a failure in either commit can restore
+    // the other side. Updating the bridge first is important: an update failure must leave the
+    // live Auth registry untouched, rather than publishing users and config before discovering
+    // that the Functions target cannot accept the imported settings.
+    let blocking_snapshot = if imported_project_blocking.is_some() {
+        let blocking = endpoints.blocking.ok_or_else(|| {
+            ArtifactError::new(
                 "auth",
                 &settings_path,
                 "blocking settings require a running owned Functions runtime",
-            ));
-        };
-        blocking
-            .update_blocking_auth_settings(&settings)
-            .map_err(|error| ArtifactError::new("auth", &settings_path, error))?;
+            )
+        })?;
+        let snapshot = blocking
+            .blocking_auth_settings_snapshot()
+            .map_err(|error| ArtifactError::new("auth", &settings_path, error))?
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "auth",
+                    &settings_path,
+                    "blocking settings cannot be imported without a rollback snapshot",
+                )
+            })?;
+        Some(snapshot)
+    } else {
+        None
+    };
+    if let Some(settings) = imported_project_blocking.as_ref() {
+        let blocking = endpoints.blocking.ok_or_else(|| {
+            ArtifactError::new(
+                "auth",
+                &settings_path,
+                "blocking settings require a running owned Functions runtime",
+            )
+        })?;
+        if let Err(error) = blocking.update_blocking_auth_settings(settings) {
+            let restore_error = blocking_snapshot.as_ref().and_then(|snapshot| {
+                blocking
+                    .restore_blocking_auth_settings_snapshot(snapshot)
+                    .err()
+            });
+            let message = match restore_error {
+                Some(restore_error) => {
+                    format!("{error}; restoring previous blocking settings failed: {restore_error}")
+                }
+                None => error,
+            };
+            return Err(ArtifactError::new("auth", &settings_path, message));
+        }
+    }
+
+    if let Err(error) = endpoints.auth.replace_default_scope(
+        endpoints.project,
+        default_candidate,
+        tenant_candidates,
+    ) {
+        if let (Some(snapshot), Some(blocking)) = (blocking_snapshot.as_ref(), endpoints.blocking) {
+            if let Err(restore_error) = blocking.restore_blocking_auth_settings_snapshot(snapshot) {
+                return Err(ArtifactError::new(
+                    "auth",
+                    PathBuf::from(AUTH_PATH),
+                    format!(
+                        "{error}; restoring previous blocking settings failed: {restore_error}"
+                    ),
+                ));
+            }
+        }
+        return Err(ArtifactError::new("auth", PathBuf::from(AUTH_PATH), error));
     }
     Ok(())
 }
@@ -3838,6 +3892,212 @@ mod tests {
         assert_eq!(std::fs::read_dir(&base).unwrap().count(), 1);
         let _ = std::fs::remove_dir_all(base);
     }
+    #[test]
+    fn auth_import_blocking_update_failure_preserves_auth_and_blocking_state() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        use fireemu_adapter_grpc::gateway::Gateway;
+        use fireemu_adapter_grpc::local::LocalBackend;
+        use fireemu_adapter_http::identity_toolkit::{AuthBlockingHook, BlockingFunctionFailure};
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};
+        use fireemu_core_export::auth::{
+            AuthSettings, AuthSettingsRecord, BlockingAuthSelectionRecord,
+            BlockingAuthSettingsRecord,
+        };
+        use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+        use serde_json::Value;
+
+        struct FailingBlockingHook {
+            settings: Mutex<Value>,
+            update_calls: AtomicUsize,
+            restore_calls: AtomicUsize,
+        }
+
+        impl AuthBlockingHook for FailingBlockingHook {
+            fn invoke(
+                &self,
+                _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+                _user: &fireemu_core_auth::store::UserRecord,
+            ) -> Result<Value, BlockingFunctionFailure> {
+                Err(BlockingFunctionFailure::unhandled())
+            }
+
+            fn blocking_auth_settings(&self) -> Option<Value> {
+                self.settings.lock().ok().map(|settings| settings.clone())
+            }
+
+            fn blocking_auth_settings_snapshot(&self) -> Result<Option<Value>, String> {
+                Ok(self.blocking_auth_settings())
+            }
+
+            fn validate_blocking_auth_settings(&self, _settings: &Value) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn update_blocking_auth_settings(&self, _settings: &Value) -> Result<(), String> {
+                self.update_calls.fetch_add(1, Ordering::Relaxed);
+                Err("injected blocking settings update failure".to_owned())
+            }
+
+            fn restore_blocking_auth_settings_snapshot(
+                &self,
+                snapshot: &Value,
+            ) -> Result<(), String> {
+                self.restore_calls.fetch_add(1, Ordering::Relaxed);
+                *self
+                    .settings
+                    .lock()
+                    .map_err(|_| "settings poisoned".to_owned())? = snapshot.clone();
+                Ok(())
+            }
+        }
+
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let backend = Arc::new(LocalBackend::new(
+            Gateway {
+                enforce_limits: true,
+                ctx: PlanningContext {
+                    edition: FirestoreEdition::Standard,
+                    api_mode: FirestoreApiMode::Native,
+                    policy: IndexValidationPolicy::Production,
+                },
+                indexes: IndexSet::default(),
+            },
+            clock.clone(),
+            7,
+        ));
+        let default_store = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let auth = Arc::new(AuthRegistry::new("demo-app", default_store.clone()));
+        let original_config = ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: true,
+            disabled_user_signup: false,
+            disabled_user_deletion: true,
+        };
+        let original_uid = {
+            let mut store = default_store.lock().unwrap();
+            store.set_config(original_config);
+            store
+                .create_user(
+                    NewUser::email("before@example.test"),
+                    LogicalInstant::UNIX_EPOCH,
+                )
+                .unwrap()
+        };
+        let tenant_store = auth.ensure_tenant("demo-app", "existing").unwrap();
+        let original_tenant_config = ProjectAuthConfig {
+            allow_duplicate_emails: false,
+            enable_improved_email_privacy: true,
+            disabled_user_signup: true,
+            disabled_user_deletion: false,
+        };
+        let original_tenant_uid = {
+            let mut store = tenant_store.lock().unwrap();
+            store.set_config(original_tenant_config);
+            store
+                .create_user(
+                    NewUser::email("tenant@example.test"),
+                    LogicalInstant::UNIX_EPOCH,
+                )
+                .unwrap()
+        };
+        let original_tenant_metadata = auth.tenant_metadata("demo-app", "existing").unwrap();
+        let blocking = FailingBlockingHook {
+            settings: Mutex::new(serde_json::json!({
+                "triggers": {
+                    "beforeCreate": null,
+                    "beforeSignIn": null
+                }
+            })),
+            update_calls: AtomicUsize::new(0),
+            restore_calls: AtomicUsize::new(0),
+        };
+        let storage = Arc::new(fireemu_adapter_http::storage::StorageState {
+            store: Mutex::new(fireemu_core_storage::store::StorageState::new(9)),
+            clock: clock.clone(),
+            auth: auth.clone(),
+            tenancy: None,
+            rules: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::default()),
+            project: "demo-app".to_owned(),
+            events: None,
+            barrier: None,
+            firestore: None,
+            faults: None,
+            clock_observer: None,
+            app_check_policy: None,
+            admin_capability: None,
+            token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+        });
+        let endpoints = super::Endpoints {
+            backend: &backend,
+            auth: &auth,
+            storage: &storage,
+            clock: &clock,
+            project: "demo-app",
+            blocking: Some(&blocking),
+        };
+        let imported_blocking = BlockingAuthSettingsRecord {
+            before_create: BlockingAuthSelectionRecord::Disabled,
+            before_sign_in: BlockingAuthSelectionRecord::Disabled,
+            forwarding: None,
+        };
+        let prepared = super::PreparedAuth {
+            auth_settings: Some(AuthSettings {
+                project_id: "demo-app".to_owned(),
+                project: AuthSettingsRecord {
+                    config: None,
+                    quota: None,
+                    blocking: Some(imported_blocking),
+                },
+                namespaces: Vec::new(),
+            }),
+            ..super::PreparedAuth::default()
+        };
+
+        let error = super::apply_auth(&prepared, &endpoints).unwrap_err();
+
+        assert!(
+            error
+                .message
+                .contains("injected blocking settings update failure"),
+            "{error:?}"
+        );
+        assert_eq!(blocking.update_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(blocking.restore_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            blocking.blocking_auth_settings(),
+            Some(serde_json::json!({
+                "triggers": {
+                    "beforeCreate": null,
+                    "beforeSignIn": null
+                }
+            }))
+        );
+        let default = default_store.lock().unwrap();
+        assert_eq!(default.config(), original_config);
+        assert!(default.user_by_id(original_uid.as_str()).is_some());
+        assert_eq!(default.user_count(), 1);
+        drop(default);
+        assert_eq!(auth.tenants("demo-app"), vec!["existing".to_owned()]);
+        assert_eq!(
+            auth.tenant_metadata("demo-app", "existing"),
+            Some(original_tenant_metadata)
+        );
+        let tenant = tenant_store.lock().unwrap();
+        assert_eq!(tenant.config(), original_tenant_config);
+        assert!(tenant.user_by_id(original_tenant_uid.as_str()).is_some());
+        assert_eq!(tenant.user_count(), 1);
+    }
+
     #[test]
     fn auth_import_preflight_refuses_poisoned_tenant_before_default_mutation() {
         use fireemu_core_auth::mfa::TotpPolicy;

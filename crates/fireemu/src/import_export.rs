@@ -597,7 +597,10 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
                 )
             })?;
         candidate.clear();
-        candidate.set_config(auth.config_over(default_config));
+        candidate.set_config(tenant_config_from_settings(
+            settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, tenant),
+            auth.config_over(default_config),
+        ));
         let mut metadata =
             settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, tenant)
                 .and_then(|settings| settings.metadata.as_ref())
@@ -613,21 +616,31 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
         if let Some(settings) =
             settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, tenant)
         {
-            if let Some(config) = &settings.settings.config {
-                candidate.set_config(auth_config_from_settings(config, candidate.config()));
-                let config_patch = auth_namespace_config_patch(config);
-                if settings.config_is_explicit && !config_patch.is_empty() {
-                    imported_tenant_config_overrides.insert(tenant.clone(), config_patch);
+            if settings.config_is_explicit {
+                if let Some(config) = &settings.settings.config {
+                    let config_patch = auth_namespace_config_patch(config);
+                    if !config_patch.is_empty() {
+                        imported_tenant_config_overrides.insert(tenant.clone(), config_patch);
+                    }
+                    metadata.disabled_user_signup = config
+                        .disabled_user_signup
+                        .unwrap_or(metadata.disabled_user_signup);
+                    metadata.disabled_user_deletion = config
+                        .disabled_user_deletion
+                        .unwrap_or(metadata.disabled_user_deletion);
+                    metadata.enable_improved_email_privacy = config
+                        .enable_improved_email_privacy
+                        .unwrap_or(metadata.enable_improved_email_privacy);
                 }
-                metadata.disabled_user_signup = config
-                    .disabled_user_signup
-                    .unwrap_or(metadata.disabled_user_signup);
-                metadata.disabled_user_deletion = config
-                    .disabled_user_deletion
-                    .unwrap_or(metadata.disabled_user_deletion);
-                metadata.enable_improved_email_privacy = config
-                    .enable_improved_email_privacy
-                    .unwrap_or(metadata.enable_improved_email_privacy);
+            } else {
+                // Version 1 sidecars carried an effective tenant projection without recording
+                // whether it was an explicit override. Migrate that ambiguous projection as
+                // inherited: both the store and metadata must start from the imported project
+                // configuration so they cannot disagree until a later project update.
+                let inherited = candidate.config();
+                metadata.disabled_user_signup = inherited.disabled_user_signup;
+                metadata.disabled_user_deletion = inherited.disabled_user_deletion;
+                metadata.enable_improved_email_privacy = inherited.enable_improved_email_privacy;
             }
             if let Some(quota) = &settings.settings.quota {
                 candidate
@@ -2140,6 +2153,16 @@ fn auth_config_from_settings(config: &AuthConfig, current: ProjectAuthConfig) ->
             .disabled_user_deletion
             .unwrap_or(current.disabled_user_deletion),
     }
+}
+
+fn tenant_config_from_settings(
+    settings: Option<&AuthSettingsNamespace>,
+    current: ProjectAuthConfig,
+) -> ProjectAuthConfig {
+    settings
+        .filter(|settings| settings.config_is_explicit)
+        .and_then(|settings| settings.settings.config.as_ref())
+        .map_or(current, |config| auth_config_from_settings(config, current))
 }
 
 fn auth_namespace_config_patch(config: &AuthConfig) -> AuthNamespaceConfigPatch {
@@ -3701,11 +3724,11 @@ mod tests {
     use super::{
         civil_from_days, decode_base32, decode_base64, enforce_storage_object_count,
         imported_instant, may_overwrite, read_inside_budgeted, read_inside_limited,
-        rfc3339_instant, rfc3339_text, scan_import_tree, UnmanagedCopyBudget,
-        IMPORT_STORAGE_OBJECT_COUNT_LIMIT,
+        rfc3339_instant, rfc3339_text, scan_import_tree, tenant_config_from_settings,
+        UnmanagedCopyBudget, IMPORT_STORAGE_OBJECT_COUNT_LIMIT,
     };
     use fireemu_core_auth::store::{ProjectAuthConfig, TenantMetadata};
-    use fireemu_core_export::auth::AuthConfig;
+    use fireemu_core_export::auth::{AuthConfig, AuthSettingsNamespace, AuthSettingsRecord};
     use fireemu_core_types::time::{days_from_civil, LogicalInstant};
     use fireemu_export_publication::PublicationStage;
 
@@ -3903,6 +3926,48 @@ mod tests {
                 enable_improved_email_privacy: false,
                 disabled_user_signup: true,
                 disabled_user_deletion: true,
+            }
+        );
+    }
+
+    #[test]
+    fn legacy_tenant_settings_are_migrated_as_inherited_configuration() {
+        let current = ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: false,
+            disabled_user_signup: false,
+            disabled_user_deletion: true,
+        };
+        let legacy = AuthSettingsNamespace {
+            tenant_id: Some("tenant-a".to_owned()),
+            settings: AuthSettingsRecord {
+                config: Some(AuthConfig {
+                    allow_duplicate_emails: Some(false),
+                    enable_improved_email_privacy: Some(true),
+                    disabled_user_signup: Some(true),
+                    disabled_user_deletion: Some(false),
+                }),
+                quota: None,
+                blocking: None,
+            },
+            config_is_explicit: false,
+            metadata: None,
+        };
+        assert_eq!(
+            tenant_config_from_settings(Some(&legacy), current),
+            current,
+            "an unversioned effective projection must not become a frozen override"
+        );
+
+        let mut explicit = legacy;
+        explicit.config_is_explicit = true;
+        assert_eq!(
+            tenant_config_from_settings(Some(&explicit), current),
+            ProjectAuthConfig {
+                allow_duplicate_emails: false,
+                enable_improved_email_privacy: true,
+                disabled_user_signup: true,
+                disabled_user_deletion: false,
             }
         );
     }

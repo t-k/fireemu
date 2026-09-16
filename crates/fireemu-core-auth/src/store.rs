@@ -5999,6 +5999,8 @@ impl AuthRegistry {
         let Ok(mut overrides) = self.tenant_config_overrides.lock() else {
             return false;
         };
+        let previous = overrides.get(&key).copied().unwrap_or_default();
+        let merged = previous.merge(patch);
         if let Some(store) = existing {
             let Some(current_metadata) = metadata.get(&key).cloned() else {
                 return false;
@@ -6006,16 +6008,16 @@ impl AuthRegistry {
             let Ok(mut store) = store.lock() else {
                 return false;
             };
-            let next_config = patch.apply_to(store.config());
+            let next_config = merged.apply_to(store.config());
             let mut next_metadata = current_metadata;
-            patch.apply_to_metadata(&mut next_metadata);
+            merged.apply_to_metadata(&mut next_metadata);
             let Some(metadata) = metadata.get_mut(&key) else {
                 return false;
             };
             *metadata = next_metadata;
             store.set_config(next_config);
         }
-        overrides.insert(key, patch);
+        overrides.insert(key, merged);
         true
     }
 

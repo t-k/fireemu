@@ -94,6 +94,59 @@ fn project_config_patch_preserves_unselected_client_permission_fields() {
 }
 
 #[test]
+fn repeated_tenant_startup_overrides_preserve_each_selected_field() {
+    let registry = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app"))));
+    registry
+        .ensure_tenant("demo-app", "tenant-a")
+        .expect("tenant is created");
+
+    assert!(registry.register_tenant_config_override(
+        "demo-app",
+        "tenant-a",
+        AuthNamespaceConfigPatch {
+            disabled_user_signup: Some(true),
+            enable_improved_email_privacy: Some(true),
+            ..AuthNamespaceConfigPatch::default()
+        },
+    ));
+    assert!(registry.register_tenant_config_override(
+        "demo-app",
+        "tenant-a",
+        AuthNamespaceConfigPatch {
+            allow_duplicate_emails: Some(true),
+            ..AuthNamespaceConfigPatch::default()
+        },
+    ));
+
+    // A later project update reapplies the stored startup patch. Every field from both
+    // registrations must remain explicit; a second partial registration must not replace the
+    // first one.
+    registry
+        .patch_project_config(
+            "demo-app",
+            ProjectAuthConfigPatch {
+                disabled_user_signup: Some(false),
+                disabled_user_deletion: Some(true),
+                ..ProjectAuthConfigPatch::default()
+            },
+        )
+        .expect("project patch succeeds");
+
+    let tenant = registry
+        .tenant_store("demo-app", "tenant-a")
+        .expect("tenant store");
+    assert_eq!(
+        tenant.lock().expect("tenant store lock").config(),
+        ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: true,
+            disabled_user_signup: true,
+            disabled_user_deletion: true,
+        }
+    );
+}
+
+#[test]
 fn project_config_and_quota_patch_commit_under_one_namespace_gate() {
     let registry = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app"))));
     let quota = SignupQuotaConfig {

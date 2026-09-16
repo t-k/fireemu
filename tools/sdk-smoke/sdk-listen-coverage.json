@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "scope": "local-sdk-harness",
+  "sdkVersions": {
+    "firebase": "12.18.0",
+    "firebase-admin": "14.3.0",
+    "firebase-functions": "7.3.2",
+    "@firebase/rules-unit-testing": "5.0.2"
+  },
+  "production": "unobserved",
+  "scenarios": [
+    {
+      "id": "FS-LISTEN-SDK.node-pending-auth-switch",
+      "runner": "pending-switch.mjs",
+      "transport": "node-grpc",
+      "obligations": [
+        "offline cache metadata",
+        "pending write promise remains distinguishable",
+        "Auth A to B switch terminates the former listener",
+        "unsubscribe and terminal callback silence",
+        "A and B Rules authorization remains isolated",
+        "reconnect control resolves a B write"
+      ]
+    },
+    {
+      "id": "FS-LISTEN-SDK.browser-webchannel-reconnect",
+      "runner": "web/listen-reconnect.html",
+      "transport": "browser-webchannel",
+      "obligations": [
+        "initial and pending snapshot ordering",
+        "WebChannel disable and enable network reconnect",
+        "server acknowledgement clears pending metadata",
+        "unsubscribe suppresses later callbacks",
+        "sign-out denies the former user's server read"
+      ]
+    },
+    {
+      "id": "FS-LISTEN-SDK.listener-sequence-and-reset",
+      "runner": "conformance/src/corpus/firestore.mjs",
+      "transport": "node-grpc",
+      "obligations": [
+        "create update delete event ordering",
+        "resume observes current state",
+        "query document change ordering",
+        "RESET and stale resume token behavior"
+      ],
+      "resetControl": "crates/fireemu-adapter-grpc/tests/streams.rs"
+    },
+    {
+      "id": "AUTH-CONFIG-SDK.client-admin-policy",
+      "runner": "auth-config-sdk.mjs",
+      "transport": "firebase-auth-and-admin",
+      "obligations": [
+        "project email privacy configuration update",
+        "configuration dependent client error mapping",
+        "configuration restoration",
+        "Admin and client paths share the selected project"
+      ],
+      "adminControl": "crates/fireemu-adapter-http/tests/auth_flows.rs"
+    },
+    {
+      "id": "AUTH-FS-CROSS.auth-switch-rules-listen",
+      "runner": "pending-switch.mjs",
+      "transport": "firebase-auth-and-firestore",
+      "obligations": [
+        "Auth token switch changes Firestore Rules principal",
+        "former user's document remains unchanged after denied write",
+        "listener lifecycle follows the Auth transition",
+        "transaction retry control remains Admin SDK covered"
+      ],
+      "transactionControl": "conformance/src/corpus/firestore.mjs"
+    }
+  ]
+}

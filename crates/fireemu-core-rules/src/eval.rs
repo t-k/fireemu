@@ -5953,6 +5953,25 @@ fn contains_nested_numeric(value: &RulesValue) -> bool {
             matches!(item, RulesValue::Int(_) | RulesValue::Float(_))
                 || contains_nested_numeric(item)
         }),
+        RulesValue::PartialMap(fields) => fields.values().any(|item| {
+            matches!(item, RulesValue::Int(_) | RulesValue::Float(_))
+                || contains_nested_numeric(item)
+        }),
+        RulesValue::PartialMapExcluding { fields, excluded } => {
+            fields.values().any(|item| {
+                matches!(item, RulesValue::Int(_) | RulesValue::Float(_))
+                    || contains_nested_numeric(item)
+            }) || excluded.iter().any(|item| {
+                matches!(item, RulesValue::Int(_) | RulesValue::Float(_))
+                    || contains_nested_numeric(item)
+            })
+        }
+        RulesValue::PartialList(items) | RulesValue::PartialListAny(items) => {
+            items.iter().any(|item| {
+                matches!(item, RulesValue::Int(_) | RulesValue::Float(_))
+                    || contains_nested_numeric(item)
+            })
+        }
         _ => false,
     }
 }
@@ -5987,9 +6006,10 @@ fn haversine_metres(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_function_captures, collect_function_scopes, evaluate_request, function_key,
-        partial_value_definitely_differs, pattern_reachable_offsets, required_function_scope,
-        Decision, EvalError, FunctionBindings, MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES,
+        bind_function_captures, collect_function_scopes, contains_nested_numeric, evaluate_request,
+        function_key, partial_value_definitely_differs, pattern_reachable_offsets,
+        required_function_scope, Decision, EvalError, FunctionBindings,
+        MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES,
     };
     use crate::ast::PathSegment;
     use crate::eval::{Method, RequestContext, RulesService};
@@ -6154,6 +6174,36 @@ mod tests {
             &expected,
             &different_actual
         ));
+    }
+
+    #[test]
+    fn nested_partial_containers_are_representation_sensitive_for_query_proofs() {
+        let nested_partial_map = RulesValue::Map(BTreeMap::from([(
+            "payload".to_owned(),
+            RulesValue::PartialMap(BTreeMap::from([("score".to_owned(), RulesValue::Int(1))])),
+        )]));
+        assert!(contains_nested_numeric(&nested_partial_map));
+
+        let nested_partial_list = RulesValue::Map(BTreeMap::from([(
+            "payload".to_owned(),
+            RulesValue::PartialList(vec![RulesValue::Float(1.0)]),
+        )]));
+        assert!(contains_nested_numeric(&nested_partial_list));
+
+        let nested_partial_map_excluding = RulesValue::Map(BTreeMap::from([(
+            "payload".to_owned(),
+            RulesValue::PartialMapExcluding {
+                fields: BTreeMap::new(),
+                excluded: vec![RulesValue::Int(1)],
+            },
+        )]));
+        assert!(contains_nested_numeric(&nested_partial_map_excluding));
+
+        let nested_partial_list_any = RulesValue::Map(BTreeMap::from([(
+            "payload".to_owned(),
+            RulesValue::PartialListAny(vec![RulesValue::Float(1.0)]),
+        )]));
+        assert!(contains_nested_numeric(&nested_partial_list_any));
     }
 
     #[test]

@@ -365,3 +365,9 @@ The affected RegexAuthorization, RegexEvaluationCache and RulesetActivation Quin
 `COMPAT_VERIFIED` remains `0 / 14`. `FS-RULES` and `FS-QUERY-INDEX` still require declared production comparisons, while `FS-DATA-WRITE` remains the nearest closure candidate with production stream/transaction precedence and bounded request/operation-limit observations outstanding. The next document-size-boundary campaign remains `BLOCKED_OWNER` pending owner identity, permission reference, execution window, fresh nonce, current configuration/pricing acceptance, recovery owner and fixed collector/manifest/comparator bindings.
 
 Updated feature head: `8f456536cf6cec322bec3deb6e72eb1975f75d6e`.
+
+## Auth selector authorization closure (`05c8b263`)
+
+The bounded AUTH-D1 local condition is now covered through the real Identity Toolkit handler. End-user `accounts:update` requests that include `localId` together with privileged fields (`customAttributes`, `emailVerified`, `disableUser`, MFA and provider-link fields) are rejected without mutation or token issuance, while the owner credential path remains successful. The integrated `identity_toolkit` suite passed 85/85 and the adapter Clippy check passed.
+
+This closes only the local selector-authorization condition. Provider lifecycle, configured policy, credential/hash classes, tenant/blocking interactions and their required production comparisons remain open; `AUTH-ACCOUNT` is not promoted. Historical receipts and saved Auth comparisons are unchanged.

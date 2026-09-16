@@ -660,7 +660,7 @@ pub fn write_from_json(v: &Value) -> Result<pb::Write, JsonError> {
         .iter()
         .filter(|k| v.get(**k).is_some_and(|value| !value.is_null()))
         .count();
-    if operation_count != 1 {
+    if operation_count > 1 {
         // A oneof carries one member.
         return err("Payload isn't valid for request.");
     }

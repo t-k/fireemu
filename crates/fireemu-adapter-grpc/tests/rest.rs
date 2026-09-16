@@ -500,6 +500,88 @@ fn batch_write_rest_rejects_write_without_operation_before_dispatch() {
 }
 
 #[test]
+fn batch_write_rest_returns_status_for_empty_oneof_between_valid_writes() {
+    let s = state(None);
+    let first = "projects/demo-app/databases/(default)/documents/batch-shape/first";
+    let last = "projects/demo-app/databases/(default)/documents/batch-shape/last";
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({
+            "writes": [
+                {"update": {"name": first, "fields": {"v": {"integerValue": "1"}}}},
+                {},
+                {"update": {"name": last, "fields": {"v": {"integerValue": "2"}}}}
+            ]
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["status"][0], json!({}), "{body}");
+    assert_eq!(body["status"][1]["code"], 3, "{body}");
+    assert_eq!(body["status"][2], json!({}), "{body}");
+
+    for (path, value) in [("batch-shape/first", "1"), ("batch-shape/last", "2")] {
+        let (status, document) = call(&s, "GET", &format!("{DOCS}/{path}"), Value::Null);
+        assert_eq!(status, 200, "{document}");
+        assert_eq!(document["fields"]["v"]["integerValue"], value);
+    }
+}
+
+#[test]
+fn batch_write_rest_rejects_multiple_non_null_operations_before_dispatch() {
+    let s = state(None);
+    let target = "projects/demo-app/databases/(default)/documents/batch-shape/multiple";
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({
+            "writes": [
+                {"update": {"name": target, "fields": {"v": {"integerValue": "1"}}}, "delete": target}
+            ]
+        }),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+
+    let (status, after) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/batch-shape/multiple"),
+        Value::Null,
+    );
+    assert_eq!(status, 404, "multiple operations mutated state: {after}");
+}
+
+#[test]
+fn commit_rest_rejects_empty_oneof_write_before_mutation() {
+    let s = state(None);
+    let target = "projects/demo-app/databases/(default)/documents/commit-shape/target";
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({
+            "writes": [
+                {},
+                {"update": {"name": target, "fields": {"v": {"integerValue": "1"}}}}
+            ]
+        }),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+
+    let (status, after) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/commit-shape/target"),
+        Value::Null,
+    );
+    assert_eq!(status, 404, "an invalid commit mutated state: {after}");
+}
+
+#[test]
 fn batch_write_rest_treats_null_oneof_members_as_unset() {
     let null_members = ["update", "delete", "verify", "transform"];
     for (index, member) in null_members.iter().enumerate() {
@@ -511,7 +593,11 @@ fn batch_write_rest_treats_null_oneof_members_as_unset() {
             &format!("{DOCS}:batchWrite"),
             json!({"writes": [{*member: null}]}),
         );
-        assert_eq!(status, 400, "null-only {member} must be absent: {body}");
+        assert_eq!(
+            status, 200,
+            "null-only {member} is an unset operation: {body}"
+        );
+        assert_eq!(body["status"][0]["code"], 3, "{body}");
         let target_path = format!("/v1/{target}");
         let (status, after) = call(&s, "GET", &target_path, Value::Null);
         assert_eq!(status, 404, "null-only {member} mutated state: {after}");

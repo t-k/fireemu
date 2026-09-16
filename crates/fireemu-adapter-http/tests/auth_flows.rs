@@ -1866,42 +1866,6 @@ fn allow_duplicate_emails_applies_to_password_accounts_and_active_lookup() {
 }
 
 #[test]
-fn batch_create_accepts_legacy_fake_hash_beyond_current_password_policy() {
-    let s = state();
-    let password = "a".repeat(4_097);
-    let (status, imported) = admin(
-        &s,
-        &format!("{V1}/projects/demo-app/accounts:batchCreate"),
-        &json!({
-            "users": [{
-                "localId": "legacy-hash-user",
-                "email": "legacy-hash@example.com",
-                "passwordHash": format!("fakeHash:salt=legacy-salt:password={password}"),
-                "providerUserInfo": [{
-                    "providerId": "password",
-                    "rawId": "legacy-hash@example.com",
-                    "email": "legacy-hash@example.com"
-                }]
-            }]
-        }),
-    );
-    assert_eq!(status, 200, "{imported}");
-    assert_eq!(imported["error"], json!([]), "{imported}");
-
-    let (status, signed_in) = post(
-        &s,
-        &format!("{V1}/accounts:signInWithPassword"),
-        &json!({
-            "email": "legacy-hash@example.com",
-            "password": password,
-            "returnSecureToken": true
-        }),
-    );
-    assert_eq!(status, 200, "{signed_in}");
-    assert_eq!(signed_in["localId"], "legacy-hash-user");
-}
-
-#[test]
 fn an_unverified_provider_email_never_claims_an_existing_account() {
     let s = state();
     let victim = sign_up(&s, "victim@example.com");

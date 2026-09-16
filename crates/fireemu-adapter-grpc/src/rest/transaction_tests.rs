@@ -49,6 +49,62 @@ fn call(state: &RestState, method: &str, path: &str, body: Value) -> (u16, Value
 }
 
 #[test]
+fn transaction_token_cannot_be_replayed_against_another_database_over_rest() {
+    let state = state();
+    let (status, begun) = call(
+        &state,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readWrite": {}}}),
+    );
+    assert_eq!(status, 200, "{begun}");
+    let transaction = begun["transaction"]
+        .as_str()
+        .expect("transaction token")
+        .to_owned();
+
+    let other_docs = "/v1/projects/demo-app/databases/other/documents";
+    let target = "projects/demo-app/databases/other/documents/guard/should-not-write".to_owned();
+    let (status, refused) = call(
+        &state,
+        "POST",
+        &format!("{other_docs}:commit"),
+        json!({
+            "transaction": transaction,
+            "writes": [{"update": {"name": target}}]
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["status"], "INVALID_ARGUMENT");
+    assert_eq!(
+        refused["error"]["message"],
+        "transaction token does not belong to this database"
+    );
+
+    let (status, absent) = call(
+        &state,
+        "GET",
+        &format!("{other_docs}/guard/should-not-write"),
+        Value::Null,
+    );
+    assert_eq!(
+        status, 404,
+        "foreign transaction refusal must not write: {absent}"
+    );
+
+    let (status, rolled_back) = call(
+        &state,
+        "POST",
+        &format!("{DOCS}:rollback"),
+        json!({"transaction": transaction}),
+    );
+    assert_eq!(
+        status, 200,
+        "issuing database must retain ownership: {rolled_back}"
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn failed_rest_commit_requires_rollback_before_exact_subsequent_poststate() {
     let state = state();

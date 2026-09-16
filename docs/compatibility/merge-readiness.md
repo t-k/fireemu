@@ -21,6 +21,8 @@ This table fixes the scope of the `feat/compatibility-inventory` pull request. I
 
 New feature stages and adjacent cases do not enter class A unless they close a regression, security defect, review blocker or missing verification required by an item above.
 
+The active branch includes later local-only repair and oracle-preparation checkpoints after the historical `575db462` candidate. Those checkpoints are retained for the broader `IP-FS-PRODUCTION-COMPATIBILITY` goal and do not enter this earlier class-A acceptance scope unless they are explicitly added to this table with bounded evidence and limitations. Their presence does not promote a parent group or authorize production traffic.
+
 ## Fixed merge candidate
 
 The [final merge-readiness result](../../spec/compatibility/broad-runs/575db462-merge-ready-local.json) binds the technical candidate `575db462d134508ea79b8299b1fd86d2bddb07fd` to base `d987d5ddcc1374cee425f08d6d81915795fc2ab5`. It records the workspace, formal, compatibility, SDK, UI, distribution and scoped G0 evidence without treating local execution as production evidence or the candidate observation as result approval. The earlier [local candidates](../../spec/compatibility/broad-runs/feac4c51-merge-ready-local.json) remain unchanged.

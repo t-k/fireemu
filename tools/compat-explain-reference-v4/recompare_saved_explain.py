@@ -148,6 +148,11 @@ def _write_output_exclusively(output: Path, result: dict, input_paths: tuple[Pat
         os.fsync(stream.fileno())
 
 
+def _absolute_without_resolving(path: Path) -> Path:
+    """Normalize CLI paths for subprocesses while retaining symlink identity."""
+    return Path(os.path.abspath(os.fspath(path)))
+
+
 def recompare(
     production_path: Path,
     original_local_path: Path,
@@ -256,16 +261,20 @@ def main() -> int:
     parser.add_argument("--historical-commit", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    production = _absolute_without_resolving(args.production)
+    original_local = _absolute_without_resolving(args.original_local)
+    current_local = _absolute_without_resolving(args.current_local)
+    output = _absolute_without_resolving(args.output)
     result = recompare(
-        args.production,
-        args.original_local,
-        args.current_local,
+        production,
+        original_local,
+        current_local,
         args.historical_commit,
     )
     _write_output_exclusively(
-        args.output,
+        output,
         result,
-        (args.production, args.original_local, args.current_local),
+        (production, original_local, current_local),
     )
     print(
         json.dumps(

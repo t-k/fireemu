@@ -61,6 +61,18 @@ def _creation_version(name, fields, status, body):
     return body["updateTime"]
 
 
+def _document_version(value):
+    if not isinstance(value, str) or not re.fullmatch(
+        r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z", value
+    ):
+        raise ValueError("document write acknowledgement version is invalid")
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("document write acknowledgement version is invalid") from error
+    return value
+
+
 def request_headers(token, *, local, form):
     headers = {
         "Content-Type": "application/x-www-form-urlencoded"
@@ -183,6 +195,7 @@ class Adapter:
         self.credential = Credential()
         self.last_request = 0
         self.documents = set()
+        self.preflight_absent = set()
         self.accounts = {}
         self.token_roles = {}
         self.last_observation = None
@@ -388,6 +401,7 @@ class Adapter:
                     {"kind": "document-attempt", "name": name, "preflightAbsent": True}
                 )
                 self.documents.add(name)
+                self.preflight_absent.add(name)
             for seed in program["seed"]:
                 status, body = self.doc(
                     seed["path"].removeprefix("/v1/"),
@@ -420,6 +434,8 @@ class Adapter:
                     method=step["method"],
                     privileged=True,
                 )
+                self._record_document_writes(step, status, result)
+                self._record_document_read(step, status, result)
                 self.rows.append(
                     {
                         "id": "firestore:" + program["id"] + "#" + step["id"],
@@ -433,6 +449,82 @@ class Adapter:
                         "observation": self.normal_observation("firestore"),
                     }
                 )
+
+    def _record_document_writes(self, step, status, result):
+        """Bind every successful commit write to its acknowledged document version."""
+        if (
+            status != 200
+            or step["method"] != "POST"
+            or not step["path"].split("?", 1)[0].endswith(":commit")
+        ):
+            return
+        body = step.get("body")
+        writes = body.get("writes") if isinstance(body, dict) else None
+        results = result.get("writeResults") if isinstance(result, dict) else None
+        if not isinstance(writes, list) or not isinstance(results, list) or len(writes) != len(results):
+            raise ValueError("document commit acknowledgement incomplete")
+
+        entries = []
+        for write, write_result in zip(writes, results, strict=True):
+            if not isinstance(write, dict) or not isinstance(write_result, dict):
+                raise ValueError(  # noqa: TRY004 -- malformed wire data is a protocol failure
+                    "document commit acknowledgement malformed"
+                )
+            if isinstance(write.get("update"), dict):
+                document = write["update"].get("name")
+                kind = "update"
+                fields = write["update"].get("fields")
+                complete_fields = (
+                    isinstance(fields, dict)
+                    and "updateMask" not in write
+                    and "updateTransforms" not in write
+                )
+            elif isinstance(write.get("transform"), dict):
+                document = write["transform"].get("document")
+                kind = "transform"
+                fields = None
+                complete_fields = False
+            elif isinstance(write.get("delete"), str):
+                document = write["delete"]
+                kind = "delete"
+                fields = None
+                complete_fields = False
+            else:
+                continue
+            if document not in self.documents:
+                raise ValueError("document write target not journaled")
+            if kind == "delete":
+                version = None
+            else:
+                version = _document_version(write_result.get("updateTime"))
+            entries.append((document, kind, version, fields if complete_fields else None))
+
+        for document, kind, version, fields in entries:
+            if kind == "delete":
+                self.creation_proofs.pop(document, None)
+                continue
+            if document not in self.creation_proofs and document not in self.preflight_absent:
+                raise ValueError("document write ownership is unconfirmed")
+            self.creation_proofs[document] = {
+                "name": document,
+                "updateTime": version,
+                "fieldsDigest": digest(fields) if fields is not None else None,
+                "responseDigest": digest(result),
+            }
+
+    def _record_document_read(self, step, status, result):
+        if status != 200 or step["method"] != "GET":
+            return
+        document = step["path"].split("?", 1)[0].removeprefix("/v1/")
+        proof = self.creation_proofs.get(document)
+        if (
+            proof is not None
+            and isinstance(result, dict)
+            and result.get("name") == document
+            and result.get("updateTime") == proof["updateTime"]
+            and isinstance(result.get("fields"), dict)
+        ):
+            proof["fieldsDigest"] = digest(result["fields"])
 
     def names(self):
         from batch_pair import namespace
@@ -629,6 +721,9 @@ class Adapter:
                         proof is None
                         or body.get("name") != name
                         or body.get("updateTime") != proof["updateTime"]
+                        or not isinstance(proof.get("fieldsDigest"), str)
+                        or not isinstance(body.get("fields"), dict)
+                        or digest(body["fields"]) != proof["fieldsDigest"]
                     ):
                         raise ValueError("document readback mismatch")
                     query = "?" + urllib.parse.urlencode(

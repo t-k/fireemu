@@ -266,6 +266,241 @@ def test_conditional_seed_race_keeps_existing_document_unowned(tmp_path, monkeyp
     assert all(method != "DELETE" for method, _url, _body in calls)
 
 
+def test_cleanup_never_deletes_same_version_document_with_changed_fields(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as a
+
+    c = contract()
+    name = "projects/demo-firestore-probe/databases/(default)/documents/broad_runs/owned/tf/doc"
+    fields = {"marker": {"stringValue": "owned"}}
+    foreign = {"marker": {"stringValue": "foreign"}}
+    calls = []
+
+    def fake_wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
+        calls.append((method, url, body))
+        if method == "GET" and len(calls) == 1:
+            return 404, {"error": {"status": "NOT_FOUND"}}, "application/json"
+        if method == "PATCH":
+            return 200, {
+                "name": name,
+                "fields": fields,
+                "updateTime": "2026-09-16T00:00:00Z",
+            }, "application/json"
+        if method == "GET":
+            return 200, {
+                "name": name,
+                "fields": foreign,
+                "updateTime": "2026-09-16T00:00:00Z",
+            }, "application/json"
+        pytest.fail("same-version field replacement must never receive DELETE")
+
+    run = a.Adapter(
+        c.candidate(),
+        "a" * 32,
+        tmp_path / "run",
+        local_origins={
+            "auth": "http://127.0.0.1:12345",
+            "firestore": "http://127.0.0.1:12346",
+        },
+    )
+    run.compiled = [{
+        "parent": name.rsplit("/tf/doc", 1)[0],
+        "targets": [name],
+        "seed": [{"path": "/v1/" + name, "fields": fields}],
+        "steps": [],
+    }]
+    monkeypatch.setattr(a, "wire", fake_wire)
+
+    run.firestore()
+    run.cleanup()
+
+    assert calls[-1][0] == "GET"
+    assert run.unrecovered == [{"kind": "document", "name": name}]
+
+
+def test_firestore_proves_and_cleans_up_every_successful_commit_document(
+    tmp_path, monkeypatch
+):
+    from urllib.parse import quote
+
+    import batch_adapter as a
+
+    c = contract()
+    base = "projects/demo-firestore-probe/databases/(default)/documents/broad_runs/owned/tf"
+    names = [base + "/" + label for label in ("doc", "extrema", "created", "sat", "nan")]
+    seed_fields = {"marker": {"stringValue": "seed"}}
+    writes = [
+        {"update": {"name": names[0], "fields": {"marker": {"stringValue": "mutated"}}}},
+        {"update": {"name": names[1], "fields": {"marker": {"stringValue": "extrema"}}}},
+        {"transform": {"document": names[2], "fieldTransforms": [{"fieldPath": "count", "increment": {"integerValue": "1"}}]}},
+        {"update": {"name": names[3], "fields": {"marker": {"stringValue": "sat"}}}},
+        {"update": {"name": names[4], "fields": {"marker": {"stringValue": "nan"}}}},
+    ]
+    versions = {name: f"2026-09-16T00:00:{index + 1:02d}Z" for index, name in enumerate(names)}
+    created_documents = {
+        names[0]: {"marker": {"stringValue": "mutated"}},
+        names[1]: {"marker": {"stringValue": "extrema"}},
+        names[2]: {"count": {"integerValue": "1"}},
+        names[3]: {"marker": {"stringValue": "sat"}},
+        names[4]: {"marker": {"stringValue": "nan"}},
+    }
+    current = {}
+    calls = []
+
+    def fake_wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
+        calls.append((method, url, body))
+        path = url.split("/v1/", 1)[-1]
+        if method == "GET" and path in names and path not in current:
+            return 404, {"error": {"status": "NOT_FOUND"}}, "application/json"
+        if method == "GET" and path in names:
+            return 200, {
+                "name": path,
+                "fields": current[path],
+                "updateTime": versions[path],
+            }, "application/json"
+        if method == "PATCH":
+            current[names[0]] = seed_fields
+            versions[names[0]] = "2026-09-16T00:00:00Z"
+            return 200, {
+                "name": names[0],
+                "fields": seed_fields,
+                "updateTime": versions[names[0]],
+            }, "application/json"
+        if method == "POST" and path.endswith(":commit"):
+            current.update(created_documents)
+            return 200, {
+                "writeResults": [{"updateTime": versions[name]} for name in names],
+                "commitTime": "2026-09-16T00:01:00Z",
+            }, "application/json"
+        if method == "DELETE":
+            name = path.split("?", 1)[0]
+            assert name in names
+            assert "currentDocument.updateTime=" + quote(versions[name], safe="") in path
+            current.pop(name, None)
+            return 200, {}, "application/json"
+        pytest.fail(f"unexpected request: {method} {url}")
+
+    run = a.Adapter(
+        c.candidate(),
+        "a" * 32,
+        tmp_path / "run",
+        local_origins={
+            "auth": "http://127.0.0.1:12345",
+            "firestore": "http://127.0.0.1:12346",
+        },
+    )
+    run.compiled = [{
+        "id": "owned-documents",
+        "parent": base,
+        "targets": names,
+        "seed": [{"path": "/v1/" + names[0], "fields": seed_fields}],
+        "steps": [
+            {
+                "id": "create-and-mutate",
+                "method": "POST",
+                "path": "/v1/" + base + ":commit",
+                "body": {"writes": writes},
+            },
+            *[
+                {"id": "read-" + name.rsplit("/", 1)[-1], "method": "GET", "path": "/v1/" + name}
+                for name in names
+            ],
+        ],
+    }]
+    monkeypatch.setattr(a, "wire", fake_wire)
+
+    run.firestore()
+    assert set(run.creation_proofs) == set(names)
+    assert all(proof["fieldsDigest"] for proof in run.creation_proofs.values())
+    run.cleanup()
+
+    assert run.unrecovered == []
+    assert not current
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_failed_commit_keeps_creation_uncertain_without_unsafe_cleanup(
+    tmp_path, monkeypatch, partial
+):
+    import batch_adapter as a
+
+    c = contract()
+    base = "projects/demo-firestore-probe/databases/(default)/documents/broad_runs/owned/tf"
+    seed = base + "/seed"
+    candidate = base + "/candidate"
+    fields = {"marker": {"stringValue": "owned"}}
+    foreign = {"marker": {"stringValue": "unknown"}}
+    current = {}
+    calls = []
+
+    def fake_wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
+        calls.append((method, url, body))
+        path = url.split("/v1/", 1)[-1]
+        if method == "GET" and path.split("?", 1)[0] in (seed, candidate):
+            name = path.split("?", 1)[0]
+            if name not in current:
+                return 404, {"error": {"status": "NOT_FOUND"}}, "application/json"
+            return 200, {
+                "name": name,
+                "fields": current[name],
+                "updateTime": "2026-09-16T00:00:00Z",
+            }, "application/json"
+        if method == "PATCH":
+            current[seed] = fields
+            return 200, {
+                "name": seed,
+                "fields": fields,
+                "updateTime": "2026-09-16T00:00:00Z",
+            }, "application/json"
+        if method == "POST" and path.endswith(":commit"):
+            if partial:
+                current[candidate] = foreign
+            return 400, {"error": {"status": "FAILED_PRECONDITION"}}, "application/json"
+        if method == "DELETE":
+            name = path.split("?", 1)[0]
+            assert name == seed
+            current.pop(name, None)
+            return 200, {}, "application/json"
+        pytest.fail(f"unexpected request: {method} {url}")
+
+    run = a.Adapter(
+        c.candidate(),
+        "a" * 32,
+        tmp_path / "run",
+        local_origins={
+            "auth": "http://127.0.0.1:12345",
+            "firestore": "http://127.0.0.1:12346",
+        },
+    )
+    run.compiled = [{
+        "id": "failed-commit",
+        "parent": base,
+        "targets": [seed, candidate],
+        "seed": [{"path": "/v1/" + seed, "fields": fields}],
+        "steps": [{
+            "id": "failed-create",
+            "method": "POST",
+            "path": "/v1/" + base + ":commit",
+            "body": {"writes": [{"update": {"name": candidate, "fields": foreign}}]},
+        }],
+    }]
+    monkeypatch.setattr(a, "wire", fake_wire)
+
+    run.firestore()
+
+    assert candidate not in run.creation_proofs
+    run.cleanup()
+    if partial:
+        assert {entry["name"] for entry in run.unrecovered} == {candidate}
+        assert all(
+            method != "DELETE" or seed in url
+            for method, url, _body in calls
+        )
+    else:
+        assert run.unrecovered == []
+
+
 def test_remote_adapter_cannot_be_constructed_without_permission(tmp_path):
     import batch_adapter as a
 

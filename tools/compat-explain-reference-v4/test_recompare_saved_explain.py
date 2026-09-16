@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-
 SCRIPT = Path(__file__).with_name("recompare_saved_explain.py")
 SPEC = importlib.util.spec_from_file_location("recompare_saved_explain", SCRIPT)
 assert SPEC and SPEC.loader
@@ -128,3 +127,53 @@ def test_main_preserves_inputs_when_comparison_fails(monkeypatch, inputs, tmp_pa
 
     assert not output.exists()
     assert {name: path.read_bytes() for name, path in inputs.items()} == before
+
+
+def test_main_normalizes_relative_input_paths_without_resolving_symlinks(
+    monkeypatch, inputs, tmp_path
+):
+    captured = {}
+
+    def fake_recompare(production, original_local, current_local, historical_commit):
+        captured.update(
+            production=production,
+            original_local=original_local,
+            current_local=current_local,
+            historical_commit=historical_commit,
+        )
+        return {"compatibility": "match", "rows": []}
+
+    monkeypatch.setattr(module, "recompare", fake_recompare)
+    monkeypatch.chdir(tmp_path)
+    for name in ("production", "original-local", "current-local"):
+        (tmp_path / f"{name}.json").write_bytes(inputs[name].read_bytes())
+
+    assert (
+        invoke_main(
+            monkeypatch,
+            production=Path("production.json"),
+            original_local=Path("original-local.json"),
+            current_local=Path("current-local.json"),
+            output=Path("result.json"),
+        )
+        == 0
+    )
+    assert all(path.is_absolute() for path in captured.values() if isinstance(path, Path))
+    assert all(not path.is_symlink() for path in captured.values() if isinstance(path, Path))
+
+
+def test_main_keeps_relative_symlink_input_rejected(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "production-target.json").write_text("{}")
+    (tmp_path / "production.json").symlink_to(tmp_path / "production-target.json")
+    (tmp_path / "original-local.json").write_text("{}")
+    (tmp_path / "current-local.json").write_text("{}")
+
+    with pytest.raises(ValueError, match="regular JSON file required"):
+        invoke_main(
+            monkeypatch,
+            production=Path("production.json"),
+            original_local=Path("original-local.json"),
+            current_local=Path("current-local.json"),
+            output=Path("result.json"),
+        )

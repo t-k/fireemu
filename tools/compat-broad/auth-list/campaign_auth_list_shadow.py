@@ -269,6 +269,24 @@ def bind(gate, bindings, operation, body):
         gate.bind("pagedToken", body["nextPageToken"])
 
 
+def validate_auth_lookup(body, expected_uid: str) -> None:
+    """Require a successful lookup for the account bound by this run."""
+    if (
+        not isinstance(body, dict)
+        or not isinstance(body.get("users"), list)
+        or len(body["users"]) != 1
+        or not isinstance(body["users"][0], dict)
+        or body["users"][0].get("localId") != expected_uid
+    ):
+        raise ValueError("owned account lookup did not return the bound user")
+
+
+def validate_deleted_lookup(body) -> None:
+    """Require the explicit empty-users acknowledgement after deletion."""
+    if not isinstance(body, dict) or body.get("users") != []:
+        raise ValueError("owned account absence unconfirmed")
+
+
 def validate_list_observations(rows, nonce: str) -> None:
     """Validate the list case outcomes and the intentionally missing parent."""
     root = "projects/demo-firestore-probe/databases/(default)/documents"
@@ -563,6 +581,10 @@ def _real_child(output: Path, nonce: str) -> None:
         if declared["operationType"] == "auth-refresh":
             if body.get("user_id") != bindings[declared["resource"] + "Uid"]:
                 raise ValueError("refresh returned a different UID")
+        if declared["operationType"] == "auth-lookup":
+            if status != 200:
+                raise ValueError("owned account lookup failed")
+            validate_auth_lookup(body, bindings[declared["resource"] + "Uid"])
 
     validate_list_observations(rows, nonce)
 
@@ -598,12 +620,10 @@ def _real_child(output: Path, nonce: str) -> None:
             versions[operation["resource"]] = body.get("updateTime", "")
         if operation["operationType"] == "auth-delete" and status != 200:
             raise ValueError("owned account deletion failed")
-        if operation["operationType"] == "auth-lookup" and (
-            status != 200
-            or not isinstance(body, dict)
-            or body.get("users", []) != []
-        ):
-            raise ValueError("owned account absence unconfirmed")
+        if operation["operationType"] == "auth-lookup":
+            if status != 200:
+                raise ValueError("owned account absence unconfirmed")
+            validate_deleted_lookup(body)
 
     gate.finish()
     state = gate.snapshot()

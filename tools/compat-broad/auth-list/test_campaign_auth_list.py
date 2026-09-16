@@ -245,6 +245,31 @@ def test_list_observation_validation_requires_expected_parent_and_pages():
             )
 
 
+def test_auth_lookup_validation_rejects_structured_error_and_wrong_shape():
+    validate = campaign_auth_list_shadow.validate_auth_lookup
+    with pytest.raises(ValueError):
+        validate({"error": {"status": "INVALID_ARGUMENT"}}, "uid-owned")
+    with pytest.raises(ValueError):
+        validate({"users": []}, "uid-owned")
+    with pytest.raises(ValueError):
+        validate({"users": [{"localId": "other"}]}, "uid-owned")
+    validate(
+        {"users": [{"localId": "uid-owned", "email": "owned@example.invalid"}]},
+        "uid-owned",
+    )
+
+
+def test_deleted_lookup_validation_requires_explicit_empty_users():
+    validate = campaign_auth_list_shadow.validate_deleted_lookup
+    with pytest.raises(ValueError):
+        validate({"error": {"status": "INTERNAL"}})
+    with pytest.raises(ValueError):
+        validate({})
+    with pytest.raises(ValueError):
+        validate({"users": [{"localId": "still-present"}]})
+    validate({"users": []})
+
+
 @pytest.mark.parametrize(
     "failure", ["auth-refusal", "timeout", "budget", "malformed", "non-json"]
 )

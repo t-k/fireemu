@@ -94,7 +94,17 @@ def child(output: Path, nonce: str) -> None:
     save(
         output / "cases.json",
         {
-            "recordingComplete": complete,
+            # Preserve each receipt invariant independently.  The supervisor
+            # uses stateValidation to distinguish a complete observation from
+            # an incomplete handoff, while semantic mismatches remain eligible
+            # for comparison when recording and cleanup are complete.
+            "recordingComplete": receipt["recordingComplete"],
+            "collectionComplete": receipt["collectionComplete"],
+            "cleanupComplete": receipt["cleanupComplete"],
+            "stateValidation": receipt["stateValidation"],
+            "stateVerified": receipt["stateVerified"],
+            "lifecycleStateVerified": receipt["lifecycleStateVerified"],
+            "safety": receipt["safety"],
             "cases": [
                 {"id": row["id"], "status": "observed", "family": "query-explain"}
                 for row in receipt["rows"]

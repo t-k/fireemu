@@ -4444,6 +4444,7 @@ fn request_may_create_end_user(
 /// name their project; client SDK routes of a session project are recognised by the API
 /// key the session declared, by the audience of the ID token they carry, or by the store
 /// that issued their refresh token; everything else is the default project's.
+#[allow(clippy::too_many_lines)]
 fn select_store(
     state: &AuthState,
     path: &str,
@@ -4453,12 +4454,10 @@ fn select_store(
 ) -> Result<Arc<Mutex<AuthStore>>, JsonResponse> {
     let (api_key, query_tenant) = query_selectors(query);
     let body_tenant = str_field(body, "tenantId");
-    if body_tenant
-        .as_deref()
-        .zip(query_tenant.as_deref())
-        .is_some_and(|(body, query)| body != query)
-    {
-        return Err(error(400, "TENANT_ID_MISMATCH"));
+    if let Some((body_tenant, query_tenant)) = body_tenant.as_ref().zip(query_tenant.as_ref()) {
+        if body_tenant != query_tenant {
+            return Err(error(400, "TENANT_ID_MISMATCH"));
+        }
     }
     let Some(registry) = &state.registry else {
         return Ok(state.store.clone());
@@ -4621,6 +4620,7 @@ fn custom_token_uid(body: &Value) -> Option<String> {
 /// `accounts:signUp`: a password user when an email or a password is present (both are then
 /// required, the email first, as the official emulator checks them), otherwise an anonymous
 /// user. `localId` is an Admin-only parameter on this route.
+#[allow(clippy::too_many_lines)]
 fn sign_up(
     store: &mut AuthStore,
     body: &Value,

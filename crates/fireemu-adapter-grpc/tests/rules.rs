@@ -1813,6 +1813,29 @@ service cloud.firestore {
         tonic::Code::PermissionDenied
     );
 
+    // A nested RangeExcluding value can prove inequality when the concrete
+    // candidate is one of the excluded values, even though it lies in range.
+    let nested_range_excluding = field_filter("meta.score", Op::GreaterThan, int(10));
+    let nested_not_equal = field_filter("meta.score", Op::NotEqual, int(20));
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} { allow list: if resource.data.meta != { score: 20 }; }
+  }
+}",
+        )
+        .unwrap();
+    let range_excluding = h
+        .client
+        .run_query(with_bearer(
+            query(vec![nested_range_excluding, nested_not_equal]),
+            &alice_token,
+        ))
+        .await;
+    assert!(range_excluding.is_ok(), "{range_excluding:?}");
+
     h.handle.abort();
 }
 

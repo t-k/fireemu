@@ -1233,7 +1233,16 @@ fn set_nested_exclusion(
         let entry = map
             .entry(segment.clone())
             .or_insert_with(|| RulesValue::PartialMap(BTreeMap::new()));
-        if !matches!(
+        if let RulesValue::NotOneOf(excluded) = entry {
+            // A parent exclusion may be encountered before a nested exclusion (the
+            // BTreeMap ordering is parent-first). Preserve it while introducing the
+            // partial child map instead of replacing the parent's constraint.
+            let parent_excluded = std::mem::take(excluded);
+            *entry = RulesValue::PartialMapExcluding {
+                fields: BTreeMap::new(),
+                excluded: parent_excluded,
+            };
+        } else if !matches!(
             entry,
             RulesValue::PartialMap(_) | RulesValue::PartialMapExcluding { .. } | RulesValue::Map(_)
         ) {
@@ -1493,5 +1502,57 @@ pub fn same_epoch(
         Err(Status::unavailable(
             "the session was reset while the request was in flight; retry against the new session",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::abstract_resource;
+    use fireemu_core_firestore::field_path::FieldPath;
+    use fireemu_core_firestore::query::{FieldOp, FilterExpr};
+    use fireemu_core_firestore::value::Value;
+    use fireemu_core_rules::value::RulesValue;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn abstract_resource_retains_parent_exclusion_when_nested_exclusion_is_added() {
+        let parent = FieldPath::parse("meta").unwrap();
+        let nested = FieldPath::parse("meta.score").unwrap();
+        let mut excluded_map = BTreeMap::new();
+        excluded_map.insert("score".to_owned(), Value::Integer(6));
+        let resource = abstract_resource(&[
+            FilterExpr::Field {
+                field: parent,
+                op: FieldOp::NotEqual,
+                value: Value::Map(excluded_map),
+            },
+            FilterExpr::Field {
+                field: nested,
+                op: FieldOp::NotEqual,
+                value: Value::Integer(5),
+            },
+        ]);
+
+        let RulesValue::Map(resource) = resource else {
+            panic!("resource should be a map");
+        };
+        let RulesValue::PartialMap(data) = resource.get("data").expect("resource data") else {
+            panic!("resource data should be a partial map");
+        };
+        let RulesValue::PartialMapExcluding { fields, excluded } =
+            data.get("meta").expect("meta constraint")
+        else {
+            panic!("parent exclusion must be retained alongside nested constraints");
+        };
+        assert_eq!(
+            fields.get("score"),
+            Some(&RulesValue::NotOneOf(vec![RulesValue::Int(5)]))
+        );
+        assert_eq!(excluded.len(), 1);
+        assert!(matches!(
+            &excluded[0],
+            RulesValue::Map(values)
+                if values.get("score") == Some(&RulesValue::Int(6))
+        ));
     }
 }

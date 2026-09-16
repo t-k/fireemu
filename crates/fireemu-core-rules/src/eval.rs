@@ -2502,8 +2502,14 @@ fn partial_value_definitely_differs(expected: &RulesValue, actual: &RulesValue) 
         return false;
     }
     match expected {
-        RulesValue::Range(range) | RulesValue::RangeExcluding { range, .. } => {
+        RulesValue::Range(range) => {
             range_relation(range, BinaryOp::Eq, actual).is_ok_and(|equal| !equal)
+        }
+        RulesValue::RangeExcluding { range, excluded } => {
+            excluded
+                .iter()
+                .any(|member| !undetermined(member) && values_equal(member, actual))
+                || range_relation(range, BinaryOp::Eq, actual).is_ok_and(|equal| !equal)
         }
         RulesValue::OneOf(members) => members
             .iter()
@@ -3314,12 +3320,13 @@ fn haversine_metres(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_function_captures, collect_function_scopes, function_key, pattern_reachable_offsets,
-        required_function_scope, EvalError, FunctionBindings,
-        MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES,
+        bind_function_captures, collect_function_scopes, function_key,
+        partial_value_definitely_differs, pattern_reachable_offsets, required_function_scope,
+        EvalError, FunctionBindings, MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES,
     };
     use crate::ast::PathSegment;
     use crate::parse::parse_ruleset;
+    use crate::value::{RangeBound, RulesValue, ValueRange};
     use std::collections::BTreeMap;
     use std::fmt::Write as _;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -3418,5 +3425,28 @@ mod tests {
         }
         assert_eq!(cache.len(), MATCH_PATH_REACHABILITY_CACHE_MAX_ENTRIES);
         assert!(work.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn range_excluding_proves_difference_for_an_excluded_concrete_value() {
+        let constrained = RulesValue::RangeExcluding {
+            range: ValueRange {
+                lower: Some(RangeBound {
+                    value: Box::new(RulesValue::Int(10)),
+                    inclusive: false,
+                }),
+                upper: None,
+            },
+            excluded: vec![RulesValue::Int(20)],
+        };
+
+        assert!(partial_value_definitely_differs(
+            &constrained,
+            &RulesValue::Int(20)
+        ));
+        assert!(!partial_value_definitely_differs(
+            &constrained,
+            &RulesValue::Int(15)
+        ));
     }
 }

@@ -448,7 +448,7 @@ pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), Artifa
     }
 
     if let Some(auth) = prepared.auth.take() {
-        apply_auth(auth, endpoints)?;
+        apply_auth(&auth, endpoints)?;
     }
 
     if let Some((objects, _)) = prepared.storage.take() {
@@ -476,7 +476,7 @@ pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), Artifa
 }
 
 #[allow(clippy::too_many_lines)]
-fn apply_auth(auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactError> {
+fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactError> {
     let policy_path = PathBuf::from(AUTH_PATH).join(PASSWORD_POLICIES_FILE);
     let mut current_tenant_policies = BTreeMap::new();
     for tenant in endpoints.auth.tenants(endpoints.project) {

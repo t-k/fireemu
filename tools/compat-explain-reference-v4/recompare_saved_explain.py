@@ -33,6 +33,24 @@ def _read_object(path: Path) -> dict:
     return value
 
 
+def _validate_historical_commit_binding(
+    *,
+    checkout_commit: str,
+    production_execution_commit: str,
+    original_local_execution_commit: str,
+) -> None:
+    """Require both frozen receipts to identify the selected checkout."""
+    for label, execution_commit in (
+        ("production", production_execution_commit),
+        ("original local", original_local_execution_commit),
+    ):
+        if execution_commit != checkout_commit:
+            raise ValueError(
+                f"historical {label} executionCommit does not match checkout "
+                f"{checkout_commit}"
+            )
+
+
 def _validate_historical_receipts(
     production_path: Path, original_local_path: Path, historical_commit: str
 ) -> dict:
@@ -49,6 +67,9 @@ def _validate_historical_receipts(
             check=True,
             cwd=checkout,
         )
+        checkout_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=checkout, text=True
+        ).strip()
         helper = r'''
 import json
 import sys
@@ -97,7 +118,16 @@ print(json.dumps({
                 "historical receipt validation failed: "
                 + (completed.stderr.strip() or completed.stdout.strip())
             )
-        return json.loads(completed.stdout)
+        historical = json.loads(completed.stdout)
+        _validate_historical_commit_binding(
+            checkout_commit=checkout_commit,
+            production_execution_commit=historical["production"]["executionCommit"],
+            original_local_execution_commit=historical["originalLocal"][
+                "executionCommit"
+            ],
+        )
+        historical["historicalCollectorCommit"] = checkout_commit
+        return historical
 
 
 def _normalization_names(nonce: str) -> dict:

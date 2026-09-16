@@ -51,6 +51,30 @@ def install_successful_recompare(monkeypatch):
     )
 
 
+def test_historical_commit_binding_accepts_matching_receipts():
+    commit = "a" * 40
+
+    assert (
+        module._validate_historical_commit_binding(
+            checkout_commit=commit,
+            production_execution_commit=commit,
+            original_local_execution_commit=commit,
+        )
+        is None
+    )
+
+
+def test_historical_commit_binding_rejects_mismatched_receipt():
+    checkout_commit = "a" * 40
+
+    with pytest.raises(ValueError, match="production executionCommit"):
+        module._validate_historical_commit_binding(
+            checkout_commit=checkout_commit,
+            production_execution_commit="b" * 40,
+            original_local_execution_commit=checkout_commit,
+        )
+
+
 @pytest.mark.parametrize("target", ["existing", "production", "symlink", "hardlink"])
 def test_main_rejects_output_that_can_replace_an_input_or_existing_inode(
     monkeypatch, inputs, tmp_path, target

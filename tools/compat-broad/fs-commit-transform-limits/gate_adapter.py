@@ -67,6 +67,7 @@ def _load(name: str, path: Path):
         if _archive_origin() != _ARCHIVE:
             raise ImportError("archive digest changed")
         allowed = {
+            ("transform_compiler", HERE / "transform_compiler.py"): "transform_compiler",
             ("_commit_gate_production_bridge", HERE / "commit_production_bridge.py"): "commit_production_bridge",
             ("_commit_gate_limits_bridge", HERE / "production_bridge.py"): "production_bridge",
             ("_commit_credential_preparation", ROOT / "tools/compat-broad/fs-write-txn/credential_prep.py"): "credential_prep",

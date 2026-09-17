@@ -51,3 +51,46 @@ def test_unexpected_negative_success_does_not_mean_collection_failure():
     assert writes_safe(rows, plan) is True
     rows[10]["body"] = {**rows[10]["body"], "updateTime": "2026-09-17T00:00:01Z"}
     assert writes_safe(rows, plan) is False
+
+
+def test_failed_recovery_admission_sends_nothing_and_retains_incomplete_journal(
+    tmp_path,
+):
+    from collector import collect
+    from shared_gate import Gate, create
+
+    plan = compile_limits_plan("demo-test", "(default)", "c" * 32)
+    create(tmp_path / "gate", plan["localGatePlan"])
+    gate = Gate(tmp_path / "gate", "limits")
+    gate.claim()
+    attempts = []
+
+    def interrupted_wire(operation, recovery, index, request_index):
+        attempts.append((recovery, index))
+        raise TimeoutError("injected transport interruption before a response")
+
+    def denied_recovery():
+        raise ValueError("injected recovery admission failure")
+
+    output = tmp_path / "collection"
+    result = collect(
+        gate, plan, output, interrupted_wire, before_recovery=denied_recovery
+    )
+    assert attempts == [(False, 0)]
+    assert result["recordingComplete"] is False
+    assert result["cleanupComplete"] is False
+    assert result["collectionComplete"] is False
+    assert result["cleanup"] == []
+    assert {failure["phase"] for failure in result["infrastructureFailures"]} >= {
+        "observation",
+        "recovery-admission",
+        "finish",
+    }
+    assert gate.snapshot()["jobs"]["limits"]["complete"] is False
+    original = (output / "collection.json").read_bytes()
+    import pytest
+
+    with pytest.raises(FileExistsError):
+        collect(gate, plan, output, interrupted_wire)
+    assert (output / "collection.json").read_bytes() == original
+    assert attempts == [(False, 0)]

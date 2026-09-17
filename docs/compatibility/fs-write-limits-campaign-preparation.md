@@ -33,3 +33,15 @@ The follow-up at `4019af0b8` implements the fixed-target bounded wire worker and
 Source `517c346ad55bc612a5dfb467cb1b74a124a91084` supplies the shared claimed-Gate collection lifecycle; test-only follow-up `2f1b64ea2` verifies recovery admission failure and immutable output refusal. The normal and fixed-interruption real artifact runs completed their declared cleanup and process reclamation. The [collector record](../../tools/compat-broad/fs-write-limits/README.md#shared-gate-collection-lifecycle) separates acquisition completeness from expectation agreement. Independent review found no required fix in this slice.
 
 This closes the reusable collection-lifecycle preparation item, not production admission. The outer Coordinator, permission/configuration bindings, production receipt validation, and comparison handoff still require integration. Production-unobserved conditions reduced: **0**. Next parent remains `FS-DATA-WRITE`; `COMPAT_VERIFIED` remains **0 / 14**.
+
+## Coordinator bridge checkpoint
+
+Source `251610b5a` connects the limits wire callback to the existing Coordinator and a limits-specific Gate subtype without adding another request budget. The charged callback is one-shot and verifies binding/credential state after waiting. Offline actual-Gate checks cover normal collection, complete unexpected outcomes, recovery outside the lock, and refusal of drift or callback reuse (32 focused checks passed).
+
+This addresses the data-wire/Coordinator connection only. The outer O7 admission and frozen envelope/lock/nonce lifecycle, production metadata acquisition, final receipt validation, and comparison handoff remain incomplete. No executable production campaign was approved, no production request was made, and production-unobserved conditions decreased by **0**.
+
+The initial bridge review required preservation of legacy credential and service-failure stops. Source `f8f5a9e6e` supersedes the initial bridge: complete 401/403 responses are retained but permanently fail that credential; 429/5xx are infrastructure failures, with bounded cleanup still available. Focused checks now pass 36 tests. These local safety corrections are not production comparison results.
+
+An executable reuse audit found that the existing Gate reserves requests and cost per campaign but does not arbitrate the proposal's cross-campaign resource locks or approval-envelope reservations. The declarations alone therefore cannot admit parallel production work. Extending existing admission with an atomic shared reservation remains a technical prerequisite; this is not a request to increase campaign scope or build a new orchestration platform.
+
+Independent re-review approved `f8f5a9e6e` within internal-component scope. No Must Fix remains. The suite also retains the requested after-controls 429/503 continuation regression. This review does not approve O7 execution or parent promotion.

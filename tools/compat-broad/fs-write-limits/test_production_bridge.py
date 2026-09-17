@@ -233,14 +233,18 @@ def test_rejected_credential_is_recorded_and_never_reused(tmp_path, status):
 
 
 @pytest.mark.parametrize("status", [429, 503])
-def test_service_failure_is_preserved_as_infrastructure_not_semantics(tmp_path, status):
+def test_service_failure_after_controls_stops_later_writes(tmp_path, status):
     from collector import collect
 
     coordinator, gate, plan = setup_bridge(tmp_path)
     compiled = compile_limits_plan("fireemu-35fe6", "(default)", coordinator.nonce)
+    stored, attempts = {}, []
 
     def responses(value):
-        if value["phase"] == "observation":
+        attempts.append((value["phase"], value["index"]))
+        operation = value["operation"]
+        name = operation["path"].split("?")[0].removeprefix("/v1/")
+        if value["phase"] == "observation" and value["index"] == 8:
             return {
                 "complete": True,
                 "status": status,
@@ -253,6 +257,14 @@ def test_service_failure_is_preserved_as_infrastructure_not_semantics(tmp_path, 
                     }
                 },
             }
+        if operation["method"] == "PATCH":
+            stored[name] = {**operation["body"], "updateTime": "2026-09-17T00:00:00Z"}
+            return {"complete": True, "status": 200, "body": stored[name]}
+        if operation["method"] == "DELETE":
+            del stored[name]
+            return {"complete": True, "status": 200, "body": {}}
+        if name in stored:
+            return {"complete": True, "status": 200, "body": stored[name]}
         return {
             "complete": True,
             "status": 404,
@@ -266,9 +278,19 @@ def test_service_failure_is_preserved_as_infrastructure_not_semantics(tmp_path, 
         bind_wire(coordinator, plan, transmit=responses),
         before_recovery=coordinator.recover_credentials,
     )
-    assert result["rows"][0]["complete"] is True
-    assert result["rows"][0]["status"] == status
-    assert any(f["phase"] == "observation" for f in result["infrastructureFailures"])
+    assert result["rows"][8]["complete"] is True
+    assert result["rows"][8]["status"] == status
+    assert result["rows"][8]["body"]["error"]["code"] == status
+    assert any(
+        f["phase"] == "observation" and f["index"] == 8
+        for f in result["infrastructureFailures"]
+    )
+    assert result["expectationMismatches"] == []
     assert result["collectionComplete"] is False
     assert result["cleanupComplete"] is True
     assert coordinator.credential.failed is False
+    assert stored == {}
+    assert [index for phase, index in attempts if phase == "observation"] == list(
+        range(9)
+    )
+    assert len(attempts) == gate.snapshot()["total"] == 19

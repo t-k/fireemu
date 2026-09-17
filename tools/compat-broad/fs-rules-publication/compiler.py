@@ -97,9 +97,24 @@ def _compile_plan(project: str, database: str, nonce: str) -> dict[str, Any]:
     for operation, expect in zip(observations, expectations, strict=True):
         operation["expect"] = expect
     recovery = [
-        {"kind": "cleanup-owned-document", "resource": owned, "mode": "conditional-owned-delete"},
-        {"kind": "cleanup-public-document", "resource": public, "mode": "conditional-owned-delete"},
-        {"kind": "cleanup-users-and-rules", "uids": [uid2, uid], "mode": "readback-then-delete"},
+        {
+            "kind": "cleanup-owned-document",
+            "resource": owned,
+            "mode": "conditional-owned-delete",
+            "wireRequestsMaximum": 3,
+        },
+        {
+            "kind": "cleanup-public-document",
+            "resource": public,
+            "mode": "conditional-owned-delete",
+            "wireRequestsMaximum": 3,
+        },
+        {
+            "kind": "cleanup-users-and-rules",
+            "uids": [uid2, uid],
+            "mode": "readback-then-delete",
+            "wireRequestsMaximum": 3,
+        },
     ]
     plan = {
         "schemaVersion": 1,
@@ -129,14 +144,19 @@ def _compile_plan(project: str, database: str, nonce: str) -> dict[str, Any]:
         "observation": observations,
         "recovery": recovery,
         "negativeCredentials": ["empty-bearer", "malformed-bearer", "admin-shaped-credential"],
+        "nonceReservation": {
+            "fresh": True,
+            "reused": False,
+            "lockKey": f"firestore-rules/{project}/{database}/o5/{nonce}",
+        },
         "budget": {
             "authUsersMaximum": 2,
             "documentsMaximum": 2,
             "rulesPublicationsMaximum": 3,
             "userSdkReadsMaximum": 6,
             "observationRequests": 6,
-            "recoveryRequests": 3,
-            "requestUpperBound": 9,
+            "recoveryRequests": 9,
+            "requestUpperBound": 15,
         },
         "productionReady": False,
         "evidenceBoundary": (
@@ -178,8 +198,16 @@ def validate_plan(plan: dict[str, Any]) -> None:
         raise ValueError("resource escaped nonce")
     if len(plan.get("observation", [])) != 6 or len(plan.get("recovery", [])) != 3:
         raise ValueError("operation budget drift")
-    if plan.get("budget", {}).get("requestUpperBound") != 9:
+    if plan.get("budget", {}).get("requestUpperBound") != 15:
         raise ValueError("request budget drift")
+    reservation = plan.get("nonceReservation")
+    if (
+        not isinstance(reservation, dict)
+        or reservation.get("fresh") is not True
+        or reservation.get("reused") is not False
+        or reservation.get("lockKey") != f"firestore-rules/{project}/{database}/o5/{nonce}"
+    ):
+        raise ValueError("nonce reservation drift")
     for index, operation in enumerate(plan["observation"]):
         if operation.get("transport") != "official-user-sdk" or operation.get(
             "authUid"

@@ -31,12 +31,14 @@ def _canonical(row: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
 
 
 def _validate_rows(
-    receipt: Any, plan: dict[str, Any]
+    receipt: Any, plan: dict[str, Any], *, production: bool
 ) -> tuple[list[dict[str, Any]] | None, str | None]:
     if not isinstance(receipt, dict) or receipt.get("planDigest") != digest(plan):
         return None, "plan-digest"
     if receipt.get("credentialKind") != "firebase-auth-user-sdk-id-token":
         return None, "wrong-credential-kind"
+    if receipt.get("productionExecuted") is not production:
+        return None, "production-role"
     rows = receipt.get("rows")
     if not isinstance(rows, list) or len(rows) != 6:
         return None, "incomplete-rows"
@@ -44,8 +46,38 @@ def _validate_rows(
     if (
         not isinstance(cleanup, dict)
         or cleanup.get("complete") is not True
-        or cleanup.get("resourcesAbsent") != plan["ownedResources"]
-        or cleanup.get("usersAbsent") != [user["uid"] for user in plan["authUsers"]]
+        or cleanup.get("lock", {}).get("key") != plan["nonceReservation"]["lockKey"]
+        or cleanup.get("lock", {}).get("acquired") is not True
+        or cleanup.get("lock", {}).get("released") is not True
+        or cleanup.get("rules") != {"finalDecision": "fixed-deny-all", "readback": True}
+    ):
+        return None, "cleanup-unproven"
+    documents = cleanup.get("documents")
+    users = cleanup.get("users")
+    if (
+        not isinstance(documents, list)
+        or len(documents) != 2
+        or not isinstance(users, list)
+        or [item.get("resource") for item in documents if isinstance(item, dict)]
+        != plan["ownedResources"]
+        or [item.get("uid") for item in users if isinstance(item, dict)]
+        != [user["uid"] for user in plan["authUsers"]]
+        or any(
+            not isinstance(item, dict)
+            or item.get("nonce") != plan["nonce"]
+            or item.get("absent") is not True
+            or item.get("readback", {}).get("status") != "owned"
+            or item.get("delete", {}).get("versionFrom")
+            != item.get("readback", {}).get("version")
+            for item in documents
+        )
+        or any(
+            not isinstance(item, dict)
+            or item.get("nonce") != plan["nonce"]
+            or item.get("deleteStatus") != "deleted"
+            or item.get("absent") is not True
+            for item in users
+        )
     ):
         return None, "cleanup-unproven"
     for index, (row, operation) in enumerate(zip(rows, plan["observation"], strict=True)):
@@ -57,8 +89,23 @@ def _validate_rows(
             return None, "request-binding"
         if row.get("complete") is not True or row.get("failure") is not None:
             return None, "incomplete-row"
+        if row.get("transport") != "official-user-sdk" or row.get(
+            "credentialKind"
+        ) != "firebase-auth-user-sdk-id-token":
+            return None, "row-credential"
         if row.get("status") not in {"success", "permission-denied"}:
             return None, "status-classification"
+        if row.get("status") != operation["expect"]["status"]:
+            return None, "unexpected-status"
+        if row.get("status") == "success":
+            body = row.get("body")
+            expected_fields = plan["fixtures"][
+                "public" if operation["path"] == plan["publicDocument"] else "owned"
+            ]
+            if not isinstance(body, dict) or body.get("name") != operation["path"]:
+                return None, "success-body"
+            if body.get("fields") != expected_fields:
+                return None, "success-body"
         if row.get("status") == "permission-denied" and row.get("body") not in (None, {}):
             return None, "denied-body-leak"
         transport = str(row.get("transport", "")).lower()
@@ -81,8 +128,8 @@ def compare_receipts(production: Any, local: Any, plan: dict[str, Any]) -> dict[
     if plan != expected:
         result["errors"].append("plan-drift")
         return result
-    left, left_error = _validate_rows(production, plan)
-    right, right_error = _validate_rows(local, plan)
+    left, left_error = _validate_rows(production, plan, production=True)
+    right, right_error = _validate_rows(local, plan, production=False)
     if left_error or right_error:
         result["errors"] = [error for error in (left_error, right_error) if error]
         return result

@@ -19,6 +19,10 @@ def test_bound_manifest_has_stable_plan_digest() -> None:
     value = bound_manifest("demo", "a" * 32)
     validate_manifest(value)
     assert value["planDigest"] == bound_manifest("demo", "a" * 32)["planDigest"]
+    changed = copy.deepcopy(value)
+    changed["manifestDigest"] = "0" * 64
+    with pytest.raises(ValueError):
+        validate_manifest(changed)
 
 
 @pytest.mark.parametrize("mutation", ["plan", "digest", "ready"])
@@ -33,4 +37,3 @@ def test_manifest_mutations_are_rejected(mutation: str) -> None:
         changed["productionReady"] = True
     with pytest.raises(ValueError):
         validate_manifest(changed)
-

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 
+
 from compiler import compile_plan
 from local_shadow import shadow_receipt, validate_shadow
 
@@ -26,6 +27,16 @@ def test_shadow_rejects_successful_denied_read_or_incomplete_cleanup() -> None:
     changed = copy.deepcopy(receipt)
     changed["rows"][3]["status"] = "success"
     assert not validate_shadow(changed, plan)
+
+
+def test_shadow_rejects_unknown_status_and_malformed_row() -> None:
+    plan = compile_plan("demo", "(default)", "c" * 32)
     changed = shadow_receipt(plan)
-    changed["cleanup"]["resourcesAbsent"] = []
+    changed["rows"][0]["status"] = "maybe"
+    assert not validate_shadow(changed, plan)
+    changed = shadow_receipt(plan)
+    changed["rows"][0] = None
+    assert not validate_shadow(changed, plan)
+    changed = shadow_receipt(plan)
+    changed["cleanup"]["documents"] = []
     assert not validate_shadow(changed, plan)

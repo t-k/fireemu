@@ -36,8 +36,32 @@ def shadow_receipt(plan: dict[str, Any]) -> dict[str, Any]:
         "rows": rows,
         "cleanup": {
             "complete": True,
-            "resourcesAbsent": plan["ownedResources"],
-            "usersAbsent": [user["uid"] for user in plan["authUsers"]],
+            "lock": {
+                "key": plan["nonceReservation"]["lockKey"],
+                "acquired": True,
+                "released": True,
+            },
+            "documents": [
+                {
+                    "resource": resource,
+                    "nonce": plan["nonce"],
+                    "ownerUid": plan["authUsers"][0]["uid"],
+                    "readback": {"status": "owned", "version": f"local-v{index}"},
+                    "delete": {"status": "deleted", "versionFrom": f"local-v{index}"},
+                    "absent": True,
+                }
+                for index, resource in enumerate(plan["ownedResources"])
+            ],
+            "users": [
+                {
+                    "uid": user["uid"],
+                    "nonce": plan["nonce"],
+                    "deleteStatus": "deleted",
+                    "absent": True,
+                }
+                for user in plan["authUsers"]
+            ],
+            "rules": {"finalDecision": "fixed-deny-all", "readback": True},
         },
     }
 
@@ -50,17 +74,43 @@ def validate_shadow(receipt: Any, plan: dict[str, Any]) -> bool:
         return False
     expected_denied = {3, 5}
     for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            return False
         if row.get("index") != index or row.get("request") != plan["observation"][index]:
             return False
-        denied = row.get("status") == "permission-denied"
+        status = row.get("status")
+        if status not in {"success", "permission-denied"}:
+            return False
+        denied = status == "permission-denied"
         if denied != (index in expected_denied) or (denied and row.get("body") not in ({}, None)):
             return False
         if row.get("complete") is not True or row.get("failure") is not None:
             return False
     cleanup = receipt.get("cleanup")
+    documents = cleanup.get("documents") if isinstance(cleanup, dict) else None
+    users = cleanup.get("users") if isinstance(cleanup, dict) else None
+    lock = cleanup.get("lock") if isinstance(cleanup, dict) else None
     return (
         isinstance(cleanup, dict)
         and cleanup.get("complete") is True
-        and cleanup.get("resourcesAbsent") == plan["ownedResources"]
-        and cleanup.get("usersAbsent") == [user["uid"] for user in plan["authUsers"]]
+        and isinstance(lock, dict)
+        and lock == {"key": plan["nonceReservation"]["lockKey"], "acquired": True, "released": True}
+        and isinstance(documents, list)
+        and len(documents) == 2
+        and all(
+            isinstance(item, dict)
+            and item.get("resource") == resource
+            and item.get("nonce") == plan["nonce"]
+            and item.get("ownerUid") == plan["authUsers"][0]["uid"]
+            and item.get("readback", {}).get("status") == "owned"
+            and item.get("delete", {}).get("versionFrom") == item.get("readback", {}).get("version")
+            and item.get("absent") is True
+            for item, resource in zip(documents, plan["ownedResources"], strict=True)
+        )
+        and isinstance(users, list)
+        and users == [
+            {"uid": user["uid"], "nonce": plan["nonce"], "deleteStatus": "deleted", "absent": True}
+            for user in plan["authUsers"]
+        ]
+        and cleanup.get("rules") == {"finalDecision": "fixed-deny-all", "readback": True}
     )

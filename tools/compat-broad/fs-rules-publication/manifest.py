@@ -50,6 +50,11 @@ def validate_manifest(value: dict[str, Any]) -> None:
         raise ValueError("manifest campaign drift")
     if value.get("productionExecuted") is not False or value.get("productionReady") is not False:
         raise ValueError("manifest cannot authorize production")
+    supplied_digest = value.get("manifestDigest")
+    unsigned = copy.deepcopy(value)
+    unsigned.pop("manifestDigest", None)
+    if not isinstance(supplied_digest, str) or digest(unsigned) != supplied_digest:
+        raise ValueError("manifest digest mismatch")
     plan = value.get("plan")
     if not isinstance(plan, dict) or value.get("planDigest") != digest(plan):
         raise ValueError("plan digest mismatch")

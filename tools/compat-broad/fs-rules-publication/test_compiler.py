@@ -30,10 +30,14 @@ def test_plan_is_deterministic_and_has_the_finite_transition_shape() -> None:
         "rulesPublicationsMaximum": 3,
         "userSdkReadsMaximum": 6,
         "observationRequests": 6,
-        "recoveryRequests": 3,
-        "requestUpperBound": 9,
+        "recoveryRequests": 9,
+        "requestUpperBound": 15,
     }
     assert plan["productionReady"] is False
+    assert plan["budget"]["recoveryRequests"] == 9
+    assert plan["budget"]["requestUpperBound"] == 15
+    assert plan["nonceReservation"]["fresh"] is True
+    assert plan["nonceReservation"]["reused"] is False
 
 
 def test_plan_owns_only_nonce_scoped_documents_and_no_credentials() -> None:

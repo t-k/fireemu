@@ -23,6 +23,22 @@ def test_comparator_excludes_request_ids_and_timestamps_but_never_promotes() -> 
     assert result["acquisitionValidated"] is False
 
 
+def test_comparator_never_matches_two_local_receipts() -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    result = compare_receipts(shadow_receipt(plan), shadow_receipt(plan), plan)
+    assert result["classification"] == "INDETERMINATE"
+    assert "production-role" in result["errors"]
+
+
+def test_comparator_requires_user_sdk_identity_on_every_row() -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    production = _production_receipt(plan)
+    del production["rows"][0]["credentialKind"]
+    result = compare_receipts(production, shadow_receipt(plan), plan)
+    assert result["classification"] == "INDETERMINATE"
+    assert "row-credential" in result["errors"]
+
+
 def test_comparator_rejects_admin_or_local_token_evidence() -> None:
     plan = compile_plan("demo", "(default)", "b" * 32)
     production = _production_receipt(plan)

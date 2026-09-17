@@ -1,0 +1,10 @@
+{
+  "kind": "query-explain-saved-reference-evaluator-v4",
+  "sourceCommit": "048208528b068985705a84ab3bc582f61477a0d3",
+  "sourceFiles": {
+    "tools/compat-explain-reference-v4/evaluate.py": "e4043d99e699ff6631f5ad0b64b107e081f833dd2fece30cd171a208d5a8193d",
+    "tools/compat-explain-reference-v4/test_evaluate_v4.py": "42855c3da23cf7915b52aabbe09133143ff17a8a7708ba06c75964d56f2724ee",
+    "spec/compatibility/broad-runs/query-explain-reference-inputs-v4.json": "1a7373b08f4233f075ef9940d37849368395a58dea1eb7b53b6dd4a80c30dd86"
+  },
+  "contractDigest": "d6c3915e803415eb111828d97e661803206ac6353c5d4236245bf6d3819eab36"
+}

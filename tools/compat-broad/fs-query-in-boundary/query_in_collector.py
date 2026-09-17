@@ -6,7 +6,7 @@ import copy
 import json
 import os
 import re
-import tempfile
+import secrets
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -87,7 +87,7 @@ def _normalize(receipt: Any) -> dict[str, Any]:
     return normalized
 
 
-def _publish(output: Path, filename: str, value: Any) -> None:
+def _publish(directory_fd: int, filename: str, value: Any) -> None:
     """Publish one bounded JSON row atomically without replacing an existing row."""
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(
         "utf-8"
@@ -96,22 +96,36 @@ def _publish(output: Path, filename: str, value: Any) -> None:
         raise ValueError("row-too-large")
     temporary: str | None = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb", dir=output, prefix=".receipt-", delete=False
-        ) as stream:
-            temporary = stream.name
+        for _ in range(8):
+            candidate = ".receipt-" + secrets.token_hex(12)
+            try:
+                temporary_fd = os.open(
+                    candidate,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=directory_fd,
+                )
+                temporary = candidate
+                break
+            except FileExistsError:
+                continue
+        else:
+            raise FileExistsError("temporary receipt name collision")
+        with os.fdopen(temporary_fd, "wb") as stream:
             stream.write(encoded)
             stream.write(b"\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.link(temporary, output / filename)
-        os.unlink(temporary)
+        os.link(
+            temporary,
+            filename,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        os.unlink(temporary, dir_fd=directory_fd)
         temporary = None
-        directory = os.open(output, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        os.fsync(directory_fd)
     finally:
         if temporary is not None:
             try:
@@ -182,12 +196,20 @@ def collect_local(
     output = Path(output)
     persistence_complete = True
     persistence_failures: list[str] = []
+    output_fd: int | None = None
+    parent_fd: int | None = None
     try:
-        if output.exists():
-            if not output.is_dir():
-                raise NotADirectoryError(output)
-        else:
-            output.mkdir(mode=0o700, parents=False, exist_ok=False)
+        parent_fd = os.open(
+            output.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+        os.mkdir(output.name, mode=0o700, dir_fd=parent_fd)
+        output_fd = os.open(
+            output.name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_fd,
+        )
+        os.fsync(parent_fd)
     except Exception as error:  # noqa: BLE001 -- report local recording failure.
         persistence_complete = False
         persistence_failures.append(f"output-init:{type(error).__name__}")
@@ -197,7 +219,9 @@ def collect_local(
         if not persistence_complete and persistence_failures:
             return
         try:
-            _publish(output, filename, value)
+            if output_fd is None:
+                raise OSError("output directory is not owned")
+            _publish(output_fd, filename, value)
         except Exception as error:  # noqa: BLE001 -- preserve rows and cleanup responsibility.
             persistence_complete = False
             persistence_failures.append(f"{filename}:{type(error).__name__}")
@@ -290,4 +314,8 @@ def collect_local(
         "persistenceComplete": persistence_complete,
     }
     persist("collection.json", result)
+    if output_fd is not None:
+        os.close(output_fd)
+    if parent_fd is not None:
+        os.close(parent_fd)
     return result

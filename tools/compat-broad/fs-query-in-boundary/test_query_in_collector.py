@@ -139,20 +139,36 @@ def test_cleanup_uses_latest_update_time_and_refuses_foreign_namespace(tmp_path:
     assert result["cleanupComplete"] is True
 
 
-def test_persistence_failure_after_create_keeps_recovery_responsibility(tmp_path: Path) -> None:
+def test_directory_path_swap_cannot_redirect_durable_rows(tmp_path: Path) -> None:
     plan = _plan()
     output = tmp_path / "receipt"
-    output.mkdir()
-    (output / "observation-01.json").write_text("occupied")
+    owned = tmp_path / "owned-receipt"
+    attacker = tmp_path / "attacker-receipt"
+    state = {"swapped": False}
+    transport = _transport(plan)
 
-    result = collect_local(plan, _transport(plan), output)
+    def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        if operation["kind"] == "preflight-typed-absence":
+            return _not_found()
+        if operation["kind"] == "create-only-patch":
+            owned.mkdir()
+            attacker.mkdir()
+            output.rename(owned)
+            output.symlink_to(attacker, target_is_directory=True)
+            state["swapped"] = True
+            return transport(operation)
+        return transport(operation)
 
-    assert result["persistenceComplete"] is False
+    result = collect_local(plan, execute, output)
+
+    assert state["swapped"] is True
+    assert result["persistenceComplete"] is True
     assert result["attemptedResources"] == [plan["document"]]
     assert result["cleanup"][1]["request"]["kind"] == "cleanup-conditional-delete"
     assert result["cleanup"][1]["status"] == 200
     assert result["resourceAbsence"][plan["document"]] is True
-    assert result["completed"] is False
+    assert (owned / "observation-01.json").exists()
+    assert not list(attacker.iterdir())
 
 
 def test_incomplete_executor_receipt_stops_observation_but_runs_safe_recovery(tmp_path: Path) -> None:
@@ -205,11 +221,12 @@ def test_oversized_receipt_is_bounded_but_owned_recovery_still_deletes(tmp_path:
     assert result["completed"] is False
 
 
-def test_publication_failure_before_create_releases_no_unowned_delete(tmp_path: Path) -> None:
+def test_existing_output_symlink_fails_closed_without_unowned_delete(tmp_path: Path) -> None:
     plan = _plan()
     output = tmp_path / "receipt"
-    output.mkdir()
-    (output / "observation-00.json").write_text("occupied")
+    attacker = tmp_path / "attacker-receipt"
+    attacker.mkdir()
+    output.symlink_to(attacker, target_is_directory=True)
     calls: list[str] = []
 
     def execute(operation: dict[str, Any]) -> dict[str, Any]:
@@ -220,13 +237,9 @@ def test_publication_failure_before_create_releases_no_unowned_delete(tmp_path: 
 
     result = collect_local(plan, execute, output)
 
-    assert calls == [
-        "preflight-typed-absence",
-        "cleanup-ownership-read",
-        "cleanup-verify-absence",
-    ]
+    assert calls == ["preflight-typed-absence", "cleanup-ownership-read", "cleanup-verify-absence"]
     assert result["cleanup"][1]["skipped"] == "already-absent"
     assert result["attemptedResources"] == []
     assert result["resourceAbsence"][plan["document"]] is True
     assert result["completed"] is False
-    assert not list(output.glob(".receipt-*"))
+    assert not list(attacker.iterdir())

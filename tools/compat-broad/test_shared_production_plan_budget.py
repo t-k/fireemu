@@ -54,7 +54,12 @@ def test_plan_limits_reject_invalid_or_unsafe_plan():
 def test_credential_coverage_keeps_phase_requirement_distinct():
     credential = Credential()
     credential.accept("token", {"expires_in": "1201"}, 100.0)
-    assert credential.usable(100.0, production.plan_limits(production.schedule("a" * 32))["observationCredentialSeconds"])
+    assert credential.usable(
+        100.0,
+        production.plan_limits(production.schedule("a" * 32))[
+            "observationCredentialSeconds"
+        ],
+    )
     assert not credential.usable(100.0, 1202)
 
 

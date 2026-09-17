@@ -13,8 +13,8 @@ CURRENT_BINDING = PACKAGE_DIR / "fs-write-txn-precedence-01-v9-binding.json"
 CURRENT_SHADOW = PACKAGE_DIR / "fs-write-txn-precedence-01-v9-local-shadow.json"
 PREVIOUS_MANIFEST = PACKAGE_DIR / "fs-write-txn-precedence-01-v8.json"
 
-EXPECTED_HEAD = "fccb003fa3cc4003fb9c06107fcbeeec7a93fceb"
-EXPECTED_ARTIFACT = "03c81f8d3b3bd61e9a17cf6ead9b2b93ba5f25f0097ca2cfbb518a7b30e95c90"
+EXPECTED_HEAD = "9830ccaf53def5d51bb620411648e2a30337a32f"
+EXPECTED_ARTIFACT = "a744d52c56a5f16045b246bd83c207634158468285a8a3086614b9e0d384c3eb"
 
 
 def load_json(path: Path) -> dict:
@@ -58,9 +58,9 @@ def test_v9_artifact_and_manifest_bindings_are_consistent() -> None:
     assert manifest["sourceBinding"]["artifactSha256"] == EXPECTED_ARTIFACT
     assert binding["source"]["artifactSha256"] == EXPECTED_ARTIFACT
     assert shadow["artifactSha256"] == EXPECTED_ARTIFACT
-    assert manifest["sourceBinding"]["artifactBuild"]["relativePath"] == "target/o3-fs-write-fccb/release/fireemu"
-    assert binding["artifactBuild"]["relativePath"] == "target/o3-fs-write-fccb/release/fireemu"
-    assert shadow["artifactBuild"]["relativePath"] == "target/o3-fs-write-fccb/release/fireemu"
+    assert manifest["sourceBinding"]["artifactBuild"]["relativePath"] == "target/o3-fs-write-current/release/fireemu"
+    assert binding["artifactBuild"]["relativePath"] == "target/o3-fs-write-current/release/fireemu"
+    assert shadow["artifactBuild"]["relativePath"] == "target/o3-fs-write-current/release/fireemu"
     assert binding["artifactBuild"]["sha256"] == EXPECTED_ARTIFACT
     assert shadow["artifactBuild"]["sha256"] == EXPECTED_ARTIFACT
 

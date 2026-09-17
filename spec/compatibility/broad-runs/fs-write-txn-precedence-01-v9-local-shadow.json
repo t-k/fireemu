@@ -3,9 +3,9 @@
   "campaignId": "FS-WRITE-TXN-PRECEDENCE-01-V9",
   "status": "prepared-local-only",
   "productionExecuted": false,
-  "sourceCommit": "fccb003fa3cc4003fb9c06107fcbeeec7a93fceb",
-  "artifactSha256": "03c81f8d3b3bd61e9a17cf6ead9b2b93ba5f25f0097ca2cfbb518a7b30e95c90",
-  "manifestSha256": "8641337800c83f81a930856214933d6ffbbd97dbeb04969df0757e4c576c28d3",
+  "sourceCommit": "9830ccaf53def5d51bb620411648e2a30337a32f",
+  "artifactSha256": "a744d52c56a5f16045b246bd83c207634158468285a8a3086614b9e0d384c3eb",
+  "manifestSha256": "793682c7b6720b4e69dad5b490e6b7d317bf808a39dc4caa678a98ad4c272ba9",
   "execution": {
     "runner": "existing shared gate plus current-head Rust gRPC/REST integration harnesses",
     "commands": [
@@ -78,9 +78,9 @@
   "notAProductionReceipt": true,
   "supersedes": "FS-WRITE-TXN-PRECEDENCE-01-V8",
   "artifactBuild": {
-    "command": "CARGO_TARGET_DIR=target/o3-fs-write-fccb cargo build --locked --release -p fireemu",
-    "relativePath": "target/o3-fs-write-fccb/release/fireemu",
-    "sha256": "03c81f8d3b3bd61e9a17cf6ead9b2b93ba5f25f0097ca2cfbb518a7b30e95c90"
+    "command": "CARGO_TARGET_DIR=target/o3-fs-write-current cargo build --locked --release -p fireemu",
+    "relativePath": "target/o3-fs-write-current/release/fireemu",
+    "sha256": "a744d52c56a5f16045b246bd83c207634158468285a8a3086614b9e0d384c3eb"
   },
-  "codeSourceHead": "fccb003fa3cc4003fb9c06107fcbeeec7a93fceb"
+  "codeSourceHead": "9830ccaf53def5d51bb620411648e2a30337a32f"
 }

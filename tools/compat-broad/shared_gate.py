@@ -520,7 +520,6 @@ class Gate:
                 or set(job["absent"]) != set(job["resources"])
             ):
                 raise ValueError("cleanup incomplete; ownership retained")
-            validate_absence_proofs(state, self.job)
             job["complete"] = True
             _save(self.path, state)
 

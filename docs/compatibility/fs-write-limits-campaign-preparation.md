@@ -72,7 +72,7 @@ This implementation remains under local end-to-end verification and O7 preparati
 
 ## Typed cleanup and post-wait deadline repair
 
-The shared Gate now records each final typed Firestore NOT_FOUND response together with its event index. Both Gate completion and shared-ledger release validate the resource's final declared recovery GET, exact request/response digests, typed status, completion, and phase. An `absent` list or completion boolean alone cannot release a lease. HTML404, a mismatched error status, non-integer error codes, and incomplete transport preserve ownership. Raw observations are retained.
+The shared Gate now records each final typed Firestore NOT_FOUND response together with its event index. The shared-ledger release validates the resource's final declared recovery GET, exact request/response digests, typed status, completion, and phase. Generic Gate completion retains its existing mixed Auth/Firestore facade contract; it does not substitute for this production release validation. An `absent` list or completion boolean alone cannot release a lease. HTML404, a mismatched error status, non-integer error codes, and incomplete transport preserve ownership. Raw observations are retained.
 
 The limits wire carries its immutable phase deadline into the charged callback without reacquiring the Gate lock. After shared admission waiting and request preparation, it rechecks the complete transfer reservation against that phase deadline. Metadata uses the state already held by `manage` and rechecks phase and permission deadlines after shared admission. Observation cannot consume recovery-reserved time through ledger contention; recovery also remains bounded by its own deadline.
 

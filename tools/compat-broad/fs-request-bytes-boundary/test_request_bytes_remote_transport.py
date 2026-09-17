@@ -306,27 +306,82 @@ def test_oserror_after_status_preserves_bounded_receipt():
     assert result["rawBodyBase64"] == base64.b64encode(b"partial").decode()
 
 
-def test_default_exchange_uses_one_deadline_for_open_and_body(monkeypatch):
+def test_default_exchange_uses_verified_worker_and_one_deadline(monkeypatch):
     plan, operation = plan_and_commit()
-    clock = iter([100.0, 100.0, 108.0, 108.0, 113.0, 113.0, 113.0])
     seen = {}
 
-    class Opener:
-        def open(self, _request, *, timeout):
-            seen["timeout"] = timeout
-            return response(200, {"Content-Length": "1"}, b"x")
+    def process(**kwargs):
+        seen.update(kwargs)
+        return 403, "application/json", b"{}", None
 
-    monkeypatch.setattr(
-        "request_bytes_remote_transport.time.monotonic", lambda: next(clock)
+    monkeypatch.setattr("request_bytes_remote_transport._run_process_exchange", process)
+    receipt = request(plan, "observation", 17, operation, "secret-test-credential")
+    assert receipt["status"] == 403
+    assert receipt["complete"] is True
+    assert seen["deadline"] - time.monotonic() <= 12
+    assert hashlib.sha256(seen["worker_source"]).hexdigest() == seen["worker_sha256"]
+    assert b"secret-test-credential" in seen["request_payload"]
+    assert b"secret-test-credential" not in seen["worker_source"]
+    assert (
+        seen["request_payload"].split(b"\n", 1)[1]
+        == json.dumps(
+            operation["body"], separators=(",", ":"), ensure_ascii=False
+        ).encode()
     )
+
+
+def test_changed_worker_source_is_rejected_before_exchange(monkeypatch):
+    plan, operation = plan_and_commit()
+    from pathlib import Path
+
+    from request_bytes_remote_transport import _WORKER_SHA256
+
+    original = Path.read_bytes
+
+    def changed(path):
+        if path.name == "request_bytes_https_worker.py":
+            return original(path) + b"\n# mutation"
+        return original(path)
+
+    monkeypatch.setattr(Path, "read_bytes", changed)
     monkeypatch.setattr(
-        "request_bytes_remote_transport.urllib.request.build_opener",
-        lambda *_args: Opener(),
+        "request_bytes_remote_transport._run_process_exchange",
+        lambda **_kwargs: pytest.fail("mutated worker executed"),
     )
-    result = request(plan, "observation", 17, operation, "token", timeout=12)
-    assert seen["timeout"] == 12
-    assert result["status"] == 200
-    assert result["failure"] == "timeout"
+    with pytest.raises(ValueError, match="digest"):
+        request(plan, "observation", 17, operation, "token")
+    assert len(_WORKER_SHA256) == 64
+
+
+def test_fixed_worker_rejects_forged_path_without_network():
+    from pathlib import Path
+
+    from request_bytes_process_exchange import _run_process_exchange
+    from request_bytes_remote_transport import _WORKER_SHA256
+
+    source = Path(
+        "tools/compat-broad/fs-request-bytes-boundary/request_bytes_https_worker.py"
+    ).read_bytes()
+    payload = (
+        json.dumps(
+            {
+                "method": "GET",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/other",
+                "authorization": "Bearer secret-test-credential",
+                "project": "fireemu-35fe6",
+                "bodyBytes": 0,
+                "deadline": time.monotonic() + 2,
+            }
+        ).encode()
+        + b"\n"
+    )
+    assert _run_process_exchange(
+        worker_source=source,
+        worker_sha256=_WORKER_SHA256,
+        request_payload=payload,
+        deadline=time.monotonic() + 2,
+        response_cap=RESPONSE_BYTES,
+    ) == (None, "", b"", "worker-failure")
 
 
 def test_collector_accepts_incomplete_receipt_and_persists_bounded_sidecar(tmp_path):

@@ -16,14 +16,14 @@ import json
 import math
 import re
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
 
 from request_bytes_compiler import validate_request_bytes_plan
+from request_bytes_process_exchange import _run_process_exchange
 
 ORIGIN = "https://firestore.googleapis.com"
 MAX_REQUEST_BYTES = 10_485_761
@@ -32,13 +32,9 @@ TIMEOUT = 12.0
 _TOKEN = re.compile(r"[A-Za-z0-9._~+/-]{1,8192}=*")
 _VERSION = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z")
 _DIAGNOSTIC_LIMIT = 512
+_WORKER_SHA256 = "99db0c3cfe940a403ac010ee09b6534936151d7fedda1dc5d808dc9dafa1b745"
 
 Exchange = Callable[[str, str, bytes | None, dict[str, str], float, int], Any]
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
-        return None
 
 
 def _compact(value: Any) -> bytes:
@@ -180,7 +176,7 @@ def _read_bounded(
     return body, None
 
 
-def _urllib_exchange(
+def _process_exchange(
     url: str,
     method: str,
     body: bytes | None,
@@ -188,30 +184,41 @@ def _urllib_exchange(
     deadline: float,
     response_cap: int,
 ) -> tuple[int | None, Any, bytes, str | None]:
-    request_object = urllib.request.Request(
-        url, data=body, headers=headers, method=method
+    if not url.startswith(ORIGIN + "/") or url.count(ORIGIN) != 1:
+        raise ValueError("invalid fixed origin")
+    path = url[len(ORIGIN) :]
+    project = headers["x-goog-user-project"]
+    if not path.startswith("/v1/projects/" + project + "/"):
+        raise ValueError("invalid project path")
+    if method not in {"GET", "POST", "DELETE"} or set(headers) not in (
+        {"Authorization", "x-goog-user-project"},
+        {"Authorization", "x-goog-user-project", "Content-Type"},
+    ):
+        raise ValueError("invalid worker request")
+    if (body is None) != (method != "POST"):
+        raise ValueError("invalid worker body")
+    if body is not None and headers.get("Content-Type") != "application/json":
+        raise ValueError("invalid worker content type")
+    source = Path(__file__).with_name("request_bytes_https_worker.py").read_bytes()
+    if hashlib.sha256(source).hexdigest() != _WORKER_SHA256:
+        raise ValueError("fixed worker digest mismatch")
+    message = {
+        "method": method,
+        "path": path,
+        "authorization": headers["Authorization"],
+        "project": project,
+        "bodyBytes": len(body or b""),
+        "deadline": deadline,
+    }
+    payload = _compact(message) + b"\n" + (body or b"")
+    status, content_type, raw, failure = _run_process_exchange(
+        worker_source=source,
+        worker_sha256=_WORKER_SHA256,
+        request_payload=payload,
+        deadline=deadline,
+        response_cap=response_cap,
     )
-    opener = urllib.request.build_opener(
-        _NoRedirect(),
-        urllib.request.ProxyHandler({}),
-    )
-    try:
-        remaining = max(0.001, deadline - time.monotonic())
-        response = opener.open(request_object, timeout=remaining)
-    except urllib.error.HTTPError as error:
-        with error:
-            payload, failure = _read_bounded(error, response_cap, deadline)
-            return error.code, error.headers, payload, failure
-    except (OSError, TimeoutError, urllib.error.URLError):
-        return (
-            None,
-            {},
-            b"",
-            "timeout" if time.monotonic() >= deadline else "transport-error",
-        )
-    with response:
-        payload, failure = _read_bounded(response, response_cap, deadline)
-        return response.status, response.headers, payload, failure
+    return status, {"Content-Type": content_type}, raw, failure
 
 
 def _result(
@@ -307,7 +314,7 @@ def _request_impl(
     deadline = time.monotonic() + timeout
     try:
         if exchange is None:
-            status, response_headers, raw_body, failure = _urllib_exchange(
+            status, response_headers, raw_body, failure = _process_exchange(
                 url, method, body, headers, deadline, RESPONSE_BYTES
             )
         else:
@@ -331,7 +338,7 @@ def _request_impl(
         return _transport_failure("timeout")
     except http.client.IncompleteRead:
         return _transport_failure("response-incomplete")
-    except (OSError, urllib.error.URLError):
+    except OSError:
         return _transport_failure("transport-error")
     if status is None:
         return _transport_failure(failure or "transport-error")

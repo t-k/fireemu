@@ -66,6 +66,7 @@ def _error_status(receipt: Any, status: str) -> bool:
         complete(receipt)
         and receipt["status"] == 400
         and isinstance(error, dict)
+        and type(error.get("code")) is int
         and error.get("code") == 400
         and error.get("status") == status
     )
@@ -317,6 +318,27 @@ def collect_local(
                 receipt = execute(copy.deepcopy(operation))
                 if not isinstance(receipt, dict):
                     raise TypeError("executor returned non-object")
+                if complete(receipt):
+                    encoded = receipt.get("rawBodyBase64")
+                    try:
+                        raw = (
+                            base64.b64decode(encoded, validate=True)
+                            if isinstance(encoded, str)
+                            else None
+                        )
+                    except (ValueError, base64.binascii.Error):
+                        raw = None
+                    if (
+                        raw is None
+                        or len(raw) > MAX_RESPONSE_BYTES
+                        or ("bodyBytes" in receipt and receipt["bodyBytes"] != len(raw))
+                    ):
+                        receipt = {
+                            **receipt,
+                            "complete": False,
+                            "failure": "response-bytes-unavailable",
+                        }
+                        receipt.pop("rawBodyBase64", None)
             except Exception as error:  # noqa: BLE001 - lost responses remain recoverable.
                 receipt = {
                     "complete": False,

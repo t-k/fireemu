@@ -1,3 +1,6 @@
+import base64
+import hashlib
+import json
 import sys
 
 import pytest
@@ -125,14 +128,19 @@ def test_lost_commit_response_holds_cleanup_responsibility(tmp_path):
         dispatched.append(operation)
         if operation["kind"] == "conditional-create-commit":
             return {"complete": False, "failure": "response-lost"}
+        body = {"error": {"code": 404, "status": "NOT_FOUND"}}
+        raw = json.dumps(body, separators=(",", ":")).encode()
         return {
             "complete": True,
             "failure": None,
             "status": 404,
-            "body": {"error": {"code": 404, "status": "NOT_FOUND"}},
+            "body": body,
+            "rawBodyBase64": base64.b64encode(raw).decode(),
+            "bodyBytes": len(raw),
         }
 
     result = collect_local(value, execute, tmp_path / "run")
+    assert any(item["kind"] == "conditional-create-commit" for item in dispatched)
     assert not result["completed"]
     assert not any(item["method"] == "DELETE" for item in dispatched)
     assert not any(item["probe"] != "under" for item in dispatched)
@@ -231,9 +239,71 @@ def test_three_probe_run_completes_with_typed_over_refusal(tmp_path):
             "body": {"error": {"code": 404, "status": "NOT_FOUND"}},
         }
 
-    result = collect_local(value, execute, tmp_path / "run")
+    def execute_with_raw(operation):
+        receipt = execute(operation)
+        raw = json.dumps(receipt["body"], separators=(",", ":")).encode()
+        receipt["rawBodyBase64"] = base64.b64encode(raw).decode()
+        receipt["bodyBytes"] = len(raw)
+        return receipt
+
+    result = collect_local(value, execute_with_raw, tmp_path / "run")
     assert result["completed"] is True
     assert result["cleanupComplete"] is True
     assert result["resourceAbsence"] is True
     assert len(deletes) == 34
     assert not live
+    sidecars = sorted((tmp_path / "run").glob("response-*.body"))
+    assert len(sidecars) == result["requestCount"]
+    for sidecar in sidecars:
+        row = json.loads(
+            (
+                tmp_path
+                / "run"
+                / sidecar.name.replace("response-", "row-").replace(".body", ".json")
+            ).read_text()
+        )
+        raw = sidecar.read_bytes()
+        assert row["responseBytes"] == len(raw)
+        assert row["responseSha256"] == hashlib.sha256(raw).hexdigest()
+    assert len((tmp_path / "run" / "result.json").read_bytes()) <= 131_072
+
+
+def test_missing_raw_response_cannot_complete_or_send_commit(tmp_path):
+    from request_bytes_collector import collect_local
+
+    value = plan()
+    dispatched = []
+
+    def execute(operation):
+        dispatched.append(operation)
+        return {
+            "complete": True,
+            "failure": None,
+            "status": 404,
+            "body": {"error": {"code": 404, "status": "NOT_FOUND"}},
+        }
+
+    result = collect_local(value, execute, tmp_path / "run")
+    assert result["completed"] is False
+    assert not any(item["kind"] == "conditional-create-commit" for item in dispatched)
+    assert not list((tmp_path / "run").glob("response-*.body"))
+    assert any(
+        "response-bytes-unavailable"
+        in json.loads(path.read_text())["receipt"].get("failure", "")
+        for path in (tmp_path / "run").glob("row-*.json")
+    )
+
+
+def test_fractional_and_boolean_over_refusal_codes_are_rejected():
+    from request_bytes_collector import _error_status
+
+    for code in (400.0, True):
+        assert not _error_status(
+            {
+                "complete": True,
+                "failure": None,
+                "status": 400,
+                "body": {"error": {"code": code, "status": "INVALID_ARGUMENT"}},
+            },
+            "INVALID_ARGUMENT",
+        )

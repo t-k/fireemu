@@ -58,6 +58,21 @@ def _owned(receipt: Any, resource: str, fields: dict[str, Any]) -> bool:
     )
 
 
+def _owned_version(
+    receipt: Any,
+    resource: str,
+    fields: dict[str, Any],
+    update_time: str,
+    create_time: str | None,
+) -> bool:
+    if not _owned(receipt, resource, fields):
+        return False
+    body = receipt["body"]
+    if body.get("updateTime") != update_time:
+        return False
+    return create_time is None or body.get("createTime") == create_time
+
+
 def _row(index: int, operation: dict[str, Any], receipt: dict[str, Any]) -> dict[str, Any]:
     return {
         "index": index,
@@ -264,6 +279,8 @@ def collect_local(
     infrastructure: list[str] = []
     attempted = False
     create_proven = False
+    created_update_time: str | None = None
+    created_create_time: str | None = None
     stop_observation = False
     for index, declared in enumerate(plan["observation"]):
         if stop_observation:
@@ -274,6 +291,9 @@ def collect_local(
         receipt = dispatch(operation)
         if operation["kind"] == "create-only-patch":
             create_proven = _owned(receipt, plan["document"], plan["fixtureFields"])
+            if create_proven:
+                created_update_time = receipt["body"]["updateTime"]
+                created_create_time = receipt["body"].get("createTime")
         row = _row(index, operation, receipt)
         rows.append(row)
         persist(f"observation-{index:02d}.json", row)
@@ -297,8 +317,12 @@ def collect_local(
             prior = cleanup[0]
             if _typed_not_found(prior):
                 row = _skip(index, operation, "already-absent")
-            elif create_proven and _owned(
-                prior, plan["document"], plan["fixtureFields"]
+            elif create_proven and _owned_version(
+                prior,
+                plan["document"],
+                plan["fixtureFields"],
+                created_update_time or "",
+                created_create_time,
             ):
                 operation["path"] += "?currentDocument.updateTime=" + quote(
                     prior["body"]["updateTime"], safe=""
@@ -308,7 +332,9 @@ def collect_local(
                 row = _skip(
                     index,
                     operation,
-                    "create-not-proven" if attempted else "unsafe-delete",
+                    ("create-not-proven" if attempted else "unsafe-delete")
+                    if not create_proven
+                    else "create-version-mismatch",
                 )
         else:
             receipt = dispatch(operation)
@@ -319,7 +345,8 @@ def collect_local(
             infrastructure.append(f"recovery-{index}:incomplete")
         if (
             operation["kind"] == "cleanup-conditional-delete"
-            and row.get("skipped") in {"unsafe-delete", "create-not-proven"}
+            and row.get("skipped")
+            in {"unsafe-delete", "create-not-proven", "create-version-mismatch"}
         ):
             semantic.append({"phase": "recovery", "index": index, "reason": row["skipped"]})
         elif operation["kind"] != "cleanup-conditional-delete" and _complete(row) and not _semantic_match(plan, operation, row):

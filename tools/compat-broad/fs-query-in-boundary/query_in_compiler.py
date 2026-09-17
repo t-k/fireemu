@@ -79,7 +79,7 @@ def _document_path(project: str, database: str, *segments: str) -> str:
 
 def _validate_document_path(path: Any, project: str, database: str, label: str) -> None:
     if not isinstance(path, str):
-        raise ValueError(f"{label} must be a document path")
+        raise ValueError(f"{label} must be a document path")  # noqa: TRY004 -- malformed plans use one public validation error.
     prefix = f"projects/{project}/databases/{database}/documents/"
     if not path.startswith(prefix):
         raise ValueError(f"{label} is outside the compiled resource")

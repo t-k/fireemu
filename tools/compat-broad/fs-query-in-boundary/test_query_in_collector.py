@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+import pytest
 from query_in_collector import _publish, collect_local
 from query_in_compiler import compile_plan
 
@@ -18,12 +19,19 @@ def _not_found() -> dict[str, Any]:
     return _ok({"error": {"code": 404, "status": "NOT_FOUND"}}, 404)
 
 
-def _owned(plan: dict[str, Any], update_time: str = "2026-09-17T00:00:00.000000Z") -> dict[str, Any]:
-    return _ok({
+def _owned(
+    plan: dict[str, Any],
+    update_time: str = "2026-09-17T00:00:00.000000Z",
+    create_time: str | None = None,
+) -> dict[str, Any]:
+    body = {
         "name": plan["document"],
         "fields": copy.deepcopy(plan["fixtureFields"]),
         "updateTime": update_time,
-    })
+    }
+    if create_time is not None:
+        body["createTime"] = create_time
+    return _ok(body)
 
 
 def _transport(plan: dict[str, Any], *, mutate: bool = False):
@@ -115,7 +123,7 @@ def test_non_json_404_is_semantic_mismatch_and_never_proves_absence(tmp_path: Pa
     assert result["cleanup"][1]["skipped"] == "unsafe-delete"
 
 
-def test_cleanup_uses_latest_update_time_and_refuses_foreign_namespace(tmp_path: Path) -> None:
+def test_cleanup_refuses_replacement_with_newer_version(tmp_path: Path) -> None:
     plan = _plan()
     seen: list[dict[str, Any]] = []
 
@@ -128,15 +136,60 @@ def test_cleanup_uses_latest_update_time_and_refuses_foreign_namespace(tmp_path:
         if operation["kind"] == "cleanup-ownership-read":
             return _owned(plan, "2026-09-17T04:05:06.000000Z")
         if operation["kind"] == "cleanup-conditional-delete":
-            assert "2026-09-17T04%3A05%3A06.000000Z" in operation["path"]
-            return _ok({})
+            raise AssertionError("replacement must not be deleted")
         if operation["kind"] == "cleanup-verify-absence":
             return _not_found()
         return _ok({"documents": []})
 
     result = collect_local(plan, execute, tmp_path / "receipt")
-    delete = next(item for item in seen if item["kind"] == "cleanup-conditional-delete")
-    assert "currentDocument.updateTime=" in delete["path"]
+    assert not any(item["kind"] == "cleanup-conditional-delete" for item in seen)
+    assert result["cleanup"][1]["skipped"] == "create-version-mismatch"
+    assert result["cleanupComplete"] is False
+
+
+def test_preflight_existing_same_or_different_fields_never_creates_or_deletes(tmp_path: Path) -> None:
+    plan = _plan()
+    for fields in (plan["fixtureFields"], {"n": {"integerValue": "99"}}):
+        calls: list[str] = []
+
+        def execute(
+            operation: dict[str, Any], fields=fields, calls=calls
+        ) -> dict[str, Any]:
+            calls.append(operation["kind"])
+            if operation["kind"] == "preflight-typed-absence":
+                return _owned(plan) if fields == plan["fixtureFields"] else _ok({"name": plan["document"], "fields": fields})
+            if operation["kind"] == "cleanup-ownership-read":
+                return _owned(plan)
+            if operation["kind"] == "cleanup-verify-absence":
+                return _owned(plan)
+            raise AssertionError("preexisting document must not be mutated")
+
+        result = collect_local(plan, execute, tmp_path / ("same" if fields == plan["fixtureFields"] else "different"))
+        assert "create-only-patch" not in calls
+        assert "cleanup-conditional-delete" not in calls
+        assert result["cleanupComplete"] is False
+
+
+def test_successful_unchanged_create_is_deleted_with_exact_version(tmp_path: Path) -> None:
+    plan = _plan()
+    create_time = "2026-09-17T01:02:03.000000Z"
+    update_time = "2026-09-17T01:02:03.000000Z"
+    seen: list[dict[str, Any]] = []
+
+    def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        seen.append(copy.deepcopy(operation))
+        if operation["kind"] == "preflight-typed-absence":
+            return _not_found()
+        if operation["kind"] in {"create-only-patch", "cleanup-ownership-read"}:
+            return _owned(plan, update_time, create_time)
+        if operation["kind"] == "cleanup-conditional-delete":
+            assert f"currentDocument.updateTime={update_time.replace(':', '%3A')}" in operation["path"]
+            return _ok({})
+        if operation["kind"] == "cleanup-verify-absence":
+            return _not_found()
+        return _ok({"documents": [plan["expectedPositiveDocument"]]})
+
+    result = collect_local(plan, execute, tmp_path / "receipt")
     assert result["cleanupComplete"] is True
 
 
@@ -206,6 +259,109 @@ def test_final_collection_publication_failure_is_returned_without_erasing_cleanu
     assert result["cleanupComplete"] is True
     assert result["persistenceComplete"] is False
     assert result["completed"] is False
+    assert any("collection.json:OSError" in item for item in result["infrastructureFailures"])
+
+
+def test_final_collection_collision_keeps_existing_file_and_reports_stale_recording(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    output = tmp_path / "receipt"
+    transport = _transport(plan)
+
+    def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        if operation["kind"] == "cleanup-verify-absence":
+            (output / "collection.json").write_text("old-record\n")
+        return transport(operation)
+
+    result = collect_local(plan, execute, output)
+
+    assert (output / "collection.json").read_text() == "old-record\n"
+    assert result["cleanupComplete"] is True
+    assert result["recordingComplete"] is False
+    assert result["persistenceComplete"] is False
+    assert any("collection.json:FileExistsError" in item for item in result["infrastructureFailures"])
+
+
+def test_final_collection_file_write_fault_reports_failure_after_real_rows(
+    tmp_path: Path, monkeypatch
+) -> None:
+    original_fdopen = os.fdopen
+    publication_count = 0
+
+    class FailingStream:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+        def write(self, value):
+            raise OSError("final-file-write-failure")
+
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+
+    def fdopen(fd, mode, *args, **kwargs):
+        nonlocal publication_count
+        publication_count += 1
+        stream = original_fdopen(fd, mode, *args, **kwargs)
+        return FailingStream(stream) if publication_count == 10 else stream
+
+    monkeypatch.setattr("query_in_collector.os.fdopen", fdopen)
+    plan = _plan()
+    result = collect_local(plan, _transport(plan), tmp_path / "receipt")
+
+    assert result["cleanupComplete"] is True
+    assert result["recordingComplete"] is False
+    assert result["persistenceComplete"] is False
+    assert any("collection.json:OSError" in item for item in result["infrastructureFailures"])
+
+
+def test_final_collection_link_fault_reports_failure_after_real_rows(
+    tmp_path: Path, monkeypatch
+) -> None:
+    original_link = os.link
+
+    def link(src, dst, *args, **kwargs):
+        if dst == "collection.json":
+            raise OSError("final-link-failure")
+        return original_link(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr("query_in_collector.os.link", link)
+    plan = _plan()
+    result = collect_local(plan, _transport(plan), tmp_path / "receipt")
+
+    assert result["cleanupComplete"] is True
+    assert result["recordingComplete"] is False
+    assert result["persistenceComplete"] is False
+    assert any("collection.json:OSError" in item for item in result["infrastructureFailures"])
+
+
+@pytest.mark.parametrize("target_call", [20, 21])
+def test_final_collection_file_or_directory_fsync_fault_reports_failure(
+    tmp_path: Path, monkeypatch, target_call: int
+) -> None:
+    original_fsync = os.fsync
+    calls = 0
+
+    def fsync(fd):
+        nonlocal calls
+        calls += 1
+        if calls == target_call:
+            raise OSError("final-fsync-failure")
+        return original_fsync(fd)
+
+    monkeypatch.setattr("query_in_collector.os.fsync", fsync)
+    plan = _plan()
+    result = collect_local(plan, _transport(plan), tmp_path / "receipt")
+
+    assert result["cleanupComplete"] is True
+    assert result["recordingComplete"] is False
+    assert result["persistenceComplete"] is False
     assert any("collection.json:OSError" in item for item in result["infrastructureFailures"])
 
 

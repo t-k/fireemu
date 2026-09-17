@@ -6,7 +6,7 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 #[cfg(not(windows))]
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -2650,9 +2650,10 @@ pub struct BlockingAuthBridge {
     deadline: Duration,
     forward_inbound_credentials: bool,
     settings: Arc<RwLock<BlockingAuthSettings>>,
+    settings_revision: AtomicU64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct BlockingAuthSettings {
     selections: fireemu_core_functions::manifest::BlockingAuthSelections,
     /// Optional project-level upper bound for raw token forwarding. `None` preserves the legacy
@@ -3061,6 +3062,7 @@ impl BlockingAuthBridge {
                 selections,
                 forwarding_restrictions,
             })),
+            settings_revision: AtomicU64::new(0),
         })
     }
 
@@ -3094,6 +3096,7 @@ impl BlockingAuthBridge {
                 selections: fireemu_core_functions::manifest::BlockingAuthSelections::default(),
                 forwarding_restrictions: None,
             })),
+            settings_revision: AtomicU64::new(0),
         }
     }
 
@@ -3127,6 +3130,22 @@ impl BlockingAuthBridge {
             .read()
             .map(|settings| settings.clone())
             .map_err(|_| ())
+    }
+
+    fn settings_revision(&self) -> u64 {
+        self.settings_revision.load(Ordering::SeqCst)
+    }
+
+    fn install_settings(&self, settings: BlockingAuthSettings) -> Result<(), String> {
+        let mut current = self
+            .settings
+            .write()
+            .map_err(|_| "blocking Auth settings are poisoned".to_owned())?;
+        if *current != settings {
+            *current = settings;
+            self.settings_revision.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_lines)]
@@ -3437,23 +3456,13 @@ impl BlockingAuthBridge {
                 .blocking_auth_target(event, selection)
                 .map_err(|error| format!("blockingFunctions: {error}"))?;
         }
-        let mut current = self
-            .settings
-            .write()
-            .map_err(|_| "blocking Auth settings are poisoned".to_owned())?;
-        *current = settings;
-        Ok(())
+        self.install_settings(settings)
     }
 
     /// Validates and atomically replaces the logical project-level blocking settings.
     pub fn replace_blocking_auth_settings(&self, value: &serde_json::Value) -> Result<(), String> {
         let settings = self.parse_blocking_auth_settings(value)?;
-        let mut current = self
-            .settings
-            .write()
-            .map_err(|_| "blocking Auth settings are poisoned".to_owned())?;
-        *current = settings;
-        Ok(())
+        self.install_settings(settings)
     }
 
     /// Applies only the fields named by an Auth project update mask. A nested update must merge
@@ -3566,12 +3575,7 @@ impl BlockingAuthBridge {
                 .blocking_auth_target(event, selection)
                 .map_err(|error| format!("blockingFunctions: {error}"))?;
         }
-        let mut current = self
-            .settings
-            .write()
-            .map_err(|_| "blocking Auth settings are poisoned".to_owned())?;
-        *current = next;
-        Ok(())
+        self.install_settings(next)
     }
 
     #[allow(clippy::unused_self)]
@@ -3720,6 +3724,10 @@ impl BlockingAuthBridge {
 }
 
 impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBridge {
+    fn blocking_auth_revision(&self) -> u64 {
+        self.settings_revision()
+    }
+
     fn request_concurrency_limit(&self) -> usize {
         self.runtime.max_global_concurrency()
     }
@@ -4724,6 +4732,53 @@ mod tests {
                 .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
                 .refresh_token
         );
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocking_auth_settings_revision_changes_only_after_successful_updates() {
+        let runtime = runtime_with_blocking_auth_policy_order(&[("guardA", true, false)]).await;
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+            true,
+        );
+        let explicit = json!({
+            "triggers": {
+                "beforeCreate": {
+                    "functionUri": "fireemu://functions/demo-app/us-central1/guardA"
+                }
+            }
+        });
+
+        assert_eq!(bridge.settings_revision(), 0);
+        bridge
+            .replace_blocking_auth_settings(&explicit)
+            .expect("valid replacement");
+        assert_eq!(bridge.settings_revision(), 1);
+        bridge
+            .replace_blocking_auth_settings(&explicit)
+            .expect("replacing with the same settings is a no-op");
+        assert_eq!(bridge.settings_revision(), 1);
+
+        let error = bridge
+            .replace_blocking_auth_settings(&json!({"triggers": []}))
+            .expect_err("invalid replacement");
+        assert!(error.contains("triggers must be an object"), "{error}");
+        assert_eq!(bridge.settings_revision(), 1);
+
+        bridge
+            .replace_blocking_auth_settings_masked(
+                &json!({"triggers": {"beforeCreate": null}}),
+                &["blockingFunctions.triggers.beforeCreate".to_owned()],
+            )
+            .expect("valid masked replacement");
+        assert_eq!(bridge.settings_revision(), 2);
+
+        bridge
+            .restore_blocking_auth_settings_snapshot_value(&explicit)
+            .expect("valid snapshot restore");
+        assert_eq!(bridge.settings_revision(), 3);
         runtime.shutdown().await;
     }
 

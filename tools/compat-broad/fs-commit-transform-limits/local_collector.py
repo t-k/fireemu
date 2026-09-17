@@ -1,171 +1,197 @@
-"""Bounded local Commit transform collector; never performs production I/O."""
+"""Finite local collection and ownership-bound recovery, independent of outcomes."""
 
 from __future__ import annotations
 
 import copy
-from urllib.parse import quote, urlsplit, parse_qs
-from typing import Any, Callable
+import json
+from collections.abc import Callable
+from typing import Any
+from urllib.parse import quote
 
-from transform_compiler import compile_plan
-
-
-def _receipt(status: int, body: Any) -> dict[str, Any]:
-    return {"complete": True, "failure": None, "status": status, "body": body}
+from transform_comparator import _exact, _timestamp, _validate_plan
 
 
-def _absent() -> dict[str, Any]:
-    return {"error": {"code": 404, "status": "NOT_FOUND"}}
-
-
-def _resource(operation: dict[str, Any]) -> str:
-    return operation["path"].split("?", 1)[0].removeprefix("/v1/")
-
-
-def _typed_not_found(receipt: dict[str, Any]) -> bool:
-    body = receipt.get("body")
-    error = body.get("error") if isinstance(body, dict) else None
+def complete(receipt: dict[str, Any]) -> bool:
     return (
         receipt.get("complete") is True
         and receipt.get("failure") is None
-        and receipt.get("status") == 404
+        and type(receipt.get("status")) is int
+        and 100 <= receipt["status"] <= 599
+        and "body" in receipt
+    )
+
+
+def typed_not_found(receipt: dict[str, Any]) -> bool:
+    body = receipt.get("body")
+    error = body.get("error") if isinstance(body, dict) else None
+    return (
+        complete(receipt)
+        and receipt["status"] == 404
         and isinstance(error, dict)
-        and error.get("code") == 404
+        and type(error.get("code")) is int
+        and error["code"] == 404
         and error.get("status") == "NOT_FOUND"
     )
 
 
-class LocalTransformStore:
-    """Small deterministic local adapter for the closed compiler plan."""
-
-    def __init__(self, *, fail_kind: str | None = None) -> None:
-        self.documents: dict[str, dict[str, Any]] = {}
-        self.fail_kind = fail_kind
-        self._version = 0
-
-    def _time(self) -> str:
-        self._version += 1
-        return f"2026-01-01T00:00:{self._version:02d}Z"
-
-    def execute(self, operation: dict[str, Any]) -> dict[str, Any]:
-        if operation["kind"] == self.fail_kind:
-            return {"complete": False, "failure": "local-injected-failure"}
-        method = operation["method"]
-        resource = _resource(operation)
-        if method == "GET":
-            document = self.documents.get(resource)
-            return _receipt(200, copy.deepcopy(document)) if document else _receipt(404, _absent())
-        if method == "PATCH":
-            if resource in self.documents:
-                return _receipt(409, {"error": {"code": 409, "status": "ALREADY_EXISTS"}})
-            body = copy.deepcopy(operation["body"])
-            body["updateTime"] = self._time()
-            self.documents[resource] = body
-            return _receipt(200, copy.deepcopy(body))
-        if method == "POST":
-            writes = operation["body"]["writes"]
-            resource = writes[0]["transform"]["document"]
-            count = sum(len(write["transform"]["fieldTransforms"]) for write in writes)
-            if count > 500:
-                return _receipt(400, {"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": "field transform limit"}})
-            document = copy.deepcopy(self.documents[resource])
-            for write in writes:
-                for transform in write["transform"]["fieldTransforms"]:
-                    document["fields"][transform["fieldPath"]] = {"integerValue": "1"}
-            document["updateTime"] = self._time()
-            self.documents[resource] = document
-            return _receipt(200, {"commitTime": document["updateTime"], "writeResults": [{"updateTime": document["updateTime"]} for _ in writes]})
-        if method == "DELETE":
-            version = parse_qs(urlsplit(operation["path"]).query).get("currentDocument.updateTime", [None])[0]
-            document = self.documents.get(resource)
-            if document is None:
-                return _receipt(404, _absent())
-            if version != document["updateTime"]:
-                return _receipt(412, {"error": {"code": 412, "status": "FAILED_PRECONDITION"}})
-            del self.documents[resource]
-            return _receipt(200, {})
-        raise ValueError(f"unsupported local operation: {method}")
+def owned(receipt: dict[str, Any], resource: str) -> bool:
+    body = receipt.get("body")
+    fields = body.get("fields") if isinstance(body, dict) else None
+    return (
+        complete(receipt)
+        and receipt["status"] == 200
+        and isinstance(body, dict)
+        and body.get("name") == resource
+        and isinstance(fields, dict)
+        and _exact(fields.get("_sharedOwner"), {"referenceValue": resource})
+        and _timestamp(body.get("updateTime"))
+    )
 
 
-def _row(index: int, request: dict[str, Any], receipt: dict[str, Any]) -> dict[str, Any]:
-    return {"index": index, "request": copy.deepcopy(request), **copy.deepcopy(receipt)}
+def _row(
+    index: int, request: dict[str, Any], receipt: dict[str, Any]
+) -> dict[str, Any]:
+    return {**copy.deepcopy(receipt), "index": index, "request": copy.deepcopy(request)}
 
 
-def collect_local(plan: dict[str, Any], execute: Callable[[dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
-    expected = compile_plan(plan["project"], plan["database"], plan["nonce"])
-    if plan != expected:
-        raise ValueError("compiler plan drift")
+def normalize_receipt(receipt: Any) -> dict[str, Any]:
+    """Validate the executor envelope without accepting provenance overrides."""
+    json.dumps(receipt, allow_nan=False)
+    if not isinstance(receipt, dict) or any(
+        key in receipt for key in ("index", "request", "skipped", "absent")
+    ):
+        raise ValueError("invalid receipt envelope")
+    receipt = copy.deepcopy(receipt)
+    if not complete(receipt):
+        receipt.update(
+            complete=False, failure=receipt.get("failure") or "invalid-receipt"
+        )
+    return receipt
+
+
+def collect_local(
+    plan: dict[str, Any], execute: Callable[[dict[str, Any]], dict[str, Any]]
+) -> dict[str, Any]:
+    """Run at most 11 observations and six recovery slots without retrying.
+
+    Only transport failure or missing mutation ownership stops observation.
+    Complete unexpected API responses remain semantic evidence. A create attempt
+    incurs recovery responsibility before dispatch, including a lost response.
+    """
+    _validate_plan(plan)
+    plan = copy.deepcopy(plan)
 
     def dispatch(operation: dict[str, Any]) -> dict[str, Any]:
         try:
-            return execute(copy.deepcopy(operation))
-        except Exception as error:
-            return {"complete": False, "failure": f"local-executor:{type(error).__name__}"}
+            receipt = execute(copy.deepcopy(operation))
+            return normalize_receipt(receipt)
+        except Exception as error:  # noqa: BLE001 -- every ambiguous mutation still enters recovery.
+            return {
+                "complete": False,
+                "failure": f"local-executor:{type(error).__name__}",
+            }
 
     rows: list[dict[str, Any]] = []
-    created: set[str] = set()
+    attempted: set[str] = set()
+    proven_owned: set[str] = set()
     for index, operation in enumerate(plan["observation"]):
+        kind = operation["kind"]
+        if kind == "commit-transform" and operation["resources"][0] not in proven_owned:
+            break
+        if kind == "create-only-patch":
+            attempted.add(operation["resource"])
+        receipt = dispatch(operation)
+        rows.append(_row(index, operation, receipt))
+        if not complete(receipt):
+            break
+        if kind == "preflight-typed-absence" and not typed_not_found(receipt):
+            break
+        if kind in {"create-only-patch", "baseline-readback"}:
+            resource = operation["resource"]
+            if owned(receipt, resource):
+                proven_owned.add(resource)
+            else:
+                proven_owned.discard(resource)
+
+    cleanup: list[dict[str, Any]] = []
+    for index, declared in enumerate(plan["recovery"]):
+        operation = copy.deepcopy(declared)
+        resource = operation["resource"]
+        if operation["kind"] == "cleanup-conditional-delete":
+            prior = cleanup[index - 1]
+            if typed_not_found(prior):
+                cleanup.append(
+                    _row(
+                        index,
+                        operation,
+                        {
+                            "complete": True,
+                            "failure": None,
+                            "status": None,
+                            "body": None,
+                            "skipped": "already-absent",
+                        },
+                    )
+                )
+                continue
+            if resource not in attempted or not owned(prior, resource):
+                cleanup.append(
+                    _row(
+                        index,
+                        operation,
+                        {
+                            "complete": False,
+                            "failure": "owned-read-unavailable",
+                            "status": None,
+                            "body": None,
+                            "skipped": "unsafe-delete",
+                        },
+                    )
+                )
+                continue
+            operation["path"] += "?currentDocument.updateTime=" + quote(
+                prior["body"]["updateTime"], safe=""
+            )
         receipt = dispatch(operation)
         row = _row(index, operation, receipt)
-        rows.append(row)
-        if receipt.get("complete") is not True or receipt.get("failure") is not None:
-            break
-        kind = operation["kind"]
-        body = receipt.get("body")
-        resource = operation.get("resource") or _resource(operation)
-        if kind == "preflight-typed-absence":
-            if not _typed_not_found(receipt):
-                break
-        elif kind == "create-only-patch":
-            fields = body.get("fields") if isinstance(body, dict) else None
-            if receipt.get("status") != 200 or not isinstance(body, dict) or body.get("name") != resource or fields != operation["body"]["fields"]:
-                break
-            created.add(resource)
-        elif kind in {"baseline-readback", "poststate-readback", "poststate-control-readback"}:
-            expected_status = operation["expect"]["status"]
-            if receipt.get("status") != expected_status or not isinstance(body, dict) or body.get("name") != resource:
-                break
-        elif kind == "commit-transform":
-            expected = operation["expect"]["outcome"]
-            if expected == "accepted" and receipt.get("status") != 200:
-                break
-            if expected == "refused" and not (400 <= receipt.get("status", 0) < 500):
-                break
-    cleanup: list[dict[str, Any]] = []
-    recovery = plan["recovery"]
-    for index, declared in enumerate(recovery):
-        resource = declared["resource"]
-        if resource not in created:
-            cleanup.append(_row(index, declared, {"complete": True, "failure": None, "status": None, "body": {"skipped": "not-created"}, "skipped": True}))
-            continue
-        operation = copy.deepcopy(declared)
-        if declared["kind"] == "cleanup-ownership-read":
-            receipt = dispatch(operation)
-            body = receipt.get("body")
-            owned = (
-                receipt.get("status") == 200
-                and isinstance(body, dict)
-                and body.get("name") == resource
-                and body.get("fields", {}).get("_sharedOwner") == {"referenceValue": resource}
-                and isinstance(body.get("updateTime"), str)
-            )
-            row = _row(index, operation, receipt)
-            if receipt.get("complete") is not True or receipt.get("failure") is not None or (receipt.get("status") == 200 and not owned):
-                row["complete"] = False
-                row["failure"] = "ownership-mismatch"
-            cleanup.append(row)
-            continue
-        if declared["kind"] == "cleanup-conditional-delete":
-            previous = cleanup[index - 1]
-            body = previous.get("body")
-            if previous.get("complete") is not True or previous.get("failure") is not None or previous.get("status") != 200 or not isinstance(body, dict) or not body.get("updateTime"):
-                cleanup.append(_row(index, declared, {"complete": False, "failure": "owned-read-unavailable", "status": None, "body": None}))
-                continue
-            operation["path"] += "?currentDocument.updateTime=" + quote(body["updateTime"], safe="")
-        receipt = dispatch(operation)
-        cleanup_row = _row(index, operation, receipt)
-        cleanup_row["absent"] = operation["kind"] == "cleanup-verify-absence" and _typed_not_found(receipt)
-        cleanup.append(cleanup_row)
-    absence = {resource: any(row.get("request", {}).get("resource") == resource and row.get("request", {}).get("kind") == "cleanup-verify-absence" and row.get("absent") is True for row in cleanup) for resource in plan["ownedResources"]}
-    recording = len(rows) == len(plan["observation"]) and all(row.get("complete") is True and row.get("failure") is None for row in rows)
-    cleanup_complete = (not created) or (len(cleanup) == len(recovery) and all(row.get("complete") is True and (row.get("status") == 404 if row["request"]["kind"] == "cleanup-verify-absence" else row.get("status") in (200, None)) for row in cleanup) and all(absence.values()))
-    return {"productionExecuted": False, "recordingComplete": recording, "cleanupComplete": cleanup_complete, "completed": recording and cleanup_complete, "rows": rows, "cleanup": cleanup, "resourceAbsence": absence}
+        row["absent"] = operation[
+            "kind"
+        ] == "cleanup-verify-absence" and typed_not_found(receipt)
+        cleanup.append(row)
+
+    absence = {
+        resource: any(
+            row["request"]["resource"] == resource
+            and row["request"]["kind"] == "cleanup-verify-absence"
+            and typed_not_found(row)
+            for row in cleanup
+        )
+        for resource in plan["ownedResources"]
+    }
+    recovery_valid = []
+    for index in (0, 3):
+        read, delete, verify = cleanup[index : index + 3]
+        deletion_ok = (
+            delete.get("skipped") == "already-absent"
+            and typed_not_found(read)
+            and delete.get("failure") is None
+        ) or (complete(delete) and delete["status"] == 200)
+        recovery_valid.append(
+            (owned(read, read["request"]["resource"]) or typed_not_found(read))
+            and deletion_ok
+            and typed_not_found(verify)
+        )
+    recording = len(rows) == 11 and all(complete(row) for row in rows)
+    cleanup_complete = all(recovery_valid) and all(absence.values())
+    return {
+        "productionExecuted": False,
+        "acquisitionValidated": False,
+        "promotionReady": False,
+        "recordingComplete": recording,
+        "cleanupComplete": cleanup_complete,
+        "completed": recording and cleanup_complete,
+        "rows": rows,
+        "cleanup": cleanup,
+        "resourceAbsence": absence,
+        "attemptedResources": sorted(attempted),
+    }

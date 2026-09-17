@@ -621,6 +621,9 @@ def _run_worker(
         gate.path.resolve()
     ):
         raise ValueError("stream reservation Gate identity differs")
+    # Reject an expired reservation before starting a worker or charging a slot.
+    # Each wire grant still revalidates after any subsequent admission wait.
+    ledger.validate(ticket, duration=REQUEST_SECONDS)
     ticket = copy.deepcopy(ticket)
     frozen_source = source_digest()
     parent, child = socket.socketpair()

@@ -2415,6 +2415,10 @@ struct ReentrantAdminHook {
     mutate: Arc<std::sync::atomic::AtomicBool>,
 }
 
+struct ReentrantProjectConfigHook {
+    state: std::sync::Weak<AuthState>,
+}
+
 #[derive(Clone, Copy)]
 enum TenantMutation {
     Disable,
@@ -2519,6 +2523,41 @@ impl AuthBlockingHook for ReentrantAdminHook {
     }
 }
 
+impl AuthBlockingHook for ReentrantProjectConfigHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        if event != BlockingAuthEvent::BeforeCreate {
+            return Ok(json!({}));
+        }
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(BlockingFunctionFailure::unhandled)?;
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let nested_state = state.clone();
+        std::thread::spawn(move || {
+            let response = handle_with(
+                &nested_state,
+                "PATCH",
+                "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=signIn.allowDuplicateEmails",
+                &owner(),
+                &json!({"signIn": {"allowDuplicateEmails": true}}),
+            );
+            let _ = sender.send(response);
+        });
+        let response = receiver
+            .recv_timeout(std::time::Duration::from_millis(250))
+            .map_err(|_| BlockingFunctionFailure::unhandled())?;
+        if response.status != 200 {
+            return Err(BlockingFunctionFailure::unhandled());
+        }
+        Ok(json!({}))
+    }
+}
+
 #[test]
 fn blocking_auth_rebases_on_admin_mutations_without_deadlocking_or_losing_them() {
     let mutate = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -2563,6 +2602,33 @@ fn blocking_auth_rebases_on_admin_mutations_without_deadlocking_or_losing_them()
             .unwrap()
             .disabled
     );
+}
+
+#[test]
+fn blocking_auth_can_reenter_project_config_without_deadlocking() {
+    let state = Arc::new_cyclic(|weak| {
+        let mut state = state();
+        state.blocking = Some(Arc::new(ReentrantProjectConfigHook {
+            state: weak.clone(),
+        }));
+        state
+    });
+
+    let (status, body) = post(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "config-callback@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    let (status, config) = admin(
+        &state,
+        "GET",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config",
+        &Value::Null,
+    );
+    assert_eq!(status, 200, "{config}");
+    assert_eq!(config["signIn"]["allowDuplicateEmails"], true);
 }
 
 #[test]

@@ -2080,6 +2080,39 @@ impl AuthStore {
         self.create_user_with_email_policy(new, now, true)
     }
 
+    /// Reserves the next generated local ID for a speculative request.
+    ///
+    /// Blocking Auth callbacks run after the request's store copy is prepared. The live store
+    /// therefore advances its random stream before the callback so another request cannot build
+    /// the same generated identity from the same snapshot. The caller must either consume this
+    /// override through a subsequent account creation or discard the speculative copy.
+    pub fn reserve_next_generated_local_id(&mut self) -> String {
+        loop {
+            let candidate = self.random_id28();
+            if !self.users.contains_key(&LocalId(candidate.clone())) {
+                self.next_id_override = Some(candidate.clone());
+                return candidate;
+            }
+        }
+    }
+
+    /// Uses a previously reserved ID for the next generated account.
+    ///
+    /// This is used when a blocking request is rebased onto the live store after its callback.
+    /// The caller has already validated that the ID came from the same speculative request.
+    pub fn use_reserved_generated_local_id(&mut self, id: &str) {
+        self.next_id_override = Some(id.to_owned());
+    }
+
+    /// Advances this store's hidden random stream to the state of a speculative copy.
+    ///
+    /// Randomness is internal state and is copied only after a new account has been prepared;
+    /// this prevents two concurrent speculative requests from reusing one generated ID while
+    /// leaving user, token and quota mutations transactional.
+    pub fn adopt_random_state_from(&mut self, speculative: &Self) {
+        self.rng = speculative.rng.clone();
+    }
+
     /// Creates the provider-scoped account used by `IdP` sign-in when email uniqueness is off.
     fn create_idp_user(&mut self, new: NewUser, now: LogicalInstant) -> Result<LocalId, AuthError> {
         self.create_user_with_email_policy(new, now, false)
@@ -6147,6 +6180,15 @@ impl AuthRegistry {
 
     /// Deletes a tenant namespace and its metadata.
     pub fn delete_tenant(&self, project: &str, tenant: &str) -> bool {
+        // Tenant authentication and tenant configuration updates use the project gate. Hold the
+        // same gate before inspecting membership so deletion cannot detach a namespace while an
+        // in-flight request is committing against its previously selected store.
+        let Some(gate) = self.operation_gate(project, None) else {
+            return false;
+        };
+        let Ok(_operation) = gate.lock() else {
+            return false;
+        };
         let key = (project.to_owned(), tenant.to_owned());
         let removed = self.tenants.lock().ok().and_then(|mut stores| {
             let mut metadata = self.tenant_metadata.lock().ok()?;
@@ -7115,6 +7157,33 @@ mod compatibility_routing_tests {
                 registry.default.lock().unwrap().config()
             );
         }
+    }
+
+    #[test]
+    fn tenant_deletion_waits_for_the_project_operation_gate() {
+        let registry = Arc::new(AuthRegistry::new("demo-app", store("demo-app", 2)));
+        let tenant = registry.ensure_tenant("demo-app", "customer").unwrap();
+        let gate = registry.operation_gate("demo-app", None).unwrap();
+        let operation = gate.lock().unwrap();
+        let deleting_registry = registry.clone();
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
+        let deletion = std::thread::spawn(move || {
+            done_tx
+                .send(deleting_registry.delete_tenant("demo-app", "customer"))
+                .unwrap();
+        });
+
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "tenant deletion must not detach a namespace while a project operation is active"
+        );
+        assert!(registry.tenant_store("demo-app", "customer").is_some());
+
+        drop(operation);
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(2)), Ok(true));
+        deletion.join().unwrap();
+        assert!(registry.tenant_store("demo-app", "customer").is_none());
+        drop(tenant);
     }
 
     #[test]

@@ -1756,7 +1756,8 @@ fn dispatch_with_blocking_hook(
     blocking: &dyn AuthBlockingHook,
     handler: routes::Handler,
     store_arc: &Arc<Mutex<AuthStore>>,
-    store: std::sync::MutexGuard<'_, AuthStore>,
+    mut store: std::sync::MutexGuard<'_, AuthStore>,
+    settings_gate: &Arc<Mutex<()>>,
     operation_gate: Option<&Arc<Mutex<()>>>,
     query: Option<&str>,
     body: &Value,
@@ -1776,6 +1777,8 @@ fn dispatch_with_blocking_hook(
             ))
         });
     let mut candidate = store.clone();
+    let _reserved_local_id = request_may_create_end_user(handler, &store, body, at)
+        .then(|| candidate.reserve_next_generated_local_id());
     let response = dispatch(
         handler,
         &mut candidate,
@@ -1810,6 +1813,13 @@ fn dispatch_with_blocking_hook(
         && uid_text.as_deref().is_some_and(|uid| {
             store.user_by_id(uid).is_none() && candidate.user_by_id(uid).is_some()
         });
+    if is_new {
+        // The candidate was built while the live store was locked. Advance only its hidden
+        // random stream before releasing that lock, so another blocking request receives a
+        // distinct generated identity. The user and credential mutations remain speculative
+        // until the commit boundary below.
+        store.adopt_random_state_from(&candidate);
+    }
     let signed_in = is_authentication
         && response.status == 200
         && (response.body.get("idToken").is_some() || response.body.get("id_token").is_some());
@@ -1945,6 +1955,11 @@ fn dispatch_with_blocking_hook(
             return error(500, "INTERNAL");
         };
         let mut committed = live.clone();
+        if is_new {
+            if let Some(uid) = speculative_uid.as_ref().map(LocalId::as_str) {
+                committed.use_reserved_generated_local_id(uid);
+            }
+        }
         let mut committed_response = if handler == routes::Handler::SignUp && is_new {
             sign_up(
                 &mut committed,
@@ -2147,10 +2162,14 @@ fn dispatch_with_blocking_hook(
         *live = committed;
         committed_response
     };
-    // Do not hold the namespace gate while invoking the synchronous hook: hooks may re-enter
-    // Auth routes (for example, an Admin update) before returning. Acquire it only after the
-    // callback completes, before reading metadata or locking the live store. This preserves the
-    // registry's gate-before-metadata/store order at the commit boundary.
+    // Do not hold either adapter settings gate or namespace gate while invoking the synchronous
+    // hook: hooks may re-enter Auth routes (for example, an Admin update) before returning.
+    // Acquire both only after the callback completes, before reading metadata or locking the
+    // live store. This preserves the adapter-to-registry gate order at the commit boundary while
+    // allowing a callback to perform a nested settings operation.
+    let Ok(_settings_operation) = settings_gate.lock() else {
+        return error(500, "INTERNAL");
+    };
     let _operation = match operation_gate {
         Some(gate) => match gate.lock() {
             Ok(operation) => Some(operation),
@@ -2220,10 +2239,9 @@ fn handle_with_policy(
     let at = now(state);
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
     let resolution = routes::resolve(method, path);
-    // Project configuration and blocking Auth requests share this adapter-level gate. The
-    // registry owns the Auth namespace gate used by the core project update below, so keeping
-    // this outer gate separate lets the blocking candidate and Auth update remain serialized
-    // without recursively locking the registry gate.
+    // Project configuration uses this adapter-level gate. Blocking Auth requests acquire the
+    // same gate only at their commit boundary, after their synchronous callback has returned, so
+    // a callback can re-enter an Admin configuration route without recursively locking it.
     let settings_boundary = matches!(
         resolution,
         routes::Resolution::Matched { route, .. }
@@ -2232,13 +2250,7 @@ fn handle_with_policy(
                 routes::Handler::AdminGetProjectConfig
                     | routes::Handler::AdminUpdateProjectConfig
             )
-    ) || state.blocking.as_deref().is_some_and(|blocking| {
-        matches!(
-            resolution,
-            routes::Resolution::Matched { route, .. }
-                if handler_may_invoke_blocking_auth(blocking, route.handler)
-        )
-    });
+    );
     let _settings_operation = if settings_boundary {
         match state.operation_gate.lock() {
             Ok(operation) => Some(operation),
@@ -2341,14 +2353,14 @@ fn handle_with_policy(
     // A registry-backed namespace has one gate shared by end-user admission and config PATCHes.
     // The legacy single-store blocking bridge may synchronously call back into that store from
     // its hook (some test and embedding bridges do), so preserve its re-entrant store behavior
-    // when no registry exists instead of introducing a store/gate deadlock. End-user requests
-    // without a blocking hook still use the adapter-wide gate, which is also used by the
-    // single-store config route.
+    // when no registry exists instead of introducing a store/gate deadlock. The adapter-wide
+    // gate is reacquired by the blocking commit boundary after the callback returns. End-user
+    // requests without a blocking hook still use the adapter-wide gate, which is also used by
+    // the single-store config route.
     let operation_gate = if state.registry.is_none() && state.blocking.is_some() {
-        // The legacy single-store bridge already serializes blocking admission with the outer
-        // settings boundary, but releases the store before invoking the hook. Keep non-hooking
-        // routes able to read that store while the hook is delayed; putting them behind the same
-        // gate would starve ordinary Auth traffic behind an external callback.
+        // Release the namespace gate before invoking a legacy single-store hook. The gate is
+        // reacquired by dispatch_with_blocking_hook for its commit, while non-hooking routes can
+        // continue to read the store during an external callback.
         None
     } else if blocking_auth || end_user_request {
         let gate = match state.registry.as_ref() {
@@ -2598,6 +2610,7 @@ fn handle_with_policy(
             route.handler,
             &store_arc,
             store,
+            &state.operation_gate,
             operation_gate.as_ref(),
             query,
             body,

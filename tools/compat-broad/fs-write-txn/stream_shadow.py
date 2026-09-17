@@ -301,6 +301,8 @@ def validate_owned_receipt(receipt, artifact_sha):
         or owned.get("configurationDigest") != digest(CONFIG)
     ):
         raise ValueError("owned artifact acquisition binding incomplete")
+    if owned.get("pricingSdk") != production.pricing_sdk_binding():
+        raise ValueError("owned pricing SDK source binding differs")
     listeners = instance.get("listenerOwners", {})
     if set(listeners) != {"firestoreOrigin", "controlOrigin", "metadataOrigin"}:
         raise ValueError("all owned listener observations required")
@@ -327,6 +329,7 @@ def run_shadow(artifact, build_manifest, output):
     validate_build(build, artifact_sha, inputs)
     commit = production.checkout_binding()
     source = stream_bridge.source_digest()
+    pricing_sdk = production.pricing_sdk_binding()
     output = Path(output).resolve()
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     retained = output / "fireemu"
@@ -401,6 +404,7 @@ def run_shadow(artifact, build_manifest, output):
         )
         owned = {
             "artifactSha256": artifact_sha,
+            "pricingSdk": pricing_sdk,
             "version": version,
             "build": build,
             "executionCommit": commit,

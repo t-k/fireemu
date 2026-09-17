@@ -609,3 +609,16 @@ def test_upfront_network_reserve_preserves_all_fourteen_recovery_slots(
     assert pricing["networkPlanningMiB"] == 5483
     assert pricing["calculatedNetworkMicrousd"] == 1_231_534
     assert pricing["freeQuotaCreditBytes"] == 0
+
+
+def test_pricing_sdk_binding_rejects_unattested_installed_client(tmp_path):
+    import json
+
+    module = production()
+    assert hasattr(module, "pricing_sdk_binding")
+    (tmp_path / "package.json").write_text(json.dumps({"version": "8.7.1"}))
+    source = tmp_path / "build/src/v1/firestore_client.js"
+    source.parent.mkdir(parents=True)
+    source.write_text("const maxMessageLength = 17 * 1024 * 1024;")
+    with pytest.raises(ValueError, match="SDK"):
+        module.pricing_sdk_binding(tmp_path)

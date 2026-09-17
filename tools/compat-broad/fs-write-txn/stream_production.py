@@ -27,6 +27,7 @@ REQUEST_SLOTS = 33
 REQUEST_COST_MICROUSD = 100
 FIXED_NETWORK_MICROUSD = 1_300_000
 TOTAL_COST_MICROUSD = FIXED_NETWORK_MICROUSD + REQUEST_SLOTS * REQUEST_COST_MICROUSD
+SDK_CLIENT_SHA256 = "ab6947259f63e324aaa87ab6934fd538b5defce75a19f40a8896728223c23dc7"
 
 
 def pricing_basis():
@@ -61,6 +62,28 @@ def pricing_basis():
         "documentWritesUpperBound": 9,
         "totalPlanningMicrousd": TOTAL_COST_MICROUSD,
         "isExpectedInvoice": False,
+    }
+
+
+def pricing_sdk_binding(directory=None):
+    """Attest only the inspected SDK initialization cap, not the whole dependency tree."""
+    directory = (
+        Path(directory)
+        if directory is not None
+        else ROOT / "tools/sdk-smoke/node_modules/@google-cloud/firestore"
+    )
+    version = load_json(directory / "package.json").get("version")
+    source = sha_file(directory / "build/src/v1/firestore_client.js")
+    if version != "8.7.1" or source != SDK_CLIENT_SHA256:
+        raise ValueError("installed pricing SDK cap source differs")
+    lock = load_json(ROOT / "tools/sdk-smoke/package-lock.json")
+    if lock["packages"]["node_modules/@google-cloud/firestore"]["version"] != version:
+        raise ValueError("pricing SDK lock version differs")
+    return {
+        "version": version,
+        "clientSha256": source,
+        "lockSha256": sha_file(ROOT / "tools/sdk-smoke/package-lock.json"),
+        "encodedReceiveCeilingMiB": 17,
     }
 
 
@@ -184,6 +207,11 @@ class StreamCoordinator(Coordinator):
         self._credential = credential
         self._shadow_origin = shadow_origin
         self._runtime = plan["nodeRuntime"]
+        self._pricing_sdk = pricing_sdk_binding() if shadow_origin is None else None
+        if self._pricing_sdk is not None and permission.get(
+            "pricingSdkDigest"
+        ) != digest(self._pricing_sdk):
+            raise ValueError("owner pricing SDK binding differs")
         super().__init__(permission, plan["nonce"], Path(output), gate, api_key)
         self.credential = credential
         self.failures = []
@@ -195,6 +223,8 @@ class StreamCoordinator(Coordinator):
         raise ValueError("O8 credential injection required; acquisition disabled")
 
     def validate_current(self, duration=13):
+        if self._pricing_sdk is not None and pricing_sdk_binding() != self._pricing_sdk:
+            raise ValueError("installed pricing SDK binding changed")
         if (
             self.gate is not self._gate
             or self.gate.plan_digest != self._plan_digest
@@ -639,6 +669,7 @@ def manifest(nonce, owner):
         ),
         "sourceDigest": stream_bridge.source_digest(),
         "pricingBasis": pricing_basis(),
+        "pricingSdk": pricing_sdk_binding(),
         "comparatorSha256": sha_file(Path(__file__).with_name("stream_comparison.mjs")),
     }
 
@@ -700,6 +731,7 @@ def _prepared_inputs(permission_path, local_path, artifact_path):
         "timeUpperBound": 1100,
         "costUpperMicrousd": TOTAL_COST_MICROUSD,
         "pricingBasisDigest": digest(frozen["pricingBasis"]),
+        "pricingSdkDigest": digest(frozen["pricingSdk"]),
         "allowedReobservations": 0,
         "recoveryDiagnostics": {
             "path": str(SHARED_ROOT / ("stream-recovery-" + nonce + ".jsonl")),

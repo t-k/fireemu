@@ -31,6 +31,17 @@ const pathSegments = (value, name) => {
 };
 
 const byteLength = value => Buffer.byteLength(JSON.stringify(value));
+const snapshot = value => {
+  const copy = JSON.parse(JSON.stringify(value));
+  const freeze = item => {
+    if (item && typeof item === 'object' && !Object.isFrozen(item)) {
+      for (const child of Object.values(item)) freeze(child);
+      Object.freeze(item);
+    }
+    return item;
+  };
+  return freeze(copy);
+};
 
 export const databaseName = projectId => `projects/${projectId}/databases/(default)`;
 export const documentName = (projectId, path) => `${databaseName(projectId)}/documents/${path}`;
@@ -128,6 +139,7 @@ export const runUnaryCore = async (operation, request, options, { createClient }
   try {
     call = client[grpcCallName(operation)](request, {
       deadline: new Date(Date.now() + options.deadlineMs),
+      retry: { retryCodes: [] },
       otherArgs: { headers: { ...options.metadata } },
     });
     const timeout = new Promise((_, reject) => {
@@ -156,14 +168,15 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
   const client = createClient();
   let stream;
   try {
-    stream = client.write({ deadline: new Date(Date.now() + options.deadlineMs), otherArgs: { headers: { ...options.metadata } } });
+    stream = client.write({ deadline: new Date(Date.now() + options.deadlineMs), retry: { retryCodes: [] }, otherArgs: { headers: { ...options.metadata } } });
   } catch (error) {
     client.close();
-    return Object.freeze({ kind: 'incomplete_stream', complete: false, error: plainError(error), sentFrames: 0, receivedFrames: 0, events: Object.freeze([]) });
+    return Object.freeze({ transportReceiptVersion: 2, kind: 'incomplete_stream', complete: false, error: plainError(error), sentFrames: 0, completedSendFrames: 0, receivedFrames: 0, events: Object.freeze([]) });
   }
   const events = [];
   let frameCount = 0;
   let sentFrames = 0;
+  let completedSendFrames = 0;
   let receivedFrames = 0;
   let status;
   let terminalError;
@@ -186,7 +199,7 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
     settled = true;
     clearTimeout(timer);
     clearTimeout(terminalGraceTimer);
-    settleTerminal(Object.freeze({ ...result, status: result.status ? plainStatus(result.status) : undefined, error: result.error ? plainError(result.error) : undefined, sentFrames, receivedFrames, events: Object.freeze(events.slice()) }));
+    settleTerminal(Object.freeze({ transportReceiptVersion: 2, ...result, status: result.status ? plainStatus(result.status) : undefined, error: result.error ? plainError(result.error) : undefined, sentFrames, completedSendFrames, receivedFrames, events: Object.freeze(events.slice()) }));
   };
   const maybeFinish = () => {
     if (settled || !(sawEnd || sawClose)) return;
@@ -201,10 +214,13 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
     else responseWaiters.push({ resolve, reject });
   });
   const sendFrame = request => {
-    if (++frameCount > options.maxFrames) throw fail('stream exceeds maxFrames', 'frame_limit');
-    sentFrames += 1;
     buildNextFrame.validate(request);
+    if (++frameCount > options.maxFrames) throw fail('stream exceeds maxFrames', 'frame_limit');
+    const outgoing = snapshot(request);
+    push('send', outgoing);
+    sentFrames += 1;
     stream.write(request);
+    completedSendFrames += 1;
   };
   stream.on('data', response => {
     if (settled) return;

@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import {
   assertReadyForWire,
   createLocalClient,
   createFixedTlsTransport,
   plainError,
   prepareFixedTlsTransport,
+  runUnaryCore,
+  runWriteCore,
 } from './transport_internal.mjs';
 
 const base = {
@@ -74,4 +77,115 @@ test('serializes terminal errors into comparator-safe fields', () => {
     details: 'denied',
     message: 'permission denied',
   });
+});
+
+test('passes explicit no-retry call options to unary and Write RPCs', async () => {
+  let unaryOptions;
+  const unaryClient = {
+    getDocument(request, callOptions) {
+      unaryOptions = callOptions;
+      return Promise.resolve([{ name: request.name }, {}]);
+    },
+    close() {},
+  };
+  const unary = await runUnaryCore('GetDocument', { name: 'documents/doc' }, {
+    deadlineMs: 100,
+    metadata: {},
+  }, { createClient: () => unaryClient });
+  assert.equal(unary.complete, true);
+  assert.deepEqual(unaryOptions.retry, { retryCodes: [] });
+
+  let writeOptions;
+  const stream = new EventEmitter();
+  stream.write = () => queueMicrotask(() => stream.emit('data', { streamToken: Buffer.from('token') }));
+  stream.end = () => {
+    queueMicrotask(() => {
+      stream.emit('status', { code: 0, details: 'ok', message: '' });
+      stream.emit('close');
+    });
+  };
+  stream.destroy = error => queueMicrotask(() => stream.emit('error', error));
+  const writeClient = {
+    write(callOptions) {
+      writeOptions = callOptions;
+      return stream;
+    },
+    close() {},
+  };
+  const write = await runWriteCore([], {
+    deadlineMs: 100,
+    maxFrames: 4,
+    maxMessageBytes: 4096,
+    metadata: {},
+  }, {
+    createClient: () => writeClient,
+    handshake: { database: 'projects/fireemu-test/databases/(default)' },
+    buildNextFrame: Object.assign((request) => request, { validate() {} }),
+  });
+  assert.equal(write.complete, true);
+  assert.deepEqual(writeOptions.retry, { retryCodes: [] });
+});
+
+test('returns immutable JSON-safe outbound frame snapshots with honest send counts', async () => {
+  const sentFrames = [];
+  const stream = new EventEmitter();
+  stream.write = frame => {
+    sentFrames.push(frame);
+    const response = sentFrames.length === 1
+      ? { streamToken: Buffer.from('fresh-token') }
+      : { streamToken: Buffer.from('new-token') };
+    if (sentFrames.length === 2) frame.streamToken = Buffer.from('mutated-after-capture');
+    queueMicrotask(() => stream.emit('data', response));
+  };
+  stream.end = () => queueMicrotask(() => {
+    stream.emit('status', { code: 0, details: 'ok', message: '' });
+    stream.emit('close');
+  });
+  stream.destroy = error => queueMicrotask(() => stream.emit('error', error));
+  const receipt = await runWriteCore([
+    { writes: [{ delete: 'projects/fireemu-test/databases/(default)/documents/compat/o3/doc' }] },
+  ], {
+    deadlineMs: 100,
+    maxFrames: 8,
+    maxMessageBytes: 4096,
+    metadata: {},
+  }, {
+    createClient: () => ({ write: () => stream, close() {} }),
+    handshake: { database: 'projects/fireemu-test/databases/(default)' },
+    buildNextFrame: Object.assign((request, response) => ({ ...request, streamToken: response.streamToken }), { validate() {} }),
+  });
+
+  assert.equal(receipt.transportReceiptVersion, 2);
+  assert.equal(receipt.sentFrames, 2);
+  assert.equal(receipt.completedSendFrames, 2);
+  assert.equal(receipt.receivedFrames, 2);
+  const sends = receipt.events.filter(event => event.type === 'send');
+  assert.equal(sends.length, 2);
+  assert.equal(sends[0].value.database, 'projects/fireemu-test/databases/(default)');
+  assert.deepEqual(sends[1].value.streamToken, { type: 'Buffer', data: [...Buffer.from('fresh-token')] });
+  assert.equal(Object.isFrozen(sends[1].value), true);
+  assert.equal(JSON.stringify(receipt).includes('authorization'), false);
+  assert.throws(() => { sends[1].value.streamToken = 'changed'; }, TypeError);
+});
+
+test('prevalidates every Write request before creating a client or writing a frame', async () => {
+  let constructed = false;
+  await assert.rejects(() => runWriteCore([{ invalid: true }], {
+    deadlineMs: 100,
+    maxFrames: 4,
+    maxMessageBytes: 4096,
+    metadata: {},
+  }, {
+    createClient: () => {
+      constructed = true;
+      throw new Error('client must not be created');
+    },
+    handshake: { database: 'projects/fireemu-test/databases/(default)' },
+    buildNextFrame: Object.assign(request => request, {
+      validate: request => {
+        if (request.invalid) throw new TypeError('invalid request');
+      },
+    }),
+  }), /invalid request/);
+  assert.equal(constructed, false);
 });

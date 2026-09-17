@@ -578,6 +578,7 @@ def source_digest():
             "stream_node_transport.mjs",
             "transport_internal.mjs",
             "stream_production.py",
+            "stream_shadow.py",
             "stream_comparison.mjs",
         )
     ]
@@ -587,11 +588,13 @@ def source_digest():
         directory.parent / "batch_adapter.py",
         directory.parent / "batch_contract.py",
         directory.parent / "batch_wire.py",
+        directory.parent.parent / "compat-inventory" / "owned_runner.py",
+        directory.parent.parent / "compat-inventory" / "evidence_common.py",
         directory.parent / "production-admission" / "reservations.py",
     ]
     return digest(
         {
-            str(path.relative_to(directory.parent)): hashlib.sha256(
+            str(path.relative_to(directory.parent.parent)): hashlib.sha256(
                 path.read_bytes()
             ).hexdigest()
             for path in paths
@@ -880,10 +883,10 @@ def run_reserved(
 
 def write_private_json(path, value):
     path = Path(path)
-    with path.open("x") as stream:
-        path.chmod(0o600)
+    import os
+
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as stream:
         json.dump(value, stream, allow_nan=False)
         stream.flush()
-        import os
-
         os.fsync(stream.fileno())

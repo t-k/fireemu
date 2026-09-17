@@ -349,3 +349,58 @@ def test_metadata_only_execution_is_reported_separately(tmp_path, metadata_serve
         "productionDataExecuted": False,
         "completedDataObservation": False,
     }
+
+
+def test_private_o8_handoff_is_bounded_and_expiry_checked():
+    import json
+    import os
+    import time
+
+    module = production()
+    assert hasattr(module, "read_o8_handoff"), (
+        "execute needs an explicit private credential FD"
+    )
+    for change in ["expired", "wrong-permission", "oversized"]:
+        read_fd, write_fd = os.pipe()
+        try:
+            handoff = {
+                "kind": "stream-o8-credential-v1",
+                "permissionDigest": "a" * 64,
+                "token": "local-test-secret",
+                "apiKey": "local-test-key",
+                "expiresAt": time.time() + 1800,
+                "verifiedAt": time.time(),
+            }
+            if change == "expired":
+                handoff["expiresAt"] = time.time() + 30
+            elif change == "wrong-permission":
+                handoff["permissionDigest"] = "b" * 64
+            else:
+                handoff["token"] = "x" * 20000
+            data = json.dumps(handoff).encode()
+            # A regular private file avoids a pipe writer blocking on oversized data.
+            import tempfile
+
+            with tempfile.TemporaryFile() as stream:
+                stream.write(data)
+                stream.seek(0)
+                with pytest.raises(ValueError):
+                    module.read_o8_handoff(stream.fileno(), "a" * 64)
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+
+
+def test_prepare_refuses_missing_owner_input_before_output(tmp_path):
+    module = production()
+    assert hasattr(module, "prepare_inputs"), (
+        "a closed prepared execution config is required"
+    )
+    with pytest.raises((ValueError, FileNotFoundError)):
+        module.prepare_inputs(
+            tmp_path / "missing-permission.json",
+            tmp_path / "missing-local.json",
+            tmp_path / "missing-artifact",
+            tmp_path / "prepared.json",
+        )
+    assert not (tmp_path / "prepared.json").exists()

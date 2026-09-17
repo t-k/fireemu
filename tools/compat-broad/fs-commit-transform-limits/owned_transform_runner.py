@@ -8,7 +8,9 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -18,6 +20,7 @@ sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
 
 import broad
 from broad_contract import digest, local_origin
+from evidence_common import runtime_inputs_at_commit
 from local_collector import collect_local
 from local_transport import TRANSPORT, local_executor, save_new, verify_wire_journal
 from owned_runner import control_get, local_addresses
@@ -40,11 +43,46 @@ def sha_file(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def validate_runtime_provenance(manifest: dict) -> dict:
+    """Compare the entire manifest input map to the fixed Git tree, not itself."""
+    expected = runtime_inputs_at_commit(RUNTIME_COMMIT, ROOT)
+    actual = manifest.get("build", {}).get("inputs")
+    if manifest.get("sourceCommit") != RUNTIME_COMMIT or not _exact(actual, expected):
+        raise ValueError("retained runtime input map differs from fixed Git tree")
+    return {
+        "runtimeInputsDigest": digest(actual),
+        "expectedRuntimeInputsDigest": digest(expected),
+        "runtimeInputCount": len(expected),
+        "runtimeInputsVerifiedAgainst": "git-tree:" + RUNTIME_COMMIT,
+    }
+
+
+@contextmanager
+def owned_artifact(source: Path, expected_sha: str = ARTIFACT_SHA):
+    """Launch scope for an exclusive verified copy, never the caller's pathname."""
+    with tempfile.TemporaryDirectory(prefix="fireemu-o3-owned-") as directory:
+        private = Path(directory)
+        private.chmod(0o700)
+        executable = private / "fireemu"
+        broad.retain_artifact(source, executable, expected_sha)
+        stat = executable.stat()
+        identity = {
+            "path": str(executable),
+            "sha256": sha_file(executable),
+            "device": stat.st_dev,
+            "inode": stat.st_ino,
+            "size": stat.st_size,
+            "mode": stat.st_mode & 0o777,
+        }
+        yield executable, identity
+
+
 def validate_retained_artifact(artifact: Path, manifest_path: Path) -> dict:
     """Validate the authorized saved artifact, never build or accept arbitrary code."""
     if artifact.is_symlink() or manifest_path.is_symlink():
         raise ValueError("retained inputs must be regular files")
-    manifest = json.loads(manifest_path.read_bytes())
+    manifest_bytes = manifest_path.read_bytes()
+    manifest = json.loads(manifest_bytes)
     build = manifest.get("build", {})
     if (
         manifest.get("sourceCommit") != RUNTIME_COMMIT
@@ -62,8 +100,8 @@ def validate_retained_artifact(artifact: Path, manifest_path: Path) -> dict:
     return {
         "artifactSha256": ARTIFACT_SHA,
         "runtimeSourceCommit": RUNTIME_COMMIT,
-        "retainedManifestSha256": sha_file(manifest_path),
-        "runtimeInputsDigest": digest(build["inputs"]),
+        "retainedManifestSha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        **validate_runtime_provenance(manifest),
     }
 
 
@@ -190,8 +228,18 @@ def child(output: Path, nonce: str) -> None:
 
 
 def run(output: Path, artifact: Path, retained_manifest: Path) -> dict:
-    """Own all listeners and the child through the existing supervisor (OS port 0)."""
+    """Own the verified executable copy, child, and all OS-assigned listeners."""
     runtime = validate_retained_artifact(artifact, retained_manifest)
+    with owned_artifact(artifact) as (executable, identity):
+        sealed = _run_pinned(output, executable, runtime, identity)
+    sealed["ownedArtifactRemoved"] = not executable.exists()
+    if not sealed["ownedArtifactRemoved"]:
+        sealed["status"] = "incomplete"
+    save_new(output / "evidence.json", sealed)
+    return sealed
+
+
+def _run_pinned(output: Path, artifact: Path, runtime: dict, identity: dict) -> dict:
     if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).strip():
         raise ValueError("freeze the collector checkout before execution")
     before = source_inputs()
@@ -205,6 +253,7 @@ def run(output: Path, artifact: Path, retained_manifest: Path) -> dict:
     save_new(output / "config.json", CONFIGURATION)
     inputs = {
         **runtime,
+        "ownedArtifact": identity,
         "collectorSourceCommit": commit,
         "sourceInputs": before,
         "nonce": nonce,
@@ -256,7 +305,9 @@ def run(output: Path, artifact: Path, retained_manifest: Path) -> dict:
     save_new(output / "supervisor-final.json", report)
     stable = (
         source_inputs() == before
-        and validate_retained_artifact(artifact, retained_manifest) == runtime
+        and sha_file(artifact) == ARTIFACT_SHA
+        and artifact.stat().st_dev == identity["device"]
+        and artifact.stat().st_ino == identity["inode"]
     )
     files = {
         str(path.relative_to(output)): sha_file(path)
@@ -275,7 +326,6 @@ def run(output: Path, artifact: Path, retained_manifest: Path) -> dict:
         "acquisitionValidated": False,
         "promotionReady": False,
     }
-    save_new(output / "evidence.json", sealed)
     return sealed
 
 

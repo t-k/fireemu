@@ -9,7 +9,7 @@ Evidence class: local artifact shadow. This is not a production observation, sav
 
 The exact 1,048,576-logical-byte document and depth-20 map were accepted and read back unchanged. The corresponding one-byte-over and depth-21 requests returned typed `400 INVALID_ARGUMENT`; both targets remained absent. Both accepted controls retained their typed fields and creation versions after each negative request.
 
-The collector completed all 16 observation operations and 12 declared recovery stages. It sent 26 HTTP requests: the Gate skipped two conditional deletes after their ownership reads proved absence. All four resource paths were absent after recovery. The supervisor independently confirmed the owned process stopped and all listeners closed. The subdirectory source binding matched before, during, and after execution.
+The collector completed all 16 observation operations and 12 declared recovery stages. The Gate accounted for 26 Firestore data-plane HTTP requests (owned-instance control checks and supervisor probes are separate): the Gate skipped two conditional deletes after their ownership reads proved absence. All four resource paths were absent after recovery. The supervisor independently confirmed the owned process stopped and all listeners closed. The subdirectory source binding matched before, during, and after execution.
 
 `recordingComplete`, `stateValidation`, and `cleanupComplete` were true. There were no local semantic discrepancies or infrastructure failures in this run. Immutable full receipts remain in the private execution directory; this public record contains no raw nonce or credentials.
 

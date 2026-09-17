@@ -1756,7 +1756,7 @@ fn dispatch_with_blocking_hook(
     blocking: &dyn AuthBlockingHook,
     handler: routes::Handler,
     store_arc: &Arc<Mutex<AuthStore>>,
-    mut store: std::sync::MutexGuard<'_, AuthStore>,
+    store: std::sync::MutexGuard<'_, AuthStore>,
     settings_gate: &Arc<Mutex<()>>,
     operation_gate: Option<&Arc<Mutex<()>>>,
     query: Option<&str>,
@@ -1777,8 +1777,6 @@ fn dispatch_with_blocking_hook(
             ))
         });
     let mut candidate = store.clone();
-    let _reserved_local_id = request_may_create_end_user(handler, &store, body, at)
-        .then(|| candidate.reserve_next_generated_local_id());
     let response = dispatch(
         handler,
         &mut candidate,
@@ -1813,13 +1811,6 @@ fn dispatch_with_blocking_hook(
         && uid_text.as_deref().is_some_and(|uid| {
             store.user_by_id(uid).is_none() && candidate.user_by_id(uid).is_some()
         });
-    if is_new {
-        // The candidate was built while the live store was locked. Advance only its hidden
-        // random stream before releasing that lock, so another blocking request receives a
-        // distinct generated identity. The user and credential mutations remain speculative
-        // until the commit boundary below.
-        store.adopt_random_state_from(&candidate);
-    }
     let signed_in = is_authentication
         && response.status == 200
         && (response.body.get("idToken").is_some() || response.body.get("id_token").is_some());
@@ -1955,11 +1946,6 @@ fn dispatch_with_blocking_hook(
             return error(500, "INTERNAL");
         };
         let mut committed = live.clone();
-        if is_new {
-            if let Some(uid) = speculative_uid.as_ref().map(LocalId::as_str) {
-                committed.use_reserved_generated_local_id(uid);
-            }
-        }
         let mut committed_response = if handler == routes::Handler::SignUp && is_new {
             sign_up(
                 &mut committed,

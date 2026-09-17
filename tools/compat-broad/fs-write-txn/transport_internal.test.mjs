@@ -217,12 +217,24 @@ test('returns a typed gRPC refusal when a Write stream is refused before handsha
   let closes = 0;
   const receipt = await bounded(controlledWrite(stream => {
     stream.emit('error', Object.assign(new Error('refused'), { code: 14, details: 'unavailable' }));
+    stream.emit('status', { code: 14, details: 'unavailable', message: '14 UNAVAILABLE' });
     stream.emit('close');
   }, writeOptions, () => { closes += 1; }));
   assert.equal(receipt.complete, true);
   assert.equal(receipt.kind, 'grpc_status');
   assert.equal(receipt.status.code, 14);
   assert.equal(closes, 1);
+});
+
+test('keeps an error-only numeric code incomplete without a status event', async () => {
+  const receipt = await bounded(controlledWrite(stream => {
+    stream.emit('error', Object.assign(new Error('aborted'), { code: 10, details: 'aborted' }));
+    stream.emit('close');
+  }));
+  assert.equal(receipt.kind, 'incomplete_stream');
+  assert.equal(receipt.complete, false);
+  assert.equal(receipt.status, undefined);
+  assert.equal(receipt.error.code, 10);
 });
 
 test('terminates a silent Write stream at the client deadline', async () => {
@@ -279,12 +291,28 @@ test('keeps a statusless end and close incomplete', async () => {
   assert.equal(receipt.status, undefined);
 });
 
-test('contains oversized status and error diagnostics without an uncaught event exception', async () => {
+test('contains oversized status diagnostics without an uncaught event exception', async () => {
   const receipt = await bounded(controlledWrite(stream => {
     stream.emit('status', { code: 0, details: 'x'.repeat(2_000), message: 'x'.repeat(2_000) });
     stream.emit('close');
   }));
   assert.equal(receipt.kind, 'incomplete_stream');
   assert.equal(receipt.complete, false);
-  assert.ok(receipt.events.some(event => event.type === 'error'));
+  assert.equal(receipt.status, undefined);
+  assert.equal(receipt.error.code, 'message_limit');
+  assert.ok(Buffer.byteLength(JSON.stringify(receipt.error)) <= writeOptions.maxMessageBytes);
+  assert.ok(receipt.events.every(event => Buffer.byteLength(JSON.stringify(event.value)) <= writeOptions.maxMessageBytes));
+});
+
+test('contains oversized error diagnostics when error and close arrive immediately', async () => {
+  const receipt = await bounded(controlledWrite(stream => {
+    stream.emit('error', Object.assign(new Error('x'.repeat(2_000)), { code: 14, details: 'x'.repeat(2_000) }));
+    stream.emit('close');
+  }));
+  assert.equal(receipt.kind, 'incomplete_stream');
+  assert.equal(receipt.complete, false);
+  assert.equal(receipt.status, undefined);
+  assert.equal(receipt.error.code, 'message_limit');
+  assert.ok(Buffer.byteLength(JSON.stringify(receipt.error)) <= writeOptions.maxMessageBytes);
+  assert.ok(receipt.events.every(event => Buffer.byteLength(JSON.stringify(event.value)) <= writeOptions.maxMessageBytes));
 });

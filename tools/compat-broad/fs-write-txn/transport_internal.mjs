@@ -225,6 +225,22 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
       recordHandlerFailure(error);
     }
   };
+  const boundedStatus = value => {
+    try {
+      const normalized = plainStatus(value);
+      return byteLength(normalized) <= options.maxMessageBytes ? normalized : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const boundedError = value => {
+    try {
+      const normalized = plainError(value);
+      return byteLength(normalized) <= options.maxMessageBytes ? normalized : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   const finish = result => {
     if (settled) return;
     settled = true;
@@ -236,7 +252,7 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
   const maybeFinish = () => {
     if (settled || !(sawEnd || sawClose)) return;
     clearTimeout(timer);
-    const terminalStatus = status ?? (typeof terminalError?.code === 'number' ? terminalError : undefined);
+    const terminalStatus = status;
     const terminalCode = terminalStatus?.code;
     if (!handlerFailureRecorded && typeof terminalCode === 'number' && (terminalCode !== 0 || (!awaitingResponse && streamEndedByClient))) {
       finish({ kind: 'grpc_status', complete: true, status: terminalStatus, error: terminalError });
@@ -273,32 +289,43 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
   });
   stream.on('status', value => {
     if (!settled) {
-      status = value;
+      const normalized = boundedStatus(value);
+      if (!normalized) {
+        status = undefined;
+        recordHandlerFailure(fail('stream status exceeds maxMessageBytes', 'message_limit'));
+        return;
+      }
+      status = normalized;
       terminalSignal = true;
-      safePush('status', plainStatus(value));
+      safePush('status', normalized);
       maybeFinish();
     }
   });
   stream.on('error', error => {
     if (!settled) {
-      terminalError = error;
+      const normalized = boundedError(error);
+      if (!normalized) {
+        recordHandlerFailure(fail('stream error exceeds maxMessageBytes', 'message_limit'));
+        return;
+      }
+      terminalError = normalized;
       terminalSignal = true;
-      safePush('error', plainError(error));
-      rejectWaiters(error);
+      safePush('error', normalized);
+      rejectWaiters(normalized);
       maybeFinish();
     }
   });
   stream.on('end', () => {
     if (!settled) {
       sawEnd = true;
-      safePush('end', { status: status ? plainStatus(status) : undefined });
+      safePush('end', { status: status ?? undefined });
       maybeFinish();
     }
   });
   stream.on('close', () => {
     if (!settled) {
       sawClose = true;
-      safePush('close', { status: status ? plainStatus(status) : undefined });
+      safePush('close', { status: status ?? undefined });
       maybeFinish();
     }
   });

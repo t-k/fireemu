@@ -35,3 +35,11 @@ Evidence is provided by `crates/fireemu-adapter-grpc/tests/streams.rs`:
   contention and post-rollback stream recovery).
 
 The capability mapping is `FS-RPC-1` in `crates/fireemu/src/capabilities.json`. Active-stream acknowledgements are covered; closed-stream resumption is unsupported. The stream/transaction contention response and atomic no-mutation behavior are local observations; production error wording and ordering, REST and SDK parity remain unobserved. `FS-WRITE` is mapped to `REQ-FS-PARITY-01` in the surface inventory as finite local evidence. The generated inventory is `docs/compatibility/surfaces.md`; the broader Standard/Native feature mapping remains `FS-DATA` in `spec/compatibility/features.json`.
+
+## Bounded Node transport preparation
+
+The local-only transport in `tools/compat-broad/fs-write-txn/stream_node_transport.mjs` reuses the pinned SDK dependency tree and requires an explicit loopback host, port, project and owned document prefix. It sequences Write handshake and response tokens, reads terminal gRPC status, bounds frames/message sizes/deadlines, rejects namespace traversal and caller target overrides, and retains serializable error/status observations. Incomplete terminal sequences remain incomplete rather than semantic outcomes. No ADC lookup or remote production endpoint is supported.
+
+The integrated deterministic suite passed 14 tests with one explicit live-endpoint test skipped when no endpoint is supplied. The transport owner separately ran that live suite against the retained `a7e182d93` strict artifact under the port registry: 15 tests passed, and the owned daemon/processes were stopped. Independent review approved this local transport scope after path, terminal and serialization repairs. A final follow-up closes the client on synchronous stream creation failure and validates options at the public write-validation boundary.
+
+This completes a collector dependency only. The finite transaction-contention collector, immutable acquisition journal, cleanup/failure rehearsal, production transport/admission and stream comparison contract are still separate preparation conditions. Document-byte and nesting cases already observed by `FS-DATA-WRITE-LIMITS-02` must not be scheduled again in the stream campaign. The consumed limits permission does not authorize Write-stream observation.

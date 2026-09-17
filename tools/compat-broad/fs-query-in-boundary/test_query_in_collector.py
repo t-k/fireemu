@@ -34,10 +34,14 @@ def _owned(
     return _ok(body)
 
 
-def _transport(plan: dict[str, Any], *, mutate: bool = False):
+def _transport(
+    plan: dict[str, Any], *, mutate: bool = False, calls: list[str] | None = None
+):
     state = {"present": False, "updateTime": "2026-09-17T00:00:00.000000Z"}
 
     def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        if calls is not None:
+            calls.append(operation["kind"])
         if mutate:
             operation["executorOnly"] = True
         kind = operation["kind"]
@@ -143,6 +147,34 @@ def test_cleanup_refuses_replacement_with_newer_version(tmp_path: Path) -> None:
 
     result = collect_local(plan, execute, tmp_path / "receipt")
     assert not any(item["kind"] == "cleanup-conditional-delete" for item in seen)
+    assert result["cleanup"][1]["skipped"] == "create-version-mismatch"
+    assert result["cleanupComplete"] is False
+
+
+@pytest.mark.parametrize("create_time", ["2026-09-17T02:02:03.000000Z", None])
+def test_cleanup_refuses_create_time_mutation_or_missing_readback(
+    tmp_path: Path, create_time: str | None
+) -> None:
+    plan = _plan()
+    created = "2026-09-17T01:02:03.000000Z"
+    seen: list[str] = []
+
+    def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        seen.append(operation["kind"])
+        if operation["kind"] == "preflight-typed-absence":
+            return _not_found()
+        if operation["kind"] == "create-only-patch":
+            return _owned(plan, created, created)
+        if operation["kind"] == "cleanup-ownership-read":
+            return _owned(plan, created, create_time)
+        if operation["kind"] == "cleanup-verify-absence":
+            return _owned(plan, created, create_time)
+        if operation["kind"] == "cleanup-conditional-delete":
+            raise AssertionError("createTime mismatch must not authorize delete")
+        return _ok({"documents": [plan["expectedPositiveDocument"]]})
+
+    result = collect_local(plan, execute, tmp_path / "receipt")
+    assert "cleanup-conditional-delete" not in seen
     assert result["cleanup"][1]["skipped"] == "create-version-mismatch"
     assert result["cleanupComplete"] is False
 
@@ -268,19 +300,24 @@ def test_final_collection_collision_keeps_existing_file_and_reports_stale_record
     plan = _plan()
     output = tmp_path / "receipt"
     transport = _transport(plan)
+    calls: list[str] = []
 
     def execute(operation: dict[str, Any]) -> dict[str, Any]:
         if operation["kind"] == "cleanup-verify-absence":
             (output / "collection.json").write_text("old-record\n")
         return transport(operation)
 
+    transport = _transport(plan, calls=calls)
     result = collect_local(plan, execute, output)
 
     assert (output / "collection.json").read_text() == "old-record\n"
     assert result["cleanupComplete"] is True
+    assert result["completed"] is False
+    assert len(calls) == 9
     assert result["recordingComplete"] is False
     assert result["persistenceComplete"] is False
     assert any("collection.json:FileExistsError" in item for item in result["infrastructureFailures"])
+    assert not list(output.glob(".receipt-*"))
 
 
 def test_final_collection_file_write_fault_reports_failure_after_real_rows(
@@ -313,12 +350,19 @@ def test_final_collection_file_write_fault_reports_failure_after_real_rows(
 
     monkeypatch.setattr("query_in_collector.os.fdopen", fdopen)
     plan = _plan()
-    result = collect_local(plan, _transport(plan), tmp_path / "receipt")
+    calls: list[str] = []
+    result = collect_local(plan, _transport(plan, calls=calls), tmp_path / "receipt")
 
     assert result["cleanupComplete"] is True
     assert result["recordingComplete"] is False
     assert result["persistenceComplete"] is False
+    assert result["completed"] is False
+    assert len(calls) == 9
     assert any("collection.json:OSError" in item for item in result["infrastructureFailures"])
+    assert len(list((tmp_path / "receipt").glob("observation-*.json"))) == 6
+    assert len(list((tmp_path / "receipt").glob("recovery-*.json"))) == 3
+    assert not (tmp_path / "receipt" / "collection.json").exists()
+    assert not list((tmp_path / "receipt").glob(".receipt-*"))
 
 
 def test_final_collection_link_fault_reports_failure_after_real_rows(
@@ -333,12 +377,19 @@ def test_final_collection_link_fault_reports_failure_after_real_rows(
 
     monkeypatch.setattr("query_in_collector.os.link", link)
     plan = _plan()
-    result = collect_local(plan, _transport(plan), tmp_path / "receipt")
+    calls: list[str] = []
+    result = collect_local(plan, _transport(plan, calls=calls), tmp_path / "receipt")
 
     assert result["cleanupComplete"] is True
     assert result["recordingComplete"] is False
     assert result["persistenceComplete"] is False
+    assert result["completed"] is False
+    assert len(calls) == 9
     assert any("collection.json:OSError" in item for item in result["infrastructureFailures"])
+    assert len(list((tmp_path / "receipt").glob("observation-*.json"))) == 6
+    assert len(list((tmp_path / "receipt").glob("recovery-*.json"))) == 3
+    assert not (tmp_path / "receipt" / "collection.json").exists()
+    assert not list((tmp_path / "receipt").glob(".receipt-*"))
 
 
 @pytest.mark.parametrize("target_call", [20, 21])
@@ -357,12 +408,49 @@ def test_final_collection_file_or_directory_fsync_fault_reports_failure(
 
     monkeypatch.setattr("query_in_collector.os.fsync", fsync)
     plan = _plan()
-    result = collect_local(plan, _transport(plan), tmp_path / "receipt")
+    calls_seen: list[str] = []
+    result = collect_local(plan, _transport(plan, calls=calls_seen), tmp_path / "receipt")
 
     assert result["cleanupComplete"] is True
     assert result["recordingComplete"] is False
     assert result["persistenceComplete"] is False
+    assert result["completed"] is False
+    assert len(calls_seen) == 9
     assert any("collection.json:OSError" in item for item in result["infrastructureFailures"])
+    assert len(list((tmp_path / "receipt").glob("observation-*.json"))) == 6
+    assert len(list((tmp_path / "receipt").glob("recovery-*.json"))) == 3
+    collection = tmp_path / "receipt" / "collection.json"
+    assert collection.exists() is (target_call == 21)
+    assert not list((tmp_path / "receipt").glob(".receipt-*"))
+
+
+def test_final_directory_fsync_fault_leaves_linked_collection_as_non_authoritative(
+    tmp_path: Path, monkeypatch
+) -> None:
+    original_fsync = os.fsync
+    calls = 0
+
+    def fsync(fd):
+        nonlocal calls
+        calls += 1
+        if calls == 21:
+            raise OSError("final-directory-fsync-failure")
+        return original_fsync(fd)
+
+    monkeypatch.setattr("query_in_collector.os.fsync", fsync)
+    plan = _plan()
+    calls_seen: list[str] = []
+    result = collect_local(plan, _transport(plan, calls=calls_seen), tmp_path / "receipt")
+    collection = tmp_path / "receipt" / "collection.json"
+
+    assert result["completed"] is False
+    assert result["cleanupComplete"] is True
+    assert result["persistenceComplete"] is False
+    assert len(calls_seen) == 9
+    assert json.loads(collection.read_text())["completed"] is True
+    assert len(list((tmp_path / "receipt").glob("observation-*.json"))) == 6
+    assert len(list((tmp_path / "receipt").glob("recovery-*.json"))) == 3
+    assert not list((tmp_path / "receipt").glob(".receipt-*"))
 
 
 def test_output_initialization_failure_sends_no_wire_operations(tmp_path: Path, monkeypatch) -> None:

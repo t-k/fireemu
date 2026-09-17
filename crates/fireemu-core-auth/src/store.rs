@@ -4202,7 +4202,13 @@ impl AuthRegistry {
             (
                 *default.policy(),
                 default.config(),
-                default.signup_quota().config().clone(),
+                // Quota simulation defaults are safe to share across projects, but a
+                // temporary override is project-scoped and must never leak into a routed
+                // candidate for another project.
+                SignupQuotaConfig {
+                    temporary: None,
+                    ..default.signup_quota().config().clone()
+                },
                 default.signer_arc(),
             )
         };
@@ -9413,7 +9419,14 @@ mod password_policy_namespace_tests {
             algorithm: QuotaAlgorithm::FixedWindowV1,
             default_quota_per_hour: 1,
             max_tracked_buckets: 16,
-            temporary: None,
+            temporary: Some(
+                crate::signup_quota::TemporaryQuota::new(
+                    2,
+                    LogicalInstant::UNIX_EPOCH,
+                    fireemu_core_types::time::LogicalDuration::from_seconds(60),
+                )
+                .expect("temporary quota is valid"),
+            ),
         };
         default
             .lock()
@@ -9439,7 +9452,14 @@ mod password_policy_namespace_tests {
         let candidate = registry
             .routed_candidate("worker-alpha")
             .expect("routed candidate");
-        assert_eq!(candidate.signup_quota().config(), &quota);
+        assert_eq!(
+            candidate.signup_quota().config(),
+            &SignupQuotaConfig {
+                temporary: None,
+                ..quota
+            },
+            "temporary quota overrides are scoped to the source project",
+        );
         assert_eq!(
             candidate
                 .signup_quota()

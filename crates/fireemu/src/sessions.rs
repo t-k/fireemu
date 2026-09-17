@@ -118,7 +118,10 @@ impl ProjectHooks for Projects {
         if let Ok(default) = self.registry.default_store().lock() {
             store.set_config(default.config());
             store
-                .set_signup_quota_config(default.signup_quota().config().clone())
+                .set_signup_quota_config(fireemu_core_auth::signup_quota::SignupQuotaConfig {
+                    temporary: None,
+                    ..default.signup_quota().config().clone()
+                })
                 .map_err(|error| format!("cannot copy the default sign-up quota: {error:?}"))?;
             if let Some(signer) = default.signer_arc() {
                 store.set_signer(signer);
@@ -1217,15 +1220,25 @@ pub(crate) mod tests {
 
     #[test]
     fn creating_a_session_project_inherits_quota_configuration_without_usage() {
-        use fireemu_core_auth::signup_quota::{QuotaMode, SignupQuotaConfig};
+        use fireemu_core_auth::signup_quota::{
+            QuotaAlgorithm, QuotaMode, SignupQuotaConfig, TemporaryQuota,
+        };
 
         let gate = gate();
         let hooks = projects(&gate);
         let quota = SignupQuotaConfig {
             mode: QuotaMode::Enforce,
+            algorithm: QuotaAlgorithm::FixedWindowV1,
             default_quota_per_hour: 2,
             max_tracked_buckets: 16,
-            ..SignupQuotaConfig::default()
+            temporary: Some(
+                TemporaryQuota::new(
+                    0,
+                    LogicalInstant::UNIX_EPOCH,
+                    LogicalDuration::from_seconds(60),
+                )
+                .expect("temporary quota is valid"),
+            ),
         };
         hooks
             .registry
@@ -1242,7 +1255,14 @@ pub(crate) mod tests {
 
         let registered = hooks.registry.store_for(SECOND_PROJECT).unwrap();
         let registered = registered.lock().unwrap();
-        assert_eq!(registered.signup_quota().config(), &quota);
+        assert_eq!(
+            registered.signup_quota().config(),
+            &SignupQuotaConfig {
+                temporary: None,
+                ..quota
+            },
+            "temporary quota overrides are scoped to the source project",
+        );
         assert_eq!(
             registered.signup_quota().usage(
                 SECOND_PROJECT,

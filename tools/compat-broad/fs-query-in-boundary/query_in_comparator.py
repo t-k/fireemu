@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import re
 from typing import Any
+from urllib.parse import quote
 
 from query_in_compiler import validate_plan
+from query_in_production import (
+    _reject_json_constant,
+    _typed_query_row,
+    _unique_json_object,
+)
 
 _TIMESTAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$")
 _PHASES = (("rows", "observation", 6), ("cleanup", "recovery", 3))
@@ -50,7 +57,7 @@ def _receipt_valid(receipt: Any, *, allow_skip: bool) -> bool:
     if receipt.get("failure") is not None:
         return False
     if "skipped" in receipt:
-        return allow_skip and receipt["skipped"] in {
+        return allow_skip and receipt.get("status") is None and receipt.get("body") is None and receipt["skipped"] in {
             "already-absent",
             "create-not-proven",
             "create-version-mismatch",
@@ -75,7 +82,7 @@ def _recovery_request_matches(
         return False
     body = prior.get("body") if isinstance(prior, dict) else None
     update_time = body.get("updateTime") if isinstance(body, dict) else None
-    suffix = "?currentDocument.updateTime=" + str(update_time)
+    suffix = "?currentDocument.updateTime=" + quote(update_time, safe="")
     expected = copy.deepcopy(operation)
     expected["path"] += suffix
     return isinstance(update_time, str) and _exact(request, expected)
@@ -174,12 +181,19 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
         and isinstance(cleanup[1].get("request"), dict)
         and isinstance(cleanup[0].get("body"), dict)
         and cleanup[1]["request"].get("path", "").endswith(
-            "?currentDocument.updateTime=" + cleanup[0]["body"].get("updateTime", "")
+            "?currentDocument.updateTime="
+            + quote(cleanup[0]["body"].get("updateTime", ""), safe="")
         )
     ):
         raise ValueError("cleanup delete receipt is not typed")
     if not _typed_absence(cleanup[2]):
         raise ValueError("cleanup absence is not typed")
+    if not _owned_read(rows[1], plan):
+        raise ValueError("create ownership is not proven")
+    created_time = rows[1]["body"]["updateTime"]
+    for index in (3, 5):
+        if not _owned_read(rows[index], plan) or rows[index]["body"]["updateTime"] != created_time:
+            raise ValueError("readback version is not bound to creation")
     ownership = bundle.get("ownership", {})
     if not isinstance(ownership, dict) or ownership.get("cleanupComplete") is not True:
         raise ValueError("ownership and cleanup evidence is incomplete")
@@ -204,7 +218,20 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
                 raise ValueError("typed raw receipt bytes are missing")
             if hashlib.sha256(raw_body).hexdigest() != digest:
                 raise ValueError("typed raw receipt hash differs")
-        if raw["2"].get("documents") != rows[2].get("body", {}).get("documents"):
+        try:
+            parsed = json.loads(raw["2"]["rawBody"], parse_constant=_reject_json_constant, object_pairs_hook=_unique_json_object)
+            derived = [
+                {"name": item["document"]["name"], "fields": item["document"]["fields"]}
+                for item in parsed
+                if _typed_query_row(item)
+            ] if isinstance(parsed, list) else None
+        except (UnicodeError, ValueError, RecursionError):
+            derived = None
+        if (
+            derived is None
+            or raw["2"].get("documents") != derived
+            or derived != rows[2].get("body", {}).get("documents")
+        ):
             raise ValueError("positive query projection is not row-bound")
     else:
         raise TypeError("typed raw receipt evidence is required")

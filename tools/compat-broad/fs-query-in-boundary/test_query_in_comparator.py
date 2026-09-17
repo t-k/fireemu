@@ -38,7 +38,7 @@ def _bundle(project: str = "demo", nonce: str = "a" * 32) -> dict:
                 "complete": True,
                 "failure": None,
                 "status": 404 if index != 1 else None,
-                "body": {"error": {"code": 404, "status": "NOT_FOUND"}},
+                "body": None if index == 1 else {"error": {"code": 404, "status": "NOT_FOUND"}},
                 "rawSha256": f"{index + 6:064x}",
                 **({"skipped": "already-absent"} if index == 1 else {}),
             }
@@ -46,7 +46,10 @@ def _bundle(project: str = "demo", nonce: str = "a" * 32) -> dict:
     journal = [*rows, *cleanup]
     raw = {}
     for index, row in enumerate(journal):
-        raw_body = json.dumps(row["body"], sort_keys=True, separators=(",", ":")).encode()
+        raw_value = row["body"]
+        if index == 2:
+            raw_value = [{"document": row["body"]["documents"][0]}]
+        raw_body = json.dumps(raw_value, sort_keys=True, separators=(",", ":")).encode()
         digest = hashlib.sha256(raw_body).hexdigest()
         row["rawSha256"] = digest
         raw[str(index)] = {"projectionVersion": 1, "sourceRawSha256": digest, "rawBody": raw_body}
@@ -86,7 +89,12 @@ def test_complete_typed_response_difference_is_semantic_mismatch():
     right["rows"][2]["status"] = 200
     right["rows"][2]["body"] = {"documents": []}
     for bundle in (left, right):
-        body = json.dumps(bundle["rows"][2]["body"], sort_keys=True, separators=(",", ":")).encode()
+        value = bundle["rows"][2]["body"]
+        if value.get("documents"):
+            value = [{"document": value["documents"][0]}]
+        else:
+            value = []
+        body = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
         digest = hashlib.sha256(body).hexdigest()
         bundle["rows"][2]["rawSha256"] = digest
         bundle["raw"]["2"].update(rawBody=body, sourceRawSha256=digest, documents=bundle["rows"][2]["body"]["documents"])
@@ -100,4 +108,26 @@ def test_incomplete_receipt_and_unsafe_cleanup_are_indeterminate():
     right["rows"][0]["complete"] = False
     right["cleanup"][0]["ownership"] = False
     result = compare_evidence(left, right)
+    assert result["classification"] == "INDETERMINATE"
+
+
+def test_cleanup_update_time_predicate_is_percent_encoded():
+    bundle = _bundle()
+    timestamp = "2026-09-18T01:02:03Z"
+    bundle["cleanup"][0].update(
+        status=200,
+        skipped=None,
+        body={"name": bundle["plan"]["document"], "fields": bundle["plan"]["fixtureFields"], "updateTime": timestamp},
+    )
+    bundle["cleanup"][0].pop("skipped")
+    bundle["cleanup"][1].pop("skipped")
+    bundle["cleanup"][1].update(status=200, body={})
+    bundle["cleanup"][1]["request"]["path"] += "?currentDocument.updateTime=2026-09-18T01%3A02%3A03Z"
+    assert compare_evidence(bundle, copy.deepcopy(bundle))["classification"] == "MATCH"
+
+
+def test_fabricated_positive_projection_is_indeterminate():
+    bundle = _bundle()
+    bundle["raw"]["2"]["documents"] = []
+    result = compare_evidence(bundle, bundle)
     assert result["classification"] == "INDETERMINATE"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -15,9 +16,20 @@ from gate_adapter import CommitGate, compiler_plan
 
 
 def _save(path: Path, value: Any) -> None:
-    with path.open("x") as stream:
+    if path.exists():
+        raise FileExistsError(path)
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("x") as stream:
         json.dump(value, stream, allow_nan=False)
         stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def _receipt(value: Any) -> dict[str, Any]:
@@ -61,6 +73,7 @@ def collect_commit(
     rows: list[dict[str, Any]] = []
     cleanup: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
+    persistence_failed = False
 
     def dispatch(operation: dict[str, Any], recovery: bool, index: int, *, row_name: str) -> dict[str, Any]:
         holder: dict[str, Any] = {}
@@ -94,16 +107,29 @@ def collect_commit(
         except Exception as error:  # noqa: BLE001 -- retain the Gate's durable failure event
             entry.update(holder.get("receipt", {"complete": False, "failure": type(error).__name__}))
             failures.append({"phase": "recovery" if recovery else "observation", "index": index, "failure": type(error).__name__})
-        _save(output / f"{row_name}-{index:02d}.json", entry)
+        nonlocal persistence_failed
+        try:
+            _save(output / f"{row_name}-{index:02d}.json", entry)
+        except OSError as error:
+            persistence_failed = True
+            failures.append(
+                {
+                    "phase": "recovery" if recovery else "observation",
+                    "index": index,
+                    "failure": f"receipt-persistence:{type(error).__name__}",
+                }
+            )
         return entry
 
-    for index, operation in enumerate(plan["observation"]):
-        row = dispatch(operation, False, index, row_name="observation")
-        rows.append(row)
-        if row.get("complete") is not True or row.get("failure") is not None:
-            break
-
-    gate.stop()
+    try:
+        for index, operation in enumerate(plan["observation"]):
+            row = dispatch(operation, False, index, row_name="observation")
+            rows.append(row)
+            if persistence_failed or row.get("complete") is not True or row.get("failure") is not None:
+                break
+    finally:
+        # A receipt failure must stop observation before entering owned recovery.
+        gate.stop()
     for index, declared in enumerate(plan["recovery"]):
         operation = copy.deepcopy(declared)
         if operation.get("kind") == "cleanup-conditional-delete":
@@ -116,8 +142,9 @@ def collect_commit(
 
     cleanup_complete = False
     try:
-        gate.finish()
-        cleanup_complete = True
+        if not persistence_failed:
+            gate.finish()
+            cleanup_complete = True
     except Exception as error:  # noqa: BLE001 -- retain cleanup ownership failure
         failures.append({"phase": "finish", "failure": type(error).__name__})
     recording = len(rows) == 11 and all(row.get("complete") is True and row.get("failure") is None for row in rows)

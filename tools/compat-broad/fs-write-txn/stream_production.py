@@ -422,7 +422,7 @@ def sha_file(path):
 
 def load_json(path):
     path = Path(path)
-    if path.is_symlink() or path.stat().st_size > MAX_INPUT_BYTES:
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_INPUT_BYTES:
         raise ValueError("bounded regular prepared input required")
     value = json.loads(
         path.read_bytes(),

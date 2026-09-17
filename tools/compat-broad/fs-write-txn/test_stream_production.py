@@ -458,3 +458,12 @@ def test_cli_prepare_accepts_missing_permission_flag():
     )
     assert result.returncode == 0, result.stderr
     assert "[--permission PERMISSION]" in result.stdout
+
+
+def test_prepared_json_rejects_non_regular_inputs(tmp_path):
+    import os
+
+    path = tmp_path / "input.fifo"
+    os.mkfifo(path, 0o600)
+    with pytest.raises(ValueError, match="regular"):
+        production().load_json(path)

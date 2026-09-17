@@ -1490,6 +1490,25 @@ impl<'a> Evaluator<'a> {
         self.query_numeric_stringification_sensitive_with(expr)
     }
 
+    /// A query-derived container can carry a numeric member even when the expression itself is
+    /// not a numeric expression. `join()` stringifies those members, so preserve the same
+    /// representation uncertainty as an explicit `string()` call.
+    fn query_container_numeric_stringification_sensitive(&self, expr: &Expr) -> bool {
+        self.query_derived_expression(expr)
+            && self.query_static_value(expr).is_some_and(|value| {
+                matches!(
+                    value,
+                    RulesValue::List(_)
+                        | RulesValue::Set(_)
+                        | RulesValue::Map(_)
+                        | RulesValue::PartialList(_)
+                        | RulesValue::PartialListAny(_)
+                        | RulesValue::PartialMap(_)
+                        | RulesValue::PartialMapExcluding { .. }
+                ) && contains_nested_numeric(&value)
+            })
+    }
+
     /// Resolves the statically known portion of a query-proof expression without evaluating it
     /// or charging the request budget. This is used only to distinguish a known string query
     /// value from a numeric value that may have an equivalent integer/double representation.
@@ -2821,6 +2840,10 @@ impl<'a> Evaluator<'a> {
                 ExprKind::Member { object, name } if name == "join" => {
                     self.query_numeric_expression_source(object)
                         || self.query_numeric_stringification_sensitive_with(object)
+                        || self.query_container_numeric_stringification_sensitive(object)
+                        || args.iter().any(|argument| {
+                            self.query_numeric_stringification_sensitive_with(argument)
+                        })
                 }
                 // Map/list lookup itself does not stringify numeric values. If the selected
                 // value is later converted to text, the enclosing string() branch will inspect
@@ -2915,6 +2938,10 @@ impl<'a> Evaluator<'a> {
                 ExprKind::Member { object, name } if name == "join" => {
                     self.query_numeric_expression_source(object)
                         || self.query_numeric_stringification_sensitive_with(object)
+                        || self.query_container_numeric_stringification_sensitive(object)
+                        || args.iter().any(|argument| {
+                            self.query_numeric_stringification_sensitive_with(argument)
+                        })
                 }
                 ExprKind::Member { object, .. } => {
                     self.query_size_stringification_sensitive(object)
@@ -4710,11 +4737,25 @@ impl<'a> Evaluator<'a> {
                 {
                     self.string_regex_call(&receiver, name, &values, compiled_regex)
                 } else {
-                    let query_derived = self.query_derived_expression(object)
+                    let query_derived_receiver = self.query_derived_expression(object);
+                    let query_derived = query_derived_receiver
                         || args
                             .iter()
                             .any(|argument| self.query_derived_expression(argument));
-                    method_call(&receiver, name, &values, query_derived)
+                    let query_join_stringification_sensitive = self.query_proof
+                        && name == "join"
+                        && (self.query_numeric_stringification_sensitive(object)
+                            || args.iter().any(|argument| {
+                                self.query_numeric_stringification_sensitive(argument)
+                            })
+                            || (query_derived_receiver && contains_nested_numeric(&receiver)));
+                    method_call(
+                        &receiver,
+                        name,
+                        &values,
+                        query_derived,
+                        query_join_stringification_sensitive,
+                    )
                 }
             }
             _ => Err(soft("call target is not callable")),
@@ -5227,6 +5268,7 @@ fn method_call(
     name: &str,
     args: &[RulesValue],
     query_derived: bool,
+    query_join_stringification_sensitive: bool,
 ) -> Result<RulesValue, EvalError> {
     use RulesValue as V;
     // An exact list / map holding an undetermined member, or an undetermined argument,
@@ -5376,6 +5418,9 @@ fn method_call(
         }
         (V::List(items), "join") => {
             arity(1)?;
+            if query_join_stringification_sensitive {
+                return Err(EvalError::Unknown);
+            }
             match &args[0] {
                 V::String(sep) => {
                     // The official runtime stringifies members rather than requiring

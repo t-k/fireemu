@@ -1652,6 +1652,55 @@ fn query_derived_numeric_arithmetic_does_not_prove_concrete_result() {
         "rules_version = '2';\nservice cloud.firestore { function joined() { return [resource.data.value].join(''); } match /databases/{d}/documents { match /notes/{id} { allow list: if joined().size() + 1 == 2; } } }",
         &zero
     ));
+    let query_list = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![("tags", RulesValue::List(vec![RulesValue::Int(0)]))],
+    );
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if resource.data.tags.join('').size() == 1; } } }",
+        &query_list
+    ));
+    let mut concrete_list = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    concrete_list.resource = Some(doc(&[(
+        "tags",
+        RulesValue::List(vec![RulesValue::Float(-0.0)]),
+    )]));
+    assert!(allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow get: if resource.data.tags.join('').size() == 2; } } }",
+        &concrete_list
+    ));
+    let query_separator = abstract_ctx(
+        "/databases/(default)/documents/notes/fireemu-placeholder",
+        vec![
+            (
+                "tags",
+                RulesValue::List(vec![
+                    RulesValue::String("x".to_owned()),
+                    RulesValue::String("y".to_owned()),
+                ]),
+            ),
+            ("separator", RulesValue::Int(0)),
+        ],
+    );
+    assert!(!allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if resource.data.tags.join(string(resource.data.separator)).size() == 3; } } }",
+        &query_separator
+    ));
+    let mut concrete_separator = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    concrete_separator.resource = Some(doc(&[
+        (
+            "tags",
+            RulesValue::List(vec![
+                RulesValue::String("x".to_owned()),
+                RulesValue::String("y".to_owned()),
+            ]),
+        ),
+        ("separator", RulesValue::Float(-0.0)),
+    ]));
+    assert!(allows(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow get: if resource.data.tags.join(string(resource.data.separator)).size() == 4; } } }",
+        &concrete_separator
+    ));
     assert!(!allows(
         "rules_version = '2';\nservice cloud.firestore { function normalized() { let value = float(resource.data.value); return string(value).size() + 1 == 2; } match /databases/{d}/documents { match /notes/{id} { allow list: if normalized(); } } }",
         &zero

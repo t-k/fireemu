@@ -107,6 +107,12 @@ class StreamCoordinator(Coordinator):
         ):
             raise TypeError("stream Gate and verified Credential required")
         plan = gate.snapshot()["plan"]
+        source = stream_bridge.source_digest()
+        if (
+            plan.get("observerSha256") != source
+            or permission.get("collectorSourceDigest") != source
+        ):
+            raise ValueError("prepared stream source binding differs")
         claim = ledger.bound_claim(ticket)
         if (
             plan.get("managementProfile") != PROFILE
@@ -124,7 +130,7 @@ class StreamCoordinator(Coordinator):
         self._ticket_digest = digest(ticket)
         self._key_digest = digest(api_key)
         self._claim_digest = digest(claim)
-        self._source = stream_bridge.source_digest()
+        self._source = source
         self._permission_digest = digest(permission)
         self._gate = gate
         self._plan_digest = digest(plan)
@@ -165,6 +171,16 @@ class StreamCoordinator(Coordinator):
         super().reserve(service, duration)
         # This runs after the shared rate wait/debit, with Gate already locked.
         self.validate_current(duration + 1)
+        if self.management_context is None:
+            raise ValueError("management context changed")
+        state, _ = self.management_context
+        deadline = (
+            state["started"]
+            + state["plan"]["wallSeconds"]
+            - (0 if self.budget.recovery else state["plan"]["recoverySeconds"])
+        )
+        if time.monotonic() + duration + 1 > deadline:
+            raise ValueError("management phase deadline after all waits")
 
     def request(
         self, service, path, body=None, *, method="POST", privileged=False, form=False
@@ -252,6 +268,24 @@ class StreamCoordinator(Coordinator):
             self.configuration_unchanged = True
 
 
+def execution_facts(state, *, production):
+    metadata = len(state["managementEvents"])
+    data = len(state["events"])
+    observed = [event for event in state["events"] if event["phase"] == "observation"]
+    complete = len(observed) == 15 and all(
+        event.get("completed") is True and event.get("failure") is None
+        for event in observed
+    )
+    return {
+        "productionExecuted": production and bool(metadata + data),
+        "productionRequests": metadata + data if production else 0,
+        "metadataRequests": metadata,
+        "dataRequests": data,
+        "productionDataExecuted": production and bool(data),
+        "completedDataObservation": complete,
+    }
+
+
 def execute_session(
     plan, permission, output, ledger, ticket, api_key, credential, *, shadow=None
 ):
@@ -326,6 +360,7 @@ def execute_session(
         released = True
     except Exception as error:  # noqa: BLE001 -- Persist failure kinds without credential-bearing text.
         failures.append({"phase": "execution", "kind": type(error).__name__})
+    final_state = gate.snapshot()
     receipt = {
         "kind": "stream-prepared-execution-v1",
         "collection": result,
@@ -333,8 +368,8 @@ def execute_session(
         "reservationReleased": released,
         "configurationUnchanged": coordinator.configuration_unchanged,
         "acquisitionValidated": not failures and released,
-        "productionExecuted": shadow is None and bool(gate.snapshot()["total"]),
-        "gate": gate.snapshot(),
+        **execution_facts(final_state, production=shadow is None),
+        "gate": final_state,
         "metadataEvidence": coordinator.metadata_evidence,
     }
     stream_bridge.write_private_json(output / "receipt.json", receipt)

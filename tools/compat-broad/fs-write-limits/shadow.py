@@ -19,6 +19,30 @@ sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
 from broad_contract import digest
 from compiler import _CATALOG, compile_limits_plan
 
+REHEARSAL = "stop-after-controls"
+
+
+def rehearsal_fault(rehearsal: str | None) -> dict | None:
+    if rehearsal is None:
+        return None
+    if rehearsal != REHEARSAL:
+        raise ValueError("unsupported rehearsal")
+    return {"name": REHEARSAL, "afterObservationIndex": 7, "triggered": False}
+
+
+def should_interrupt(rehearsal: str | None, rows: list[dict], plan: dict) -> bool:
+    return (
+        rehearsal == REHEARSAL
+        and len(rows) == 8
+        and all(
+            row.get("complete") is True
+            and row.get("failure") is None
+            and type(row.get("status")) is int
+            for row in rows
+        )
+        and not evaluate_rows(rows, plan)
+    )
+
 
 def save(path: Path, value: Any) -> None:
     """Create an immutable receipt, refusing existing files and symlinks."""
@@ -133,11 +157,18 @@ def validate_local_receipt(receipt: dict, plan: dict) -> bool:
     )
 
 
-def _validate_cleanup(receipt: dict, plan: dict) -> bool:
+def _validate_cleanup(
+    receipt: dict, plan: dict, *, observed_prefix: int | None = None
+) -> bool:
     """Check ordered cleanup against creation receipts and the final Gate journal."""
     gate_plan = plan["localGatePlan"]
     declared_job = gate_plan["jobs"]["limits"]
     operations = declared_job["recovery"]
+    expected_observations = len(declared_job["observation"])
+    if observed_prefix is not None:
+        if type(observed_prefix) is not int or observed_prefix != 8:
+            return False
+        expected_observations = observed_prefix
     cleanup = receipt.get("cleanup")
     gate = receipt.get("gate")
     if (
@@ -154,7 +185,7 @@ def _validate_cleanup(receipt: dict, plan: dict) -> bool:
         not isinstance(job, dict)
         or job.get("complete") is not True
         or job.get("inflight") is not False
-        or job.get("observation") != len(declared_job["observation"])
+        or job.get("observation") != expected_observations
         or job.get("recovery") != len(operations)
         or job.get("resources") != declared_job["resources"]
         or not isinstance(job.get("absent"), list)
@@ -242,7 +273,8 @@ def resolve_recovery(declared: dict, cleanup: list[dict]) -> dict:
     return operation
 
 
-def _real_child(output: Path, nonce: str) -> None:
+def _real_child(output: Path, nonce: str, *, rehearsal: str | None = None) -> None:
+    injected_fault = rehearsal_fault(rehearsal)
     from broad import local_origin
     from owned_runner import control_get, local_addresses
     from shared_gate import Gate, create
@@ -340,6 +372,9 @@ def _real_child(output: Path, nonce: str) -> None:
                 break
             if index < 4 and evaluate_rows(rows, plan):
                 break
+            if injected_fault is not None and should_interrupt(rehearsal, rows, plan):
+                injected_fault["triggered"] = True
+                break
     except Exception as error:  # noqa: BLE001 -- Persist failures and retain cleanup ownership.
         infrastructure.append(
             {"phase": "observation", "failure": type(error).__name__ + ":" + str(error)}
@@ -383,6 +418,7 @@ def _real_child(output: Path, nonce: str) -> None:
         result = {
             "productionExecuted": False,
             "formalCompatibilityClaim": False,
+            "injectedFault": injected_fault,
             "recordingComplete": recording,
             "stateValidation": state_valid,
             "cleanupComplete": cleanup_complete,
@@ -398,6 +434,7 @@ def _real_child(output: Path, nonce: str) -> None:
                 "sourceInputs": before,
                 "sourceInputsAfter": after,
                 "nonce": nonce,
+                "injectedFault": injected_fault,
             },
         }
         save(output / "result.json", result)
@@ -433,13 +470,16 @@ def _real_child(output: Path, nonce: str) -> None:
         )
 
 
-def run(output: Path) -> dict:
+def run(output: Path, *, rehearsal: str | None = None) -> dict:
+    rehearsal_fault(rehearsal)
     import broad
 
     before = source_inputs()
     report = broad.run(
         output,
-        child_script=Path(__file__).resolve(),
+        child_script=HERE / "rehearsal.py"
+        if rehearsal == REHEARSAL
+        else Path(__file__).resolve(),
         project="demo-firestore-probe",
         configuration={"daemon": {"authProjectNumbers": {}}},
         execution_timeout=600,

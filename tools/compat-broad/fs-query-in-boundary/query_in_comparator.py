@@ -5,12 +5,15 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 from query_in_compiler import validate_plan
 from query_in_production import (
+    RawJournal,
     _reject_json_constant,
     _typed_query_row,
     _unique_json_object,
@@ -18,6 +21,115 @@ from query_in_production import (
 
 _TIMESTAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$")
 _PHASES = (("rows", "observation", 6), ("cleanup", "recovery", 3))
+_RAW_LIMIT = 65536
+_BUNDLE_LIMIT = 131072
+
+
+def _read_json_file(path: Path, limit: int) -> Any:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        with os.fdopen(fd, "rb") as stream:
+            encoded = stream.read(limit + 1)
+    except BaseException:
+        # fdopen owns the descriptor once it succeeds; this covers open/read
+        # failures before ownership is transferred to the file object.
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+    if len(encoded) > limit:
+        raise ValueError("collection bundle capacity")
+    return json.loads(
+        encoded,
+        parse_constant=_reject_json_constant,
+        object_pairs_hook=_unique_json_object,
+    )
+
+
+def _json_media_type(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and value.split(";", 1)[0].strip().lower() == "application/json"
+    )
+
+
+def load_collected_bundle(directory: str | Path) -> dict[str, Any]:
+    """Load collector JSON and bind all nine immutable raw sidecars.
+
+    The compact journal is trusted only for operation and receipt metadata.
+    Raw response bytes are read from the manifest's named sidecars and remain
+    the comparator's authority; no bytes are reconstructed from compact JSON.
+    """
+    root = Path(directory)
+    bundle = _read_json_file(root / "collection.json", _BUNDLE_LIMIT)
+    if not isinstance(bundle, dict):
+        raise TypeError("collection bundle must be an object")
+    rows = bundle.get("rows")
+    cleanup = bundle.get("cleanup")
+    if not isinstance(rows, list) or not isinstance(cleanup, list):
+        raise ValueError("collection bundle journals are missing")
+    if len(rows) != 6 or len(cleanup) != 3:
+        raise ValueError("collection bundle does not contain nine journal rows")
+
+    journal = RawJournal.reload(root / "raw")
+    try:
+        bindings = journal._bindings  # validated and immutable after reload
+        if len(bindings) != 9:
+            raise ValueError("collection bundle does not contain nine raw slots")
+        by_slot: dict[int, dict[str, Any]] = {}
+        for binding in bindings.values():
+            phase = binding["phase"]
+            index = binding["index"]
+            slot = index if phase == "observation" else 6 + index
+            if slot in by_slot:
+                raise ValueError("collection bundle has duplicate raw slot")
+            by_slot[slot] = binding
+        if set(by_slot) != set(range(9)):
+            raise ValueError("collection bundle does not contain nine raw slots")
+
+        journal_rows = [*rows, *cleanup]
+        raw: dict[str, Any] = {}
+        for slot in range(9):
+            binding = by_slot[slot]
+            row = journal_rows[slot]
+            if not isinstance(row, dict) or row.get("raw") != binding:
+                raise ValueError(f"raw slot {slot} is not bound to its journal row")
+            fd = os.open(binding["path"], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=journal._fd)
+            try:
+                with os.fdopen(fd, "rb") as stream:
+                    body = stream.read(_RAW_LIMIT + 1)
+            except BaseException:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                raise
+            if len(body) > _RAW_LIMIT or len(body) != binding["byteCount"]:
+                raise ValueError(f"raw slot {slot} byte count differs")
+            digest = hashlib.sha256(body).hexdigest()
+            if digest != binding["sha256"]:
+                raise ValueError(f"raw slot {slot} hash differs")
+            view = {
+                "projectionVersion": 1,
+                "sourceRawSha256": digest,
+                "rawBody": body,
+                "phase": binding["phase"],
+                "index": binding["index"],
+                "status": binding["status"],
+                "complete": binding["complete"],
+                "byteCount": binding["byteCount"],
+                "contentType": binding["contentType"],
+            }
+            if slot == 2:
+                semantic = journal.semantic_view(binding)
+                view.update({key: value for key, value in semantic.items() if key != "rawBody"})
+            row["rawSha256"] = digest
+            raw[str(slot)] = view
+        bundle["raw"] = raw
+        return bundle
+    finally:
+        journal.close()
 
 
 def _exact(left: Any, right: Any) -> bool:
@@ -231,7 +343,7 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
                 raise ValueError("typed raw receipt slot differs")
             if view.get("status") != raw_row.get("status") or view.get("complete") is not raw_row.get("complete"):
                 raise ValueError("typed raw receipt status differs")
-            if view.get("byteCount") != len(raw_body) or view.get("contentType") != "application/json":
+            if view.get("byteCount") != len(raw_body) or not _json_media_type(view.get("contentType")):
                 raise ValueError("typed raw receipt metadata differs")
             parsed_body = json.loads(raw_body, parse_constant=_reject_json_constant, object_pairs_hook=_unique_json_object)
             if int(slot) != 2 and parsed_body != raw_row.get("body"):
@@ -350,6 +462,11 @@ def compare_rows(
         {"plan": production_plan, "rows": production_rows, "cleanup": production_cleanup or [], "ownership": {"cleanupComplete": True}, "raw": production_raw},
         {"plan": local_plan, "rows": local_rows, "cleanup": local_cleanup or [], "ownership": {"cleanupComplete": True}, "raw": local_raw},
     )
+
+
+# Keep the adapter discoverable to callers that use the shorter bundle name.
+load_bundle = load_collected_bundle
+load_collector_bundle = load_collected_bundle
 
 
 compare_collections = compare_evidence

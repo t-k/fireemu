@@ -2,7 +2,14 @@ import copy
 import hashlib
 import json
 
-from query_in_comparator import compare_evidence, compare_rows
+import pytest
+
+from query_in_comparator import (
+    compare_evidence,
+    compare_rows,
+    load_collected_bundle,
+)
+from query_in_production import RawJournal
 from query_in_compiler import compile_plan
 
 
@@ -159,3 +166,69 @@ def test_compare_rows_accepts_explicit_sidecars():
         production_raw=bundle["raw"], local_raw=bundle["raw"],
     )
     assert result["classification"] == "MATCH"
+
+
+def test_comparator_accepts_json_media_type_parameters():
+    bundle = _bundle()
+    for view in bundle["raw"].values():
+        view["contentType"] = "Application/JSON; charset=UTF-8"
+    result = compare_evidence(bundle, copy.deepcopy(bundle))
+    assert result["classification"] == "MATCH"
+
+
+def test_loader_binds_persisted_raw_bytes_and_manifest_slots(tmp_path):
+    bundle = _bundle()
+    output = tmp_path / "receipt"
+    output.mkdir()
+    journal = RawJournal(output / "raw")
+    for slot in range(9):
+        view = bundle["raw"][str(slot)]
+        if slot == 7:
+            view = {**view, "status": 404, "complete": False}
+        binding = journal.add(
+            view["phase"],
+            view["index"],
+            view["status"],
+            view["rawBody"],
+            complete=view["complete"],
+            content_type="application/json; charset=UTF-8",
+        )
+        row = bundle["rows"][slot] if slot < 6 else bundle["cleanup"][slot - 6]
+        row["raw"] = copy.deepcopy(binding)
+        row["rawSha256"] = binding["sha256"]
+    journal.close()
+    persisted = copy.deepcopy(bundle)
+    persisted["raw"] = None
+    (output / "collection.json").write_text(
+        json.dumps(persisted, sort_keys=True, separators=(",", ":"))
+    )
+
+    loaded = load_collected_bundle(output)
+
+    assert loaded["raw"]["2"]["rawBody"] == bundle["raw"]["2"]["rawBody"]
+    assert loaded["raw"]["2"]["sourceRawSha256"] == bundle["raw"]["2"]["sourceRawSha256"]
+    assert loaded["raw"]["2"]["contentType"] == "application/json; charset=UTF-8"
+
+
+def test_loader_rejects_missing_raw_slot_without_reconstructing_bytes(tmp_path):
+    bundle = _bundle()
+    output = tmp_path / "receipt"
+    output.mkdir()
+    journal = RawJournal(output / "raw")
+    for slot in range(8):
+        view = bundle["raw"][str(slot)]
+        if slot == 7:
+            view = {**view, "status": 404, "complete": False}
+        binding = journal.add(
+            view["phase"], view["index"], view["status"], view["rawBody"],
+            complete=view["complete"], content_type="application/json",
+        )
+        row = bundle["rows"][slot] if slot < 6 else bundle["cleanup"][slot - 6]
+        row["raw"] = copy.deepcopy(binding)
+        row["rawSha256"] = binding["sha256"]
+    journal.close()
+    bundle["raw"] = None
+    (output / "collection.json").write_text(json.dumps(bundle))
+
+    with pytest.raises(ValueError, match="nine raw slots"):
+        load_collected_bundle(output)

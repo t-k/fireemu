@@ -57,7 +57,13 @@ def test_supervisor_passes_the_same_approved_archive_fd_to_child(
     marker = tmp_path / "child-ran.json"
     with bundle.unlinked_archive_fd(archive, sha) as fd:
         report: dict = {}
-        broad.supervise(_command(fd, sha, marker), tmp_path, "o8-fd-test", report)
+        broad.supervise(
+            _command(fd, sha, marker),
+            tmp_path,
+            "o8-fd-test",
+            report,
+            inherited_fd=fd,
+        )
         assert marker.exists(), report
         observed = json.loads(marker.read_text())
         assert observed["main"] == f"/dev/fd/{fd}/__main__.py"

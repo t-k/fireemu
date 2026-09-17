@@ -371,12 +371,30 @@ def cleanup_run(process, output, nonce, report, *, recovery_grace=0.2):
             save(output / "manifest.json", report)
 
 
-def supervise(command, output, nonce, report, *, timeout=240, recovery_grace=0.2):
+def supervise(
+    command,
+    output,
+    nonce,
+    report,
+    *,
+    timeout=240,
+    recovery_grace=0.2,
+    inherited_fd=None,
+):
     """Persist immutable parent inputs before launch; retain partial results on every exit."""
     report.update(status="incomplete", recordingComplete=False, cases=[])
     save(output / "manifest.json", report)
     process = None
     try:
+        pass_fds = ()
+        if inherited_fd is not None:
+            if type(inherited_fd) is not int or inherited_fd < 0:
+                raise ValueError("inherited FD must be a non-negative integer")
+            try:
+                os.fstat(inherited_fd)
+            except OSError as error:
+                raise ValueError("inherited FD is not open") from error
+            pass_fds = (inherited_fd,)
         with (output / "owned-stderr.log").open("wb") as errors:
             process = subprocess.Popen(
                 command,
@@ -385,6 +403,7 @@ def supervise(command, output, nonce, report, *, timeout=240, recovery_grace=0.2
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=errors,
+                pass_fds=pass_fds,
             )
             try:
                 report["exitCode"] = process.wait(timeout=timeout)

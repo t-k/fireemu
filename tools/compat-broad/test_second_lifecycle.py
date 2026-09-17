@@ -85,3 +85,26 @@ sys.exit(subprocess.call([sys.executable,sys.argv[1],sys.argv[2]]))
     assert result["cases"][0]["id"] == "partial"
     assert result["ownedProcess"]["stopped"] is True
     assert result["ownedProcess"]["listenersClosed"] is True
+
+
+def test_registered_isolated_python_preserves_flags_for_stop(tmp_path):
+    script = tmp_path / "isolated.py"
+    script.write_text('''import json,os,sys,time
+from pathlib import Path
+output=Path(sys.argv[1])
+(output/'instance.json').write_text(json.dumps(dict(pid=os.getpid(),parentPid=os.getppid(),nonce='n',argv=sys.orig_argv[1:])))
+while True: time.sleep(1)
+''')
+    command = [sys.executable, "-I", "-S", "-B", str(script), str(tmp_path)]
+    child = subprocess.Popen(command)
+    try:
+        deadline = time.monotonic() + 5
+        while not (tmp_path / "instance.json").exists():
+            assert child.poll() is None and time.monotonic() < deadline
+            time.sleep(0.01)
+        stop_registered(tmp_path, os.getpid(), "n")
+        assert child.wait(timeout=5) != 0
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=5)

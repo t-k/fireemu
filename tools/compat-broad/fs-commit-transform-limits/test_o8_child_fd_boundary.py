@@ -63,6 +63,7 @@ def test_supervisor_passes_the_same_approved_archive_fd_to_child(
             "o8-fd-test",
             report,
             inherited_fd=fd,
+            archive_sha256=sha,
         )
         assert marker.exists(), report
         observed = json.loads(marker.read_text())
@@ -107,3 +108,36 @@ def test_invalid_archive_fd_refuses_before_child_side_effects(
         assert result.returncode != 0
         assert "O8 archive bootstrap refused" in result.stderr
         assert not marker.exists()
+
+
+def test_supervisor_rejects_unbound_open_fd_before_child_side_effects(tmp_path: Path) -> None:
+    sys.path.insert(0, str(HERE.parent))
+    try:
+        import broad
+    finally:
+        sys.path.pop(0)
+    marker = tmp_path / "unexpected"
+    with (tmp_path / "ordinary.txt").open("wb") as ordinary:
+        result = broad.supervise(
+            [sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"],
+            tmp_path, "n", {}, inherited_fd=ordinary.fileno()
+        )
+    assert result["stopReason"] == "process-start-failure"
+    assert not marker.exists()
+
+
+def test_supervisor_rejects_bootstrap_digest_mismatch_before_launch(tmp_path: Path) -> None:
+    sys.path.insert(0, str(HERE.parent))
+    try:
+        import broad
+    finally:
+        sys.path.pop(0)
+    archive, sha = _archive(tmp_path)
+    marker = tmp_path / "unexpected"
+    with bundle.unlinked_archive_fd(archive, sha) as fd:
+        command = _command(fd, sha, marker)
+        result = broad.supervise(
+            command, tmp_path, "n", {}, inherited_fd=fd, archive_sha256="0" * 64
+        )
+    assert result["stopReason"] == "process-start-failure"
+    assert not marker.exists()

@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import fcntl
 import hashlib
 import json
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -169,7 +171,7 @@ def child(output, nonce, firestore_program=None):
         {
             "pid": os.getpid(),
             "parentPid": os.getppid(),
-            "argv": sys.argv,
+            "argv": sys.orig_argv[1:],
             "nonce": nonce,
             "authOrigin": auth,
             "firestoreOrigin": firestore,
@@ -380,6 +382,7 @@ def supervise(
     timeout=240,
     recovery_grace=0.2,
     inherited_fd=None,
+    archive_sha256=None,
 ):
     """Persist immutable parent inputs before launch; retain partial results on every exit."""
     report.update(status="incomplete", recordingComplete=False, cases=[])
@@ -390,11 +393,51 @@ def supervise(
         if inherited_fd is not None:
             if type(inherited_fd) is not int or inherited_fd < 0:
                 raise ValueError("inherited FD must be a non-negative integer")
+            bootstrap = HERE / "fs-commit-transform-limits/o8_fd_bootstrap.py"
+            if (
+                not isinstance(archive_sha256, str)
+                or len(archive_sha256) != 64
+                or any(c not in "0123456789abcdef" for c in archive_sha256)
+                or len(command) < 7
+                or command[:5]
+                != [sys.executable, "-I", "-S", "-B", str(bootstrap)]
+                or command[5:7] != [str(inherited_fd), archive_sha256]
+            ):
+                raise ValueError("inherited FD requires bound O8 bootstrap command")
             try:
-                os.fstat(inherited_fd)
+                info = os.fstat(inherited_fd)
+                flags = fcntl.fcntl(inherited_fd, fcntl.F_GETFL)
+                if (
+                    flags & os.O_ACCMODE != os.O_RDONLY
+                    or not stat.S_ISREG(info.st_mode)
+                    or info.st_nlink != 0
+                    or info.st_size > 32 * 1024 * 1024
+                    or hashlib.sha256(os.pread(inherited_fd, info.st_size + 1, 0)).hexdigest()
+                    != archive_sha256
+                ):
+                    raise ValueError("inherited archive FD differs")
+                later = os.fstat(inherited_fd)
+                if (
+                    info.st_dev,
+                    info.st_ino,
+                    info.st_size,
+                    info.st_mtime_ns,
+                    info.st_ctime_ns,
+                    info.st_nlink,
+                ) != (
+                    later.st_dev,
+                    later.st_ino,
+                    later.st_size,
+                    later.st_mtime_ns,
+                    later.st_ctime_ns,
+                    later.st_nlink,
+                ):
+                    raise ValueError("inherited archive FD changed during validation")
             except OSError as error:
                 raise ValueError("inherited FD is not open") from error
             pass_fds = (inherited_fd,)
+        elif archive_sha256 is not None:
+            raise ValueError("archive digest requires an inherited FD")
         with (output / "owned-stderr.log").open("wb") as errors:
             process = subprocess.Popen(
                 command,

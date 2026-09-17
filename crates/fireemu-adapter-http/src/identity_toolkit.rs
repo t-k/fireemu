@@ -1755,9 +1755,30 @@ fn discard_pending_inbound_credentials(
     store.clear_pending_sign_in_credentials(pending);
 }
 
+fn discard_pending_inbound_credentials_if_revision_current(
+    store: &Arc<Mutex<AuthStore>>,
+    pending: Option<&PendingSignInId>,
+    settings_gate: &Arc<Mutex<()>>,
+    blocking: &dyn AuthBlockingHook,
+    expected_blocking_revision: u64,
+) -> Result<(), JsonResponse> {
+    let Some(pending) = pending else {
+        return Ok(());
+    };
+    let Ok(_settings_operation) = settings_gate.lock() else {
+        return Err(error(500, "INTERNAL"));
+    };
+    if blocking.blocking_auth_revision() != expected_blocking_revision {
+        return Err(error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"));
+    }
+    discard_pending_inbound_credentials(store, Some(pending));
+    Ok(())
+}
+
 struct GeneratedLocalIdReservation {
     store: Arc<Mutex<AuthStore>>,
     id: String,
+    generation: u64,
 }
 
 impl Drop for GeneratedLocalIdReservation {
@@ -1766,7 +1787,7 @@ impl Drop for GeneratedLocalIdReservation {
             .store
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        store.release_reserved_generated_local_id(&self.id);
+        store.release_reserved_generated_local_id_at_generation(&self.id, self.generation);
     }
 }
 
@@ -1807,15 +1828,16 @@ fn dispatch_with_blocking_hook(
     let live_snapshot = store.clone();
     let reset_generation = store.reset_generation();
     let reserve_local_id = request_may_create_end_user(handler, &store, body, at)
-        .then(|| candidate.reserve_next_generated_local_id());
+        .then(|| candidate.reserve_next_generated_local_id_with_generation());
     // Register the reservation while the candidate still shares its reservation registry with
     // the live store, then release the request's store guard before constructing the Drop guard.
     // Every subsequent early return may therefore safely release the reservation without trying
     // to re-lock this still-held mutex.
     drop(store);
-    let _reserved_local_id = reserve_local_id.map(|id| GeneratedLocalIdReservation {
+    let _reserved_local_id = reserve_local_id.map(|(id, generation)| GeneratedLocalIdReservation {
         store: store_arc.clone(),
         id,
+        generation,
     });
     let response = dispatch(
         handler,
@@ -1949,10 +1971,17 @@ fn dispatch_with_blocking_hook(
                     ) {
                         Ok(value) => value,
                         Err(failure) => {
-                            discard_pending_inbound_credentials(
-                                store_arc,
-                                pending_continuation.as_ref().map(|(pending, _, _)| pending),
-                            );
+                            if let Err(response) =
+                                discard_pending_inbound_credentials_if_revision_current(
+                                    store_arc,
+                                    pending_continuation.as_ref().map(|(pending, _, _)| pending),
+                                    settings_gate,
+                                    blocking,
+                                    expected_blocking_revision,
+                                )
+                            {
+                                return response;
+                            }
                             return error(failure.identity_status(), &failure.client_message());
                         }
                     }
@@ -1964,10 +1993,17 @@ fn dispatch_with_blocking_hook(
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
                         &value,
                     ) {
-                        discard_pending_inbound_credentials(
-                            store_arc,
-                            pending_continuation.as_ref().map(|(pending, _, _)| pending),
-                        );
+                        if let Err(response) =
+                            discard_pending_inbound_credentials_if_revision_current(
+                                store_arc,
+                                pending_continuation.as_ref().map(|(pending, _, _)| pending),
+                                settings_gate,
+                                blocking,
+                                expected_blocking_revision,
+                            )
+                        {
+                            return response;
+                        }
                         return error(400, &reason);
                     }
                     blocking_responses.push((
@@ -9916,10 +9952,13 @@ fn password_policy_json(policy: &PasswordPolicy) -> JsonResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fireemu_core_auth::mfa::TotpPolicy;
+    use fireemu_core_types::determinism::SplitMix64;
 
     struct AllBlockingHooks;
     struct BeforeCreateOnlyHook;
     struct NoBlockingHooks;
+    struct FixedBlockingRevision(u64);
 
     impl AuthBlockingHook for AllBlockingHooks {
         fn invoke(
@@ -9942,6 +9981,20 @@ mod tests {
             _user: &fireemu_core_auth::store::UserRecord,
         ) -> Result<Value, BlockingFunctionFailure> {
             unreachable!("a bridge without matching exports is never invoked")
+        }
+    }
+
+    impl AuthBlockingHook for FixedBlockingRevision {
+        fn invoke(
+            &self,
+            _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+            _user: &fireemu_core_auth::store::UserRecord,
+        ) -> Result<Value, BlockingFunctionFailure> {
+            unreachable!("the revision helper test never invokes a hook")
+        }
+
+        fn blocking_auth_revision(&self) -> u64 {
+            self.0
         }
     }
 
@@ -10046,6 +10099,58 @@ mod tests {
             None
         );
         assert_eq!(BlockingFunctionCode::from_canonical_name("OK"), None);
+    }
+
+    #[test]
+    fn stale_before_sign_in_cleanup_does_not_discard_pending_credentials() {
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user_with_password(NewUser::email("pending@example.com"), "hunter22", now)
+            .unwrap();
+        store
+            .set_phone_factors(
+                &uid,
+                vec![("+15550001234".to_owned(), Some("primary".to_owned()))],
+                now,
+            )
+            .unwrap();
+        let pending = store
+            .start_mfa_sign_in_with_context(
+                &uid,
+                now,
+                PendingSignInContext::new_with_credentials(
+                    Some("password".to_owned()),
+                    false,
+                    None,
+                    Some(PendingSignInCredentials::new(
+                        Some("access-token".to_owned()),
+                        Some("id-token".to_owned()),
+                        Some("refresh-token".to_owned()),
+                    )),
+                ),
+            )
+            .unwrap();
+        let store = Arc::new(Mutex::new(store));
+        let settings_gate = Arc::new(Mutex::new(()));
+        let result = discard_pending_inbound_credentials_if_revision_current(
+            &store,
+            Some(&pending),
+            &settings_gate,
+            &FixedBlockingRevision(1),
+            0,
+        );
+        let response = result.unwrap_err();
+        assert_eq!(response.status, 409);
+
+        let store = store.lock().unwrap();
+        let credentials = store
+            .pending_sign_in_context(&pending)
+            .and_then(PendingSignInContext::inbound_credentials)
+            .expect("revision drift must retain pending credentials");
+        assert_eq!(credentials.access_token(), Some("access-token"));
+        assert_eq!(credentials.id_token(), Some("id-token"));
+        assert_eq!(credentials.refresh_token(), Some("refresh-token"));
     }
 
     #[test]

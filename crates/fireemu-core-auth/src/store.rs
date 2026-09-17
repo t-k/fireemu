@@ -2121,6 +2121,14 @@ impl AuthStore {
     /// keeps concurrent blocking candidates distinct while preserving the established identity
     /// change check when an ordinary nested Admin request consumes the same generated ID.
     pub fn reserve_next_generated_local_id(&mut self) -> String {
+        self.reserve_next_generated_local_id_with_generation().0
+    }
+
+    /// Reserves the next generated local ID and returns the reset generation that owns it.
+    ///
+    /// The generation is part of the reservation ticket so a guard from before a reset cannot
+    /// release a same-ID reservation created after that reset.
+    pub fn reserve_next_generated_local_id_with_generation(&mut self) -> (String, u64) {
         let generation = self.reset_generation();
         loop {
             let candidate = LocalId(self.random_id28());
@@ -2134,14 +2142,14 @@ impl AuthStore {
             let generations = reservations.entry(candidate.clone()).or_default();
             if generations.insert(generation) {
                 self.next_id_override = Some(candidate.as_str().to_owned());
-                return candidate.as_str().to_owned();
+                return (candidate.as_str().to_owned(), generation);
             }
         }
     }
 
     /// Uses a previously reserved ID for the next generated account and retires its current
-    /// generation reservation. The adapter's Drop guard remains safe because its later release
-    /// sees no current entry and only retires an older generation, if one exists.
+    /// generation reservation. Adapter reservation guards carry the generation ticket, so a later
+    /// release sees no current entry and cannot affect a reservation from another generation.
     pub fn use_reserved_generated_local_id(&mut self, id: &str) {
         self.next_id_override = Some(id.to_owned());
         let generation = self.reset_generation();
@@ -2171,6 +2179,15 @@ impl AuthStore {
         if generations.is_empty() {
             reservations.remove(&key);
         }
+    }
+
+    /// Releases exactly the reservation identified by its generated ID and reset generation.
+    pub fn release_reserved_generated_local_id_at_generation(&self, id: &str, generation: u64) {
+        let mut reservations = self
+            .generated_local_id_reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::release_reservation_generation(&mut reservations, id, generation);
     }
 
     fn release_reservation_generation(
@@ -9601,7 +9618,7 @@ mod password_policy_namespace_tests {
 
 #[cfg(test)]
 mod generated_id_tests {
-    use super::{AuthSnapshot, AuthStore, NewUser};
+    use super::{AuthSnapshot, AuthStore, LocalId, NewUser};
     use crate::mfa::TotpPolicy;
     use fireemu_core_types::determinism::SplitMix64;
     use fireemu_core_types::time::LogicalInstant;
@@ -9659,6 +9676,64 @@ mod generated_id_tests {
         live.release_reserved_generated_local_id(&old_reservation);
         let next_reservation = live.clone().reserve_next_generated_local_id();
         assert_ne!(next_reservation, new_reservation);
+    }
+
+    #[test]
+    fn exact_generation_release_does_not_remove_a_newer_reservation() {
+        let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let (old_id, old_generation) = live
+            .clone()
+            .reserve_next_generated_local_id_with_generation();
+
+        live.clear();
+        let (new_id, new_generation) = live
+            .clone()
+            .reserve_next_generated_local_id_with_generation();
+        assert_eq!(new_id, old_id);
+        assert_ne!(new_generation, old_generation);
+
+        // This models the old guard being dropped after the newer reservation was created.
+        live.release_reserved_generated_local_id_at_generation(&old_id, old_generation);
+        let (next_id, next_generation) = live
+            .clone()
+            .reserve_next_generated_local_id_with_generation();
+        assert_ne!(next_id, new_id);
+
+        live.release_reserved_generated_local_id_at_generation(&new_id, new_generation);
+        live.release_reserved_generated_local_id_at_generation(&next_id, next_generation);
+    }
+
+    #[test]
+    fn reverse_generation_release_preserves_the_older_reservation_until_it_drops() {
+        let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let (old_id, old_generation) = live
+            .clone()
+            .reserve_next_generated_local_id_with_generation();
+
+        live.clear();
+        let (new_id, new_generation) = live
+            .clone()
+            .reserve_next_generated_local_id_with_generation();
+        assert_eq!(new_id, old_id);
+
+        // The newer guard may be dropped before the older one. Its exact ticket must not be
+        // confused with the older reservation, which remains in the shared ledger.
+        live.release_reserved_generated_local_id_at_generation(&new_id, new_generation);
+        assert!(live
+            .generated_local_id_reservations
+            .lock()
+            .unwrap()
+            .get(&LocalId(old_id.clone()))
+            .is_some_and(|generations| {
+                generations.len() == 1 && generations.contains(&old_generation)
+            }));
+
+        live.release_reserved_generated_local_id_at_generation(&old_id, old_generation);
+        assert!(!live
+            .generated_local_id_reservations
+            .lock()
+            .unwrap()
+            .contains_key(&LocalId(old_id)));
     }
 }
 

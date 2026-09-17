@@ -185,6 +185,10 @@ def test_shared_wait_rechecks_phase_deadline_before_transmission(
 ):
     from contextlib import contextmanager
 
+    # Freeze the origin before Gate creation so exact deadlines do not inherit
+    # platform uptime rounding from differently grouped float additions.
+    clock = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     coordinator, gate, ledger, _, plan = setup(tmp_path)
     sent = []
 
@@ -204,8 +208,7 @@ def test_shared_wait_rechecks_phase_deadline_before_transmission(
         + plan["wallSeconds"]
         - (0 if recovery else plan["recoverySeconds"])
     )
-    clock = [deadline - 13]
-    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    clock[0] = deadline - 13
     original_locked = ledger._locked
 
     @contextmanager

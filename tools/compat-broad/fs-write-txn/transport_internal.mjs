@@ -255,6 +255,11 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
     clearTimeout(timer);
     const terminalStatus = status;
     const terminalCode = terminalStatus?.code;
+    const cleanStatusReady = typeof terminalCode === 'number' && (terminalCode !== 0 || (!awaitingResponse && streamEndedByClient));
+    if (pendingTerminalError === terminalError && cleanStatusReady && !handlerFailureRecorded) {
+      terminalError = undefined;
+      pendingTerminalError = undefined;
+    }
     if (!handlerFailureRecorded && typeof terminalCode === 'number' && (terminalCode !== 0 || (!awaitingResponse && streamEndedByClient && !terminalError))) {
       finish({ kind: 'grpc_status', complete: true, status: terminalStatus, error: terminalError });
     } else if (!terminalGraceTimer) {
@@ -357,6 +362,7 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
     awaitingResponse = false;
     streamEndedByClient = true;
     stream.end();
+    maybeFinish();
   } catch (error) {
     if (!terminalError) terminalError = error;
     terminalSignal = true;

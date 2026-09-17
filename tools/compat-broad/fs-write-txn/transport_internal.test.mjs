@@ -106,6 +106,43 @@ test('does not clear a real error when status follows end', async () => {
   assert.equal(receipt.error.code, 13);
 });
 
+test('accepts same-tick terminal ordering after the final ACK is queued', async () => {
+  for (const order of ['status-end', 'end-status', 'close-status']) {
+    const stream = new EventEmitter();
+    let writes = 0;
+    stream.write = () => queueMicrotask(() => {
+      writes += 1;
+      stream.emit('data', { streamToken: Buffer.from(`token-${writes}`) });
+      if (writes === 2) {
+        const status = { code: 0, details: 'ok', message: '' };
+        if (order === 'status-end') {
+          stream.emit('status', status);
+          stream.emit('end');
+        } else if (order === 'end-status') {
+          stream.emit('end');
+          stream.emit('status', status);
+        } else {
+          stream.emit('close');
+          stream.emit('status', status);
+        }
+      }
+    });
+    stream.end = () => {};
+    stream.destroy = () => {};
+    const receipt = await bounded(runWriteCore([{ writes: [] }], writeOptions, {
+      createClient: () => ({ write: () => stream, close() {} }),
+      handshake,
+      buildNextFrame: Object.assign((request, response) => ({ ...request, streamToken: response.streamToken }), { validate() {} }),
+    }));
+    assert.equal(receipt.kind, 'grpc_status', order);
+    assert.equal(receipt.complete, true, order);
+    assert.equal(receipt.status.code, 0, order);
+    assert.equal(receipt.error, undefined, order);
+    assert.equal(receipt.completedSendFrames, 2, order);
+    assert.equal(receipt.receivedFrames, 2, order);
+  }
+});
+
 test('local client factory rejects non-loopback options before channel construction', () => {
   assert.throws(() => createLocalClient({ host: 'firestore.googleapis.com', port: 443, projectId: 'fireemu-test' }), /loopback/);
 });

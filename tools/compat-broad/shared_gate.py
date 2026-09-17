@@ -23,6 +23,24 @@ from broad_contract import digest
 REQUEST_SECONDS = 13  # 12-second wire deadline plus adapter spacing allowance.
 
 
+def _stream_policy(plan):
+    if plan.get("contract") == "shared-stream-v1":
+        if plan.get("protocol") != "firestore-grpc-stream-v1":
+            raise ValueError("unknown shared stream protocol")
+        import importlib.util
+
+        module_path = Path(__file__).parent / "fs-write-txn" / "stream_bridge.py"
+        spec = importlib.util.spec_from_file_location(
+            "_shared_stream_policy", module_path
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    if plan.get("protocol") is not None:
+        raise ValueError("unexpected shared protocol")
+    return None
+
+
 def typed_absence(status, body):
     error = body.get("error") if isinstance(body, dict) else None
     return (
@@ -37,6 +55,9 @@ def typed_absence(status, body):
 
 def validate_absence_proofs(state, job_name):
     """Validate final typed readback against the registered recovery plan and journal."""
+    policy = _stream_policy(state["plan"])
+    if policy:
+        return policy.validate_absence(state, job_name)
     job = state["jobs"][job_name]
     proofs = job.get("absenceProofs", {})
     if set(proofs) != set(job["resources"]):
@@ -91,18 +112,23 @@ def _save(path, state):
 
 def create(path, plan):
     path = Path(path)
+    policy = _stream_policy(plan)
+    if policy:
+        policy.validate_plan(plan)
+    request_seconds = policy.REQUEST_SECONDS if policy else REQUEST_SECONDS
     jobs = plan["jobs"]
     resources = [r for job in jobs.values() for r in job["resources"]]
     recovery = sum(len(job["recovery"]) for job in jobs.values())
     management_recovery = plan.get("management", {}).get("recovery", [])
-    recovery_time = recovery * (REQUEST_SECONDS + plan["intervalSeconds"]) + sum(
+    recovery_time = recovery * (request_seconds + plan["intervalSeconds"]) + sum(
         item["timeout"] + plan["intervalSeconds"] for item in management_recovery
     )
     recovery += len(management_recovery)
     overhead = plan.get("coordinatorRequests", 0)
     fixed_cost = plan.get("fixedCostMicrousd", 0)
     if (
-        plan["contract"] not in {"shared-local-v1", "shared-local-v2"}
+        plan["contract"]
+        not in {"shared-local-v1", "shared-local-v2", "shared-stream-v1"}
         or not 1 <= len(jobs) <= 2
         or len(resources) != len(set(resources))
         or not resources
@@ -347,45 +373,56 @@ class Gate:
             index = job[phase]
             if index >= len(operations):
                 raise ValueError("scenario request capacity")
-            expected = dict(operations[index])
-            source = expected.pop("versionFrom", None)
-            valid_version = False
-            if source is not None:
-                capture = job["captures"].get(str(source))
-                valid_version = bool(
-                    capture
-                    and type(capture["status"]) is int
-                    and capture["status"] == 200
-                    and isinstance(capture.get("updateTime"), str)
-                    and capture["updateTime"]
-                )
-                if valid_version:
-                    version = capture.get("updateTime")
-                    expected["path"] += "?currentDocument.updateTime=" + quote(
-                        version, safe=""
+            policy = _stream_policy(plan)
+            request_seconds = policy.REQUEST_SECONDS if policy else REQUEST_SECONDS
+            if policy:
+                expected, resource, skip = policy.resolve(state, self.job, recovery)
+                source = "stream-guard" if skip else None
+                valid_version = False
+                if digest(operation) != digest(expected):
+                    raise ValueError("request outside closed stream scenario")
+            else:
+                expected = dict(operations[index])
+                source = expected.pop("versionFrom", None)
+                valid_version = False
+                if source is not None:
+                    capture = job["captures"].get(str(source))
+                    valid_version = bool(
+                        capture
+                        and type(capture["status"]) is int
+                        and capture["status"] == 200
+                        and isinstance(capture.get("updateTime"), str)
+                        and capture["updateTime"]
                     )
-            if digest(operation) != digest(expected):
-                raise ValueError("request outside closed scenario")
-            resource = operation["path"].split("?", 1)[0].removeprefix("/v1/")
-            if recovery and resource not in job["resources"]:
-                raise ValueError("cleanup target outside assigned resources")
-            if operation["method"] == "DELETE" and (source is None or valid_version):
-                proof = job.get("creationProofs", {}).get(resource)
-                capture = job["captures"].get(str(source), {})
-                if (
-                    not recovery
-                    or proof is None
-                    or capture.get("name") != resource
-                    or capture.get("fieldsDigest") != proof["fieldsDigest"]
-                    or operation["path"]
-                    != "/v1/"
-                    + resource
-                    + "?currentDocument.updateTime="
-                    + quote(proof["updateTime"], safe="")
+                    if valid_version:
+                        version = capture.get("updateTime")
+                        expected["path"] += "?currentDocument.updateTime=" + quote(
+                            version, safe=""
+                        )
+                if digest(operation) != digest(expected):
+                    raise ValueError("request outside closed scenario")
+                resource = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+                if recovery and resource not in job["resources"]:
+                    raise ValueError("cleanup target outside assigned resources")
+                if operation["method"] == "DELETE" and (
+                    source is None or valid_version
                 ):
-                    raise ValueError(
-                        "cleanup requires journaled creation ownership/version"
-                    )
+                    proof = job.get("creationProofs", {}).get(resource)
+                    capture = job["captures"].get(str(source), {})
+                    if (
+                        not recovery
+                        or proof is None
+                        or capture.get("name") != resource
+                        or capture.get("fieldsDigest") != proof["fieldsDigest"]
+                        or operation["path"]
+                        != "/v1/"
+                        + resource
+                        + "?currentDocument.updateTime="
+                        + quote(proof["updateTime"], safe="")
+                    ):
+                        raise ValueError(
+                            "cleanup requires journaled creation ownership/version"
+                        )
             if recovery:
                 job["stopped"] = True  # Recovery is a one-way transition.
             if source is not None and not valid_version:
@@ -399,7 +436,11 @@ class Gate:
                     }
                 )
                 _save(self.path, state)
-                return None, {"skipped": "absent-or-unavailable-cleanup-read"}
+                return (
+                    {"skipped": skip}
+                    if policy
+                    else (None, {"skipped": "absent-or-unavailable-cleanup-read"})
+                )
             now = time.monotonic()
             delay = max(0, state["lastSent"] + plan["intervalSeconds"] - now)
             deadline = (
@@ -410,7 +451,7 @@ class Gate:
             cost = plan["requestCostMicrousd"]
             remaining = state["reservedRecovery"] - (1 if recovery else 0)
             if (
-                now + delay + REQUEST_SECONDS > deadline
+                now + delay + request_seconds > deadline
                 or (
                     not recovery and state["observation"] >= plan["observationRequests"]
                 )
@@ -418,8 +459,10 @@ class Gate:
             ):
                 raise ValueError("global phase/time/cost capacity")
             time.sleep(delay)
-            if time.monotonic() + REQUEST_SECONDS > deadline:
+            if time.monotonic() + request_seconds > deadline:
                 raise ValueError("deadline after rate wait")
+            if policy:
+                policy.debit(state, job, operation)
             state["lastSent"] = time.monotonic()
             state["total"] += 1
             state[phase] += 1
@@ -452,6 +495,9 @@ class Gate:
                 event["failure"] = type(error).__name__
                 raise
             else:
+                if policy:
+                    policy.record(state, self.job, operation, result, event)
+                    return result
                 status, body = result
                 event.update(status=status, responseDigest=digest(body), completed=True)
                 if type(status) is not int:
@@ -503,8 +549,8 @@ class Gate:
                 # Normal exception paths have returned from bounded transport. A killed
                 # process never reaches here: its marker blocks every successor dispatch.
                 interruption = sys.exc_info()[0]
-                job["inflight"] = interruption is not None and not issubclass(
-                    interruption, Exception
+                job["inflight"] = interruption is not None and (
+                    policy is not None or not issubclass(interruption, Exception)
                 )
                 event["ended"] = time.monotonic()
                 state["lastSent"] = event["ended"]
@@ -520,6 +566,8 @@ class Gate:
                 or set(job["absent"]) != set(job["resources"])
             ):
                 raise ValueError("cleanup incomplete; ownership retained")
+            if _stream_policy(state["plan"]):
+                validate_absence_proofs(state, self.job)
             job["complete"] = True
             _save(self.path, state)
 

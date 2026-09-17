@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 
 import owned_transform_runner as runner
 import pytest
@@ -55,6 +56,30 @@ def test_repaired_profile_accepts_original_build_manifest_without_derived_fields
     assert result["runtimeSourceCommit"] == profile["runtimeCommit"]
     assert result["artifactSha256"] == profile["artifactSha256"]
     assert result["retainedManifestSha256"]
+
+
+def test_generated_artifact_is_rejected_by_pinned_repaired_profile(
+    generated_repaired_fixture,
+):
+    artifact, manifest, _ = generated_repaired_fixture
+
+    with pytest.raises(ValueError):
+        validate_retained_artifact(artifact, manifest, profile=REPAIRED_PROFILE)
+
+
+def test_generated_manifest_contains_independently_verified_git_tree_digest(
+    generated_repaired_fixture,
+):
+    _, manifest_path, profile = generated_repaired_fixture
+    manifest = json.loads(manifest_path.read_text())
+    content = subprocess.check_output(
+        ["git", "show", f"{profile['runtimeCommit']}:Cargo.toml"],
+        cwd=runner.ROOT,
+    )
+
+    assert manifest["build"]["inputs"]["Cargo.toml"] == hashlib.sha256(
+        content
+    ).hexdigest()
 
 
 def test_unknown_profile_is_rejected_before_artifact_validation(tmp_path):

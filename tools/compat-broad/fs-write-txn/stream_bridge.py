@@ -578,6 +578,7 @@ def source_digest():
             "stream_node_transport.mjs",
             "transport_internal.mjs",
             "stream_production.py",
+            "credential_prep.py",
             "stream_shadow.py",
             "stream_comparison.mjs",
         )

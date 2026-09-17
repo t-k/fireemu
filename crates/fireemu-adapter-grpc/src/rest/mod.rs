@@ -864,7 +864,16 @@ impl RestState {
             request_options: None,
         };
         let guard = self.write_guard(principal);
-        let doc = self.local.create_document_with(&req, &*guard)?;
+        let doc = self
+            .local
+            .create_document_with(&req, &*guard)
+            .map_err(|status| {
+                document_resource
+                    .as_deref()
+                    .map_or(status.clone(), |resource| {
+                        crate::local::rest_limit_diagnostic(&status, resource)
+                    })
+            })?;
         Ok(ok(document_to_json(&doc)))
     }
 

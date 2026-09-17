@@ -411,6 +411,44 @@ fn rest_nested_limit_diagnostics_keep_the_property_and_route_context() {
 }
 
 #[test]
+fn rest_collection_create_oversize_reports_the_explicit_document_resource() {
+    let s = state(None);
+    let project = fireemu_core_types::ids::ProjectId::try_new("demo-app").unwrap();
+    let database = fireemu_core_types::ids::DatabaseId::try_new("(default)").unwrap();
+    let path =
+        fireemu_core_firestore::path::DocumentPath::parse(&project, &database, "limits/post-size")
+            .unwrap();
+    let base = document_size(
+        &path,
+        &BTreeMap::from([
+            ("a".to_owned(), CoreValue::String(String::new())),
+            ("b".to_owned(), CoreValue::String(String::new())),
+        ]),
+    )
+    .unwrap()
+    .total;
+    let payload = usize::try_from(1_048_577 - base).unwrap();
+    let first_len = payload / 2;
+    let second_len = payload - first_len;
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}/limits?documentId=post-size"),
+        json!({"fields": {
+            "a": {"stringValue": "x".repeat(first_len)},
+            "b": {"stringValue": "x".repeat(second_len)}
+        }}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "Document 'projects/demo-app/databases/(default)/documents/limits/post-size' cannot be written because its size (1,048,577 bytes) exceeds the maximum allowed size of 1,048,576 bytes."
+    );
+    let (status, missing) = call(&s, "GET", &format!("{DOCS}/limits/post-size"), Value::Null);
+    assert_eq!(status, 404, "{missing}");
+}
+
+#[test]
 fn rest_oversized_nested_values_report_canonical_paths_without_publishing() {
     let s = state(None);
     let oversized = "x".repeat(1_048_488);

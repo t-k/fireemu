@@ -29,10 +29,9 @@ def _load(name: str, path: Path):
 
 
 _compiler = _load("_commit_gate_transform_compiler", HERE / "transform_compiler.py")
-_commit_bridge_path = HERE / "commit_production_bridge.py"
-if not _commit_bridge_path.exists():
-    _commit_bridge_path = HERE / "production_bridge.py"
-_commit_bridge = _load("_commit_gate_production_bridge", _commit_bridge_path)
+_commit_bridge = _load(
+    "_commit_gate_production_bridge", HERE / "commit_production_bridge.py"
+)
 
 # The existing LimitsGate supplies the one charged callback and consume_wire
 # boundary. Load it by path because another campaign has a production_bridge.

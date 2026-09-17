@@ -111,19 +111,26 @@ const main = async () => {
     runWrite: requests => observe('Write', requests),
     recover: async () => {
       const cleanup = [];
+      const byRole = new Map();
       for (let index = 0; index < plan.jobs.stream.recovery.length; index++) {
         const result = await rpc('recovery', index, null);
-        recoveryObservations.push({ phase: result.operation.slot, receipt: result.raw, skipped: result.skipped === true });
+        recoveryObservations.push({ index, phase: result.operation.slot, receipt: result.raw, skipped: result.skipped === true });
+        if (result.operation.slot.startsWith('owned-read-')) byRole.set(result.operation.slot.slice('owned-read-'.length), { ownedRead: result.raw });
+        if (result.operation.slot.startsWith('conditional-delete-')) {
+          const entry = byRole.get(result.operation.slot.slice('conditional-delete-'.length));
+          entry.deleted = result.raw; entry.skipped = result.skipped === true;
+        }
         if (result.operation.slot.startsWith('typed-absence-')) {
           const absent = result.raw?.kind === 'grpc_status' && result.raw?.complete === true && result.raw?.status?.code === 5;
-          cleanup.push({ path: result.operation.request.name, complete: absent, absent, receipt: result.raw });
+          const entry = byRole.get(result.operation.slot.slice('typed-absence-'.length));
+          cleanup.push({ path: result.operation.request.name.split('/documents/')[1], skipped: entry.skipped, complete: absent, absent, ...(entry.skipped ? { receipt: entry.ownedRead } : { ownedRead: entry.ownedRead, receipt: entry.deleted }), absence: result.raw });
         }
       }
       return cleanup;
     },
   };
   const result = await collectWithApi(options, api, plan.ownerId);
-  result.observations.push(...recoveryObservations);
+  result.recoveryObservations = recoveryObservations;
   send({ type: 'done', protocol: PROTOCOL, planDigest: init.planDigest, job: 'stream', id, result });
   if ((await receive()).type !== 'shutdown') fail();
   // The parent has consumed done and every receipt before granting shutdown.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import copy
 import re
+import shutil
 
 from broad_contract import digest
 
@@ -14,11 +15,12 @@ REQUEST_SECONDS = 31
 BOUNDS = {
     "rpcSlots": 25,
     "writeRpcs": 8,
-    "outboundFrames": 16,
-    "acceptedFrames": 256,
+    "writeOutboundFrames": 16,
+    "outboundFrames": 33,
+    "acceptedFrames": 290,
     "writes": 9,
     "maxMessageBytes": 1048576,
-    "acceptedBytes": 268435456,
+    "acceptedBytes": 286261248,
 }
 
 
@@ -108,13 +110,13 @@ def compile_plan(project, nonce, owner):
             "optional-transaction",
         )
     ]
-    for role in names:
+    for role, name in names.items():
         recovery += [
             read(f"owned-read-{role}", role),
             op(
                 f"conditional-delete-{role}",
                 "Write",
-                [{"writes": [{"delete": names[role]}]}],
+                [{"writes": [{"delete": name}]}],
                 "owned-version",
             ),
             read(f"typed-absence-{role}", role),
@@ -125,6 +127,7 @@ def compile_plan(project, nonce, owner):
         "projectId": project,
         "nonce": nonce,
         "ownerId": owner,
+        "nodeRuntime": node_runtime(),
         "documentPrefix": prefix,
         "streamBounds": dict(BOUNDS),
         "wallSeconds": 1100,
@@ -201,6 +204,22 @@ def resolve(state, job_name, recovery):
         elif transaction is None:
             raise ValueError("journaled transaction required")
         else:
+            proof_index = job.get("transactionEventIndex")
+            if type(proof_index) is not int or not 0 <= proof_index < len(
+                state["events"]
+            ):
+                raise ValueError("journaled transaction event required")
+            proof_event = state["events"][proof_index]
+            proof_raw = proof_event.get("receipt", {}).get("raw", {})
+            if (
+                proof_event.get("job") != job_name
+                or proof_event.get("method") != "BeginTransaction"
+                or proof_event.get("completed") is not True
+                or proof_event.get("failure") is not None
+                or grpc_code(proof_raw) != 0
+                or proof_raw.get("response", {}).get("transaction") != transaction
+            ):
+                raise ValueError("journaled transaction token differs")
             operation["request"]["transaction"] = token(transaction)
     if dynamic == "owned-version":
         owned = job.get("latestOwnedVersions", {}).get(resource)
@@ -235,10 +254,11 @@ def debit(state, job, operation):
     amounts = {
         "rpcSlots": 1,
         "writeRpcs": int(bool(writes)),
-        "outboundFrames": 2 if writes else 0,
-        "acceptedFrames": 32 if writes else 0,
+        "writeOutboundFrames": 2 if writes else 0,
+        "outboundFrames": 2 if writes else 1,
+        "acceptedFrames": 32 if writes else 2,
         "writes": len(writes),
-        "acceptedBytes": 32 * BOUNDS["maxMessageBytes"] if writes else 0,
+        "acceptedBytes": (32 if writes else 1) * BOUNDS["maxMessageBytes"],
     }
     if any(used[key] + amount > BOUNDS[key] for key, amount in amounts.items()):
         raise ValueError("stream frame/write/byte capacity")
@@ -281,6 +301,9 @@ def record(state, job_name, operation, receipt, event):
     ):
         raise ValueError("bound canonical gRPC receipt required")
     raw = receipt["raw"]
+    limit = (32 if operation["method"] == "Write" else 1) * BOUNDS["maxMessageBytes"]
+    if len(json.dumps(raw, separators=(",", ":")).encode()) > limit:
+        raise ValueError("accepted receipt byte bound exceeded")
     code = grpc_code(raw)
     if code is None:
         raise ValueError("complete typed gRPC terminal required")
@@ -304,6 +327,14 @@ def record(state, job_name, operation, receipt, event):
         ):
             raise ValueError("actual Write frame evidence required")
         if len(sends) == 2:
+            responses = [e["value"] for e in raw["events"] if e.get("type") == "data"]
+            if not responses or sends[1].get("streamToken") != responses[0].get(
+                "streamToken"
+            ):
+                raise ValueError(
+                    "Write stream token does not follow handshake response"
+                )
+            token(sends[1].get("streamToken"))
             payload = dict(sends[1])
             payload.pop("streamToken", None)
             if payload != operation["request"][0]:
@@ -329,6 +360,7 @@ def record(state, job_name, operation, receipt, event):
         if code == 0:
             job["transaction"] = token(raw.get("response", {}).get("transaction"))
             job["transactionUnknown"] = False
+            job["transactionEventIndex"] = event_index
     if method == "Rollback":
         if code == 0:
             job["transaction"] = None
@@ -445,7 +477,6 @@ def validate_absence(state, job_name):
 # One bounded private socket; no bearer material is written to files or stdout.
 import hashlib
 import json
-import os
 import socket
 import struct
 import subprocess
@@ -456,9 +487,16 @@ MAX_IPC_BYTES = 4 * 1024 * 1024
 
 
 def read_message(channel):
+    original_timeout = channel.gettimeout()
+    deadline = time.monotonic() + REQUEST_SECONDS
+
     def exact(count):
         chunks = bytearray()
         while len(chunks) < count:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("private message deadline")
+            channel.settimeout(min(remaining, original_timeout or REQUEST_SECONDS))
             chunk = channel.recv(count - len(chunks))
             if not chunk:
                 raise ValueError("private stream channel closed")
@@ -485,7 +523,7 @@ def read_message(channel):
         ),
     )
     if not isinstance(result, dict):
-        raise ValueError("private message object required")
+        raise ValueError("private message object required")  # noqa: TRY004 -- Protocol failures share ValueError.
     return result
 
 
@@ -494,6 +532,29 @@ def write_message(channel, value):
     if not 0 < len(raw) <= MAX_IPC_BYTES:
         raise ValueError("bounded private message required")
     channel.sendall(struct.pack("!I", len(raw)) + raw)
+
+
+def node_runtime():
+    executable = shutil.which("node")
+    if executable is None:
+        raise ValueError("verified Node runtime required")
+    path = Path(executable).resolve(strict=True)
+    if not path.is_file() or path.stat().st_mode & 0o022:
+        raise ValueError("private trusted Node runtime required")
+    return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def verify_execution_bindings(source, runtime):
+    path = Path(runtime["path"])
+    if (
+        not path.is_absolute()
+        or path.is_symlink()
+        or not path.is_file()
+        or path.stat().st_mode & 0o022
+        or hashlib.sha256(path.read_bytes()).hexdigest() != runtime["sha256"]
+        or source_digest() != source
+    ):
+        raise ValueError("stream source/runtime binding changed")
 
 
 def source_digest():
@@ -523,8 +584,6 @@ def source_digest():
 
 
 def _run_worker(plan, gate, ledger, ticket, *, mode, port, authorize):
-    from shared_gate import create
-
     frozen = copy.deepcopy(plan)
     validate_plan(frozen)
     claim = ledger.bound_claim(ticket)
@@ -536,12 +595,15 @@ def _run_worker(plan, gate, ledger, ticket, *, mode, port, authorize):
     frozen_source = source_digest()
     parent, child = socket.socketpair()
     parent.settimeout(REQUEST_SECONDS)
-    env = {"PATH": os.environ["PATH"], "STREAM_CHANNEL_FD": str(child.fileno())}
+    env = {"STREAM_CHANNEL_FD": str(child.fileno())}
     worker = None
-    completed = False
     try:
+        verify_execution_bindings(frozen_source, frozen["nodeRuntime"])
         worker = subprocess.Popen(
-            ["node", str(Path(__file__).with_name("stream_worker.mjs"))],
+            [
+                frozen["nodeRuntime"]["path"],
+                str(Path(__file__).with_name("stream_worker.mjs")),
+            ],
             pass_fds=(child.fileno(),),
             env=env,
             stdin=subprocess.DEVNULL,
@@ -578,9 +640,9 @@ def _run_worker(plan, gate, ledger, ticket, *, mode, port, authorize):
                 worker.wait(timeout=1)
                 if worker.returncode != 0:
                     raise ValueError("stream worker did not close")
+                verify_execution_bindings(frozen_source, frozen["nodeRuntime"])
                 gate.finish()
                 ledger.finish(ticket)
-                completed = True
                 return message["result"]
             message_id += 1
             if (
@@ -622,7 +684,12 @@ def _run_worker(plan, gate, ledger, ticket, *, mode, port, authorize):
             }
             used = False
 
-            def send():
+            def send(
+                recovery=recovery,
+                snapshot=snapshot,
+                operation=operation,
+                binding=binding,
+            ):
                 nonlocal used
                 if (
                     used
@@ -631,6 +698,7 @@ def _run_worker(plan, gate, ledger, ticket, *, mode, port, authorize):
                 ):
                     raise ValueError("single-use source/plan binding differs")
                 used = True
+                verify_execution_bindings(frozen_source, frozen["nodeRuntime"])
                 ledger.validate(ticket, duration=REQUEST_SECONDS)
                 if ledger.bound_claim(ticket) != claim:
                     raise ValueError("stream claim changed")
@@ -723,8 +791,11 @@ def run_local(plan, path, ledger, ticket, *, port):
 
 def run_reserved(plan, gate, ledger, ticket, coordinator):
     """Internal prepared-parent entrypoint. Never issues permission or obtains tokens."""
-    from batch_contract import Credential
+    from batch_contract import PROJECT, Credential
+    from shared_production import Coordinator
 
+    if not isinstance(coordinator, Coordinator):
+        raise TypeError("existing prepared Coordinator required")
     permission = copy.deepcopy(coordinator.permission)
     credential = coordinator.credential
     if (
@@ -732,7 +803,8 @@ def run_reserved(plan, gate, ledger, ticket, coordinator):
         or plan.get("permissionDigest") != digest(permission)
         or plan.get("observerSha256") != source_digest()
         or permission.get("collectorSourceDigest") != source_digest()
-        or permission.get("projectId") != plan["projectId"]
+        or permission.get("project") != PROJECT
+        or plan["projectId"] != PROJECT
     ):
         raise ValueError("prepared stream permission/source required")
 

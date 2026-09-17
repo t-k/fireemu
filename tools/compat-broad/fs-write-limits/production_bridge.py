@@ -8,6 +8,10 @@ verify the checkout/artifact and complete Coordinator acquisition/preflight.
 
 from __future__ import annotations
 
+import hashlib
+import sys
+from pathlib import Path
+
 import json
 import math
 import time
@@ -20,6 +24,12 @@ from shadow import source_inputs
 from batch_adapter import observer_digest
 from broad_contract import digest
 from shared_production import Coordinator, ProductionGate
+
+ADMISSION_SOURCE = (
+    Path(__file__).resolve().parent.parent / "production-admission/reservations.py"
+)
+sys.path.insert(0, str(ADMISSION_SOURCE.parent))
+from reservations import Ledger
 
 TRANSPORT = "limits-explicit-production-v1"
 
@@ -48,7 +58,15 @@ class LimitsGate(ProductionGate):
 
 
 def source_digest():
-    return digest({"shared": observer_digest(), "limits": source_inputs()})
+    return digest(
+        {
+            "shared": observer_digest(),
+            "limits": source_inputs(),
+            "sharedReservations": hashlib.sha256(
+                ADMISSION_SOURCE.read_bytes()
+            ).hexdigest(),
+        }
+    )
 
 
 def execution_plan(permission, nonce):
@@ -141,3 +159,50 @@ def bind_wire(coordinator, plan, *, transmit=request):
         return result
 
     return wire
+
+
+class ReservedCoordinator(Coordinator):
+    """Limits Coordinator whose metadata attempts also require the shared lease."""
+
+    def __init__(self, permission, nonce, output, gate, api_key, *, ledger, ticket):
+        if not isinstance(ledger, Ledger) or not isinstance(gate, LimitsGate):
+            raise TypeError("shared ledger and limits Gate required")
+        frozen_plan = gate.snapshot()["plan"]
+        claim = ledger.bound_claim(ticket)
+        if claim["gatePath"] != str(gate.path.resolve()) or claim[
+            "gatePlanDigest"
+        ] != digest(frozen_plan):
+            raise ValueError("reservation belongs to another Gate")
+        self.ledger = ledger
+        self.reservation_ticket = json.loads(json.dumps(ticket))
+        self.reserved_permission_digest = frozen_plan["permissionDigest"]
+        self.reserved_source_digest = frozen_plan["collectorSourceDigest"]
+        ledger.validate(self.reservation_ticket)
+        super().__init__(permission, nonce, output, gate, api_key)
+
+    def reserve(self, service, duration=12):
+        # super.reserve performs the existing rate wait and durable attempt debit.
+        super().reserve(service, duration)
+        self.validate_reservation(duration + 1)
+
+    def validate_reservation(self, duration=13):
+        if (
+            digest(self.permission) != self.reserved_permission_digest
+            or source_digest() != self.reserved_source_digest
+        ):
+            raise ValueError("reserved production binding changed")
+        self.ledger.validate(self.reservation_ticket, duration=duration)
+
+
+def bind_reserved_wire(coordinator, plan, *, transmit=request):
+    """The outer runner must use this lease-bound variant after O7 admission."""
+    if not isinstance(coordinator, ReservedCoordinator):
+        raise TypeError("shared-reservation Coordinator required")
+    coordinator.validate_reservation()
+    wire = bind_wire(coordinator, plan, transmit=transmit)
+
+    def reserved(operation, recovery, index, request_index):
+        coordinator.validate_reservation()
+        return wire(operation, recovery, index, request_index)
+
+    return reserved

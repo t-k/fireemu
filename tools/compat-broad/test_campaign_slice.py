@@ -116,7 +116,7 @@ class FixtureBackend:
         path = url.split("/v1/", 1)[1].split("?", 1)[0]
         if method == "GET":
             value = copy.deepcopy(self.docs.get(path))
-            return (200, value, "application/json") if value else (404, {"error": {}}, "application/json")
+            return (200, value, "application/json") if value else (404, {"error": {"code": 404, "status": "NOT_FOUND"}}, "application/json")
         if method == "PATCH":
             value = {
                 "name": path,

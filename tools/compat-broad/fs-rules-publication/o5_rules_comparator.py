@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from compiler import validate_plan
+from o5_rules_case import validate_plan
 
 
 def compare_receipts(production: Any, local: Any, plan: Any) -> dict[str, Any]:

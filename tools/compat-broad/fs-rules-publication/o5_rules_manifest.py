@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from compiler import CAMPAIGN, compile_plan, digest
+from o5_rules_case import CAMPAIGN, compile_plan, digest
 
 
 def manifest() -> dict[str, Any]:

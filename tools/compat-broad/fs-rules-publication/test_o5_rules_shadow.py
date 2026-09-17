@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from compiler import compile_plan
-from local_shadow import shadow_receipt, validate_shadow
+from o5_rules_case import compile_plan
+from o5_rules_shadow import shadow_receipt, validate_shadow
 
 
 def test_shadow_is_only_a_preparation_case() -> None:
-    plan = compile_plan("demo", "(default)", "a" * 32)
+    plan = compile_plan("demo-project", "(default)", "a" * 32)
     case = shadow_receipt(plan)
     assert validate_shadow(case, plan)
     assert case["status"] == "PREPARATION_ONLY"
@@ -19,5 +19,5 @@ def test_shadow_is_only_a_preparation_case() -> None:
 
 
 def test_shadow_rejects_malformed_case() -> None:
-    plan = compile_plan("demo", "(default)", "b" * 32)
+    plan = compile_plan("demo-project", "(default)", "b" * 32)
     assert not validate_shadow({"status": "MATCH"}, plan)

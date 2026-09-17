@@ -4,7 +4,7 @@ import copy
 
 import pytest
 
-from compiler import compile_plan, validate_plan
+from o5_rules_case import compile_plan, validate_plan
 
 
 def test_case_is_finite_and_not_executable() -> None:
@@ -26,14 +26,14 @@ def test_case_is_finite_and_not_executable() -> None:
     assert "recovery" not in plan["rulesets"]
 
 
-@pytest.mark.parametrize("project,database,nonce", [("bad/project", "(default)", "a" * 32), ("demo", "bad/database", "a" * 32), ("demo", "(default)", "short")])
+@pytest.mark.parametrize("project,database,nonce", [("bad/project", "(default)", "a" * 32), ("demo-project", "bad/database", "a" * 32), ("demo-project", "(default)", "short"), ("A", "(default)", "a" * 32), ("demo-project", "_", "a" * 32), ("demo-project", "-bad", "a" * 32)])
 def test_invalid_identity_rejected(project, database, nonce) -> None:
     with pytest.raises(ValueError):
         compile_plan(project, database, nonce)
 
 
 def test_drift_rejected() -> None:
-    plan = compile_plan("demo", "(default)", "a" * 32)
+    plan = compile_plan("demo-project", "(default)", "a" * 32)
     changed = copy.deepcopy(plan)
     changed["observation"][3]["expect"]["status"] = "success"
     with pytest.raises(ValueError):

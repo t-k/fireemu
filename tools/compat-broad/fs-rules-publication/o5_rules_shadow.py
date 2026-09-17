@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from compiler import digest, validate_plan
+from o5_rules_case import digest, validate_plan
 
 
 def shadow_receipt(plan: dict[str, Any]) -> dict[str, Any]:

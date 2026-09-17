@@ -13,7 +13,8 @@ from typing import Any
 
 CAMPAIGN = "FS-RULES-PUBLICATION-USER-TOKEN-01"
 _NONCE = re.compile(r"^[0-9a-f]{32}$")
-_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
+_PROJECT = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
+_DATABASE = re.compile(r"^[a-z][a-z0-9-]{2,61}[a-z0-9]$")
 
 
 def digest(value: Any) -> str:
@@ -62,10 +63,10 @@ def _read(kind: str, path: str, *, ruleset: str, uid: str) -> dict[str, Any]:
 
 
 def _compile_plan(project: str, database: str, nonce: str) -> dict[str, Any]:
-    if not isinstance(project, str) or not _NAME.fullmatch(project):
+    if not isinstance(project, str) or not _PROJECT.fullmatch(project):
         raise ValueError("malformed project")
     if not isinstance(database, str) or (
-        database != "(default)" and not _NAME.fullmatch(database)
+        database != "(default)" and not _DATABASE.fullmatch(database)
     ):
         raise ValueError("malformed database")
     if not isinstance(nonce, str) or not _NONCE.fullmatch(nonce):

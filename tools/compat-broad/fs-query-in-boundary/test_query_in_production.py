@@ -115,6 +115,74 @@ def test_raw_sidecars_preserve_bytes_and_bind_projection(tmp_path: Path) -> None
         )
 
 
+def test_raw_journal_manifest_can_be_reloaded_after_publication(tmp_path: Path) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    body = b"[]"
+    binding = journal.add(
+        "observation", 2, 200, body, complete=True, content_type="application/json"
+    )
+    journal.close()
+
+    reloaded = RawJournal.reload(tmp_path / "raw")
+    assert reloaded.semantic_view(binding)["documents"] == []
+    with pytest.raises(ValueError, match="immutable"):
+        reloaded.add("observation", 3, 200, b"[]", complete=True, content_type="application/json")
+    reloaded.close()
+
+
+def test_raw_journal_reload_rejects_tampered_manifest_binding(tmp_path: Path) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    journal.add("observation", 2, 200, b"[]", complete=True, content_type="application/json")
+    journal.close()
+    manifest_path = tmp_path / "raw" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["bindings"][0]["sha256"] = "0" * 63
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="invalid raw journal binding"):
+        RawJournal.reload(tmp_path / "raw")
+
+
+@pytest.mark.parametrize("version", [True, 1.0])
+def test_raw_journal_reload_requires_exact_manifest_version_type(
+    tmp_path: Path, version: object
+) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    journal.add("observation", 2, 200, b"[]", complete=True, content_type="application/json")
+    journal.close()
+    manifest_path = tmp_path / "raw" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["version"] = version
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="invalid raw journal manifest"):
+        RawJournal.reload(tmp_path / "raw")
+
+
+def test_raw_journal_reload_rejects_complete_binding_without_status(tmp_path: Path) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    journal.add("observation", 2, 200, b"[]", complete=True, content_type="application/json")
+    journal.close()
+    manifest_path = tmp_path / "raw" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["bindings"][0]["status"] = None
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="invalid raw journal binding"):
+        RawJournal.reload(tmp_path / "raw")
+
+
+def test_raw_journal_reload_rejects_manifest_over_byte_cap(tmp_path: Path) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    journal.add("observation", 2, 200, b"[]", complete=True, content_type="application/json")
+    journal.close()
+    manifest_path = tmp_path / "raw" / "manifest.json"
+    manifest_path.write_bytes(manifest_path.read_bytes() + b" " * 32768)
+
+    with pytest.raises(ValueError, match="manifest capacity"):
+        RawJournal.reload(tmp_path / "raw")
+
+
 def test_complete_unexpected_query_is_preserved(tmp_path: Path) -> None:
     journal = RawJournal(tmp_path / "raw")
     body = json.dumps(

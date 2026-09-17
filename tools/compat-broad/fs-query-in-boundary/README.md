@@ -10,6 +10,8 @@ The `expect` entries describe the finite local comparison contract: the 30-opera
 
 The collector publishes each row with an exclusive link and fsync. The final `collection.json` publication is reported in the returned result when its link or fsync fails, without overwriting an older file or retrying observation. The returned cleanup fact remains separate, so a successful cleanup is preserved even when recording is incomplete. If journal directory initialization fails, the collector sends no wire operations and retains the initialization failure.
 
+When a local transport supplies `rawBody` bytes (or strict `rawBodyBase64`) together with the typed HTTP status, content type, completion flag, and byte count, the collector publishes one immutable `.raw` sidecar per dispatched observation or recovery slot below `raw/`. `raw/manifest.json` records each binding's phase, index, path, byte count, and SHA-256 digest. The collector reloads this manifest through `RawJournal` before returning the result and exposes the hash-checked semantic view on each bound row. Missing, partial, or invalid transport bytes remain compact evidence only and set `rawComplete` false; the collector never reconstructs raw bytes from the decoded JSON body.
+
 Run the focused checks with:
 
 ```text
@@ -23,6 +25,10 @@ Collector source `8b0f12166a0115a9ad32edd6efaf986a609ef7da` was exercised agains
 The final test-only follow-up `c0a41b55c87dcbc092d3fcbc9e41de0da53c6b13` passed 40 focused tests and Ruff. Independent review approved the final change with no remaining blocker or high finding. The regression set includes preexisting matching and nonmatching documents, refused and ambiguous creation, replacement-version rejection, and final write/fsync/link/collision failures. Directory-fsync failure can leave an already-linked file with optimistic flags; callers must use the returned publication failure and must not promote that file alone as validated acquisition evidence.
 
 This verifies the local observation tooling and the finite local API controls. It is not a production observation, saved-production comparison, or parent compatibility promotion.
+
+## Offline comparator
+
+`query_in_comparator.py` compares two retained bundles after validating each plan digest, every ordered operation request, typed receipt envelope, and ownership/cleanup evidence. It canonicalizes only the compiled owned document/parent identities and bounded timestamps; Firestore Value types, error objects, query shapes, and invalid path refusals remain exact. Complete differing responses are `SEMANTIC_MISMATCH`, equivalent semantics with run-specific values are `EXPECTED_NONDETERMINISM`, and missing or unbound evidence is `INDETERMINATE`. The result is semantic-only and always keeps `acquisitionValidated` and `promotionReady` false. Raw sidecar projections may be supplied as typed views; malformed or unbound views are indeterminate.
 
 ## Production bridge preparation
 

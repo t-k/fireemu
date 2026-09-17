@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import copy
 import json
 import os
@@ -13,11 +15,18 @@ from typing import Any
 from urllib.parse import quote
 
 from query_in_compiler import validate_plan
+from query_in_production import (
+    RawJournal,
+    _reject_json_constant,
+    _unique_json_object,
+)
 
 _TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$"
 )
 _MAX_SERIALIZED_RECEIPT_BYTES = 131072
+_MAX_RAW_BYTES = 65536
+_MAX_RAW_BASE64 = 4 * ((_MAX_RAW_BYTES + 2) // 3)
 
 
 def _complete(receipt: Any) -> bool:
@@ -195,6 +204,102 @@ def _skip(index: int, operation: dict[str, Any], reason: str) -> dict[str, Any]:
     )
 
 
+def _transport_raw(receipt: Any) -> tuple[bytes, int | None, str, bool] | None:
+    """Extract exact transport evidence; a decoded body is never a raw substitute."""
+    if not isinstance(receipt, dict):
+        return None
+    raw_value = receipt.get("rawBody")
+    if "rawBody" in receipt and not isinstance(raw_value, bytes):
+        return None
+    raw: bytes | None = raw_value
+    encoded = receipt.get("rawBodyBase64")
+    decoded: bytes | None = None
+    if "rawBodyBase64" in receipt and not isinstance(encoded, str):
+        return None
+    if isinstance(encoded, str):
+        if len(encoded) > _MAX_RAW_BASE64:
+            return None
+        try:
+            decoded = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error):
+            return None
+        if len(decoded) > _MAX_RAW_BYTES:
+            return None
+    if raw is not None and decoded is not None:
+        if raw != decoded:
+            return None
+    elif raw is None:
+        raw = decoded
+    if raw is None:
+        return None
+    if len(raw) > _MAX_RAW_BYTES:
+        return None
+    body_bytes = receipt.get("bodyBytes")
+    raw_body_bytes = receipt.get("rawBodyBytes")
+    if "bodyBytes" in receipt and (type(body_bytes) is not int or body_bytes != len(raw)):
+        return None
+    if "rawBodyBytes" in receipt and (
+        type(raw_body_bytes) is not int or raw_body_bytes != len(raw)
+    ):
+        return None
+    status = receipt.get("status")
+    if status is not None and (type(status) is not int or not 100 <= status <= 599):
+        return None
+    complete = receipt.get("complete")
+    content_type = receipt.get("contentType")
+    if type(complete) is not bool or not isinstance(content_type, str):
+        return None
+    return raw, status, content_type, complete
+
+
+def _discard_raw_fields(row: dict[str, Any]) -> None:
+    for key in ("rawBody", "rawBodyBase64", "rawBodyBytes", "bodyBytes"):
+        row.pop(key, None)
+
+
+def _has_raw_fields(receipt: Any) -> bool:
+    return isinstance(receipt, dict) and any(
+        key in receipt
+        for key in ("rawBody", "rawBodyBase64", "rawBodyBytes", "bodyBytes", "contentType")
+    )
+
+
+def _raw_matches_row(journal: RawJournal, binding: dict[str, Any], row: dict[str, Any]) -> bool:
+    """Ensure complete raw JSON remains bound to its compact receipt."""
+    if binding.get("contentType", "").split(";", 1)[0].strip().lower() != "application/json":
+        return False
+    fd = os.open(binding["path"], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=journal._fd)
+    try:
+        with os.fdopen(fd, "rb") as stream:
+            encoded = stream.read(_MAX_RAW_BYTES + 1)
+    except BaseException:  # noqa: BLE001 -- close the descriptor on any read failure.
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        return False
+    if len(encoded) > _MAX_RAW_BYTES:
+        return False
+    try:
+        parsed = json.loads(
+            encoded,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_unique_json_object,
+        )
+    except (UnicodeError, ValueError, RecursionError):
+        return False
+    if binding.get("phase") == "observation" and binding.get("index") == 2:
+        view = journal.semantic_view(binding)
+        body = row.get("body")
+        return (
+            "difference" not in view
+            and isinstance(view.get("documents"), list)
+            and isinstance(body, dict)
+            and view["documents"] == body.get("documents")
+        )
+    return parsed == row.get("body")
+
+
 def collect_local(
     plan: dict[str, Any],
     execute: Callable[[dict[str, Any]], dict[str, Any]],
@@ -213,6 +318,9 @@ def collect_local(
     persistence_failures: list[str] = []
     output_fd: int | None = None
     parent_fd: int | None = None
+    raw_journal: RawJournal | None = None
+    raw_bindings: list[dict[str, Any]] = []
+    raw_failures: list[str] = []
     try:
         parent_fd = os.open(
             output.parent,
@@ -243,12 +351,54 @@ def collect_local(
 
     def dispatch(operation: dict[str, Any]) -> dict[str, Any]:
         try:
-            return _normalize(execute(copy.deepcopy(operation)))
+            received = execute(copy.deepcopy(operation))
+            if isinstance(received, dict):
+                raw_fields = {
+                    key: received[key]
+                    for key in ("rawBody", "rawBodyBase64", "rawBodyBytes", "bodyBytes", "contentType")
+                    if key in received
+                }
+                normalized = _normalize(
+                    {key: value for key, value in received.items() if key not in raw_fields}
+                )
+                normalized.update(raw_fields)
+                return normalized
+            return _normalize(received)
         except Exception as error:  # noqa: BLE001 -- ambiguous calls require recovery.
             return {
                 "complete": False,
                 "failure": f"local-executor:{type(error).__name__}",
             }
+
+    def publish_raw(phase: str, index: int, receipt: dict[str, Any], row: dict[str, Any]) -> None:
+        nonlocal raw_journal
+        evidence = _transport_raw(receipt)
+        if evidence is None:
+            if _has_raw_fields(receipt):
+                raw_failures.append(f"{phase}-{index}:response-bytes-unavailable")
+            return
+        try:
+            if raw_journal is None:
+                raw_journal = RawJournal(output / "raw")
+            raw, status, content_type, complete = evidence
+            binding = raw_journal.add(
+                phase, index, status, raw, complete=complete, content_type=content_type
+            )
+            row["raw"] = copy.deepcopy(binding)
+            raw_bindings.append({"phase": phase, "index": index, **copy.deepcopy(binding)})
+            for key in ("rawBody", "rawBodyBase64", "rawBodyBytes", "bodyBytes"):
+                row.pop(key, None)
+            if complete:
+                try:
+                    row["semanticView"] = raw_journal.semantic_view(binding)
+                except ValueError as error:
+                    row["semanticView"] = {"difference": f"raw-view:{type(error).__name__}"}
+        except Exception as error:  # noqa: BLE001 -- retain compact evidence and report raw failure.
+            raw_failures.append(f"{phase}-{index}:raw-publication-{type(error).__name__}")
+        else:
+            pass
+        finally:
+            _discard_raw_fields(row)
 
     # Without an owned journal directory, no wire result can be retained.
     if output_fd is None or not persistence_complete:
@@ -295,6 +445,8 @@ def collect_local(
                 created_update_time = receipt["body"]["updateTime"]
                 created_create_time = receipt["body"].get("createTime")
         row = _row(index, operation, receipt)
+        publish_raw("observation", index, receipt, row)
+        _discard_raw_fields(row)
         rows.append(row)
         persist(f"observation-{index:02d}.json", row)
         if not persistence_complete:
@@ -340,6 +492,9 @@ def collect_local(
             receipt = dispatch(operation)
             row = _row(index, operation, receipt)
         cleanup.append(row)
+        if operation["kind"] != "cleanup-conditional-delete" or "skipped" not in row:
+            publish_raw("recovery", index, row, row)
+        _discard_raw_fields(row)
         persist(f"recovery-{index:02d}.json", row)
         if operation["kind"] != "cleanup-conditional-delete" and not _complete(row):
             infrastructure.append(f"recovery-{index}:incomplete")
@@ -360,6 +515,49 @@ def collect_local(
         and _typed_not_found(cleanup[2])
     )
     recording_complete = len(rows) == 6 and all(_complete(row) for row in rows)
+    raw_semantic_mismatch = False
+    if raw_journal is not None:
+        reloaded: RawJournal | None = None
+        try:
+            raw_journal.close()
+            reloaded = RawJournal.reload(output / "raw")
+            for candidate in [*rows, *cleanup]:
+                binding = candidate.get("raw")
+                if isinstance(binding, dict):
+                    candidate["semanticView"] = reloaded.semantic_view(binding)
+                    if binding.get("complete") is True and not _raw_matches_row(
+                        reloaded, binding, candidate
+                    ):
+                        raw_semantic_mismatch = True
+            positive = next((row for row in rows if row.get("index") == 2), None)
+            if positive is not None:
+                view = positive.get("semanticView")
+                compact_documents = (
+                    positive.get("body", {}).get("documents")
+                    if isinstance(positive.get("body"), dict)
+                    else None
+                )
+                raw_semantic_mismatch = raw_semantic_mismatch or not (
+                    isinstance(view, dict)
+                    and isinstance(view.get("documents"), list)
+                    and view["documents"] == compact_documents
+                )
+        except Exception as error:  # noqa: BLE001 -- compact publication remains available.
+            raw_failures.append(f"raw-manifest:reload-{type(error).__name__}")
+            raw_semantic_mismatch = True
+        finally:
+            if reloaded is not None:
+                reloaded.close()
+    raw_attempted = bool(raw_bindings or raw_failures)
+    raw_verified_completed = (
+        not raw_attempted
+        or (
+            len(raw_bindings) == 9
+            and all(binding.get("complete") is True for binding in raw_bindings)
+            and not raw_failures
+            and not raw_semantic_mismatch
+        )
+    )
     result = {
         "productionExecuted": False,
         "localOnly": True,
@@ -367,7 +565,7 @@ def collect_local(
         "promotionReady": False,
         "recordingComplete": recording_complete and persistence_complete,
         "cleanupComplete": recovery_ok and persistence_complete,
-        "completed": recording_complete and recovery_ok and persistence_complete and not infrastructure,
+        "completed": recording_complete and recovery_ok and persistence_complete and not infrastructure and raw_verified_completed,
         "rows": rows,
         "cleanup": cleanup,
         "resourceAbsence": {plan["document"]: absence},
@@ -375,6 +573,17 @@ def collect_local(
         "semanticMismatches": semantic,
         "infrastructureFailures": infrastructure + persistence_failures,
         "persistenceComplete": persistence_complete,
+        "rawBindings": raw_bindings,
+        "rawComplete": (
+            len(raw_bindings) == 9
+            and all(binding.get("complete") is True for binding in raw_bindings)
+            and not raw_failures
+            and not raw_semantic_mismatch
+        ),
+        "rawFailures": raw_failures,
+        "rawSemanticMismatch": raw_semantic_mismatch,
+        "rawVerifiedCompleted": raw_verified_completed,
+        "rawManifest": "raw/manifest.json" if raw_bindings else None,
     }
     persist("collection.json", result)
     # Cleanup is an observed fact even when final journal publication fails.

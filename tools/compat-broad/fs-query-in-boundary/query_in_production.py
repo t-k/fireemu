@@ -361,6 +361,93 @@ class RawJournal:
         self.directory.mkdir(mode=0o700, parents=False, exist_ok=False)
         self._fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         self._bindings: dict[str, dict[str, Any]] = {}
+        self._closed = False
+        self._manifest_loaded = False
+
+    @classmethod
+    def reload(cls, directory: Path) -> RawJournal:
+        """Reload an already published journal without trusting its directory listing."""
+        self = cls.__new__(cls)
+        self.directory = Path(directory)
+        self._fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        self._closed = False
+        self._manifest_loaded = True
+        try:
+            manifest_fd = os.open("manifest.json", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=self._fd)
+        except BaseException:
+            os.close(self._fd)
+            raise
+        try:
+            with os.fdopen(manifest_fd, "rb") as stream:
+                encoded = stream.read(_ENVELOPE_LIMIT + 1)
+                if len(encoded) > _ENVELOPE_LIMIT:
+                    raise ValueError("raw journal manifest capacity")
+                manifest = json.loads(encoded, object_pairs_hook=_unique_json_object)
+        except BaseException:
+            os.close(self._fd)
+            raise
+        if not isinstance(manifest, dict) or type(manifest.get("version")) is not int or manifest["version"] != 1:
+            os.close(self._fd)
+            raise ValueError("invalid raw journal manifest")
+        bindings = manifest.get("bindings")
+        if not isinstance(bindings, list) or len(bindings) > 9:
+            os.close(self._fd)
+            raise ValueError("invalid raw journal manifest")
+        self._bindings = {}
+        for binding in bindings:
+            if not isinstance(binding, dict):
+                os.close(self._fd)
+                raise TypeError("invalid raw journal binding")
+            phase = binding.get("phase")
+            index = binding.get("index")
+            path = binding.get("path")
+            expected_path = (
+                f"{phase}-{index:02d}.raw"
+                if phase in {"observation", "recovery"} and type(index) is int
+                else None
+            )
+            limit = 6 if phase == "observation" else 3
+            if (
+                expected_path is None
+                or index < 0
+                or index >= limit
+                or path != expected_path
+                or path in self._bindings
+                or set(binding) != {"phase", "index", "path", "byteCount", "sha256", "status", "complete", "contentType"}
+                or type(binding.get("byteCount")) is not int
+                or not 0 <= binding["byteCount"] <= _RAW_LIMIT
+                or not isinstance(binding.get("sha256"), str)
+                or re.fullmatch(r"[0-9a-f]{64}", binding["sha256"]) is None
+                or (binding.get("status") is not None and (type(binding["status"]) is not int or not 100 <= binding["status"] <= 599))
+                or type(binding.get("complete")) is not bool
+                or (binding["complete"] and binding["status"] is None)
+                or not isinstance(binding.get("contentType"), str)
+                or len(binding["contentType"]) > 128
+            ):
+                os.close(self._fd)
+                raise ValueError("invalid raw journal binding")
+            self._bindings[path] = copy.deepcopy(binding)
+        return self
+
+    def _write_manifest(self) -> None:
+        manifest = {"version": 1, "bindings": list(self._bindings.values())}
+        encoded = json.dumps(manifest, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        if len(encoded) > _ENVELOPE_LIMIT:
+            raise ValueError("raw journal manifest capacity")
+        fd = os.open("manifest.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=self._fd)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(encoded)
+                stream.write(b"\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.fsync(self._fd)
+        except BaseException:
+            try:
+                os.unlink("manifest.json", dir_fd=self._fd)
+            except FileNotFoundError:
+                pass
+            raise
 
     def add(
         self,
@@ -372,6 +459,8 @@ class RawJournal:
         complete: bool,
         content_type: str,
     ) -> dict[str, Any]:
+        if self._manifest_loaded:
+            raise ValueError("reloaded raw journal is immutable")
         if (
             phase not in {"observation", "recovery"}
             or type(index) is not int
@@ -403,6 +492,8 @@ class RawJournal:
             os.fsync(stream.fileno())
         os.fsync(self._fd)
         binding = {
+            "phase": phase,
+            "index": index,
             "path": name,
             "byteCount": len(body),
             "sha256": hashlib.sha256(body).hexdigest(),
@@ -470,4 +561,10 @@ class RawJournal:
         return result
 
     def close(self) -> None:
-        os.close(self._fd)
+        if not self._closed:
+            try:
+                if not self._manifest_loaded:
+                    self._write_manifest()
+            finally:
+                os.close(self._fd)
+                self._closed = True

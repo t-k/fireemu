@@ -1,0 +1,9 @@
+# AUTH-MFA-TOTP-ENROLL-RETRY-01 preparation
+
+Status: `PREPARATION`. `productionExecuted=false`; this folder has no production transport, observed production receipt, or parity claim. The manifest is a logical sequence, not an executable HTTP request plan. Its proposed limits are not enforced. A nonce format check establishes neither freshness nor ownership.
+
+The distinct O2 question is whether a wrong TOTP code leaves the same enrollment session usable for one correct retry, whether replay after success is refused, and what account and factor readback shows at both boundaries. Related controls already exist in `conformance/fixtures/auth/mfa-error-shapes.json`, `conformance/fixtures/auth/mfa-enrollment-eligibility.json`, and `conformance/src/auth-probe/programs.mjs`; they do not discharge this same-session obligation.
+
+Execution requires a production-capable verified account setup, validated typed TOTP request bodies and tenant selector, a real pending-state observation path, an owned-resource cleanup finalizer, enforced request/time/cost limits, and paired source-bound evidence. None is supplied here. No local model cleanup is treated as Firebase cleanup. The comparator returns `INDETERMINATE` for every supplied pair because caller-provided hashes cannot establish independent source or artifact provenance. It reports structural receipt completeness separately, but cannot report a semantic difference, `MATCH`, or parity in this preparation phase. A semantic result requires a new executable design with independently verified provenance. Missing binding, stage, recording, or cleanup proof remains incomplete.
+
+Run local contract checks with `uv run --project tools/compat-inventory --locked pytest tools/compat-broad/auth-totp-enroll` and `uv run --project tools/compat-inventory --locked ruff check tools/compat-broad/auth-totp-enroll`.

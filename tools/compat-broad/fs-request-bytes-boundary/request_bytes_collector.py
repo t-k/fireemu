@@ -2,39 +2,73 @@
 
 from __future__ import annotations
 
-import copy
 import base64
+import copy
 import hashlib
 import json
 import os
 import re
-import secrets
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from request_bytes_compiler import compact_utf8, logical_fields_digest, validate_request_bytes_plan
+from request_bytes_compiler import (
+    compact_utf8,
+    logical_fields_digest,
+    validate_request_bytes_plan,
+)
 
 MAX_ROW_BYTES = 131_072
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$")
 
 
+def _valid_timestamp(value: str) -> bool:
+    if _TIMESTAMP.fullmatch(value) is None:
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
 def complete(receipt: Any) -> bool:
-    return isinstance(receipt, dict) and receipt.get("complete") is True and receipt.get("failure") is None and type(receipt.get("status")) is int and 100 <= receipt["status"] <= 599 and "body" in receipt
+    return (
+        isinstance(receipt, dict)
+        and receipt.get("complete") is True
+        and receipt.get("failure") is None
+        and type(receipt.get("status")) is int
+        and 100 <= receipt["status"] <= 599
+        and "body" in receipt
+    )
 
 
 def typed_not_found(receipt: Any) -> bool:
     body = receipt.get("body") if isinstance(receipt, dict) else None
     error = body.get("error") if isinstance(body, dict) else None
-    return complete(receipt) and receipt["status"] == 404 and isinstance(error, dict) and type(error.get("code")) is int and error.get("code") == 404 and error.get("status") == "NOT_FOUND"
+    return (
+        complete(receipt)
+        and receipt["status"] == 404
+        and isinstance(error, dict)
+        and type(error.get("code")) is int
+        and error.get("code") == 404
+        and error.get("status") == "NOT_FOUND"
+    )
 
 
 def _error_status(receipt: Any, status: str) -> bool:
     body = receipt.get("body") if isinstance(receipt, dict) else None
     error = body.get("error") if isinstance(body, dict) else None
-    return complete(receipt) and receipt["status"] == 400 and isinstance(error, dict) and error.get("code") == 400 and error.get("status") == status
+    return (
+        complete(receipt)
+        and receipt["status"] == 400
+        and isinstance(error, dict)
+        and error.get("code") == 400
+        and error.get("status") == status
+    )
 
 
 def _document_fields(receipt: Any) -> dict[str, Any] | None:
@@ -43,7 +77,9 @@ def _document_fields(receipt: Any) -> dict[str, Any] | None:
     return fields if isinstance(fields, dict) else None
 
 
-def owned_document(receipt: Any, resource: str, expected_digest: str, nonce: str) -> bool:
+def owned_document(
+    receipt: Any, resource: str, expected_digest: str, nonce: str
+) -> bool:
     body = receipt.get("body") if isinstance(receipt, dict) else None
     fields = _document_fields(receipt)
     return bool(
@@ -52,7 +88,7 @@ def owned_document(receipt: Any, resource: str, expected_digest: str, nonce: str
         and isinstance(body, dict)
         and body.get("name") == resource
         and isinstance(body.get("updateTime"), str)
-        and _TIMESTAMP.fullmatch(body["updateTime"]) is not None
+        and _valid_timestamp(body["updateTime"])
         and isinstance(fields, dict)
         and fields.get("_owner") == {"stringValue": nonce}
         and logical_fields_digest(fields) == expected_digest
@@ -68,7 +104,11 @@ def commit_versions(receipt: Any, resources: list[str]) -> list[str] | None:
         return None
     versions: list[str] = []
     for item, resource in zip(writes, resources):
-        if not isinstance(item, dict) or not isinstance(item.get("updateTime"), str) or not _TIMESTAMP.fullmatch(item["updateTime"]):
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("updateTime"), str)
+            or not _valid_timestamp(item["updateTime"])
+        ):
             return None
         if item.get("name", resource) != resource:
             return None
@@ -76,7 +116,9 @@ def commit_versions(receipt: Any, resources: list[str]) -> list[str] | None:
     return versions
 
 
-def readback_matches(receipt: Any, resource: str, expected_digest: str, nonce: str, version: str | None) -> bool:
+def readback_matches(
+    receipt: Any, resource: str, expected_digest: str, nonce: str, version: str | None
+) -> bool:
     if not owned_document(receipt, resource, expected_digest, nonce):
         return False
     return version is None or receipt["body"].get("updateTime") == version
@@ -88,14 +130,25 @@ def validate_schedule(plan: dict[str, Any]) -> None:
     expected = [
         item
         for probe in range(3)
-        for item in ([{"phase": "observation", "index": i} for i in range(probe * 35, (probe + 1) * 35)] + [{"phase": "recovery", "index": i} for i in range(probe * 51, (probe + 1) * 51)])
+        for item in (
+            [
+                {"phase": "observation", "index": i}
+                for i in range(probe * 35, (probe + 1) * 35)
+            ]
+            + [
+                {"phase": "recovery", "index": i}
+                for i in range(probe * 51, (probe + 1) * 51)
+            ]
+        )
     ]
     if plan.get("executionSchedule") != expected:
         raise ValueError("request-byte execution schedule drift")
 
 
 def _safe_json(value: Any) -> bytes:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
     if len(encoded) > MAX_ROW_BYTES:
         raise ValueError("row-too-large")
     return encoded
@@ -121,7 +174,15 @@ def _publish(directory: Path, name: str, value: Any, *, bounded: bool = True) ->
         raise
 
 
-def _row(phase: str, index: int, operation: dict[str, Any], receipt: dict[str, Any], status: str, *, skipped: str | None = None) -> dict[str, Any]:
+def _row(
+    phase: str,
+    index: int,
+    operation: dict[str, Any],
+    receipt: dict[str, Any],
+    status: str,
+    *,
+    skipped: str | None = None,
+) -> dict[str, Any]:
     body = operation.get("body")
     request_bytes = compact_utf8(body) if body is not None else b""
     row: dict[str, Any] = {
@@ -135,7 +196,11 @@ def _row(phase: str, index: int, operation: dict[str, Any], receipt: dict[str, A
         "requestBytes": len(request_bytes),
         "requestSha256": hashlib.sha256(request_bytes).hexdigest(),
         "status": status,
-        "receipt": {key: value for key, value in receipt.items() if key not in {"body", "rawBody", "rawBodyBase64"}},
+        "receipt": {
+            key: value
+            for key, value in receipt.items()
+            if key not in {"body", "rawBody", "rawBodyBase64"}
+        },
     }
     if skipped is not None:
         row["skipped"] = skipped
@@ -151,7 +216,11 @@ def _row(phase: str, index: int, operation: dict[str, Any], receipt: dict[str, A
     return row
 
 
-def collect_local(plan: dict[str, Any], execute: Callable[[dict[str, Any]], dict[str, Any]], output: str | Path) -> dict[str, Any]:
+def collect_local(
+    plan: dict[str, Any],
+    execute: Callable[[dict[str, Any]], dict[str, Any]],
+    output: str | Path,
+) -> dict[str, Any]:
     """Execute the immutable schedule and persist bounded rows in an exclusive directory."""
     validate_schedule(plan)
     plan = copy.deepcopy(plan)
@@ -164,7 +233,15 @@ def collect_local(plan: dict[str, Any], execute: Callable[[dict[str, Any]], dict
         if len(body) != probe["bodyBytes"] or len(body) > MAX_RESPONSE_BYTES * 8:
             # The request bodies are intentionally retained outside bounded rows.
             raise ValueError("unexpected compiled Commit body")
-        _publish(output, f"request-{probe['label']}.json", {"probe": probe["label"], "bytes": len(body), "sha256": hashlib.sha256(body).hexdigest()})
+        _publish(
+            output,
+            f"request-{probe['label']}.json",
+            {
+                "probe": probe["label"],
+                "bytes": len(body),
+                "sha256": hashlib.sha256(body).hexdigest(),
+            },
+        )
         with (output / f"request-{probe['label']}.body").open("xb") as stream:
             stream.write(body)
             stream.flush()
@@ -180,7 +257,9 @@ def collect_local(plan: dict[str, Any], execute: Callable[[dict[str, Any]], dict
     stopped = False
     dispatches = 0
     failures: list[str] = []
-    absence_proofs: dict[str, set[str]] = {probe["label"]: set() for probe in plan["probes"]}
+    absence_proofs: dict[str, set[str]] = {
+        probe["label"]: set() for probe in plan["probes"]
+    }
     for sequence, slot in enumerate(plan["executionSchedule"]):
         phase, index = slot["phase"], slot["index"]
         operation = copy.deepcopy(plan[phase][index])
@@ -190,21 +269,46 @@ def collect_local(plan: dict[str, Any], execute: Callable[[dict[str, Any]], dict
         skip = None
         if stopped:
             skip = "earlier-probe-incomplete"
-        elif phase == "observation" and kind != "preflight-typed-absence" and not preflight_ok[probe]:
-            skip = "preflight-not-proven"
-        elif kind == "conditional-create-commit" and not preflight_ok[probe]:
+        elif (
+            phase == "observation"
+            and kind != "preflight-typed-absence"
+            and not preflight_ok[probe]
+            or kind == "conditional-create-commit"
+            and not preflight_ok[probe]
+        ):
             skip = "preflight-not-proven"
         elif kind == "cleanup-version-bound-delete":
             prior = ownership_reads.get((probe, resource))
             proved_version = versions.get(probe, {}).get(resource)
             expected_digest = plan["documents"][resource]["fieldsSha256"]
-            if proved_version is None or prior is None or not readback_matches(prior, resource, expected_digest, plan["nonce"], proved_version):
+            if (
+                proved_version is None
+                or prior is None
+                or not readback_matches(
+                    prior, resource, expected_digest, plan["nonce"], proved_version
+                )
+            ):
                 skip = "creation-and-current-version-not-proven"
             else:
-                operation["path"] += "?currentDocument.updateTime=" + quote(proved_version, safe="")
+                operation["path"] += "?currentDocument.updateTime=" + quote(
+                    proved_version, safe=""
+                )
         if skip:
-            row = _row(phase, index, operation, {"complete": False, "failure": "skipped"}, "skipped", skipped=skip)
-            failures.append(f"{phase}:{index}:{skip}")
+            row = _row(
+                phase,
+                index,
+                operation,
+                {"complete": False, "failure": "skipped"},
+                "skipped",
+                skipped=skip,
+            )
+            expected_refusal_skip = (
+                kind == "cleanup-version-bound-delete"
+                and probe in commit_refused
+                and typed_not_found(ownership_reads.get((probe, resource)))
+            )
+            if not expected_refusal_skip:
+                failures.append(f"{phase}:{index}:{skip}")
         else:
             if kind == "conditional-create-commit":
                 commit_sent.add(probe)
@@ -212,9 +316,12 @@ def collect_local(plan: dict[str, Any], execute: Callable[[dict[str, Any]], dict
             try:
                 receipt = execute(copy.deepcopy(operation))
                 if not isinstance(receipt, dict):
-                    raise ValueError("executor returned non-object")
+                    raise TypeError("executor returned non-object")
             except Exception as error:  # noqa: BLE001 - lost responses remain recoverable.
-                receipt = {"complete": False, "failure": f"executor:{type(error).__name__}"}
+                receipt = {
+                    "complete": False,
+                    "failure": f"executor:{type(error).__name__}",
+                }
             status = "complete" if complete(receipt) else "infrastructure-incomplete"
             if kind == "cleanup-ownership-read":
                 ownership_reads[(probe, resource)] = receipt
@@ -225,7 +332,11 @@ def collect_local(plan: dict[str, Any], execute: Callable[[dict[str, Any]], dict
                 if len(raw) > MAX_RESPONSE_BYTES:
                     raise ValueError("response exceeds cap")
                 sidecar = f"response-{sequence:03d}.body"
-                fd = os.open(output / sidecar, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                fd = os.open(
+                    output / sidecar,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                )
                 with os.fdopen(fd, "wb") as stream:
                     stream.write(raw)
                     stream.flush()
@@ -235,7 +346,11 @@ def collect_local(plan: dict[str, Any], execute: Callable[[dict[str, Any]], dict
                 preflight_ok[probe] = False
                 failures.append(f"{phase}:{index}:preflight-not-absent")
             elif kind == "conditional-create-commit":
-                probe_resources = next(item["resources"] for item in plan["probes"] if item["label"] == probe)
+                probe_resources = next(
+                    item["resources"]
+                    for item in plan["probes"]
+                    if item["label"] == probe
+                )
                 found = commit_versions(receipt, probe_resources)
                 if found is not None and probe != "over":
                     versions[probe] = dict(zip(probe_resources, found))
@@ -245,14 +360,30 @@ def collect_local(plan: dict[str, Any], execute: Callable[[dict[str, Any]], dict
                     failures.append(f"{probe}:commit-proof-missing")
             elif kind == "probe-readback":
                 expected_digest = plan["documents"][resource]["fieldsSha256"]
-                matched = typed_not_found(receipt) if probe == "over" else readback_matches(receipt, resource, expected_digest, plan["nonce"], versions.get(probe, {}).get(resource)) and resource in versions.get(probe, {})
+                matched = (
+                    typed_not_found(receipt)
+                    if probe == "over"
+                    else readback_matches(
+                        receipt,
+                        resource,
+                        expected_digest,
+                        plan["nonce"],
+                        versions.get(probe, {}).get(resource),
+                    )
+                    and resource in versions.get(probe, {})
+                )
                 if not matched:
                     failures.append(f"{phase}:{index}:readback-mismatch")
             elif kind == "cleanup-ownership-read":
                 expected_digest = plan["documents"][resource]["fieldsSha256"]
-                if not (typed_not_found(receipt) or owned_document(receipt, resource, expected_digest, plan["nonce"])):
+                if not (
+                    typed_not_found(receipt)
+                    or owned_document(receipt, resource, expected_digest, plan["nonce"])
+                ):
                     failures.append(f"{phase}:{index}:unsafe-ownership-read")
-            elif kind == "cleanup-version-bound-delete" and not (complete(receipt) and receipt["status"] == 200):
+            elif kind == "cleanup-version-bound-delete" and not (
+                complete(receipt) and receipt["status"] == 200
+            ):
                 failures.append(f"{phase}:{index}:delete-failure")
             elif kind == "cleanup-verify-absence":
                 if typed_not_found(receipt):
@@ -263,10 +394,29 @@ def collect_local(plan: dict[str, Any], execute: Callable[[dict[str, Any]], dict
                 failures.append(f"{phase}:{index}:incomplete")
         (rows if phase == "observation" else recovery).append(row)
         _publish(output, f"row-{sequence:03d}.json", row)
-        next_slot = plan["executionSchedule"][sequence + 1] if sequence + 1 < len(plan["executionSchedule"]) else None
-        if next_slot is not None and next_slot["phase"] == "observation" and phase == "recovery":
-            probe_resources = next(item["resources"] for item in plan["probes"] if item["label"] == probe)
-            if failures or set(probe_resources) != absence_proofs[probe] or (probe in commit_sent and probe not in versions and probe not in commit_refused) or not preflight_ok[probe]:
+        next_slot = (
+            plan["executionSchedule"][sequence + 1]
+            if sequence + 1 < len(plan["executionSchedule"])
+            else None
+        )
+        if (
+            next_slot is not None
+            and next_slot["phase"] == "observation"
+            and phase == "recovery"
+        ):
+            probe_resources = next(
+                item["resources"] for item in plan["probes"] if item["label"] == probe
+            )
+            if (
+                failures
+                or set(probe_resources) != absence_proofs[probe]
+                or (
+                    probe in commit_sent
+                    and probe not in versions
+                    and probe not in commit_refused
+                )
+                or not preflight_ok[probe]
+            ):
                 stopped = True
     all_resources = {item for probe in plan["probes"] for item in probe["resources"]}
     absence = all_resources == set().union(*absence_proofs.values())
@@ -285,5 +435,5 @@ def collect_local(plan: dict[str, Any], execute: Callable[[dict[str, Any]], dict
         "completed": not failures,
         "failures": failures,
     }
-    _publish(output, "result.json", result, bounded=False)
+    _publish(output, "result.json", result)
     return result

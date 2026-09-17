@@ -51,6 +51,29 @@ SOURCES = {
 }
 
 
+def test_remote_transport_loads_exact_member_from_inherited_archive(tmp_path: Path) -> None:
+    main = b"import commit_remote_transport\nprint(commit_remote_transport._transport.__file__)\n"
+    (tmp_path / "__main__.py").write_bytes(main)
+    manifest = {"__main__.py": hashlib.sha256(main).hexdigest()}
+    for name, source in SOURCES.items():
+        data = source.read_bytes()
+        (tmp_path / f"{name}.py").write_bytes(data)
+        manifest[f"{name}.py"] = hashlib.sha256(data).hexdigest()
+    archive, sha = bundle.build_archive(tmp_path, manifest)
+    bundle.verify_archive(archive, manifest, sha)
+    with bundle.unlinked_archive_fd(archive, sha) as fd:
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", "-B", str(HERE / "o8_fd_bootstrap.py"), str(fd), sha],
+            cwd=tmp_path,
+            pass_fds=(fd,),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == f"/dev/fd/{fd}/transport.py"
+
+
 def test_gate_adapter_imports_first_from_exact_archive_member(tmp_path: Path) -> None:
     """The adapter must load its compiler before any parent imports it."""
     main = b"import gate_adapter, transform_compiler\nprint(gate_adapter.__file__)\n"

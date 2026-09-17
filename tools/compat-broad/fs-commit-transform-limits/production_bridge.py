@@ -14,7 +14,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from transform_compiler import MAX_TRANSFORMS
+from transform_compiler import MAX_TRANSFORMS, compile_plan
 
 _FIELD_PATH = re.compile(r"t(?:0|[1-9][0-9]{0,2}|500)$")
 _RESOURCE = re.compile(
@@ -52,6 +52,18 @@ def _commit_operations(plan: dict[str, Any]) -> list[dict[str, Any]]:
     }:
         raise ValueError("Commit resources differ from owned resource set")
     return operations
+
+
+def _validate_compiler_plan(plan: dict[str, Any]) -> None:
+    """Prove that the caller's frozen plan is the canonical compiler output."""
+    if not isinstance(plan, dict):
+        raise TypeError("compiler plan must be an object")
+    try:
+        canonical = compile_plan(plan["project"], plan["database"], plan["nonce"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("malformed compiler plan") from error
+    if not _exact(plan, canonical):
+        raise ValueError("compiler plan differs from canonical output")
 
 
 def validate_commit_operation(plan: dict[str, Any], operation: dict[str, Any]) -> dict[str, Any]:
@@ -113,9 +125,20 @@ def classify_receipt(receipt: Any) -> dict[str, Any]:
     if not isinstance(receipt, dict) or receipt.get("complete") is not True:
         failure = receipt.get("failure", "incomplete-wire") if isinstance(receipt, dict) else "invalid-wire-receipt"
         return {"classification": "indeterminate", "status": None, "body": None, "failure": failure}
+    if receipt.get("failure") is not None:
+        return {
+            "classification": "indeterminate",
+            "status": receipt.get("status"),
+            "body": receipt.get("body"),
+            "failure": "wire-failure",
+        }
     status, body = receipt.get("status"), receipt.get("body")
-    if type(status) is not int or not isinstance(body, dict):
+    if type(status) is not int or not 100 <= status <= 599 or not isinstance(body, dict):
         return {"classification": "indeterminate", "status": status, "body": body, "failure": "invalid-complete-receipt"}
+    try:
+        json.dumps(body, allow_nan=False)
+    except (TypeError, ValueError):
+        return {"classification": "indeterminate", "status": status, "body": None, "failure": "invalid-complete-receipt"}
     if status == 429 or status >= 500:
         return {"classification": "indeterminate", "status": status, "body": body, "failure": "infrastructure-response"}
     return {"classification": "semantic", "status": status, "body": body, "failure": None}
@@ -127,6 +150,7 @@ class CommitProductionBridge:
     def __init__(self, plan: dict[str, Any], *, transmit: Callable[[dict[str, Any]], Any]):
         self._plan = copy.deepcopy(plan)
         self._transmit = transmit
+        _validate_compiler_plan(self._plan)
         _commit_operations(self._plan)
 
     @property

@@ -23,7 +23,10 @@ def test_commit_bridge_sends_only_the_compiler_bound_commit():
     compiled = plan()
     bridge = CommitProductionBridge(
         compiled,
-        transmit=lambda value: (calls.append(value) or {"complete": True, "status": 200, "body": {}}),
+        transmit=lambda value: (
+            calls.append(value)
+            or {"complete": True, "failure": None, "status": 200, "body": {}}
+        ),
     )
 
     result = bridge.send(commit(compiled))
@@ -70,6 +73,27 @@ def test_commit_binding_rejects_mutation_before_transport(mutation):
     assert calls == []
 
 
+def test_forged_plan_is_rejected_before_transport():
+    calls = []
+    forged = plan()
+    forged["ownedResources"] = [
+        resource.replace("projects/demo/", "projects/attacker/")
+        for resource in forged["ownedResources"]
+    ]
+    commit_resources = iter(forged["ownedResources"])
+    for operation in forged["observation"]:
+        if operation["kind"] == "commit-transform":
+            resource = next(commit_resources)
+            for write in operation["body"]["writes"]:
+                write["transform"]["document"] = resource
+            operation["resources"] = [resource]
+
+    with pytest.raises(ValueError):
+        CommitProductionBridge(forged, transmit=lambda value: calls.append(value))
+
+    assert calls == []
+
+
 def test_complete_expected_four_x_is_retained_as_semantic_evidence():
     result = classify_receipt(
         {"complete": True, "status": 400, "body": {"error": {"status": "INVALID_ARGUMENT"}}}
@@ -87,9 +111,12 @@ def test_complete_expected_four_x_is_retained_as_semantic_evidence():
     "receipt",
     [
         {"complete": False, "failure": "timeout"},
+        {"complete": True, "failure": "timeout", "status": 400, "body": {}},
+        {"complete": True, "failure": None, "status": 0, "body": {}},
         {"complete": True, "status": 429, "body": {}},
         {"complete": True, "status": 503, "body": {}},
         {"complete": True, "status": 400, "body": "truncated"},
+        {"complete": True, "failure": None, "status": 400, "body": {"value": float("nan")}},
     ],
 )
 def test_incomplete_or_infrastructure_receipts_are_indeterminate(receipt):

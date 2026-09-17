@@ -12,7 +12,7 @@ def run_shadow(plan: dict[str, Any], scenario: str = "reconnect") -> dict[str, A
         raise ValueError("unsupported shadow scenario")
     collection = plan["owner"]["collection"]
     one, two = f"{collection}/one", f"{collection}/two"
-    events = [
+    expected_events = [
         {
             "snapshotType": "initial",
             "document": one,
@@ -59,29 +59,11 @@ def run_shadow(plan: dict[str, Any], scenario: str = "reconnect") -> dict[str, A
         },
     ]
     if scenario == "control":
-        events[2]["lifecycle"] = "active"
-        events[3]["lifecycle"] = "active"
-    if scenario == "negative":
-        events.extend(
-            {
-                "snapshotType": "error",
-                "document": None,
-                "revision": None,
-                "changeKind": None,
-                "oldIndex": None,
-                "newIndex": None,
-                "lifecycle": "reconnected",
-                "errorCode": code,
-                "tokenCase": token_case,
-            }
-            for token_case, code in (
-                ("stale-token", "FAILED_PRECONDITION"),
-                ("compacted-token", "FAILED_PRECONDITION"),
-                ("session-reset", "ABORTED"),
-            )
-        )
+        expected_events[2]["lifecycle"] = "active"
+        expected_events[3]["lifecycle"] = "active"
     return {
-        "schema": "o6-listen-resume-receipt-v1",
+        "schema": "o6-listen-resume-preparation-v2",
+        "status": "PREPARATION_ONLY",
         "caseId": plan["caseId"],
         "planDigest": digest(plan),
         "productionExecuted": False,
@@ -89,19 +71,6 @@ def run_shadow(plan: dict[str, Any], scenario: str = "reconnect") -> dict[str, A
         "shadow": dict(SHADOW),
         "sourceBinding": dict(plan["sourceBinding"]),
         "transportBinding": dict(plan["transportBinding"]),
-        "collector": {"complete": True, "eventCount": len(events)},
-        "transport": {
-            "interruptionObserved": scenario != "control",
-            "reconnectObserved": True,
-        },
-        "events": events,
-        "cleanup": {one: True, two: True},
-        "bounds": {
-            "runCount": 1,
-            "requestCount": 12,
-            "durationSeconds": 1,
-            "concurrency": 1,
-            "snapshotCount": 4,
-            "estimatedCostUsd": 0,
-        },
+        "unsupportedObligations": list(plan["unsupportedObligations"]),
+        "expectedLogicalEvents": expected_events,
     }

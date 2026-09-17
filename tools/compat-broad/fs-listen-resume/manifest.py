@@ -72,7 +72,8 @@ def compile_plan(
         {"index": 11, "kind": "absence", "path": two},
     ]
     return {
-        "schema": "o6-listen-resume-plan-v1",
+        "schema": "o6-listen-resume-preparation-v2",
+        "status": "PREPARATION_ONLY",
         "caseId": CASE_ID,
         "seed": "o6-listen-resume-v1",
         "project": project,
@@ -89,18 +90,26 @@ def compile_plan(
         "sdk": deepcopy(_SDK),
         "shadow": deepcopy(_SHADOW),
         "sourceBinding": {
+            "kind": "declared-pin",
             "lockfiles": deepcopy(LOCKFILES),
             "entrypoint": "tools/compat-broad/fs-listen-resume",
+            "evidence": "declaration-only",
         },
         "transportBinding": {
             "kind": "grpc-listen",
             "resumeBoundary": "sdk-managed",
             "endpointPolicy": "declared-only",
+            "evidence": "acquisition-required",
         },
         "resumeToken": {"persist": "sha256", "rawBytes": False},
         "limits": deepcopy(_LIMITS),
         "operations": operations,
-        "negativeCases": ["stale-token", "compacted-token", "session-reset"],
+        "unsupportedObligations": [
+            "stale-token",
+            "compacted-token",
+            "session-reset",
+            "typed-cleanup-absence",
+        ],
         "cleanup": {
             "order": [
                 "unsubscribe",
@@ -109,14 +118,14 @@ def compile_plan(
                 "absence-check",
                 "process-close",
             ],
-            "recovery": "same-nonce-only",
+            "recovery": "measurement-required",
         },
         "productionExecuted": False,
     }
 
 
 def validate_plan(plan: Any) -> bool:
-    if not isinstance(plan, dict) or plan.get("schema") != "o6-listen-resume-plan-v1":
+    if not isinstance(plan, dict) or plan.get("schema") != "o6-listen-resume-preparation-v2":
         return False
     try:
         nonce_digest = plan["owner"]["nonceDigest"]
@@ -129,8 +138,15 @@ def validate_plan(plan: Any) -> bool:
         ):
             return False
         if (
-            plan.get("productionExecuted") is not False
-            or len(plan["operations"]) > LIMITS["maxOperations"]
+            plan.get("status") != "PREPARATION_ONLY"
+            or plan.get("unsupportedObligations") != [
+                "stale-token", "compacted-token", "session-reset", "typed-cleanup-absence"
+            ]
+            or plan.get("productionExecuted") is not False
+        ):
+            return False
+        if (
+            len(plan["operations"]) > LIMITS["maxOperations"]
         ):
             return False
         collection = plan["owner"]["collection"]

@@ -70,11 +70,16 @@ def test_plan_binds_pins_lockfiles_and_transport():
         "tools/sdk-smoke/package-lock.json": "77320cd304149c5c3e99289b7548757e307c08373bf02a811a5ae8518775704c",
         "conformance/pnpm-lock.yaml": "a1287b8bf5d8ef937b0bd82d7cec0df65abe3fe8f6669a4d2e3d927874291432",
     }
+    assert plan["sourceBinding"]["kind"] == "declared-pin"
+    assert plan["sourceBinding"]["evidence"] == "declaration-only"
     assert plan["transportBinding"] == {
         "kind": "grpc-listen",
         "resumeBoundary": "sdk-managed",
         "endpointPolicy": "declared-only",
+        "evidence": "acquisition-required",
     }
+    assert plan["status"] == "PREPARATION_ONLY"
+    assert plan["productionExecuted"] is False
 
 
 def test_operations_fit_the_frozen_budget_and_include_ordered_cleanup():
@@ -97,3 +102,14 @@ def test_operations_fit_the_frozen_budget_and_include_ordered_cleanup():
     ]
     assert operations[-2]["path"].endswith("/one")
     assert operations[-1]["path"].endswith("/two")
+
+
+def test_plan_marks_token_and_cleanup_claims_as_unmet_obligations():
+    plan = compile_plan("c" * 32)
+    assert plan["unsupportedObligations"] == [
+        "stale-token",
+        "compacted-token",
+        "session-reset",
+        "typed-cleanup-absence",
+    ]
+    assert plan["cleanup"]["recovery"] == "measurement-required"

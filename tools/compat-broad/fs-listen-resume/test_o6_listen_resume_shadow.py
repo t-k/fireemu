@@ -2,19 +2,17 @@ from o6_listen_resume.manifest import compile_plan
 from o6_listen_resume.shadow import run_shadow
 
 
-def test_shadow_is_offline_and_emits_one_revision_per_document():
+def test_shadow_is_offline_and_emits_expected_logical_events_only():
     plan = compile_plan("3" * 32)
     receipt = run_shadow(plan)
+    assert receipt["status"] == "PREPARATION_ONLY"
     assert receipt["productionExecuted"] is False
     assert receipt["sdk"]["firebase"] == "12.18.0"
-    assert receipt["transport"]["interruptionObserved"] is True
-    assert receipt["transport"]["reconnectObserved"] is True
-    assert receipt["cleanup"] == {
-        resource["path"]: True for resource in plan["ownedResources"]
-    }
+    assert "expectedLogicalEvents" in receipt
+    assert not {"collector", "transport", "bounds", "cleanup"} & receipt.keys()
     revisions = [
         (event["document"], event["revision"])
-        for event in receipt["events"]
+        for event in receipt["expectedLogicalEvents"]
         if event["revision"] is not None
     ]
     assert revisions.count((plan["ownedResources"][0]["path"], 0)) == 1
@@ -23,16 +21,8 @@ def test_shadow_is_offline_and_emits_one_revision_per_document():
     assert revisions.count((plan["ownedResources"][1]["path"], 0)) == 1
 
 
-def test_negative_shadow_refuses_stale_compacted_and_reset_tokens():
+def test_negative_shadow_keeps_unimplemented_token_cases_as_obligations():
     plan = compile_plan("4" * 32)
     receipt = run_shadow(plan, scenario="negative")
-    errors = [
-        (event["tokenCase"], event["errorCode"])
-        for event in receipt["events"]
-        if event["errorCode"]
-    ]
-    assert errors == [
-        ("stale-token", "FAILED_PRECONDITION"),
-        ("compacted-token", "FAILED_PRECONDITION"),
-        ("session-reset", "ABORTED"),
-    ]
+    assert receipt["unsupportedObligations"] == plan["unsupportedObligations"]
+    assert all(event["snapshotType"] != "error" for event in receipt["expectedLogicalEvents"])

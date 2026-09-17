@@ -5,6 +5,8 @@ credential handoff. It has no preparation, metadata-only, ADC, or injected
 transport mode.
 """
 
+# ruff: noqa: TRY004 -- Public boundary collapses malformed private input to one refusal class.
+
 from __future__ import annotations
 
 import argparse
@@ -16,7 +18,6 @@ import select
 import stat
 import sys
 import time
-import time
 from pathlib import Path
 
 import commit_acquisition as acquisition
@@ -25,6 +26,8 @@ from commit_remote_transport import request as remote_request
 from commit_reserved_adapter import validate_handoff
 
 MAX_HANDOFF_BYTES = 16 * 1024
+CAMPAIGN_SECONDS = 1200
+RECOVERY_SECONDS = 180
 APPROVAL_KIND = "commit-o8-approval-v1"
 MANIFEST_KIND = "commit-o8-manifest-v1"
 
@@ -172,11 +175,16 @@ def _validate_approval(
         "artifactSha256": inputs["artifactSha256"],
         "planDigest": inputs["planDigest"],
         "nonceDigest": digest(inputs["plan"]["nonce"]),
-        "ledgerRoot": str(ledger.absolute()),
+        "ledgerRoot": str(ledger.resolve(strict=False)),
         "launcherSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     }
     if any(approval[key] != value for key, value in bindings.items()):
         raise ValueError("O7 approval binding differs")
+    if (
+        permission.get("wallSeconds") != CAMPAIGN_SECONDS
+        or permission.get("recoverySeconds") != RECOVERY_SECONDS
+    ):
+        raise ValueError("O7 campaign window binding differs")
     if manifest.get("inputsDigest") != inputs["inputsDigest"]:
         raise ValueError("O7 manifest binding differs")
     for key in ("windowStartsAt", "windowExpiresAt"):
@@ -187,7 +195,12 @@ def _validate_approval(
         ):
             raise ValueError("O7 execution window invalid")
     now = time.time()
-    if not approval["windowStartsAt"] <= now <= approval["windowExpiresAt"]:
+    if (
+        not approval["windowStartsAt"] <= now
+        or now + CAMPAIGN_SECONDS > approval["windowExpiresAt"]
+        or approval["windowStartsAt"] + CAMPAIGN_SECONDS
+        > approval["windowExpiresAt"]
+    ):
         raise ValueError("O7 execution window expired")
 
 

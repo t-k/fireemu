@@ -1,8 +1,6 @@
 """Offline contract tests for the bounded Commit O8 entrypoint."""
 
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 

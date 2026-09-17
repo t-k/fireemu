@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from fs_write_binding_test_support import historical_sha256
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_DIR = ROOT / "spec/compatibility/broad-runs"
@@ -60,7 +61,12 @@ def test_current_package_binds_current_artifact_and_manifest_digest():
     assert shadow["manifestSha256"] == manifest_digest
 
     for relative_path, expected in manifest["sourceBinding"]["runtimeSourceDigests"].items():
-        assert sha256(ROOT / relative_path) == expected
+        assert (
+            historical_sha256(
+                ROOT, manifest["sourceBinding"]["featureHead"], relative_path
+            )
+            == expected
+        )
 
 
 def test_current_package_remains_blocked_until_owner_and_technical_inputs_exist():

@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from fs_write_binding_test_support import historical_sha256
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_DIR = ROOT / "spec/compatibility/broad-runs"
 CURRENT_MANIFEST = PACKAGE_DIR / "fs-write-txn-precedence-01-v7.json"
@@ -72,7 +73,12 @@ def test_v7_artifact_and_manifest_bindings_are_consistent() -> None:
     assert shadow["manifestSha256"] == manifest_digest
 
     for relative_path, expected in manifest["sourceBinding"]["runtimeSourceDigests"].items():
-        assert sha256(ROOT / relative_path) == expected, relative_path
+        assert (
+            historical_sha256(
+                ROOT, manifest["sourceBinding"]["featureHead"], relative_path
+            )
+            == expected
+        ), relative_path
 
 
 def test_v7_remains_blocked_without_owner_or_stream_comparator() -> None:

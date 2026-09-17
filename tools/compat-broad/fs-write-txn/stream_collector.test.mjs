@@ -145,6 +145,7 @@ test('recovers an ambiguous setup write only for the fresh owner marker', async 
   };
   const result = await collectWithApi(options, api, ownerId);
   assert.equal(writes, 2);
+  assert.equal(result.cleanup.find(item => item.path.endsWith('control')).ownedRead?.response?.name, documentName(options.projectId, `${options.documentPrefix}/control`));
   assert.equal(result.cleanup.find(item => item.path.endsWith('control')).absent, true);
   assert.equal(result.observations.some(item => item.phase === 'positive-uncontended-stream'), false);
 });

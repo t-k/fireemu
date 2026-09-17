@@ -129,8 +129,8 @@ const statusCode = receipt => receipt?.status?.code;
 const run = async (options, api, ownerId = randomUUID()) => {
   const paths = collectorPaths(options);
   const name = path => documentName(options.projectId, path);
-  const write = (requests, phase) => api.runWrite(requests, options).then(receipt => ({ phase, receipt, complete: receiptComplete(receipt) }));
-  const read = (path, phase, transaction) => api.runUnary('GetDocument', options, { path, ...(transaction ? { transaction } : {}) }).then(receipt => ({ phase, receipt, complete: receiptComplete(receipt) }));
+  const write = (requests, phase) => api.runWrite(requests, options, { phase }).then(receipt => ({ phase, receipt, complete: receiptComplete(receipt) }));
+  const read = (path, phase, transaction) => api.runUnary('GetDocument', options, { path, ...(transaction ? { transaction } : {}) }, { phase }).then(receipt => ({ phase, receipt, complete: receiptComplete(receipt) }));
   const created = new Map();
   const candidates = new Map([
     [paths.control, 'control'],
@@ -179,11 +179,11 @@ const run = async (options, api, ownerId = randomUUID()) => {
     observations.push({ phase: 'readback-control', receipt: controlPoststate.receipt, complete: controlPoststate.complete, controlAccepted });
     if (!controlAccepted) throw new Error('positive control stream state was not observed');
 
-    const begin = await api.runUnary('BeginTransaction', options, { options: { readWrite: {} } });
+    const begin = await api.runUnary('BeginTransaction', options, { options: { readWrite: {} } }, { phase: 'begin-rw-transaction' });
     observations.push({ phase: 'begin-rw-transaction', receipt: begin, complete: receiptComplete(begin) });
     transaction = begin.response?.transaction;
     if (!transaction) throw new Error('begin transaction did not return a transaction token');
-    const lockedInTransaction = await api.runUnary('GetDocument', options, { path: paths.locked, transaction });
+    const lockedInTransaction = await api.runUnary('GetDocument', options, { path: paths.locked, transaction }, { phase: 'get-locked-with-transaction' });
     observations.push({ phase: 'get-locked-with-transaction', receipt: lockedInTransaction, complete: receiptComplete(lockedInTransaction) });
     baselineLocked = responseBody(lockedInTransaction);
     if (!lockedInTransaction.complete || !isOwnedDocument(baselineLocked, ownerId, 'locked')) throw new Error('transactional locked read did not provide an owned baseline');
@@ -216,7 +216,7 @@ const run = async (options, api, ownerId = randomUUID()) => {
     };
     observations.push({ phase: 'readback-contention', receipt: { locked: lockedRead.receipt, suffix: suffixRead.receipt }, complete: readback.complete, readback });
 
-    const rollback = await api.runUnary('Rollback', options, { transaction });
+    const rollback = await api.runUnary('Rollback', options, { transaction }, { phase: 'rollback' });
     observations.push({ phase: 'rollback', receipt: rollback, complete: receiptComplete(rollback) });
     if (receiptComplete(rollback) && !rollback.status) transaction = undefined;
     else transactionReleaseUnknown = true;
@@ -230,44 +230,48 @@ const run = async (options, api, ownerId = randomUUID()) => {
   } catch (error) {
     failure = plainFailure(error);
   } finally {
-    if (transaction) {
-      try {
-        const rollback = await api.runUnary('Rollback', options, { transaction });
-        observations.push({ phase: 'rollback-finally', receipt: rollback, complete: receiptComplete(rollback) });
-        if (!(receiptComplete(rollback) && !rollback.status)) transactionReleaseUnknown = true;
-        else {
-          transaction = undefined;
-          transactionReleaseUnknown = false;
-        }
-      } catch (error) {
-        transactionReleaseUnknown = true;
-        observations.push({ phase: 'rollback-finally', receipt: { complete: false, error: plainFailure(error) }, complete: false });
-      }
-    }
-    cleanup = [];
-    if (transactionReleaseUnknown) {
-      for (const path of attempted) cleanup.push({ path, skipped: true, complete: false, absent: false, failure: 'transaction-release-uncertain' });
+    if (api.recover) {
+      cleanup = await api.recover(options);
     } else {
-      for (const path of attempted) {
-        const role = candidates.get(path);
+      if (transaction) {
         try {
-          const final = await read(path, 'final-owned-read');
-          const body = responseBody(final.receipt);
-          if (final.complete && statusCode(final.receipt) === 5) {
-            cleanup.push({ path, skipped: true, complete: true, absent: true, receipt: final.receipt });
-            continue;
+          const rollback = await api.runUnary('Rollback', options, { transaction }, { phase: 'rollback-finally' });
+          observations.push({ phase: 'rollback-finally', receipt: rollback, complete: receiptComplete(rollback) });
+          if (!(receiptComplete(rollback) && !rollback.status)) transactionReleaseUnknown = true;
+          else {
+            transaction = undefined;
+            transactionReleaseUnknown = false;
           }
-          if (!final.complete || !isOwnedDocument(body, ownerId, role)) {
-            cleanup.push({ path, skipped: true, complete: false, absent: false, receipt: final.receipt });
-            continue;
-          }
-          const removed = await write([{ writes: [deleteWrite(name(path), body.updateTime)] }], 'conditional-delete');
-          const absent = await read(path, 'typed-absence');
-          const removedSucceeded = removed.complete && statusCode(removed.receipt) === 0;
-          const absentConfirmed = removedSucceeded && absent.complete && statusCode(absent.receipt) === 5;
-          cleanup.push({ path, skipped: false, complete: absentConfirmed, receipt: removed.receipt, absence: absent.receipt, absent: absentConfirmed });
         } catch (error) {
-          cleanup.push({ path, skipped: true, complete: false, absent: false, failure: plainFailure(error) });
+          transactionReleaseUnknown = true;
+          observations.push({ phase: 'rollback-finally', receipt: { complete: false, error: plainFailure(error) }, complete: false });
+        }
+      }
+      cleanup = [];
+      if (transactionReleaseUnknown) {
+        for (const path of attempted) cleanup.push({ path, skipped: true, complete: false, absent: false, failure: 'transaction-release-uncertain' });
+      } else {
+        for (const path of attempted) {
+          const role = candidates.get(path);
+          try {
+            const final = await read(path, 'final-owned-read');
+            const body = responseBody(final.receipt);
+            if (final.complete && statusCode(final.receipt) === 5) {
+              cleanup.push({ path, skipped: true, complete: true, absent: true, receipt: final.receipt });
+              continue;
+            }
+            if (!final.complete || !isOwnedDocument(body, ownerId, role)) {
+              cleanup.push({ path, skipped: true, complete: false, absent: false, receipt: final.receipt });
+              continue;
+            }
+            const removed = await write([{ writes: [deleteWrite(name(path), body.updateTime)] }], 'conditional-delete');
+            const absent = await read(path, 'typed-absence');
+            const removedSucceeded = removed.complete && statusCode(removed.receipt) === 0;
+            const absentConfirmed = removedSucceeded && absent.complete && statusCode(absent.receipt) === 5;
+            cleanup.push({ path, skipped: false, complete: absentConfirmed, receipt: removed.receipt, ownedRead: final.receipt, absence: absent.receipt, absent: absentConfirmed });
+          } catch (error) {
+            cleanup.push({ path, skipped: true, complete: false, absent: false, failure: plainFailure(error) });
+          }
         }
       }
     }

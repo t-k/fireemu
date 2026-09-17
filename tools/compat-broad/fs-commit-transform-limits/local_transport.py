@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import copy
+import fcntl
+import hashlib
 import importlib.util
 import json
+import os
 import re
+import stat
 import sys
+import types
+import zipimport
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -20,9 +26,45 @@ sys.path.insert(0, str(HERE.parent))
 from broad_contract import local_origin
 
 TRANSPORT = HERE.parent / "fs-write-limits/transport.py"
-_spec = importlib.util.spec_from_file_location("o3_shared_bounded_transport", TRANSPORT)
-_transport = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_transport)
+
+
+def _archive_origin() -> tuple[str, str] | None:
+    match = re.fullmatch(r"(/dev/fd/([0-9]+))/local_transport\.py", __file__)
+    if match is None:
+        return None
+    archive, number = match.group(1), int(match.group(2))
+    info = os.fstat(number)
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_nlink != 0
+        or fcntl.fcntl(number, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY
+        or archive not in sys.path
+    ):
+        raise ImportError("untrusted archive descriptor")
+    return archive, hashlib.sha256(os.pread(number, info.st_size, 0)).hexdigest()
+
+
+_ARCHIVE = _archive_origin()
+if _ARCHIVE is None:
+    _spec = importlib.util.spec_from_file_location("o3_shared_bounded_transport", TRANSPORT)
+    if _spec is None or _spec.loader is None:
+        raise ImportError("bounded transport unavailable")
+    _transport = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_transport)
+else:
+    _archive, _ = _ARCHIVE
+    _importer = zipimport.zipimporter(_archive)
+    _code = _importer.get_code("transport")
+    _origin = f"{_archive}/transport.py"
+    if _code is None or _code.co_filename != _origin or _archive_origin() != _ARCHIVE:
+        raise ImportError("bounded transport archive member unavailable")
+    TRANSPORT = Path(_origin)
+    _transport = types.ModuleType("o3_shared_bounded_transport")
+    _transport.__file__ = _origin
+    _transport.__loader__ = _importer
+    exec(_code, _transport.__dict__)  # noqa: S102 -- exact member of the verified inherited archive
+    if _archive_origin() != _ARCHIVE:
+        raise ImportError("bounded transport archive digest changed")
 REQUEST_CAP = 64 * 1024
 RESPONSE_CAP = 256 * 1024
 

@@ -3,16 +3,43 @@
 from __future__ import annotations
 
 import copy
+import fcntl
+import hashlib
 import importlib.util
+import os
 import re
+import stat
 import sys
 import threading
+import zipimport
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+
+
+def _archive_origin() -> tuple[str, str] | None:
+    """Bind zip imports to this module's inherited, read-only archive."""
+    match = re.fullmatch(r"(/dev/fd/([0-9]+))/gate_adapter\.py", __file__)
+    if match is None:
+        return None
+    archive, number = match.group(1), int(match.group(2))
+    info = os.fstat(number)
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_nlink != 0
+        or fcntl.fcntl(number, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY
+    ):
+        raise ImportError("untrusted archive descriptor")
+    identity = hashlib.sha256(os.pread(number, info.st_size, 0)).hexdigest()
+    if archive not in sys.path:
+        raise ImportError("archive import root differs")
+    return archive, identity
+
+
+_ARCHIVE = _archive_origin()
 
 
 def _check_import_origins(expected: dict[str, Path]) -> None:
@@ -22,11 +49,43 @@ def _check_import_origins(expected: dict[str, Path]) -> None:
         if module is None:
             continue
         origin = getattr(module, "__file__", None)
-        if not isinstance(origin, str) or Path(origin).resolve() != path.resolve():
+        if _ARCHIVE is not None:
+            canonical = f"{_ARCHIVE[0]}/{name}.py"
+            valid = (
+                path.name == f"{name}.py"
+                and origin == canonical
+                and _archive_origin() == _ARCHIVE
+            )
+        else:
+            valid = isinstance(origin, str) and Path(origin).resolve() == path.resolve()
+        if not valid:
             raise ImportError(f"foreign module origin for {name}")
 
 
 def _load(name: str, path: Path):
+    if _ARCHIVE is not None:
+        if _archive_origin() != _ARCHIVE:
+            raise ImportError("archive digest changed")
+        allowed = {
+            ("transform_compiler", HERE / "transform_compiler.py"): "transform_compiler",
+            ("_commit_gate_production_bridge", HERE / "commit_production_bridge.py"): "commit_production_bridge",
+            ("_commit_gate_limits_bridge", HERE / "production_bridge.py"): "production_bridge",
+            ("_commit_credential_preparation", ROOT / "tools/compat-broad/fs-write-txn/credential_prep.py"): "credential_prep",
+        }
+        member = allowed.get((name, path))
+        if member is None:
+            raise ImportError(f"unreviewed archive member for {name}")
+        importer = zipimport.zipimporter(_ARCHIVE[0])
+        code = importer.get_code(member)
+        if code is None or code.co_filename != f"{_ARCHIVE[0]}/{member}.py":
+            raise ImportError(f"cannot load {name} from archive")
+        module = importer.load_module(member)
+        if getattr(module, "__file__", None) != code.co_filename:
+            raise ImportError(f"foreign module origin for {name}")
+        sys.modules[name] = module
+        if _archive_origin() != _ARCHIVE:
+            raise ImportError("archive digest changed")
+        return module
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {name}")
@@ -57,7 +116,7 @@ _commit_bridge = _load(
 
 # The existing LimitsGate supplies the one charged callback and consume_wire
 # boundary. Load it by path because another campaign has a production_bridge.
-_limits_dir = ROOT / "tools/compat-broad/fs-write-limits"
+_limits_dir = HERE if _ARCHIVE is not None else ROOT / "tools/compat-broad/fs-write-limits"
 _limits_origins = {
     name: _limits_dir / filename
     for name, filename in {

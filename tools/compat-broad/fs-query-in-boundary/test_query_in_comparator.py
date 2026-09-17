@@ -1,4 +1,6 @@
 import copy
+import hashlib
+import json
 
 from query_in_comparator import compare_evidence
 from query_in_compiler import compile_plan
@@ -41,12 +43,20 @@ def _bundle(project: str = "demo", nonce: str = "a" * 32) -> dict:
                 **({"skipped": "already-absent"} if index == 1 else {}),
             }
         )
+    journal = [*rows, *cleanup]
+    raw = {}
+    for index, row in enumerate(journal):
+        raw_body = json.dumps(row["body"], sort_keys=True, separators=(",", ":")).encode()
+        digest = hashlib.sha256(raw_body).hexdigest()
+        row["rawSha256"] = digest
+        raw[str(index)] = {"projectionVersion": 1, "sourceRawSha256": digest, "rawBody": raw_body}
+    raw["2"]["documents"] = rows[2]["body"]["documents"]
     return {
         "plan": plan,
         "rows": rows,
         "cleanup": cleanup,
         "ownership": {"created": False, "cleanupComplete": True},
-        "raw": {str(index): {"projectionVersion": 1, "sourceRawSha256": f"{index:064x}"} for index in range(9)},
+        "raw": raw,
     }
 
 
@@ -75,6 +85,11 @@ def test_complete_typed_response_difference_is_semantic_mismatch():
     left["rows"][2]["body"] = {"documents": [{"name": left["plan"]["document"], "fields": left["plan"]["fixtureFields"]}]}
     right["rows"][2]["status"] = 200
     right["rows"][2]["body"] = {"documents": []}
+    for bundle in (left, right):
+        body = json.dumps(bundle["rows"][2]["body"], sort_keys=True, separators=(",", ":")).encode()
+        digest = hashlib.sha256(body).hexdigest()
+        bundle["rows"][2]["rawSha256"] = digest
+        bundle["raw"]["2"].update(rawBody=body, sourceRawSha256=digest, documents=bundle["rows"][2]["body"]["documents"])
     result = compare_evidence(left, right)
     assert result["classification"] == "SEMANTIC_MISMATCH"
 

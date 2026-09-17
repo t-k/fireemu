@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-import json
+import hashlib
 import re
 from typing import Any
 
@@ -14,30 +14,31 @@ _PHASES = (("rows", "observation", 6), ("cleanup", "recovery", 3))
 
 
 def _exact(left: Any, right: Any) -> bool:
-    try:
-        return json.dumps(left, sort_keys=True, separators=(",", ":"), allow_nan=False) == json.dumps(
-            right, sort_keys=True, separators=(",", ":"), allow_nan=False
-        )
-    except (TypeError, ValueError):
+    if type(left) is not type(right):
         return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(_exact(left[key], right[key]) for key in left)
+    if isinstance(left, list):
+        return len(left) == len(right) and all(_exact(a, b) for a, b in zip(left, right, strict=True))
+    return left == right
 
 
-def _canonical(value: Any, plan: dict[str, Any], timestamp_ranks: dict[str, int]) -> Any:
+def _canonical(value: Any, plan: dict[str, Any], timestamp_ranks: dict[str, int], *, timestamp_field: bool = False) -> Any:
     if isinstance(value, str):
         if value == plan["document"]:
             return "$owned-document"
         if value == plan["parent"]:
             return "$owned-parent"
-        if _TIMESTAMP.fullmatch(value):
+        if timestamp_field and _TIMESTAMP.fullmatch(value):
             if value not in timestamp_ranks:
                 timestamp_ranks[value] = len(timestamp_ranks)
             return {"$timestampRank": timestamp_ranks[value]}
         return value
     if isinstance(value, list):
-        return [_canonical(item, plan, timestamp_ranks) for item in value]
+        return [_canonical(item, plan, timestamp_ranks, timestamp_field=timestamp_field) for item in value]
     if isinstance(value, dict):
         return {
-            key: _canonical(item, plan, timestamp_ranks)
+            key: _canonical(item, plan, timestamp_ranks, timestamp_field=key in {"createTime", "updateTime", "readTime"})
             for key, item in sorted(value.items())
         }
     return value
@@ -66,7 +67,7 @@ def _recovery_request_matches(
     row: dict[str, Any], operation: dict[str, Any], prior: dict[str, Any]
 ) -> bool:
     request = row.get("request")
-    if _exact(request, operation):
+    if (operation.get("kind") != "cleanup-conditional-delete" or row.get("skipped")) and _exact(request, operation):
         return True
     if operation.get("kind") != "cleanup-conditional-delete":
         return False
@@ -167,7 +168,14 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
     if not (_typed_absence(cleanup[0]) or _owned_read(cleanup[0], plan)):
         raise ValueError("cleanup ownership read is not typed")
     if "skipped" not in cleanup[1] and not (
-        cleanup[1].get("status") == 200 and isinstance(cleanup[1].get("body"), dict)
+        cleanup[1].get("status") == 200
+        and isinstance(cleanup[1].get("body"), dict)
+        and _owned_read(cleanup[0], plan)
+        and isinstance(cleanup[1].get("request"), dict)
+        and isinstance(cleanup[0].get("body"), dict)
+        and cleanup[1]["request"].get("path", "").endswith(
+            "?currentDocument.updateTime=" + cleanup[0]["body"].get("updateTime", "")
+        )
     ):
         raise ValueError("cleanup delete receipt is not typed")
     if not _typed_absence(cleanup[2]):
@@ -179,16 +187,25 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
     if raw is not None and not isinstance(raw, dict):
         raise ValueError("typed raw receipt evidence is malformed")
     if isinstance(raw, dict):
+        if set(raw) != {str(index) for index in range(9)}:
+            raise ValueError("typed raw receipt set is incomplete")
+        journal = [*rows, *cleanup]
         for slot, view in raw.items():
             if not isinstance(slot, str) or not slot.isdigit() or not isinstance(view, dict):
                 raise ValueError("typed raw receipt evidence is malformed")
             digest = view.get("sourceRawSha256")
             if not isinstance(digest, str) or len(digest) != 64:
                 raise ValueError("typed raw receipt evidence is unbound")
-            journal = [*rows, *cleanup]
             raw_row = journal[int(slot)] if int(slot) < len(journal) else None
             if not isinstance(raw_row, dict) or raw_row.get("rawSha256") != digest:
                 raise ValueError("typed raw receipt is not bound to its journal row")
+            raw_body = view.get("rawBody")
+            if not isinstance(raw_body, bytes) or len(raw_body) > 65536:
+                raise ValueError("typed raw receipt bytes are missing")
+            if hashlib.sha256(raw_body).hexdigest() != digest:
+                raise ValueError("typed raw receipt hash differs")
+        if raw["2"].get("documents") != rows[2].get("body", {}).get("documents"):
+            raise ValueError("positive query projection is not row-bound")
     else:
         raise TypeError("typed raw receipt evidence is required")
     contract = [

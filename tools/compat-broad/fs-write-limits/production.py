@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from production_bridge import (
@@ -364,6 +365,34 @@ def frozen_checkout():
     ).strip()
 
 
+@contextmanager
+def admission_journal(output, inputs):
+    """Journal pre-network failures without silently releasing uncertain ownership."""
+    try:
+        yield
+    except BaseException as error:
+        try:
+            save(
+                Path(output) / "admission-failure.json",
+                {
+                    "kind": "fs-write-limits-admission-failure-v1",
+                    "inputsDigest": digest(inputs),
+                    "reservationTicket": inputs["reservationTicket"],
+                    "productionExecuted": False,
+                    "acquisitionValidated": False,
+                    "reservationReleased": False,
+                    "recoveryRequired": True,
+                    "failure": type(error).__name__,
+                },
+            )
+        except Exception as journal_error:
+            error.add_note(
+                "Admission journal unavailable; shared reservation remains held."
+            )
+            raise error from journal_error
+        raise
+
+
 def execute(permission, local_directory, artifact, output, api_key):
     """O8: execute only this closed permission once; do not classify semantics."""
     commit = frozen_checkout()
@@ -385,6 +414,7 @@ def execute(permission, local_directory, artifact, output, api_key):
     )
     plan = execution_plan(permission, nonce)
     allocation = production_plan(nonce)
+    compiled = compile_limits_plan(PROJECT, DATABASE, nonce)
     output = Path(output).absolute()
     if output != output.resolve() or output.is_relative_to(
         Path(local_directory).resolve()
@@ -421,27 +451,27 @@ def execute(permission, local_directory, artifact, output, api_key):
         "envelope": envelope(permission, claim["locks"]),
         "admittedAt": started,
     }
-    save(output / "inputs.json", inputs)
-    # Preserve the existing cross-tool replay fence in addition to the canonical shared ledger.
-    consumed = Path.home() / ".local/state/fireemu-broad/consumed"
-    consumed.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with (consumed / nonce).open("x") as stream:
-        stream.write(digest(permission))
-        stream.flush()
-        os.fsync(stream.fileno())
-    create(output / "gate", plan)
-    gate = LimitsGate(output / "gate")
-    gate.claim()
-    coordinator = ReservedCoordinator(
-        permission,
-        nonce,
-        output / "coordinator",
-        gate,
-        api_key,
-        ledger=ledger,
-        ticket=ticket,
-    )
-    compiled = compile_limits_plan(PROJECT, DATABASE, nonce)
+    with admission_journal(output, inputs):
+        save(output / "inputs.json", inputs)
+        # Preserve the existing cross-tool replay fence in addition to the canonical shared ledger.
+        consumed = Path.home() / ".local/state/fireemu-broad/consumed"
+        consumed.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with (consumed / nonce).open("x") as stream:
+            stream.write(digest(permission))
+            stream.flush()
+            os.fsync(stream.fileno())
+        create(output / "gate", plan)
+        gate = LimitsGate(output / "gate")
+        gate.claim()
+        coordinator = ReservedCoordinator(
+            permission,
+            nonce,
+            output / "coordinator",
+            gate,
+            api_key,
+            ledger=ledger,
+            ticket=ticket,
+        )
     collection, failure = None, None
     try:
         coordinator.acquire()

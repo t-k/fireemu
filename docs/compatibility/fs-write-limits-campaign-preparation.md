@@ -59,3 +59,13 @@ Source `723c18e0f` closes those three findings. The default clock is read after 
 The parallel Auth test-only change `b0fbf2981` captures the old revision before its synchronization notification. The normal test passes, and removing the commit-time guard in an isolated mutation causes HTTP 200 instead of the required 409. Runtime code and formal bindings are unchanged by this follow-up.
 
 Shared admission is now a reviewed reusable component, but the limits-specific outer runner still must connect owner/manifest approval, canonical ledger selection, frozen artifact/environment inputs, complete immutable acquisition validation and comparison handoff. Production-unobserved conditions reduced this cycle: **0**. Parent promotions: **0**. No production request or credential acquisition occurred.
+
+## Limits-specific outer entry
+
+The limits `production.py` now connects exact permission validation, canonical shared-ledger reservation, Coordinator preflight, bounded collection/recovery, immutable production receipts, acquisition validation, and separate credential-free comparison. A complete unexpected API outcome is eligible for semantic comparison; transport, ownership, cleanup, binding, and configuration failures remain indeterminate. Saved-production recompare deliberately admits a newly verified local artifact after repair without changing the original production permission or receipt.
+
+The shadow now retains its exact executable as `fireemu` inside its output directory. Pass that retained file to `--artifact`; a later Cargo build can replace `target/debug/fireemu` with different bytes even when runtime source inputs match. The original shadow without a retained binary remains historical local evidence, not a newly admitted artifact. Admission failures before network access receive an exclusive sanitized journal; shared reservations remain held for explicit recovery. If that journal cannot be written, the original exception is preserved and the shared ledger remains authoritative.
+
+The shared supervisor source change requires a new prepared Explain observer binding. `prod-campaign-explain-01-v3.json` is the new preparation manifest; v2 and all historical receipts remain unchanged. This is not new production authorization.
+
+This implementation remains under local end-to-end verification and O7 preparation. No production campaign is approved by these code changes. Parent count remains **0 / 14**, and production-unobserved conditions reduced remain **0**.

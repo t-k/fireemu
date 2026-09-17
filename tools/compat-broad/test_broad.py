@@ -407,3 +407,21 @@ def test_bounded_firestore_selection_rejects_other_programs(program_id):
 
     with pytest.raises(ValueError, match="reads/read-time"):
         runner.bounded_firestore_program(program_id)
+
+
+def test_retained_artifact_preserves_exact_bytes_and_refuses_replacement(tmp_path):
+    import hashlib
+
+    from broad import retain_artifact
+
+    source, destination = tmp_path / "source", tmp_path / "retained"
+    source.write_bytes(b"first-build")
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    retain_artifact(source, destination, expected)
+    source.write_bytes(b"relinked-build")
+    assert destination.read_bytes() == b"first-build"
+    with pytest.raises(FileExistsError):
+        retain_artifact(source, destination, expected)
+    with pytest.raises(ValueError):
+        retain_artifact(source, tmp_path / "wrong", expected)
+    assert destination.read_bytes() == b"first-build"

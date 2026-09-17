@@ -567,6 +567,15 @@ def summarize(report):
     }
 
 
+def retain_artifact(source: Path, destination: Path, expected: str) -> None:
+    """Keep the exact executed bytes independently of later Cargo relinking."""
+    with source.open("rb") as original, destination.open("xb") as retained:
+        shutil.copyfileobj(original, retained)
+    destination.chmod(0o500)
+    if hashlib.sha256(destination.read_bytes()).hexdigest() != expected:
+        raise ValueError("retained artifact digest differs")
+
+
 def run(
     output,
     *,
@@ -576,6 +585,7 @@ def run(
     execution_timeout=240,
     recovery_grace=0.2,
     firestore_program=None,
+    retain_executed_artifact=False,
 ):
     if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).strip():
         raise ValueError("freeze the checkout before artifact execution")
@@ -599,6 +609,8 @@ def run(
         artifact.chmod(0o500)
         if hashlib.sha256(artifact.read_bytes()).hexdigest() != build["artifactSha256"]:
             raise ValueError("artifact copy mismatch")
+        if retain_executed_artifact:
+            retain_artifact(artifact, output / "fireemu", build["artifactSha256"])
         index_commit = "2526c61eda5fc53ac91250307786127ae3c601be"
         index_bytes = subprocess.check_output(
             ["git", "show", f"{index_commit}:conformance/firestore.indexes.json"],

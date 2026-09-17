@@ -411,6 +411,7 @@ def run(output: Path, *, rehearsal: str | None = None) -> dict:
         configuration={"daemon": {"authProjectNumbers": {}}},
         execution_timeout=600,
         recovery_grace=1,
+        retain_executed_artifact=True,
     )
     after = source_inputs()
     child_inputs = report.get("manifest", {}).get("sourceInputs")

@@ -426,3 +426,25 @@ def test_incomplete_comparison_is_indeterminate_and_cannot_overwrite_receipt(tmp
             directory / "receipt.json",
         )
     assert (directory / "receipt.json").read_bytes() == before
+
+
+def test_admission_failure_keeps_immutable_sanitized_recovery_record(tmp_path):
+    import json
+
+    from production import admission_journal
+
+    inputs = {"reservationTicket": {"reservation": "owned-ticket"}}
+    with pytest.raises(ValueError), admission_journal(tmp_path, inputs):
+        raise ValueError("credential-like text must not enter evidence")
+    record = json.loads((tmp_path / "admission-failure.json").read_text())
+    assert record["productionExecuted"] is False
+    assert record["reservationReleased"] is False
+    assert record["recoveryRequired"] is True
+    assert record["failure"] == "ValueError"
+    assert record["inputsDigest"] == digest(inputs)
+    assert "credential-like" not in (tmp_path / "admission-failure.json").read_text()
+    before = (tmp_path / "admission-failure.json").read_bytes()
+    with pytest.raises(RuntimeError) as failure, admission_journal(tmp_path, inputs):
+        raise RuntimeError("later failure")
+    assert isinstance(failure.value.__cause__, FileExistsError)
+    assert (tmp_path / "admission-failure.json").read_bytes() == before

@@ -5,18 +5,86 @@ from __future__ import annotations
 import copy
 import json
 import time
+import sys
 from pathlib import Path
 from urllib.parse import urlencode
 
+# ruff: noqa: I001 -- Bootstrap sibling admission and owned evidence modules.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "production-admission"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "compat-inventory"))
+
 import stream_bridge
 from batch_adapter import request_headers, wire
-from batch_contract import PROJECT, Credential, database_evidence
+from batch_contract import PROJECT, NUMBER, Credential, database_evidence
 from broad_contract import digest, local_origin
 from shared_gate import _save, create
 from shared_production import Coordinator, ProductionGate
 
 PROFILE = "stream-prepared-metadata-v1"
 ACTIONS = ("project", "database", "auth", "key")
+REQUEST_SLOTS = 33
+REQUEST_COST_MICROUSD = 100
+FIXED_NETWORK_MICROUSD = 1_300_000
+TOTAL_COST_MICROUSD = FIXED_NETWORK_MICROUSD + REQUEST_SLOTS * REQUEST_COST_MICROUSD
+SDK_CLIENT_SHA256 = "ab6947259f63e324aaa87ab6934fd538b5defce75a19f40a8896728223c23dc7"
+
+
+def pricing_basis():
+    """Conservative planning charge; accepted JSON bytes are not received wire bytes."""
+    network_mib = (290 + 25) * 17 + 8 * 8 + 64
+    rate = 230_000
+    return {
+        "kind": "stream-conservative-pricing-v1",
+        "checkedAt": "2026-09-17",
+        "primarySource": "https://cloud.google.com/firestore/pricing",
+        "rateMicrousdPerGiB": rate,
+        "rateBasis": "highest listed destination (China), no destination discount",
+        "freeQuotaCreditBytes": 0,
+        "acceptedEventSlots": 290,
+        "rejectedMessageSlots": 25,
+        "encodedReceiveCeilingMiB": 17,
+        "sdkVersion": "@google-cloud/firestore@8.7.1",
+        "sdkSource": "tools/sdk-smoke/node_modules/@google-cloud/firestore/build/src/v1/firestore_client.js:initialize",
+        "sdkLockSha256": sha_file(ROOT / "tools/sdk-smoke/package-lock.json"),
+        "metadataCalls": 8,
+        "metadataAllowanceMiBPerCall": 8,
+        "metadataBodyReadBytes": 65537,
+        "httpHeaderCount": 100,
+        "httpHeaderLineBytes": 65536,
+        "metadataBasis": "body plus one overflow header: 65537 + 101*65537, status line and buffering within8MiB",
+        "framingAndBufferingReserveMiB": 64,
+        "networkPlanningMiB": network_mib,
+        "calculatedNetworkMicrousd": (network_mib * rate + 1023) // 1024,
+        "fixedNetworkMicrousd": FIXED_NETWORK_MICROUSD,
+        "operationSlots": REQUEST_SLOTS,
+        "operationAllowanceMicrousdPerSlot": REQUEST_COST_MICROUSD,
+        "documentWritesUpperBound": 9,
+        "totalPlanningMicrousd": TOTAL_COST_MICROUSD,
+        "isExpectedInvoice": False,
+    }
+
+
+def pricing_sdk_binding(directory=None):
+    """Attest only the inspected SDK initialization cap, not the whole dependency tree."""
+    directory = (
+        Path(directory)
+        if directory is not None
+        else ROOT / "tools/sdk-smoke/node_modules/@google-cloud/firestore"
+    )
+    version = load_json(directory / "package.json").get("version")
+    source = sha_file(directory / "build/src/v1/firestore_client.js")
+    if version != "8.7.1" or source != SDK_CLIENT_SHA256:
+        raise ValueError("installed pricing SDK cap source differs")
+    lock = load_json(ROOT / "tools/sdk-smoke/package-lock.json")
+    if lock["packages"]["node_modules/@google-cloud/firestore"]["version"] != version:
+        raise ValueError("pricing SDK lock version differs")
+    return {
+        "version": version,
+        "clientSha256": source,
+        "lockSha256": sha_file(ROOT / "tools/sdk-smoke/package-lock.json"),
+        "encodedReceiveCeilingMiB": 17,
+    }
 
 
 def with_management(plan):
@@ -28,7 +96,9 @@ def with_management(plan):
         coordinatorRequests=0,
         observationRequests=19,
         recoverySeconds=366,
-        costMicrousd=3300,
+        fixedCostMicrousd=FIXED_NETWORK_MICROUSD,
+        requestCostMicrousd=REQUEST_COST_MICROUSD,
+        costMicrousd=TOTAL_COST_MICROUSD,
     )
     return plan
 
@@ -137,6 +207,11 @@ class StreamCoordinator(Coordinator):
         self._credential = credential
         self._shadow_origin = shadow_origin
         self._runtime = plan["nodeRuntime"]
+        self._pricing_sdk = pricing_sdk_binding() if shadow_origin is None else None
+        if self._pricing_sdk is not None and permission.get(
+            "pricingSdkDigest"
+        ) != digest(self._pricing_sdk):
+            raise ValueError("owner pricing SDK binding differs")
         super().__init__(permission, plan["nonce"], Path(output), gate, api_key)
         self.credential = credential
         self.failures = []
@@ -148,6 +223,8 @@ class StreamCoordinator(Coordinator):
         raise ValueError("O8 credential injection required; acquisition disabled")
 
     def validate_current(self, duration=13):
+        if self._pricing_sdk is not None and pricing_sdk_binding() != self._pricing_sdk:
+            raise ValueError("installed pricing SDK binding changed")
         if (
             self.gate is not self._gate
             or self.gate.plan_digest != self._plan_digest
@@ -286,8 +363,115 @@ def execution_facts(state, *, production):
     }
 
 
+def write_atomic_receipt(path, value):
+    """Publish a private immutable receipt only after its complete bytes are durable."""
+    import uuid
+
+    path = Path(path)
+    pending = path.with_name("." + path.name + "." + uuid.uuid4().hex + ".pending")
+    try:
+        stream_bridge.write_private_json(pending, value)
+        os.link(pending, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        pending.unlink(missing_ok=True)
+
+
+def retained_failure(output, ledger, ticket, error, *, production=True):
+    try:
+        reservation = ledger.snapshot()["reservations"][ticket["reservation"]]
+        released = reservation["state"] == "released"
+    except (OSError, ValueError, KeyError):
+        released = False
+    facts = execution_facts(
+        {"managementEvents": [], "events": []}, production=production
+    )
+    try:
+        facts = execution_facts(
+            StreamProductionGate(Path(output) / "gate").snapshot(),
+            production=production,
+        )
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, KeyError):
+        facts = {key: None for key in facts}
+    receipt = {
+        "kind": "stream-prepared-setup-failure-v1",
+        "acquisitionValidated": False,
+        "reservationReleased": released,
+        **facts,
+        "failures": [{"phase": "reserved-execution", "kind": type(error).__name__}],
+        "recoveryResponsibility": {
+            "state": "released" if released else "retained",
+            "ticket": ticket,
+            "gatePath": str(Path(output) / "gate"),
+        },
+    }
+    try:
+        write_atomic_receipt(Path(output) / "failure-receipt.json", receipt)
+    except OSError:
+        # If storage itself fails, retain the lease and expose only its non-secret recovery ID.
+        receipt["terminalReceiptPersisted"] = False
+        print(
+            json.dumps(
+                {
+                    "kind": "stream-recovery-required",
+                    "reservation": ticket["reservation"],
+                    "terminalReceiptPersisted": False,
+                }
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
+        os.fsync(sys.stderr.fileno())
+    return receipt
+
+
 def execute_session(
-    plan, permission, output, ledger, ticket, api_key, credential, *, shadow=None
+    plan,
+    permission,
+    output,
+    ledger,
+    ticket,
+    api_key,
+    credential,
+    *,
+    shadow=None,
+    final_binding=None,
+):
+    try:
+        return _execute_session(
+            plan,
+            permission,
+            output,
+            ledger,
+            ticket,
+            api_key,
+            credential,
+            shadow=shadow,
+            final_binding=final_binding,
+        )
+    except Exception as error:  # noqa: BLE001 -- Keep responsibility visible even before Gate setup succeeds.
+        return retained_failure(
+            output, ledger, ticket, error, production=shadow is None
+        )
+
+
+def _execute_session(
+    plan,
+    permission,
+    output,
+    ledger,
+    ticket,
+    api_key,
+    credential,
+    *,
+    shadow=None,
+    final_binding=None,
 ):
     """Execute an already reserved, frozen plan with an injected O8 credential."""
     output = Path(output)
@@ -307,6 +491,7 @@ def execute_session(
     result = None
     failures = []
     released = False
+    comparison = None
 
     def postflight():
         try:
@@ -354,6 +539,8 @@ def execute_session(
         metadata_valid(gate.snapshot())
         if failures:
             raise ValueError("stream acquisition incomplete")
+        comparison = final_binding(result) if final_binding is not None else None
+        coordinator.validate_current()
         gate.finish()
         coordinator.validate_current()
         ledger.finish(ticket)
@@ -364,6 +551,7 @@ def execute_session(
     receipt = {
         "kind": "stream-prepared-execution-v1",
         "collection": result,
+        "comparison": comparison,
         "failures": failures,
         "reservationReleased": released,
         "configurationUnchanged": coordinator.configuration_unchanged,
@@ -372,5 +560,458 @@ def execute_session(
         "gate": final_state,
         "metadataEvidence": coordinator.metadata_evidence,
     }
-    stream_bridge.write_private_json(output / "receipt.json", receipt)
+    write_atomic_receipt(output / "receipt.json", receipt)
     return receipt
+
+
+# The CLI is a frozen-input consumer. It never acquires or refreshes credentials.
+import argparse
+import hashlib
+import math
+import os
+import re
+import select
+import stat
+import subprocess
+
+from batch_contract import DATABASE_PROJECTION, validate_owner_baseline
+
+SHARED_ROOT = Path.home() / ".local/state/fireemu-broad/production-admission-v1"
+ROOT = Path(__file__).resolve().parents[3]
+MAX_INPUT_BYTES = 16 * 1024 * 1024
+
+
+def sha_file(path):
+    path = Path(path)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("regular bound artifact required")
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def load_json(path):
+    path = Path(path)
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_INPUT_BYTES:
+        raise ValueError("bounded regular prepared input required")
+    value = json.loads(
+        path.read_bytes(),
+        parse_constant=lambda _: (_ for _ in ()).throw(
+            ValueError("finite JSON required")
+        ),
+    )
+    if not isinstance(value, dict):
+        raise TypeError("prepared input object required")
+    return value
+
+
+def checkout_binding():
+    commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).strip():
+        raise ValueError("clean frozen checkout required")
+    return commit
+
+
+def comparison_contract(plan):
+    return {
+        "version": 1,
+        "projectId": plan["projectId"],
+        "documentPrefix": plan["documentPrefix"],
+        "resources": [
+            {"role": "control", "suffix": "control"},
+            {"role": "locked", "suffix": "locked"},
+            {"role": "suffix", "suffix": "contended-tail"},
+        ],
+        "maxRpc": 25,
+        "maxFramesPerRpc": 32,
+    }
+
+
+def compare_bound(collection, local, plan):
+    # Fixed checked-in comparator, fixed Node runtime, bounded stdin/output.
+    expected = comparison_contract(plan)
+    local_plan = local["gate"]["plan"]
+    expected["local"] = {
+        "projectId": local_plan["projectId"],
+        "documentPrefix": local_plan["documentPrefix"],
+    }
+    source = 'import {compareStreamReceipts} from "./stream_comparison.mjs"; let raw=""; for await (const chunk of process.stdin) { raw+=chunk; if(raw.length>16777216) process.exit(2); } process.stdout.write(JSON.stringify(compareStreamReceipts(JSON.parse(raw))));'
+    result = subprocess.run(
+        [plan["nodeRuntime"]["path"], "--input-type=module", "-e", source],
+        input=json.dumps(
+            {
+                "production": collection,
+                "local": local["collection"],
+                "expected": expected,
+            }
+        ),
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+        cwd=Path(__file__).parent,
+        env={},
+    )
+    if result.returncode != 0 or len(result.stdout) > MAX_INPUT_BYTES:
+        raise ValueError("bounded comparison failed")
+    value = json.loads(result.stdout)
+    if value.get("classification") == "INDETERMINATE":
+        raise ValueError("stream comparison proof incomplete")
+    return value
+
+
+def manifest(nonce, owner):
+    return {
+        "kind": "stream-prepared-manifest-v1",
+        "allocation": with_management(
+            stream_bridge.compile_plan(PROJECT, nonce, owner)
+        ),
+        "sourceDigest": stream_bridge.source_digest(),
+        "pricingBasis": pricing_basis(),
+        "pricingSdk": pricing_sdk_binding(),
+        "comparatorSha256": sha_file(Path(__file__).with_name("stream_comparison.mjs")),
+    }
+
+
+def _prepared_inputs(permission_path, local_path, artifact_path):
+    from reservations import Ledger
+
+    import uuid
+
+    permission = load_json(permission_path) if permission_path is not None else None
+    local = load_json(local_path)
+    artifact_path, local_path = (
+        Path(artifact_path).resolve(),
+        Path(local_path).resolve(),
+    )
+    nonce = permission.get("nonce") if permission else uuid.uuid4().hex
+    owner = permission.get("ownerId") if permission else "stream-owner-" + nonce
+    if (
+        not isinstance(nonce, str)
+        or not re.fullmatch(r"[a-f0-9]{32}", nonce)
+        or not isinstance(owner, str)
+    ):
+        raise ValueError("fresh stream owner namespace required")
+    frozen = manifest(nonce, owner)
+    ledger = Ledger(SHARED_ROOT)
+    binding = {
+        "sourceDigest": stream_bridge.source_digest(),
+        "comparatorSha256": frozen["comparatorSha256"],
+        "artifactPath": str(artifact_path),
+        "artifactSha256": sha_file(artifact_path),
+        "localReceiptPath": str(local_path),
+        "localReceiptSha256": sha_file(local_path),
+        "frozenCommit": checkout_binding(),
+        "ledgerPath": str(ledger.path),
+        "ledgerIdentity": ledger.identity,
+    }
+    required = {
+        "kind": "stream-prepared-owner-permission-v1",
+        "nonce": nonce,
+        "ownerId": owner,
+        "project": PROJECT,
+        "projectNumber": NUMBER,
+        "quotaProject": PROJECT,
+        "database": "(default)",
+        "manifestSha256": digest(frozen),
+        "collectorSourceDigest": binding["sourceDigest"],
+        "comparisonContractDigest": digest(comparison_contract(frozen["allocation"])),
+        "comparatorSha256": binding["comparatorSha256"],
+        "artifactSha256": binding["artifactSha256"],
+        "localReceiptSha256": binding["localReceiptSha256"],
+        "frozenCommit": binding["frozenCommit"],
+        "ledgerIdentity": ledger.identity,
+        "databaseProjectionContractDigest": digest(DATABASE_PROJECTION),
+        "tariffsConfirmedBelowPlanningCeilings": True,
+        "requestUpperBound": 33,
+        "accountUpperBound": 0,
+        "resourceUpperBound": 3,
+        "concurrencyUpperBound": 1,
+        "timeUpperBound": 1100,
+        "costUpperMicrousd": TOTAL_COST_MICROUSD,
+        "pricingBasisDigest": digest(frozen["pricingBasis"]),
+        "pricingSdkDigest": digest(frozen["pricingSdk"]),
+        "allowedReobservations": 0,
+        "recoveryDiagnostics": {
+            "path": str(SHARED_ROOT / ("stream-recovery-" + nonce + ".jsonl")),
+            "ownerRetainsUntilReservationResolved": True,
+        },
+    }
+    if (
+        local.get("kind") != "stream-prepared-execution-v1"
+        or local.get("productionExecuted") is not False
+        or local.get("acquisitionValidated") is not True
+        or local.get("reservationReleased") is not True
+        or local.get("failures") != []
+        or local["gate"]["plan"].get("observerSha256") != binding["sourceDigest"]
+    ):
+        raise ValueError("current complete local outer receipt required")
+    stream_bridge.validate_plan(local["gate"]["plan"])
+    stream_bridge.validate_absence(local["gate"], "stream")
+    compare_bound(local["collection"], local, local["gate"]["plan"])
+    from stream_shadow import validate_owned_receipt
+
+    validate_owned_receipt(local, binding["artifactSha256"])
+    if permission is None:
+        return {
+            "kind": "stream-owner-proposal-v1",
+            "status": "BLOCKED_OWNER",
+            "bindings": binding,
+            "manifest": frozen,
+            "requiredPermission": required,
+            "ownerFieldsRequired": [
+                "issuedAt",
+                "expiresAt",
+                "apiKeyDigest",
+                "recoveryOwner",
+                "authConfigDigest",
+                "databaseProjectionDigest",
+                "pricingLocation",
+                "pricingCheckedAt",
+                "databaseProjection",
+                "ownerIdentity",
+                "permissionReference",
+            ],
+            "permissionGranted": False,
+        }
+    validate_owner_baseline(permission, required, time.time())
+    if (
+        not isinstance(permission.get("apiKeyDigest"), str)
+        or not re.fullmatch(r"[a-f0-9]{64}", permission["apiKeyDigest"])
+        or not isinstance(permission.get("recoveryOwner"), str)
+        or not permission["recoveryOwner"].strip()
+    ):
+        raise ValueError("API-key binding and recovery owner required")
+    plan = prepared_plan(nonce, owner, digest(permission))
+    return {
+        "kind": "stream-prepared-inputs-v1",
+        "permissionPath": str(Path(permission_path).resolve()),
+        "permission": permission,
+        "permissionDigest": digest(permission),
+        "bindings": binding,
+        "manifest": frozen,
+        "plan": plan,
+        "comparisonContract": comparison_contract(plan),
+    }
+
+
+def prepare_inputs(permission_path, local_path, artifact_path, output):
+    value = _prepared_inputs(permission_path, local_path, artifact_path)
+    stream_bridge.write_private_json(output, value)
+    return value
+
+
+def validate_prepared(value):
+    if not isinstance(value, dict) or value.get("kind") != "stream-prepared-inputs-v1":
+        raise ValueError("closed prepared input required")
+    binding = value["bindings"]
+    current = _prepared_inputs(
+        value["permissionPath"], binding["localReceiptPath"], binding["artifactPath"]
+    )
+    if digest(current) != digest(value):
+        raise ValueError("prepared execution binding changed")
+    return current
+
+
+def read_o8_handoff(fd, permission_digest):
+    if type(fd) is not int or fd < 3:
+        raise ValueError("private O8 descriptor required")
+    info = os.fstat(fd)
+    if (
+        info.st_uid != os.getuid()
+        or info.st_mode & 0o077
+        or not (
+            stat.S_ISREG(info.st_mode)
+            or stat.S_ISFIFO(info.st_mode)
+            or stat.S_ISSOCK(info.st_mode)
+        )
+    ):
+        raise ValueError("private O8 descriptor required")
+    # A private regular file is also supported; secrets never become CLI arguments.
+    raw = bytearray()
+    deadline = time.monotonic() + 5
+    while len(raw) <= 16384:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+            raise ValueError("O8 handoff deadline")
+        chunk = os.read(fd, 16385 - len(raw))
+        if not chunk:
+            break
+        raw.extend(chunk)
+    if len(raw) > 16384:
+        raise ValueError("bounded O8 handoff required")
+    value = json.loads(raw)
+    if (
+        not isinstance(value, dict)
+        or set(value)
+        != {"kind", "permissionDigest", "token", "apiKey", "verifiedAt", "expiresAt"}
+        or value["kind"] != "stream-o8-credential-v1"
+        or value["permissionDigest"] != permission_digest
+    ):
+        raise ValueError("bound O8 handoff required")
+    now = time.time()
+    if (
+        any(
+            type(value[key]) not in (int, float) or not math.isfinite(value[key])
+            for key in ("verifiedAt", "expiresAt")
+        )
+        or not 0 <= now - value["verifiedAt"] <= 300
+        or not now + 1102 <= value["expiresAt"] <= now + 3600
+    ):
+        raise ValueError("verified O8 credential lifetime required")
+    if any(
+        not isinstance(value[key], str)
+        or not value[key]
+        or not value[key].isascii()
+        or any(char.isspace() for char in value[key])
+        or len(value[key]) > maximum
+        for key, maximum in [("token", 8192), ("apiKey", 256)]
+    ):
+        raise ValueError("bounded O8 credential values required")
+    credential = Credential()
+    credential.accept(
+        value["token"], {"expires_in": int(value["expiresAt"] - now)}, time.monotonic()
+    )
+    return credential, value["apiKey"]
+
+
+def validate_recovery_capture(permission, *, fd=2):
+    """The owner retains an exact private append file for last-resort recovery IDs."""
+    import fcntl
+
+    contract = permission["recoveryDiagnostics"]
+    path = Path(contract["path"])
+    info = os.fstat(fd)
+    if (
+        contract.get("ownerRetainsUntilReservationResolved") is not True
+        or not path.is_absolute()
+        or path.is_symlink()
+        or not path.is_file()
+        or info.st_uid != os.getuid()
+        or info.st_mode & 0o077
+        or not stat.S_ISREG(info.st_mode)
+        or (info.st_dev, info.st_ino) != (path.stat().st_dev, path.stat().st_ino)
+        or not fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_APPEND
+    ):
+        raise ValueError("exact private owner recovery stderr capture required")
+
+
+def execute_prepared(config_path, output, credential_fd):
+    from reservations import Ledger
+
+    value = validate_prepared(load_json(config_path))
+    validate_recovery_capture(value["permission"])
+    credential, api_key = read_o8_handoff(credential_fd, value["permissionDigest"])
+    permission, plan = value["permission"], value["plan"]
+    if digest(api_key) != permission["apiKeyDigest"]:
+        raise ValueError("O8 API-key binding differs")
+    output = Path(output).absolute()
+    if output != output.resolve() or output.exists():
+        raise ValueError("fresh canonical execution output required")
+    ledger = Ledger(SHARED_ROOT)
+    scope = {
+        "key": f"project/{PROJECT}/firestore/(default)/documents/{plan['documentPrefix']}",
+        "mode": "EXCLUSIVE",
+    }
+    budget = {
+        "requests": 33,
+        "accounts": 0,
+        "resources": 3,
+        "costMicrousd": TOTAL_COST_MICROUSD,
+    }
+    envelope = {
+        "permissionDigest": value["permissionDigest"],
+        "issuedAt": permission["issuedAt"],
+        "expiresAt": permission["expiresAt"],
+        "limits": budget,
+        "concurrency": 1,
+        "scopes": [scope],
+    }
+    claim = {
+        "campaignId": plan["nonce"],
+        "manifestDigest": digest(value["manifest"]),
+        "nonceDigest": digest(plan["nonce"]),
+        "gatePath": str(output / "gate"),
+        "gatePlanDigest": digest(plan),
+        "locks": [scope],
+        "budget": budget,
+        "durationSeconds": 1100,
+    }
+    output.mkdir(mode=0o700)
+    ticket = ledger.reserve(envelope, claim, plan)
+    return execute_reserved_inputs(
+        value,
+        output,
+        ledger,
+        ticket,
+        api_key,
+        credential,
+        reservation_inputs={"claim": claim, "ticket": ticket, "envelope": envelope},
+    )
+
+
+def execute_reserved_inputs(
+    value, output, ledger, ticket, api_key, credential, *, reservation_inputs=None
+):
+    """Own every operation after the one successful central reservation."""
+    try:
+        plan = value["plan"]
+        stream_bridge.write_private_json(
+            output / "inputs.json",
+            {**value, **(reservation_inputs or {})},
+        )
+
+        def final_binding(collection):
+            validate_prepared(value)
+            return compare_bound(
+                collection, load_json(value["bindings"]["localReceiptPath"]), plan
+            )
+
+        return execute_session(
+            plan,
+            value["permission"],
+            output,
+            ledger,
+            ticket,
+            api_key,
+            credential,
+            final_binding=final_binding,
+        )
+    except Exception as error:  # noqa: BLE001 -- Reservation ownership persists across every setup failure.
+        return retained_failure(output, ledger, ticket, error)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Prepare or execute one frozen stream campaign; credentials are supplied only by O8 private FD."
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+    prepare = commands.add_parser("prepare")
+    prepare.add_argument("--permission", type=Path)
+    prepare.add_argument("--local-receipt", type=Path, required=True)
+    prepare.add_argument("--artifact", type=Path, required=True)
+    prepare.add_argument("--output", type=Path, required=True)
+    execute = commands.add_parser("execute")
+    execute.add_argument("--prepared", type=Path, required=True)
+    execute.add_argument("--output", type=Path, required=True)
+    execute.add_argument("--credential-fd", type=int, required=True)
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "prepare":
+            prepare_inputs(
+                args.permission, args.local_receipt, args.artifact, args.output
+            )
+            return 0
+        result = execute_prepared(args.prepared, args.output, args.credential_fd)
+        return 0 if result["acquisitionValidated"] else 1
+    except Exception as error:  # noqa: BLE001 -- Never echo credential-bearing messages or tracebacks.
+        print(
+            f"Prepared stream refused ({type(error).__name__}); no permission is inferred.",
+            file=sys.stderr,
+        )
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

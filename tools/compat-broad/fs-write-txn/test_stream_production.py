@@ -28,7 +28,7 @@ def test_prepared_allocation_counts_metadata_separately():
     plan = module.prepared_plan("stream-preflight-001", "owner-001", "a" * 64)
     assert plan["observationRequests"] == 19
     assert plan["recoverySeconds"] >= 366
-    assert plan["costMicrousd"] == 3300
+    assert plan["costMicrousd"] == 1_303_300
     assert plan["streamBounds"]["rpcSlots"] == 25
     assert plan["streamBounds"]["acceptedBytes"] == 273 * 1024 * 1024
     assert [item["id"] for item in plan["management"]["observation"]] == [
@@ -150,7 +150,12 @@ def prepared_fixture(tmp_path, metadata_server, stale=None):
         "key": f"project/{PROJECT}/firestore/(default)/documents/{plan['documentPrefix']}",
         "mode": "EXCLUSIVE",
     }
-    budget = {"requests": 33, "accounts": 0, "resources": 3, "costMicrousd": 3300}
+    budget = {
+        "requests": 33,
+        "accounts": 0,
+        "resources": 3,
+        "costMicrousd": module.TOTAL_COST_MICROUSD,
+    }
     envelope = {
         "permissionDigest": digest(permission),
         "issuedAt": time.time() - 1,
@@ -349,3 +354,271 @@ def test_metadata_only_execution_is_reported_separately(tmp_path, metadata_serve
         "productionDataExecuted": False,
         "completedDataObservation": False,
     }
+
+
+def test_private_o8_handoff_is_bounded_and_expiry_checked():
+    import json
+    import os
+    import time
+
+    module = production()
+    assert hasattr(module, "read_o8_handoff"), (
+        "execute needs an explicit private credential FD"
+    )
+    for change in ["expired", "wrong-permission", "oversized"]:
+        read_fd, write_fd = os.pipe()
+        try:
+            handoff = {
+                "kind": "stream-o8-credential-v1",
+                "permissionDigest": "a" * 64,
+                "token": "local-test-secret",
+                "apiKey": "local-test-key",
+                "expiresAt": time.time() + 1800,
+                "verifiedAt": time.time(),
+            }
+            if change == "expired":
+                handoff["expiresAt"] = time.time() + 30
+            elif change == "wrong-permission":
+                handoff["permissionDigest"] = "b" * 64
+            else:
+                handoff["token"] = "x" * 20000
+            data = json.dumps(handoff).encode()
+            # A regular private file avoids a pipe writer blocking on oversized data.
+            import tempfile
+
+            with tempfile.TemporaryFile() as stream:
+                stream.write(data)
+                stream.seek(0)
+                with pytest.raises(ValueError):
+                    module.read_o8_handoff(stream.fileno(), "a" * 64)
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+
+
+def test_prepare_refuses_missing_owner_input_before_output(tmp_path):
+    module = production()
+    assert hasattr(module, "prepare_inputs"), (
+        "a closed prepared execution config is required"
+    )
+    with pytest.raises((ValueError, FileNotFoundError)):
+        module.prepare_inputs(
+            tmp_path / "missing-permission.json",
+            tmp_path / "missing-local.json",
+            tmp_path / "missing-artifact",
+            tmp_path / "prepared.json",
+        )
+    assert not (tmp_path / "prepared.json").exists()
+
+
+def test_ownerless_prepare_stops_without_local_proof(tmp_path):
+    module = production()
+    with pytest.raises((ValueError, FileNotFoundError)):
+        module.prepare_inputs(
+            None,
+            tmp_path / "missing-local.json",
+            tmp_path / "missing-artifact",
+            tmp_path / "proposal.json",
+        )
+    assert not (tmp_path / "proposal.json").exists()
+
+
+def test_valid_private_o8_handoff_preserves_bounded_credential():
+    import json
+    import tempfile
+    import time
+
+    module = production()
+    now = time.time()
+    value = {
+        "kind": "stream-o8-credential-v1",
+        "permissionDigest": "a" * 64,
+        "token": "local-secret",
+        "apiKey": "local-key",
+        "verifiedAt": now,
+        "expiresAt": now + 1800,
+    }
+    with tempfile.TemporaryFile() as stream:
+        stream.write(json.dumps(value).encode())
+        stream.seek(0)
+        credential, key = module.read_o8_handoff(stream.fileno(), "a" * 64)
+    assert key == "local-key"
+    assert credential.token == "local-secret"
+    assert credential.usable(time.monotonic(), 1100)
+
+
+def test_cli_prepare_accepts_missing_permission_flag():
+    import subprocess
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).with_name("stream_production.py")),
+            "prepare",
+            "--help",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "[--permission PERMISSION]" in result.stdout
+
+
+def test_prepared_json_rejects_non_regular_inputs(tmp_path):
+    import os
+
+    path = tmp_path / "input.fifo"
+    os.mkfifo(path, 0o600)
+    with pytest.raises(ValueError, match="regular"):
+        production().load_json(path)
+
+
+@pytest.mark.parametrize("stage", ["gate", "coordinator"])
+def test_reserved_setup_failure_retains_a_terminal_owner_receipt(
+    tmp_path, metadata_server, stage
+):
+    module, permission, plan, ledger, ticket, credential = prepared_fixture(
+        tmp_path, metadata_server
+    )
+    if stage == "gate":
+        (tmp_path / "gate").mkdir()
+    else:
+        permission["collectorSourceDigest"] = "0" * 64
+    receipt = module.execute_session(
+        plan,
+        permission,
+        tmp_path,
+        ledger,
+        ticket,
+        "local-shadow-key",
+        credential,
+        shadow={"metadataOrigin": metadata_server["origin"], "port": 1},
+    )
+    assert receipt["acquisitionValidated"] is False
+    assert receipt["reservationReleased"] is False
+    assert receipt["recoveryResponsibility"]["ticket"] == ticket
+    assert receipt["recoveryResponsibility"]["state"] == "retained"
+    assert (tmp_path / "failure-receipt.json").is_file()
+    assert metadata_server["requests"] == []
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+def test_o8_refuses_world_accessible_fifo_before_read(tmp_path):
+    import os
+
+    path = tmp_path / "credential.fifo"
+    os.mkfifo(path)
+    path.chmod(0o666)
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        with pytest.raises(ValueError, match="private"):
+            production().read_o8_handoff(fd, "a" * 64)
+    finally:
+        os.close(fd)
+
+
+def test_o8_refuses_unprotected_socket_before_read():
+    import socket
+
+    left, right = socket.socketpair()
+    try:
+        with pytest.raises(ValueError, match="private"):
+            production().read_o8_handoff(left.fileno(), "a" * 64)
+    finally:
+        left.close()
+        right.close()
+
+
+def test_atomic_receipt_is_private_complete_and_immutable(tmp_path):
+    import json
+
+    path = tmp_path / "receipt.json"
+    production().write_atomic_receipt(path, {"complete": True})
+    assert json.loads(path.read_text()) == {"complete": True}
+    assert path.stat().st_mode & 0o777 == 0o600
+    with pytest.raises(FileExistsError):
+        production().write_atomic_receipt(path, {"complete": False})
+    assert json.loads(path.read_text()) == {"complete": True}
+    assert list(tmp_path.glob("*.pending")) == []
+
+
+def test_reserved_input_write_failure_keeps_terminal_responsibility(
+    tmp_path, metadata_server
+):
+    module, permission, plan, ledger, ticket, credential = prepared_fixture(
+        tmp_path, metadata_server
+    )
+    (tmp_path / "inputs.json").write_text("existing")
+    receipt = module.execute_reserved_inputs(
+        {"plan": plan, "permission": permission},
+        tmp_path,
+        ledger,
+        ticket,
+        "local-shadow-key",
+        credential,
+    )
+    assert receipt["recoveryResponsibility"]["ticket"] == ticket
+    assert receipt["reservationReleased"] is False
+    assert receipt["productionExecuted"] is False
+    assert (tmp_path / "failure-receipt.json").is_file()
+    assert (tmp_path / "inputs.json").read_text() == "existing"
+    assert metadata_server["requests"] == []
+
+
+def test_recovery_capture_requires_exact_private_append_file(tmp_path):
+    import os
+
+    module = production()
+    assert hasattr(module, "validate_recovery_capture")
+    path = tmp_path / "recovery.jsonl"
+    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+    permission = {
+        "recoveryDiagnostics": {
+            "path": str(path),
+            "ownerRetainsUntilReservationResolved": True,
+        }
+    }
+    try:
+        module.validate_recovery_capture(permission, fd=fd)
+        path.chmod(0o644)
+        with pytest.raises(ValueError):
+            module.validate_recovery_capture(permission, fd=fd)
+    finally:
+        os.close(fd)
+
+
+def test_upfront_network_reserve_preserves_all_fourteen_recovery_slots(
+    tmp_path, metadata_server
+):
+    from shared_gate import create
+
+    module, _permission, plan, ledger, ticket, _credential = prepared_fixture(
+        tmp_path, metadata_server
+    )
+    assert plan["fixedCostMicrousd"] == 1_300_000
+    assert plan["requestCostMicrousd"] == 100
+    assert plan["costMicrousd"] == 1_303_300
+    create(tmp_path / "gate", plan)
+    state = module.StreamProductionGate(tmp_path / "gate").snapshot()
+    assert state["costMicrousd"] == 1_300_000
+    assert state["reservedRecovery"] == 14
+    assert plan["costMicrousd"] - state["costMicrousd"] - 14 * 100 == 19 * 100
+    assert ledger.bound_claim(ticket)["budget"]["costMicrousd"] == plan["costMicrousd"]
+    pricing = module.pricing_basis()
+    assert pricing["networkPlanningMiB"] == 5483
+    assert pricing["calculatedNetworkMicrousd"] == 1_231_534
+    assert pricing["freeQuotaCreditBytes"] == 0
+
+
+def test_pricing_sdk_binding_rejects_unattested_installed_client(tmp_path):
+    import json
+
+    module = production()
+    assert hasattr(module, "pricing_sdk_binding")
+    (tmp_path / "package.json").write_text(json.dumps({"version": "8.7.1"}))
+    source = tmp_path / "build/src/v1/firestore_client.js"
+    source.parent.mkdir(parents=True)
+    source.write_text("const maxMessageLength = 17 * 1024 * 1024;")
+    with pytest.raises(ValueError, match="SDK"):
+        module.pricing_sdk_binding(tmp_path)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import re
 import sys
 import types
 from datetime import datetime
@@ -28,9 +29,10 @@ def _load(name: str, path: Path):
 
 
 _compiler = _load("_commit_gate_transform_compiler", HERE / "transform_compiler.py")
-_commit_bridge = _load(
-    "_commit_gate_production_bridge", HERE / "production_bridge.py"
-)
+_commit_bridge_path = HERE / "commit_production_bridge.py"
+if not _commit_bridge_path.exists():
+    _commit_bridge_path = HERE / "production_bridge.py"
+_commit_bridge = _load("_commit_gate_production_bridge", _commit_bridge_path)
 
 # The existing LimitsGate supplies the one charged callback and consume_wire
 # boundary. Load it by path because another campaign has a production_bridge.
@@ -49,6 +51,9 @@ _limits_bridge = _load(
     "_commit_gate_limits_bridge", _limits_dir / "production_bridge.py"
 )
 LimitsGate = _limits_bridge.LimitsGate
+_TIMESTAMP = re.compile(
+    r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$"
+)
 
 
 def compiler_plan(project: str, database: str, nonce: str) -> dict:
@@ -106,10 +111,13 @@ class CommitGate(LimitsGate):
         capture = super()._recovery_capture(operation, status, body)
         marker = None
         fields = body.get("fields") if isinstance(body, dict) else None
+        resource = operation["path"].split("?", 1)[0].removeprefix("/v1/")
         if isinstance(fields, dict) and fields.get("_sharedOwner") is not None:
             owner = fields["_sharedOwner"]
-            if set(owner) == {"referenceValue"} and isinstance(
-                owner["referenceValue"], str
+            if (
+                isinstance(owner, dict)
+                and set(owner) == {"referenceValue"}
+                and owner["referenceValue"] == resource
             ):
                 marker = {"referenceValue": owner["referenceValue"]}
         capture["ownerMarker"] = marker
@@ -129,6 +137,7 @@ class CommitGate(LimitsGate):
             or capture.get("name") != resource
             or capture.get("ownerMarker") != {"referenceValue": resource}
             or not isinstance(capture.get("updateTime"), str)
+            or _TIMESTAMP.fullmatch(capture.get("updateTime", "")) is None
         ):
             raise ValueError("current Commit ownership marker required")
         version = capture["updateTime"]

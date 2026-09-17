@@ -125,6 +125,62 @@ def test_commit_gate_rejects_foreign_marker_before_delete_callback(tmp_path):
     assert called == []
 
 
+@pytest.mark.parametrize("marker", [["referenceValue"], {}, {"referenceValue": "x", "extra": "y"}])
+def test_commit_gate_records_malformed_marker_as_invalid_proof(tmp_path, marker):
+    plan = compiler_plan("demo", "(default)", "c" * 32)
+    gate = create_commit_gate(tmp_path / "gate", plan)
+    gate.claim()
+    _, versions = _run_observation(gate, plan)
+    read = plan["recovery"][0]
+    gate.dispatch(
+        read,
+        True,
+        lambda: (
+            200,
+            {
+                "name": read["resource"],
+                "fields": {"_sharedOwner": marker},
+                "updateTime": versions[read["resource"]],
+            },
+        ),
+    )
+    capture = gate.snapshot()["jobs"]["commit"]["captures"]["0"]
+    assert capture["ownerMarker"] is None
+    delete = dict(plan["recovery"][1])
+    delete.pop("versionFrom")
+    delete["path"] += "?currentDocument.updateTime=" + versions[read["resource"]].replace(
+        ":", "%3A"
+    )
+    with pytest.raises(ValueError, match="ownership marker"):
+        gate.dispatch(delete, True, lambda: pytest.fail("unsafe delete callback"))
+
+
+def test_commit_gate_rejects_noncanonical_ownership_timestamp(tmp_path):
+    plan = compiler_plan("demo", "(default)", "d" * 32)
+    gate = create_commit_gate(tmp_path / "gate", plan)
+    gate.claim()
+    _, versions = _run_observation(gate, plan)
+    read = plan["recovery"][0]
+    invalid = "2026-01-01"
+    gate.dispatch(
+        read,
+        True,
+        lambda: (
+            200,
+            {
+                "name": read["resource"],
+                "fields": {"_sharedOwner": {"referenceValue": read["resource"]}},
+                "updateTime": invalid,
+            },
+        ),
+    )
+    delete = dict(plan["recovery"][1])
+    delete.pop("versionFrom")
+    delete["path"] += "?currentDocument.updateTime=" + invalid
+    with pytest.raises(ValueError, match="ownership marker"):
+        gate.dispatch(delete, True, lambda: pytest.fail("unsafe delete callback"))
+
+
 def test_default_gate_still_rejects_changed_creation_fields(tmp_path):
     gate = Gate.__new__(Gate)
     operation = {"method": "DELETE", "path": "/v1/a?currentDocument.updateTime=old"}

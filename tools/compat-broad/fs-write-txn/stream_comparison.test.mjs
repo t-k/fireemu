@@ -214,3 +214,8 @@ for (const token of ['', 'not bytes!', 'YQ', 'YR==', '====']) test(`rejects nonc
 test('same opaque bytes in Buffer JSON and canonical base64 are declared nondeterminism', () => {
   const r = fixture(); assert.equal(compare(r, canonicalByteEncoding(r)).classification, 'EXPECTED_NONDETERMINISM');
 });
+for (const length of [65535, 65536, 65537, 65538]) test(`canonical base64 token decoded length ${length} obeys the same byte bound as Buffer JSON`, () => {
+  const r = canonicalByteEncoding(fixture()); const token = Buffer.alloc(length, 1).toString('base64');
+  r.observations[2].receipt.events[1].value.streamToken = token; r.observations[2].receipt.events[2].value.streamToken = token;
+  assert.equal(compare(r).classification, length <= 65536 ? 'MATCH' : 'INDETERMINATE');
+});

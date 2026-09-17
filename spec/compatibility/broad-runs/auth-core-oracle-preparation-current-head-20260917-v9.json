@@ -31,7 +31,7 @@
         "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v10.json",
         "sha256": "b29e7f60c3dff560d423d7311311dec725f809cc6656efca4a051a9640efb6e1",
         "codeSourceHead": "9830ccaf53def5d51bb620411648e2a30337a32f",
-        "evidencePackageCommit": null,
+        "evidencePackageCommit": "20eeb12600dd98b04d891b5bbae32a3d56f4b1f5",
         "collectorCommit": "e8d86723aaea340dea3a2f073a358f624d72afbe",
         "comparatorId": "typed-sdk-policy-v1",
         "status": "BLOCKED_OWNER",
@@ -45,7 +45,7 @@
         "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v10.json",
         "sha256": "12d000c8a96d14797d204dfea8cceb695271de89ec3096653ed87b6b4256305d",
         "codeSourceHead": "9830ccaf53def5d51bb620411648e2a30337a32f",
-        "evidencePackageCommit": null,
+        "evidencePackageCommit": "20eeb12600dd98b04d891b5bbae32a3d56f4b1f5",
         "collectorCommit": "ca9894d0275c33f478b999aeb2c4d1ea32c5d9b5",
         "comparatorId": "auth-settings-v1",
         "status": "BLOCKED_OWNER",
@@ -65,7 +65,7 @@
     "savedProductionReference": "historical receipts and replay retained without current-head promotion",
     "sdkLocal": "runner source bindings are prepared; case-level local shadow remains pending"
   },
-  "evidencePackageCommit": null,
+  "evidencePackageCommit": "20eeb12600dd98b04d891b5bbae32a3d56f4b1f5",
   "evidencePackageCommitPolicy": "package files were committed in the package commit; codeSourceHead remains the compatibility source identity; this report records the external package commit without self-reference",
   "frozenAt": "2026-09-17T02:19:09Z",
   "gitStatus": "clean at freeze",
@@ -117,7 +117,7 @@
       "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v10.json",
       "sha256": "b29e7f60c3dff560d423d7311311dec725f809cc6656efca4a051a9640efb6e1",
       "codeSourceHead": "9830ccaf53def5d51bb620411648e2a30337a32f",
-      "evidencePackageCommit": null,
+      "evidencePackageCommit": "20eeb12600dd98b04d891b5bbae32a3d56f4b1f5",
       "collectorCommit": "e8d86723aaea340dea3a2f073a358f624d72afbe",
       "comparatorId": "typed-sdk-policy-v1",
       "status": "BLOCKED_OWNER",
@@ -131,7 +131,7 @@
       "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v10.json",
       "sha256": "12d000c8a96d14797d204dfea8cceb695271de89ec3096653ed87b6b4256305d",
       "codeSourceHead": "9830ccaf53def5d51bb620411648e2a30337a32f",
-      "evidencePackageCommit": null,
+      "evidencePackageCommit": "20eeb12600dd98b04d891b5bbae32a3d56f4b1f5",
       "collectorCommit": "ca9894d0275c33f478b999aeb2c4d1ea32c5d9b5",
       "comparatorId": "auth-settings-v1",
       "status": "BLOCKED_OWNER",
@@ -216,14 +216,14 @@
       "collectorCommit": "e8d86723aaea340dea3a2f073a358f624d72afbe",
       "productionExecuted": false,
       "status": "PREPARED_NOT_EXECUTED",
-      "evidencePackageCommit": null
+      "evidencePackageCommit": "20eeb12600dd98b04d891b5bbae32a3d56f4b1f5"
     },
     {
       "packagePath": "spec/compatibility/broad-runs/auth-settings-sdk-next-v10.json",
       "collectorCommit": "ca9894d0275c33f478b999aeb2c4d1ea32c5d9b5",
       "productionExecuted": false,
       "status": "PREPARED_NOT_EXECUTED",
-      "evidencePackageCommit": null
+      "evidencePackageCommit": "20eeb12600dd98b04d891b5bbae32a3d56f4b1f5"
     }
   ],
   "artifactBinding": {

@@ -82,6 +82,21 @@ def metadata_fixture():
             raise ValueError("owned metadata listener did not close")
 
 
+def validate_kernel_addresses(addresses, port):
+    import ipaddress
+
+    if not isinstance(addresses, list) or not addresses:
+        raise ValueError("kernel listener addresses required")
+    for address in addresses:
+        host, separator, observed_port = address.rpartition(":")
+        if (
+            not separator
+            or observed_port != str(port)
+            or not ipaddress.ip_address(host.strip("[]")).is_loopback
+        ):
+            raise ValueError("kernel listener must be loopback on the exact port")
+
+
 def listener_owner(origin, pid):
     """Retain a live kernel listener observation for the exact owned process."""
     from urllib.parse import urlsplit
@@ -114,8 +129,11 @@ def listener_owner(origin, pid):
         )
     ):
         raise ValueError("owned process does not hold the expected listener")
+    addresses = [line[1:] for line in records if line.startswith("n")]
+    validate_kernel_addresses(addresses, port)
     return {
         "pid": pid,
+        "kernelAddresses": addresses,
         "origin": origin,
         "port": port,
         "listening": True,

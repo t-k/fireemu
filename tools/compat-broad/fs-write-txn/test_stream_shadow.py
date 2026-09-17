@@ -69,3 +69,19 @@ def test_live_listener_proof_binds_the_actual_owner():
         assert proof["listening"] is True
         with pytest.raises(ValueError):
             stream_shadow.listener_owner(origin, 1)
+
+
+def test_listener_kernel_proof_refuses_wildcard_and_remote_addresses():
+    import stream_shadow
+
+    assert hasattr(stream_shadow, "validate_kernel_addresses")
+    for address in [
+        "*:1234",
+        "0.0.0.0:1234",
+        "[::]:1234",
+        "192.0.2.1:1234",
+        "127.0.0.1:9999",
+    ]:
+        with pytest.raises(ValueError):
+            stream_shadow.validate_kernel_addresses([address], 1234)
+    stream_shadow.validate_kernel_addresses(["127.0.0.1:1234", "[::1]:1234"], 1234)

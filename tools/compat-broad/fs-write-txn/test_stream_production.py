@@ -559,3 +559,25 @@ def test_reserved_input_write_failure_keeps_terminal_responsibility(
     assert (tmp_path / "failure-receipt.json").is_file()
     assert (tmp_path / "inputs.json").read_text() == "existing"
     assert metadata_server["requests"] == []
+
+
+def test_recovery_capture_requires_exact_private_append_file(tmp_path):
+    import os
+
+    module = production()
+    assert hasattr(module, "validate_recovery_capture")
+    path = tmp_path / "recovery.jsonl"
+    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+    permission = {
+        "recoveryDiagnostics": {
+            "path": str(path),
+            "ownerRetainsUntilReservationResolved": True,
+        }
+    }
+    try:
+        module.validate_recovery_capture(permission, fd=fd)
+        path.chmod(0o644)
+        with pytest.raises(ValueError):
+            module.validate_recovery_capture(permission, fd=fd)
+    finally:
+        os.close(fd)

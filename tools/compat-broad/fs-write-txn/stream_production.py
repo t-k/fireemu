@@ -354,7 +354,9 @@ def retained_failure(output, ledger, ticket, error, *, production=True):
                 }
             ),
             file=sys.stderr,
+            flush=True,
         )
+        os.fsync(sys.stderr.fileno())
     return receipt
 
 
@@ -656,6 +658,10 @@ def _prepared_inputs(permission_path, local_path, artifact_path):
         "timeUpperBound": 1100,
         "costUpperMicrousd": 3300,
         "allowedReobservations": 0,
+        "recoveryDiagnostics": {
+            "path": str(SHARED_ROOT / ("stream-recovery-" + nonce + ".jsonl")),
+            "ownerRetainsUntilReservationResolved": True,
+        },
     }
     if (
         local.get("kind") != "stream-prepared-execution-v1"
@@ -795,10 +801,32 @@ def read_o8_handoff(fd, permission_digest):
     return credential, value["apiKey"]
 
 
+def validate_recovery_capture(permission, *, fd=2):
+    """The owner retains an exact private append file for last-resort recovery IDs."""
+    import fcntl
+
+    contract = permission["recoveryDiagnostics"]
+    path = Path(contract["path"])
+    info = os.fstat(fd)
+    if (
+        contract.get("ownerRetainsUntilReservationResolved") is not True
+        or not path.is_absolute()
+        or path.is_symlink()
+        or not path.is_file()
+        or info.st_uid != os.getuid()
+        or info.st_mode & 0o077
+        or not stat.S_ISREG(info.st_mode)
+        or (info.st_dev, info.st_ino) != (path.stat().st_dev, path.stat().st_ino)
+        or not fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_APPEND
+    ):
+        raise ValueError("exact private owner recovery stderr capture required")
+
+
 def execute_prepared(config_path, output, credential_fd):
     from reservations import Ledger
 
     value = validate_prepared(load_json(config_path))
+    validate_recovery_capture(value["permission"])
     credential, api_key = read_o8_handoff(credential_fd, value["permissionDigest"])
     permission, plan = value["permission"], value["plan"]
     if digest(api_key) != permission["apiKeyDigest"]:

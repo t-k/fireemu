@@ -116,7 +116,7 @@ def test_transport_raw_bytes_are_published_and_reloaded_for_all_nine_slots(
     raw_dir = tmp_path / "receipt" / "raw"
     manifest = json.loads((raw_dir / "manifest.json").read_text())
 
-    assert result["rawComplete"] is True
+    assert result["rawComplete"] is False
     assert result["completed"] is False
     assert result["rawSemanticMismatch"] is True
     assert result["rawFailures"] == []
@@ -158,6 +158,36 @@ def test_missing_or_partial_raw_response_fails_closed_without_synthesizing_bytes
     assert any("response-bytes-unavailable" in item for item in result["rawFailures"])
     assert not (tmp_path / "receipt" / "raw" / "observation-02.raw").exists()
     assert not (tmp_path / "receipt" / "raw" / "observation-04.raw").exists()
+
+
+def test_mismatched_complete_non_query_raw_bytes_fail_closed(tmp_path: Path) -> None:
+    plan = _plan()
+    transport = _transport(plan)
+
+    def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        receipt = transport(operation)
+        if operation["kind"] == "positive-query":
+            raw = json.dumps(
+                [{"document": plan["expectedPositiveDocument"]}],
+                separators=(",", ":"),
+            ).encode()
+        elif operation["kind"] == "preflight-typed-absence":
+            raw = b"{}"
+        else:
+            raw = json.dumps(receipt["body"], separators=(",", ":")).encode()
+        return {
+            **receipt,
+            "rawBody": raw,
+            "bodyBytes": len(raw),
+            "contentType": "application/json",
+        }
+
+    result = collect_local(plan, execute, tmp_path / "receipt")
+
+    assert result["rawComplete"] is False
+    assert result["rawSemanticMismatch"] is True
+    assert result["rawVerifiedCompleted"] is False
+    assert result["completed"] is False
 
 
 def test_conflicting_raw_representations_fail_closed_across_nine_slots(tmp_path: Path) -> None:

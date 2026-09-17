@@ -175,6 +175,68 @@ def test_comparator_accepts_json_media_type_parameters():
     assert result["classification"] == "MATCH"
 
 
+def test_positive_query_extra_body_key_is_not_a_contract_match():
+    bundle = _bundle()
+    bundle["rows"][2]["body"]["extra"] = True
+    result = compare_evidence(bundle, copy.deepcopy(bundle))
+    assert result["classification"] == "SEMANTIC_MISMATCH"
+
+
+def test_cleanup_update_time_bytes_are_expected_nondeterminism():
+    left = _bundle()
+    right = copy.deepcopy(left)
+    for candidate, timestamp in (
+        (left, "2026-09-18T00:00:00Z"),
+        (right, "2026-09-18T01:00:00Z"),
+    ):
+        plan = candidate["plan"]
+        for row_index in (1, 3, 5):
+            candidate["rows"][row_index]["body"]["updateTime"] = timestamp
+            raw_body = json.dumps(
+                candidate["rows"][row_index]["body"], sort_keys=True, separators=(",", ":")
+            ).encode()
+            candidate["raw"][str(row_index)].update(
+                rawBody=raw_body,
+                sourceRawSha256=hashlib.sha256(raw_body).hexdigest(),
+                byteCount=len(raw_body),
+            )
+            candidate["rows"][row_index]["rawSha256"] = candidate["raw"][str(row_index)]["sourceRawSha256"]
+        candidate["cleanup"][0] = {
+            "index": 0,
+            "request": copy.deepcopy(plan["recovery"][0]),
+            "complete": True,
+            "failure": None,
+            "status": 200,
+            "body": {
+                "name": plan["document"],
+                "fields": plan["fixtureFields"],
+                "updateTime": timestamp,
+            },
+        }
+        candidate["cleanup"][1].pop("skipped", None)
+        candidate["cleanup"][1].update(status=200, body={})
+        candidate["cleanup"][1]["request"] = copy.deepcopy(plan["recovery"][1])
+        candidate["cleanup"][1]["request"]["path"] += (
+            "?currentDocument.updateTime=" + timestamp.replace(":", "%3A")
+        )
+        raw_body = json.dumps(candidate["cleanup"][0]["body"], sort_keys=True, separators=(",", ":")).encode()
+        candidate["raw"]["6"].update(
+            rawBody=raw_body,
+            sourceRawSha256=hashlib.sha256(raw_body).hexdigest(),
+            status=200,
+            byteCount=len(raw_body),
+        )
+        candidate["raw"]["7"].update(
+            rawBody=b"{}",
+            sourceRawSha256=hashlib.sha256(b"{}").hexdigest(),
+            status=200,
+            byteCount=2,
+        )
+        candidate["cleanup"][0]["rawSha256"] = candidate["raw"]["6"]["sourceRawSha256"]
+        candidate["cleanup"][1]["rawSha256"] = candidate["raw"]["7"]["sourceRawSha256"]
+    assert compare_evidence(left, right)["classification"] == "EXPECTED_NONDETERMINISM"
+
+
 def test_loader_binds_persisted_raw_bytes_and_manifest_slots(tmp_path):
     bundle = _bundle()
     output = tmp_path / "receipt"

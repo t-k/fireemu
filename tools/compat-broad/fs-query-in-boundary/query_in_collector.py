@@ -15,7 +15,11 @@ from typing import Any
 from urllib.parse import quote
 
 from query_in_compiler import validate_plan
-from query_in_production import RawJournal
+from query_in_production import (
+    RawJournal,
+    _reject_json_constant,
+    _unique_json_object,
+)
 
 _TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$"
@@ -260,6 +264,42 @@ def _has_raw_fields(receipt: Any) -> bool:
     )
 
 
+def _raw_matches_row(journal: RawJournal, binding: dict[str, Any], row: dict[str, Any]) -> bool:
+    """Ensure complete raw JSON remains bound to its compact receipt."""
+    if binding.get("contentType", "").split(";", 1)[0].strip().lower() != "application/json":
+        return False
+    fd = os.open(binding["path"], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=journal._fd)
+    try:
+        with os.fdopen(fd, "rb") as stream:
+            encoded = stream.read(_MAX_RAW_BYTES + 1)
+    except BaseException:  # noqa: BLE001 -- close the descriptor on any read failure.
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        return False
+    if len(encoded) > _MAX_RAW_BYTES:
+        return False
+    try:
+        parsed = json.loads(
+            encoded,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_unique_json_object,
+        )
+    except (UnicodeError, ValueError, RecursionError):
+        return False
+    if binding.get("phase") == "observation" and binding.get("index") == 2:
+        view = journal.semantic_view(binding)
+        body = row.get("body")
+        return (
+            "difference" not in view
+            and isinstance(view.get("documents"), list)
+            and isinstance(body, dict)
+            and view["documents"] == body.get("documents")
+        )
+    return parsed == row.get("body")
+
+
 def collect_local(
     plan: dict[str, Any],
     execute: Callable[[dict[str, Any]], dict[str, Any]],
@@ -485,6 +525,10 @@ def collect_local(
                 binding = candidate.get("raw")
                 if isinstance(binding, dict):
                     candidate["semanticView"] = reloaded.semantic_view(binding)
+                    if binding.get("complete") is True and not _raw_matches_row(
+                        reloaded, binding, candidate
+                    ):
+                        raw_semantic_mismatch = True
             positive = next((row for row in rows if row.get("index") == 2), None)
             if positive is not None:
                 view = positive.get("semanticView")
@@ -493,7 +537,7 @@ def collect_local(
                     if isinstance(positive.get("body"), dict)
                     else None
                 )
-                raw_semantic_mismatch = not (
+                raw_semantic_mismatch = raw_semantic_mismatch or not (
                     isinstance(view, dict)
                     and isinstance(view.get("documents"), list)
                     and view["documents"] == compact_documents
@@ -534,6 +578,7 @@ def collect_local(
             len(raw_bindings) == 9
             and all(binding.get("complete") is True for binding in raw_bindings)
             and not raw_failures
+            and not raw_semantic_mismatch
         ),
         "rawFailures": raw_failures,
         "rawSemanticMismatch": raw_semantic_mismatch,

@@ -9,7 +9,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from query_in_compiler import validate_plan
 from query_in_production import (
@@ -152,6 +152,17 @@ def _canonical(value: Any, plan: dict[str, Any], timestamp_ranks: dict[str, int]
             if value not in timestamp_ranks:
                 timestamp_ranks[value] = len(timestamp_ranks)
             return {"$timestampRank": timestamp_ranks[value]}
+        marker = "?currentDocument.updateTime="
+        if marker in value:
+            prefix, encoded = value.split(marker, 1)
+            timestamp = unquote(encoded)
+            if _TIMESTAMP.fullmatch(timestamp):
+                if timestamp not in timestamp_ranks:
+                    timestamp_ranks[timestamp] = len(timestamp_ranks)
+                return {
+                    "$timestampQueryPrefix": prefix + marker,
+                    "$timestampRank": timestamp_ranks[timestamp],
+                }
         return value
     if isinstance(value, list):
         return [_canonical(item, plan, timestamp_ranks, timestamp_field=timestamp_field) for item in value]
@@ -244,11 +255,37 @@ def _contract_match(plan: dict[str, Any], operation: dict[str, Any], row: dict[s
         return (
             row.get("status") == 200
             and isinstance(body, dict)
+            and set(body) == {"documents"}
             and body.get("documents") == [plan["expectedPositiveDocument"]]
         )
     if operation["kind"] == "diagnostic-query":
         return _typed_invalid_argument(row)
     return False
+
+
+def _raw_views_semantically_equal(
+    left: dict[str, Any], right: dict[str, Any], left_plan: dict[str, Any], right_plan: dict[str, Any]
+) -> bool:
+    """Allow run-generated timestamp bytes to differ after typed validation."""
+    if set(left) != set(right):
+        return False
+    left_body = left.get("rawBody")
+    right_body = right.get("rawBody")
+    if not isinstance(left_body, bytes) or not isinstance(right_body, bytes):
+        return False
+    left_meta = {key: value for key, value in left.items() if key not in {"rawBody", "sourceRawSha256"}}
+    right_meta = {key: value for key, value in right.items() if key not in {"rawBody", "sourceRawSha256"}}
+    if not _exact(left_meta, right_meta):
+        return False
+    try:
+        parsed_left = json.loads(left_body, parse_constant=_reject_json_constant, object_pairs_hook=_unique_json_object)
+        parsed_right = json.loads(right_body, parse_constant=_reject_json_constant, object_pairs_hook=_unique_json_object)
+    except (UnicodeError, ValueError, RecursionError):
+        return False
+    return _exact(
+        _canonical(parsed_left, left_plan, {}),
+        _canonical(parsed_right, right_plan, {}),
+    )
 
 
 def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], list[bool]]:
@@ -441,6 +478,15 @@ def compare_evidence(production: dict[str, Any], local: dict[str, Any]) -> dict[
         }
         if not _exact(raw_left, raw_right):
             result["classification"] = "SEMANTIC_MISMATCH"
+            if (
+                set(left_raw) == set(right_raw)
+                and all(
+                _raw_views_semantically_equal(left_raw[key], right_raw[key], production_plan, local_plan)
+                for key in set(left_raw) & set(right_raw)
+                )
+                and all(row["classification"] != "SEMANTIC_MISMATCH" for row in result["rows"])
+            ):
+                result["classification"] = "EXPECTED_NONDETERMINISM"
         elif result["classification"] == "MATCH" and left_raw != right_raw:
             result["classification"] = "EXPECTED_NONDETERMINISM"
     return result

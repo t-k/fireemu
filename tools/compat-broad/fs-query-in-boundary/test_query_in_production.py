@@ -115,6 +115,19 @@ def test_raw_sidecars_preserve_bytes_and_bind_projection(tmp_path: Path) -> None
         )
 
 
+def test_raw_journal_manifest_can_be_reloaded_after_publication(tmp_path: Path) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    body = b"[]"
+    binding = journal.add(
+        "observation", 2, 200, body, complete=True, content_type="application/json"
+    )
+    journal.close()
+
+    reloaded = RawJournal.reload(tmp_path / "raw")
+    assert reloaded.semantic_view(binding)["documents"] == []
+    reloaded.close()
+
+
 def test_complete_unexpected_query_is_preserved(tmp_path: Path) -> None:
     journal = RawJournal(tmp_path / "raw")
     body = json.dumps(

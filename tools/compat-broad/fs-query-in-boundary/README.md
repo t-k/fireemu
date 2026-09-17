@@ -10,6 +10,8 @@ The `expect` entries describe the finite local comparison contract: the 30-opera
 
 The collector publishes each row with an exclusive link and fsync. The final `collection.json` publication is reported in the returned result when its link or fsync fails, without overwriting an older file or retrying observation. The returned cleanup fact remains separate, so a successful cleanup is preserved even when recording is incomplete. If journal directory initialization fails, the collector sends no wire operations and retains the initialization failure.
 
+When a local transport supplies `rawBody` bytes (or strict `rawBodyBase64`) together with the typed HTTP status, content type, completion flag, and byte count, the collector publishes one immutable `.raw` sidecar per dispatched observation or recovery slot below `raw/`. `raw/manifest.json` records each binding's phase, index, path, byte count, and SHA-256 digest. The collector reloads this manifest through `RawJournal` before returning the result and exposes the hash-checked semantic view on each bound row. Missing, partial, or invalid transport bytes remain compact evidence only and set `rawComplete` false; the collector never reconstructs raw bytes from the decoded JSON body.
+
 Run the focused checks with:
 
 ```text

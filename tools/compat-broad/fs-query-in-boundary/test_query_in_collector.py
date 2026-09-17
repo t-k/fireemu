@@ -95,6 +95,68 @@ def test_collects_six_observations_three_recovery_and_exclusive_rows(tmp_path: P
     assert json.loads((tmp_path / "receipt" / "observation-04.json").read_text())["index"] == 4
 
 
+def test_transport_raw_bytes_are_published_and_reloaded_for_all_nine_slots(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    transport = _transport(plan)
+
+    def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        receipt = transport(operation)
+        raw = json.dumps(receipt["body"], separators=(",", ":")).encode()
+        return {
+            **receipt,
+            "rawBody": raw,
+            "bodyBytes": len(raw),
+            "contentType": "application/json; charset=UTF-8",
+        }
+
+    result = collect_local(plan, execute, tmp_path / "receipt")
+    raw_dir = tmp_path / "receipt" / "raw"
+    manifest = json.loads((raw_dir / "manifest.json").read_text())
+
+    assert result["rawComplete"] is True
+    assert result["rawFailures"] == []
+    assert len(result["rawBindings"]) == 9
+    assert len(manifest["bindings"]) == 9
+    assert all({"phase", "index", "path", "sha256"} <= set(item) for item in manifest["bindings"])
+    assert len(list(raw_dir.glob("*.raw"))) == 9
+    assert result["rows"][2]["semanticView"]["difference"] == "unexpected-query-shape"
+
+
+def test_missing_or_partial_raw_response_fails_closed_without_synthesizing_bytes(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    transport = _transport(plan)
+
+    def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        receipt = transport(operation)
+        raw = json.dumps(receipt["body"], separators=(",", ":")).encode()
+        if operation["kind"] == "positive-query":
+            return {**receipt, "contentType": "application/json"}
+        if operation["kind"] == "diagnostic-query":
+            return {
+                **receipt,
+                "rawBody": raw,
+                "bodyBytes": len(raw) + 1,
+                "contentType": "application/json",
+            }
+        return {
+            **receipt,
+            "rawBody": raw,
+            "bodyBytes": len(raw),
+            "contentType": "application/json",
+        }
+
+    result = collect_local(plan, execute, tmp_path / "receipt")
+
+    assert result["rawComplete"] is False
+    assert any("response-bytes-unavailable" in item for item in result["rawFailures"])
+    assert not (tmp_path / "receipt" / "raw" / "observation-02.raw").exists()
+    assert not (tmp_path / "receipt" / "raw" / "observation-04.raw").exists()
+
+
 def test_complete_namespace_mismatch_stops_before_create_and_preserves_receipt(tmp_path: Path) -> None:
     plan = _plan()
 

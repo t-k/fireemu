@@ -16,8 +16,9 @@ import time
 import uuid
 from pathlib import Path
 
-import stream_bridge
+# ruff: noqa: I001 -- Production bootstraps sibling imports for direct CLI execution.
 import stream_production as production
+import stream_bridge
 from batch_contract import NUMBER, PROJECT, Credential, database_evidence
 from broad_contract import digest
 from evidence_common import runtime_inputs

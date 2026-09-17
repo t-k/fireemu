@@ -32,3 +32,16 @@ def test_shadow_command_rejects_missing_artifact_without_launch(tmp_path):
             tmp_path / "missing", tmp_path / "missing-build.json", tmp_path / "output"
         )
     assert not (tmp_path / "output").exists()
+
+
+def test_shadow_cli_bootstraps_sibling_imports():
+    import subprocess
+
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("stream_shadow.py")), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--artifact" in result.stdout

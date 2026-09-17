@@ -221,57 +221,170 @@ def test_authentication_refusal_fails_parent_credential_and_stops_gate(tmp_path,
     assert gate.snapshot()["stopped"] is True
 
 
-@pytest.mark.parametrize("code", [7, 16])
+@pytest.mark.parametrize("code", [7, 16, 10])
 @pytest.mark.parametrize("rpc", ["Write", "GetDocument", "Rollback"])
-def test_recorded_auth_refusal_stops_before_next_grant(tmp_path, code, rpc):
-    """The parent records the refusal, then denies the worker's next request."""
+def test_worker_ipc_records_refusal_before_next_request(tmp_path, code, rpc):
+    """Exercise the actual subprocess, framed channel, Gate and held Ledger."""
+    import json
+    import os
+    import time
+
     from batch_contract import Credential
     from shared_gate import Gate, create
 
     policy = bridge()
-    plan = policy.compile_plan(
-        "demo-stream-gate", f"stream-run-sequence-{code}-{rpc}", "owner-sequence"
+    target = {"GetDocument": 0, "Write": 2, "Rollback": 12}[rpc]
+    executable = tmp_path / "node"
+    trace = tmp_path / "ipc-trace.jsonl"
+    trace.touch(mode=0o600)
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        + f"import sys; sys.path.insert(0, {str(ROOT)!r}); sys.path.insert(0, {str(Path(__file__).parent)!r})\n"
+        + f"TARGET={target}; CODE={code}; TRACE={str(trace)!r}\n"
+        + """import json, os, socket
+from stream_bridge import read_message, write_message
+channel = socket.socket(fileno=int(os.environ["STREAM_CHANNEL_FD"]))
+channel.settimeout(5)
+initial = read_message(channel)
+plan = initial["plan"]
+
+def log(kind, **fields):
+    with open(TRACE, "a") as output:
+        output.write(json.dumps({"kind": kind, "pid": os.getpid(), **fields}) + "\\n")
+        output.flush()
+        os.fsync(output.fileno())
+
+def request(index):
+    operation = dict(plan["jobs"]["stream"]["observation"][index])
+    if operation.pop("dynamic", None) == "transaction":
+        operation["request"] = {**operation["request"], "transaction": "dGVzdA=="}
+    recovery = TARGET == 12 and index == TARGET + 1
+    binding = {"protocol": initial["protocol"], "planDigest": initial["planDigest"],
+               "job": "stream", "id": index + 1,
+               "phase": "recovery" if recovery else "observation", "index": 0 if recovery else index}
+    if recovery:
+        operation = None
+    write_message(channel, {**binding, "type": "request", "operation": operation})
+    log("request", index=index)
+    return binding
+
+binding = request(0)
+for index in range(TARGET + 2):
+    grant = read_message(channel)
+    if grant["type"] == "denied":
+        log("denied")
+        break
+    assert grant["type"] == "grant"
+    log("grant", index=index)
+    operation = grant["operation"]
+    method = operation["method"]
+    code = CODE if index == TARGET else (0 if method == "BeginTransaction" else 10 if method == "Write" else 5)
+    raw = {"kind": "grpc_status", "complete": True, "status": {"code": code}}
+    if method == "Write":
+        raw.update(transportReceiptVersion=2, sentFrames=1, completedSendFrames=1,
+                   receivedFrames=0, events=[{"type": "send", "value": {"database": f"projects/{plan['projectId']}/databases/(default)"}}])
+    else:
+        raw.update(operation=method, request=operation["request"])
+        if method == "BeginTransaction":
+            raw["response"] = {"transaction": "dGVzdA=="}
+    write_message(channel, {**binding, "type": "receipt", "receipt": {
+        "protocol": initial["protocol"], "requestDigest": grant["requestDigest"], "raw": raw}})
+    recorded = read_message(channel)
+    assert recorded["type"] == "recorded"
+    log("recorded", index=index)
+    if index == TARGET + 1:
+        write_message(channel, {"type": "done", "protocol": initial["protocol"],
+            "planDigest": initial["planDigest"], "job": "stream", "id": index + 1,
+            "result": {"fixtureCompleted": True}})
+        assert read_message(channel)["type"] == "shutdown"
+        break
+    binding = request(index + 1)
+channel.close()
+"""
     )
-    create(tmp_path / "gate", plan)
-    gate = Gate(tmp_path / "gate", "stream")
-    gate.claim()
-    credential = Credential()
-    credential.accept("synthetic", {"expires_in": 1200}, 0)
-    messages = [
-        {"type": "grant", "rpc": rpc},
-        {
-            "type": "receipt",
-            "receipt": {
-                "raw": {
-                    "kind": "grpc_status",
-                    "complete": True,
-                    "status": {"code": code},
-                    "error": {"code": code},
-                }
-            },
-        },
-        {"type": "recorded"},
-        {"type": "request", "rpc": "next"},
-    ]
-    grants = []
-    recorded = []
-    while messages:
-        message = messages.pop(0)
-        if message["type"] == "grant":
-            grants.append(message["rpc"])
-        elif message["type"] == "receipt":
-            recorded.append(message["receipt"])
-        elif message["type"] == "recorded":
+    executable.chmod(0o700)
+    previous = os.environ["PATH"]
+    os.environ["PATH"] = str(tmp_path) + os.pathsep + previous
+    try:
+        plan = policy.compile_plan(
+            "demo-stream-gate", f"stream-ipc-{code}-{rpc}", "ipc-owner"
+        )
+        ledger, ticket = reservation(tmp_path, plan)
+        create(tmp_path / "gate", plan)
+        gate = Gate(tmp_path / "gate", "stream")
+        gate.claim()
+        credential = Credential()
+        credential.accept("synthetic", {"expires_in": 1200}, time.monotonic())
+
+        def authorize(_recovery):
+            assert credential.usable(time.monotonic(), 31)
+            return (
+                {"authorization": "Bearer synthetic"},
+                time.time() + 1200,
+                time.time() + 1200,
+            )
+
+        def after_record(receipt):
+            if (
+                policy.grpc_code(receipt["raw"]) == code
+                and len(gate.snapshot()["events"]) == target + 1
+            ):
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    rows = [json.loads(line) for line in trace.read_text().splitlines()]
+                    if any(
+                        row["kind"] == "request" and row["index"] == target + 1
+                        for row in rows
+                    ):
+                        break
+                    time.sleep(0.01)
+                else:
+                    pytest.fail("real worker never attempted its next request")
+            policy.stop_after_credential_rejection(receipt, credential, gate)
+
+        if code in {7, 16}:
             with pytest.raises(ValueError, match="credential rejected"):
-                policy.stop_after_credential_rejection(
-                    recorded[-1], credential, gate
+                policy._run_worker(
+                    plan,
+                    gate,
+                    ledger,
+                    ticket,
+                    mode="local",
+                    port=0,
+                    authorize=authorize,
+                    after_record=after_record,
+                    finalize=False,
                 )
-            break
-    assert grants == [rpc]
-    assert recorded[0]["raw"]["status"]["code"] == code
-    assert messages[-1] == {"type": "request", "rpc": "next"}
-    assert credential.failed is True
-    assert gate.snapshot()["stopped"] is True
+        else:
+            assert policy._run_worker(
+                plan,
+                gate,
+                ledger,
+                ticket,
+                mode="local",
+                port=0,
+                authorize=authorize,
+                after_record=after_record,
+                finalize=False,
+            ) == {"fixtureCompleted": True}
+        rows = [json.loads(line) for line in trace.read_text().splitlines()]
+        grants = [row["index"] for row in rows if row["kind"] == "grant"]
+        assert grants == list(range(target + (1 if code in {7, 16} else 2)))
+        assert any(
+            row["kind"] == "request" and row["index"] == target + 1 for row in rows
+        )
+        state = gate.snapshot()
+        assert state["events"][target]["grpcCode"] == code
+        assert state["events"][target]["completed"] is True
+        assert credential.failed is (code in {7, 16})
+        assert state["stopped"] is (code in {7, 16})
+        assert (
+            ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+        )
+        with pytest.raises(ProcessLookupError):
+            os.kill(rows[0]["pid"], 0)
+    finally:
+        os.environ["PATH"] = previous
 
 
 def test_aborted_rpc_keeps_credential_and_gate_usable_for_planned_recovery(tmp_path):
@@ -279,7 +392,9 @@ def test_aborted_rpc_keeps_credential_and_gate_usable_for_planned_recovery(tmp_p
     from shared_gate import Gate, create
 
     policy = bridge()
-    plan = policy.compile_plan("demo-stream-gate", "stream-run-auth-abort", "owner-auth")
+    plan = policy.compile_plan(
+        "demo-stream-gate", "stream-run-auth-abort", "owner-auth"
+    )
     create(tmp_path / "gate", plan)
     gate = Gate(tmp_path / "gate", "stream")
     gate.claim()
@@ -303,7 +418,9 @@ def test_aborted_rpc_allows_the_next_planned_grant(tmp_path):
     from shared_gate import Gate, create
 
     policy = bridge()
-    plan = policy.compile_plan("demo-stream-gate", "stream-run-abort-next", "owner-auth")
+    plan = policy.compile_plan(
+        "demo-stream-gate", "stream-run-abort-next", "owner-auth"
+    )
     create(tmp_path / "gate", plan)
     gate = Gate(tmp_path / "gate", "stream")
     gate.claim()

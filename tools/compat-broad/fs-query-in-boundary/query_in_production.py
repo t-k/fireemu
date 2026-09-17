@@ -372,10 +372,17 @@ class RawJournal:
         self._fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         self._closed = False
         self._manifest_loaded = True
-        manifest_fd = os.open("manifest.json", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=self._fd)
+        try:
+            manifest_fd = os.open("manifest.json", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=self._fd)
+        except BaseException:
+            os.close(self._fd)
+            raise
         try:
             with os.fdopen(manifest_fd, "rb") as stream:
-                manifest = json.loads(stream.read(_ENVELOPE_LIMIT + 1), object_pairs_hook=_unique_json_object)
+                encoded = stream.read(_ENVELOPE_LIMIT + 1)
+                if len(encoded) > _ENVELOPE_LIMIT:
+                    raise ValueError("raw journal manifest capacity")
+                manifest = json.loads(encoded, object_pairs_hook=_unique_json_object)
         except BaseException:
             os.close(self._fd)
             raise
@@ -451,6 +458,8 @@ class RawJournal:
         complete: bool,
         content_type: str,
     ) -> dict[str, Any]:
+        if self._manifest_loaded:
+            raise ValueError("reloaded raw journal is immutable")
         if (
             phase not in {"observation", "recovery"}
             or type(index) is not int

@@ -228,6 +228,18 @@ def _transport_raw(receipt: Any) -> tuple[bytes, int | None, str, bool] | None:
     return raw, status, content_type, complete
 
 
+def _discard_raw_fields(row: dict[str, Any]) -> None:
+    for key in ("rawBody", "rawBodyBase64", "rawBodyBytes", "bodyBytes"):
+        row.pop(key, None)
+
+
+def _has_raw_fields(receipt: Any) -> bool:
+    return isinstance(receipt, dict) and any(
+        key in receipt
+        for key in ("rawBody", "rawBodyBase64", "rawBodyBytes", "bodyBytes", "contentType")
+    )
+
+
 def collect_local(
     plan: dict[str, Any],
     execute: Callable[[dict[str, Any]], dict[str, Any]],
@@ -302,7 +314,8 @@ def collect_local(
         nonlocal raw_journal
         evidence = _transport_raw(receipt)
         if evidence is None:
-            raw_failures.append(f"{phase}-{index}:response-bytes-unavailable")
+            if _has_raw_fields(receipt):
+                raw_failures.append(f"{phase}-{index}:response-bytes-unavailable")
             return
         try:
             if raw_journal is None:
@@ -325,8 +338,7 @@ def collect_local(
         else:
             pass
         finally:
-            for key in ("rawBody", "rawBodyBase64", "rawBodyBytes", "bodyBytes"):
-                row.pop(key, None)
+            _discard_raw_fields(row)
 
     # Without an owned journal directory, no wire result can be retained.
     if output_fd is None or not persistence_complete:
@@ -374,6 +386,7 @@ def collect_local(
                 created_create_time = receipt["body"].get("createTime")
         row = _row(index, operation, receipt)
         publish_raw("observation", index, receipt, row)
+        _discard_raw_fields(row)
         rows.append(row)
         persist(f"observation-{index:02d}.json", row)
         if not persistence_complete:
@@ -421,6 +434,7 @@ def collect_local(
         cleanup.append(row)
         if operation["kind"] != "cleanup-conditional-delete" or "skipped" not in row:
             publish_raw("recovery", index, row, row)
+        _discard_raw_fields(row)
         persist(f"recovery-{index:02d}.json", row)
         if operation["kind"] != "cleanup-conditional-delete" and not _complete(row):
             infrastructure.append(f"recovery-{index}:incomplete")
@@ -470,6 +484,16 @@ def collect_local(
         finally:
             if reloaded is not None:
                 reloaded.close()
+    raw_attempted = bool(raw_bindings or raw_failures)
+    raw_verified_completed = (
+        not raw_attempted
+        or (
+            len(raw_bindings) == 9
+            and all(binding.get("complete") is True for binding in raw_bindings)
+            and not raw_failures
+            and not raw_semantic_mismatch
+        )
+    )
     result = {
         "productionExecuted": False,
         "localOnly": True,
@@ -477,7 +501,7 @@ def collect_local(
         "promotionReady": False,
         "recordingComplete": recording_complete and persistence_complete,
         "cleanupComplete": recovery_ok and persistence_complete,
-        "completed": recording_complete and recovery_ok and persistence_complete and not infrastructure and not raw_semantic_mismatch,
+        "completed": recording_complete and recovery_ok and persistence_complete and not infrastructure and raw_verified_completed,
         "rows": rows,
         "cleanup": cleanup,
         "resourceAbsence": {plan["document"]: absence},
@@ -493,6 +517,7 @@ def collect_local(
         ),
         "rawFailures": raw_failures,
         "rawSemanticMismatch": raw_semantic_mismatch,
+        "rawVerifiedCompleted": raw_verified_completed,
         "rawManifest": "raw/manifest.json" if raw_bindings else None,
     }
     persist("collection.json", result)

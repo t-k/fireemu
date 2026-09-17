@@ -125,6 +125,8 @@ def test_raw_journal_manifest_can_be_reloaded_after_publication(tmp_path: Path) 
 
     reloaded = RawJournal.reload(tmp_path / "raw")
     assert reloaded.semantic_view(binding)["documents"] == []
+    with pytest.raises(ValueError, match="immutable"):
+        reloaded.add("observation", 3, 200, b"[]", complete=True, content_type="application/json")
     reloaded.close()
 
 
@@ -138,6 +140,17 @@ def test_raw_journal_reload_rejects_tampered_manifest_binding(tmp_path: Path) ->
     manifest_path.write_text(json.dumps(manifest))
 
     with pytest.raises(ValueError, match="invalid raw journal binding"):
+        RawJournal.reload(tmp_path / "raw")
+
+
+def test_raw_journal_reload_rejects_manifest_over_byte_cap(tmp_path: Path) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    journal.add("observation", 2, 200, b"[]", complete=True, content_type="application/json")
+    journal.close()
+    manifest_path = tmp_path / "raw" / "manifest.json"
+    manifest_path.write_bytes(manifest_path.read_bytes() + b" " * 32768)
+
+    with pytest.raises(ValueError, match="manifest capacity"):
         RawJournal.reload(tmp_path / "raw")
 
 

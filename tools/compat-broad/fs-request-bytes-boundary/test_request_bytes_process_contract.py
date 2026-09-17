@@ -10,6 +10,7 @@ import inspect
 import json
 import os
 import socket
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -281,3 +282,33 @@ sys.stdout.buffer.flush()
 """
     result, _ = _exchange(tmp_path, 0, 1.0, worker)
     assert result == (200, "text/plain", b"x" * 600, None)
+
+
+def test_selector_construction_failure_reaps_spawned_worker(monkeypatch):
+    spawned = []
+    original_popen = subprocess.Popen
+
+    def capture_process(*args, **kwargs):
+        process = original_popen(*args, **kwargs)
+        spawned.append(process)
+        return process
+
+    def reject_selector():
+        raise OSError("selector unavailable")
+
+    monkeypatch.setattr(transport.subprocess, "Popen", capture_process)
+    monkeypatch.setattr(transport.selectors, "DefaultSelector", reject_selector)
+    source = b"import time\ntime.sleep(10)\n"
+    with pytest.raises(OSError, match="selector unavailable"):
+        transport._run_process_exchange(
+            worker_source=source,
+            request_payload=b"private-token\n",
+            deadline=time.monotonic() + 2,
+            response_cap=1024,
+            worker_sha256=hashlib.sha256(source).hexdigest(),
+        )
+    assert len(spawned) == 1
+    process = spawned[0]
+    assert process.poll() is not None
+    assert process.stdin is not None and process.stdin.closed
+    assert process.stdout is not None and process.stdout.closed

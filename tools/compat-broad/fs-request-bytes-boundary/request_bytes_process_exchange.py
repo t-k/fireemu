@@ -59,8 +59,7 @@ def _run_process_exchange(
         close_fds=True,
         env={"PATH": os.defpath},
     )
-    assert process.stdin is not None and process.stdout is not None
-    selector = selectors.DefaultSelector()
+    selector: selectors.BaseSelector | None = None
     status: int | None = None
     content_type = ""
     body = bytearray()
@@ -73,6 +72,8 @@ def _run_process_exchange(
     terminal: str | None = None
     failure: str | None = None
     try:
+        assert process.stdin is not None and process.stdout is not None
+        selector = selectors.DefaultSelector()
         os.set_blocking(process.stdin.fileno(), False)
         os.set_blocking(process.stdout.fileno(), False)
         selector.register(process.stdout, selectors.EVENT_READ)
@@ -202,10 +203,16 @@ def _run_process_exchange(
             failure = "timeout"
         return status, content_type, bytes(body), failure
     finally:
-        selector.close()
-        if process.poll() is None:
-            process.kill()
-        for stream in (process.stdin, process.stdout):
-            if stream is not None and not stream.closed:
-                stream.close()
-        process.wait()
+        try:
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            for stream in (process.stdin, process.stdout):
+                if stream is not None and not stream.closed:
+                    stream.close()
+        finally:
+            process.wait()
+            if selector is not None:
+                selector.close()

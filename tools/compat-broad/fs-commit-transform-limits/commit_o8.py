@@ -8,11 +8,14 @@ transport mode.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import os
 import select
 import stat
 import sys
+import time
 import time
 from pathlib import Path
 
@@ -22,6 +25,8 @@ from commit_remote_transport import request as remote_request
 from commit_reserved_adapter import validate_handoff
 
 MAX_HANDOFF_BYTES = 16 * 1024
+APPROVAL_KIND = "commit-o8-approval-v1"
+MANIFEST_KIND = "commit-o8-manifest-v1"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,6 +34,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Execute one frozen, O7-approved Commit campaign."
     )
     parser.add_argument("--inputs", type=Path, required=True)
+    parser.add_argument("--approval", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--permission", type=Path, required=True)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--artifact", type=Path, required=True)
@@ -40,13 +47,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _read_json(path: Path, *, limit: int = 8 * 1024 * 1024) -> dict:
+def _read_json(
+    path: Path, *, limit: int = 8 * 1024 * 1024, private: bool = False
+) -> tuple[dict, bytes]:
     if path.is_symlink() or not path.is_file() or path.stat().st_size > limit:
         raise ValueError("bounded regular input file required")
-    value = json.loads(path.read_bytes())
+    info = path.stat()
+    if private and (info.st_uid != os.getuid() or info.st_mode & 0o077):
+        raise ValueError("private approval file required")
+    raw = path.read_bytes()
+    value = json.loads(raw)
     if not isinstance(value, dict):
         raise ValueError("bounded JSON object required")
-    return value
+    return value, raw
 
 
 def _read_private_fd(fd: int) -> dict:
@@ -118,10 +131,80 @@ def _validate_frozen(inputs: dict) -> None:
         raise ValueError("O7 frozen approval binding differs")
 
 
+def _validate_approval(
+    approval: dict,
+    manifest_bytes: bytes,
+    manifest: dict,
+    inputs: dict,
+    permission: dict,
+    *,
+    ledger: Path,
+) -> None:
+    expected = {
+        "kind",
+        "status",
+        "manifestSha256",
+        "inputsDigest",
+        "permissionDigest",
+        "sourceCommit",
+        "sourceInputsDigest",
+        "artifactSha256",
+        "planDigest",
+        "nonceDigest",
+        "ledgerRoot",
+        "launcherSha256",
+        "windowStartsAt",
+        "windowExpiresAt",
+    }
+    if set(approval) != expected or approval["kind"] != APPROVAL_KIND:
+        raise ValueError("O7 approval artifact required")
+    if manifest.get("kind") != MANIFEST_KIND:
+        raise ValueError("O7 manifest artifact required")
+    if approval["status"] != "approved":
+        raise ValueError("O7 approval is not approved")
+    if hashlib.sha256(manifest_bytes).hexdigest() != approval["manifestSha256"]:
+        raise ValueError("O7 manifest digest differs")
+    bindings = {
+        "inputsDigest": inputs["inputsDigest"],
+        "permissionDigest": inputs["permissionDigest"],
+        "sourceCommit": inputs["sourceCommit"],
+        "sourceInputsDigest": digest(inputs["sourceInputs"]),
+        "artifactSha256": inputs["artifactSha256"],
+        "planDigest": inputs["planDigest"],
+        "nonceDigest": digest(inputs["plan"]["nonce"]),
+        "ledgerRoot": str(ledger.absolute()),
+        "launcherSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+    }
+    if any(approval[key] != value for key, value in bindings.items()):
+        raise ValueError("O7 approval binding differs")
+    if manifest.get("inputsDigest") != inputs["inputsDigest"]:
+        raise ValueError("O7 manifest binding differs")
+    for key in ("windowStartsAt", "windowExpiresAt"):
+        if (
+            type(approval[key]) not in (int, float)
+            or isinstance(approval[key], bool)
+            or not math.isfinite(approval[key])
+        ):
+            raise ValueError("O7 execution window invalid")
+    now = time.time()
+    if not approval["windowStartsAt"] <= now <= approval["windowExpiresAt"]:
+        raise ValueError("O7 execution window expired")
+
+
 def execute(args: argparse.Namespace) -> dict:
-    inputs = _read_json(args.inputs)
+    inputs, _ = _read_json(args.inputs)
     _validate_frozen(inputs)
-    permission = _read_json(args.permission)
+    manifest, manifest_bytes = _read_json(args.manifest, private=True)
+    approval, _ = _read_json(args.approval, private=True)
+    permission, _ = _read_json(args.permission)
+    _validate_approval(
+        approval,
+        manifest_bytes,
+        manifest,
+        inputs,
+        permission,
+        ledger=args.ledger,
+    )
     handoff = _read_handoff(args)
     api_key = handoff.get("apiKey")
     if not isinstance(api_key, str):

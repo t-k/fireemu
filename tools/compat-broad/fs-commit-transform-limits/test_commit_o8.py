@@ -39,6 +39,10 @@ def test_cli_rejects_missing_o7_approval_before_acquisition(tmp_path, monkeypatc
         [
             "--inputs",
             str(inputs),
+            "--approval",
+            str(tmp_path / "approval.json"),
+            "--manifest",
+            str(tmp_path / "manifest.json"),
             "--permission",
             str(tmp_path / "permission.json"),
             "--source",
@@ -93,6 +97,8 @@ def test_complete_released_acquisition_is_success_even_when_comparison_flag_is_f
     result = commit_o8.main(
         [
             "--inputs", str(tmp_path / "inputs"),
+            "--approval", str(tmp_path / "approval"),
+            "--manifest", str(tmp_path / "manifest"),
             "--permission", str(tmp_path / "permission"),
             "--source", str(tmp_path / "source"),
             "--artifact", str(tmp_path / "artifact"),
@@ -120,6 +126,7 @@ def test_cli_binds_exact_fixed_transport_and_handoff_without_public_secret(
         },
     )
     monkeypatch.setattr(commit_o8, "_validate_frozen", lambda inputs: None)
+    monkeypatch.setattr(commit_o8, "_validate_approval", lambda *args, **kwargs: None)
     monkeypatch.setattr(commit_o8, "validate_handoff", lambda *args: None)
     inputs = tmp_path / "inputs.json"
     inputs.write_text(
@@ -132,6 +139,12 @@ def test_cli_binds_exact_fixed_transport_and_handoff_without_public_secret(
     )
     permission = tmp_path / "permission.json"
     permission.write_text("{}")
+    approval = tmp_path / "approval.json"
+    approval.write_text("{}")
+    approval.chmod(0o600)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}")
+    manifest.chmod(0o600)
     source = tmp_path / "source"
     source.mkdir()
     artifact = tmp_path / "artifact"
@@ -145,6 +158,10 @@ def test_cli_binds_exact_fixed_transport_and_handoff_without_public_secret(
         [
             "--inputs",
             str(inputs),
+            "--approval",
+            str(approval),
+            "--manifest",
+            str(manifest),
             "--permission",
             str(permission),
             "--source",

@@ -27,3 +27,9 @@ Source `3883f3717` adds the offline 40-request allocation (22 observation, 18 re
 The local recovery preparation condition is complete as recorded above. Production transport/collector, full comparison admission, current executable artifact binding, and concrete O7 envelope admission remain incomplete. No production operation or production-unobserved condition reduction occurred. `FS-DATA-WRITE` remains `IMPLEMENTING`; production-ready queue size remains zero.
 
 The follow-up at `4019af0b8` implements the fixed-target bounded wire worker and reuses the local transport's tested exchange mechanics. Offline rejection, large-body loopback tests, and a fresh normal real-artifact shadow pass; independent review has no required fix for the wire layer. This completes wire implementation preparation, not admitted production execution. Production Gate/collector integration, acquisition validation and O7 bindings remain required. No production observation was performed.
+
+## Shared collector checkpoint
+
+Source `517c346ad55bc612a5dfb467cb1b74a124a91084` supplies the shared claimed-Gate collection lifecycle; test-only follow-up `2f1b64ea2` verifies recovery admission failure and immutable output refusal. The normal and fixed-interruption real artifact runs completed their declared cleanup and process reclamation. The [collector record](../../tools/compat-broad/fs-write-limits/README.md#shared-gate-collection-lifecycle) separates acquisition completeness from expectation agreement. Independent review found no required fix in this slice.
+
+This closes the reusable collection-lifecycle preparation item, not production admission. The outer Coordinator, permission/configuration bindings, production receipt validation, and comparison handoff still require integration. Production-unobserved conditions reduced: **0**. Next parent remains `FS-DATA-WRITE`; `COMPAT_VERIFIED` remains **0 / 14**.

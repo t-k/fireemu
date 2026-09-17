@@ -43,12 +43,16 @@ def _bundle(project: str = "demo", nonce: str = "a" * 32) -> dict:
                 "request": copy.deepcopy(operation),
                 "complete": True,
                 "failure": None,
-                "status": 404 if index != 1 else None,
-                "body": None if index == 1 else {"error": {"code": 404, "status": "NOT_FOUND"}},
+                "status": 404 if index == 2 else 200,
+                "body": (
+                    {"name": plan["document"], "fields": plan["fixtureFields"], "updateTime": "2026-09-18T00:00:00Z"}
+                    if index == 0
+                    else {} if index == 1 else {"error": {"code": 404, "status": "NOT_FOUND"}}
+                ),
                 "rawSha256": f"{index + 6:064x}",
-                **({"skipped": "already-absent"} if index == 1 else {}),
             }
         )
+    cleanup[1]["request"]["path"] += "?currentDocument.updateTime=2026-09-18T00%3A00%3A00Z"
     journal = [*rows, *cleanup]
     raw = {}
     for index, row in enumerate(journal):
@@ -135,10 +139,10 @@ def test_cleanup_update_time_predicate_is_percent_encoded():
         skipped=None,
         body={"name": bundle["plan"]["document"], "fields": bundle["plan"]["fixtureFields"], "updateTime": timestamp},
     )
-    bundle["cleanup"][0].pop("skipped")
-    bundle["cleanup"][1].pop("skipped")
+    bundle["cleanup"][0].pop("skipped", None)
+    bundle["cleanup"][1].pop("skipped", None)
     bundle["cleanup"][1].update(status=200, body={})
-    bundle["cleanup"][1]["request"]["path"] += "?currentDocument.updateTime=2026-09-18T00%3A00%3A00Z"
+    bundle["cleanup"][1]["request"]["path"] = bundle["plan"]["recovery"][1]["path"] + "?currentDocument.updateTime=2026-09-18T00%3A00%3A00Z"
     raw_body = json.dumps(bundle["cleanup"][0]["body"], sort_keys=True, separators=(",", ":")).encode()
     digest = hashlib.sha256(raw_body).hexdigest()
     bundle["cleanup"][0]["rawSha256"] = digest
@@ -180,6 +184,21 @@ def test_positive_query_extra_body_key_is_not_a_contract_match():
     bundle["rows"][2]["body"]["extra"] = True
     result = compare_evidence(bundle, copy.deepcopy(bundle))
     assert result["classification"] == "SEMANTIC_MISMATCH"
+
+
+def test_skipped_cleanup_cannot_have_complete_raw_sidecar_without_status():
+    bundle = _bundle()
+    bundle["cleanup"][1].update(status=None, body={}, skipped="already-absent")
+    bundle["cleanup"][1]["rawSha256"] = hashlib.sha256(b"null").hexdigest()
+    bundle["raw"]["7"].update(
+        rawBody=b"null",
+        sourceRawSha256=hashlib.sha256(b"null").hexdigest(),
+        status=None,
+        complete=True,
+        byteCount=4,
+    )
+    result = compare_evidence(bundle, copy.deepcopy(bundle))
+    assert result["classification"] == "INDETERMINATE"
 
 
 def test_cleanup_update_time_bytes_are_expected_nondeterminism():
@@ -233,6 +252,49 @@ def test_cleanup_update_time_bytes_are_expected_nondeterminism():
             byteCount=2,
         )
         candidate["cleanup"][0]["rawSha256"] = candidate["raw"]["6"]["sourceRawSha256"]
+        candidate["cleanup"][1]["rawSha256"] = candidate["raw"]["7"]["sourceRawSha256"]
+    assert compare_evidence(left, right)["classification"] == "EXPECTED_NONDETERMINISM"
+
+
+def test_cleanup_timestamp_formatting_and_byte_count_are_expected_nondeterminism():
+    left = _bundle()
+    right = copy.deepcopy(left)
+    for candidate, timestamp, encoded in (
+        (left, "2026-09-18T00:00:00Z", "2026-09-18T00:00:00Z"),
+        (right, "2026-09-18T00:00:00.000000Z", "2026-09-18T00:00:00.000000Z"),
+    ):
+        candidate["cleanup"][0].pop("skipped", None)
+        candidate["cleanup"][0]["status"] = 200
+        candidate["cleanup"][0]["body"] = {
+            "name": candidate["plan"]["document"],
+            "fields": candidate["plan"]["fixtureFields"],
+            "updateTime": timestamp,
+        }
+        candidate["cleanup"][1].pop("skipped", None)
+        candidate["cleanup"][1]["status"] = 200
+        candidate["cleanup"][1]["body"] = {}
+        candidate["cleanup"][1]["request"]["path"] = candidate["plan"]["recovery"][1]["path"] + "?currentDocument.updateTime=" + encoded.replace(":", "%3A")
+        candidate["raw"]["7"].update(status=200, complete=True)
+        candidate["rows"][1]["body"]["updateTime"] = timestamp
+        candidate["rows"][3]["body"]["updateTime"] = timestamp
+        candidate["rows"][5]["body"]["updateTime"] = timestamp
+        candidate["cleanup"][0]["body"]["updateTime"] = timestamp
+        candidate["cleanup"][1]["request"]["path"] = candidate["cleanup"][1]["request"]["path"].replace(
+            "2026-09-18T00%3A00%3A00Z", encoded.replace(":", "%3A")
+        )
+        for slot in (1, 3, 5, 6):
+            body = candidate["rows"][slot]["body"] if slot < 6 else candidate["cleanup"][0]["body"]
+            raw_body = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+            candidate["raw"][str(slot)].update(
+                rawBody=raw_body,
+                sourceRawSha256=hashlib.sha256(raw_body).hexdigest(),
+                **({"status": 200, "complete": True} if slot == 6 else {}),
+                byteCount=len(raw_body),
+            )
+            (candidate["rows"][slot] if slot < 6 else candidate["cleanup"][0])["rawSha256"] = candidate["raw"][str(slot)]["sourceRawSha256"]
+        candidate["raw"]["7"].update(
+            rawBody=b"{}", sourceRawSha256=hashlib.sha256(b"{}").hexdigest(), byteCount=2
+        )
         candidate["cleanup"][1]["rawSha256"] = candidate["raw"]["7"]["sourceRawSha256"]
     assert compare_evidence(left, right)["classification"] == "EXPECTED_NONDETERMINISM"
 

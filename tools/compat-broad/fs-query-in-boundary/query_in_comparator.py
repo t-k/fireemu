@@ -273,8 +273,8 @@ def _raw_views_semantically_equal(
     right_body = right.get("rawBody")
     if not isinstance(left_body, bytes) or not isinstance(right_body, bytes):
         return False
-    left_meta = {key: value for key, value in left.items() if key not in {"rawBody", "sourceRawSha256"}}
-    right_meta = {key: value for key, value in right.items() if key not in {"rawBody", "sourceRawSha256"}}
+    left_meta = {key: value for key, value in left.items() if key not in {"rawBody", "sourceRawSha256", "byteCount"}}
+    right_meta = {key: value for key, value in right.items() if key not in {"rawBody", "sourceRawSha256", "byteCount"}}
     if not _exact(left_meta, right_meta):
         return False
     try:
@@ -369,6 +369,8 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
             raw_row = journal[int(slot)] if int(slot) < len(journal) else None
             if not isinstance(raw_row, dict) or raw_row.get("rawSha256") != digest:
                 raise ValueError("typed raw receipt is not bound to its journal row")
+            if raw_row.get("skipped") is not None and view.get("complete") is True and view.get("status") is None:
+                raise ValueError("skipped cleanup cannot have a complete raw receipt")
             raw_body = view.get("rawBody")
             if not isinstance(raw_body, bytes) or len(raw_body) > 65536:
                 raise ValueError("typed raw receipt bytes are missing")
@@ -384,7 +386,7 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
                 raise ValueError("typed raw receipt metadata differs")
             parsed_body = json.loads(raw_body, parse_constant=_reject_json_constant, object_pairs_hook=_unique_json_object)
             if int(slot) != 2 and parsed_body != raw_row.get("body"):
-                raise ValueError("raw receipt body differs from journal row")
+                raise ValueError(f"raw receipt body differs from journal row {slot}")
         try:
             parsed = json.loads(raw["2"]["rawBody"], parse_constant=_reject_json_constant, object_pairs_hook=_unique_json_object)
             derived = ([

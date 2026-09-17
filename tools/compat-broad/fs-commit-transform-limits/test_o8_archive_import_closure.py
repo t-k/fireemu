@@ -197,3 +197,75 @@ def test_historical_source_map_is_independent_of_current_archive_map(
     }
     bundle.verify_archive(first, current, first_sha)
     bundle.verify_archive(second, changed, second_sha)
+
+
+def test_same_name_checkout_shadows_cannot_replace_archive_dependencies(
+    tmp_path: Path,
+) -> None:
+    main = b"""import json, local_transport, gate_adapter, sys
+print(json.dumps({name: sys.modules[name].__file__ for name in ('local_transport', 'gate_adapter', 'transform_compiler', 'transport', 'production_bridge') if name in sys.modules}, sort_keys=True))
+"""
+    (tmp_path / "__main__.py").write_bytes(main)
+    manifest = {"__main__.py": hashlib.sha256(main).hexdigest()}
+    for name, source in SOURCES.items():
+        data = source.read_bytes()
+        (tmp_path / f"{name}.py").write_bytes(data)
+        manifest[f"{name}.py"] = hashlib.sha256(data).hexdigest()
+    archive, sha = bundle.build_archive(tmp_path, manifest)
+    bundle.verify_archive(archive, manifest, sha)
+    dirty = tmp_path / "dirty"
+    dirty.mkdir()
+    for name in ("transport", "production_bridge", "transform_compiler"):
+        (dirty / f"{name}.py").write_text(
+            f"raise RuntimeError('checkout shadow {name} imported')\n"
+        )
+    with bundle.unlinked_archive_fd(archive, sha) as fd:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-B",
+                str(HERE / "o8_fd_bootstrap.py"),
+                str(fd),
+                sha,
+            ],
+            cwd=dirty,
+            env={**os.environ, "PYTHONPATH": str(dirty)},
+            pass_fds=(fd,),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        origins = json.loads(result.stdout)
+        assert all(origin.startswith(f"/dev/fd/{fd}/") for origin in origins.values())
+
+
+def test_gate_adapter_accepts_preloaded_compiler_from_archive(
+    tmp_path: Path,
+) -> None:
+    main = b"import json, transform_compiler, gate_adapter\nprint(json.dumps({'compiler': transform_compiler.__file__, 'adapter': gate_adapter.__file__}))\n"
+    (tmp_path / "__main__.py").write_bytes(main)
+    manifest = {"__main__.py": hashlib.sha256(main).hexdigest()}
+    for name, source in SOURCES.items():
+        data = source.read_bytes()
+        (tmp_path / f"{name}.py").write_bytes(data)
+        manifest[f"{name}.py"] = hashlib.sha256(data).hexdigest()
+    archive, sha = bundle.build_archive(tmp_path, manifest)
+    bundle.verify_archive(archive, manifest, sha)
+    with bundle.unlinked_archive_fd(archive, sha) as fd:
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", "-B", str(HERE / "o8_fd_bootstrap.py"), str(fd), sha],
+            cwd=tmp_path,
+            pass_fds=(fd,),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        origins = json.loads(result.stdout)
+        assert origins == {
+            "adapter": f"/dev/fd/{fd}/gate_adapter.py",
+            "compiler": f"/dev/fd/{fd}/transform_compiler.py",
+        }

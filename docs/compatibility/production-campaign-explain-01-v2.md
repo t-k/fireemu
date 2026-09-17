@@ -5,6 +5,8 @@ The v1 manifest, collector, receipts and comparison results remain frozen. The
 v2 manifest is [prod-campaign-explain-01-v2.json](../../spec/compatibility/broad-runs/prod-campaign-explain-01-v2.json)
 and uses a new comparison contract digest.
 
+The checked-in v2 file is a prepared offline input. Its observer binding is generated from the current Explain campaign sources, including the shadow lifecycle preservation fix in `77e0c7194`; regenerate it with `uv run --python 3.14 tools/compat-broad/campaign_explain.py --manifest` before accepting source changes. This refresh changes preparation metadata only and does not rewrite historical receipts or approvals.
+
 The collector still requires a complete request, response, readback and
 cleanup receipt. A response is complete when it is either a valid Explain
 success or a single structured API rejection whose status is a stable semantic

@@ -1,9 +1,9 @@
 {
   "kind": "query-explain-saved-reference-evaluator-v4",
-  "sourceCommit": "048208528b068985705a84ab3bc582f61477a0d3",
+  "sourceCommit": "7e28e7287ecbb00146b66064a132ee95893a3111",
   "sourceFiles": {
-    "tools/compat-explain-reference-v4/evaluate.py": "e4043d99e699ff6631f5ad0b64b107e081f833dd2fece30cd171a208d5a8193d",
-    "tools/compat-explain-reference-v4/test_evaluate_v4.py": "42855c3da23cf7915b52aabbe09133143ff17a8a7708ba06c75964d56f2724ee",
+    "tools/compat-explain-reference-v4/evaluate.py": "27d3e986dc52c77e9b4ed65f2537f82588cab2822d3da80930665c1214ebcfbe",
+    "tools/compat-explain-reference-v4/test_evaluate_v4.py": "ef7f02badce091849e76f6295f2a470d9951a807b2e10e4a69d7e0a5f795a43b",
     "spec/compatibility/broad-runs/query-explain-reference-inputs-v4.json": "1a7373b08f4233f075ef9940d37849368395a58dea1eb7b53b6dd4a80c30dd86"
   },
   "contractDigest": "d6c3915e803415eb111828d97e661803206ac6353c5d4236245bf6d3819eab36"

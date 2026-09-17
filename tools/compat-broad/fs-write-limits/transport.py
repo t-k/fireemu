@@ -98,12 +98,19 @@ def _perform(
     headers = {"Content-Type": "application/json"} if body is not None else {}
     if operation.get("privileged"):
         headers["Authorization"] = "Bearer owner"
-    req = urllib.request.Request(
+    return _exchange(
         url,
-        data=data if body is not None else None,
-        headers=headers,
-        method=operation.get("method", "GET"),
+        operation.get("method", "GET"),
+        data if body is not None else None,
+        headers,
+        response_cap,
+        timeout,
     )
+
+
+def _exchange(url, method, data, headers, response_cap, timeout):
+    """Shared bounded I/O mechanics; callers validate their distinct origins/admission."""
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
     opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
     started = time.monotonic()
     try:

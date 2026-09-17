@@ -24,6 +24,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         data = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         self.received.append((self.path, data, self.headers.get("Authorization")))
+        if self.path.startswith("/v1/large"):
+            payload = json.dumps({"blob": "x" * 100000}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if self.path.startswith("/v1/slow"):
             self.send_response(200)
             self.send_header("Content-Length", "20")
@@ -227,3 +235,25 @@ def test_worker_rejects_oversized_body_before_io(origin):
     )
     assert result.returncode != 0
     assert Handler.received == []
+
+
+def test_shared_exchange_handles_large_body_response_and_retains_api_errors(origin):
+    from transport import _exchange
+
+    body = json.dumps({"blob": "x" * 100000}).encode()
+    result = _exchange(
+        origin + "/v1/large",
+        "POST",
+        body,
+        {"Content-Type": "application/json", "Authorization": "Bearer synthetic"},
+        110000,
+        2,
+    )
+    assert result["complete"] is True
+    assert result["body"] == {"blob": "x" * 100000}
+    assert Handler.received[-1][1] == body
+    assert Handler.received[-1][2] == "Bearer synthetic"
+    refusal = _exchange(origin + "/v1/error", "GET", None, {}, 65536, 2)
+    assert refusal["status"] == 400
+    assert refusal["complete"] is True
+    assert refusal["body"] == {"error": {"status": "INVALID_ARGUMENT"}}

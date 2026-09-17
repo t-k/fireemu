@@ -3133,6 +3133,11 @@ impl BlockingAuthBridge {
     }
 
     fn settings_revision(&self) -> u64 {
+        // Keep the settings publication lock while reading the revision. This makes the
+        // revision a lock-ordered observation: a reader cannot pass through this method while a
+        // settings replacement has published its new value but has not yet published its
+        // revision.
+        let _settings = self.settings.read().ok();
         self.settings_revision.load(Ordering::SeqCst)
     }
 
@@ -4779,6 +4784,29 @@ mod tests {
             .restore_blocking_auth_settings_snapshot_value(&explicit)
             .expect("valid snapshot restore");
         assert_eq!(bridge.settings_revision(), 3);
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocking_auth_revision_waits_for_settings_publication_lock() {
+        let runtime = runtime_with_blocking_auth_policy_order(&[("guardA", true, false)]).await;
+        let bridge = Arc::new(BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+            true,
+        ));
+        let settings_guard = bridge.settings.write().expect("settings lock");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let reader = bridge.clone();
+        let thread = std::thread::spawn(move || {
+            sender
+                .send(reader.settings_revision())
+                .expect("revision result");
+        });
+        assert!(receiver.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(settings_guard);
+        assert_eq!(receiver.recv().expect("revision result"), 0);
+        thread.join().expect("revision reader");
         runtime.shutdown().await;
     }
 

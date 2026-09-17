@@ -9,6 +9,7 @@ import base64
 import copy
 import json
 import os
+import re
 import signal
 import urllib.parse
 
@@ -45,6 +46,24 @@ LOCAL_ORIGIN = "http://127.0.0.1:12345"
 # The local fireemu pending lifetime the scripted backend mimics; revision 2's ages straddle
 # it (600/1800/3300 below, 3900 above).
 LOCAL_TTL = 3600
+
+
+def artifact_contains_secret(text):
+    for marker in SECRET_MARKERS:
+        if marker == TEST_CODE:
+            if re.search(rf"(?<![A-Za-z0-9]){re.escape(marker)}(?![A-Za-z0-9])", text):
+                return True
+        elif marker in text:
+            return True
+    return False
+
+
+def test_secret_scan_distinguishes_embedded_identifier_digits_from_a_code():
+    identifier = '"email":"oracle-a2913579081460@example.test"'
+    assert TEST_CODE in identifier
+    assert not artifact_contains_secret(identifier)
+    assert artifact_contains_secret('{"oobCode":"' + TEST_CODE + '"}')
+    assert artifact_contains_secret("oobCode=" + TEST_CODE + "&next=1")
 
 
 def jwt(payload, marker):
@@ -324,8 +343,7 @@ def run(tmp_path, monkeypatch, budget=None, **options):
     for path in world.output.rglob("*"):
         if path.is_file():
             text = path.read_text()
-            for marker in SECRET_MARKERS:
-                assert marker not in text, (path.name, marker)
+            assert not artifact_contains_secret(text), path.name
     assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
     return world, report, saved
 

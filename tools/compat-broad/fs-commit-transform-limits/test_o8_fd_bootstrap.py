@@ -7,6 +7,7 @@ import py_compile
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -108,6 +109,72 @@ class BootstrapTests(unittest.TestCase):
                 result = self.run_bootstrap(self.good, **options)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(self.marker.exists())
+
+    def test_preexisting_writable_alias_can_change_archive_after_validation(self) -> None:
+        original = self.good
+        mutated_main = (
+            f"from pathlib import Path\nPath({str(self.marker)!r}).write_text('mutated main')\n"
+        )
+        mutated = archive(mutated_main)
+        self.assertEqual(len(mutated), len(original))
+
+        path = self.root / "archive.pyz"
+        path.write_bytes(original)
+        os.chmod(path, 0o600)
+        writer = os.open(path, os.O_RDWR)
+        reader = os.open(path, os.O_RDONLY)
+        path.unlink()
+        verified = self.root / "verified"
+        mutate = self.root / "mutate"
+        child = (
+            "import os, runpy, sys, time\n"
+            "bootstrap = runpy.run_path(sys.argv[1])\n"
+            "fd = int(sys.argv[2])\n"
+            "bootstrap['verify'](fd, sys.argv[3])\n"
+            "open(sys.argv[4], 'w').close()\n"
+            "while not os.path.exists(sys.argv[5]): time.sleep(0.001)\n"
+            "os.set_inheritable(fd, True)\n"
+            "os.execv(sys.executable, [sys.executable, '-I', '-S', '-B', f'/dev/fd/{fd}'])\n"
+        )
+        result: subprocess.Popen[str] | None = None
+        try:
+            result = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    "-B",
+                    "-c",
+                    child,
+                    str(BOOTSTRAP),
+                    str(reader),
+                    self.digest,
+                    str(verified),
+                    str(mutate),
+                ],
+                cwd=self.root,
+                pass_fds=(reader,),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for _ in range(1000):
+                if verified.exists():
+                    break
+                time.sleep(0.001)
+            else:
+                self.fail("bootstrap did not finish validation")
+            self.assertEqual(os.pwrite(writer, mutated, 0), len(mutated))
+            mutate.touch()
+            stdout, stderr = result.communicate(timeout=10)
+            self.assertEqual(result.returncode, 0, stderr or stdout)
+            self.assertEqual(self.marker.read_text(), "mutated main")
+        finally:
+            if result is not None and result.poll() is None:
+                result.terminate()
+                result.wait(timeout=10)
+            os.close(reader)
+            os.close(writer)
 
     def test_alternate_valid_zip_or_missing_main_refuses_before_main(self) -> None:
         for content in (archive(self.main + "# alternate\n"), archive(self.main, include_main=False)):

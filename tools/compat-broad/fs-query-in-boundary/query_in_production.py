@@ -186,9 +186,20 @@ def _firestore_value(value: Any, depth: int, budget: list[int]) -> bool:
 
 def _typed_query_row(row: Any) -> bool:
     # The compiled query requests neither a transaction nor result skipping.
-    if not isinstance(row, dict) or set(row) - {"document", "readTime"}:
+    # RunQuery may still emit a typed terminal row, or a readTime-only row for
+    # an empty result.  Preserve those protocol markers instead of treating
+    # them as malformed documents.
+    if not isinstance(row, dict) or set(row) - {"document", "readTime", "done"}:
         return False
-    document = row.get("document")
+    if "done" in row and row["done"] is not True:
+        return False
+    if "readTime" in row and not _typed_timestamp(row["readTime"]):
+        return False
+    if "document" not in row:
+        # A readTime-only response is the valid empty-result representation;
+        # a terminal row may also contain no document.
+        return "readTime" in row or "done" in row
+    document = row["document"]
     if not isinstance(document, dict) or set(document) - {
         "name",
         "fields",
@@ -200,12 +211,10 @@ def _typed_query_row(row: Any) -> bool:
         document.get("fields"), 0, [_MAX_VALUE_NODES]
     ):
         return False
-    if any(
+    return not any(
         key in document and not _typed_timestamp(document[key])
         for key in ("createTime", "updateTime")
-    ):
-        return False
-    return "readTime" not in row or _typed_timestamp(row["readTime"])
+    )
 
 
 def source_inputs() -> dict[str, str]:
@@ -551,12 +560,22 @@ class RawJournal:
             result["difference"] = "unexpected-query-shape"
             return result
         documents = []
-        for row in parsed:
+        terminal_seen = False
+        for index, row in enumerate(parsed):
             if not _typed_query_row(row):
                 result["difference"] = "unexpected-query-row"
                 return result
-            document = row["document"]
-            documents.append({"name": document["name"], "fields": document["fields"]})
+            if terminal_seen:
+                result["difference"] = "unexpected-query-row"
+                return result
+            if row.get("done") is True:
+                if index != len(parsed) - 1:
+                    result["difference"] = "unexpected-query-row"
+                    return result
+                terminal_seen = True
+            document = row.get("document")
+            if document is not None:
+                documents.append({"name": document["name"], "fields": document["fields"]})
         result["documents"] = documents
         return result
 

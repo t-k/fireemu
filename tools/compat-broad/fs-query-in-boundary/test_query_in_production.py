@@ -130,6 +130,71 @@ def test_raw_journal_manifest_can_be_reloaded_after_publication(tmp_path: Path) 
     reloaded.close()
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        lambda: [
+            {
+                "document": {"name": _DOC, "fields": {"s": {"stringValue": "x"}}},
+                "readTime": "2026-09-18T00:00:00.000000Z",
+            },
+            {"done": True},
+        ],
+        lambda: [{"readTime": "2026-09-18T00:00:00.000000Z"}],
+    ],
+)
+def test_run_query_accepts_typed_terminal_and_empty_result_rows(
+    tmp_path: Path, body: object
+) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    binding = journal.add(
+        "observation",
+        2,
+        200,
+        json.dumps(body()).encode(),
+        complete=True,
+        content_type="application/json",
+    )
+    journal.close()
+
+    reloaded = RawJournal.reload(tmp_path / "raw")
+    view = reloaded.semantic_view(binding)
+    assert view["documents"] == (
+        [{"name": _DOC, "fields": {"s": {"stringValue": "x"}}}]
+        if len(body()) == 2
+        else []
+    )
+    reloaded.close()
+
+
+def test_run_query_rejects_terminal_row_before_following_rows(tmp_path: Path) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    body = json.dumps(
+        [
+            {"done": True},
+            {"readTime": "2026-09-18T00:00:00.000000Z"},
+        ]
+    ).encode()
+    binding = journal.add(
+        "observation", 2, 200, body, complete=True, content_type="application/json"
+    )
+    assert journal.semantic_view(binding)["difference"] == "unexpected-query-row"
+    journal.close()
+
+
+@pytest.mark.parametrize("done", [False, "true", 1, None, {}])
+def test_run_query_rejects_invalid_terminal_marker(tmp_path: Path, done: object) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    body = json.dumps(
+        [{"readTime": "2026-09-18T00:00:00.000000Z", "done": done}]
+    ).encode()
+    binding = journal.add(
+        "observation", 2, 200, body, complete=True, content_type="application/json"
+    )
+    assert journal.semantic_view(binding)["difference"] == "unexpected-query-row"
+    journal.close()
+
+
 def test_raw_journal_reload_rejects_tampered_manifest_binding(tmp_path: Path) -> None:
     journal = RawJournal(tmp_path / "raw")
     journal.add("observation", 2, 200, b"[]", complete=True, content_type="application/json")

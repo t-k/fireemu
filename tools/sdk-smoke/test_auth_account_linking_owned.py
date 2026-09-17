@@ -177,3 +177,49 @@ def test_harness_source_rejects_dirty_collector_and_commit_drift(tmp_path):
     )
     with pytest.raises(ValueError, match="commit"):
         _module.verify_harness_source(tmp_path, commit)
+
+
+def config_readback(value=False, **changes):
+    return {
+        "origin": "http://127.0.0.1:12345",
+        "project": "demo-app",
+        "path": "/emulator/v1/projects/demo-app/config",
+        "status": 200,
+        "body": {"signIn": {"allowDuplicateEmails": value}},
+        **changes,
+    }
+
+
+def test_config_readback_preserves_true_and_false_without_defaulting():
+    for value in (True, False):
+        proof = _module.validate_config_readbacks(
+            config_readback(value), config_readback(value), "http://127.0.0.1:12345"
+        )
+        assert proof["allowDuplicateEmails"] is value
+    with pytest.raises(ValueError, match="allowDuplicateEmails"):
+        _module.validate_config_readbacks(
+            config_readback(body={}), config_readback(), "http://127.0.0.1:12345"
+        )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"project": "another-project"},
+        {"path": "/emulator/v1/projects/another-project/config"},
+        {"origin": "http://127.0.0.1:12346"},
+        {"status": 403},
+    ],
+)
+def test_config_readback_rejects_wrong_namespace_or_read_failure(changes):
+    with pytest.raises(ValueError, match="configuration"):
+        _module.validate_config_readbacks(
+            config_readback(**changes), config_readback(), "http://127.0.0.1:12345"
+        )
+
+
+def test_config_readback_rejects_stale_before_claim():
+    with pytest.raises(ValueError, match="changed"):
+        _module.validate_config_readbacks(
+            config_readback(False), config_readback(True), "http://127.0.0.1:12345"
+        )

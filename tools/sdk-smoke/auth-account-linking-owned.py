@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -149,6 +150,74 @@ def observe_listener(port: int, parent: int) -> dict:
     return {"port": port, "pid": parent, "addresses": addresses}
 
 
+def read_local_config(origin: str, output: Path) -> dict:
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(origin)
+    require(
+        parsed.scheme == "http"
+        and parsed.hostname == "127.0.0.1"
+        and parsed.port
+        and not parsed.path
+        and not parsed.query
+        and not parsed.fragment
+        and not parsed.username,
+        "configuration endpoint must be an owned loopback origin",
+    )
+    path = "/emulator/v1/projects/demo-app/config"
+    connection = http.client.HTTPConnection("127.0.0.1", parsed.port, timeout=10)
+    record = {"origin": origin, "project": "demo-app", "path": path}
+    try:
+        # The emulator Owner credential is local-only; HTTPConnection never follows redirects.
+        connection.request("GET", path, headers={"Authorization": "Bearer owner"})
+        response = connection.getresponse()
+        raw = response.read(1024 * 1024 + 1)
+        record["status"] = response.status
+        require(len(raw) <= 1024 * 1024, "configuration readback exceeds budget")
+        record["body"] = json.loads(raw)
+    except (OSError, ValueError, http.client.HTTPException) as error:
+        record["readFailure"] = type(error).__name__
+        raise
+    finally:
+        connection.close()
+        with output.open("x") as stream:
+            json.dump(record, stream, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+    return record
+
+
+def validate_config_readbacks(before: dict, after: dict, origin: str) -> dict:
+    values = []
+    for record in (before, after):
+        require(
+            record.get("origin") == origin
+            and record.get("project") == "demo-app"
+            and record.get("path") == "/emulator/v1/projects/demo-app/config",
+            "configuration namespace mismatch",
+        )
+        require(
+            record.get("status") == 200 and "readFailure" not in record,
+            "configuration management readback failed",
+        )
+        body = record.get("body")
+        sign_in = body.get("signIn") if isinstance(body, dict) else None
+        value = (
+            sign_in.get("allowDuplicateEmails") if isinstance(sign_in, dict) else None
+        )
+        require(
+            type(value) is bool, "effective allowDuplicateEmails is absent or invalid"
+        )
+        values.append(value)
+    require(values[0] == values[1], "effective configuration changed during SDK flow")
+    return {
+        "allowDuplicateEmails": values[0],
+        "before": before,
+        "after": after,
+        "unchanged": True,
+    }
+
+
 def owned_child(output: Path, nonce: str) -> None:
     sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
     from urllib.parse import urlsplit
@@ -193,7 +262,11 @@ def owned_child(output: Path, nonce: str) -> None:
     }
     with (output / "instance.json").open("x") as stream:
         json.dump(instance, stream)
+    before = read_local_config(auth, output / "config-before.json")
+    validate_config_readbacks(before, before, auth)
     subprocess.run(["node", str(JS)], cwd=ROOT, check=True, timeout=120)
+    after = read_local_config(auth, output / "config-after.json")
+    validate_config_readbacks(before, after, auth)
     require(
         verify_harness_source(ROOT, source["commit"]) == source,
         "child harness source drift",
@@ -356,8 +429,14 @@ def run(
                 [row.get("id") for row in child.get("operations", [])] == OPERATION_IDS,
                 "operation sequence incomplete",
             )
+            configuration = validate_config_readbacks(
+                load_json(output / "config-before.json"),
+                load_json(output / "config-after.json"),
+                instance["authOrigin"],
+            )
             report = {
                 **child,
+                "effectiveConfiguration": configuration,
                 "sourceCommit": source_commit,
                 "harnessSource": harness_source,
                 "artifact": {

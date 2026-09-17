@@ -14,3 +14,11 @@ The collector completed all 16 observation operations and 12 declared recovery s
 `recordingComplete`, `stateValidation`, and `cleanupComplete` were true. There were no local semantic discrepancies or infrastructure failures in this run. Immutable full receipts remain in the private execution directory; this public record contains no raw nonce or credentials.
 
 Preparation conditions completed by this slice are bounded large-body local transport and the successful real-artifact boundary/cleanup shadow. This does not complete failure injection/recovery rehearsals, production collector/comparator binding, environment preflight budgets, frozen O7 admission, or production observation. Production-unobserved parent closure conditions reduced: **0**. `FS-DATA-WRITE` is not `COMPAT_VERIFIED`. Historical campaign manifests and production receipts were not modified.
+
+## Reviewed binding follow-up
+
+Independent review identified that the initial Python-only source closure omitted the compiler's limit catalog. The initial run above remains unchanged and is not the final binding evidence. The follow-up binds `spec/limits/firestore-standard-2026-08-25.json` alongside the collector inputs in the parent, child, and post-run maps. It also verifies the full ordered cleanup journal and repeats body-cap validation inside the transport worker.
+
+A new run at source `a9ab812de51fb1f9a7b824ab52246474f13ebeba`, artifact SHA-256 `565ec3bbeac612ae867083858a0cc6c070b2549d7a8f6ad4301002f641a42e0c`, completed the same 16 observations and 12 recovery stages with 26 Gate-accounted Firestore requests. Catalog-inclusive binding and the independent receipt validator passed. There were no local semantic discrepancies or infrastructure failures. The supervisor confirmed process termination and listener closure. The new receipt is separate from the initial run.
+
+Validation after remediation: compiler/shadow 48 passed; actual-loopback transport 10 passed; Ruff and type checks passed. The oversized direct-worker regression failed before the fix and passes with zero received requests afterward. Catalog-only mutation and missing/reordered/altered cleanup records are rejected. These checks remain local evidence and do not reduce production-unobserved conditions.

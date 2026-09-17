@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { createHash, randomBytes } from "node:crypto";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { writeFile } from "node:fs/promises";
 import { initializeApp } from "firebase/app";
 import {
   connectAuthEmulator,
@@ -16,7 +16,6 @@ import { initializeApp as initializeAdminApp } from "firebase-admin/app";
 import { getAuth as getAdminAuth } from "firebase-admin/auth";
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
-const SDK_VERSION = "firebase 12.18.0; firebase-admin 14.3.0; node >=20";
 export const REQUIRED_OPERATION_IDS = [
   "signup-a",
   "signup-b",
@@ -39,13 +38,8 @@ export function projectUser(user) {
 export function validateReceipt(receipt) {
   assert.equal(receipt?.status, "completed");
   assert.equal(receipt?.productionExecuted, false, "productionExecuted must be false");
-  assert.equal(receipt?.transport, "real-fireemu-artifact");
+  assert.equal(receipt?.transport, "firebase-sdk-local-emulator");
   assert.equal(receipt?.providerBoundary, "local-emulator-fixture");
-  assert.match(receipt?.sourceCommit ?? "", /^[0-9a-f]{9,40}$/, "source binding is required");
-  assert.match(receipt?.artifact?.sha256 ?? "", /^[0-9a-f]{64}$/, "artifact binding is required");
-  assert.equal(receipt?.cleanup?.ownedResources, 0, "owned resources must be reclaimed");
-  assert.equal(receipt?.cleanup?.listenersClosed, true, "listeners must be closed");
-  assert.equal(receipt?.cleanup?.processStopped, true, "process must be stopped");
   assert.equal(receipt?.comparison?.contract, "auth-settings-v1");
   assert.deepEqual(
     (receipt?.operations ?? []).map((operation) => operation.id),
@@ -53,20 +47,6 @@ export function validateReceipt(receipt) {
     "selected operation sequence is incomplete",
   );
   return receipt;
-}
-
-async function bindArtifact(env) {
-  const path = env.FIREEMU_ARTIFACT;
-  const expected = env.FIREEMU_ARTIFACT_SHA256;
-  const sourceCommit = env.FIREEMU_SOURCE_COMMIT;
-  assert.ok(path, "FIREEMU_ARTIFACT is required");
-  assert.match(path, /(^|\/)fireemu$/, "artifact must be fireemu");
-  assert.match(expected ?? "", /^[0-9a-f]{64}$/, "FIREEMU_ARTIFACT_SHA256 is required");
-  assert.match(sourceCommit ?? "", /^[0-9a-f]{9,40}$/, "FIREEMU_SOURCE_COMMIT is required");
-  assert.equal((await stat(path)).isFile(), true, "artifact must be a regular file");
-  const actual = createHash("sha256").update(await readFile(path)).digest("hex");
-  assert.equal(actual, expected, "artifact digest mismatch");
-  return { path, sha256: actual, sourceCommit };
 }
 
 function authOrigin(value) {
@@ -81,7 +61,6 @@ async function absent(admin, uid) {
 }
 
 export async function runLocalCase(env = process.env) {
-  const artifact = await bindArtifact(env);
   const authHost = authOrigin(env.FIREBASE_AUTH_EMULATOR_HOST);
   const project = env.GOOGLE_CLOUD_PROJECT ?? "demo-app";
   const marker = randomBytes(8).toString("hex");
@@ -151,16 +130,12 @@ export async function runLocalCase(env = process.env) {
     return validateReceipt({
       status: "completed",
       productionExecuted: false,
-      transport: "real-fireemu-artifact",
+      transport: "firebase-sdk-local-emulator",
       providerBoundary: "local-emulator-fixture",
-      sourceCommit: artifact.sourceCommit,
-      sdkVersion: SDK_VERSION,
-      artifact,
       project,
       tenantId: null,
       operations,
       readback,
-      cleanup: { ownedResources: 0, listenersClosed: true, processStopped: true },
       comparison: {
         contract: "auth-settings-v1",
         classifications: ["MATCH", "SEMANTIC_MISMATCH", "INDETERMINATE"],

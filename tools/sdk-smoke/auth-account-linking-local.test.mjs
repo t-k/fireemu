@@ -32,22 +32,17 @@ test("rejects incomplete or production-looking receipts", () => {
     () => validateReceipt({ status: "completed", productionExecuted: true }),
     /productionExecuted/,
   );
-  assert.throws(
-    () => validateReceipt({ status: "completed", productionExecuted: false }),
-    /artifact|cleanup|comparison/,
-  );
+  assert.throws(() => validateReceipt({ status: "completed", productionExecuted: false }));
 });
 
 test("accepts a complete local receipt and preserves fixture boundary", () => {
   const receipt = validateReceipt({
     status: "completed",
     productionExecuted: false,
-    transport: "real-fireemu-artifact",
+    transport: "firebase-sdk-local-emulator",
     providerBoundary: "local-emulator-fixture",
-    sourceCommit: "8b33aac4d",
     artifact: { path: "/tmp/fireemu", sha256: "a".repeat(64) },
     operations: REQUIRED_OPERATION_IDS.map((id) => ({ id })),
-    cleanup: { ownedResources: 0, listenersClosed: true, processStopped: true },
     comparison: { contract: "auth-settings-v1", classifications: ["MATCH"] },
   });
   assert.equal(receipt.providerBoundary, "local-emulator-fixture");

@@ -37,3 +37,15 @@ cargo nextest run --locked -p fireemu --test functions_discovery \
 ```
 
 Both passed: discovery classified the real `firebase-functions` 7.3.2 exports as served triggers, and the runner exposed their synchronous blocking endpoint. The selected run's 19 skips are excluded tests from that binary. These two checks establish SDK-local discovery/runner behavior, not end-to-end Auth mutation or production hook parity. Together with the six Connect checks, eight of the 81 baseline ignored tests were explicitly executed in this follow-up; the other 73 were not executed here. The normal workspace run retains its original 81-skip result.
+
+## Complete Functions SDK follow-up at 06ab2a6ad
+
+The 24 ignored Functions discovery/runtime checks were explicitly executed at `06ab2a6adae0ace3d49617acbdfd514caf896c76` after the locked `tools/sdk-smoke` dependency installation. All 24 selected tests passed; the one additional test excluded by `--run-ignored only` is not a failed or newly ignored case. Pins were `firebase-functions` 7.3.2, `firebase-admin` 14.3.0 and `firebase` 12.18.0, with Node 24.14.0.
+
+```sh
+cargo nextest run --locked -p fireemu --test functions_codebases --test functions_discovery --profile pr --run-ignored only
+```
+
+The command ran through the owned port-registry wrapper. Its reservation, Functions runners and child processes were closed afterward. Rust and SDK inputs matched the fixed source; unrelated pending Commit-observation Python edits did not change those inputs. The private record preserves tool-returned stdout, dependency installation, input binding and cleanup results, explicitly identifying the later transcription of the original tool output.
+
+This execution covers the 24-case SDK-local group, including the two discovery checks previously run at the older source. It does not change the original normal-workspace result of 81 skips, does not execute the remaining 57 ignored cases in this follow-up, and is not production hook-parity evidence. Formal/Java, release qualification and intentional leak-driver obligations remain separately tracked.

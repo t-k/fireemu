@@ -56,6 +56,36 @@ test('prepares a fixed TLS production configuration without accepting endpoint o
   assert.throws(() => prepareFixedTlsTransport({ ...base, metadata: {} }), /authorization/);
 });
 
+test('accepts clean status and terminal events in all supported orders', async () => {
+  for (const order of ['status-end', 'end-status', 'close-status']) {
+    const stream = new EventEmitter();
+    stream.write = () => queueMicrotask(() => stream.emit('data', { streamToken: Buffer.from('token') }));
+    stream.end = () => {
+      const status = { code: 0, details: 'ok', message: '' };
+      if (order === 'status-end') {
+        stream.emit('status', status);
+        stream.emit('end');
+      } else if (order === 'end-status') {
+        stream.emit('end');
+        setTimeout(() => stream.emit('status', status), 10);
+      } else {
+        stream.emit('close');
+        setTimeout(() => stream.emit('status', status), 10);
+      }
+    };
+    stream.destroy = () => {};
+    const receipt = await bounded(runWriteCore([], writeOptions, {
+      createClient: () => ({ write: () => stream, close() {} }),
+      handshake,
+      buildNextFrame: identityFrame,
+    }));
+    assert.equal(receipt.kind, 'grpc_status', order);
+    assert.equal(receipt.complete, true, order);
+    assert.equal(receipt.status.code, 0, order);
+    assert.equal(receipt.error, undefined, order);
+  }
+});
+
 test('local client factory rejects non-loopback options before channel construction', () => {
   assert.throws(() => createLocalClient({ host: 'firestore.googleapis.com', port: 443, projectId: 'fireemu-test' }), /loopback/);
 });

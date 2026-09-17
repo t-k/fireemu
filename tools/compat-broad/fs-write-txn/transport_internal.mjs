@@ -193,6 +193,7 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
   let awaitingResponse = false;
   let streamEndedByClient = false;
   let handlerFailureRecorded = false;
+  let pendingTerminalError = false;
   let settled = false;
   let timer;
   let terminalGraceTimer;
@@ -257,7 +258,10 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
     if (!handlerFailureRecorded && typeof terminalCode === 'number' && (terminalCode !== 0 || (!awaitingResponse && streamEndedByClient))) {
       finish({ kind: 'grpc_status', complete: true, status: terminalStatus, error: terminalError });
     } else if (!terminalGraceTimer) {
-      if (!terminalError) terminalError = Object.assign(new Error('stream terminated before all responses'), { code: 'incomplete_stream' });
+      if (!terminalError) {
+        terminalError = Object.assign(new Error('stream terminated before all responses'), { code: 'incomplete_stream' });
+        pendingTerminalError = true;
+      }
       rejectWaiters(terminalError);
       terminalGraceTimer = setTimeout(() => finish({ kind: 'incomplete_stream', complete: false, status, error: terminalError }), 100);
     }
@@ -296,6 +300,10 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
         return;
       }
       status = normalized;
+      if (pendingTerminalError) {
+        terminalError = undefined;
+        pendingTerminalError = false;
+      }
       terminalSignal = true;
       safePush('status', normalized);
       maybeFinish();

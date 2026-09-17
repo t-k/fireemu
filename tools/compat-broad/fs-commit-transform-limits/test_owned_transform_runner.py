@@ -60,11 +60,16 @@ def test_repaired_profile_accepts_original_build_manifest_without_derived_fields
 
 def test_generated_artifact_is_rejected_by_pinned_repaired_profile(
     generated_repaired_fixture,
+    tmp_path,
 ):
     artifact, manifest, _ = generated_repaired_fixture
+    pinned_manifest = json.loads(manifest.read_text())
+    pinned_manifest["build"]["artifactSha256"] = REPAIRED_PROFILE["artifactSha256"]
+    pinned_path = tmp_path / "pinned-manifest.json"
+    pinned_path.write_text(json.dumps(pinned_manifest))
 
-    with pytest.raises(ValueError):
-        validate_retained_artifact(artifact, manifest, profile=REPAIRED_PROFILE)
+    with pytest.raises(ValueError, match="retained artifact/build/source binding"):
+        validate_retained_artifact(artifact, pinned_path, profile=REPAIRED_PROFILE)
 
 
 def test_generated_manifest_contains_independently_verified_git_tree_digest(

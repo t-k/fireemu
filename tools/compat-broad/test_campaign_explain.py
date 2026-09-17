@@ -219,9 +219,11 @@ def test_manifest_binds_metadata_and_recovery_budget():
 def test_checked_in_manifest_and_binding_are_stable():
     path = (
         __import__("pathlib").Path(__file__).parents[2]
-        / "spec/compatibility/broad-runs/prod-campaign-explain-01-v4.json"
+        / "spec/compatibility/broad-runs/prod-campaign-explain-01-v5.json"
     )
+    binding_path = path.with_name("prod-campaign-explain-01-v5-binding.json")
     assert json.loads(path.read_bytes()) == manifest()
+    assert json.loads(binding_path.read_bytes()) == binding()
     assert binding()["manifestDigest"] == digest(manifest())
 
 

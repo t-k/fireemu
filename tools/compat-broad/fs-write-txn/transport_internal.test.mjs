@@ -56,6 +56,93 @@ test('prepares a fixed TLS production configuration without accepting endpoint o
   assert.throws(() => prepareFixedTlsTransport({ ...base, metadata: {} }), /authorization/);
 });
 
+test('accepts clean status and terminal events in all supported orders', async () => {
+  for (const order of ['status-end', 'end-status', 'close-status']) {
+    const stream = new EventEmitter();
+    stream.write = () => queueMicrotask(() => stream.emit('data', { streamToken: Buffer.from('token') }));
+    stream.end = () => {
+      const status = { code: 0, details: 'ok', message: '' };
+      if (order === 'status-end') {
+        stream.emit('status', status);
+        stream.emit('end');
+      } else if (order === 'end-status') {
+        stream.emit('end');
+        setTimeout(() => stream.emit('status', status), 10);
+      } else {
+        stream.emit('close');
+        setTimeout(() => stream.emit('status', status), 10);
+      }
+    };
+    stream.destroy = () => {};
+    const receipt = await bounded(runWriteCore([], writeOptions, {
+      createClient: () => ({ write: () => stream, close() {} }),
+      handshake,
+      buildNextFrame: identityFrame,
+    }));
+    assert.equal(receipt.kind, 'grpc_status', order);
+    assert.equal(receipt.complete, true, order);
+    assert.equal(receipt.status.code, 0, order);
+    assert.equal(receipt.error, undefined, order);
+  }
+});
+
+test('does not clear a real error when status follows end', async () => {
+  const stream = new EventEmitter();
+  stream.write = () => queueMicrotask(() => stream.emit('data', { streamToken: Buffer.from('token') }));
+  stream.end = () => {
+    stream.emit('end');
+    queueMicrotask(() => stream.emit('error', Object.assign(new Error('aborted'), { code: 13, details: 'aborted' })));
+    setTimeout(() => stream.emit('status', { code: 0, details: 'late', message: '' }), 10);
+  };
+  stream.destroy = () => {};
+  const receipt = await bounded(runWriteCore([], writeOptions, {
+    createClient: () => ({ write: () => stream, close() {} }),
+    handshake,
+    buildNextFrame: identityFrame,
+  }));
+  assert.equal(receipt.kind, 'incomplete_stream');
+  assert.equal(receipt.complete, false);
+  assert.equal(receipt.status.code, 0);
+  assert.equal(receipt.error.code, 13);
+});
+
+test('accepts same-tick terminal ordering after the final ACK is queued', async () => {
+  for (const order of ['status-end', 'end-status', 'close-status']) {
+    const stream = new EventEmitter();
+    let writes = 0;
+    stream.write = () => queueMicrotask(() => {
+      writes += 1;
+      stream.emit('data', { streamToken: Buffer.from(`token-${writes}`) });
+      if (writes === 2) {
+        const status = { code: 0, details: 'ok', message: '' };
+        if (order === 'status-end') {
+          stream.emit('status', status);
+          stream.emit('end');
+        } else if (order === 'end-status') {
+          stream.emit('end');
+          stream.emit('status', status);
+        } else {
+          stream.emit('close');
+          stream.emit('status', status);
+        }
+      }
+    });
+    stream.end = () => {};
+    stream.destroy = () => {};
+    const receipt = await bounded(runWriteCore([{ writes: [] }], writeOptions, {
+      createClient: () => ({ write: () => stream, close() {} }),
+      handshake,
+      buildNextFrame: Object.assign((request, response) => ({ ...request, streamToken: response.streamToken }), { validate() {} }),
+    }));
+    assert.equal(receipt.kind, 'grpc_status', order);
+    assert.equal(receipt.complete, true, order);
+    assert.equal(receipt.status.code, 0, order);
+    assert.equal(receipt.error, undefined, order);
+    assert.equal(receipt.completedSendFrames, 2, order);
+    assert.equal(receipt.receivedFrames, 2, order);
+  }
+});
+
 test('local client factory rejects non-loopback options before channel construction', () => {
   assert.throws(() => createLocalClient({ host: 'firestore.googleapis.com', port: 443, projectId: 'fireemu-test' }), /loopback/);
 });

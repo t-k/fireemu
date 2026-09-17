@@ -317,15 +317,14 @@ def test_fractional_and_boolean_over_refusal_codes_are_rejected():
     from request_bytes_collector import _error_status
 
     for code in (400.0, True):
-        assert not _error_status(
-            {
-                "complete": True,
-                "failure": None,
-                "status": 400,
-                "body": {"error": {"code": code, "status": "INVALID_ARGUMENT"}},
-            },
-            "INVALID_ARGUMENT",
-        )
+        receipt = {
+            "complete": True,
+            "failure": None,
+            "status": 400,
+            "body": {"error": {"code": code, "status": "INVALID_ARGUMENT"}},
+        }
+        assert not _error_status(receipt, "INVALID_ARGUMENT")
+        assert not typed_over_refusal(receipt)
 
 
 def test_http_413_invalid_argument_is_a_complete_refusal_with_discrepancy_metadata():
@@ -371,6 +370,124 @@ def test_http_413_invalid_argument_is_a_complete_refusal_with_discrepancy_metada
 def test_413_over_refusal_controls_fail_closed(receipt):
     assert not typed_over_refusal(receipt)
     assert over_refusal_classification(receipt) is None
+
+
+@pytest.mark.parametrize(
+    "over_receipt",
+    [
+        {
+            "complete": False,
+            "failure": "response-lost",
+            "status": 413,
+            "body": {"error": {"code": 413, "status": "INVALID_ARGUMENT"}},
+        },
+        {
+            "complete": True,
+            "failure": None,
+            "status": 413,
+            "body": "not-json-error",
+        },
+        {
+            "complete": True,
+            "failure": None,
+            "status": 200,
+            "body": {"error": {"code": 200, "status": "INVALID_ARGUMENT"}},
+        },
+        {
+            "complete": True,
+            "failure": None,
+            "status": 413,
+            "body": {"error": {"code": 400, "status": "INVALID_ARGUMENT"}},
+        },
+    ],
+)
+def test_invalid_over_receipt_keeps_collection_incomplete_and_never_deletes(
+    tmp_path, over_receipt
+):
+    from request_bytes_collector import collect_local
+
+    value = plan()
+    documents = {
+        write["update"]["name"]: write["update"]["fields"]
+        for probe in value["probes"]
+        for write in probe["body"]["writes"]
+    }
+    version = "2026-01-01T00:00:00Z"
+    live = set()
+    dispatched = []
+    over_dispatch_index = None
+
+    def with_raw(receipt):
+        if not receipt["complete"]:
+            return receipt
+        raw = json.dumps(receipt["body"], separators=(",", ":")).encode()
+        return {
+            **receipt,
+            "rawBodyBase64": base64.b64encode(raw).decode(),
+            "bodyBytes": len(raw),
+        }
+
+    def execute(operation):
+        dispatched.append(operation)
+        kind, resource = operation["kind"], operation.get("resource")
+        if kind == "conditional-create-commit":
+            if operation["probe"] == "over":
+                nonlocal over_dispatch_index
+                over_dispatch_index = len(dispatched) - 1
+                return with_raw(over_receipt)
+            resources = next(
+                probe["resources"]
+                for probe in value["probes"]
+                if probe["label"] == operation["probe"]
+            )
+            live.update(resources)
+            return with_raw(
+                {
+                    "complete": True,
+                    "failure": None,
+                    "status": 200,
+                    "body": {
+                        "writeResults": [
+                            {"updateTime": version} for _ in resources
+                        ]
+                    },
+                }
+            )
+        if kind == "cleanup-version-bound-delete":
+            live.remove(resource)
+            return with_raw(
+                {"complete": True, "failure": None, "status": 200, "body": {}}
+            )
+        if resource in live:
+            return with_raw(
+                {
+                    "complete": True,
+                    "failure": None,
+                    "status": 200,
+                    "body": {
+                        "name": resource,
+                        "fields": documents[resource],
+                        "updateTime": version,
+                    },
+                }
+            )
+        return with_raw(
+            {
+                "complete": True,
+                "failure": None,
+                "status": 404,
+                "body": {"error": {"code": 404, "status": "NOT_FOUND"}},
+            }
+        )
+
+    result = collect_local(value, execute, tmp_path / "run")
+    assert result["completed"] is False
+    assert result["cleanupComplete"] is False
+    assert over_dispatch_index is not None
+    assert not any(
+        operation["kind"] == "cleanup-version-bound-delete"
+        for operation in dispatched[over_dispatch_index + 1 :]
+    )
 
 
 def test_contradictory_raw_response_cannot_prove_preflight(tmp_path):

@@ -174,6 +174,10 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
             raise ValueError(f"invalid recovery journal row {index}")
     if not (_typed_absence(cleanup[0]) or _owned_read(cleanup[0], plan)):
         raise ValueError("cleanup ownership read is not typed")
+    if cleanup[1].get("skipped") == "already-absent" and not _typed_absence(cleanup[0]):
+        raise ValueError("already-absent skip lacks typed absence proof")
+    if cleanup[1].get("skipped") in {"create-not-proven", "create-version-mismatch", "unsafe-delete"}:
+        raise ValueError("unsafe cleanup skip is indeterminate")
     if "skipped" not in cleanup[1] and not (
         cleanup[1].get("status") == 200
         and isinstance(cleanup[1].get("body"), dict)
@@ -194,6 +198,8 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
     for index in (3, 5):
         if not _owned_read(rows[index], plan) or rows[index]["body"]["updateTime"] != created_time:
             raise ValueError("readback version is not bound to creation")
+    if _owned_read(cleanup[0], plan) and cleanup[0]["body"]["updateTime"] != created_time:
+        raise ValueError("cleanup version is not bound to creation")
     ownership = bundle.get("ownership", {})
     if not isinstance(ownership, dict) or ownership.get("cleanupComplete") is not True:
         raise ValueError("ownership and cleanup evidence is incomplete")
@@ -218,6 +224,14 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
                 raise ValueError("typed raw receipt bytes are missing")
             if hashlib.sha256(raw_body).hexdigest() != digest:
                 raise ValueError("typed raw receipt hash differs")
+            expected_phase = "observation" if int(slot) < 6 else "recovery"
+            expected_index = int(slot) if int(slot) < 6 else int(slot) - 6
+            if view.get("phase") != expected_phase or view.get("index") != expected_index:
+                raise ValueError("typed raw receipt slot differs")
+            if view.get("status") != raw_row.get("status") or view.get("complete") is not raw_row.get("complete"):
+                raise ValueError("typed raw receipt status differs")
+            if view.get("byteCount") != len(raw_body) or view.get("contentType") != "application/json":
+                raise ValueError("typed raw receipt metadata differs")
         try:
             parsed = json.loads(raw["2"]["rawBody"], parse_constant=_reject_json_constant, object_pairs_hook=_unique_json_object)
             derived = [

@@ -52,7 +52,17 @@ def _bundle(project: str = "demo", nonce: str = "a" * 32) -> dict:
         raw_body = json.dumps(raw_value, sort_keys=True, separators=(",", ":")).encode()
         digest = hashlib.sha256(raw_body).hexdigest()
         row["rawSha256"] = digest
-        raw[str(index)] = {"projectionVersion": 1, "sourceRawSha256": digest, "rawBody": raw_body}
+        raw[str(index)] = {
+            "projectionVersion": 1,
+            "sourceRawSha256": digest,
+            "rawBody": raw_body,
+            "phase": "observation" if index < 6 else "recovery",
+            "index": index if index < 6 else index - 6,
+            "status": row["status"],
+            "complete": True,
+            "byteCount": len(raw_body),
+            "contentType": "application/json",
+        }
     raw["2"]["documents"] = rows[2]["body"]["documents"]
     return {
         "plan": plan,
@@ -97,7 +107,7 @@ def test_complete_typed_response_difference_is_semantic_mismatch():
         body = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
         digest = hashlib.sha256(body).hexdigest()
         bundle["rows"][2]["rawSha256"] = digest
-        bundle["raw"]["2"].update(rawBody=body, sourceRawSha256=digest, documents=bundle["rows"][2]["body"]["documents"])
+        bundle["raw"]["2"].update(rawBody=body, sourceRawSha256=digest, documents=bundle["rows"][2]["body"]["documents"], status=200, byteCount=len(body))
     result = compare_evidence(left, right)
     assert result["classification"] == "SEMANTIC_MISMATCH"
 
@@ -113,7 +123,7 @@ def test_incomplete_receipt_and_unsafe_cleanup_are_indeterminate():
 
 def test_cleanup_update_time_predicate_is_percent_encoded():
     bundle = _bundle()
-    timestamp = "2026-09-18T01:02:03Z"
+    timestamp = "2026-09-18T00:00:00Z"
     bundle["cleanup"][0].update(
         status=200,
         skipped=None,
@@ -122,7 +132,12 @@ def test_cleanup_update_time_predicate_is_percent_encoded():
     bundle["cleanup"][0].pop("skipped")
     bundle["cleanup"][1].pop("skipped")
     bundle["cleanup"][1].update(status=200, body={})
-    bundle["cleanup"][1]["request"]["path"] += "?currentDocument.updateTime=2026-09-18T01%3A02%3A03Z"
+    bundle["cleanup"][1]["request"]["path"] += "?currentDocument.updateTime=2026-09-18T00%3A00%3A00Z"
+    raw_body = json.dumps(bundle["cleanup"][0]["body"], sort_keys=True, separators=(",", ":")).encode()
+    digest = hashlib.sha256(raw_body).hexdigest()
+    bundle["cleanup"][0]["rawSha256"] = digest
+    bundle["raw"]["6"].update(status=200, rawBody=raw_body, sourceRawSha256=digest, byteCount=len(raw_body))
+    bundle["raw"]["7"].update(status=200)
     assert compare_evidence(bundle, copy.deepcopy(bundle))["classification"] == "MATCH"
 
 

@@ -1,7 +1,7 @@
 import copy
 
 import pytest
-from production_bridge import CommitProductionBridge, classify_receipt
+from commit_production_bridge import CommitProductionBridge, classify_receipt
 from transform_compiler import compile_plan
 
 

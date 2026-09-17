@@ -1,5 +1,5 @@
 {
-  "kind": "query-explain-frozen-reference-inputs-v4",
+  "kind": "query-explain-frozen-reference-inputs-v5",
   "directories": {
     "production": {
       "comparison.json": "83cc22cd1bb8c8b702ae838422256705c685b97ee72737454594119697f0f909",

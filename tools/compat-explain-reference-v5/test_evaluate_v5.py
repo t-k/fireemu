@@ -4,8 +4,8 @@ from pathlib import Path
 
 def load():
     path = Path(__file__).with_name("evaluate.py")
-    assert path.exists(), "v4 evaluator must exist"
-    spec = importlib.util.spec_from_file_location("current_explain_v4", path)
+    assert path.exists(), "v5 evaluator must exist"
+    spec = importlib.util.spec_from_file_location("current_explain_v5", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -34,9 +34,9 @@ import pytest
 
 @pytest.fixture
 def private_inputs():
-    base = os.environ.get("EXPLAIN_V4_PRIVATE_ROOT")
+    base = os.environ.get("EXPLAIN_V5_PRIVATE_ROOT")
     if not base:
-        pytest.skip("set EXPLAIN_V4_PRIVATE_ROOT for immutable real-input checks")
+        pytest.skip("set EXPLAIN_V5_PRIVATE_ROOT for immutable real-input checks")
     base = Path(base)
     return base, {
         "production": base

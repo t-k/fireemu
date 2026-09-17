@@ -16,18 +16,18 @@ v3 = importlib.util.module_from_spec(_spec)
 exec(compile(_path.read_bytes(), str(_path), "exec"), v3.__dict__)  # noqa: S102 -- verified source-only import; ignores stale bytecode.
 sha, digest, require = v3.sha, v3.digest, v3.require
 CURRENT_COMMIT = "cce4a4f9b7369938c89bd32a5106e8d3cab59f83"
-INPUTS = "spec/compatibility/broad-runs/query-explain-reference-inputs-v4.json"
-ANCHOR = "spec/compatibility/broad-runs/query-explain-reference-evaluator-v4.json"
+INPUTS = "spec/compatibility/broad-runs/query-explain-reference-inputs-v5.json"
+ANCHOR = "spec/compatibility/broad-runs/query-explain-reference-evaluator-v5.json"
 SOURCE_FILES = (
-    "tools/compat-explain-reference-v4/evaluate.py",
-    "tools/compat-explain-reference-v4/test_evaluate_v4.py",
+    "tools/compat-explain-reference-v5/evaluate.py",
+    "tools/compat-explain-reference-v5/test_evaluate_v5.py",
     INPUTS,
 )
 
 
 def contract():
     return {
-        "kind": "query-explain-saved-reference-comparison-v4",
+        "kind": "query-explain-saved-reference-comparison-v5",
         "productionExecuted": False,
         "currentCollectorCommit": CURRENT_COMMIT,
         "historicalValidation": "Unchanged v3 historical worker and original v3 production/originalLocal anchors.",
@@ -41,11 +41,11 @@ def source_identity():
     historical = v3.source_identity()
     raw = (ROOT / ANCHOR).read_bytes()
     require(
-        raw == v3.git("show", "HEAD:" + ANCHOR), "v4 anchor not committed unchanged"
+        raw == v3.git("show", "HEAD:" + ANCHOR), "v5 anchor not committed unchanged"
     )
     anchor = json.loads(raw)
     files = {name: sha((ROOT / name).read_bytes()) for name in SOURCE_FILES}
-    require(anchor["sourceFiles"] == files, "v4 source closure drift")
+    require(anchor["sourceFiles"] == files, "v5 source closure drift")
     commit = anchor["sourceCommit"]
     v3.git("merge-base", "--is-ancestor", commit, "HEAD")
     require(
@@ -53,9 +53,9 @@ def source_identity():
             sha(v3.git("show", commit + ":" + name)) == value
             for name, value in files.items()
         ),
-        "v4 source commit differs",
+        "v5 source commit differs",
     )
-    require(anchor["contractDigest"] == digest(contract()), "v4 contract differs")
+    require(anchor["contractDigest"] == digest(contract()), "v5 contract differs")
     return {
         "sourceCommit": commit,
         "sourceDigest": digest(files),

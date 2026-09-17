@@ -204,3 +204,13 @@ for (const [name, mutate] of Object.entries({
   'skipped slot has extra receipt': r => { r.recoveryObservations[0].receipt = r.observations[11].receipt; },
   'extra executed rollback after complete nominal sequence': r => { r.recoveryObservations[0].skipped = false; r.recoveryObservations[0].receipt = r.observations[11].receipt; },
 })) test(`rejects Gate ${name}`, () => { const r = recoveryJournal(fixture()); mutate(r); assert.equal(compare(r).classification, 'INDETERMINATE'); });
+
+const canonicalByteEncoding = v => Array.isArray(v) ? v.map(canonicalByteEncoding) : v && typeof v === 'object' ? v.type === 'Buffer' ? Buffer.from(v.data).toString('base64') : Object.fromEntries(Object.entries(v).map(([k, x]) => [k, canonicalByteEncoding(x)])) : v;
+test('accepts Gate canonical base64 bytes in the declared stream and transaction slots', () => assert.equal(compare(canonicalByteEncoding(recoveryJournal(fixture()))).classification, 'MATCH'));
+for (const token of ['', 'not bytes!', 'YQ', 'YR==', '====']) test(`rejects noncanonical base64 token ${JSON.stringify(token)}`, () => {
+  const r = canonicalByteEncoding(fixture()); r.observations[2].receipt.events[1].value.streamToken = token; r.observations[2].receipt.events[2].value.streamToken = token;
+  assert.equal(compare(r).classification, 'INDETERMINATE');
+});
+test('same opaque bytes in Buffer JSON and canonical base64 are declared nondeterminism', () => {
+  const r = fixture(); assert.equal(compare(r, canonicalByteEncoding(r)).classification, 'EXPECTED_NONDETERMINISM');
+});

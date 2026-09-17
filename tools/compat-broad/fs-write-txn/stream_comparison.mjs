@@ -47,7 +47,9 @@ const sideContract = (expected, side) => {
   return c;
 };
 
-const byteToken = v => keys(v, ['type', 'data']) && v.type === 'Buffer' && Array.isArray(v.data) && v.data.length > 0 && v.data.length <= 65536 && v.data.every(n => Number.isInteger(n) && n >= 0 && n <= 255);
+const byteToken = v => typeof v === 'string'
+  ? v.length > 0 && v.length <= 87384 && /^[A-Za-z0-9+/]+={0,2}$/.test(v) && Buffer.from(v, 'base64').toString('base64') === v
+  : keys(v, ['type', 'data']) && v.type === 'Buffer' && Array.isArray(v.data) && v.data.length > 0 && v.data.length <= 65536 && v.data.every(n => Number.isInteger(n) && n >= 0 && n <= 255);
 const timestamp = value => {
   requireProof(keys(value, ['seconds', 'nanos']), 'timestamp must be a typed protobuf timestamp');
   let seconds = value.seconds;

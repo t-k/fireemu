@@ -24,10 +24,39 @@ const assertInteger = (value, name, minimum, maximum) => {
   }
 };
 
+const pathSegments = (value, name) => {
+  if (typeof value !== 'string' || value.length === 0 || value.startsWith('/') || value.endsWith('/')) {
+    throw fail(`${name} must be a non-empty relative path`);
+  }
+  const segments = value.split('/');
+  if (segments.some(segment => segment.length === 0 || segment === '.' || segment === '..')) {
+    throw fail(`${name} contains an invalid path segment`);
+  }
+  return segments;
+};
+
 const byteLength = value => {
   const encoded = JSON.stringify(value);
   if (encoded === undefined) throw fail('stream value is not serializable', 'message_limit');
   return Buffer.byteLength(encoded);
+};
+
+const plainError = error => Object.freeze({
+  name: error?.name,
+  code: error?.code,
+  details: error?.details,
+  message: error?.message,
+});
+
+const plainStatus = status => Object.freeze({
+  code: status?.code,
+  details: status?.details,
+  message: status?.message,
+});
+
+export const classifyTerminal = ({ status, error, sawEnd, sawClose }) => {
+  if (status && (sawEnd || sawClose)) return { kind: 'grpc_status', complete: true, status: plainStatus(status), error: error ? plainError(error) : undefined };
+  return undefined;
 };
 
 export const validateTransportOptions = options => {
@@ -40,9 +69,7 @@ export const validateTransportOptions = options => {
   if (typeof projectId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]{4,62}$/.test(projectId)) {
     throw fail('projectId is invalid');
   }
-  if (typeof documentPrefix !== 'string' || documentPrefix.length === 0 || documentPrefix.startsWith('/')) {
-    throw fail('documentPrefix must be a relative document path');
-  }
+  pathSegments(documentPrefix, 'documentPrefix');
   const deadlineMs = options.deadlineMs ?? 10_000;
   const maxFrames = options.maxFrames ?? 32;
   const maxMessageBytes = options.maxMessageBytes ?? 1_048_576;
@@ -53,7 +80,7 @@ export const validateTransportOptions = options => {
     throw fail('metadata must be a plain object');
   }
   for (const [key, value] of Object.entries(options.metadata ?? {})) {
-    if (!/^[a-z0-9-]+$/i.test(key) || !(typeof value === 'string' || (Array.isArray(value) && value.every(item => typeof item === 'string')))) {
+    if (!/^[a-z0-9-]+$/.test(key) || !(typeof value === 'string' || (Array.isArray(value) && value.every(item => typeof item === 'string')))) {
       throw fail('metadata must contain string header values');
     }
   }
@@ -77,7 +104,9 @@ export const buildUnaryRequest = (operation, options, input = {}) => {
   if (operation === 'BeginTransaction') return { database: databaseName(validated.projectId), ...input };
   if (operation === 'Rollback') return { database: databaseName(validated.projectId), ...input };
   const path = input.path;
-  if (typeof path !== 'string' || !path.startsWith(`${validated.documentPrefix}/`)) {
+  const prefixSegments = pathSegments(validated.documentPrefix, 'documentPrefix');
+  const pathParts = pathSegments(path, 'document path');
+  if (pathParts.length <= prefixSegments.length || pathParts.slice(0, prefixSegments.length).join('/') !== validated.documentPrefix) {
     throw fail('document path is outside the owned prefix');
   }
   const { path: _path, ...rest } = input;
@@ -94,15 +123,21 @@ const requestTargets = request => {
   return targets;
 };
 
-const assertRequest = (request, options) => {
+export const validateWriteRequest = (request, options) => {
   if (!request || typeof request !== 'object') throw fail('write request must be an object');
   if (Object.hasOwn(request, 'database') && request.database !== databaseName(options.projectId)) {
     throw fail('write database is transport-owned');
   }
   if (byteLength(request) > options.maxMessageBytes) throw fail('write request exceeds maxMessageBytes', 'message_limit');
-  const prefix = documentName(options.projectId, options.documentPrefix);
   for (const target of requestTargets(request)) {
-    if (!target.startsWith(`${prefix}/`) && target !== prefix) throw fail('write target is outside the owned prefix');
+    const marker = `${databaseName(options.projectId)}/documents/`;
+    if (!target.startsWith(marker)) throw fail('write target is outside the owned prefix');
+    const targetPath = target.slice(marker.length);
+    const targetSegments = pathSegments(targetPath, 'write target');
+    const prefixSegments = pathSegments(options.documentPrefix, 'documentPrefix');
+    if (targetSegments.length <= prefixSegments.length || targetSegments.slice(0, prefixSegments.length).join('/') !== options.documentPrefix) {
+      throw fail('write target is outside the owned prefix');
+    }
   }
 };
 
@@ -121,8 +156,8 @@ const statusReceipt = (operation, request, error) => ({
   complete: true,
   operation,
   request,
-  status: { code: error?.code, details: error?.details },
-  error,
+  status: plainStatus(error),
+  error: plainError(error),
 });
 
 export const runUnary = async (operation, options, input = {}) => {
@@ -130,20 +165,24 @@ export const runUnary = async (operation, options, input = {}) => {
   const request = buildUnaryRequest(operation, validated, input);
   const client = clientFor(validated);
   let timer;
+  let call;
   try {
-    const call = client[grpcCallName(operation)](request, {
+    call = client[grpcCallName(operation)](request, {
       deadline: new Date(Date.now() + validated.deadlineMs),
       otherArgs: { headers: { ...validated.metadata } },
     });
     const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(Object.assign(new Error('client deadline exceeded'), { code: 'client_deadline' })), validated.deadlineMs);
+      timer = setTimeout(() => {
+        call?.cancel?.();
+        reject(Object.assign(new Error('client deadline exceeded'), { code: 'client_deadline' }));
+      }, validated.deadlineMs);
     });
     const result = await Promise.race([call, timeout]);
     return { kind: 'grpc_status', complete: true, operation, request, response: result[0] ?? result };
   } catch (error) {
-    if (error?.code === 'client_deadline') return { kind: 'client_deadline', complete: false, operation, request, error };
+    if (error?.code === 'client_deadline') return { kind: 'client_deadline', complete: false, operation, request, error: plainError(error) };
     if (typeof error?.code === 'number') return statusReceipt(operation, request, error);
-    return { kind: 'incomplete_stream', complete: false, operation, request, error };
+    return { kind: 'incomplete_stream', complete: false, operation, request, error: plainError(error) };
   } finally {
     clearTimeout(timer);
     client.close();
@@ -170,6 +209,8 @@ export const runWrite = async (requests, options) => {
   });
   const events = [];
   let frameCount = 0;
+  let sentFrames = 0;
+  let receivedFrames = 0;
   let status;
   let terminalError;
   let sawEnd = false;
@@ -182,21 +223,27 @@ export const runWrite = async (requests, options) => {
   let settleTerminal;
   const terminal = new Promise(resolve => { settleTerminal = resolve; });
   const push = (event, value) => {
+    if (settled) return;
     if (byteLength(value) > validated.maxMessageBytes) throw fail('stream event exceeds maxMessageBytes', 'message_limit');
-    events.push({ type: event, value });
+    events.push(Object.freeze({ type: event, value }));
   };
   const finish = result => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       clearTimeout(terminalGraceTimer);
-      settleTerminal({ ...result, events: events.slice() });
+      settleTerminal(Object.freeze({ ...result, status: result.status ? plainStatus(result.status) : undefined, error: result.error ? plainError(result.error) : undefined, sentFrames, receivedFrames, events: Object.freeze(events.slice()) }));
   };
   const maybeFinish = () => {
     if (settled || !(sawEnd || sawClose)) return;
-    if (status) finish({ kind: 'grpc_status', complete: true, status });
-    else if (terminalError) finish({ kind: 'incomplete_stream', complete: false, error: terminalError });
-    else finish({ kind: 'incomplete_stream', complete: false });
+    const classified = classifyTerminal({ status, error: terminalError, sawEnd, sawClose });
+    if (classified?.kind === 'grpc_status') finish({ kind: 'grpc_status', complete: true, status });
+    else if (!terminalGraceTimer) {
+      terminalGraceTimer = setTimeout(() => {
+        if (terminalError) finish({ kind: 'incomplete_stream', complete: false, error: terminalError });
+        else finish({ kind: 'incomplete_stream', complete: false });
+      }, 100);
+    }
   };
   const rejectWaiters = error => {
     while (responseWaiters.length > 0) responseWaiters.shift().reject(error);
@@ -208,12 +255,15 @@ export const runWrite = async (requests, options) => {
   });
   const sendFrame = request => {
     if (++frameCount > validated.maxFrames) throw fail('stream exceeds maxFrames', 'frame_limit');
-    assertRequest(request, validated);
+    sentFrames += 1;
+    validateWriteRequest(request, validated);
     stream.write(request);
   };
   stream.on('data', response => {
+    if (settled) return;
     try {
       push('data', response);
+      receivedFrames += 1;
       if (++frameCount > validated.maxFrames) {
         stream.destroy(fail('stream exceeds maxFrames', 'frame_limit'));
         return;
@@ -223,13 +273,15 @@ export const runWrite = async (requests, options) => {
     } catch (error) { stream.destroy(error); }
   });
   stream.on('status', value => {
+    if (settled) return;
     status = value;
-    try { push('status', value); } catch (error) { stream.destroy(error); }
+    try { push('status', plainStatus(value)); } catch (error) { stream.destroy(error); }
     maybeFinish();
   });
   stream.on('error', error => {
+    if (settled) return;
     terminalError = error;
-    try { push('error', error); } catch { /* retain the typed error in the receipt */ }
+    try { push('error', plainError(error)); } catch { /* retain the typed error in the receipt */ }
     rejectWaiters(error);
     // grpc-js may emit error before status and close; defer classification until
     // the terminal status/close pair has had a chance to arrive.
@@ -237,13 +289,15 @@ export const runWrite = async (requests, options) => {
     maybeFinish();
   });
   stream.on('end', () => {
+    if (settled) return;
     sawEnd = true;
-    try { push('end', { status }); } catch { /* terminal event remains bounded */ }
+    try { push('end', { status: status ? plainStatus(status) : undefined }); } catch { /* terminal event remains bounded */ }
     maybeFinish();
   });
   stream.on('close', () => {
+    if (settled) return;
     sawClose = true;
-    try { push('close', { status }); } catch { /* terminal event remains bounded */ }
+    try { push('close', { status: status ? plainStatus(status) : undefined }); } catch { /* terminal event remains bounded */ }
     maybeFinish();
   });
   timer = setTimeout(() => {

@@ -2,12 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildUnaryRequest,
+  classifyTerminal,
   databaseName,
   documentName,
   listWriteFrames,
   runWrite,
   runUnary,
   validateTransportOptions,
+  validateWriteRequest,
 } from './stream_node_transport.mjs';
 
 const options = {
@@ -55,10 +57,26 @@ test('builds explicit unary Firestore requests', () => {
 test('accepts explicit local metadata without consulting environment credentials', () => {
   const validated = validateTransportOptions({ ...options, metadata: { authorization: 'Bearer owner' } });
   assert.deepEqual(validated.metadata, { authorization: 'Bearer owner' });
+  assert.throws(() => validateTransportOptions({ ...options, metadata: { Authorization: 'Bearer owner' } }), /metadata/);
 });
 
 test('refuses unary reads outside the owned document prefix', () => {
   assert.throws(() => buildUnaryRequest('GetDocument', options, { path: 'compat/other/doc' }), /owned prefix/);
+  for (const path of ['compat/o3/../other/doc', 'compat/o3//doc', 'compat/o3/./doc']) {
+    assert.throws(() => buildUnaryRequest('GetDocument', options, { path }), /invalid path segment|relative path/);
+  }
+});
+
+test('rejects traversal and duplicate segments in owned prefixes and write targets', () => {
+  for (const documentPrefix of ['compat/../o3', 'compat//o3', 'compat/./o3']) {
+    assert.throws(() => validateTransportOptions({ ...options, documentPrefix }), /invalid path segment|relative path/);
+  }
+  const otherProject = documentName('other-project', 'compat/o3/doc');
+  const traversal = documentName(options.projectId, 'compat/o3/../other/doc');
+  const duplicate = documentName(options.projectId, 'compat/o3//doc');
+  for (const target of [otherProject, traversal, duplicate]) {
+    assert.throws(() => validateWriteRequest({ writes: [{ delete: target }] }, options), /outside the owned prefix|invalid path segment|relative path/);
+  }
 });
 
 test('refuses caller overrides of transport-owned request fields', () => {
@@ -74,6 +92,16 @@ test('feeds only the freshest server stream token into the next write frame', ()
   ]);
   assert.throws(() => listWriteFrames([{ streamToken: Buffer.from('caller-token') }], response), /transport-owned/);
   assert.throws(() => listWriteFrames([{ database: 'projects/other/databases/(default)' }], response), /transport-owned/);
+});
+
+test('waits for status after error and close, and keeps terminal values serializable', () => {
+  const error = Object.assign(new Error('permission denied'), { code: 7, details: 'denied' });
+  assert.equal(classifyTerminal({ error, sawClose: true, sawEnd: false }), undefined);
+  const receipt = classifyTerminal({ error, status: { code: 7, details: 'denied' }, sawClose: true, sawEnd: false });
+  assert.equal(receipt.kind, 'grpc_status');
+  assert.equal(receipt.status.code, 7);
+  assert.deepEqual(receipt.error, { name: 'Error', code: 7, details: 'denied', message: 'permission denied' });
+  assert.match(JSON.stringify({ error: receipt.error }), /permission denied/);
 });
 
 test('classifies a local deadline as incomplete', async () => {

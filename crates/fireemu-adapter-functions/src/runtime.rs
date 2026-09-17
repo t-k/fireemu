@@ -3365,20 +3365,38 @@ impl FunctionsRuntime {
         })
     }
 
-    /// Token policy of the first Blocking Auth target selected for `event`.
+    /// Token policy of the first discovered Blocking Auth target for `event`.
     #[must_use]
     pub fn blocking_auth_token_policy(
         &self,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
     ) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+        self.blocking_auth_token_policy_for(event, None)
+    }
+
+    /// Token policy of the selected Blocking Auth target for `event`.
+    ///
+    /// `None` preserves discovery order and returns the first target's policy. When a function
+    /// name is provided, the policy is read from that exact target so configuration that selects
+    /// a later function cannot accidentally inherit an earlier function's credential policy.
+    #[must_use]
+    pub fn blocking_auth_token_policy_for(
+        &self,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        selected_function: Option<&str>,
+    ) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
         self.manifest
             .functions
             .iter()
-            .find_map(|function| match function.trigger {
+            .find_map(|candidate| match candidate.trigger {
                 Trigger::BlockingAuth {
-                    event: candidate,
+                    event: candidate_event,
                     token_policy,
-                } if candidate == event => Some(token_policy),
+                } if candidate_event == event
+                    && selected_function.is_none_or(|selected| candidate.name == selected) =>
+                {
+                    Some(token_policy)
+                }
                 _ => None,
             })
             .unwrap_or_default()

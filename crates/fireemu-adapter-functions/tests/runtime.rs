@@ -830,6 +830,56 @@ async fn hot_reload_rejects_a_policy_only_blocking_auth_manifest_change() {
 }
 
 #[tokio::test]
+async fn blocking_auth_token_policy_follows_an_explicit_target() {
+    let (runtime, _clock) = start_with_policies_and_manifest(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        |manifest| {
+            let mut blocking = parse_manifest(&json!({"functions": [{
+                "name": "policyA",
+                "trigger": {"type": "blockingAuth", "eventType": "beforeCreate"}
+            }, {
+                "name": "policyB",
+                "trigger": {"type": "blockingAuth", "eventType": "beforeCreate", "accessToken": true}
+            }]}))
+            .unwrap();
+            manifest.functions.append(&mut blocking.functions);
+        },
+    )
+    .await;
+
+    assert!(
+        !runtime
+            .blocking_auth_token_policy(BlockingAuthEvent::BeforeCreate)
+            .access_token
+    );
+    assert!(
+        !runtime
+            .blocking_auth_token_policy_for(BlockingAuthEvent::BeforeCreate, Some("policyA"))
+            .access_token
+    );
+    assert!(
+        runtime
+            .blocking_auth_token_policy_for(BlockingAuthEvent::BeforeCreate, Some("policyB"))
+            .access_token
+    );
+    assert!(
+        !runtime
+            .blocking_auth_token_policy_for(BlockingAuthEvent::BeforeCreate, Some("missing"))
+            .access_token
+    );
+
+    let (target, admission) = runtime
+        .try_admit_blocking_auth_for(BlockingAuthEvent::BeforeCreate, Some("policyB"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(target.function, "policyB");
+    assert!(target.token_policy.access_token);
+    drop(admission);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn omitted_second_generation_concurrency_admits_two_http_requests() {
     let (runtime, _clock) = start_with_policies_and_manifest(
         fireemu_adapter_functions::runtime::OverlapPolicy::Allow,

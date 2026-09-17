@@ -3110,6 +3110,18 @@ impl BlockingAuthBridge {
         )
     }
 
+    fn selected_function(
+        selection: &fireemu_core_functions::manifest::BlockingAuthSelection,
+    ) -> Option<&str> {
+        match selection {
+            fireemu_core_functions::manifest::BlockingAuthSelection::Explicit {
+                function, ..
+            } => Some(function),
+            fireemu_core_functions::manifest::BlockingAuthSelection::Discovery
+            | fireemu_core_functions::manifest::BlockingAuthSelection::Disabled => None,
+        }
+    }
+
     fn settings_snapshot(&self) -> Result<BlockingAuthSettings, ()> {
         self.settings
             .read()
@@ -3620,13 +3632,7 @@ impl BlockingAuthBridge {
         }
 
         let selection = settings.selections.for_event(event);
-        let selected_function = match selection {
-            fireemu_core_functions::manifest::BlockingAuthSelection::Explicit {
-                function, ..
-            } => Some(function.as_str()),
-            fireemu_core_functions::manifest::BlockingAuthSelection::Discovery
-            | fireemu_core_functions::manifest::BlockingAuthSelection::Disabled => None,
-        };
+        let selected_function = Self::selected_function(selection);
         let admitted = self
             .runtime
             .try_admit_blocking_auth_for(event, selected_function)
@@ -3748,9 +3754,17 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
             let Ok(settings) = self.settings_snapshot() else {
                 return fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default();
             };
+            let selection = settings.selections.for_event(event);
+            if matches!(
+                selection,
+                fireemu_core_functions::manifest::BlockingAuthSelection::Disabled
+            ) {
+                return fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default();
+            }
             let restrictions = settings.forwarding_restrictions;
             restrict_blocking_auth_token_policy(
-                self.runtime.blocking_auth_token_policy(event),
+                self.runtime
+                    .blocking_auth_token_policy_for(event, Self::selected_function(selection)),
                 restrictions,
             )
         } else {
@@ -4468,6 +4482,249 @@ mod tests {
             &BlockingAuthSelection::Disabled,
             Some(("guardSignIn", "europe-west1"))
         ));
+    }
+
+    async fn runtime_with_blocking_auth_policy_order(
+        order: &[(&str, bool, bool)],
+    ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
+        use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+        use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
+        use fireemu_core_functions::manifest::{BlockingAuthEvent, Trigger};
+        use fireemu_core_types::ids::SessionId;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let spec = SpawnSpec {
+            command: vec!["python3".to_owned(), script.display().to_string()],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(60),
+        };
+        let runner = Runner::spawn_spec(&spec).await.unwrap();
+        let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        let template = manifest.get("echo").unwrap().clone();
+        for (name, access_token, refresh_token) in order {
+            let mut function = template.clone();
+            function.name = (*name).to_owned();
+            function.entry_point = (*name).to_owned();
+            function.trigger = Trigger::BlockingAuth {
+                event: BlockingAuthEvent::BeforeCreate,
+                token_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+                    access_token: *access_token,
+                    refresh_token: *refresh_token,
+                    ..Default::default()
+                },
+            };
+            manifest.functions.push(function);
+        }
+        FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: SessionId::new(7),
+                max_running: 4,
+                debug_mode: false,
+                retry_attempts: 1,
+                max_catch_up_runs: 1,
+                runner_secret: "test-secret".to_owned(),
+                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+                functions_host: None,
+            },
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            Arc::new(runner),
+            Some(spec),
+        )
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn explicit_blocking_auth_prefilter_uses_the_selected_function_policy() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_functions::manifest::{
+            BlockingAuthEvent, BlockingAuthSelection, BlockingAuthSelections,
+        };
+
+        let runtime = runtime_with_blocking_auth_policy_order(&[
+            ("guardA", false, false),
+            ("guardB", true, true),
+        ])
+        .await;
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            BlockingAuthSelections {
+                before_create: BlockingAuthSelection::Explicit {
+                    function: "guardB".to_owned(),
+                    region: Some("us-central1".to_owned()),
+                },
+                before_sign_in: BlockingAuthSelection::Disabled,
+            },
+            true,
+        );
+        assert!(bridge.forward_inbound_credentials());
+        assert!(
+            bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .access_token
+        );
+        assert!(
+            bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .refresh_token
+        );
+        let (target, admission) = runtime
+            .try_admit_blocking_auth_for(BlockingAuthEvent::BeforeCreate, Some("guardB"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(target.function, "guardB");
+        assert!(target.token_policy.access_token);
+        assert!(target.token_policy.refresh_token);
+        drop(admission);
+
+        let global_disabled = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            bridge.settings_snapshot().unwrap().selections,
+            false,
+        );
+        let global_disabled_policy =
+            global_disabled.inbound_credential_policy(BlockingAuthEvent::BeforeCreate);
+        assert!(!global_disabled_policy.access_token);
+        assert!(!global_disabled_policy.refresh_token);
+
+        let restricted = BlockingAuthBridge::try_new_with_selections_and_forwarding_policy(
+            runtime.clone(),
+            bridge.settings_snapshot().unwrap().selections,
+            true,
+            Some(fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+                access_token: false,
+                id_token: false,
+                refresh_token: true,
+            }),
+        )
+        .unwrap();
+        let restricted_policy =
+            restricted.inbound_credential_policy(BlockingAuthEvent::BeforeCreate);
+        assert!(!restricted_policy.access_token);
+        assert!(restricted_policy.refresh_token);
+        runtime.shutdown().await;
+
+        let runtime = runtime_with_blocking_auth_policy_order(&[
+            ("guardB", true, true),
+            ("guardA", false, false),
+        ])
+        .await;
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            BlockingAuthSelections {
+                before_create: BlockingAuthSelection::Explicit {
+                    function: "guardB".to_owned(),
+                    region: Some("us-central1".to_owned()),
+                },
+                before_sign_in: BlockingAuthSelection::Disabled,
+            },
+            true,
+        );
+        assert!(
+            bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .access_token
+        );
+        assert!(
+            bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .refresh_token
+        );
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocking_auth_prefilter_keeps_discovery_and_disabled_policies() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_functions::manifest::{
+            BlockingAuthEvent, BlockingAuthSelection, BlockingAuthSelections,
+        };
+
+        let runtime = runtime_with_blocking_auth_policy_order(&[
+            ("guardA", false, false),
+            ("guardB", true, true),
+        ])
+        .await;
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            BlockingAuthSelections {
+                before_create: BlockingAuthSelection::Explicit {
+                    function: "guardA".to_owned(),
+                    region: Some("us-central1".to_owned()),
+                },
+                before_sign_in: BlockingAuthSelection::Disabled,
+            },
+            true,
+        );
+        assert!(
+            !bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .access_token
+        );
+        assert!(
+            !bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .refresh_token
+        );
+        runtime.shutdown().await;
+
+        let runtime = runtime_with_blocking_auth_policy_order(&[
+            ("guardA", false, false),
+            ("guardB", true, true),
+        ])
+        .await;
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            BlockingAuthSelections {
+                before_create: BlockingAuthSelection::Discovery,
+                before_sign_in: BlockingAuthSelection::Disabled,
+            },
+            true,
+        );
+        assert!(
+            !bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .access_token
+        );
+        assert!(
+            !bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .refresh_token
+        );
+        runtime.shutdown().await;
+
+        let runtime = runtime_with_blocking_auth_policy_order(&[
+            ("guardA", false, false),
+            ("guardB", true, true),
+        ])
+        .await;
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            BlockingAuthSelections {
+                before_create: BlockingAuthSelection::Disabled,
+                before_sign_in: BlockingAuthSelection::Disabled,
+            },
+            true,
+        );
+        assert!(
+            !bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .access_token
+        );
+        assert!(
+            !bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .refresh_token
+        );
+        runtime.shutdown().await;
     }
 
     #[tokio::test(flavor = "current_thread")]

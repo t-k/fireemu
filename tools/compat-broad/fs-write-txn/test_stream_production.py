@@ -404,3 +404,57 @@ def test_prepare_refuses_missing_owner_input_before_output(tmp_path):
             tmp_path / "prepared.json",
         )
     assert not (tmp_path / "prepared.json").exists()
+
+
+def test_ownerless_prepare_stops_without_local_proof(tmp_path):
+    module = production()
+    with pytest.raises((ValueError, FileNotFoundError)):
+        module.prepare_inputs(
+            None,
+            tmp_path / "missing-local.json",
+            tmp_path / "missing-artifact",
+            tmp_path / "proposal.json",
+        )
+    assert not (tmp_path / "proposal.json").exists()
+
+
+def test_valid_private_o8_handoff_preserves_bounded_credential():
+    import json
+    import tempfile
+    import time
+
+    module = production()
+    now = time.time()
+    value = {
+        "kind": "stream-o8-credential-v1",
+        "permissionDigest": "a" * 64,
+        "token": "local-secret",
+        "apiKey": "local-key",
+        "verifiedAt": now,
+        "expiresAt": now + 1800,
+    }
+    with tempfile.TemporaryFile() as stream:
+        stream.write(json.dumps(value).encode())
+        stream.seek(0)
+        credential, key = module.read_o8_handoff(stream.fileno(), "a" * 64)
+    assert key == "local-key"
+    assert credential.token == "local-secret"
+    assert credential.usable(time.monotonic(), 1100)
+
+
+def test_cli_prepare_accepts_missing_permission_flag():
+    import subprocess
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).with_name("stream_production.py")),
+            "prepare",
+            "--help",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "[--permission PERMISSION]" in result.stdout

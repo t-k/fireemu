@@ -25,4 +25,15 @@ cargo nextest run --locked -p fireemu-verification-quint \
 
 Each binary exercised deterministic scenarios, projection-fault detection, and generated traces against its existing driver. The command reported `6 passed, 9 skipped`; those nine are the ordinary tests excluded by `--run-ignored only`, not nine failures or new ignored cases. The full workspace run already covered those ordinary tests.
 
-This is local model/implementation evidence for the existing models. It does not establish production parity, does not prove the new reservation protocol as a dedicated formal model, and does not turn all 81 baseline skips into passes. The other 75 ignored cases were not executed by this follow-up. Historical evidence and prior runs remain unchanged.
+This is local model/implementation evidence for the existing models. It does not establish production parity or prove the new reservation protocol as a dedicated formal model. Historical evidence and prior runs remain unchanged.
+
+## Blocking Functions SDK follow-up
+
+After `npm ci --prefix tools/sdk-smoke --ignore-scripts --no-audit --no-fund`, the two existing `blocking_identity_exports` tests were explicitly executed through the port-registry process wrapper:
+
+```sh
+cargo nextest run --locked -p fireemu --test functions_discovery \
+  --profile pr --run-ignored only -E 'test(blocking_identity_exports)'
+```
+
+Both passed: discovery classified the real `firebase-functions` 7.3.2 exports as served triggers, and the runner exposed their synchronous blocking endpoint. The selected run's 19 skips are excluded tests from that binary. These two checks establish SDK-local discovery/runner behavior, not end-to-end Auth mutation or production hook parity. Together with the six Connect checks, eight of the 81 baseline ignored tests were explicitly executed in this follow-up; the other 73 were not executed here. The normal workspace run retains its original 81-skip result.

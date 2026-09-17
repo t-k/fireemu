@@ -217,6 +217,11 @@ struct ToggleHandlesHook {
     enabled_after_initial: bool,
 }
 
+struct RevisionBumpBeforeDispatchHook {
+    revision: AtomicUsize,
+    revision_calls: AtomicUsize,
+}
+
 struct BeforeCreateOnlyRejectingHook;
 
 struct BeforeCreateOnlySuccessfulHook(Arc<Mutex<Vec<BlockingAuthEvent>>>);
@@ -285,6 +290,24 @@ impl AuthBlockingHook for ToggleHandlesHook {
         _user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Value, BlockingFunctionFailure> {
         unreachable!("toggle barrier regression must reject before hook dispatch")
+    }
+}
+
+impl AuthBlockingHook for RevisionBumpBeforeDispatchHook {
+    fn blocking_auth_revision(&self) -> u64 {
+        let call = self.revision_calls.fetch_add(1, Ordering::SeqCst);
+        if call >= 2 {
+            self.revision.store(1, Ordering::SeqCst);
+        }
+        self.revision.load(Ordering::SeqCst) as u64
+    }
+
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        unreachable!("revision drift must be rejected before hook dispatch")
     }
 }
 
@@ -2815,6 +2838,26 @@ fn unbound_blocking_auth_runs_for_default_but_not_routed_projects() {
         .unwrap()
         .user_by_email("worker@example.com")
         .is_some());
+}
+
+#[test]
+fn blocking_auth_revision_drift_between_plan_and_dispatch_is_rejected() {
+    let mut auth = state();
+    auth.blocking = Some(Arc::new(RevisionBumpBeforeDispatchHook {
+        revision: AtomicUsize::new(0),
+        revision_calls: AtomicUsize::new(0),
+    }));
+    let (status, body) = post(
+        &auth,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "revision-drift@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
+    );
+    assert_eq!(auth.store.lock().unwrap().user_count(), 0);
 }
 
 #[test]

@@ -1776,6 +1776,7 @@ impl Drop for GeneratedLocalIdReservation {
 fn dispatch_with_blocking_hook(
     state: &AuthState,
     blocking: &dyn AuthBlockingHook,
+    expected_blocking_revision: u64,
     handler: routes::Handler,
     store_arc: &Arc<Mutex<AuthStore>>,
     store: std::sync::MutexGuard<'_, AuthStore>,
@@ -1798,7 +1799,9 @@ fn dispatch_with_blocking_hook(
                 store.pending_sign_in_context(&pending)?.clone(),
             ))
         });
-    let blocking_revision = blocking.blocking_auth_revision();
+    if blocking.blocking_auth_revision() != expected_blocking_revision {
+        return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
+    }
     let generated_id_interference = store.generated_id_interference_count();
     let mut candidate = store.clone();
     let reset_generation = store.reset_generation();
@@ -1818,7 +1821,7 @@ fn dispatch_with_blocking_hook(
         at,
         state.into(),
     );
-    if blocking.blocking_auth_revision() != blocking_revision {
+    if blocking.blocking_auth_revision() != expected_blocking_revision {
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
     }
     let is_authentication = matches!(
@@ -1971,7 +1974,7 @@ fn dispatch_with_blocking_hook(
             }
         }
     }
-    if blocking.blocking_auth_revision() != blocking_revision {
+    if blocking.blocking_auth_revision() != expected_blocking_revision {
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
     }
     let mut commit = |metadata: Option<&fireemu_core_auth::store::TenantMetadata>| {
@@ -2694,6 +2697,7 @@ fn handle_with_policy(
         dispatch_with_blocking_hook(
             state,
             blocking,
+            blocking_revision,
             route.handler,
             &store_arc,
             store,

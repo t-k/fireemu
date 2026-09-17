@@ -638,12 +638,13 @@ class Gate:
                 )
             ):
                 raise ValueError("positive or uncertain data Gate evidence")
-            pids = {state["coordinatorPid"]} | {
-                job["pid"] for job in state["jobs"].values()
-            }
-            for pid in pids - {None}:
+            pids = [
+                state["coordinatorPid"],
+                *[job["pid"] for job in state["jobs"].values()],
+            ]
+            for pid in pids:
                 if type(pid) is not int or pid <= 0:
-                    raise ValueError("invalid worker identity")
+                    raise ValueError("recorded worker identity required")
                 try:
                     os.kill(pid, 0)
                 except ProcessLookupError:

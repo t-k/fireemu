@@ -4,6 +4,7 @@
 import multiprocessing
 import json
 import os
+from types import SimpleNamespace
 import threading
 import time
 from pathlib import Path
@@ -18,6 +19,8 @@ from reservations import (
 )
 from broad_contract import digest
 from shared_gate import Gate, _save, create
+from shared_production import ProductionGate
+import shared_production
 
 
 def envelope():
@@ -302,8 +305,22 @@ def test_no_data_abort_releases_only_lock_and_keeps_budget_and_nonce(tmp_path):
     assert gate.snapshot()["stopped"] is True
     with pytest.raises(ValueError):
         gate.dispatch(plan()["jobs"]["limits"]["recovery"][0], True, lambda: None)
+    assert row["finalGateDigest"] == digest(gate.snapshot())
     with pytest.raises(ValueError):
         ledger.finish(ticket)
+    assert row["finalGateDigest"] == digest(gate.snapshot())
+    with pytest.raises(ValueError):
+        gate.claim()
+    assert row["finalGateDigest"] == digest(gate.snapshot())
+    with pytest.raises(ValueError):
+        gate.coordinator_call(0, lambda: None)
+    assert row["finalGateDigest"] == digest(gate.snapshot())
+    with pytest.raises(ValueError):
+        gate.stop(environment=True)
+    assert row["finalGateDigest"] == digest(gate.snapshot())
+    with pytest.raises(ValueError):
+        gate.finish()
+    assert row["finalGateDigest"] == digest(gate.snapshot())
     ledger.abort_no_data(ticket, record)
     assert (
         ledger.snapshot()["envelopes"][digest(envelope())]["allocated"]
@@ -420,6 +437,47 @@ def test_no_data_abort_rejects_tampered_gate_after_stop(tmp_path):
     assert (
         ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "closing"
     )
+
+
+@pytest.mark.parametrize("missing", ["coordinator", "job", "both", "malformed"])
+def test_no_data_abort_requires_recorded_worker_identity(tmp_path, missing):
+    ledger, gate, ticket, record = _no_data_attempt(tmp_path)
+    with gate.locked() as state:
+        if missing in {"coordinator", "both"}:
+            state["coordinatorPid"] = None
+        if missing in {"job", "both"}:
+            state["jobs"]["limits"]["pid"] = None
+        if missing == "malformed":
+            state["jobs"]["limits"]["pid"] = "not-a-pid"
+        _save(gate.path, state)
+    receipt_path = Path(record["receiptPath"])
+    receipt = json.loads(receipt_path.read_text())
+    receipt["gate"] = gate.snapshot()
+    receipt_path.write_text(json.dumps(receipt))
+    record["gateDigest"] = digest(receipt["gate"])
+    record["receiptDigest"] = digest(receipt)
+    with pytest.raises(ValueError, match="worker identity"):
+        ledger.abort_no_data(ticket, record)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "closing"
+    )
+
+
+def test_terminal_abort_rejects_recovery_management_without_gate_mutation(
+    tmp_path, monkeypatch
+):
+    ledger, gate, ticket, record = _no_data_attempt(tmp_path)
+    ledger.abort_no_data(ticket, record)
+    frozen = gate.snapshot()
+    worker_pid = frozen["coordinatorPid"]
+    monkeypatch.setattr(shared_production.os, "getpid", lambda: worker_pid)
+    production_gate = ProductionGate(gate.path, "limits")
+    coordinator = SimpleNamespace(budget=SimpleNamespace(recovery=True))
+    with pytest.raises(ValueError, match="management stopped"):
+        production_gate.manage(coordinator, "project", lambda: "accepted")
+    assert gate.snapshot() == frozen
+    row = ledger.snapshot()["reservations"][ticket["reservation"]]
+    assert row["finalGateDigest"] == digest(frozen)
 
 
 def contender(root, barrier, queue, label):

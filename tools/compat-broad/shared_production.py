@@ -167,7 +167,8 @@ class ProductionGate(Gate):
     def manage(self, coordinator, action, callback):
         with self.locked() as state:
             if (
-                state["coordinatorPid"] != os.getpid()
+                state.get("noDataAbort") is not None
+                or state["coordinatorPid"] != os.getpid()
                 or state["coordinatorInflight"]
                 or any(j["inflight"] for j in state["jobs"].values())
                 or (state["stopped"] and not coordinator.budget.recovery)

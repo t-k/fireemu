@@ -46,6 +46,8 @@ SOURCES = {
     "shadow": ROOT / "tools/compat-broad/fs-write-limits/shadow.py",
     "compiler": ROOT / "tools/compat-broad/fs-write-limits/compiler.py",
     "transport": ROOT / "tools/compat-broad/fs-write-limits/transport.py",
+    "production_bridge": ROOT / "tools/compat-broad/fs-write-limits/production_bridge.py",
+    "credential_prep": ROOT / "tools/compat-broad/fs-write-txn/credential_prep.py",
 }
 
 

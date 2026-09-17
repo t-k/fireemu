@@ -193,6 +193,7 @@ def recompare(
         "derivedAnalysis": True,
         "comparisonOrigin": "new-local-v1-comparison",
         "originalFrozenComparisonSha256": original_hash,
+        "v2ResultSha256": sha_file(output / "v2-result.json"),
         "productionReceiptSha256": receipt_hash
         if v1_result.get("acquisitionValidated")
         else None,

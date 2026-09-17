@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -203,3 +204,29 @@ def test_v2_binding_declares_both_source_files_and_aggregate():
 
     assert V2_ENTRY_SOURCE_SHA256 != kernel_hash
     assert len(V2_SOURCE_SHA256) == 64
+
+
+def test_recompare_preserves_indeterminate_for_invalid_v1_acquisition(tmp_path):
+    from recompare import recompare
+
+    production = tmp_path / "production"
+    local = tmp_path / "local"
+    production.mkdir()
+    local.mkdir()
+    artifact = tmp_path / "missing-artifact"
+    output = tmp_path / "output"
+
+    result = recompare(production, local, artifact, output)
+    v1 = json.loads((output / "v1-result.json").read_bytes())
+    v2 = json.loads((output / "v2-result.json").read_bytes())
+    binding = json.loads((output / "binding.json").read_bytes())
+
+    assert result["classification"] == "INDETERMINATE"
+    assert v1["classification"] == "INDETERMINATE"
+    assert v2["classification"] == "INDETERMINATE"
+    assert binding["acquisitionValidated"] is False
+    assert binding["promotionReady"] is False
+    assert (
+        binding["v2ResultSha256"]
+        == hashlib.sha256((output / "v2-result.json").read_bytes()).hexdigest()
+    )

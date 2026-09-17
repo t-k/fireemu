@@ -692,3 +692,95 @@ def test_actual_ledger_retains_configuration_reads_across_independent_campaigns(
     other = ledger.reserve(envelope, claim, plan)
     assert ledger.bound_claim(other)["locks"] == locks
     assert ledger.bound_claim(ticket)["locks"] != locks
+
+
+def test_frozen_credential_modes_define_distinct_outer_reservations():
+    import credential_prep
+
+    module = production()
+    assert hasattr(module, "credential_mode_contract")
+    verified = module.credential_mode_contract(credential_prep.VERIFIED_MODE)
+    refresh = module.credential_mode_contract(credential_prep.MODE)
+    assert verified["outer"] == {
+        "requests": 33,
+        "seconds": 1100,
+        "costMicrousd": 1303300,
+    }
+    assert refresh["outer"] == {
+        "requests": 35,
+        "seconds": 1200,
+        "costMicrousd": 1303500,
+    }
+    assert refresh["preparation"] == credential_prep.contract()
+    with pytest.raises(ValueError):
+        module.credential_mode_contract("runtime-fallback")
+
+
+def test_refresh_handoff_uses_private_descriptor_and_frozen_permission(tmp_path):
+    import json
+
+    import credential_prep
+    from broad_contract import digest
+    from test_credential_prep import ADC, PRINCIPAL
+
+    permission = {"authorizedUserDigest": digest(ADC), "credentialPrincipal": PRINCIPAL}
+    handoff = {
+        "kind": "stream-o8-authorized-user-v1",
+        "permissionDigest": digest(permission),
+        "apiKey": "synthetic-key",
+        "adc": ADC,
+    }
+    path = tmp_path / "private-handoff"
+    path.write_text(json.dumps(handoff))
+    path.chmod(0o600)
+    module = production()
+    assert hasattr(module, "read_refresh_handoff")
+    with path.open("rb") as stream:
+        assert module.read_refresh_handoff(stream.fileno(), permission) == handoff
+    path.chmod(0o644)
+    with path.open("rb") as stream, pytest.raises(ValueError):
+        module.read_refresh_handoff(stream.fileno(), permission)
+    assert credential_prep.MODE != credential_prep.VERIFIED_MODE
+
+
+def test_refresh_mode_cannot_bypass_preparation_with_injected_token(
+    tmp_path, metadata_server
+):
+    import credential_prep
+    from batch_contract import Credential
+    from test_credential_prep import reserved_fixture
+
+    output, ledger, ticket, permission, plan, _handoff = reserved_fixture(tmp_path)
+    assert permission["credentialMode"] == credential_prep.MODE
+    result = production().execute_session(
+        plan,
+        permission,
+        output,
+        ledger,
+        ticket,
+        "synthetic-key",
+        Credential(),
+        shadow={"metadataOrigin": metadata_server["origin"], "port": 1},
+    )
+    assert result["acquisitionValidated"] is False
+    assert result["reservationReleased"] is False
+    assert not (output / "gate").exists()
+    assert metadata_server["requests"] == []
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+def test_preparation_failure_terminal_receipt_accounts_charged_attempt(tmp_path):
+    from test_credential_prep import reserved_fixture
+
+    output, ledger, ticket, _permission, _plan, _handoff = reserved_fixture(tmp_path)
+    directory = output / "credential-preparation"
+    directory.mkdir(mode=0o700)
+    production().write_atomic_receipt(directory / "refresh-charge.json", {"ordinal": 1})
+    result = production().retained_failure(
+        output, ledger, ticket, ValueError("sanitized")
+    )
+    assert result["productionExecuted"] is True
+    assert result["productionRequests"] == 1
+    assert result["credentialPreparationAttempts"] == 1
+    assert result["dataRequests"] == 0
+    assert result["reservationReleased"] is False

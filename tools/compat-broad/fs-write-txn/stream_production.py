@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "production-admissi
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "compat-inventory"))
 
 import stream_bridge
+import credential_prep
 from batch_adapter import request_headers, wire
 from batch_contract import PROJECT, NUMBER, Credential, database_evidence
 from broad_contract import digest, local_origin
@@ -399,7 +400,16 @@ def retained_failure(output, ledger, ticket, error, *, production=True):
         pass
     except (OSError, ValueError, KeyError):
         facts = {key: None for key in facts}
+    preparation_attempts = sum(
+        (Path(output) / "credential-preparation" / f"{slot}-charge.json").exists()
+        for slot in ("refresh", "tokeninfo")
+    )
+    if preparation_attempts and production:
+        facts["productionExecuted"] = True
+        if facts["productionRequests"] is not None:
+            facts["productionRequests"] += preparation_attempts
     receipt = {
+        "credentialPreparationAttempts": preparation_attempts,
         "kind": "stream-prepared-setup-failure-v1",
         "acquisitionValidated": False,
         "reservationReleased": released,
@@ -442,6 +452,7 @@ def execute_session(
     *,
     shadow=None,
     final_binding=None,
+    preparation_proof=None,
 ):
     try:
         return _execute_session(
@@ -454,6 +465,7 @@ def execute_session(
             credential,
             shadow=shadow,
             final_binding=final_binding,
+            preparation_proof=preparation_proof,
         )
     except Exception as error:  # noqa: BLE001 -- Keep responsibility visible even before Gate setup succeeds.
         return retained_failure(
@@ -472,9 +484,23 @@ def _execute_session(
     *,
     shadow=None,
     final_binding=None,
+    preparation_proof=None,
 ):
     """Execute an already reserved, frozen plan with an injected O8 credential."""
     output = Path(output)
+    if permission.get("credentialMode") == credential_prep.MODE:
+        if preparation_proof is None:
+            raise ValueError("verified two-slot preparation proof required")
+        credential_prep.validate_preparation(
+            output,
+            ledger,
+            ticket,
+            permission,
+            preparation_proof,
+            {"total": 0, "costMicrousd": FIXED_NETWORK_MICROUSD},
+        )
+    elif preparation_proof is not None:
+        raise ValueError("unbound preparation proof refused")
     create(output / "gate", plan)
     gate = StreamProductionGate(output / "gate")
     gate.claim()
@@ -541,6 +567,10 @@ def _execute_session(
             raise ValueError("stream acquisition incomplete")
         comparison = final_binding(result) if final_binding is not None else None
         coordinator.validate_current()
+        if preparation_proof is not None:
+            credential_prep.validate_preparation(
+                output, ledger, ticket, permission, preparation_proof, gate.snapshot()
+            )
         gate.finish()
         coordinator.validate_current()
         ledger.finish(ticket)
@@ -560,6 +590,17 @@ def _execute_session(
         "gate": final_state,
         "metadataEvidence": coordinator.metadata_evidence,
     }
+    if preparation_proof is not None:
+        receipt["credentialPreparation"] = preparation_proof
+        receipt["outerAccounting"] = {
+            "requests": final_state["total"] + 2,
+            "costMicrousd": final_state["costMicrousd"] + 200,
+            "reservationStartedAt": preparation_proof["reservationStartedAt"],
+            "finishedAt": time.time(),
+        }
+        if shadow is None:
+            receipt["productionExecuted"] = True
+            receipt["productionRequests"] += 2
     write_atomic_receipt(output / "receipt.json", receipt)
     return receipt
 
@@ -675,10 +716,31 @@ def resource_locks(plan):
     ]
 
 
-def manifest(nonce, owner):
+def credential_mode_contract(mode):
+    if mode == credential_prep.VERIFIED_MODE:
+        return {
+            "mode": mode,
+            "outer": {
+                "requests": 33,
+                "seconds": 1100,
+                "costMicrousd": TOTAL_COST_MICROUSD,
+            },
+            "preparation": None,
+        }
+    if mode == credential_prep.MODE:
+        return {
+            "mode": mode,
+            "outer": credential_prep.contract()["outer"],
+            "preparation": credential_prep.contract(),
+        }
+    raise ValueError("closed frozen credential mode required")
+
+
+def manifest(nonce, owner, credential_mode=credential_prep.VERIFIED_MODE):
     allocation = with_management(stream_bridge.compile_plan(PROJECT, nonce, owner))
     return {
         "kind": "stream-prepared-manifest-v1",
+        "credential": credential_mode_contract(credential_mode),
         "allocation": allocation,
         "resourceLocks": resource_locks(allocation),
         "sourceDigest": stream_bridge.source_digest(),
@@ -688,7 +750,7 @@ def manifest(nonce, owner):
     }
 
 
-def _prepared_inputs(permission_path, local_path, artifact_path):
+def _prepared_inputs(permission_path, local_path, artifact_path, credential_mode=None):
     from reservations import Ledger
 
     import uuid
@@ -707,7 +769,12 @@ def _prepared_inputs(permission_path, local_path, artifact_path):
         or not isinstance(owner, str)
     ):
         raise ValueError("fresh stream owner namespace required")
-    frozen = manifest(nonce, owner)
+    mode = credential_mode or (permission or {}).get(
+        "credentialMode", credential_prep.VERIFIED_MODE
+    )
+    mode_contract = credential_mode_contract(mode)
+    outer = mode_contract["outer"]
+    frozen = manifest(nonce, owner, mode)
     ledger = Ledger(SHARED_ROOT)
     binding = {
         "sourceDigest": stream_bridge.source_digest(),
@@ -721,7 +788,12 @@ def _prepared_inputs(permission_path, local_path, artifact_path):
         "ledgerIdentity": ledger.identity,
     }
     required = {
-        "kind": "stream-prepared-owner-permission-v1",
+        "kind": (
+            "stream-prepared-refresh-owner-permission-v1"
+            if mode == credential_prep.MODE
+            else "stream-prepared-owner-permission-v1"
+        ),
+        "credentialMode": mode,
         "nonce": nonce,
         "ownerId": owner,
         "project": PROJECT,
@@ -739,12 +811,12 @@ def _prepared_inputs(permission_path, local_path, artifact_path):
         "ledgerIdentity": ledger.identity,
         "databaseProjectionContractDigest": digest(DATABASE_PROJECTION),
         "tariffsConfirmedBelowPlanningCeilings": True,
-        "requestUpperBound": 33,
+        "requestUpperBound": outer["requests"],
         "accountUpperBound": 0,
         "resourceUpperBound": 3,
         "concurrencyUpperBound": 1,
-        "timeUpperBound": 1100,
-        "costUpperMicrousd": TOTAL_COST_MICROUSD,
+        "timeUpperBound": outer["seconds"],
+        "costUpperMicrousd": outer["costMicrousd"],
         "pricingBasisDigest": digest(frozen["pricingBasis"]),
         "pricingSdkDigest": digest(frozen["pricingSdk"]),
         "allowedReobservations": 0,
@@ -753,6 +825,8 @@ def _prepared_inputs(permission_path, local_path, artifact_path):
             "ownerRetainsUntilReservationResolved": True,
         },
     }
+    if mode == credential_prep.MODE:
+        required["credentialPreparationDigest"] = digest(mode_contract["preparation"])
     if (
         local.get("kind") != "stream-prepared-execution-v1"
         or local.get("productionExecuted") is not False
@@ -775,7 +849,12 @@ def _prepared_inputs(permission_path, local_path, artifact_path):
             "bindings": binding,
             "manifest": frozen,
             "requiredPermission": required,
-            "ownerFieldsRequired": [
+            "ownerFieldsRequired": (
+                ["authorizedUserDigest", "credentialPrincipal"]
+                if mode == credential_prep.MODE
+                else []
+            )
+            + [
                 "issuedAt",
                 "expiresAt",
                 "apiKeyDigest",
@@ -798,6 +877,12 @@ def _prepared_inputs(permission_path, local_path, artifact_path):
         or not permission["recoveryOwner"].strip()
     ):
         raise ValueError("API-key binding and recovery owner required")
+    if mode == credential_prep.MODE:
+        credential_prep.validate_principal(permission.get("credentialPrincipal"))
+        if not re.fullmatch(
+            r"[a-f0-9]{64}", str(permission.get("authorizedUserDigest", ""))
+        ):
+            raise ValueError("private authorized-user digest required")
     plan = prepared_plan(nonce, owner, digest(permission))
     return {
         "kind": "stream-prepared-inputs-v1",
@@ -811,8 +896,12 @@ def _prepared_inputs(permission_path, local_path, artifact_path):
     }
 
 
-def prepare_inputs(permission_path, local_path, artifact_path, output):
-    value = _prepared_inputs(permission_path, local_path, artifact_path)
+def prepare_inputs(
+    permission_path, local_path, artifact_path, output, *, credential_mode=None
+):
+    value = _prepared_inputs(
+        permission_path, local_path, artifact_path, credential_mode
+    )
     stream_bridge.write_private_json(output, value)
     return value
 
@@ -829,7 +918,7 @@ def validate_prepared(value):
     return current
 
 
-def read_o8_handoff(fd, permission_digest):
+def _read_private_handoff(fd):
     if type(fd) is not int or fd < 3:
         raise ValueError("private O8 descriptor required")
     info = os.fstat(fd)
@@ -856,7 +945,15 @@ def read_o8_handoff(fd, permission_digest):
         raw.extend(chunk)
     if len(raw) > 16384:
         raise ValueError("bounded O8 handoff required")
-    value = json.loads(raw)
+    return credential_prep.decode_json(raw)
+
+
+def read_refresh_handoff(fd, permission):
+    return credential_prep.validate_handoff(_read_private_handoff(fd), permission)
+
+
+def read_o8_handoff(fd, permission_digest):
+    value = _read_private_handoff(fd)
     if (
         not isinstance(value, dict)
         or set(value)
@@ -917,8 +1014,18 @@ def execute_prepared(config_path, output, credential_fd):
 
     value = validate_prepared(load_json(config_path))
     validate_recovery_capture(value["permission"])
-    credential, api_key = read_o8_handoff(credential_fd, value["permissionDigest"])
     permission, plan = value["permission"], value["plan"]
+    mode = permission["credentialMode"]
+    mode_contract = credential_mode_contract(mode)
+    if value["manifest"]["credential"] != mode_contract:
+        raise ValueError("frozen credential mode differs")
+    handoff = None
+    if mode == credential_prep.MODE:
+        handoff = read_refresh_handoff(credential_fd, permission)
+        credential, api_key = None, handoff["apiKey"]
+    else:
+        credential, api_key = read_o8_handoff(credential_fd, value["permissionDigest"])
+    outer = mode_contract["outer"]
     if digest(api_key) != permission["apiKeyDigest"]:
         raise ValueError("O8 API-key binding differs")
     output = Path(output).absolute()
@@ -929,10 +1036,10 @@ def execute_prepared(config_path, output, credential_fd):
     if value["manifest"]["resourceLocks"] != locks:
         raise ValueError("frozen resource locks differ")
     budget = {
-        "requests": 33,
+        "requests": outer["requests"],
         "accounts": 0,
         "resources": 3,
-        "costMicrousd": TOTAL_COST_MICROUSD,
+        "costMicrousd": outer["costMicrousd"],
     }
     envelope = {
         "permissionDigest": value["permissionDigest"],
@@ -950,7 +1057,7 @@ def execute_prepared(config_path, output, credential_fd):
         "gatePlanDigest": digest(plan),
         "locks": locks,
         "budget": budget,
-        "durationSeconds": 1100,
+        "durationSeconds": outer["seconds"],
     }
     output.mkdir(mode=0o700)
     ticket = ledger.reserve(envelope, claim, plan)
@@ -962,11 +1069,20 @@ def execute_prepared(config_path, output, credential_fd):
         api_key,
         credential,
         reservation_inputs={"claim": claim, "ticket": ticket, "envelope": envelope},
+        preparation_handoff=handoff,
     )
 
 
 def execute_reserved_inputs(
-    value, output, ledger, ticket, api_key, credential, *, reservation_inputs=None
+    value,
+    output,
+    ledger,
+    ticket,
+    api_key,
+    credential,
+    *,
+    reservation_inputs=None,
+    preparation_handoff=None,
 ):
     """Own every operation after the one successful central reservation."""
     try:
@@ -976,8 +1092,33 @@ def execute_reserved_inputs(
             {**value, **(reservation_inputs or {})},
         )
 
+        preparation_proof = None
+        if value.get("permission", {}).get("credentialMode") == credential_prep.MODE:
+            if preparation_handoff is None:
+                raise ValueError("frozen refresh mode requires private preparation")
+            credential, preparation_proof = credential_prep.prepare_credentials(
+                output,
+                ledger,
+                ticket,
+                value["permission"],
+                plan,
+                preparation_handoff,
+                binding_check=lambda: validate_prepared(value),
+            )
+        elif preparation_handoff is not None:
+            raise ValueError("unbound credential preparation refused")
+
         def final_binding(collection):
             validate_prepared(value)
+            if preparation_proof is not None:
+                credential_prep.validate_preparation(
+                    output,
+                    ledger,
+                    ticket,
+                    value["permission"],
+                    preparation_proof,
+                    StreamProductionGate(output / "gate").snapshot(),
+                )
             return compare_bound(
                 collection, load_json(value["bindings"]["localReceiptPath"]), plan
             )
@@ -991,6 +1132,7 @@ def execute_reserved_inputs(
             api_key,
             credential,
             final_binding=final_binding,
+            preparation_proof=preparation_proof,
         )
     except Exception as error:  # noqa: BLE001 -- Reservation ownership persists across every setup failure.
         return retained_failure(output, ledger, ticket, error)
@@ -1003,6 +1145,10 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     prepare = commands.add_parser("prepare")
     prepare.add_argument("--permission", type=Path)
+    prepare.add_argument(
+        "--credential-mode",
+        choices=[credential_prep.VERIFIED_MODE, credential_prep.MODE],
+    )
     prepare.add_argument("--local-receipt", type=Path, required=True)
     prepare.add_argument("--artifact", type=Path, required=True)
     prepare.add_argument("--output", type=Path, required=True)
@@ -1014,7 +1160,11 @@ def main(argv=None):
     try:
         if args.command == "prepare":
             prepare_inputs(
-                args.permission, args.local_receipt, args.artifact, args.output
+                args.permission,
+                args.local_receipt,
+                args.artifact,
+                args.output,
+                credential_mode=args.credential_mode,
             )
             return 0
         result = execute_prepared(args.prepared, args.output, args.credential_fd)

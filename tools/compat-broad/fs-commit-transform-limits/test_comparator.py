@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from urllib.parse import quote
 
 import pytest
 from comparator import compare_rows
@@ -11,8 +12,18 @@ def _rows(plan: dict) -> list[dict]:
     rows = []
     for index, request in enumerate(plan["observation"]):
         if request["kind"] == "commit-transform":
-            body = {"commitTime": "2026-09-17T00:00:00Z", "writeResults": []}
-            status = 200 if request["expect"]["outcome"] == "accepted" else 400
+            if request["expect"]["outcome"] == "accepted":
+                body = {"commitTime": "2026-09-17T00:00:00Z", "writeResults": []}
+                status = 200
+            else:
+                body = {
+                    "error": {
+                        "code": 400,
+                        "status": "INVALID_ARGUMENT",
+                        "details": [{"reason": "field transform limit"}],
+                    }
+                }
+                status = 400
         elif request["kind"] == "preflight-typed-absence":
             body, status = {"error": {"code": 404, "status": "NOT_FOUND"}}, 404
         elif request["kind"] == "create-only-patch":
@@ -68,10 +79,19 @@ def _recovery_rows(plan: dict) -> list[dict]:
         )
         if request["kind"] == "cleanup-ownership-read":
             body, status = (
-                {"name": resource, "fields": copy.deepcopy(document["expectedFields"])},
+                {
+                    "name": resource,
+                    "fields": copy.deepcopy(document["expectedFields"]),
+                    "updateTime": "2026-09-17T00:00:00Z",
+                },
                 200,
             )
         elif request["kind"] == "cleanup-conditional-delete":
+            prior = rows[-1]["body"]
+            request = copy.deepcopy(request)
+            request["path"] += "?currentDocument.updateTime=" + quote(
+                prior["updateTime"], safe=""
+            )
             body, status = {}, 200
         else:
             body, status = {"error": {"code": 404, "status": "NOT_FOUND"}}, 404
@@ -127,7 +147,9 @@ def test_unbound_or_incomplete_rows_are_indeterminate(mutation: str) -> None:
     else:
         rows[8]["status"] = 200
     result = compare_rows(plan, _rows(plan), plan, rows)
-    assert result["classification"] == "INDETERMINATE"
+    assert result["classification"] == (
+        "SEMANTIC_MISMATCH" if mutation == "unexpected-status" else "INDETERMINATE"
+    )
     assert result["promotionReady"] is False
 
 
@@ -158,4 +180,66 @@ def test_cleanup_rows_are_part_of_the_strict_contract() -> None:
     result = compare_rows(
         plan, _rows(plan), plan, _rows(plan), left_recovery=left, right_recovery=right
     )
+    assert result["classification"] == "SEMANTIC_MISMATCH"
+
+
+def test_complete_unexpected_commit_status_is_a_semantic_mismatch() -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    rows = _rows(plan)
+    rows[6]["status"] = 400
+    result = compare_rows(plan, _rows(plan), plan, rows)
+    assert result["classification"] == "SEMANTIC_MISMATCH"
+
+
+def test_typed_commit_error_details_are_compared_without_timestamp_erasure() -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    rows = _rows(plan)
+    other = copy.deepcopy(rows)
+    other[8]["body"]["error"]["details"][0]["reason"] = "different"
+    result = compare_rows(plan, rows, plan, other)
+    assert result["classification"] == "SEMANTIC_MISMATCH"
+
+
+def test_only_supported_top_level_timestamps_are_normalized() -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    rows = _rows(plan)
+    other = copy.deepcopy(rows)
+    other[7]["body"]["fields"]["userUpdateTime"] = {"stringValue": "one"}
+    rows[7]["body"]["fields"]["userUpdateTime"] = {"stringValue": "two"}
+    assert (
+        compare_rows(plan, rows, plan, other)["classification"] == "SEMANTIC_MISMATCH"
+    )
+
+
+def test_distinct_project_and_nonce_are_structural_identity_changes_only() -> None:
+    left_plan = compile_plan("demo-left", "(default)", "a" * 32)
+    right_plan = compile_plan("demo-right", "(default)", "b" * 32)
+    assert (
+        compare_rows(left_plan, _rows(left_plan), right_plan, _rows(right_plan))[
+            "classification"
+        ]
+        == "MATCH"
+    )
+
+
+def test_resolved_cleanup_delete_must_bind_to_ownership_read_version() -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    left = _recovery_rows(plan)
+    right = copy.deepcopy(left)
+    right[1]["request"]["path"] = right[1]["request"]["path"].replace(
+        "2026-09-17T00%3A00%3A00Z", "2026-09-17T00%3A00%3A01Z"
+    )
+    result = compare_rows(
+        plan, _rows(plan), plan, _rows(plan), left_recovery=left, right_recovery=right
+    )
+    assert result["classification"] == "INDETERMINATE"
+
+
+def test_both_journals_are_structurally_validated_before_poststate_semantics() -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    left = _rows(plan)
+    right = _rows(plan)
+    left[7]["body"]["fields"]["t0"] = {"integerValue": "999"}
+    right[0]["complete"] = False
+    result = compare_rows(plan, left, plan, right)
     assert result["classification"] == "INDETERMINATE"

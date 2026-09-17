@@ -8405,6 +8405,91 @@ fn tenant_password_policy_leaf_mask_preserves_unselected_fields() {
 }
 
 #[test]
+fn tenant_password_policy_null_without_mask_is_absent_and_list_projects_policy() {
+    let mut s = state();
+    let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+        "demo-app",
+        s.store.clone(),
+    ));
+    registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    s.registry = Some(registry);
+    let path = "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/tenant-a";
+    let configured = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=passwordPolicyConfig"),
+        &json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": "ENFORCE",
+            "forceUpgradeOnSignin": true,
+            "passwordPolicyVersions": [{"customStrengthOptions": {
+                "minPasswordLength": 12
+            }}]
+        }}),
+    );
+    assert_eq!(configured.0, 200, "{}", configured.1);
+
+    let before = admin(&s, "GET", path, &Value::Null);
+    assert_eq!(before.0, 200, "{}", before.1);
+
+    // A message-level ProtoJSON null without an update mask is absent and preserves the policy.
+    let absent = admin(&s, "PATCH", path, &json!({"passwordPolicyConfig": null}));
+    assert_eq!(absent.0, 200, "{}", absent.1);
+    assert_eq!(absent.1, before.1);
+
+    // A selected null explicitly clears the message to the default policy.
+    let cleared = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=passwordPolicyConfig"),
+        &json!({"passwordPolicyConfig": null}),
+    );
+    assert_eq!(cleared.0, 200, "{}", cleared.1);
+    assert_eq!(
+        cleared.1["passwordPolicyConfig"]["passwordPolicyEnforcementState"],
+        "OFF"
+    );
+
+    let restored = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=passwordPolicyConfig"),
+        &json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": "ENFORCE",
+            "forceUpgradeOnSignin": true,
+            "passwordPolicyVersions": [{"customStrengthOptions": {
+                "minPasswordLength": 12
+            }}]
+        }}),
+    );
+    assert_eq!(restored.0, 200, "{}", restored.1);
+
+    let listed = admin(
+        &s,
+        "GET",
+        "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
+        &Value::Null,
+    );
+    assert_eq!(listed.0, 200, "{}", listed.1);
+    let listed_tenant = listed.1["tenants"]
+        .as_array()
+        .and_then(|tenants| {
+            tenants
+                .iter()
+                .find(|tenant| tenant["name"] == "projects/demo-app/tenants/tenant-a")
+        })
+        .expect("tenant is listed");
+    assert_eq!(
+        listed_tenant["passwordPolicyConfig"]["passwordPolicyEnforcementState"],
+        "ENFORCE"
+    );
+    assert_eq!(
+        listed_tenant["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
+            ["minPasswordLength"],
+        12
+    );
+}
+
+#[test]
 fn project_client_permissions_are_exposed_and_applied_atomically() {
     let s = state();
     let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";

@@ -5264,9 +5264,15 @@ fn tenant_management(
             let tenants: Vec<Value> = ids
                 .iter()
                 .filter_map(|id| {
-                    registry
-                        .tenant_metadata(project, id)
-                        .map(|metadata| tenant_json(project, id, &metadata))
+                    let metadata = registry.tenant_metadata(project, id)?;
+                    let store = registry.tenant_store(project, id)?;
+                    let store = store.lock().ok()?;
+                    Some(tenant_json_with_policy(
+                        project,
+                        id,
+                        &metadata,
+                        store.password_policy(),
+                    ))
                 })
                 .collect();
             let next = has_more.then(|| ids.last().cloned()).flatten();
@@ -5325,7 +5331,13 @@ fn tenant_management(
                     if body.get("emailPrivacyConfig").is_some() {
                         fields.push("emailPrivacyConfig".to_owned());
                     }
-                    if body.get("passwordPolicyConfig").is_some() {
+                    // A message-level ProtoJSON null is absent when no update mask selects it.
+                    // An explicit mask still reaches `password_policy_from_update` and can
+                    // clear the policy.
+                    if body
+                        .get("passwordPolicyConfig")
+                        .is_some_and(contains_non_null_value)
+                    {
                         fields.push("passwordPolicyConfig".to_owned());
                     }
                     fields

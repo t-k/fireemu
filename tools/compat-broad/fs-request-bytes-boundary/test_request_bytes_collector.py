@@ -10,8 +10,10 @@ sys.path.insert(0, "tools/compat-broad")
 
 from request_bytes_collector import (
     commit_versions,
+    over_refusal_classification,
     readback_matches,
     typed_not_found,
+    typed_over_refusal,
     validate_schedule,
 )
 from request_bytes_compiler import compile_request_bytes_plan
@@ -178,7 +180,13 @@ def test_timestamp_accepts_firestore_precision_variants():
     )
 
 
-def test_three_probe_run_completes_with_typed_over_refusal(tmp_path):
+@pytest.mark.parametrize(
+    ("over_status", "over_classification"),
+    [(400, "expected"), (413, "semantic-discrepancy")],
+)
+def test_three_probe_run_completes_with_typed_over_refusal(
+    tmp_path, over_status, over_classification
+):
     from request_bytes_collector import collect_local
 
     value = plan()
@@ -198,8 +206,13 @@ def test_three_probe_run_completes_with_typed_over_refusal(tmp_path):
                 return {
                     "complete": True,
                     "failure": None,
-                    "status": 400,
-                    "body": {"error": {"code": 400, "status": "INVALID_ARGUMENT"}},
+                    "status": over_status,
+                    "body": {
+                        "error": {
+                            "code": over_status,
+                            "status": "INVALID_ARGUMENT",
+                        }
+                    },
                 }
             resources = next(
                 probe["resources"]
@@ -250,6 +263,12 @@ def test_three_probe_run_completes_with_typed_over_refusal(tmp_path):
     assert result["completed"] is True
     assert result["cleanupComplete"] is True
     assert result["resourceAbsence"] is True
+    assert result["overRefusal"] == {
+        "httpStatus": over_status,
+        "errorCode": over_status,
+        "errorStatus": "INVALID_ARGUMENT",
+        "classification": over_classification,
+    }
     assert len(deletes) == 34
     assert not live
     sidecars = sorted((tmp_path / "run").glob("response-*.body"))
@@ -307,6 +326,51 @@ def test_fractional_and_boolean_over_refusal_codes_are_rejected():
             },
             "INVALID_ARGUMENT",
         )
+
+
+def test_http_413_invalid_argument_is_a_complete_refusal_with_discrepancy_metadata():
+    refusal = {
+        "complete": True,
+        "failure": None,
+        "status": 413,
+        "body": {"error": {"code": 413, "status": "INVALID_ARGUMENT"}},
+    }
+    assert typed_over_refusal(refusal)
+    assert over_refusal_classification(refusal) == "semantic-discrepancy"
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        {
+            "complete": False,
+            "failure": "response-lost",
+            "status": 413,
+            "body": {"error": {"code": 413, "status": "INVALID_ARGUMENT"}},
+        },
+        {
+            "complete": True,
+            "failure": None,
+            "status": 200,
+            "body": {"error": {"code": 200, "status": "INVALID_ARGUMENT"}},
+        },
+        {
+            "complete": True,
+            "failure": None,
+            "status": 413,
+            "body": {"error": {"code": 400, "status": "INVALID_ARGUMENT"}},
+        },
+        {
+            "complete": True,
+            "failure": None,
+            "status": 413,
+            "body": {"error": {"code": 413, "status": "FAILED_PRECONDITION"}},
+        },
+    ],
+)
+def test_413_over_refusal_controls_fail_closed(receipt):
+    assert not typed_over_refusal(receipt)
+    assert over_refusal_classification(receipt) is None
 
 
 def test_contradictory_raw_response_cannot_prove_preflight(tmp_path):

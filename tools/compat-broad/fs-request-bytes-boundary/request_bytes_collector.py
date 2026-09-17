@@ -81,6 +81,26 @@ def _error_status(receipt: Any, status: str) -> bool:
     )
 
 
+def typed_over_refusal(receipt: Any) -> bool:
+    """Accept only a complete canonical over-boundary refusal envelope."""
+    body = receipt.get("body") if isinstance(receipt, dict) else None
+    error = body.get("error") if isinstance(body, dict) else None
+    return (
+        complete(receipt)
+        and receipt["status"] in {400, 413}
+        and isinstance(error, dict)
+        and type(error.get("code")) is int
+        and error.get("code") == receipt["status"]
+        and error.get("status") == "INVALID_ARGUMENT"
+    )
+
+
+def over_refusal_classification(receipt: Any) -> str | None:
+    if not typed_over_refusal(receipt):
+        return None
+    return "expected" if receipt["status"] == 400 else "semantic-discrepancy"
+
+
 def _document_fields(receipt: Any) -> dict[str, Any] | None:
     body = receipt.get("body") if isinstance(receipt, dict) else None
     fields = body.get("fields") if isinstance(body, dict) else None
@@ -293,6 +313,7 @@ def collect_local(
         }
         commit_sent: set[str] = set()
         commit_refused: set[str] = set()
+        over_refusal_observation: dict[str, Any] | None = None
         stopped = False
         dispatches = 0
         failures: list[str] = []
@@ -420,8 +441,16 @@ def collect_local(
                     found = commit_versions(receipt, probe_resources)
                     if found is not None and probe != "over":
                         versions[probe] = dict(zip(probe_resources, found))
-                    elif probe == "over" and _error_status(receipt, "INVALID_ARGUMENT"):
+                    elif probe == "over" and typed_over_refusal(receipt):
                         commit_refused.add(probe)
+                        body = receipt["body"]
+                        error = body["error"]
+                        over_refusal_observation = {
+                            "httpStatus": receipt["status"],
+                            "errorCode": error["code"],
+                            "errorStatus": error["status"],
+                            "classification": over_refusal_classification(receipt),
+                        }
                     else:
                         failures.append(f"{probe}:commit-proof-missing")
                 elif kind == "probe-readback":
@@ -507,6 +536,8 @@ def collect_local(
             "completed": not failures,
             "failures": failures,
         }
+        if over_refusal_observation is not None:
+            result["overRefusal"] = over_refusal_observation
         _publish(output_fd, "result.json", result)
         return result
     finally:

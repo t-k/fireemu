@@ -315,6 +315,7 @@ def collect_local(
         commit_refused: set[str] = set()
         over_refusal_observation: dict[str, Any] | None = None
         stopped = False
+        observation_stopped = False
         dispatches = 0
         failures: list[str] = []
         absence_proofs: dict[str, set[str]] = {
@@ -327,7 +328,7 @@ def collect_local(
             kind = operation["kind"]
             resource = operation.get("resource")
             skip = None
-            if stopped:
+            if stopped or (observation_stopped and phase == "observation"):
                 skip = "earlier-probe-incomplete"
             elif (
                 phase == "observation"
@@ -418,17 +419,27 @@ def collect_local(
                     if len(raw) > MAX_RESPONSE_BYTES:
                         raise ValueError("response exceeds cap")
                     sidecar = f"response-{sequence:03d}.body"
-                    fd = os.open(
-                        sidecar,
-                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                        0o600,
-                        dir_fd=output_fd,
-                    )
-                    with os.fdopen(fd, "wb") as stream:
-                        stream.write(raw)
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    row["responseBodyFile"] = sidecar
+                    try:
+                        fd = os.open(
+                            sidecar,
+                            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                            0o600,
+                            dir_fd=output_fd,
+                        )
+                        with os.fdopen(fd, "wb") as stream:
+                            stream.write(raw)
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                        row["responseBodyFile"] = sidecar
+                    except Exception as error:  # noqa: BLE001 - recording must not bypass recovery.
+                        try:
+                            os.unlink(sidecar, dir_fd=output_fd)
+                        except OSError:
+                            pass
+                        failures.append(
+                            f"recording:response-{sequence:03d}.body:{type(error).__name__}"
+                        )
+                        observation_stopped = True
                 if kind == "preflight-typed-absence" and not typed_not_found(receipt):
                     preflight_ok[probe] = False
                     failures.append(f"{phase}:{index}:preflight-not-absent")
@@ -439,8 +450,10 @@ def collect_local(
                         if item["label"] == probe
                     )
                     found = commit_versions(receipt, probe_resources)
-                    if found is not None and probe != "over":
+                    if found is not None:
                         versions[probe] = dict(zip(probe_resources, found))
+                        if probe == "over":
+                            failures.append("over:unexpected-success")
                     elif probe == "over" and typed_over_refusal(receipt):
                         commit_refused.add(probe)
                         body = receipt["body"]
@@ -457,7 +470,7 @@ def collect_local(
                     expected_digest = plan["documents"][resource]["fieldsSha256"]
                     matched = (
                         typed_not_found(receipt)
-                        if probe == "over"
+                        if probe == "over" and probe not in versions
                         else readback_matches(
                             receipt,
                             resource,
@@ -490,7 +503,13 @@ def collect_local(
                 if not complete(receipt):
                     failures.append(f"{phase}:{index}:incomplete")
             (rows if phase == "observation" else recovery).append(row)
-            _publish(output_fd, f"row-{sequence:03d}.json", row)
+            try:
+                _publish(output_fd, f"row-{sequence:03d}.json", row)
+            except Exception as error:  # noqa: BLE001 - recording must not bypass recovery.
+                failures.append(
+                    f"recording:row-{sequence:03d}.json:{type(error).__name__}"
+                )
+                observation_stopped = True
             next_slot = (
                 plan["executionSchedule"][sequence + 1]
                 if sequence + 1 < len(plan["executionSchedule"])

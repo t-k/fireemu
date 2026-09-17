@@ -313,6 +313,180 @@ def test_missing_raw_response_cannot_complete_or_send_commit(tmp_path):
     )
 
 
+def test_unexpected_over_success_keeps_creation_proof_for_cleanup(tmp_path):
+    from request_bytes_collector import collect_local
+
+    value = plan()
+    documents = {
+        write["update"]["name"]: write["update"]["fields"]
+        for probe in value["probes"]
+        for write in probe["body"]["writes"]
+    }
+    version = "2026-01-01T00:00:00Z"
+    live = set()
+    deletes = []
+
+    def execute(operation):
+        kind, resource = operation["kind"], operation.get("resource")
+        if kind == "conditional-create-commit":
+            resources = next(
+                item["resources"]
+                for item in value["probes"]
+                if item["label"] == operation["probe"]
+            )
+            live.update(resources)
+            body = {"writeResults": [{"updateTime": version} for _ in resources]}
+            if operation["probe"] == "over":
+                body["writeResults"] = [
+                    {"updateTime": version, "name": resource} for resource in resources
+                ]
+            receipt = {"complete": True, "failure": None, "status": 200, "body": body}
+        elif kind == "cleanup-version-bound-delete":
+            assert resource in live
+            deletes.append(resource)
+            live.remove(resource)
+            receipt = {"complete": True, "failure": None, "status": 200, "body": {}}
+        elif resource in live:
+            receipt = {
+                "complete": True,
+                "failure": None,
+                "status": 200,
+                "body": {
+                    "name": resource,
+                    "fields": documents[resource],
+                    "updateTime": version,
+                },
+            }
+        else:
+            receipt = {
+                "complete": True,
+                "failure": None,
+                "status": 404,
+                "body": {"error": {"code": 404, "status": "NOT_FOUND"}},
+            }
+        raw = json.dumps(receipt["body"], separators=(",", ":")).encode()
+        return {
+            **receipt,
+            "rawBodyBase64": base64.b64encode(raw).decode(),
+            "bodyBytes": len(raw),
+        }
+
+    result = collect_local(value, execute, tmp_path / "run")
+    assert len(deletes) == 51
+    assert not live
+    assert result["resourceAbsence"] is True
+    assert result["cleanupComplete"] is False
+    assert "over:unexpected-success" in result["failures"]
+
+
+@pytest.mark.parametrize(
+    ("failure_kind", "failure_sequence"),
+    [
+        (failure_kind, failure_sequence)
+        for failure_kind in ("row", "sidecar")
+        for failure_sequence in (0, 17)
+    ],
+)
+def test_recording_failure_stops_observation_but_runs_recovery(
+    tmp_path, monkeypatch, failure_kind, failure_sequence
+):
+    import request_bytes_collector
+    from request_bytes_collector import collect_local
+
+    value = plan()
+    documents = {
+        write["update"]["name"]: write["update"]["fields"]
+        for probe in value["probes"]
+        for write in probe["body"]["writes"]
+    }
+    version = "2026-01-01T00:00:00Z"
+    live = set()
+    deletes = []
+    calls = []
+    failed = False
+    original_publish = request_bytes_collector._publish
+
+    def publish(directory, name, value, *, bounded=True):
+        nonlocal failed
+        if not failed and (
+            (failure_kind == "row" and name == f"row-{failure_sequence:03d}.json")
+            or (
+                failure_kind == "sidecar"
+                and name == f"response-{failure_sequence:03d}.body"
+            )
+        ):
+            failed = True
+            raise OSError("injected recording failure")
+        return original_publish(directory, name, value, bounded=bounded)
+
+    monkeypatch.setattr(request_bytes_collector, "_publish", publish)
+    if failure_kind == "sidecar":
+        original_open = request_bytes_collector.os.open
+
+        def open_file(path, flags, mode=0o777, *, dir_fd=None):
+            nonlocal failed
+            if path == f"response-{failure_sequence:03d}.body" and not failed:
+                failed = True
+                raise OSError("injected recording failure")
+            return original_open(path, flags, mode, dir_fd=dir_fd)
+
+        monkeypatch.setattr(request_bytes_collector.os, "open", open_file)
+
+    def execute(operation):
+        calls.append(operation)
+        kind, resource = operation["kind"], operation.get("resource")
+        if kind == "conditional-create-commit":
+            resources = next(
+                item["resources"]
+                for item in value["probes"]
+                if item["label"] == operation["probe"]
+            )
+            live.update(resources)
+            body = {"writeResults": [{"updateTime": version} for _ in resources]}
+            receipt = {"complete": True, "failure": None, "status": 200, "body": body}
+        elif kind == "cleanup-version-bound-delete":
+            assert resource in live
+            deletes.append(resource)
+            live.remove(resource)
+            receipt = {"complete": True, "failure": None, "status": 200, "body": {}}
+        elif resource in live:
+            receipt = {
+                "complete": True,
+                "failure": None,
+                "status": 200,
+                "body": {
+                    "name": resource,
+                    "fields": documents[resource],
+                    "updateTime": version,
+                },
+            }
+        else:
+            receipt = {
+                "complete": True,
+                "failure": None,
+                "status": 404,
+                "body": {"error": {"code": 404, "status": "NOT_FOUND"}},
+            }
+        raw = json.dumps(receipt["body"], separators=(",", ":")).encode()
+        return {
+            **receipt,
+            "rawBodyBase64": base64.b64encode(raw).decode(),
+            "bodyBytes": len(raw),
+        }
+
+    result = collect_local(value, execute, tmp_path / "run")
+    assert result["completed"] is False
+    assert result["resourceAbsence"] is False
+    assert len(deletes) == (17 if failure_sequence == 17 else 0)
+    assert not any(item["probe"] != "under" for item in calls)
+    if failure_sequence == 0:
+        assert not any(item["kind"] == "conditional-create-commit" for item in calls)
+    else:
+        assert any(item["kind"] == "conditional-create-commit" for item in calls)
+        assert not any(item["kind"] == "probe-readback" for item in calls)
+    assert any(failure.startswith("recording:") for failure in result["failures"])
+
+
 def test_fractional_and_boolean_over_refusal_codes_are_rejected():
     from request_bytes_collector import _error_status
 
@@ -447,9 +621,7 @@ def test_invalid_over_receipt_keeps_collection_incomplete_and_never_deletes(
                     "failure": None,
                     "status": 200,
                     "body": {
-                        "writeResults": [
-                            {"updateTime": version} for _ in resources
-                        ]
+                        "writeResults": [{"updateTime": version} for _ in resources]
                     },
                 }
             )

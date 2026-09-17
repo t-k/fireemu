@@ -27,6 +27,7 @@ def test_cli_rejects_missing_o7_approval_before_acquisition(tmp_path, monkeypatc
             {
                 "kind": "commit-frozen-inputs-v2",
                 "permissionDigest": commit_o8.digest({}),
+                "artifactSha256": "artifact",
             }
         )
     )
@@ -125,6 +126,16 @@ def test_cli_binds_exact_fixed_transport_and_handoff_without_public_secret(
     )
     monkeypatch.setattr(commit_o8, "_validate_frozen", lambda inputs: None)
     monkeypatch.setattr(commit_o8, "_validate_approval", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        commit_o8,
+        "validate_retained_artifact",
+        lambda *args, **kwargs: {
+            "artifactSha256": "artifact",
+            "retainedManifestSha256": commit_o8.hashlib.sha256(
+                b"{}"
+            ).hexdigest(),
+        },
+    )
     monkeypatch.setattr(commit_o8, "validate_handoff", lambda *args: None)
     inputs = tmp_path / "inputs.json"
     inputs.write_text(
@@ -132,6 +143,7 @@ def test_cli_binds_exact_fixed_transport_and_handoff_without_public_secret(
             {
                 "kind": "commit-frozen-inputs-v2",
                 "permissionDigest": commit_o8.digest({}),
+                "artifactSha256": "artifact",
             }
         )
     )

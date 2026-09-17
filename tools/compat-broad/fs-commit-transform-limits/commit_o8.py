@@ -24,12 +24,14 @@ import commit_acquisition as acquisition
 from broad_contract import digest
 from commit_remote_transport import request as remote_request
 from commit_reserved_adapter import validate_handoff
+from owned_transform_runner import validate_retained_artifact
 
 MAX_HANDOFF_BYTES = 16 * 1024
 CAMPAIGN_SECONDS = 1200
 RECOVERY_SECONDS = 180
 APPROVAL_KIND = "commit-o8-approval-v1"
 MANIFEST_KIND = "commit-o8-manifest-v1"
+REVIEWED_ARTIFACT_PROFILE = "repaired-567565bdd"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -156,6 +158,7 @@ def _validate_approval(
         "nonceDigest",
         "ledgerRoot",
         "launcherSha256",
+        "artifactProfile",
         "windowStartsAt",
         "windowExpiresAt",
     }
@@ -165,6 +168,8 @@ def _validate_approval(
         raise ValueError("O7 manifest artifact required")
     if approval["status"] != "approved":
         raise ValueError("O7 approval is not approved")
+    if approval["artifactProfile"] != REVIEWED_ARTIFACT_PROFILE:
+        raise ValueError("O7 artifact profile differs")
     if hashlib.sha256(manifest_bytes).hexdigest() != approval["manifestSha256"]:
         raise ValueError("O7 manifest digest differs")
     bindings = {
@@ -218,6 +223,15 @@ def execute(args: argparse.Namespace) -> dict:
         permission,
         ledger=args.ledger,
     )
+    retained = validate_retained_artifact(
+        args.artifact, args.manifest, profile=REVIEWED_ARTIFACT_PROFILE
+    )
+    if (
+        retained.get("artifactSha256") != inputs["artifactSha256"]
+        or retained.get("retainedManifestSha256")
+        != hashlib.sha256(manifest_bytes).hexdigest()
+    ):
+        raise ValueError("retained v7 artifact binding differs")
     handoff = _read_handoff(args)
     api_key = handoff.get("apiKey")
     if not isinstance(api_key, str):

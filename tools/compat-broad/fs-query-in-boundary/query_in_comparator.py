@@ -232,6 +232,9 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
                 raise ValueError("typed raw receipt status differs")
             if view.get("byteCount") != len(raw_body) or view.get("contentType") != "application/json":
                 raise ValueError("typed raw receipt metadata differs")
+            parsed_body = json.loads(raw_body, parse_constant=_reject_json_constant, object_pairs_hook=_unique_json_object)
+            if int(slot) != 2 and parsed_body != raw_row.get("body"):
+                raise ValueError("raw receipt body differs from journal row")
         try:
             parsed = json.loads(raw["2"]["rawBody"], parse_constant=_reject_json_constant, object_pairs_hook=_unique_json_object)
             derived = [
@@ -339,11 +342,13 @@ def compare_rows(
     *,
     production_cleanup: list[dict[str, Any]] | None = None,
     local_cleanup: list[dict[str, Any]] | None = None,
+    production_raw: dict[str, Any] | None = None,
+    local_raw: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compatibility entry point for callers holding journals separately."""
     return compare_evidence(
-        {"plan": production_plan, "rows": production_rows, "cleanup": production_cleanup or [], "ownership": {"cleanupComplete": True}},
-        {"plan": local_plan, "rows": local_rows, "cleanup": local_cleanup or [], "ownership": {"cleanupComplete": True}},
+        {"plan": production_plan, "rows": production_rows, "cleanup": production_cleanup or [], "ownership": {"cleanupComplete": True}, "raw": production_raw},
+        {"plan": local_plan, "rows": local_rows, "cleanup": local_cleanup or [], "ownership": {"cleanupComplete": True}, "raw": local_raw},
     )
 
 

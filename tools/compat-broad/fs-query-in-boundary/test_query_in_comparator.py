@@ -2,7 +2,7 @@ import copy
 import hashlib
 import json
 
-from query_in_comparator import compare_evidence
+from query_in_comparator import compare_evidence, compare_rows
 from query_in_compiler import compile_plan
 
 
@@ -137,7 +137,10 @@ def test_cleanup_update_time_predicate_is_percent_encoded():
     digest = hashlib.sha256(raw_body).hexdigest()
     bundle["cleanup"][0]["rawSha256"] = digest
     bundle["raw"]["6"].update(status=200, rawBody=raw_body, sourceRawSha256=digest, byteCount=len(raw_body))
-    bundle["raw"]["7"].update(status=200)
+    delete_body = b"{}"
+    delete_digest = hashlib.sha256(delete_body).hexdigest()
+    bundle["cleanup"][1]["rawSha256"] = delete_digest
+    bundle["raw"]["7"].update(status=200, rawBody=delete_body, sourceRawSha256=delete_digest, byteCount=len(delete_body))
     assert compare_evidence(bundle, copy.deepcopy(bundle))["classification"] == "MATCH"
 
 
@@ -146,3 +149,13 @@ def test_fabricated_positive_projection_is_indeterminate():
     bundle["raw"]["2"]["documents"] = []
     result = compare_evidence(bundle, bundle)
     assert result["classification"] == "INDETERMINATE"
+
+
+def test_compare_rows_accepts_explicit_sidecars():
+    bundle = _bundle()
+    result = compare_rows(
+        bundle["plan"], bundle["rows"], bundle["plan"], bundle["rows"],
+        production_cleanup=bundle["cleanup"], local_cleanup=bundle["cleanup"],
+        production_raw=bundle["raw"], local_raw=bundle["raw"],
+    )
+    assert result["classification"] == "MATCH"

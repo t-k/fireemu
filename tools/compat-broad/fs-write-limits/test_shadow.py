@@ -107,7 +107,9 @@ def test_output_history_cannot_be_replaced(tmp_path):
     assert '"first"' in output.read_text()
 
 
-def test_complete_count_cannot_substitute_for_state_validation(plan):
+def fixture_receipt(plan):
+    from broad_contract import digest
+
     receipt = {
         "productionExecuted": False,
         "recordingComplete": True,
@@ -117,6 +119,70 @@ def test_complete_count_cannot_substitute_for_state_validation(plan):
         "rows": fixture_rows(plan),
         "resourceAbsence": {d["resource"]: True for d in plan["documents"].values()},
     }
+    cleanup = []
+    proofs = {}
+    for row in receipt["rows"]:
+        if row["request"]["method"] == "PATCH" and row["status"] == 200:
+            body = row["body"]
+            proofs[body["name"]] = {
+                "name": body["name"],
+                "updateTime": body["updateTime"],
+                "fieldsDigest": digest(body["fields"]),
+                "requestDigest": digest(row["request"]),
+                "responseDigest": digest(body),
+            }
+    gate_plan = plan["localGatePlan"]
+    recovery = gate_plan["jobs"]["limits"]["recovery"]
+    for index, declared in enumerate(recovery):
+        operation = resolve_recovery(declared, cleanup)
+        resource = declared["path"].removeprefix("/v1/")
+        row = {"index": index, "request": operation, "complete": True, "failure": None}
+        if index % 3 == 0 and resource in proofs:
+            doc = next(
+                d for d in plan["documents"].values() if d["resource"] == resource
+            )
+            row.update(
+                status=200,
+                body={
+                    "name": resource,
+                    "fields": doc["fields"],
+                    "updateTime": proofs[resource]["updateTime"],
+                },
+            )
+        elif index % 3 == 1:
+            if resource in proofs:
+                row.update(status=200, body={})
+            else:
+                row.update(
+                    status=None,
+                    body={"skipped": "absent-or-unavailable-cleanup-read"},
+                    skipped=True,
+                )
+        else:
+            row.update(status=404, body={"error": {"code": 404, "status": "NOT_FOUND"}})
+        cleanup.append(row)
+    resources = gate_plan["jobs"]["limits"]["resources"]
+    receipt["cleanup"] = cleanup
+    receipt["gate"] = {
+        "plan": gate_plan,
+        "planDigest": digest(gate_plan),
+        "jobs": {
+            "limits": {
+                "complete": True,
+                "inflight": False,
+                "observation": 16,
+                "recovery": 12,
+                "resources": resources,
+                "absent": list(resources),
+                "creationProofs": proofs,
+            }
+        },
+    }
+    return receipt
+
+
+def test_complete_count_cannot_substitute_for_state_validation(plan):
+    receipt = fixture_receipt(plan)
     assert validate_local_receipt(receipt, plan)
     receipt["rows"][10]["body"] = {}
     assert not validate_local_receipt(receipt, plan)
@@ -147,3 +213,84 @@ def test_source_binding_contains_actual_checkout_inputs():
     assert "tools/compat-broad/fs-write-limits/compiler.py" in inputs
     assert "tools/compat-broad/fs-write-limits/test_shadow.py" in inputs
     assert all(len(value) == 64 for value in inputs.values())
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing",
+        "short",
+        "reorder",
+        "path",
+        "skip",
+        "absence",
+        "read-version",
+        "gate-complete",
+        "gate-absence",
+        "gate-proof",
+        "gate-plan",
+    ],
+)
+def test_incomplete_or_altered_cleanup_is_rejected(plan, mutation):
+    receipt = copy.deepcopy(fixture_receipt(plan))
+    if mutation == "missing":
+        del receipt["cleanup"]
+    elif mutation == "short":
+        receipt["cleanup"].pop()
+    elif mutation == "reorder":
+        receipt["cleanup"][0], receipt["cleanup"][2] = (
+            receipt["cleanup"][2],
+            receipt["cleanup"][0],
+        )
+    elif mutation == "path":
+        receipt["cleanup"][1]["request"]["path"] = receipt["cleanup"][0]["request"][
+            "path"
+        ]
+    elif mutation == "skip":
+        receipt["cleanup"][4].update(status=200, body={}, skipped=False)
+    elif mutation == "absence":
+        receipt["cleanup"][2]["body"] = {}
+    elif mutation == "read-version":
+        receipt["cleanup"][0]["body"]["updateTime"] = "2026-09-18T00:00:00Z"
+    elif mutation == "gate-complete":
+        receipt["gate"]["jobs"]["limits"]["complete"] = False
+    elif mutation == "gate-absence":
+        receipt["gate"]["jobs"]["limits"]["absent"].pop()
+    elif mutation == "gate-proof":
+        receipt["gate"]["jobs"]["limits"]["creationProofs"] = {}
+    else:
+        receipt["gate"]["planDigest"] = "0" * 64
+    assert not validate_local_receipt(receipt, plan)
+
+
+def test_catalog_bytes_are_bound_across_temporary_checkout(tmp_path):
+    import json
+    import shutil
+    import subprocess
+    import sys
+
+    import shadow
+
+    catalog = "spec/limits/firestore-standard-2026-08-25.json"
+    for relative in [
+        "tools/compat-broad/fs-write-limits/shadow.py",
+        "tools/compat-broad/fs-write-limits/compiler.py",
+        "tools/compat-broad/broad_contract.py",
+        catalog,
+    ]:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(shadow.ROOT / relative, destination)
+    command = [
+        sys.executable,
+        "-c",
+        "import json, shadow; print(json.dumps(shadow.source_inputs()))",
+    ]
+    directory = tmp_path / "tools/compat-broad/fs-write-limits"
+    before = json.loads(subprocess.check_output(command, cwd=directory))
+    (tmp_path / catalog).write_bytes((tmp_path / catalog).read_bytes() + b" ")
+    after = json.loads(subprocess.check_output(command, cwd=directory))
+    assert catalog in before
+    assert before[catalog] != after[catalog]
+    assert all(before[key] == after[key] for key in before if key != catalog)
+    assert not before == after == before  # Parent/child/post-run binding rejects drift.

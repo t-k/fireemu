@@ -17,7 +17,7 @@ sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
 
 from broad_contract import digest
-from compiler import compile_limits_plan
+from compiler import _CATALOG, compile_limits_plan
 
 
 def save(path: Path, value: Any) -> None:
@@ -30,7 +30,7 @@ def save(path: Path, value: Any) -> None:
 def source_inputs() -> dict[str, str]:
     return {
         str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sorted(HERE.glob("*.py"))
+        for path in sorted([*HERE.glob("*.py"), _CATALOG])
     }
 
 
@@ -127,9 +127,104 @@ def validate_local_receipt(receipt: dict, plan: dict) -> bool:
             for row in rows
         )
         and not evaluate_rows(rows, plan)
+        and _validate_cleanup(receipt, plan)
         and receipt.get("resourceAbsence")
         == {d["resource"]: True for d in plan["documents"].values()}
     )
+
+
+def _validate_cleanup(receipt: dict, plan: dict) -> bool:
+    """Check ordered cleanup against creation receipts and the final Gate journal."""
+    gate_plan = plan["localGatePlan"]
+    declared_job = gate_plan["jobs"]["limits"]
+    operations = declared_job["recovery"]
+    cleanup = receipt.get("cleanup")
+    gate = receipt.get("gate")
+    if (
+        not isinstance(cleanup, list)
+        or len(cleanup) != len(operations)
+        or not isinstance(gate, dict)
+        or gate.get("plan") != gate_plan
+        or gate.get("planDigest") != digest(gate_plan)
+    ):
+        return False
+    jobs = gate.get("jobs")
+    job = jobs.get("limits") if isinstance(jobs, dict) else None
+    if (
+        not isinstance(job, dict)
+        or job.get("complete") is not True
+        or job.get("inflight") is not False
+        or job.get("observation") != len(declared_job["observation"])
+        or job.get("recovery") != len(operations)
+        or job.get("resources") != declared_job["resources"]
+        or not isinstance(job.get("absent"), list)
+        or sorted(job["absent"]) != sorted(declared_job["resources"])
+    ):
+        return False
+    creations = {
+        row["body"]["name"]: row
+        for row in receipt["rows"]
+        if row["request"]["method"] == "PATCH" and row["status"] == 200
+    }
+    proofs = {
+        name: {
+            "name": name,
+            "updateTime": row["body"]["updateTime"],
+            "fieldsDigest": digest(row["body"]["fields"]),
+            "requestDigest": digest(row["request"]),
+            "responseDigest": digest(row["body"]),
+        }
+        for name, row in creations.items()
+    }
+    if job.get("creationProofs") != proofs:
+        return False
+    for index, (row, declared) in enumerate(zip(cleanup, operations, strict=True)):
+        if (
+            not isinstance(row, dict)
+            or row.get("index") != index
+            or row.get("request") != resolve_recovery(declared, cleanup[:index])
+            or row.get("complete") is not True
+            or row.get("failure") is not None
+            or row.get("dispatchFailure") is not None
+        ):
+            return False
+        status, body = row.get("status"), row.get("body")
+        resource = declared["path"].removeprefix("/v1/")
+        source = declared.get("versionFrom")
+        if source is not None:
+            previous = cleanup[source]
+            if typed_absence(previous.get("status"), previous.get("body")):
+                if (
+                    status is not None
+                    or row.get("skipped") is not True
+                    or body != {"skipped": "absent-or-unavailable-cleanup-read"}
+                ):
+                    return False
+            elif (
+                type(status) is not int
+                or status != 200
+                or row.get("skipped")
+                or resource not in creations
+                or previous["body"].get("updateTime") != proofs[resource]["updateTime"]
+            ):
+                return False
+        elif index % 3 == 2 or resource not in creations:
+            if not typed_absence(status, body) or row.get("skipped"):
+                return False
+        else:
+            created = creations[resource]["body"]
+            if (
+                type(status) is not int
+                or status != 200
+                or row.get("skipped")
+                or not isinstance(body, dict)
+                or any(
+                    body.get(key) != created.get(key)
+                    for key in ("name", "fields", "updateTime")
+                )
+            ):
+                return False
+    return True
 
 
 def resolve_recovery(declared: dict, cleanup: list[dict]) -> dict:

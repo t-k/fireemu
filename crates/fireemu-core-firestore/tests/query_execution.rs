@@ -14,8 +14,8 @@ use fireemu_core_firestore::query::{
     Cursor, Direction, FieldOp, FilterExpr, OrderClause, Query, QueryScope, UnaryOp,
 };
 use fireemu_core_firestore::store::{
-    get_field, normalize_aggregation_query, Aggregation, Document, FirestoreState, ListedDocument,
-    Write, WriteOp,
+    get_field, normalize_aggregation_query, Aggregation, Document, FirestoreState, HistoryLimits,
+    ListedDocument, Write, WriteOp,
 };
 use fireemu_core_firestore::value::{GeoPoint, Timestamp, Value};
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
@@ -1298,7 +1298,11 @@ fn latest_name_pages_skip_retained_tombstones() {
 }
 
 fn scoped_performance_state(total: usize, collection_count: usize) -> FirestoreState {
-    let mut state = FirestoreState::new();
+    let limits = HistoryLimits {
+        max_versions: HistoryLimits::default().max_versions.max(total as u64 + 10),
+        ..HistoryLimits::default()
+    };
+    let mut state = FirestoreState::with_history_limits(limits);
     let now = LogicalInstant::from_unix_seconds(1_788_000_000);
     for batch_start in (0..total).step_by(500) {
         let batch_end = (batch_start + 500).min(total);

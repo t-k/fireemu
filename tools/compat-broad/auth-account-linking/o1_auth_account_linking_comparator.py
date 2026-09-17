@@ -2,23 +2,18 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 CONTRACT = "auth-settings-v1"
-_DYNAMIC = re.compile(r"^(?:local|prod)-[a-z0-9-]+$")
 
 
-def _stable(value: Any) -> Any:
+def _stable(value: Any, key: str | None = None) -> Any:
     if isinstance(value, dict):
-        return {
-            k: _stable(v)
-            for k, v in sorted(value.items())
-            if k not in {"timestamp", "nonce", "token", "idToken", "refreshToken"}
-        }
+        ignored = {"timestamp", "nonce", "token", "idToken", "refreshToken"}
+        return {k: _stable(v, k) for k, v in sorted(value.items()) if k not in ignored}
     if isinstance(value, list):
-        return sorted((_stable(v) for v in value), key=repr)
-    if isinstance(value, str) and _DYNAMIC.fullmatch(value):
+        return [_stable(v, key) for v in value]
+    if key in {"uid", "subject", "localId"} and isinstance(value, str):
         return "$dynamic"
     return value
 
@@ -32,12 +27,31 @@ def compare(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
         "operations",
         "cleanup",
     )
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return {
+            "contract": CONTRACT,
+            "classification": "INDETERMINATE",
+            "reason": "receipt-not-object",
+        }
     if any(key not in left or key not in right for key in required):
         return {
             "contract": CONTRACT,
             "classification": "INDETERMINATE",
             "reason": "binding-missing",
         }
+    for receipt in (left, right):
+        operations = receipt.get("operations")
+        if not isinstance(operations, list) or any(
+            not isinstance(row, dict)
+            or row.get("status") in {None, "transport-error", "incomplete"}
+            or row.get("failure") is not None
+            for row in operations
+        ):
+            return {
+                "contract": CONTRACT,
+                "classification": "INDETERMINATE",
+                "reason": "transport-or-incomplete-operation",
+            }
     if (
         left.get("contract") != CONTRACT
         or right.get("contract") != CONTRACT
@@ -58,8 +72,12 @@ def compare(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
             "reason": "production-receipt-not-admissible",
         }
     if (
-        left.get("cleanup", {}).get("complete") is not True
-        or right.get("cleanup", {}).get("complete") is not True
+        not isinstance(left.get("cleanup"), dict)
+        or not isinstance(right.get("cleanup"), dict)
+        or left["cleanup"].get("complete") is not True
+        or right["cleanup"].get("complete") is not True
+        or left.get("after") != {}
+        or right.get("after") != {}
     ):
         return {
             "contract": CONTRACT,

@@ -9,9 +9,15 @@ import pytest
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
-from comparator import compare  # noqa: E402
-from compiler import BOUNDS, compile_case, compile_manifest  # noqa: E402
-from shadow import run_shadow  # noqa: E402
+from o1_auth_account_linking_comparator import compare  # noqa: E402
+from o1_auth_account_linking_compiler import (  # noqa: E402
+    BOUNDS,
+    SDK_PINS,
+    compile_case,
+    compile_manifest,
+    validate_manifest,
+)
+from o1_auth_account_linking_shadow import run_shadow  # noqa: E402
 
 
 def plan() -> dict:
@@ -22,6 +28,8 @@ def test_compiler_closes_case_and_never_retains_nonce_or_production_expectation(
     value = plan()
     assert value["status"] == "PREPARATION"
     assert value["productionExecuted"] is False
+    assert value["campaign"] == "auth-settings-sdk-next-v10"
+    assert value["slice"] == "account-linking-duplicate-email"
     assert "fresh-opaque-nonce" not in str(value)
     assert value["expectedProduction"] is None
     assert value["bounds"] == BOUNDS
@@ -39,6 +47,18 @@ def test_manifest_binds_artifact_source_sdk_and_configuration_without_owner_auth
     assert value["status"] == "PREPARATION"
     assert value["ownerBinding"] is None
     assert value["cleanup"] == {"required": True, "complete": False}
+    validate_manifest(value)
+    for key, replacement in (("artifactSha256", "d" * 64), ("sourceCommit", "e" * 40)):
+        changed = copy.deepcopy(value)
+        changed[key] = replacement
+        validate_manifest(changed)
+    changed = copy.deepcopy(value)
+    changed["sdk"] = {
+        "firebase": "latest",
+        "firebase-admin": SDK_PINS["firebase-admin"],
+    }
+    with pytest.raises(ValueError, match="SDK pins"):
+        validate_manifest(changed)
     with pytest.raises(ValueError, match="production-disabled"):
         compile_manifest(
             {**plan(), "productionExecuted": True},
@@ -61,8 +81,10 @@ def test_local_shadow_models_provider_email_collision_and_full_cleanup_for_both_
             "uid": "local-b",
             "providerOwner": "B",
             "emailOwner": "A",
+            "emailOwnershipMode": "multiple" if mode else "single",
         }
         assert receipt["cleanup"]["complete"] is True
+        assert receipt["after"] == {}
         assert receipt["productionExpectation"] is None
 
 
@@ -85,6 +107,22 @@ def test_comparator_does_not_compare_secret_like_fields_or_dynamic_ids():
     right["token"] = "secret-token"
     right["operations"][3]["uid"] = "prod-rotated"
     assert compare(left, right)["classification"] == "MATCH"
+
+
+def test_comparator_preserves_operation_order_and_fails_closed_for_malformed_cleanup():
+    left = run_shadow(plan(), allow_duplicate_emails=True)
+    reordered = copy.deepcopy(left)
+    reordered["operations"][0], reordered["operations"][1] = (
+        reordered["operations"][1],
+        reordered["operations"][0],
+    )
+    assert compare(left, reordered)["classification"] == "SEMANTIC_MISMATCH"
+    malformed = copy.deepcopy(left)
+    malformed["cleanup"] = None
+    assert compare(left, malformed)["classification"] == "INDETERMINATE"
+    transport = copy.deepcopy(left)
+    transport["operations"][0]["failure"] = "timeout"
+    assert compare(left, transport)["classification"] == "INDETERMINATE"
 
 
 def test_nonce_is_digest_only():

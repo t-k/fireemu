@@ -7,8 +7,9 @@ import re
 from typing import Any
 
 CONTRACT = "auth-settings-v1"
-CAMPAIGN = "account-linking-duplicate-email"
+CAMPAIGN = "auth-settings-sdk-next-v10"
 CASE_ID = "provider-collision-allow-duplicate-emails"
+SDK_PINS = {"firebase": "12.18.0", "firebase-admin": "14.3.0"}
 BOUNDS = {
     "concurrency": 1,
     "requestRate": 1,
@@ -64,6 +65,7 @@ def compile_case(project: str, tenant: str | None, nonce: str) -> dict[str, Any]
     return {
         "contract": CONTRACT,
         "campaign": CAMPAIGN,
+        "slice": "account-linking-duplicate-email",
         "caseId": CASE_ID,
         "status": "PREPARATION",
         "productionExecuted": False,
@@ -87,6 +89,7 @@ def compile_manifest(
     sdk: dict[str, str],
     configuration_digest: str,
 ) -> dict[str, Any]:
+    validate_plan(plan)
     if (
         plan.get("status") != "PREPARATION"
         or plan.get("productionExecuted") is not False
@@ -98,10 +101,7 @@ def compile_manifest(
         or re.fullmatch(r"[0-9a-f]{40}", source_commit) is None
     ):
         raise ValueError("source commit must be a full SHA-1")
-    if sdk != {
-        "firebase": sdk.get("firebase"),
-        "firebase-admin": sdk.get("firebase-admin"),
-    } or any(not isinstance(v, str) for v in sdk.values()):
+    if sdk != SDK_PINS:
         raise ValueError("closed SDK pins are required")
     _sha(configuration_digest, "configuration_digest")
     return {
@@ -119,3 +119,115 @@ def compile_manifest(
         "ownerBinding": None,
         "cleanup": {"required": True, "complete": False},
     }
+
+
+def validate_manifest(manifest: Any) -> None:
+    required = {
+        "contract",
+        "campaign",
+        "caseId",
+        "status",
+        "productionExecuted",
+        "plan",
+        "artifactSha256",
+        "sourceCommit",
+        "sdk",
+        "configurationDigest",
+        "nonceDigest",
+        "ownerBinding",
+        "cleanup",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != required:
+        raise ValueError("manifest binding mismatch")
+    if (
+        manifest["contract"] != CONTRACT
+        or manifest["campaign"] != CAMPAIGN
+        or manifest["caseId"] != CASE_ID
+        or manifest["status"] != "PREPARATION"
+        or manifest["productionExecuted"] is not False
+        or manifest["ownerBinding"] is not None
+    ):
+        raise ValueError("manifest must remain preparation-only")
+    validate_plan(manifest["plan"])
+    _sha(manifest["artifactSha256"], "artifactSha256")
+    if re.fullmatch(r"[0-9a-f]{40}", manifest["sourceCommit"]) is None:
+        raise ValueError("source commit must be a full SHA-1")
+    if manifest["sdk"] != SDK_PINS:
+        raise ValueError("SDK pins differ from reviewed versions")
+    _sha(manifest["configurationDigest"], "configurationDigest")
+    if manifest["nonceDigest"] != manifest["plan"]["nonceDigest"]:
+        raise ValueError("manifest nonce binding mismatch")
+    if manifest["cleanup"] != {"required": True, "complete": False}:
+        raise ValueError("preparation cleanup state mismatch")
+
+
+def validate_plan(plan: Any) -> None:
+    required = {
+        "contract",
+        "campaign",
+        "slice",
+        "caseId",
+        "status",
+        "productionExecuted",
+        "namespace",
+        "nonceDigest",
+        "operations",
+        "bounds",
+        "provider",
+        "expectedProduction",
+    }
+    if not isinstance(plan, dict) or set(plan) != required:
+        raise ValueError("plan binding mismatch")
+    if (
+        plan["contract"] != CONTRACT
+        or plan["campaign"] != CAMPAIGN
+        or plan["slice"] != "account-linking-duplicate-email"
+        or plan["caseId"] != CASE_ID
+        or plan["status"] != "PREPARATION"
+        or plan["productionExecuted"] is not False
+        or plan["expectedProduction"] is not None
+    ):
+        raise ValueError("plan must remain production-disabled preparation")
+    namespace = plan["namespace"]
+    if (
+        not isinstance(namespace, dict)
+        or set(namespace) != {"projectId", "tenantId"}
+        or not isinstance(namespace["projectId"], str)
+    ):
+        raise ValueError("namespace binding missing")
+    _sha(plan["nonceDigest"], "nonceDigest")
+    if plan["bounds"] != BOUNDS:
+        raise ValueError("bounded envelope mismatch")
+    if plan["provider"] != {
+        "providerId": "google.com",
+        "boundary": "owner-controlled-prerequisite",
+    }:
+        raise ValueError("provider boundary mismatch")
+    expected_ids = [
+        "configuration-read",
+        "signup-a",
+        "signup-b",
+        "same-provider-signin",
+        "password-signin-b",
+        "provider-collision",
+        "readback-a",
+        "readback-b",
+        "delete-a",
+        "delete-b",
+        "absence-a",
+        "absence-b",
+    ]
+    operations = plan["operations"]
+    if not isinstance(operations, list) or len(operations) != len(expected_ids):
+        raise ValueError("fixed operation sequence required")
+    if [
+        row.get("id") if isinstance(row, dict) else None for row in operations
+    ] != expected_ids:
+        raise ValueError("operation sequence binding mismatch")
+    if any(
+        not isinstance(row, dict)
+        or set(row) != {"id", "phase", "mutation"}
+        or type(row["mutation"]) is not bool
+        for row in operations
+    ):
+        raise ValueError("operation shape mismatch")

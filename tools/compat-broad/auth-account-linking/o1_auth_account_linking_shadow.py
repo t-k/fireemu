@@ -5,12 +5,13 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from compiler import CASE_ID, CONTRACT
+from o1_auth_account_linking_compiler import CASE_ID, CONTRACT, validate_plan
 
 
 def run_shadow(plan: dict[str, Any], *, allow_duplicate_emails: bool) -> dict[str, Any]:
     if plan.get("caseId") != CASE_ID or plan.get("productionExecuted") is not False:
         raise ValueError("invalid production-disabled plan")
+    validate_plan(plan)
     email = f"marker-{plan['nonceDigest'][:12]}@example.test"
     users = {
         "A": {
@@ -46,19 +47,21 @@ def run_shadow(plan: dict[str, Any], *, allow_duplicate_emails: bool) -> dict[st
             "uid": "local-b",
             "providerOwner": "B",
             "emailOwner": "A",
+            "emailOwnershipMode": "multiple" if allow_duplicate_emails else "single",
         }
     )
+    readback = {"A": copy.deepcopy(users["A"]), "B": copy.deepcopy(users["B"])}
     operations.extend(
         [
             {
                 "id": "readback-a",
                 "status": "success",
-                "user": copy.deepcopy(users["A"]),
+                "user": readback["A"],
             },
             {
                 "id": "readback-b",
                 "status": "success",
-                "user": copy.deepcopy(users["B"]),
+                "user": readback["B"],
             },
             {"id": "delete-a", "status": "success", "account": "A"},
             {"id": "delete-b", "status": "success", "account": "B"},
@@ -73,7 +76,8 @@ def run_shadow(plan: dict[str, Any], *, allow_duplicate_emails: bool) -> dict[st
         "productionExecuted": False,
         "allowDuplicateEmails": allow_duplicate_emails,
         "before": before,
-        "after": users,
+        "after": {},
+        "readback": readback,
         "operations": operations,
         "cleanup": {
             "complete": True,

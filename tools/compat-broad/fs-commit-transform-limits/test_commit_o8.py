@@ -65,6 +65,45 @@ def test_cli_does_not_discover_credentials_or_accept_api_key_argument(tmp_path):
     assert "GOOGLE_APPLICATION_CREDENTIALS" not in commit_o8.__dict__
 
 
+def test_frozen_input_digest_is_required_for_o7_binding():
+    value = {
+        "kind": "commit-frozen-inputs-v2",
+        "permission": {"kind": "commit-owner-execution-permission-v1"},
+        "permissionDigest": commit_o8.digest({"kind": "other"}),
+        "plan": {},
+        "planDigest": commit_o8.digest({}),
+        "sourceCommit": "frozen",
+        "sourceInputs": {},
+        "artifactSha256": "artifact",
+        "inputsDigest": "wrong",
+    }
+    with pytest.raises(ValueError, match="O7 frozen approval binding"):
+        commit_o8._validate_frozen(value)
+
+
+def test_complete_released_acquisition_is_success_even_when_comparison_flag_is_false(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(commit_o8, "execute", lambda args: {
+        "failure": None,
+        "releaseEligible": True,
+        "reservationReleased": True,
+        "acquisitionValidated": False,
+    })
+    result = commit_o8.main(
+        [
+            "--inputs", str(tmp_path / "inputs"),
+            "--permission", str(tmp_path / "permission"),
+            "--source", str(tmp_path / "source"),
+            "--artifact", str(tmp_path / "artifact"),
+            "--ledger", str(tmp_path / "ledger"),
+            "--output", str(tmp_path / "output"),
+            "--credential-file", str(tmp_path / "credential"),
+        ]
+    )
+    assert result == 0
+
+
 def test_cli_binds_exact_fixed_transport_and_handoff_without_public_secret(
     tmp_path, monkeypatch, capsys
 ):
@@ -72,7 +111,13 @@ def test_cli_binds_exact_fixed_transport_and_handoff_without_public_secret(
     monkeypatch.setattr(
         commit_o8.acquisition,
         "run_acquisition",
-        lambda output, inputs, **kwargs: calls.update(kwargs) or {"acquisitionValidated": True},
+        lambda output, inputs, **kwargs: calls.update(kwargs)
+        or {
+            "failure": None,
+            "releaseEligible": True,
+            "reservationReleased": True,
+            "acquisitionValidated": False,
+        },
     )
     monkeypatch.setattr(commit_o8, "_validate_frozen", lambda inputs: None)
     monkeypatch.setattr(commit_o8, "validate_handoff", lambda *args: None)

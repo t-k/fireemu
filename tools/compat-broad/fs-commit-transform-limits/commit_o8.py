@@ -106,6 +106,16 @@ def _validate_frozen(inputs: dict) -> None:
         "kind"
     ) != "commit-owner-execution-permission-v1":
         raise ValueError("O7 frozen approval binding required")
+    if (
+        inputs["inputsDigest"]
+        != digest({key: value for key, value in inputs.items() if key != "inputsDigest"})
+        or inputs["permissionDigest"] != digest(inputs["permission"])
+        or inputs["planDigest"] != digest(inputs["plan"])
+        or not isinstance(inputs["sourceInputs"], dict)
+        or not isinstance(inputs["sourceCommit"], str)
+        or not isinstance(inputs["artifactSha256"], str)
+    ):
+        raise ValueError("O7 frozen approval binding differs")
 
 
 def execute(args: argparse.Namespace) -> dict:
@@ -138,7 +148,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         result = execute(args)
-        return 0 if result.get("acquisitionValidated") is True else 1
+        complete = (
+            result.get("failure") is None
+            and result.get("releaseEligible") is True
+            and result.get("reservationReleased") is True
+        )
+        return 0 if complete else 1
     except Exception as error:  # noqa: BLE001 -- public output must be secret-free.
         print(f"Commit O8 refused ({type(error).__name__}).", file=sys.stderr)
         return 2

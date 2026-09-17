@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
@@ -142,33 +143,81 @@ def _exact(left: Any, right: Any) -> bool:
     return left == right
 
 
-def _canonical(value: Any, plan: dict[str, Any], timestamp_ranks: dict[str, int], *, timestamp_field: bool = False) -> Any:
+def _timestamp_order(value: str) -> tuple[datetime, int]:
+    base, _, fraction = value[:-1].partition(".")
+    return datetime.fromisoformat(base), int(fraction.ljust(9, "0")) if fraction else 0
+
+
+def _owned_path(value: str, plan: dict[str, Any]) -> str:
+    document = "/v1/" + plan["document"]
+    parent = "/v1/" + plan["parent"]
+    if value == document:
+        return "/v1/$owned-document"
+    if value == document + "?currentDocument.exists=false":
+        return "/v1/$owned-document?currentDocument.exists=false"
+    if value == parent + ":runQuery":
+        return "/v1/$owned-parent:runQuery"
+    return value
+
+
+def _timestamp_ranks(value: Any, *, key_name: str = "") -> dict[str, int]:
+    found: set[str] = set()
+
+    def visit(item: Any, field: str) -> None:
+        if isinstance(item, dict):
+            for name, child in item.items():
+                visit(child, name)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child, field)
+        elif isinstance(item, str):
+            if field in {"createTime", "updateTime", "readTime"} and _TIMESTAMP.fullmatch(item):
+                found.add(item)
+            elif field == "path" and "?currentDocument.updateTime=" in item:
+                timestamp = unquote(item.split("?currentDocument.updateTime=", 1)[1])
+                if _TIMESTAMP.fullmatch(timestamp):
+                    found.add(timestamp)
+
+    visit(value, key_name)
+    return {timestamp: index for index, timestamp in enumerate(sorted(found, key=_timestamp_order))}
+
+
+def _typed_query_response(value: Any) -> bool:
+    return isinstance(value, list) and all(
+        _typed_query_row(row) and (index == len(value) - 1 or row.get("done") is not True)
+        for index, row in enumerate(value)
+    )
+
+
+def _canonical(value: Any, plan: dict[str, Any], timestamp_ranks: dict[str, int], *, timestamp_field: bool = False, key_name: str = "") -> Any:
     if isinstance(value, str):
-        if value == plan["document"]:
+        if key_name == "path":
+            value = _owned_path(value, plan)
+        if key_name in {"name", "resource", "targetResources"} and value == plan["document"]:
             return "$owned-document"
-        if value == plan["parent"]:
+        if key_name == "parent" and value == plan["parent"]:
             return "$owned-parent"
         if timestamp_field and _TIMESTAMP.fullmatch(value):
             if value not in timestamp_ranks:
                 timestamp_ranks[value] = len(timestamp_ranks)
             return {"$timestampRank": timestamp_ranks[value]}
         marker = "?currentDocument.updateTime="
-        if marker in value:
+        if key_name == "path" and marker in value:
             prefix, encoded = value.split(marker, 1)
             timestamp = unquote(encoded)
             if _TIMESTAMP.fullmatch(timestamp):
                 if timestamp not in timestamp_ranks:
                     timestamp_ranks[timestamp] = len(timestamp_ranks)
                 return {
-                    "$timestampQueryPrefix": prefix + marker,
+                    "$timestampQueryPrefix": _owned_path(prefix, plan) + marker,
                     "$timestampRank": timestamp_ranks[timestamp],
                 }
         return value
     if isinstance(value, list):
-        return [_canonical(item, plan, timestamp_ranks, timestamp_field=timestamp_field) for item in value]
+        return [_canonical(item, plan, timestamp_ranks, timestamp_field=timestamp_field, key_name=key_name) for item in value]
     if isinstance(value, dict):
         return {
-            key: _canonical(item, plan, timestamp_ranks, timestamp_field=key in {"createTime", "updateTime", "readTime"})
+            key: _canonical(item, plan, timestamp_ranks, timestamp_field=key in {"createTime", "updateTime", "readTime"}, key_name=key)
             for key, item in sorted(value.items())
         }
     return value
@@ -275,7 +324,7 @@ def _raw_views_semantically_equal(
         return False
     left_meta = {key: value for key, value in left.items() if key not in {"rawBody", "sourceRawSha256", "byteCount"}}
     right_meta = {key: value for key, value in right.items() if key not in {"rawBody", "sourceRawSha256", "byteCount"}}
-    if not _exact(left_meta, right_meta):
+    if not _exact(_canonical(left_meta, left_plan, _timestamp_ranks(left_meta)), _canonical(right_meta, right_plan, _timestamp_ranks(right_meta))):
         return False
     try:
         parsed_left = json.loads(left_body, parse_constant=_reject_json_constant, object_pairs_hook=_unique_json_object)
@@ -283,8 +332,8 @@ def _raw_views_semantically_equal(
     except (UnicodeError, ValueError, RecursionError):
         return False
     return _exact(
-        _canonical(parsed_left, left_plan, {}),
-        _canonical(parsed_right, right_plan, {}),
+        _canonical(parsed_left, left_plan, _timestamp_ranks(parsed_left)),
+        _canonical(parsed_right, right_plan, _timestamp_ranks(parsed_right)),
     )
 
 
@@ -387,12 +436,14 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
             parsed_body = json.loads(raw_body, parse_constant=_reject_json_constant, object_pairs_hook=_unique_json_object)
             if int(slot) != 2 and parsed_body != raw_row.get("body"):
                 raise ValueError(f"raw receipt body differs from journal row {slot}")
+        query_time_consistent = True
         try:
             parsed = json.loads(raw["2"]["rawBody"], parse_constant=_reject_json_constant, object_pairs_hook=_unique_json_object)
             derived = ([
                 {"name": item["document"]["name"], "fields": item["document"]["fields"]}
                 for item in parsed
-            ] if isinstance(parsed, list) and all(_typed_query_row(item) for item in parsed) else None)
+                if "document" in item
+            ] if _typed_query_response(parsed) else None)
         except (UnicodeError, ValueError, RecursionError):
             derived = None
         if (
@@ -401,6 +452,22 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
             or derived != rows[2].get("body", {}).get("documents")
         ):
             raise ValueError("positive query projection is not row-bound")
+        for item in parsed:
+            document = item.get("document")
+            if not isinstance(document, dict) or document.get("name") != plan["document"]:
+                continue
+            created = rows[1]["body"]
+            for field in ("createTime", "updateTime"):
+                if field in document and field in created and document[field] != created[field]:
+                    query_time_consistent = False
+            if "createTime" in document and "updateTime" in document and _timestamp_order(document["createTime"]) > _timestamp_order(document["updateTime"]):
+                query_time_consistent = False
+            read_time = item.get("readTime")
+            if isinstance(read_time, str) and _TIMESTAMP.fullmatch(read_time):
+                for field in ("createTime", "updateTime"):
+                    version = document.get(field, created.get(field))
+                    if isinstance(version, str) and _TIMESTAMP.fullmatch(version) and _timestamp_order(read_time) < _timestamp_order(version):
+                        query_time_consistent = False
     else:
         raise TypeError("typed raw receipt evidence is required")
     contract = [
@@ -410,13 +477,14 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
             *zip(plan["recovery"], cleanup, strict=True),
         ]
     ]
+    contract[2] = contract[2] and query_time_consistent
     return plan, rows, cleanup, contract
 
 
 def _canonical_journal(
     plan: dict[str, Any], rows: list[dict[str, Any]], cleanup: list[dict[str, Any]]
 ) -> list[Any]:
-    ranks: dict[str, int] = {}
+    ranks = _timestamp_ranks([*rows, *cleanup])
     result: list[Any] = []
     for row in [*rows, *cleanup]:
         result.append(

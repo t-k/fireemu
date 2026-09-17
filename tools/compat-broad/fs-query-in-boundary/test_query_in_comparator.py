@@ -355,3 +355,107 @@ def test_loader_rejects_missing_raw_slot_without_reconstructing_bytes(tmp_path):
 
     with pytest.raises(ValueError, match="nine raw slots"):
         load_collected_bundle(output)
+
+
+def _persist_bundle(tmp_path, name, bundle):
+    output = tmp_path / name
+    output.mkdir()
+    journal = RawJournal(output / "raw")
+    for slot in range(9):
+        view = bundle["raw"][str(slot)]
+        binding = journal.add(
+            view["phase"], view["index"], view["status"], view["rawBody"],
+            complete=view["complete"], content_type="application/json",
+        )
+        row = bundle["rows"][slot] if slot < 6 else bundle["cleanup"][slot - 6]
+        row["raw"] = copy.deepcopy(binding)
+        row["rawSha256"] = binding["sha256"]
+    journal.close()
+    bundle["raw"] = None
+    (output / "collection.json").write_text(json.dumps(bundle))
+    return load_collected_bundle(output)
+
+
+def _set_query_raw(bundle, *, update_time=None, read_time=None):
+    document = copy.deepcopy(bundle["rows"][2]["body"]["documents"][0])
+    if update_time is not None:
+        document["updateTime"] = update_time
+    row = {"document": document}
+    if read_time is not None:
+        row["readTime"] = read_time
+    body = json.dumps([row], sort_keys=True, separators=(",", ":")).encode()
+    bundle["raw"]["2"]["rawBody"] = body
+    bundle["raw"]["2"]["byteCount"] = len(body)
+    bundle["raw"]["2"]["sourceRawSha256"] = hashlib.sha256(body).hexdigest()
+
+
+@pytest.mark.parametrize("difference", ["project", "nonce"])
+def test_distinct_owned_identifiers_compare_as_same_operation(tmp_path, difference):
+    left = _persist_bundle(tmp_path, "left", _bundle())
+    other = _bundle("other" if difference == "project" else "demo", "b" * 32 if difference == "nonce" else "a" * 32)
+    right = _persist_bundle(tmp_path, "right", other)
+    assert compare_evidence(left, right)["classification"] == "EXPECTED_NONDETERMINISM"
+
+
+@pytest.mark.parametrize("difference", ["query-version", "read-before-create"])
+def test_query_timestamp_conflict_is_not_expected_nondeterminism(tmp_path, difference):
+    left = _bundle()
+    right = _bundle()
+    if difference == "query-version":
+        _set_query_raw(left, update_time="2026-09-18T00:00:00Z")
+        _set_query_raw(right, update_time="2026-09-17T23:00:00Z")
+    else:
+        _set_query_raw(left, read_time="2026-09-18T00:01:00Z")
+        _set_query_raw(right, read_time="2026-09-17T23:00:00Z")
+    left = _persist_bundle(tmp_path, "left", left)
+    right = _persist_bundle(tmp_path, "right", right)
+    assert compare_evidence(left, right)["classification"] == "SEMANTIC_MISMATCH"
+
+
+def test_coherent_query_and_creation_time_shift_is_expected(tmp_path):
+    left = _bundle()
+    right = _bundle()
+    for bundle, created, read in (
+        (left, "2026-09-18T00:00:00Z", "2026-09-18T00:01:00Z"),
+        (right, "2026-09-19T00:00:00Z", "2026-09-19T00:01:00Z"),
+    ):
+        for index in (1, 3, 5):
+            bundle["rows"][index]["body"]["updateTime"] = created
+            body = json.dumps(bundle["rows"][index]["body"], sort_keys=True, separators=(",", ":")).encode()
+            bundle["raw"][str(index)].update(rawBody=body, byteCount=len(body))
+        bundle["cleanup"][0]["body"]["updateTime"] = created
+        body = json.dumps(bundle["cleanup"][0]["body"], sort_keys=True, separators=(",", ":")).encode()
+        bundle["raw"]["6"].update(rawBody=body, byteCount=len(body))
+        bundle["cleanup"][1]["request"]["path"] = bundle["plan"]["recovery"][1]["path"] + "?currentDocument.updateTime=" + created.replace(":", "%3A")
+        _set_query_raw(bundle, update_time=created, read_time=read)
+    result = compare_evidence(
+        _persist_bundle(tmp_path, "left", left), _persist_bundle(tmp_path, "right", right)
+    )
+    assert result["classification"] == "EXPECTED_NONDETERMINISM"
+
+
+def test_altered_query_filter_is_rejected_after_raw_reload(tmp_path):
+    left = _persist_bundle(tmp_path, "left", _bundle())
+    right = _bundle("other")
+    right["rows"][2]["request"]["body"]["structuredQuery"]["limit"] = 2
+    right = _persist_bundle(tmp_path, "right", right)
+    assert compare_evidence(left, right)["classification"] == "INDETERMINATE"
+
+
+def test_terminal_done_document_row_is_comparable_after_reload(tmp_path):
+    bundle = _bundle()
+    document = bundle["rows"][2]["body"]["documents"][0]
+    body = json.dumps([{"document": document, "readTime": "2026-09-18T00:01:00Z", "done": True}]).encode()
+    bundle["raw"]["2"].update(rawBody=body, byteCount=len(body))
+    loaded = _persist_bundle(tmp_path, "terminal", bundle)
+    assert compare_evidence(loaded, copy.deepcopy(loaded))["classification"] == "MATCH"
+
+
+def test_read_time_only_empty_result_is_semantic_mismatch_after_reload(tmp_path):
+    left = _persist_bundle(tmp_path, "left", _bundle())
+    right = _bundle()
+    body = b'[{"readTime":"2026-09-18T00:01:00Z"}]'
+    right["raw"]["2"].update(rawBody=body, byteCount=len(body))
+    right["rows"][2]["body"] = {"documents": []}
+    loaded = _persist_bundle(tmp_path, "right", right)
+    assert compare_evidence(left, loaded)["classification"] == "SEMANTIC_MISMATCH"

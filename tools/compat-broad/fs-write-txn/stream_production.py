@@ -736,6 +736,34 @@ def credential_mode_contract(mode):
     raise ValueError("closed frozen credential mode required")
 
 
+def legacy_verified_permission(permission):
+    return (
+        permission.get("kind") == "stream-prepared-owner-permission-v1"
+        and "credentialMode" not in permission
+    )
+
+
+def bound_credential_contract(value):
+    permission = value["permission"]
+    if legacy_verified_permission(permission):
+        if "credential" in value["manifest"]:
+            raise ValueError("legacy permission requires legacy manifest")
+        return credential_mode_contract(credential_prep.VERIFIED_MODE)
+    mode = permission.get("credentialMode")
+    contract = credential_mode_contract(mode)
+    expected_kind = (
+        "stream-prepared-refresh-owner-permission-v1"
+        if mode == credential_prep.MODE
+        else "stream-prepared-owner-permission-v1"
+    )
+    if (
+        permission.get("kind") != expected_kind
+        or value["manifest"].get("credential") != contract
+    ):
+        raise ValueError("frozen credential mode differs")
+    return contract
+
+
 def manifest(nonce, owner, credential_mode=credential_prep.VERIFIED_MODE):
     allocation = with_management(stream_bridge.compile_plan(PROJECT, nonce, owner))
     return {
@@ -775,6 +803,11 @@ def _prepared_inputs(permission_path, local_path, artifact_path, credential_mode
     mode_contract = credential_mode_contract(mode)
     outer = mode_contract["outer"]
     frozen = manifest(nonce, owner, mode)
+    legacy = permission is not None and legacy_verified_permission(permission)
+    if legacy:
+        if mode != credential_prep.VERIFIED_MODE:
+            raise ValueError("legacy permission only authorizes verified tokens")
+        del frozen["credential"]
     ledger = Ledger(SHARED_ROOT)
     binding = {
         "sourceDigest": stream_bridge.source_digest(),
@@ -825,6 +858,8 @@ def _prepared_inputs(permission_path, local_path, artifact_path, credential_mode
             "ownerRetainsUntilReservationResolved": True,
         },
     }
+    if legacy:
+        del required["credentialMode"]
     if mode == credential_prep.MODE:
         required["credentialPreparationDigest"] = digest(mode_contract["preparation"])
     if (
@@ -1014,24 +1049,41 @@ def execute_prepared(config_path, output, credential_fd):
 
     value = validate_prepared(load_json(config_path))
     validate_recovery_capture(value["permission"])
-    permission, plan = value["permission"], value["plan"]
-    mode = permission["credentialMode"]
-    mode_contract = credential_mode_contract(mode)
-    if value["manifest"]["credential"] != mode_contract:
-        raise ValueError("frozen credential mode differs")
+    permission = value["permission"]
+    mode_contract = bound_credential_contract(value)
+    mode = mode_contract["mode"]
     handoff = None
     if mode == credential_prep.MODE:
         handoff = read_refresh_handoff(credential_fd, permission)
         credential, api_key = None, handoff["apiKey"]
     else:
         credential, api_key = read_o8_handoff(credential_fd, value["permissionDigest"])
-    outer = mode_contract["outer"]
     if digest(api_key) != permission["apiKeyDigest"]:
         raise ValueError("O8 API-key binding differs")
     output = Path(output).absolute()
+    ledger = Ledger(SHARED_ROOT)
+    ticket, reservation_inputs = reserve_execution(value, output, ledger)
+    return execute_reserved_inputs(
+        value,
+        output,
+        ledger,
+        ticket,
+        api_key,
+        credential,
+        reservation_inputs=reservation_inputs,
+        preparation_handoff=handoff,
+    )
+
+
+def reserve_execution(value, output, ledger):
+    """Reserve the frozen mode without altering immutable owner permission."""
+    permission, plan = value["permission"], value["plan"]
+    outer = bound_credential_contract(value)["outer"]
+    if digest(permission) != value["permissionDigest"]:
+        raise ValueError("owner permission digest differs")
+    output = Path(output).absolute()
     if output != output.resolve() or output.exists():
         raise ValueError("fresh canonical execution output required")
-    ledger = Ledger(SHARED_ROOT)
     locks = resource_locks(plan)
     if value["manifest"]["resourceLocks"] != locks:
         raise ValueError("frozen resource locks differ")
@@ -1061,16 +1113,7 @@ def execute_prepared(config_path, output, credential_fd):
     }
     output.mkdir(mode=0o700)
     ticket = ledger.reserve(envelope, claim, plan)
-    return execute_reserved_inputs(
-        value,
-        output,
-        ledger,
-        ticket,
-        api_key,
-        credential,
-        reservation_inputs={"claim": claim, "ticket": ticket, "envelope": envelope},
-        preparation_handoff=handoff,
-    )
+    return ticket, {"claim": claim, "ticket": ticket, "envelope": envelope}
 
 
 def execute_reserved_inputs(

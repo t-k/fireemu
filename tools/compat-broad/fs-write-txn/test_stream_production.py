@@ -784,3 +784,63 @@ def test_preparation_failure_terminal_receipt_accounts_charged_attempt(tmp_path)
     assert result["credentialPreparationAttempts"] == 1
     assert result["dataRequests"] == 0
     assert result["reservationReleased"] is False
+
+
+def test_legacy_verified_permission_preserves_digest_through_real_reservation(tmp_path):
+    import json
+    import time
+
+    from broad_contract import digest
+    from reservations import Ledger
+
+    module = production()
+    assert hasattr(module, "bound_credential_contract")
+    permission = {
+        "kind": "stream-prepared-owner-permission-v1",
+        "issuedAt": time.time() - 1,
+        "expiresAt": time.time() + 1800,
+        "apiKeyDigest": digest("legacy-synthetic-key"),
+    }
+    original = json.dumps(permission, sort_keys=True)
+    plan = module.prepared_plan(
+        "legacy-stream-credential", "legacy-owner", digest(permission)
+    )
+    value = {
+        "permission": permission,
+        "permissionDigest": digest(permission),
+        "plan": plan,
+        "manifest": {"resourceLocks": module.resource_locks(plan)},
+    }
+    contract = module.bound_credential_contract(value)
+    assert contract["mode"] == "verified-token-v1"
+    handoff = {
+        "kind": "stream-o8-credential-v1",
+        "permissionDigest": digest(permission),
+        "token": "legacy-synthetic-token",
+        "apiKey": "legacy-synthetic-key",
+        "verifiedAt": time.time(),
+        "expiresAt": time.time() + 1800,
+    }
+    path = tmp_path / "handoff"
+    path.write_text(json.dumps(handoff))
+    path.chmod(0o600)
+    with path.open("rb") as stream:
+        credential, key = module.read_o8_handoff(
+            stream.fileno(), value["permissionDigest"]
+        )
+    assert credential.usable(time.monotonic(), 1102)
+    assert digest(key) == permission["apiKeyDigest"]
+    ledger = Ledger.create(tmp_path / "ledger")
+    output = tmp_path / "execution"
+    ticket, reservation = module.reserve_execution(value, output, ledger)
+    assert reservation["claim"]["budget"]["requests"] == 33
+    assert reservation["claim"]["durationSeconds"] == 1100
+    assert ledger.bound_claim(ticket) == reservation["claim"]
+    assert json.dumps(permission, sort_keys=True) == original
+    assert digest(permission) == value["permissionDigest"]
+    assert not (output / "credential-preparation").exists()
+    for kind in ("stream-prepared-refresh-owner-permission-v1", "unknown"):
+        with pytest.raises(ValueError):
+            module.bound_credential_contract(
+                {**value, "permission": {**permission, "kind": kind}}
+            )

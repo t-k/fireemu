@@ -1,0 +1,151 @@
+{
+  "artifactSha256": "11c7f71225dad2cba9e2c8636256d36b51c8b3ed59dee1a6fb79c639f40e98b1",
+  "authorization": {
+    "accountsAllowed": 0,
+    "budget": {
+      "accounts": 0,
+      "concurrency": 1,
+      "costMicrousd": 44000,
+      "recoverySeconds": 360,
+      "requests": 40,
+      "resources": 4,
+      "seconds": 960
+    },
+    "configurationMutationAllowed": false,
+    "iterationsAuthorized": 1,
+    "iterationsExecuted": 1,
+    "ownerAccepted": true,
+    "permissionReference": "conversation:2026-09-17:FS-DATA-WRITE-LIMITS-02:explicit-bounded-24h-acceptance"
+  },
+  "campaignId": "FS-DATA-WRITE-LIMITS-02",
+  "caseOwnership": {
+    "FS-LIMIT-DOCUMENT-BYTES": "FS-DATA-WRITE-LIMITS-02",
+    "FS-LIMIT-NESTING": "FS-DATA-WRITE-LIMITS-02"
+  },
+  "closure": {
+    "compatVerifiedParents": 0,
+    "newlyCompatibilityVerifiedConditions": 0,
+    "newlyObservedFiniteCaseGroups": 2,
+    "parent": "FS-DATA-WRITE",
+    "parentsPromoted": 0,
+    "remaining": [
+      "Repair and saved-reference recompare of the eight mismatching rows.",
+      "Production Write-stream/transaction precedence comparison.",
+      "Remaining request/operation-limit conditions and final-artifact review."
+    ],
+    "targetParents": 14
+  },
+  "collectorSourceDigest": "a9c1a67252189f70b4e766f9d4200466e4d92cd65095b7bd8a0e47fb7d501c99",
+  "comparison": {
+    "acquisitionValidated": true,
+    "classification": "SEMANTIC_MISMATCH",
+    "promotionReady": false,
+    "rowClassificationCounts": {
+      "EXPECTED_NONDETERMINISM": 8,
+      "SEMANTIC_MISMATCH": 8
+    },
+    "rows": [
+      {
+        "classification": "SEMANTIC_MISMATCH",
+        "index": 0
+      },
+      {
+        "classification": "SEMANTIC_MISMATCH",
+        "index": 1
+      },
+      {
+        "classification": "SEMANTIC_MISMATCH",
+        "index": 2
+      },
+      {
+        "classification": "SEMANTIC_MISMATCH",
+        "index": 3
+      },
+      {
+        "classification": "EXPECTED_NONDETERMINISM",
+        "index": 4
+      },
+      {
+        "classification": "EXPECTED_NONDETERMINISM",
+        "index": 5
+      },
+      {
+        "classification": "EXPECTED_NONDETERMINISM",
+        "index": 6
+      },
+      {
+        "classification": "EXPECTED_NONDETERMINISM",
+        "index": 7
+      },
+      {
+        "classification": "SEMANTIC_MISMATCH",
+        "index": 8
+      },
+      {
+        "classification": "SEMANTIC_MISMATCH",
+        "index": 9
+      },
+      {
+        "classification": "EXPECTED_NONDETERMINISM",
+        "index": 10
+      },
+      {
+        "classification": "EXPECTED_NONDETERMINISM",
+        "index": 11
+      },
+      {
+        "classification": "SEMANTIC_MISMATCH",
+        "index": 12
+      },
+      {
+        "classification": "SEMANTIC_MISMATCH",
+        "index": 13
+      },
+      {
+        "classification": "EXPECTED_NONDETERMINISM",
+        "index": 14
+      },
+      {
+        "classification": "EXPECTED_NONDETERMINISM",
+        "index": 15
+      }
+    ]
+  },
+  "comparisonContractDigest": "0d22482c53ec3c17660e704bfce1053c8d2f9471ff95ab6350b9ba1d23684840",
+  "database": "(default)",
+  "evidenceCategory": "production-observed-and-fixed-artifact-comparison",
+  "kind": "fs-write-limits-production-result-v1",
+  "limitations": [
+    "Recorded cost is conservative budget accounting, not a measured invoice.",
+    "The original comparison invocation failed on a wrong local artifact path and is preserved as INDETERMINATE; the corrected offline comparison used the exact retained artifact without new production requests.",
+    "Sixteen rows cover two finite byte/depth case groups, not sixteen independent requirements or all Firestore limits.",
+    "Original production observations and comparisons remain immutable; repair verification uses saved-reference comparison by default.",
+    "Raw nonce, credentials, and owned document payloads are retained privately."
+  ],
+  "localBundleDigest": "b44c9decee1d1ea4927b9265ebf27afb8a4253a8ee5d665e321de2c455551eb5",
+  "manifestDigest": "4c8d5707f10720b0476582637acd739557e5f232f597050754a1ab33493e8a40",
+  "privateEvidenceSha256": {
+    "comparison": "c6f6906c491ce186fd26bf43496767f47a278c12df17138afbc422c9a8d06e41",
+    "frozenInputs": "27f62136d95e85ae514ffd4ec7ae885d806d09540bfbf8a4281f837c06323499",
+    "gateApproval": "4085a6d98167f5105fc5876e94cfcbea386c7aec27bc3f49474789b3f2568c0b",
+    "initialInvalidArtifactInvocation": "4f16abad2ed21fcd3ae3892d95ff6f9467f7c5bd7f2532c18b35403201fb6d9c",
+    "ownerPermission": "562a9e64b622b3cccd39565964bbbe35f11d6af70712474c6bdff830ea14c117",
+    "productionReceipt": "ca418bcf1eed6d906baebc7d22090161752071c7d845ab19a10bd3b6ddc429a7"
+  },
+  "production": {
+    "accountingCostMicrousd": 43600,
+    "acquisitionValidated": true,
+    "billingMeasured": false,
+    "cleanupComplete": true,
+    "configurationUnchanged": true,
+    "infrastructureFailures": 0,
+    "productionExecuted": true,
+    "recordingComplete": true,
+    "requestsUsed": 36,
+    "reservationReleased": true,
+    "reservationState": "released",
+    "rows": 16
+  },
+  "project": "fireemu-35fe6",
+  "sourceCommit": "40dfc0da3a03968928fa1906cdee409b703a0bb1"
+}

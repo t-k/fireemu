@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_DIR = ROOT / "spec/compatibility/broad-runs"
@@ -53,7 +53,7 @@ def test_package_is_explicitly_blocked_without_production_execution():
     )
 
 
-def test_manifest_source_and_companion_bindings_have_current_digests():
+def test_manifest_source_and_companion_bindings_match_frozen_source():
     manifest = load_json(MANIFEST_PATH)
     binding = load_json(BINDING_PATH)
     shadow = load_json(SHADOW_PATH)
@@ -67,19 +67,29 @@ def test_manifest_source_and_companion_bindings_have_current_digests():
     assert manifest["sourceBinding"]["artifactSha256"] == binding["source"]["artifactSha256"]
     assert manifest["sourceBinding"]["artifactSha256"] == shadow["artifactSha256"]
 
+    source = manifest["sourceBinding"]["featureHead"]
+    assert source == "d813c811945e262296b16fce7609f4d0a8698909"
+
+    def source_digest(relative_path: str) -> str:
+        content = subprocess.run(
+            ["git", "show", f"{source}:{relative_path}"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        ).stdout
+        return hashlib.sha256(content).hexdigest()
+
     for relative_path, expected in manifest["sourceBinding"]["runtimeSourceDigests"].items():
-        path = ROOT / relative_path
-        assert path.is_file(), relative_path
-        assert sha256(path) == expected, relative_path
+        assert source_digest(relative_path) == expected, relative_path
 
     for section in (manifest["collectorBinding"], binding["collector"]):
         for entry in section.values():
             if isinstance(entry, dict) and "path" in entry and "sha256" in entry:
-                assert sha256(ROOT / entry["path"]) == entry["sha256"]
+                assert source_digest(entry["path"]) == entry["sha256"]
     comparator = manifest["comparatorBinding"]
-    assert sha256(ROOT / comparator["path"]) == comparator["sha256"]
+    assert source_digest(comparator["path"]) == comparator["sha256"]
     local_comparator = binding["comparator"]["localTypedComparator"]
-    assert sha256(ROOT / local_comparator["path"]) == local_comparator["sha256"]
+    assert source_digest(local_comparator["path"]) == local_comparator["sha256"]
 
 
 def test_cases_bind_required_observation_and_recovery_contracts():

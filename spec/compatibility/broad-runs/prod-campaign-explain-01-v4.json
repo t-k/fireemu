@@ -122,7 +122,7 @@
     "database": "(default)",
     "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
     "edition": "STANDARD",
-    "observerSha256": "71418b186d5e1a137abef67daf2c3bf1e1adb65b4df57402f756ba66ea0e179f",
+    "observerSha256": "8f1ecf23589a86637f8a700f7ba4400b2f7be2305e9681e14ce6ceb59538c8cd",
     "project": "fireemu-35fe6",
     "projectNumber": "592603257417"
   },
@@ -499,7 +499,7 @@
     "metadataRequests": 0,
     "nonce": "{freshNonce}",
     "observationRequests": 18,
-    "observerSha256": "71418b186d5e1a137abef67daf2c3bf1e1adb65b4df57402f756ba66ea0e179f",
+    "observerSha256": "8f1ecf23589a86637f8a700f7ba4400b2f7be2305e9681e14ce6ceb59538c8cd",
     "recoveryRequestIds": [
       "recovery:access-command",
       "recovery:tokeninfo",

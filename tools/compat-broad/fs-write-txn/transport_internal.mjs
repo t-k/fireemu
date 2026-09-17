@@ -166,11 +166,18 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
     for (const request of requests) buildNextFrame.validate(request);
   }
   const client = createClient();
+  let clientClosed = false;
+  const closeClient = () => {
+    if (!clientClosed) {
+      clientClosed = true;
+      client.close();
+    }
+  };
   let stream;
   try {
     stream = client.write({ deadline: new Date(Date.now() + options.deadlineMs), retry: { retryCodes: [] }, otherArgs: { headers: { ...options.metadata } } });
   } catch (error) {
-    client.close();
+    closeClient();
     return Object.freeze({ transportReceiptVersion: 2, kind: 'incomplete_stream', complete: false, error: plainError(error), sentFrames: 0, completedSendFrames: 0, receivedFrames: 0, events: Object.freeze([]) });
   }
   const events = [];
@@ -182,6 +189,10 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
   let terminalError;
   let sawEnd = false;
   let sawClose = false;
+  let terminalSignal = false;
+  let awaitingResponse = false;
+  let streamEndedByClient = false;
+  let handlerFailureRecorded = false;
   let settled = false;
   let timer;
   let terminalGraceTimer;
@@ -194,31 +205,60 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
     if (byteLength(value) > options.maxMessageBytes) throw fail('stream event exceeds maxMessageBytes', 'message_limit');
     events.push(Object.freeze({ type: event, value }));
   };
+  const rejectWaiters = error => { while (responseWaiters.length > 0) responseWaiters.shift().reject(error); };
+  const recordHandlerFailure = error => {
+    if (handlerFailureRecorded) return;
+    handlerFailureRecorded = true;
+    if (!terminalError) terminalError = error;
+    terminalSignal = true;
+    rejectWaiters(error);
+    try {
+      const value = plainError(error);
+      if (byteLength(value) <= options.maxMessageBytes) events.push(Object.freeze({ type: 'error', value }));
+    } catch {}
+    try { stream.destroy(error); } catch {}
+  };
+  const safePush = (event, value) => {
+    try {
+      push(event, value);
+    } catch (error) {
+      recordHandlerFailure(error);
+    }
+  };
   const finish = result => {
     if (settled) return;
     settled = true;
     clearTimeout(timer);
     clearTimeout(terminalGraceTimer);
+    rejectWaiters(terminalError ?? Object.assign(new Error('stream terminated'), { code: 'incomplete_stream' }));
     settleTerminal(Object.freeze({ transportReceiptVersion: 2, ...result, status: result.status ? plainStatus(result.status) : undefined, error: result.error ? plainError(result.error) : undefined, sentFrames, completedSendFrames, receivedFrames, events: Object.freeze(events.slice()) }));
   };
   const maybeFinish = () => {
     if (settled || !(sawEnd || sawClose)) return;
-    const classified = classifyTerminal({ status, error: terminalError, sawEnd, sawClose });
-    if (classified?.kind === 'grpc_status') finish({ kind: 'grpc_status', complete: true, status });
-    else if (!terminalGraceTimer) terminalGraceTimer = setTimeout(() => terminalError ? finish({ kind: 'incomplete_stream', complete: false, error: terminalError }) : finish({ kind: 'incomplete_stream', complete: false }), 100);
+    clearTimeout(timer);
+    const terminalStatus = status ?? (typeof terminalError?.code === 'number' ? terminalError : undefined);
+    const terminalCode = terminalStatus?.code;
+    if (!handlerFailureRecorded && typeof terminalCode === 'number' && (terminalCode !== 0 || (!awaitingResponse && streamEndedByClient))) {
+      finish({ kind: 'grpc_status', complete: true, status: terminalStatus, error: terminalError });
+    } else if (!terminalGraceTimer) {
+      if (!terminalError) terminalError = Object.assign(new Error('stream terminated before all responses'), { code: 'incomplete_stream' });
+      rejectWaiters(terminalError);
+      terminalGraceTimer = setTimeout(() => finish({ kind: 'incomplete_stream', complete: false, status, error: terminalError }), 100);
+    }
   };
-  const rejectWaiters = error => { while (responseWaiters.length > 0) responseWaiters.shift().reject(error); };
   const waitResponse = () => new Promise((resolve, reject) => {
     if (responseQueue.length > 0) resolve(responseQueue.shift());
-    else if (terminalError) reject(terminalError);
+    else if (settled || terminalError || terminalSignal) reject(terminalError ?? Object.assign(new Error('stream terminated before response'), { code: 'incomplete_stream' }));
     else responseWaiters.push({ resolve, reject });
   });
   const sendFrame = request => {
+    if (settled || terminalSignal || sawEnd || sawClose) throw fail('stream terminated before send', 'incomplete_stream');
     buildNextFrame.validate(request);
     if (++frameCount > options.maxFrames) throw fail('stream exceeds maxFrames', 'frame_limit');
     const outgoing = snapshot(request);
     push('send', outgoing);
     sentFrames += 1;
+    awaitingResponse = true;
     stream.write(request);
     completedSendFrames += 1;
   };
@@ -229,33 +269,70 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
       receivedFrames += 1;
       if (++frameCount > options.maxFrames) return stream.destroy(fail('stream exceeds maxFrames', 'frame_limit'));
       if (responseWaiters.length > 0) responseWaiters.shift().resolve(response); else responseQueue.push(response);
-    } catch (error) { stream.destroy(error); }
+    } catch (error) { recordHandlerFailure(error); }
   });
-  stream.on('status', value => { if (!settled) { status = value; push('status', plainStatus(value)); maybeFinish(); } });
-  stream.on('error', error => { if (!settled) { terminalError = error; push('error', plainError(error)); rejectWaiters(error); terminalGraceTimer = setTimeout(maybeFinish, 100); maybeFinish(); } });
-  stream.on('end', () => { if (!settled) { sawEnd = true; push('end', { status: status ? plainStatus(status) : undefined }); maybeFinish(); } });
-  stream.on('close', () => { if (!settled) { sawClose = true; push('close', { status: status ? plainStatus(status) : undefined }); maybeFinish(); } });
+  stream.on('status', value => {
+    if (!settled) {
+      status = value;
+      terminalSignal = true;
+      safePush('status', plainStatus(value));
+      maybeFinish();
+    }
+  });
+  stream.on('error', error => {
+    if (!settled) {
+      terminalError = error;
+      terminalSignal = true;
+      safePush('error', plainError(error));
+      rejectWaiters(error);
+      maybeFinish();
+    }
+  });
+  stream.on('end', () => {
+    if (!settled) {
+      sawEnd = true;
+      safePush('end', { status: status ? plainStatus(status) : undefined });
+      maybeFinish();
+    }
+  });
+  stream.on('close', () => {
+    if (!settled) {
+      sawClose = true;
+      safePush('close', { status: status ? plainStatus(status) : undefined });
+      maybeFinish();
+    }
+  });
   timer = setTimeout(() => {
     const error = Object.assign(new Error('client deadline exceeded'), { code: 'client_deadline' });
     terminalError = error;
+    terminalSignal = true;
     rejectWaiters(error);
-    stream.destroy(error);
+    try { stream.destroy(error); } catch {}
     finish({ kind: 'client_deadline', complete: false, error, status });
   }, options.deadlineMs);
   try {
     sendFrame(handshake);
     let response = await waitResponse();
+    awaitingResponse = false;
     for await (const request of requests) {
       sendFrame(buildNextFrame(request, response));
       response = await waitResponse();
+      awaitingResponse = false;
     }
+    awaitingResponse = false;
+    streamEndedByClient = true;
     stream.end();
   } catch (error) {
-    if (!terminalError) { terminalError = error; rejectWaiters(error); stream.destroy(error); }
+    if (!terminalError) terminalError = error;
+    terminalSignal = true;
+    rejectWaiters(error);
+    try { stream.destroy(error); } catch {}
   }
-  const receipt = await terminal;
-  client.close();
-  return receipt;
+  try {
+    return await terminal;
+  } finally {
+    closeClient();
+  }
 };
 
 const validMetadata = metadata => {

@@ -20,6 +20,29 @@ const base = {
   phaseDeadlineAt: 3_000,
 };
 
+const writeOptions = { deadlineMs: 25, maxFrames: 8, maxMessageBytes: 256, metadata: {} };
+const handshake = { database: 'projects/fireemu-test/databases/(default)' };
+const identityFrame = Object.assign((request) => request, { validate() {} });
+const controlledWrite = (onWrite, options = writeOptions, onClose = () => {}) => {
+  const stream = new EventEmitter();
+  stream.write = frame => queueMicrotask(() => onWrite(stream, frame));
+  stream.end = () => {};
+  stream.destroy = error => queueMicrotask(() => {
+    stream.emit('error', error);
+    stream.emit('close');
+  });
+  return runWriteCore([], options, {
+    createClient: () => ({ write: () => stream, close: onClose }),
+    handshake,
+    buildNextFrame: identityFrame,
+  });
+};
+
+const bounded = promise => Promise.race([
+  promise,
+  new Promise((_, reject) => setTimeout(() => reject(new Error('test watchdog expired')), 300)),
+]);
+
 test('prepares a fixed TLS production configuration without accepting endpoint or ADC inputs', () => {
   const prepared = prepareFixedTlsTransport(base);
   assert.equal(prepared.servicePath, 'firestore.googleapis.com');
@@ -188,4 +211,80 @@ test('prevalidates every Write request before creating a client or writing a fra
     }),
   }), /invalid request/);
   assert.equal(constructed, false);
+});
+
+test('returns a typed gRPC refusal when a Write stream is refused before handshake acknowledgement', async () => {
+  let closes = 0;
+  const receipt = await bounded(controlledWrite(stream => {
+    stream.emit('error', Object.assign(new Error('refused'), { code: 14, details: 'unavailable' }));
+    stream.emit('close');
+  }, writeOptions, () => { closes += 1; }));
+  assert.equal(receipt.complete, true);
+  assert.equal(receipt.kind, 'grpc_status');
+  assert.equal(receipt.status.code, 14);
+  assert.equal(closes, 1);
+});
+
+test('terminates a silent Write stream at the client deadline', async () => {
+  const receipt = await bounded(controlledWrite(() => {}));
+  assert.equal(receipt.kind, 'client_deadline');
+  assert.equal(receipt.complete, false);
+});
+
+test('does not send after status and end arrive before the handshake acknowledgement', async () => {
+  let writes = 0;
+  const receipt = await bounded(controlledWrite(stream => {
+    writes += 1;
+    stream.emit('status', { code: 0, details: 'early', message: '' });
+    stream.emit('end');
+  }));
+  assert.equal(receipt.complete, false);
+  assert.equal(receipt.kind, 'incomplete_stream');
+  assert.equal(writes, 1);
+});
+
+test('does not send a next Write after status and end arrive between response and continuation', async () => {
+  let writes = 0;
+  const stream = new EventEmitter();
+  stream.write = () => {
+    writes += 1;
+    if (writes === 1) queueMicrotask(() => stream.emit('data', { streamToken: Buffer.from('token') }));
+    else queueMicrotask(() => {
+      stream.emit('status', { code: 0, details: 'early', message: '' });
+      stream.emit('end');
+    });
+  };
+  stream.end = () => {};
+  stream.destroy = error => queueMicrotask(() => {
+    stream.emit('error', error);
+    stream.emit('close');
+  });
+  const receipt = await bounded(runWriteCore([{ writes: [] }], writeOptions, {
+    createClient: () => ({ write: () => stream, close() {} }),
+    handshake,
+    buildNextFrame: Object.assign((request, response) => ({ ...request, streamToken: response.streamToken }), { validate() {} }),
+  }));
+  assert.equal(receipt.complete, false);
+  assert.equal(receipt.kind, 'incomplete_stream');
+  assert.equal(writes, 2);
+});
+
+test('keeps a statusless end and close incomplete', async () => {
+  const receipt = await bounded(controlledWrite(stream => {
+    stream.emit('end');
+    stream.emit('close');
+  }));
+  assert.equal(receipt.kind, 'incomplete_stream');
+  assert.equal(receipt.complete, false);
+  assert.equal(receipt.status, undefined);
+});
+
+test('contains oversized status and error diagnostics without an uncaught event exception', async () => {
+  const receipt = await bounded(controlledWrite(stream => {
+    stream.emit('status', { code: 0, details: 'x'.repeat(2_000), message: 'x'.repeat(2_000) });
+    stream.emit('close');
+  }));
+  assert.equal(receipt.kind, 'incomplete_stream');
+  assert.equal(receipt.complete, false);
+  assert.ok(receipt.events.some(event => event.type === 'error'));
 });

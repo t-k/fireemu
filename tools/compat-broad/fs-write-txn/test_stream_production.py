@@ -28,7 +28,7 @@ def test_prepared_allocation_counts_metadata_separately():
     plan = module.prepared_plan("stream-preflight-001", "owner-001", "a" * 64)
     assert plan["observationRequests"] == 19
     assert plan["recoverySeconds"] >= 366
-    assert plan["costMicrousd"] == 3300
+    assert plan["costMicrousd"] == 1_303_300
     assert plan["streamBounds"]["rpcSlots"] == 25
     assert plan["streamBounds"]["acceptedBytes"] == 273 * 1024 * 1024
     assert [item["id"] for item in plan["management"]["observation"]] == [
@@ -150,7 +150,12 @@ def prepared_fixture(tmp_path, metadata_server, stale=None):
         "key": f"project/{PROJECT}/firestore/(default)/documents/{plan['documentPrefix']}",
         "mode": "EXCLUSIVE",
     }
-    budget = {"requests": 33, "accounts": 0, "resources": 3, "costMicrousd": 3300}
+    budget = {
+        "requests": 33,
+        "accounts": 0,
+        "resources": 3,
+        "costMicrousd": module.TOTAL_COST_MICROUSD,
+    }
     envelope = {
         "permissionDigest": digest(permission),
         "issuedAt": time.time() - 1,
@@ -581,3 +586,26 @@ def test_recovery_capture_requires_exact_private_append_file(tmp_path):
             module.validate_recovery_capture(permission, fd=fd)
     finally:
         os.close(fd)
+
+
+def test_upfront_network_reserve_preserves_all_fourteen_recovery_slots(
+    tmp_path, metadata_server
+):
+    from shared_gate import create
+
+    module, _permission, plan, ledger, ticket, _credential = prepared_fixture(
+        tmp_path, metadata_server
+    )
+    assert plan["fixedCostMicrousd"] == 1_300_000
+    assert plan["requestCostMicrousd"] == 100
+    assert plan["costMicrousd"] == 1_303_300
+    create(tmp_path / "gate", plan)
+    state = module.StreamProductionGate(tmp_path / "gate").snapshot()
+    assert state["costMicrousd"] == 1_300_000
+    assert state["reservedRecovery"] == 14
+    assert plan["costMicrousd"] - state["costMicrousd"] - 14 * 100 == 19 * 100
+    assert ledger.bound_claim(ticket)["budget"]["costMicrousd"] == plan["costMicrousd"]
+    pricing = module.pricing_basis()
+    assert pricing["networkPlanningMiB"] == 5483
+    assert pricing["calculatedNetworkMicrousd"] == 1_231_534
+    assert pricing["freeQuotaCreditBytes"] == 0

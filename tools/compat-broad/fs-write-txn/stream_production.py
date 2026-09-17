@@ -23,6 +23,45 @@ from shared_production import Coordinator, ProductionGate
 
 PROFILE = "stream-prepared-metadata-v1"
 ACTIONS = ("project", "database", "auth", "key")
+REQUEST_SLOTS = 33
+REQUEST_COST_MICROUSD = 100
+FIXED_NETWORK_MICROUSD = 1_300_000
+TOTAL_COST_MICROUSD = FIXED_NETWORK_MICROUSD + REQUEST_SLOTS * REQUEST_COST_MICROUSD
+
+
+def pricing_basis():
+    """Conservative planning charge; accepted JSON bytes are not received wire bytes."""
+    network_mib = (290 + 25) * 17 + 8 * 8 + 64
+    rate = 230_000
+    return {
+        "kind": "stream-conservative-pricing-v1",
+        "checkedAt": "2026-09-17",
+        "primarySource": "https://cloud.google.com/firestore/pricing",
+        "rateMicrousdPerGiB": rate,
+        "rateBasis": "highest listed destination (China), no destination discount",
+        "freeQuotaCreditBytes": 0,
+        "acceptedEventSlots": 290,
+        "rejectedMessageSlots": 25,
+        "encodedReceiveCeilingMiB": 17,
+        "sdkVersion": "@google-cloud/firestore@8.7.1",
+        "sdkSource": "tools/sdk-smoke/node_modules/@google-cloud/firestore/build/src/v1/firestore_client.js:initialize",
+        "sdkLockSha256": sha_file(ROOT / "tools/sdk-smoke/package-lock.json"),
+        "metadataCalls": 8,
+        "metadataAllowanceMiBPerCall": 8,
+        "metadataBodyReadBytes": 65537,
+        "httpHeaderCount": 100,
+        "httpHeaderLineBytes": 65536,
+        "metadataBasis": "body plus one overflow header: 65537 + 101*65537, status line and buffering within8MiB",
+        "framingAndBufferingReserveMiB": 64,
+        "networkPlanningMiB": network_mib,
+        "calculatedNetworkMicrousd": (network_mib * rate + 1023) // 1024,
+        "fixedNetworkMicrousd": FIXED_NETWORK_MICROUSD,
+        "operationSlots": REQUEST_SLOTS,
+        "operationAllowanceMicrousdPerSlot": REQUEST_COST_MICROUSD,
+        "documentWritesUpperBound": 9,
+        "totalPlanningMicrousd": TOTAL_COST_MICROUSD,
+        "isExpectedInvoice": False,
+    }
 
 
 def with_management(plan):
@@ -34,7 +73,9 @@ def with_management(plan):
         coordinatorRequests=0,
         observationRequests=19,
         recoverySeconds=366,
-        costMicrousd=3300,
+        fixedCostMicrousd=FIXED_NETWORK_MICROUSD,
+        requestCostMicrousd=REQUEST_COST_MICROUSD,
+        costMicrousd=TOTAL_COST_MICROUSD,
     )
     return plan
 
@@ -597,6 +638,7 @@ def manifest(nonce, owner):
             stream_bridge.compile_plan(PROJECT, nonce, owner)
         ),
         "sourceDigest": stream_bridge.source_digest(),
+        "pricingBasis": pricing_basis(),
         "comparatorSha256": sha_file(Path(__file__).with_name("stream_comparison.mjs")),
     }
 
@@ -656,7 +698,8 @@ def _prepared_inputs(permission_path, local_path, artifact_path):
         "resourceUpperBound": 3,
         "concurrencyUpperBound": 1,
         "timeUpperBound": 1100,
-        "costUpperMicrousd": 3300,
+        "costUpperMicrousd": TOTAL_COST_MICROUSD,
+        "pricingBasisDigest": digest(frozen["pricingBasis"]),
         "allowedReobservations": 0,
         "recoveryDiagnostics": {
             "path": str(SHARED_ROOT / ("stream-recovery-" + nonce + ".jsonl")),
@@ -839,7 +882,12 @@ def execute_prepared(config_path, output, credential_fd):
         "key": f"project/{PROJECT}/firestore/(default)/documents/{plan['documentPrefix']}",
         "mode": "EXCLUSIVE",
     }
-    budget = {"requests": 33, "accounts": 0, "resources": 3, "costMicrousd": 3300}
+    budget = {
+        "requests": 33,
+        "accounts": 0,
+        "resources": 3,
+        "costMicrousd": TOTAL_COST_MICROUSD,
+    }
     envelope = {
         "permissionDigest": value["permissionDigest"],
         "issuedAt": permission["issuedAt"],

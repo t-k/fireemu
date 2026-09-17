@@ -208,7 +208,12 @@ def child(output, nonce):
             "key": f"project/{PROJECT}/firestore/(default)/documents/{plan['documentPrefix']}",
             "mode": "EXCLUSIVE",
         }
-        budget = {"requests": 33, "accounts": 0, "resources": 3, "costMicrousd": 3300}
+        budget = {
+            "requests": 33,
+            "accounts": 0,
+            "resources": 3,
+            "costMicrousd": production.TOTAL_COST_MICROUSD,
+        }
         envelope = {
             "permissionDigest": digest(permission),
             "issuedAt": time.time() - 1,

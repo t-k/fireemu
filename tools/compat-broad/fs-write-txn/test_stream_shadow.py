@@ -45,3 +45,9 @@ def test_shadow_cli_bootstraps_sibling_imports():
     )
     assert result.returncode == 0, result.stderr
     assert "--artifact" in result.stdout
+
+
+def test_owned_configuration_has_required_schema_version():
+    import stream_shadow
+
+    assert stream_shadow.CONFIG == {"schemaVersion": 1, "profile": "strict"}

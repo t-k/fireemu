@@ -32,7 +32,7 @@ from owned_runner import (
 )
 from reservations import Ledger
 
-CONFIG = {"profile": "strict"}
+CONFIG = {"schemaVersion": 1, "profile": "strict"}
 
 
 @contextlib.contextmanager
@@ -83,6 +83,15 @@ def metadata_fixture():
 
 
 def child(output, nonce):
+    stream_bridge.write_private_json(
+        output / "child-identity.json",
+        {
+            "parentPid": os.getppid(),
+            "childPid": os.getpid(),
+            "argv": [sys.executable, *sys.argv],
+            "nonce": nonce,
+        },
+    )
     firestore, control = local_addresses(
         os.environ["FIRESTORE_EMULATOR_HOST"], os.environ["FIREEMU_CONTROL_URL"]
     )
@@ -296,6 +305,13 @@ def run_shadow(artifact, build_manifest, output):
             stderr=subprocess.DEVNULL,
         )
         code = process.wait(timeout=1150)
+        result["supervisor"] = {
+            "exitCode": code,
+            "childStarted": (output / "child-identity.json").is_file(),
+            "controlVerified": (output / "instance.json").is_file(),
+        }
+        if not (output / "instance.json").is_file():
+            raise ValueError("owned supervisor or child initialization failed")
         instance = production.load_json(output / "instance.json")
         result = production.load_json(output / "execution" / "receipt.json")
         closed = all(
@@ -337,9 +353,10 @@ def run_shadow(artifact, build_manifest, output):
                         process.wait(timeout=20)
                     except subprocess.TimeoutExpired:
                         pass
-                if (output / "instance.json").exists():
+                if (output / "child-identity.json").exists():
                     stop_child(
-                        production.load_json(output / "instance.json"), process.pid
+                        production.load_json(output / "child-identity.json"),
+                        process.pid,
                     )
             except Exception as error:  # noqa: BLE001 -- Retain cleanup uncertainty.
                 result["acquisitionValidated"] = False

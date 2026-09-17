@@ -68,11 +68,13 @@ def test_observed_differences_never_become_agreement() -> None:
         lambda x: x["stages"][2]["response"].update(status=401),
         lambda x: x["state"]["afterWrong"].update(pendingSession=False),
         lambda x: x["state"]["afterSuccess"].update(factorCount=2),
-        lambda x: x["recovery"].update(remainingAccounts=1),
     ):
         production = receipt("production")
         mutation(production)
-        assert compare(local, production)["classification"] == "SEMANTIC_MISMATCH"
+        assert compare(local, production)["classification"] == "INDETERMINATE"
+    production = receipt("production")
+    production["recovery"]["remainingAccounts"] = 1
+    assert compare(local, production)["receiptStatus"] == "INCOMPLETE"
     production = receipt("production")
     production["recovery"]["cleanupVerified"] = False
     assert compare(local, production)["classification"] == "INDETERMINATE"
@@ -92,4 +94,30 @@ def test_serialized_outputs_do_not_contain_secret_material() -> None:
     manifest = json.dumps(campaign_manifest("a" * 32))
     for material in ("RAW_SECRET_123", "123456", "RAW_PASSWORD_123", "RAW_TOKEN_123", "RAW_REFRESH_123", "RAW_SESSION_123"):
         assert material not in result + manifest
+    assert compare(local, production)["classification"] == "INDETERMINATE"
+
+
+def test_secret_only_difference_is_not_semantic_mismatch() -> None:
+    local, production = receipt("local"), receipt("production")
+    local["stages"][1]["response"]["totpSecret"] = "SECRET_ONE"
+    production["stages"][1]["response"]["totpSecret"] = "SECRET_TWO"
+    assert compare(local, production)["classification"] == "INDETERMINATE"
+
+
+def test_boolean_status_and_cleanup_count_are_not_typed_receipts() -> None:
+    local, production = receipt("local"), receipt("production")
+    production["stages"][1]["response"]["status"] = True
+    production["state"]["afterSuccess"]["factorCount"] = 2
+    assert compare(local, production)["receiptStatus"] == "INCOMPLETE"
+    production = receipt("production")
+    production["recovery"]["remainingAccounts"] = False
+    production["state"]["afterSuccess"]["factorCount"] = 2
+    assert compare(local, production)["receiptStatus"] == "INCOMPLETE"
+
+
+def test_forged_source_binding_cannot_enable_semantic_comparison() -> None:
+    local, production = receipt("local"), receipt("production")
+    for record in (local, production):
+        record["sourceBinding"] = {"commit": "x" * 40, "artifactSha256": "x" * 64}
+    production["state"]["afterSuccess"]["factorCount"] = 2
     assert compare(local, production)["classification"] == "INDETERMINATE"

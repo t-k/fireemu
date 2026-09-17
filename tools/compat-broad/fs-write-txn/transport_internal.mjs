@@ -193,7 +193,7 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
   let awaitingResponse = false;
   let streamEndedByClient = false;
   let handlerFailureRecorded = false;
-  let pendingTerminalError = false;
+  let pendingTerminalError;
   let settled = false;
   let timer;
   let terminalGraceTimer;
@@ -255,12 +255,12 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
     clearTimeout(timer);
     const terminalStatus = status;
     const terminalCode = terminalStatus?.code;
-    if (!handlerFailureRecorded && typeof terminalCode === 'number' && (terminalCode !== 0 || (!awaitingResponse && streamEndedByClient))) {
+    if (!handlerFailureRecorded && typeof terminalCode === 'number' && (terminalCode !== 0 || (!awaitingResponse && streamEndedByClient && !terminalError))) {
       finish({ kind: 'grpc_status', complete: true, status: terminalStatus, error: terminalError });
     } else if (!terminalGraceTimer) {
       if (!terminalError) {
         terminalError = Object.assign(new Error('stream terminated before all responses'), { code: 'incomplete_stream' });
-        pendingTerminalError = true;
+        pendingTerminalError = terminalError;
       }
       rejectWaiters(terminalError);
       terminalGraceTimer = setTimeout(() => finish({ kind: 'incomplete_stream', complete: false, status, error: terminalError }), 100);
@@ -300,9 +300,9 @@ export const runWriteCore = async (requests, options, { createClient, handshake,
         return;
       }
       status = normalized;
-      if (pendingTerminalError) {
+      if (pendingTerminalError === terminalError) {
         terminalError = undefined;
-        pendingTerminalError = false;
+        pendingTerminalError = undefined;
       }
       terminalSignal = true;
       safePush('status', normalized);

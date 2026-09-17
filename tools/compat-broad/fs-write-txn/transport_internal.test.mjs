@@ -86,6 +86,26 @@ test('accepts clean status and terminal events in all supported orders', async (
   }
 });
 
+test('does not clear a real error when status follows end', async () => {
+  const stream = new EventEmitter();
+  stream.write = () => queueMicrotask(() => stream.emit('data', { streamToken: Buffer.from('token') }));
+  stream.end = () => {
+    stream.emit('end');
+    queueMicrotask(() => stream.emit('error', Object.assign(new Error('aborted'), { code: 13, details: 'aborted' })));
+    setTimeout(() => stream.emit('status', { code: 0, details: 'late', message: '' }), 10);
+  };
+  stream.destroy = () => {};
+  const receipt = await bounded(runWriteCore([], writeOptions, {
+    createClient: () => ({ write: () => stream, close() {} }),
+    handshake,
+    buildNextFrame: identityFrame,
+  }));
+  assert.equal(receipt.kind, 'incomplete_stream');
+  assert.equal(receipt.complete, false);
+  assert.equal(receipt.status.code, 0);
+  assert.equal(receipt.error.code, 13);
+});
+
 test('local client factory rejects non-loopback options before channel construction', () => {
   assert.throws(() => createLocalClient({ host: 'firestore.googleapis.com', port: 443, projectId: 'fireemu-test' }), /loopback/);
 });

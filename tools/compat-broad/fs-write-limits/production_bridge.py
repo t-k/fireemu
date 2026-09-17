@@ -129,6 +129,15 @@ def bind_wire(coordinator, plan, *, transmit=request):
             "token": coordinator.access(),
         }
         prepare(value)
-        return transmit(value)
+        result = transmit(value)
+        if result.get("status") in {401, 403}:
+            # Retain the complete response for the collector before it stops.
+            # Never refresh/reuse a principal already rejected by production.
+            coordinator.credential.fail()
+            return {**result, "failure": "AdministratorCredentialRejected"}
+        status = result.get("status")
+        if type(status) is int and (status == 429 or status >= 500):
+            return {**result, "failure": "UnexpectedServiceResponse"}
+        return result
 
     return wire

@@ -184,3 +184,91 @@ def test_charged_callback_cannot_send_twice(tmp_path):
     gate.dispatch(operation, False, twice)
     assert len(sent) == 1
     assert gate.snapshot()["total"] == 1
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_rejected_credential_is_recorded_and_never_reused(tmp_path, status):
+    import json
+    from collector import collect
+
+    coordinator, gate, plan = setup_bridge(tmp_path)
+    compiled = compile_limits_plan("fireemu-35fe6", "(default)", coordinator.nonce)
+    attempts = []
+
+    def refused(value):
+        attempts.append(value)
+        return {
+            "complete": True,
+            "status": status,
+            "body": {
+                "error": {
+                    "code": status,
+                    "status": "UNAUTHENTICATED"
+                    if status == 401
+                    else "PERMISSION_DENIED",
+                }
+            },
+        }
+
+    output = tmp_path / "collection"
+    result = collect(
+        gate,
+        compiled,
+        output,
+        bind_wire(coordinator, plan, transmit=refused),
+        before_recovery=coordinator.recover_credentials,
+    )
+    assert len(attempts) == 1
+    assert coordinator.credential.failed is True
+    assert coordinator.credential.token is None or coordinator.credential.token == ""
+    receipt = json.loads((output / "observation-00-wire.json").read_bytes())
+    assert receipt["complete"] is True
+    assert receipt["status"] == status
+    assert receipt["body"]["error"]["code"] == status
+    assert result["collectionComplete"] is False
+    assert result["cleanupComplete"] is False
+    assert any(
+        f["phase"] == "recovery-admission" for f in result["infrastructureFailures"]
+    )
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_service_failure_is_preserved_as_infrastructure_not_semantics(tmp_path, status):
+    from collector import collect
+
+    coordinator, gate, plan = setup_bridge(tmp_path)
+    compiled = compile_limits_plan("fireemu-35fe6", "(default)", coordinator.nonce)
+
+    def responses(value):
+        if value["phase"] == "observation":
+            return {
+                "complete": True,
+                "status": status,
+                "body": {
+                    "error": {
+                        "code": status,
+                        "status": "RESOURCE_EXHAUSTED"
+                        if status == 429
+                        else "UNAVAILABLE",
+                    }
+                },
+            }
+        return {
+            "complete": True,
+            "status": 404,
+            "body": {"error": {"code": 404, "status": "NOT_FOUND"}},
+        }
+
+    result = collect(
+        gate,
+        compiled,
+        tmp_path / "collection",
+        bind_wire(coordinator, plan, transmit=responses),
+        before_recovery=coordinator.recover_credentials,
+    )
+    assert result["rows"][0]["complete"] is True
+    assert result["rows"][0]["status"] == status
+    assert any(f["phase"] == "observation" for f in result["infrastructureFailures"])
+    assert result["collectionComplete"] is False
+    assert result["cleanupComplete"] is True
+    assert coordinator.credential.failed is False

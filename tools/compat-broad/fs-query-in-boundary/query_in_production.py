@@ -386,7 +386,7 @@ class RawJournal:
         except BaseException:
             os.close(self._fd)
             raise
-        if not isinstance(manifest, dict) or manifest.get("version") != 1:
+        if not isinstance(manifest, dict) or type(manifest.get("version")) is not int or manifest["version"] != 1:
             os.close(self._fd)
             raise ValueError("invalid raw journal manifest")
         bindings = manifest.get("bindings")

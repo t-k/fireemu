@@ -204,15 +204,22 @@ def _transport_raw(receipt: Any) -> tuple[bytes, int | None, str, bool] | None:
     """Extract exact transport evidence; a decoded body is never a raw substitute."""
     if not isinstance(receipt, dict):
         return None
-    raw: bytes | None = receipt.get("rawBody") if isinstance(receipt.get("rawBody"), bytes) else None
+    raw_value = receipt.get("rawBody")
+    if "rawBody" in receipt and not isinstance(raw_value, bytes):
+        return None
+    raw: bytes | None = raw_value
     encoded = receipt.get("rawBodyBase64")
     decoded: bytes | None = None
+    if "rawBodyBase64" in receipt and not isinstance(encoded, str):
+        return None
     if isinstance(encoded, str):
         if len(encoded) > _MAX_RAW_BASE64:
             return None
         try:
             decoded = base64.b64decode(encoded, validate=True)
         except (ValueError, binascii.Error):
+            return None
+        if len(decoded) > _MAX_RAW_BYTES:
             return None
     if raw is not None and decoded is not None:
         if raw != decoded:
@@ -221,11 +228,13 @@ def _transport_raw(receipt: Any) -> tuple[bytes, int | None, str, bool] | None:
         raw = decoded
     if raw is None:
         return None
+    if len(raw) > _MAX_RAW_BYTES:
+        return None
     body_bytes = receipt.get("bodyBytes")
     raw_body_bytes = receipt.get("rawBodyBytes")
-    if body_bytes is not None and (type(body_bytes) is not int or body_bytes != len(raw)):
+    if "bodyBytes" in receipt and (type(body_bytes) is not int or body_bytes != len(raw)):
         return None
-    if raw_body_bytes is not None and (
+    if "rawBodyBytes" in receipt and (
         type(raw_body_bytes) is not int or raw_body_bytes != len(raw)
     ):
         return None

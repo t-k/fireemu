@@ -184,6 +184,35 @@ def test_conflicting_raw_representations_fail_closed_across_nine_slots(tmp_path:
     assert result["rawBindings"] == []
 
 
+@pytest.mark.parametrize("bad_field", ["rawBody", "rawBodyBase64", "bodyBytes", "rawBodyBytes"])
+def test_malformed_explicit_raw_metadata_is_not_hidden_by_valid_metadata(
+    tmp_path: Path, bad_field: str
+) -> None:
+    plan = _plan()
+    transport = _transport(plan)
+
+    def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        receipt = transport(operation)
+        raw = json.dumps(receipt["body"], separators=(",", ":")).encode()
+        result = {
+            **receipt,
+            "rawBody": raw,
+            "rawBodyBase64": base64.b64encode(raw).decode("ascii"),
+            "bodyBytes": len(raw),
+            "rawBodyBytes": len(raw),
+            "contentType": "application/json",
+        }
+        if operation["kind"] == "positive-query":
+            result[bad_field] = None
+        return result
+
+    result = collect_local(plan, execute, tmp_path / "receipt")
+
+    assert result["rawComplete"] is False
+    assert result["completed"] is False
+    assert len(result["rawBindings"]) == 8
+
+
 def test_incomplete_raw_receipts_do_not_count_as_complete_raw_run(tmp_path: Path) -> None:
     plan = _plan()
     transport = _transport(plan)

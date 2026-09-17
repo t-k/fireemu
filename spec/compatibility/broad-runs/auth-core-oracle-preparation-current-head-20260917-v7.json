@@ -31,7 +31,7 @@
         "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v8.json",
         "sha256": "eca51ff315551c5a876da4bc65119da1be5abd688d618ae0b59d54ae72f6b210",
         "codeSourceHead": "27c07e041c3ee5bf21eff9beff2cfc62131c6ab3",
-        "evidencePackageCommit": null,
+        "evidencePackageCommit": "ce2152fa27e4c2bd29929debbb6f4bf4ea67243a",
         "collectorCommit": "e8d86723aaea340dea3a2f073a358f624d72afbe",
         "comparatorId": "typed-sdk-policy-v1",
         "manifestDigest": null,
@@ -43,7 +43,7 @@
         "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v8.json",
         "sha256": "bc96c5168e0293788b49ac78ecf00ff1f20e98bd9f868ca81ad3409062326dcc",
         "codeSourceHead": "27c07e041c3ee5bf21eff9beff2cfc62131c6ab3",
-        "evidencePackageCommit": null,
+        "evidencePackageCommit": "ce2152fa27e4c2bd29929debbb6f4bf4ea67243a",
         "collectorCommit": "ca9894d0275c33f478b999aeb2c4d1ea32c5d9b5",
         "comparatorId": "auth-settings-v1",
         "manifestDigest": null,
@@ -61,8 +61,8 @@
     "savedProductionReference": "historical receipts and replay retained without current-head promotion",
     "sdkLocal": "runner source bindings are prepared; case-level local shadow remains pending"
   },
-  "evidencePackageCommit": null,
-  "evidencePackageCommitPolicy": "package commits remain immutable; this report records the external package commit after the package commit is created",
+  "evidencePackageCommit": "ce2152fa27e4c2bd29929debbb6f4bf4ea67243a",
+  "evidencePackageCommitPolicy": "package files were committed in the package commit; codeSourceHead remains the compatibility source identity; this report records the external package commit without self-reference",
   "frozenAt": "2026-09-17T00:15:45Z",
   "gitStatus": "clean at freeze",
   "id": "auth-core-oracle-preparation-current-head-20260917-v7",
@@ -113,7 +113,7 @@
       "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v8.json",
       "sha256": "eca51ff315551c5a876da4bc65119da1be5abd688d618ae0b59d54ae72f6b210",
       "codeSourceHead": "27c07e041c3ee5bf21eff9beff2cfc62131c6ab3",
-      "evidencePackageCommit": null,
+      "evidencePackageCommit": "ce2152fa27e4c2bd29929debbb6f4bf4ea67243a",
       "collectorCommit": "e8d86723aaea340dea3a2f073a358f624d72afbe",
       "comparatorId": "typed-sdk-policy-v1",
       "prior": {
@@ -127,7 +127,7 @@
       "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v8.json",
       "sha256": "bc96c5168e0293788b49ac78ecf00ff1f20e98bd9f868ca81ad3409062326dcc",
       "codeSourceHead": "27c07e041c3ee5bf21eff9beff2cfc62131c6ab3",
-      "evidencePackageCommit": null,
+      "evidencePackageCommit": "ce2152fa27e4c2bd29929debbb6f4bf4ea67243a",
       "collectorCommit": "ca9894d0275c33f478b999aeb2c4d1ea32c5d9b5",
       "comparatorId": "auth-settings-v1",
       "prior": {
@@ -198,13 +198,15 @@
       "packagePath": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v8.json",
       "collectorCommit": "e8d86723aaea340dea3a2f073a358f624d72afbe",
       "productionExecuted": false,
-      "status": "PREPARED_NOT_EXECUTED"
+      "status": "PREPARED_NOT_EXECUTED",
+      "evidencePackageCommit": "ce2152fa27e4c2bd29929debbb6f4bf4ea67243a"
     },
     {
       "packagePath": "spec/compatibility/broad-runs/auth-settings-sdk-next-v8.json",
       "collectorCommit": "ca9894d0275c33f478b999aeb2c4d1ea32c5d9b5",
       "productionExecuted": false,
-      "status": "PREPARED_NOT_EXECUTED"
+      "status": "PREPARED_NOT_EXECUTED",
+      "evidencePackageCommit": "ce2152fa27e4c2bd29929debbb6f4bf4ea67243a"
     }
   ],
   "artifactBinding": {

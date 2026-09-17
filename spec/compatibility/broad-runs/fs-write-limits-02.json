@@ -131,7 +131,15 @@
       "FS-TRANSACTION-SDK-RETRY-01"
     ],
     "reason": "Independent owned data namespace and no shared setting mutation.",
-    "requires": []
+    "requires": [],
+    "overlapWith": {
+      "campaignId": "FS-WRITE-TXN-PRECEDENCE-01-V9",
+      "surfaces": [
+        "FS-LIMIT-DOCUMENT-BYTES",
+        "FS-LIMIT-NESTING"
+      ],
+      "resolution": "Do not schedule both campaigns for production. O3 must retain these surfaces in exactly one frozen campaign; this package is the independent limits owner for FS-DATA-WRITE closure."
+    }
   },
   "evidenceBoundary": {
     "local": "planned shadow and local tests only",
@@ -228,8 +236,8 @@
     },
     "artifactKind": "unbuilt-current-head",
     "artifactSha256": null,
-    "codeSourceHead": "00f5eba7b88c40fa33040bc4dd5ce423e49722b3",
-    "featureHead": "00f5eba7b88c40fa33040bc4dd5ce423e49722b3",
+    "codeSourceHead": "9830ccaf53def5d51bb620411648e2a30337a32f",
+    "featureHead": "9830ccaf53def5d51bb620411648e2a30337a32f",
     "runtimeSourceDigests": {
       "crates/fireemu-adapter-grpc/tests/local.rs": "821b82abab52cd3b1ab5ed2fe51d1d380e518d9946d04298a80f2c078823c493",
       "crates/fireemu-adapter-grpc/tests/rest.rs": "bbe99465fc6dd776f303d20c75d9fb8d14403f3c48068ed17f10745a42b68730",

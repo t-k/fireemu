@@ -122,11 +122,11 @@
     "database": "(default)",
     "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
     "edition": "STANDARD",
-    "observerSha256": "a7d3b06fa7218e22f8288019f3929ebb5dc45899a27ab39cfd9ecf77253a1ead",
+    "observerSha256": "7737e75a7bb976994b14ea011daa4ff8c634ac2c0289119fb8dac850f433c2a4",
     "project": "fireemu-35fe6",
     "projectNumber": "592603257417"
   },
-  "kind": "production-campaign-explain-01-v4",
+  "kind": "production-campaign-explain-01-v5",
   "networkCalls": 0,
   "ownerAuthorization": {
     "noncePolicy": "fresh-generated-32-hex-only",
@@ -499,7 +499,7 @@
     "metadataRequests": 0,
     "nonce": "{freshNonce}",
     "observationRequests": 18,
-    "observerSha256": "a7d3b06fa7218e22f8288019f3929ebb5dc45899a27ab39cfd9ecf77253a1ead",
+    "observerSha256": "7737e75a7bb976994b14ea011daa4ff8c634ac2c0289119fb8dac850f433c2a4",
     "recoveryRequestIds": [
       "recovery:access-command",
       "recovery:tokeninfo",

@@ -203,6 +203,10 @@ class RawJournal:
             or len(content_type) > 128
         ):
             raise ValueError("invalid bounded raw receipt")
+        if (
+            status is not None and (type(status) is not int or not 100 <= status <= 599)
+        ) or (complete and status is None):
+            raise ValueError("typed HTTP status required")
         name = f"{phase}-{index:02d}.raw"
         fd = os.open(
             name,
@@ -251,7 +255,7 @@ class RawJournal:
         if path != "observation-02.raw":
             result["difference"] = "not-positive-query-slot"
             return result
-        if binding.get("status") != 200:
+        if type(binding.get("status")) is not int or binding["status"] != 200:
             result["difference"] = "unexpected-query-status"
             return result
         if (

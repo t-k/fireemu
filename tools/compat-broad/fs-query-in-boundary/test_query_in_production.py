@@ -204,6 +204,24 @@ def test_malformed_complete_json_remains_raw_without_projection(tmp_path: Path) 
     assert (tmp_path / "raw" / binding["path"]).read_bytes() == body
 
 
+@pytest.mark.parametrize("status", [200.0, True, "200"])
+def test_numeric_or_boolean_status_cannot_become_typed_success(
+    tmp_path: Path, status: object
+) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    body = b'[{"document":{"name":"x","fields":{}}}]'
+    with pytest.raises(ValueError, match="typed HTTP status"):
+        journal.add(
+            "observation",
+            2,
+            status,
+            body,
+            complete=True,
+            content_type="application/json",
+        )
+    assert not list((tmp_path / "raw").iterdir())
+
+
 def test_permission_remains_closed_for_unbound_costs_and_nonfinite_expiry() -> None:
     for expiry in (float("nan"), float("inf"), 1_000_000_000_000):
         with pytest.raises(ValueError):

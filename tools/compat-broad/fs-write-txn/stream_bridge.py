@@ -297,6 +297,15 @@ def grpc_code(receipt):
     )
 
 
+def stop_after_credential_rejection(receipt, credential, gate):
+    """Fail the parent credential after recording a typed authentication refusal."""
+    code = grpc_code(receipt.get("raw")) if isinstance(receipt, dict) else None
+    if code in {7, 16}:
+        credential.fail()
+        gate.stop(environment=True)
+        raise ValueError("stream credential rejected; cleanup remains required")
+
+
 def record(state, job_name, operation, receipt, event):
     job = state["jobs"][job_name]
     if (
@@ -613,6 +622,7 @@ def _run_worker(
     port,
     authorize,
     before_recovery=None,
+    after_record=None,
     finalize=True,
 ):
     frozen = copy.deepcopy(plan)
@@ -789,6 +799,8 @@ def _run_worker(
                     "operation": operation,
                 },
             )
+            if after_record is not None:
+                after_record(result)
     except BaseException:
         # The Gate conservatively retains uncertainty on all stream exceptions.
         try:
@@ -871,6 +883,9 @@ def run_reserved(
             expiry,
         )
 
+    def after_record(receipt):
+        stop_after_credential_rejection(receipt, credential, gate)
+
     authorize(False)
     return _run_worker(
         plan,
@@ -881,6 +896,7 @@ def run_reserved(
         port=None,
         authorize=authorize,
         before_recovery=before_recovery,
+        after_record=after_record,
         finalize=finalize,
     )
 

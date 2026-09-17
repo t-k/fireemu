@@ -1860,6 +1860,10 @@ async fn commit_get_query_and_delete_round_trip() {
         .await
         .unwrap_err();
     assert_eq!(missing.code(), tonic::Code::NotFound);
+    assert_eq!(
+        missing.message(),
+        format!("Document \"{DOCS}/users/zoe\" not found.")
+    );
 
     clock
         .lock()

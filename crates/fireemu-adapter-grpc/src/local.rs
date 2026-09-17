@@ -1200,7 +1200,7 @@ impl DocumentSnapshot {
         match self.document {
             Some(d) => Ok(encode_masked(&d, self.mask.as_deref())),
             None => Err(Status::not_found(format!(
-                "Document not found: {}",
+                "Document \"{}\" not found.",
                 self.path.resource_name()
             ))),
         }

@@ -1779,6 +1779,7 @@ struct GeneratedLocalIdReservation {
     store: Arc<Mutex<AuthStore>>,
     id: String,
     generation: u64,
+    ticket: u64,
 }
 
 impl Drop for GeneratedLocalIdReservation {
@@ -1787,7 +1788,7 @@ impl Drop for GeneratedLocalIdReservation {
             .store
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        store.release_reserved_generated_local_id_at_generation(&self.id, self.generation);
+        store.release_reserved_generated_local_id_at_ticket(&self.id, self.generation, self.ticket);
     }
 }
 
@@ -1828,17 +1829,20 @@ fn dispatch_with_blocking_hook(
     let live_snapshot = store.clone();
     let reset_generation = store.reset_generation();
     let reserve_local_id = request_may_create_end_user(handler, &store, body, at)
-        .then(|| candidate.reserve_next_generated_local_id_with_generation());
+        .then(|| candidate.reserve_next_generated_local_id_with_ticket());
     // Register the reservation while the candidate still shares its reservation registry with
     // the live store, then release the request's store guard before constructing the Drop guard.
     // Every subsequent early return may therefore safely release the reservation without trying
     // to re-lock this still-held mutex.
     drop(store);
-    let _reserved_local_id = reserve_local_id.map(|(id, generation)| GeneratedLocalIdReservation {
-        store: store_arc.clone(),
-        id,
-        generation,
-    });
+    let reservation_ticket = reserve_local_id.clone();
+    let _reserved_local_id =
+        reserve_local_id.map(|(id, generation, ticket)| GeneratedLocalIdReservation {
+            store: store_arc.clone(),
+            id,
+            generation,
+            ticket,
+        });
     let response = dispatch(
         handler,
         &mut candidate,
@@ -2041,7 +2045,21 @@ fn dispatch_with_blocking_hook(
         let mut committed = live.clone();
         if is_new {
             if let Some(uid) = speculative_uid.as_ref().map(LocalId::as_str) {
-                committed.use_reserved_generated_local_id(uid);
+                // Some creation routes (for example custom-token sign-in) use an explicit UID
+                // supplied by the caller rather than the generated reservation. Only retire a
+                // ticket when it names the UID that the candidate actually selected; otherwise
+                // the outer guard releases the unused generated reservation on return.
+                if let Some((reserved_id, generation, ticket)) = reservation_ticket.as_ref() {
+                    if reserved_id == uid
+                        && !committed.use_reserved_generated_local_id_with_ticket(
+                            uid,
+                            *generation,
+                            *ticket,
+                        )
+                    {
+                        return error(409, "AUTH_STATE_CHANGED");
+                    }
+                }
             }
         }
         let mut committed_response = if handler == routes::Handler::SignUp && is_new {

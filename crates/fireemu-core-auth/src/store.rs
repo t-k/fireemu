@@ -22,12 +22,12 @@ use crate::mfa::{
     MAX_FACTORS_PER_USER,
 };
 
-/// Reservations grouped by the reset generation that created them.
+/// Reservations grouped by generated UID, reset generation, and request ticket.
 ///
-/// The adapter's reservation guard carries only the generated UID, so a release cannot name its
-/// generation. Keeping old generations until their guards drop lets a pre-reset guard release
-/// its own entry before a same-UID reservation from the current generation.
-type GeneratedLocalIdReservations = BTreeMap<LocalId, BTreeSet<u64>>;
+/// The request ticket makes reservation ownership one-shot even when a failed commit consumes a
+/// reservation before its outer guard is dropped and a later request reuses the same UID and
+/// reset generation.
+type GeneratedLocalIdReservations = BTreeMap<LocalId, BTreeSet<(u64, u64)>>;
 use crate::password_policy::{Operation as PasswordPolicyOperation, PasswordPolicy, ViolationCode};
 use crate::signup_quota::{QuotaError, SignupQuota, SignupQuotaConfig, SignupReservation};
 
@@ -882,10 +882,13 @@ pub struct AuthStore {
     /// credential is resolved directly rather than by scanning every user
     /// (`AUTH-TRANSIENT-04`). Kept in step with the users' own pending maps.
     pending_sign_in_owners: Arc<BTreeMap<String, LocalId>>,
-    /// Generated IDs held by in-flight blocking Auth candidates, grouped by reset generation.
-    /// This registry is shared by snapshots so concurrent candidates avoid each other's IDs
-    /// without advancing the live random stream that ordinary nested Admin requests use.
+    /// Generated IDs held by in-flight blocking Auth candidates, grouped by reset generation and
+    /// request ticket. This registry is shared by snapshots so concurrent candidates avoid each
+    /// other's IDs without advancing the live random stream that ordinary nested Admin requests
+    /// use.
     generated_local_id_reservations: Arc<Mutex<GeneratedLocalIdReservations>>,
+    /// Monotonic request tickets that identify one generated-ID reservation owner.
+    generated_local_id_reservation_ticket: Arc<AtomicU64>,
     /// Monotonic count of ordinary generated-ID allocations that skipped an in-flight blocking
     /// reservation. A blocking candidate captures this before its hook runs; a change at commit
     /// means a nested ordinary Admin allocation changed the identity allocation boundary.
@@ -1116,6 +1119,7 @@ impl AuthStore {
             verification_codes: Arc::new(BTreeMap::new()),
             pending_sign_in_owners: Arc::new(BTreeMap::new()),
             generated_local_id_reservations: Arc::new(Mutex::new(BTreeMap::new())),
+            generated_local_id_reservation_ticket: Arc::new(AtomicU64::new(0)),
             generated_id_interference: Arc::new(AtomicU64::new(0)),
             pending_user_ids: BTreeSet::new(),
             created_users: Vec::new(),
@@ -2126,10 +2130,25 @@ impl AuthStore {
 
     /// Reserves the next generated local ID and returns the reset generation that owns it.
     ///
-    /// The generation is part of the reservation ticket so a guard from before a reset cannot
-    /// release a same-ID reservation created after that reset.
+    /// The generation identifies the reset epoch so a guard from before a reset cannot release a
+    /// same-ID reservation created after that reset. Callers that need request ownership should
+    /// use [`Self::reserve_next_generated_local_id_with_ticket`].
     pub fn reserve_next_generated_local_id_with_generation(&mut self) -> (String, u64) {
+        let (id, generation, _) = self.reserve_next_generated_local_id_with_ticket();
+        (id, generation)
+    }
+
+    /// Reserves the next generated local ID and returns its reset generation and request ticket.
+    ///
+    /// The ticket is unique across snapshots sharing this store's reservation ledger. A
+    /// reservation remains distinct from a later request in the same reset generation even if a
+    /// failed commit has already consumed its generated ID override.
+    pub fn reserve_next_generated_local_id_with_ticket(&mut self) -> (String, u64, u64) {
         let generation = self.reset_generation();
+        let ticket = self
+            .generated_local_id_reservation_ticket
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
         loop {
             let candidate = LocalId(self.random_id28());
             if self.users.contains_key(&candidate) {
@@ -2139,25 +2158,52 @@ impl AuthStore {
                 .generated_local_id_reservations
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let generations = reservations.entry(candidate.clone()).or_default();
-            if generations.insert(generation) {
+            let entries = reservations.entry(candidate.clone()).or_default();
+            if entries
+                .iter()
+                .any(|(reserved_generation, _)| *reserved_generation == generation)
+            {
+                continue;
+            }
+            if entries.insert((generation, ticket)) {
                 self.next_id_override = Some(candidate.as_str().to_owned());
-                return (candidate.as_str().to_owned(), generation);
+                return (candidate.as_str().to_owned(), generation, ticket);
             }
         }
     }
 
-    /// Uses a previously reserved ID for the next generated account and retires its current
-    /// generation reservation. Adapter reservation guards carry the generation ticket, so a later
-    /// release sees no current entry and cannot affect a reservation from another generation.
+    /// Uses a previously reserved ID for the next generated account and retires one reservation
+    /// from the current generation. New blocking requests use the ticketed variant below so a
+    /// later guard release cannot affect another request's reservation.
     pub fn use_reserved_generated_local_id(&mut self, id: &str) {
-        self.next_id_override = Some(id.to_owned());
         let generation = self.reset_generation();
         let mut reservations = self
             .generated_local_id_reservations
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::release_reservation_generation(&mut reservations, id, generation);
+        self.next_id_override = Some(id.to_owned());
+    }
+
+    /// Uses and retires exactly one request-owned generated ID reservation.
+    pub fn use_reserved_generated_local_id_with_ticket(
+        &mut self,
+        id: &str,
+        generation: u64,
+        ticket: u64,
+    ) -> bool {
+        if self.reset_generation() != generation {
+            return false;
+        }
+        let mut reservations = self
+            .generated_local_id_reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let removed = Self::release_reservation_ticket(&mut reservations, id, generation, ticket);
+        if removed {
+            self.next_id_override = Some(id.to_owned());
+        }
+        removed
     }
 
     /// Releases a generated ID held by an in-flight blocking candidate. When the same ID was
@@ -2172,10 +2218,10 @@ impl AuthStore {
         let Some(generations) = reservations.get_mut(&key) else {
             return;
         };
-        let Some(generation) = generations.iter().next().copied() else {
+        let Some((generation, ticket)) = generations.iter().next().copied() else {
             return;
         };
-        generations.remove(&generation);
+        generations.remove(&(generation, ticket));
         if generations.is_empty() {
             reservations.remove(&key);
         }
@@ -2190,6 +2236,20 @@ impl AuthStore {
         Self::release_reservation_generation(&mut reservations, id, generation);
     }
 
+    /// Releases exactly one request-owned generated ID reservation.
+    pub fn release_reserved_generated_local_id_at_ticket(
+        &self,
+        id: &str,
+        generation: u64,
+        ticket: u64,
+    ) {
+        let mut reservations = self
+            .generated_local_id_reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::release_reservation_ticket(&mut reservations, id, generation, ticket);
+    }
+
     fn release_reservation_generation(
         reservations: &mut GeneratedLocalIdReservations,
         id: &str,
@@ -2199,10 +2259,35 @@ impl AuthStore {
         let Some(generations) = reservations.get_mut(&key) else {
             return;
         };
-        generations.remove(&generation);
+        let Some(ticket) = generations
+            .iter()
+            .find_map(|(reserved_generation, ticket)| {
+                (*reserved_generation == generation).then_some(*ticket)
+            })
+        else {
+            return;
+        };
+        generations.remove(&(generation, ticket));
         if generations.is_empty() {
             reservations.remove(&key);
         }
+    }
+
+    fn release_reservation_ticket(
+        reservations: &mut GeneratedLocalIdReservations,
+        id: &str,
+        generation: u64,
+        ticket: u64,
+    ) -> bool {
+        let key = LocalId(id.to_owned());
+        let Some(generations) = reservations.get_mut(&key) else {
+            return false;
+        };
+        let removed = generations.remove(&(generation, ticket));
+        if generations.is_empty() {
+            reservations.remove(&key);
+        }
+        removed
     }
 
     /// Creates the provider-scoped account used by `IdP` sign-in when email uniqueness is off.
@@ -2240,7 +2325,11 @@ impl AuthStore {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .get(&candidate)
-                    .is_some_and(|generations| generations.contains(&self.reset_generation()));
+                    .is_some_and(|entries| {
+                        entries
+                            .iter()
+                            .any(|(generation, _)| *generation == self.reset_generation())
+                    });
                 if reserved {
                     self.generated_id_interference
                         .fetch_add(1, Ordering::AcqRel);
@@ -3854,6 +3943,8 @@ impl AuthSnapshot {
         // the destination ledger so old guards can retire their entries without touching a new
         // generation, while discarding reservations captured from the source snapshot.
         restored.generated_local_id_reservations = live.generated_local_id_reservations.clone();
+        restored.generated_local_id_reservation_ticket =
+            live.generated_local_id_reservation_ticket.clone();
         restored.generated_id_interference = live.generated_id_interference.clone();
         // A snapshot intentionally has no provider configurations. Preserve the destination's
         // control-plane state instead of allowing a cross-project restore to transfer it.
@@ -9725,7 +9816,10 @@ mod generated_id_tests {
             .unwrap()
             .get(&LocalId(old_id.clone()))
             .is_some_and(|generations| {
-                generations.len() == 1 && generations.contains(&old_generation)
+                generations.len() == 1
+                    && generations
+                        .iter()
+                        .all(|(generation, _)| *generation == old_generation)
             }));
 
         live.release_reserved_generated_local_id_at_generation(&old_id, old_generation);
@@ -9734,6 +9828,31 @@ mod generated_id_tests {
             .lock()
             .unwrap()
             .contains_key(&LocalId(old_id)));
+    }
+
+    #[test]
+    fn stale_same_generation_release_does_not_remove_a_replacement_reservation() {
+        let live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let (old_id, generation, old_ticket) =
+            live.clone().reserve_next_generated_local_id_with_ticket();
+        let mut committed = live.clone();
+        assert!(
+            committed.use_reserved_generated_local_id_with_ticket(&old_id, generation, old_ticket,)
+        );
+
+        let (new_id, new_generation, new_ticket) =
+            live.clone().reserve_next_generated_local_id_with_ticket();
+        assert_eq!(new_id, old_id);
+        assert_eq!(new_generation, generation);
+
+        // A failed commit drops the old guard after a replacement reservation was created.
+        live.release_reserved_generated_local_id_at_ticket(&old_id, generation, old_ticket);
+        let (next_id, next_generation, next_ticket) =
+            live.clone().reserve_next_generated_local_id_with_ticket();
+        assert_ne!(next_id, new_id);
+
+        live.release_reserved_generated_local_id_at_ticket(&new_id, new_generation, new_ticket);
+        live.release_reserved_generated_local_id_at_ticket(&next_id, next_generation, next_ticket);
     }
 }
 

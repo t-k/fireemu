@@ -16,15 +16,23 @@ from gate_adapter import CommitGate, compiler_plan
 
 
 def _save(path: Path, value: Any) -> None:
-    if path.exists():
-        raise FileExistsError(path)
     temporary = path.with_name(path.name + ".tmp")
     with temporary.open("x") as stream:
         json.dump(value, stream, allow_nan=False)
         stream.write("\n")
         stream.flush()
         os.fsync(stream.fileno())
-    os.replace(temporary, path)
+    try:
+        # link() publishes atomically with exclusive destination semantics;
+        # unlike replace(), it can never overwrite a historical receipt.
+        os.link(temporary, path)
+    except OSError:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    temporary.unlink()
     directory = os.open(path.parent, os.O_RDONLY)
     try:
         os.fsync(directory)

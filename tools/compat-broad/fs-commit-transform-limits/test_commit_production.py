@@ -131,3 +131,4 @@ def test_receipt_persistence_failure_keeps_gate_ownership_and_runs_cleanup(
     assert len(result["cleanup"]) == 6
     assert sum(operation["method"] == "DELETE" for operation in sent) == 2
     assert gate.snapshot()["jobs"]["commit"]["complete"] is False
+    assert (output / ("observation-03.json" if failure_phase == "observation" else "recovery-00.json")).read_text() == "occupied\n"

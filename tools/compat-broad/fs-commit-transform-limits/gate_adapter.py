@@ -10,11 +10,19 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from broad_contract import digest
-from shared_gate import create
-
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+
+
+def _check_import_origins(expected: dict[str, Path]) -> None:
+    """Reject preloaded campaign modules whose source is not canonical."""
+    for name, path in expected.items():
+        module = sys.modules.get(name)
+        if module is None:
+            continue
+        origin = getattr(module, "__file__", None)
+        if not isinstance(origin, str) or Path(origin).resolve() != path.resolve():
+            raise ImportError(f"foreign module origin for {name}")
 
 
 def _load(name: str, path: Path):
@@ -27,7 +35,22 @@ def _load(name: str, path: Path):
     return module
 
 
-_compiler = _load("_commit_gate_transform_compiler", HERE / "transform_compiler.py")
+_check_import_origins(
+    {
+        "broad_contract": ROOT / "tools/compat-broad/broad_contract.py",
+        "shared_gate": ROOT / "tools/compat-broad/shared_gate.py",
+    }
+)
+from broad_contract import digest  # noqa: E402
+from shared_gate import create  # noqa: E402
+
+
+_compiler_path = HERE / "transform_compiler.py"
+_check_import_origins({"transform_compiler": _compiler_path})
+if "transform_compiler" in sys.modules:
+    _compiler = sys.modules["transform_compiler"]
+else:
+    _compiler = _load("transform_compiler", _compiler_path)
 _commit_bridge = _load(
     "_commit_gate_production_bridge", HERE / "commit_production_bridge.py"
 )
@@ -35,12 +58,41 @@ _commit_bridge = _load(
 # The existing LimitsGate supplies the one charged callback and consume_wire
 # boundary. Load it by path because another campaign has a production_bridge.
 _limits_dir = ROOT / "tools/compat-broad/fs-write-limits"
+_limits_origins = {
+    name: _limits_dir / filename
+    for name, filename in {
+        "production_plan": "production_plan.py",
+        "remote_transport": "remote_transport.py",
+        "shadow": "shadow.py",
+        "compiler": "compiler.py",
+        "transport": "transport.py",
+}.items()
+}
+_limits_origins["reservations"] = ROOT / "tools/compat-broad/production-admission/reservations.py"
+_limits_origins.update(
+    {
+        name: ROOT / "tools/compat-broad" / f"{name}.py"
+        for name in (
+            "batch_adapter",
+            "batch_contract",
+            "batch_pair",
+            "broad_cases",
+            "broad_contract",
+            "shared_cases",
+            "shared_gate",
+            "shared_production",
+            "shared_production_pair",
+        )
+    }
+)
+_check_import_origins(_limits_origins)
 for _path in (str(_limits_dir),):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 _limits_bridge = _load(
     "_commit_gate_limits_bridge", _limits_dir / "production_bridge.py"
 )
+_check_import_origins(_limits_origins)
 LimitsGate = _limits_bridge.LimitsGate
 _TIMESTAMP = re.compile(
     r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$"

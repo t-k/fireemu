@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -187,3 +189,50 @@ def test_default_gate_still_rejects_changed_creation_fields(tmp_path):
     job = {"creationProofs": {"a": {"fieldsDigest": "created", "updateTime": "old"}}, "captures": {"0": {"name": "a", "fieldsDigest": "changed"}}}
     with pytest.raises(ValueError):
         gate._validate_cleanup_ownership(operation, True, "a", 0, job)
+
+
+@pytest.mark.parametrize(
+    "foreign_name",
+    [
+        "remote_transport",
+        "batch_adapter",
+        "batch_contract",
+        "batch_pair",
+        "broad_cases",
+        "broad_contract",
+        "shared_cases",
+        "shared_gate",
+        "shared_production",
+        "shared_production_pair",
+    ],
+)
+def test_foreign_limits_module_is_rejected_before_adapter_import(tmp_path, foreign_name):
+    script = """
+import sys, types
+from pathlib import Path
+here = Path(sys.argv[1])
+foreign_name = sys.argv[3]
+foreign = types.ModuleType(foreign_name)
+foreign.__file__ = str(Path(sys.argv[2]) / (foreign_name + '.py'))
+sys.modules[foreign_name] = foreign
+sys.path.insert(0, str(here.parent))
+sys.path.insert(0, str(here))
+try:
+    import gate_adapter
+except ImportError as error:
+    if 'foreign module origin' not in str(error):
+        raise
+else:
+    raise AssertionError('foreign module was accepted')
+"""
+    foreign_root = tmp_path / "foreign"
+    foreign_root.mkdir()
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(HERE), str(foreign_root), foreign_name],
+        cwd=HERE.parent.parent.parent,
+        env={**os.environ, "PYTHONPATH": str(HERE.parent)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout

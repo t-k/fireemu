@@ -5520,13 +5520,14 @@ fn select_store(
             if route.handler == routes::Handler::Token
     );
     if exchanges_custom_token {
-        // A query tenant is an explicit namespace assertion. A valid custom token without a
-        // tenant claim is project-scoped and must not be silently rebound to the requested
-        // tenant; malformed tokens are left to the normal handler for its existing error shape.
-        if let Some(query_tenant) = query_tenant.as_deref() {
+        // A selected tenant is an explicit namespace assertion, whether it came from the query
+        // or the request body. A valid custom token without a tenant claim is project-scoped and
+        // must not be silently rebound to the requested tenant; malformed tokens are left to the
+        // normal handler for its existing error shape.
+        if let Some(requested_tenant) = requested_tenant {
             let token_mismatches = match custom_token_tenant(body) {
                 Some(CustomTokenTenant::ProjectScoped) => true,
-                Some(CustomTokenTenant::Tenant(token_tenant)) => token_tenant != query_tenant,
+                Some(CustomTokenTenant::Tenant(token_tenant)) => token_tenant != requested_tenant,
                 None => false,
             };
             if token_mismatches {

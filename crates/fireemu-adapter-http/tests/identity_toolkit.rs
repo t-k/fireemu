@@ -9571,6 +9571,77 @@ fn query_tenant_binds_custom_token_namespace_before_auth_work() {
 }
 
 #[test]
+fn body_tenant_rejects_project_custom_token_before_routing_or_mutation() {
+    use fireemu_core_auth::signup_quota::{QuotaMode, SignupQuotaConfig};
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    assert!(registry.register(
+        "worker-alpha",
+        AuthStore::new("worker-alpha", SplitMix64::new(8), TotpPolicy::default()),
+    ));
+    for tenant in ["customer-a", "customer-b"] {
+        registry.ensure_tenant("worker-alpha", tenant).unwrap();
+    }
+    s.registry = Some(registry.clone());
+    let mut tenancy = Tenancy::new("demo-app");
+    tenancy
+        .register("worker-alpha", &[], &["worker-key".to_owned()])
+        .unwrap();
+    s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+
+    let customer_b = registry.tenant_store("worker-alpha", "customer-b").unwrap();
+    customer_b
+        .lock()
+        .unwrap()
+        .set_signup_quota_config(SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            default_quota_per_hour: 1,
+            ..Default::default()
+        })
+        .unwrap();
+    let before_count = customer_b.lock().unwrap().user_count();
+    let before_usage = customer_b.lock().unwrap().signup_quota().usage(
+        "worker-alpha",
+        "127.0.0.1",
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    );
+
+    let project_token = custom_token_from_payload(&json!({
+        "aud": fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE,
+        "uid": "body-project-scoped-custom-user",
+    }));
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken?key=worker-key"),
+        &json!({
+            "tenantId": "customer-b",
+            "token": project_token,
+            "returnSecureToken": true,
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "TENANT_ID_MISMATCH");
+    assert!(refused.get("idToken").is_none());
+    assert!(refused.get("refreshToken").is_none());
+
+    let store = customer_b.lock().unwrap();
+    assert_eq!(store.user_count(), before_count);
+    assert!(store
+        .user_by_id("body-project-scoped-custom-user")
+        .is_none());
+    assert_eq!(
+        store.signup_quota().usage(
+            "worker-alpha",
+            "127.0.0.1",
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        ),
+        before_usage
+    );
+}
+
+#[test]
 fn query_tenant_binds_refresh_token_namespace_before_auth_work() {
     use fireemu_core_auth::store::AuthRegistry;
     use fireemu_core_session::tenancy::Tenancy;

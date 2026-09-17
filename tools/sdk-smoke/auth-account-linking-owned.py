@@ -73,6 +73,38 @@ def validate_manifest(manifest: dict, artifact: Path) -> tuple[str, str]:
     return source, actual
 
 
+def verify_harness_source(root: Path, expected_commit: str) -> dict:
+    require(
+        isinstance(expected_commit, str)
+        and re.fullmatch(r"[0-9a-f]{40}", expected_commit),
+        "full expected harness commit required",
+    )
+
+    def git(*args: str) -> bytes:
+        return subprocess.check_output(["git", "-C", str(root), *args])
+
+    require(
+        git("rev-parse", "HEAD").decode().strip() == expected_commit,
+        "harness source commit drift",
+    )
+    require(
+        not git("status", "--porcelain", "--untracked-files=no"),
+        "harness source checkout is dirty",
+    )
+    digests = {}
+    for relative in (
+        "tools/sdk-smoke/auth-account-linking-owned.py",
+        "tools/sdk-smoke/auth-account-linking-local.mjs",
+    ):
+        committed = hashlib.sha256(
+            git("show", f"{expected_commit}:{relative}")
+        ).hexdigest()
+        actual = sha(root / relative)
+        require(actual == committed, f"harness source digest mismatch: {relative}")
+        digests[relative] = actual
+    return {"commit": expected_commit, "sha256": digests}
+
+
 def validate_prepared_paths(manifest_path: Path, artifact: Path) -> None:
     common = Path(
         subprocess.check_output(
@@ -123,6 +155,7 @@ def owned_child(output: Path, nonce: str) -> None:
 
     from owned_runner import control_get, local_addresses
 
+    source = verify_harness_source(ROOT, os.environ["AUTH_LINKING_HARNESS_COMMIT"])
     auth, control = local_addresses(
         os.environ["FIREBASE_AUTH_EMULATOR_HOST"], os.environ["FIREEMU_CONTROL_URL"]
     )
@@ -161,6 +194,10 @@ def owned_child(output: Path, nonce: str) -> None:
     with (output / "instance.json").open("x") as stream:
         json.dump(instance, stream)
     subprocess.run(["node", str(JS)], cwd=ROOT, check=True, timeout=120)
+    require(
+        verify_harness_source(ROOT, source["commit"]) == source,
+        "child harness source drift",
+    )
     # Recheck the same live listeners after the SDK has finished.
     for listener in listeners:
         observe_listener(listener["port"], parent)
@@ -208,7 +245,9 @@ def terminate_group(process: subprocess.Popen[bytes], attempts: list[dict]) -> N
     require(descendant_group_gone(pgid), "owned process group remains alive")
 
 
-def run(output: Path, manifest_path: Path, artifact: Path) -> dict:
+def run(
+    output: Path, manifest_path: Path, artifact: Path, harness_commit: str | None = None
+) -> dict:
     output = output.resolve()
     output.mkdir(mode=0o700, exist_ok=False)
     report: dict = {"status": "owned-run-failed", "productionExecuted": False}
@@ -216,6 +255,7 @@ def run(output: Path, manifest_path: Path, artifact: Path) -> dict:
     process: subprocess.Popen[bytes] | None = None
     ports: list[int] = []
     try:
+        harness_source = verify_harness_source(ROOT, harness_commit)
         validate_prepared_paths(manifest_path, artifact)
         manifest = load_json(manifest_path)
         source_commit, artifact_hash = validate_manifest(manifest, artifact)
@@ -246,6 +286,7 @@ def run(output: Path, manifest_path: Path, artifact: Path) -> dict:
                     {
                         "GOOGLE_CLOUD_PROJECT": "demo-app",
                         "AUTH_LINKING_RECEIPT": str(child_receipt),
+                        "AUTH_LINKING_HARNESS_COMMIT": harness_commit,
                     }
                 )
                 argv = [
@@ -318,6 +359,7 @@ def run(output: Path, manifest_path: Path, artifact: Path) -> dict:
             report = {
                 **child,
                 "sourceCommit": source_commit,
+                "harnessSource": harness_source,
                 "artifact": {
                     "path": str(artifact),
                     "sha256": artifact_hash,
@@ -344,6 +386,10 @@ def run(output: Path, manifest_path: Path, artifact: Path) -> dict:
                 and report["ownedProcess"]["listenersClosed"],
                 "measured process cleanup incomplete",
             )
+        require(
+            verify_harness_source(ROOT, harness_commit) == harness_source,
+            "harness source drift invalidates observation",
+        )
         pending = output / "receipt.pending.json"
         with pending.open("x", encoding="utf-8") as stream:
             json.dump(report, stream, indent=2)
@@ -387,10 +433,20 @@ def run(output: Path, manifest_path: Path, artifact: Path) -> dict:
         except OSError as persistence_error:
             failure["failureArtifactError"] = type(persistence_error).__name__
             print(json.dumps(failure), file=sys.stderr)
-            with (output / "failure-recovery.json").open("x") as stream:
-                json.dump(failure, stream)
-                stream.flush()
-                os.fsync(stream.fileno())
+            try:
+                with (output / "failure-recovery.json").open("x") as stream:
+                    json.dump(failure, stream)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            except OSError as recovery_error:
+                message = (
+                    f"CRITICAL: no durable failure artifact could be persisted; "
+                    f"runner owner PID={os.getpid()} must recover the stderr failure record "
+                    f"to {output / 'failure-recovery.json'}; "
+                    f"persistence error={type(recovery_error).__name__}"
+                )
+                print(message, file=sys.stderr, flush=True)
+                raise RuntimeError(message) from recovery_error
         return failure
 
 
@@ -402,8 +458,13 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--artifact", type=Path, required=True)
+    parser.add_argument(
+        "--harness-commit",
+        required=True,
+        help="Reviewed full commit for the clean harness checkout",
+    )
     args = parser.parse_args()
-    result = run(args.output, args.manifest, args.artifact)
+    result = run(args.output, args.manifest, args.artifact, args.harness_commit)
     print(
         json.dumps({"status": result["status"], "output": str(args.output)}, indent=2)
     )

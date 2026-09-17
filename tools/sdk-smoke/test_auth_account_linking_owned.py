@@ -131,3 +131,49 @@ def test_esm_resolution_detects_relinked_installed_version(tmp_path):
     assert observed["firebase-admin"]["version"] == "14.3.1"
     with pytest.raises(ValueError, match="installed SDK"):
         _module.validate_installed_sdk(observed)
+
+
+def test_harness_source_rejects_dirty_collector_and_commit_drift(tmp_path):
+    import subprocess
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-C", str(tmp_path), *args], text=True
+        ).strip()
+
+    git("init", "-q")
+    paths = [
+        "tools/sdk-smoke/auth-account-linking-owned.py",
+        "tools/sdk-smoke/auth-account-linking-local.mjs",
+    ]
+    for relative in paths:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("reviewed source\n")
+    git("add", ".")
+    git(
+        "-c",
+        "user.name=Source Test",
+        "-c",
+        "user.email=source@example.test",
+        "commit",
+        "-qm",
+        "reviewed",
+    )
+    commit = git("rev-parse", "HEAD")
+    assert _module.verify_harness_source(tmp_path, commit)["commit"] == commit
+    (tmp_path / paths[1]).write_text("changed observation semantics\n")
+    with pytest.raises(ValueError, match="source"):
+        _module.verify_harness_source(tmp_path, commit)
+    git("add", ".")
+    git(
+        "-c",
+        "user.name=Source Test",
+        "-c",
+        "user.email=source@example.test",
+        "commit",
+        "-qm",
+        "drift",
+    )
+    with pytest.raises(ValueError, match="commit"):
+        _module.verify_harness_source(tmp_path, commit)

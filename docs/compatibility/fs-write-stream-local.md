@@ -55,3 +55,10 @@ A replacement run of collector source `6ded4fc5e75bc0c741ca789b2a322af951cd9ef2`
 The daemon waits up to 15 seconds for contention; the former ten-second collector deadline expired first. A bounded thirty-second transport deadline records the actual terminal response without changing runtime behavior. This is a new local verification, not a production re-observation or an attempt to reconstruct the lost artifact.
 
 The local preparation condition is reduced, but production transport/admission, an immutable stream comparison contract and complete failure rehearsal remain required. No production observation was made and the consumed limits permission is not reused. The CLI's bracketed IPv6 parsing improvement is deferred; this checkpoint uses the verified IPv4 loopback path.
+
+
+## Reviewed transport boundary
+
+The fixed TLS transport seam was integrated at `d8501544c` after independent review of `ce88a5fd2`. Local and fixed-endpoint execution share the unary and Write receipt logic. The internal production factory requires trusted admission, rejects invalid requests and deadline overrides before client construction, and rechecks the phase and credential deadlines after asynchronous admission. TLS credentials and the endpoint are transport-owned. No production request was made by these tests, and this component does not itself provide campaign approval or the missing stream acquisition/comparison binding.
+
+The combined integrated Node suite passed 36 tests with two explicit live-endpoint skips at `00385a668`. The Auth harness and Explain preparation checks passed 129 tests. The preceding clean broad checkpoint `3a0608904` passed 930 tests with 10 skips after isolating the new transform modules from the existing limits compiler imports. These results are local validation, not new production observations.

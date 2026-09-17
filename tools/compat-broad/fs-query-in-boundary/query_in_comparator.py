@@ -104,7 +104,34 @@ def _owned_read(row: dict[str, Any], plan: dict[str, Any]) -> bool:
     )
 
 
-def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+def _typed_invalid_argument(row: dict[str, Any]) -> bool:
+    body = row.get("body")
+    error = body.get("error") if isinstance(body, dict) else None
+    return row.get("status") == 400 and isinstance(error, dict) and error.get("status") == "INVALID_ARGUMENT"
+
+
+def _contract_match(plan: dict[str, Any], operation: dict[str, Any], row: dict[str, Any]) -> bool:
+    if operation["kind"] in {"preflight-typed-absence", "cleanup-verify-absence"}:
+        return _typed_absence(row)
+    if operation["kind"] == "cleanup-ownership-read":
+        return _typed_absence(row) or _owned_read(row, plan)
+    if operation["kind"] == "cleanup-conditional-delete":
+        return row.get("skipped") == "already-absent" or row.get("status") == 200
+    if operation["kind"] in {"create-only-patch", "before-readback", "after-readback"}:
+        return _owned_read(row, plan)
+    if operation["kind"] == "positive-query":
+        body = row.get("body")
+        return (
+            row.get("status") == 200
+            and isinstance(body, dict)
+            and body.get("documents") == [plan["expectedPositiveDocument"]]
+        )
+    if operation["kind"] == "diagnostic-query":
+        return _typed_invalid_argument(row)
+    return False
+
+
+def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], list[bool]]:
     if not isinstance(bundle, dict):
         raise TypeError("evidence bundle must be an object")
     plan = bundle.get("plan")
@@ -158,7 +185,20 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
             digest = view.get("sourceRawSha256")
             if not isinstance(digest, str) or len(digest) != 64:
                 raise ValueError("typed raw receipt evidence is unbound")
-    return plan, rows, cleanup
+            journal = [*rows, *cleanup]
+            raw_row = journal[int(slot)] if int(slot) < len(journal) else None
+            if not isinstance(raw_row, dict) or raw_row.get("rawSha256") != digest:
+                raise ValueError("typed raw receipt is not bound to its journal row")
+    else:
+        raise TypeError("typed raw receipt evidence is required")
+    contract = [
+        _contract_match(plan, operation, row)
+        for operation, row in [
+            *zip(plan["observation"], rows, strict=True),
+            *zip(plan["recovery"], cleanup, strict=True),
+        ]
+    ]
+    return plan, rows, cleanup, contract
 
 
 def _canonical_journal(
@@ -193,8 +233,8 @@ def compare_evidence(production: dict[str, Any], local: dict[str, Any]) -> dict[
         "errors": [],
     }
     try:
-        production_plan, production_rows, production_cleanup = _validate_side(production)
-        local_plan, local_rows, local_cleanup = _validate_side(local)
+        production_plan, production_rows, production_cleanup, production_contract = _validate_side(production)
+        local_plan, local_rows, local_cleanup, local_contract = _validate_side(local)
     except (ValueError, TypeError, KeyError, IndexError) as error:
         result["errors"].append(str(error))
         return result
@@ -203,9 +243,9 @@ def compare_evidence(production: dict[str, Any], local: dict[str, Any]) -> dict[
     for index, (a, b) in enumerate(zip(left, right, strict=True)):
         raw_a = {key: production_rows[index][key] for key in ("status", "body")} if index < 6 else production_cleanup[index - 6]
         raw_b = {key: local_rows[index][key] for key in ("status", "body")} if index < 6 else local_cleanup[index - 6]
-        classification = "SEMANTIC_MISMATCH" if not _exact(a, b) else (
+        classification = "SEMANTIC_MISMATCH" if not (production_contract[index] and local_contract[index]) else ("SEMANTIC_MISMATCH" if not _exact(a, b) else (
             "MATCH" if _exact(raw_a, raw_b) else "EXPECTED_NONDETERMINISM"
-        )
+        ))
         result["rows"].append({"index": index, "classification": classification})
     classes = {row["classification"] for row in result["rows"]}
     result["classification"] = next(

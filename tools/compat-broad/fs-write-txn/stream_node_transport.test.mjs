@@ -68,6 +68,7 @@ test('refuses unary reads outside the owned document prefix', () => {
 });
 
 test('rejects traversal and duplicate segments in owned prefixes and write targets', () => {
+  assert.throws(() => validateWriteRequest({}, { ...options, host: '203.0.113.8' }), /loopback/);
   for (const documentPrefix of ['compat/../o3', 'compat//o3', 'compat/./o3']) {
     assert.throws(() => validateTransportOptions({ ...options, documentPrefix }), /invalid path segment|relative path/);
   }

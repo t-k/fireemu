@@ -124,18 +124,19 @@ const requestTargets = request => {
 };
 
 export const validateWriteRequest = (request, options) => {
+  const validated = validateTransportOptions(options);
   if (!request || typeof request !== 'object') throw fail('write request must be an object');
-  if (Object.hasOwn(request, 'database') && request.database !== databaseName(options.projectId)) {
+  if (Object.hasOwn(request, 'database') && request.database !== databaseName(validated.projectId)) {
     throw fail('write database is transport-owned');
   }
-  if (byteLength(request) > options.maxMessageBytes) throw fail('write request exceeds maxMessageBytes', 'message_limit');
+  if (byteLength(request) > validated.maxMessageBytes) throw fail('write request exceeds maxMessageBytes', 'message_limit');
   for (const target of requestTargets(request)) {
-    const marker = `${databaseName(options.projectId)}/documents/`;
+    const marker = `${databaseName(validated.projectId)}/documents/`;
     if (!target.startsWith(marker)) throw fail('write target is outside the owned prefix');
     const targetPath = target.slice(marker.length);
     const targetSegments = pathSegments(targetPath, 'write target');
-    const prefixSegments = pathSegments(options.documentPrefix, 'documentPrefix');
-    if (targetSegments.length <= prefixSegments.length || targetSegments.slice(0, prefixSegments.length).join('/') !== options.documentPrefix) {
+    const prefixSegments = pathSegments(validated.documentPrefix, 'documentPrefix');
+    if (targetSegments.length <= prefixSegments.length || targetSegments.slice(0, prefixSegments.length).join('/') !== validated.documentPrefix) {
       throw fail('write target is outside the owned prefix');
     }
   }
@@ -203,10 +204,16 @@ export const listWriteFrames = (requests, response) => {
 export const runWrite = async (requests, options) => {
   const validated = validateTransportOptions(options);
   const client = clientFor(validated);
-  const stream = client.write({
-    deadline: new Date(Date.now() + validated.deadlineMs),
-    otherArgs: { headers: { ...validated.metadata } },
-  });
+  let stream;
+  try {
+    stream = client.write({
+      deadline: new Date(Date.now() + validated.deadlineMs),
+      otherArgs: { headers: { ...validated.metadata } },
+    });
+  } catch (error) {
+    client.close();
+    return Object.freeze({ kind: 'incomplete_stream', complete: false, error: plainError(error), sentFrames: 0, receivedFrames: 0, events: Object.freeze([]) });
+  }
   const events = [];
   let frameCount = 0;
   let sentFrames = 0;
@@ -284,7 +291,9 @@ export const runWrite = async (requests, options) => {
     try { push('error', plainError(error)); } catch { /* retain the typed error in the receipt */ }
     rejectWaiters(error);
     // grpc-js may emit error before status and close; defer classification until
-    // the terminal status/close pair has had a chance to arrive.
+    // the terminal status/close pair has had a chance to arrive. The bounded
+    // grace below deliberately reports incomplete_stream when a peer never
+    // supplies a terminal status, keeping the collector from waiting forever.
     terminalGraceTimer = setTimeout(maybeFinish, 100);
     maybeFinish();
   });

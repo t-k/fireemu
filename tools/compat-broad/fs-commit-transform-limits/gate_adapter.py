@@ -10,9 +10,6 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from broad_contract import digest
-from shared_gate import create
-
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 
@@ -38,6 +35,16 @@ def _load(name: str, path: Path):
     return module
 
 
+_check_import_origins(
+    {
+        "broad_contract": ROOT / "tools/compat-broad/broad_contract.py",
+        "shared_gate": ROOT / "tools/compat-broad/shared_gate.py",
+    }
+)
+from broad_contract import digest  # noqa: E402
+from shared_gate import create  # noqa: E402
+
+
 _compiler_path = HERE / "transform_compiler.py"
 _check_import_origins({"transform_compiler": _compiler_path})
 if "transform_compiler" in sys.modules:
@@ -59,9 +66,15 @@ _limits_origins = {
         "shadow": "shadow.py",
         "compiler": "compiler.py",
         "transport": "transport.py",
-    }.items()
+}.items()
 }
 _limits_origins["reservations"] = ROOT / "tools/compat-broad/production-admission/reservations.py"
+_limits_origins.update(
+    {
+        name: ROOT / "tools/compat-broad" / f"{name}.py"
+        for name in ("batch_adapter", "broad_contract", "shared_production")
+    }
+)
 _check_import_origins(_limits_origins)
 for _path in (str(_limits_dir),):
     if _path not in sys.path:

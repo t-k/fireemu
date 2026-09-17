@@ -191,14 +191,18 @@ def test_default_gate_still_rejects_changed_creation_fields(tmp_path):
         gate._validate_cleanup_ownership(operation, True, "a", 0, job)
 
 
-def test_foreign_limits_module_is_rejected_before_adapter_import(tmp_path):
+@pytest.mark.parametrize(
+    "foreign_name", ["remote_transport", "batch_adapter", "broad_contract", "shared_production"]
+)
+def test_foreign_limits_module_is_rejected_before_adapter_import(tmp_path, foreign_name):
     script = """
 import sys, types
 from pathlib import Path
 here = Path(sys.argv[1])
-foreign = types.ModuleType('remote_transport')
-foreign.__file__ = str(Path(sys.argv[2]) / 'remote_transport.py')
-sys.modules['remote_transport'] = foreign
+foreign_name = sys.argv[3]
+foreign = types.ModuleType(foreign_name)
+foreign.__file__ = str(Path(sys.argv[2]) / (foreign_name + '.py'))
+sys.modules[foreign_name] = foreign
 sys.path.insert(0, str(here.parent))
 sys.path.insert(0, str(here))
 try:
@@ -212,7 +216,7 @@ else:
     foreign_root = tmp_path / "foreign"
     foreign_root.mkdir()
     result = subprocess.run(
-        [sys.executable, "-c", script, str(HERE), str(foreign_root)],
+        [sys.executable, "-c", script, str(HERE), str(foreign_root), foreign_name],
         cwd=HERE.parent.parent.parent,
         env={**os.environ, "PYTHONPATH": str(HERE.parent)},
         capture_output=True,

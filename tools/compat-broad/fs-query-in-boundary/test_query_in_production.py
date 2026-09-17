@@ -17,6 +17,8 @@ from query_in_production import (
     validate_permission,
 )
 
+_DOC = "projects/fireemu-35fe6/databases/(default)/documents/cur/c"
+
 
 def _plan():
     return compile_plan("fireemu-35fe6", "(default)", "a" * 32)
@@ -77,7 +79,14 @@ def test_pre_send_capacity_rejects_tenth_data_attempt() -> None:
 
 def test_raw_sidecars_preserve_bytes_and_bind_projection(tmp_path: Path) -> None:
     journal = RawJournal(tmp_path / "raw")
-    body = b'[{"document":{"name":"x","fields":{"s":{"stringValue":"\\u00e9"}}},"readTime":"2026-09-18T00:00:00.000000Z"}]'
+    body = json.dumps(
+        [
+            {
+                "document": {"name": _DOC, "fields": {"s": {"stringValue": "é"}}},
+                "readTime": "2026-09-18T00:00:00.000000Z",
+            }
+        ]
+    ).encode()
     binding = journal.add(
         "observation",
         2,
@@ -88,7 +97,7 @@ def test_raw_sidecars_preserve_bytes_and_bind_projection(tmp_path: Path) -> None
     )
     assert (tmp_path / "raw" / binding["path"]).read_bytes() == body
     view = journal.semantic_view(binding)
-    assert view["documents"] == [{"name": "x", "fields": {"s": {"stringValue": "é"}}}]
+    assert view["documents"] == [{"name": _DOC, "fields": {"s": {"stringValue": "é"}}}]
     assert view["sourceRawSha256"] == hashlib.sha256(body).hexdigest()
     second = journal.add(
         "recovery", 0, 404, b"\xff", complete=False, content_type="application/json"
@@ -274,6 +283,168 @@ def test_duplicate_keys_or_bad_metadata_never_project(
     assert view["difference"] == difference
     assert "documents" not in view
     assert (tmp_path / "raw" / binding["path"]).read_bytes() == body
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        True,
+        1,
+        "x",
+        [],
+        {},
+        {"unknownValue": "x"},
+        {"stringValue": "x", "integerValue": "1"},
+        {"integerValue": True},
+        {"integerValue": "01"},
+        {"integerValue": "9223372036854775808"},
+        {"doubleValue": True},
+        {"doubleValue": "1.5"},
+        {"timestampValue": "bad"},
+        {"bytesValue": "***"},
+        {"referenceValue": "x"},
+        {"arrayValue": {"values": [3]}},
+        {"arrayValue": {"values": "bad"}},
+        {"mapValue": {"fields": {"n": {"integerValue": "01"}}}},
+        {"mapValue": {"fields": []}},
+        {"geoPointValue": {"latitude": 91, "longitude": 0}},
+        {"nullValue": "bad"},
+        {"stringValue": "\ud800"},
+    ],
+)
+def test_malformed_firestore_value_remains_raw(tmp_path: Path, value: object) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    body = json.dumps([{"document": {"name": _DOC, "fields": {"n": value}}}]).encode()
+    binding = journal.add(
+        "observation", 2, 200, body, complete=True, content_type="application/json"
+    )
+    view = journal.semantic_view(binding)
+    assert view["difference"] == "unexpected-query-row"
+    assert "documents" not in view
+    assert (tmp_path / "raw" / binding["path"]).read_bytes() == body
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "",
+        "x",
+        "projects/p/databases/(default)/documents/c",
+        "projects/p/databases/(default)/documents/c/",
+        "projects/p/databases/(default)/documents/c/.",
+    ],
+)
+def test_noncanonical_document_name_remains_raw(tmp_path: Path, name: str) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    body = json.dumps([{"document": {"name": name, "fields": {}}}]).encode()
+    binding = journal.add(
+        "observation", 2, 200, body, complete=True, content_type="application/json"
+    )
+    assert journal.semantic_view(binding)["difference"] == "unexpected-query-row"
+
+
+@pytest.mark.parametrize("name", ["", "__reserved__", "x" * 1501, "\ud800"])
+def test_noncanonical_field_name_remains_raw(tmp_path: Path, name: str) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    body = json.dumps(
+        [{"document": {"name": _DOC, "fields": {name: {"stringValue": "x"}}}}]
+    ).encode()
+    binding = journal.add(
+        "observation", 2, 200, body, complete=True, content_type="application/json"
+    )
+    assert journal.semantic_view(binding)["difference"] == "unexpected-query-row"
+
+
+def test_deep_nested_value_remains_raw(tmp_path: Path) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    value: object = {"stringValue": "leaf"}
+    for _ in range(40):
+        value = {"mapValue": {"fields": {"n": value}}}
+    body = json.dumps([{"document": {"name": _DOC, "fields": {"n": value}}}]).encode()
+    binding = journal.add(
+        "observation", 2, 200, body, complete=True, content_type="application/json"
+    )
+    assert journal.semantic_view(binding)["difference"] == "unexpected-query-row"
+
+
+def test_wide_value_exceeding_node_budget_remains_raw(tmp_path: Path) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    values = [{"nullValue": "NULL_VALUE"}] * 1025
+    body = json.dumps(
+        [
+            {
+                "document": {
+                    "name": _DOC,
+                    "fields": {"n": {"arrayValue": {"values": values}}},
+                }
+            }
+        ]
+    ).encode()
+    assert len(body) <= 65536
+    binding = journal.add(
+        "observation", 2, 200, body, complete=True, content_type="application/json"
+    )
+    assert journal.semantic_view(binding)["difference"] == "unexpected-query-row"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"nullValue": "NULL_VALUE"},
+        {"booleanValue": False},
+        {"integerValue": "-9223372036854775808"},
+        {"doubleValue": 1.5},
+        {"doubleValue": "NaN"},
+        {"timestampValue": "2026-09-18T00:00:00Z"},
+        {"bytesValue": "YQ=="},
+        {"referenceValue": _DOC},
+        {"geoPointValue": {"latitude": 90, "longitude": -180}},
+        {"arrayValue": {"values": [{"stringValue": "x"}]}},
+        {"mapValue": {"fields": {"a": {"integerValue": "0"}}}},
+    ],
+)
+def test_well_formed_value_remains_comparable(tmp_path: Path, value: object) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    body = json.dumps([{"document": {"name": _DOC, "fields": {"n": value}}}]).encode()
+    binding = journal.add(
+        "observation", 2, 200, body, complete=True, content_type="application/json"
+    )
+    assert journal.semantic_view(binding)["documents"] == [
+        {"name": _DOC, "fields": {"n": value}}
+    ]
+
+
+def test_other_well_formed_document_remains_comparable(tmp_path: Path) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    other = "projects/other-project/databases/(default)/documents/cur/other"
+    body = json.dumps(
+        [
+            {
+                "document": {
+                    "name": other,
+                    "fields": {
+                        "n": {"integerValue": "3"},
+                        "nested": {
+                            "mapValue": {
+                                "fields": {
+                                    "a": {
+                                        "arrayValue": {
+                                            "values": [{"booleanValue": True}]
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                    },
+                }
+            }
+        ]
+    ).encode()
+    binding = journal.add(
+        "observation", 2, 200, body, complete=True, content_type="application/json"
+    )
+    assert journal.semantic_view(binding)["documents"][0]["name"] == other
 
 
 @pytest.mark.parametrize("status", [200.0, True, "200"])

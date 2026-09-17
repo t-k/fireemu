@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import copy
 import hashlib
 import json
@@ -26,6 +28,11 @@ _RAW_LIMIT = 65536
 _ROW_LIMIT = 8192
 _ENVELOPE_LIMIT = 32768
 _TIMESTAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$")
+_INTEGER = re.compile(r"^(?:0|-?[1-9][0-9]*)$")
+_PROJECT = re.compile(r"^[A-Za-z0-9_-]+$")
+_RESERVED_FIELD = re.compile(r"^__.*__$")
+_MAX_VALUE_DEPTH = 20
+_MAX_VALUE_NODES = 1024
 
 
 def _reject_json_constant(value: str) -> None:
@@ -51,6 +58,123 @@ def _typed_timestamp(value: Any) -> bool:
     return True
 
 
+def _utf8_length(value: Any) -> int | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        return None
+
+
+def _field_name(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and (length := _utf8_length(value)) is not None
+        and length <= 1500
+        and _RESERVED_FIELD.fullmatch(value) is None
+    )
+
+
+def _document_name(value: Any) -> bool:
+    if _utf8_length(value) is None:
+        return False
+    parts = value.split("/")
+    return (
+        len(parts) >= 7
+        and len(parts) % 2 == 1
+        and parts[0] == "projects"
+        and _PROJECT.fullmatch(parts[1]) is not None
+        and parts[2] == "databases"
+        and (parts[3] == "(default)" or _PROJECT.fullmatch(parts[3]) is not None)
+        and parts[4] == "documents"
+        and all(
+            part not in {"", ".", ".."}
+            and (length := _utf8_length(part)) is not None
+            and length <= 1500
+            for part in parts[5:]
+        )
+    )
+
+
+def _fields(value: Any, depth: int, budget: list[int]) -> bool:
+    return isinstance(value, dict) and all(
+        _field_name(name) and _firestore_value(item, depth + 1, budget)
+        for name, item in value.items()
+    )
+
+
+def _firestore_value(value: Any, depth: int, budget: list[int]) -> bool:
+    budget[0] -= 1
+    if (
+        depth > _MAX_VALUE_DEPTH
+        or budget[0] < 0
+        or not isinstance(value, dict)
+        or len(value) != 1
+    ):
+        return False
+    kind, item = next(iter(value.items()))
+    if kind == "nullValue":
+        return item == "NULL_VALUE"
+    if kind == "booleanValue":
+        return type(item) is bool
+    if kind == "integerValue":
+        return (
+            isinstance(item, str)
+            and _INTEGER.fullmatch(item) is not None
+            and -(2**63) <= int(item) < 2**63
+        )
+    if kind == "doubleValue":
+        return (type(item) in (int, float) and math.isfinite(item)) or (
+            isinstance(item, str) and item in {"NaN", "Infinity", "-Infinity"}
+        )
+    if kind == "timestampValue":
+        return _typed_timestamp(item)
+    if kind == "stringValue":
+        return _utf8_length(item) is not None
+    if kind == "bytesValue":
+        if not isinstance(item, str):
+            return False
+        try:
+            return (
+                base64.b64encode(base64.b64decode(item, validate=True)).decode("ascii")
+                == item
+            )
+        except (ValueError, binascii.Error):
+            return False
+    if kind == "referenceValue":
+        return _document_name(item)
+    if kind == "geoPointValue":
+        return (
+            isinstance(item, dict)
+            and set(item) == {"latitude", "longitude"}
+            and all(
+                type(item[key]) in (int, float) and math.isfinite(item[key])
+                for key in ("latitude", "longitude")
+            )
+            and -90 <= item["latitude"] <= 90
+            and -180 <= item["longitude"] <= 180
+        )
+    if kind == "arrayValue":
+        return (
+            isinstance(item, dict)
+            and set(item) <= {"values"}
+            and isinstance(item.get("values", []), list)
+            and all(
+                _firestore_value(child, depth + 1, budget)
+                for child in item.get("values", [])
+            )
+        )
+    if kind == "mapValue":
+        return (
+            isinstance(item, dict)
+            and set(item) <= {"fields"}
+            and _fields(item.get("fields", {}), depth + 1, budget)
+        )
+    return False
+
+
 def _typed_query_row(row: Any) -> bool:
     # The compiled query requests neither a transaction nor result skipping.
     if not isinstance(row, dict) or set(row) - {"document", "readTime"}:
@@ -63,8 +187,8 @@ def _typed_query_row(row: Any) -> bool:
         "updateTime",
     }:
         return False
-    if not isinstance(document.get("name"), str) or not isinstance(
-        document.get("fields"), dict
+    if not _document_name(document.get("name")) or not _fields(
+        document.get("fields"), 0, [_MAX_VALUE_NODES]
     ):
         return False
     if any(
@@ -320,7 +444,7 @@ class RawJournal:
                 parse_constant=_reject_json_constant,
                 object_pairs_hook=_unique_json_object,
             )
-        except (UnicodeError, ValueError):
+        except (UnicodeError, ValueError, RecursionError):
             result["difference"] = "malformed-query-json"
             return result
         if not isinstance(parsed, list):

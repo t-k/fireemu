@@ -1,6 +1,8 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { initializeApp } from "firebase/app";
 import {
   connectAuthEmulator,
@@ -14,6 +16,32 @@ import {
 } from "firebase/auth";
 import { initializeApp as initializeAdminApp } from "firebase-admin/app";
 import { getAuth as getAdminAuth } from "firebase-admin/auth";
+
+export async function installedSdk() {
+  const installed = {};
+  for (const name of ["firebase", "firebase-admin"]) {
+    const entries = ["app", "auth"].map((entry) => import.meta.resolve(`${name}/${entry}`));
+    const packages = [];
+    for (const entry of entries) {
+      let directory = dirname(fileURLToPath(entry));
+      let metadata;
+      while (true) {
+        try {
+          metadata = JSON.parse(await readFile(join(directory, "package.json"), "utf8"));
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+        if (metadata?.name === name) break;
+        assert.notEqual(dirname(directory), directory, "installed SDK package root missing");
+        directory = dirname(directory);
+      }
+      packages.push({ version: metadata.version, packageRoot: directory });
+    }
+    assert.deepEqual(packages[0], packages[1], "SDK entry points resolve to different packages");
+    installed[name] = { ...packages[0], entries };
+  }
+  return installed;
+}
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 export const REQUIRED_OPERATION_IDS = [
@@ -61,6 +89,9 @@ async function absent(admin, uid) {
 }
 
 export async function runLocalCase(env = process.env) {
+  const sdk = await installedSdk();
+  assert.equal(sdk.firebase.version, "12.18.0");
+  assert.equal(sdk["firebase-admin"].version, "14.3.0");
   const authHost = authOrigin(env.FIREBASE_AUTH_EMULATOR_HOST);
   const project = env.GOOGLE_CLOUD_PROJECT ?? "demo-app";
   const marker = randomBytes(8).toString("hex");
@@ -133,6 +164,8 @@ export async function runLocalCase(env = process.env) {
       transport: "firebase-sdk-local-emulator",
       providerBoundary: "local-emulator-fixture",
       project,
+      sdk,
+      authOrigin: authHost,
       tenantId: null,
       operations,
       readback,
@@ -144,12 +177,28 @@ export async function runLocalCase(env = process.env) {
     });
   } finally {
     await signOut(auth).catch(() => {});
-    for (const uid of owned) await admin.deleteUser(uid).catch(() => {});
+    const cleanupErrors = [];
+    for (const uid of owned) {
+      try {
+        const user = await admin.getUser(uid);
+        assert.ok([emailA, emailB].includes(user.email), "cleanup namespace ownership mismatch");
+        await admin.deleteUser(uid);
+        await absent(admin, uid);
+      } catch (error) {
+        if (error?.code !== "auth/user-not-found") cleanupErrors.push(error);
+      }
+    }
+    if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "owned account cleanup failed");
   }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
+    if (process.argv[2] === "--sdk-info") {
+      const installed = await installedSdk();
+      console.log(JSON.stringify(installed));
+      process.exit(0);
+    }
     const receipt = await runLocalCase();
     const output = process.env.AUTH_LINKING_RECEIPT;
     if (output) await writeFile(output, `${JSON.stringify(receipt, null, 2)}\n`, { flag: "wx" });

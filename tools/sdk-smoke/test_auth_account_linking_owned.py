@@ -1,17 +1,18 @@
 import hashlib
 import importlib.util
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-_spec = importlib.util.spec_from_file_location("auth_account_linking_owned", Path(__file__).with_name("auth-account-linking-owned.py"))
+_spec = importlib.util.spec_from_file_location(
+    "auth_account_linking_owned",
+    Path(__file__).with_name("auth-account-linking-owned.py"),
+)
 _module = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
 _spec.loader.exec_module(_module)
 validate_manifest = _module.validate_manifest
-validate_sdk_pins = _module.validate_sdk_pins
 run = _module.run
 
 
@@ -58,22 +59,75 @@ def test_manifest_rejects_production_or_artifact_drift(tmp_path: Path):
         )
 
 
-def test_sdk_pins_are_exact():
-    assert validate_sdk_pins({"dependencies": {"firebase": "12.18.0", "firebase-admin": "14.3.0"}}) == {
-        "firebase": "12.18.0",
-        "firebase-admin": "14.3.0",
-    }
-    with pytest.raises(ValueError, match="SDK"):
-        validate_sdk_pins({"dependencies": {"firebase": "12.18.0", "firebase-admin": "14.3.1"}})
-
-
 def test_runner_persists_failure_without_false_success(tmp_path: Path):
     artifact = tmp_path / "fireemu"
     artifact.write_bytes(b"wrong-artifact")
     manifest = tmp_path / "manifest.json"
-    manifest.write_text(json.dumps({"status": "completed", "productionExecuted": False}), encoding="utf-8")
+    manifest.write_text(
+        json.dumps({"status": "completed", "productionExecuted": False}),
+        encoding="utf-8",
+    )
     output = tmp_path / "run"
     result = run(output, manifest, artifact)
     assert result["status"] == "owned-run-failed"
     assert (output / "failure.json").is_file()
     assert not (output / "receipt.json").exists()
+
+
+def test_substituted_listener_is_rejected():
+    import os
+    import socket
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        with pytest.raises(ValueError, match="listener owner"):
+            _module.observe_listener(listener.getsockname()[1], os.getpid() + 100000)
+
+
+def test_installed_sdk_mismatch_rejected_even_with_correct_declarations():
+    with pytest.raises(ValueError, match="installed SDK"):
+        _module.validate_installed_sdk(
+            {
+                "firebase": {"version": "12.17.0"},
+                "firebase-admin": {"version": "14.3.0"},
+            }
+        )
+
+
+def test_fixed_manifest_identity_rejects_self_consistent_substitution(tmp_path):
+    with pytest.raises(ValueError, match="prepared"):
+        _module.validate_prepared_paths(
+            tmp_path / "manifest.json", tmp_path / "fireemu"
+        )
+
+
+def test_esm_resolution_detects_relinked_installed_version(tmp_path):
+    import shutil
+    import subprocess
+
+    smoke = Path(__file__).parent
+    modules = smoke / "node_modules"
+    if not modules.exists():
+        pytest.skip("installed SDK dependencies required")
+    fixture_modules = tmp_path / "node_modules"
+    fixture_modules.mkdir()
+    for entry in modules.iterdir():
+        if entry.name != "firebase-admin":
+            (fixture_modules / entry.name).symlink_to(entry.resolve())
+    shutil.copytree(modules / "firebase-admin", fixture_modules / "firebase-admin")
+    metadata = fixture_modules / "firebase-admin/package.json"
+    installed = json.loads(metadata.read_text())
+    installed["version"] = "14.3.1"
+    metadata.write_text(json.dumps(installed))
+    (tmp_path / "package.json").write_text(
+        json.dumps({"dependencies": _module.EXPECTED_SDK})
+    )
+    collector = tmp_path / "collector.mjs"
+    shutil.copyfile(smoke / "auth-account-linking-local.mjs", collector)
+    observed = json.loads(
+        subprocess.check_output(["node", str(collector), "--sdk-info"], text=True)
+    )
+    assert observed["firebase-admin"]["version"] == "14.3.1"
+    with pytest.raises(ValueError, match="installed SDK"):
+        _module.validate_installed_sdk(observed)

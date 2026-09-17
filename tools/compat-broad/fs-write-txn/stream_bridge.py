@@ -148,6 +148,12 @@ def compile_plan(project, nonce, owner):
 
 def validate_plan(plan):
     expected = compile_plan(plan["projectId"], plan["nonce"], plan["ownerId"])
+    if plan.get("managementProfile") is not None:
+        from stream_production import PROFILE, with_management
+
+        if plan["managementProfile"] != PROFILE:
+            raise ValueError("unknown stream management profile")
+        expected = with_management(expected)
     # Permission/source bindings may be added by the parent; execution policy is closed.
     extra = {"permissionDigest", "observerSha256"}
     if set(plan) - set(expected) - extra or any(
@@ -430,6 +436,10 @@ def record(state, job_name, operation, receipt, event):
 
 
 def validate_absence(state, job_name):
+    if state["plan"].get("managementProfile"):
+        from stream_production import metadata_valid
+
+        metadata_valid(state)
     job = state["jobs"][job_name]
     slots = state["plan"]["jobs"][job_name]["recovery"]
     if (
@@ -567,10 +577,16 @@ def source_digest():
             "stream_collector.mjs",
             "stream_node_transport.mjs",
             "transport_internal.mjs",
+            "stream_production.py",
+            "stream_comparison.mjs",
         )
     ]
     paths += [
         directory.parent / "shared_gate.py",
+        directory.parent / "shared_production.py",
+        directory.parent / "batch_adapter.py",
+        directory.parent / "batch_contract.py",
+        directory.parent / "batch_wire.py",
         directory.parent / "production-admission" / "reservations.py",
     ]
     return digest(
@@ -583,7 +599,18 @@ def source_digest():
     )
 
 
-def _run_worker(plan, gate, ledger, ticket, *, mode, port, authorize):
+def _run_worker(
+    plan,
+    gate,
+    ledger,
+    ticket,
+    *,
+    mode,
+    port,
+    authorize,
+    before_recovery=None,
+    finalize=True,
+):
     frozen = copy.deepcopy(plan)
     validate_plan(frozen)
     claim = ledger.bound_claim(ticket)
@@ -624,6 +651,7 @@ def _run_worker(plan, gate, ledger, ticket, *, mode, port, authorize):
             },
         )
         message_id = 0
+        recovery_started = False
         while True:
             message = read_message(parent)
             if message.get("type") == "done":
@@ -641,8 +669,9 @@ def _run_worker(plan, gate, ledger, ticket, *, mode, port, authorize):
                 if worker.returncode != 0:
                     raise ValueError("stream worker did not close")
                 verify_execution_bindings(frozen_source, frozen["nodeRuntime"])
-                gate.finish()
-                ledger.finish(ticket)
+                if finalize:
+                    gate.finish()
+                    ledger.finish(ticket)
                 return message["result"]
             message_id += 1
             if (
@@ -667,6 +696,10 @@ def _run_worker(plan, gate, ledger, ticket, *, mode, port, authorize):
             ):
                 raise ValueError("private request binding differs")
             recovery = message["phase"] == "recovery"
+            if recovery and not recovery_started:
+                recovery_started = True
+                if before_recovery is not None:
+                    before_recovery()
             snapshot = gate.snapshot()
             if (
                 type(message["index"]) is not int
@@ -789,7 +822,9 @@ def run_local(plan, path, ledger, ticket, *, port):
     )
 
 
-def run_reserved(plan, gate, ledger, ticket, coordinator):
+def run_reserved(
+    plan, gate, ledger, ticket, coordinator, *, before_recovery=None, finalize=True
+):
     """Internal prepared-parent entrypoint. Never issues permission or obtains tokens."""
     from batch_contract import PROJECT, Credential
     from shared_production import Coordinator
@@ -831,5 +866,24 @@ def run_reserved(plan, gate, ledger, ticket, coordinator):
 
     authorize(False)
     return _run_worker(
-        plan, gate, ledger, ticket, mode="fixed-tls", port=None, authorize=authorize
+        plan,
+        gate,
+        ledger,
+        ticket,
+        mode="fixed-tls",
+        port=None,
+        authorize=authorize,
+        before_recovery=before_recovery,
+        finalize=finalize,
     )
+
+
+def write_private_json(path, value):
+    path = Path(path)
+    with path.open("x") as stream:
+        path.chmod(0o600)
+        json.dump(value, stream, allow_nan=False)
+        stream.flush()
+        import os
+
+        os.fsync(stream.fileno())

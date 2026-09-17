@@ -391,8 +391,31 @@ class RawJournal:
             if not isinstance(binding, dict):
                 os.close(self._fd)
                 raise TypeError("invalid raw journal binding")
+            phase = binding.get("phase")
+            index = binding.get("index")
             path = binding.get("path")
-            if not isinstance(path, str) or path in self._bindings:
+            expected_path = (
+                f"{phase}-{index:02d}.raw"
+                if phase in {"observation", "recovery"} and type(index) is int
+                else None
+            )
+            limit = 6 if phase == "observation" else 3
+            if (
+                expected_path is None
+                or index < 0
+                or index >= limit
+                or path != expected_path
+                or path in self._bindings
+                or set(binding) != {"phase", "index", "path", "byteCount", "sha256", "status", "complete", "contentType"}
+                or type(binding.get("byteCount")) is not int
+                or not 0 <= binding["byteCount"] <= _RAW_LIMIT
+                or not isinstance(binding.get("sha256"), str)
+                or re.fullmatch(r"[0-9a-f]{64}", binding["sha256"]) is None
+                or (binding.get("status") is not None and (type(binding["status"]) is not int or not 100 <= binding["status"] <= 599))
+                or type(binding.get("complete")) is not bool
+                or not isinstance(binding.get("contentType"), str)
+                or len(binding["contentType"]) > 128
+            ):
                 os.close(self._fd)
                 raise ValueError("invalid raw journal binding")
             self._bindings[path] = copy.deepcopy(binding)

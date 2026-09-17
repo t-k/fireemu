@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import os
@@ -106,7 +107,7 @@ def test_transport_raw_bytes_are_published_and_reloaded_for_all_nine_slots(
         raw = json.dumps(receipt["body"], separators=(",", ":")).encode()
         return {
             **receipt,
-            "rawBody": raw,
+            "rawBodyBase64": base64.b64encode(raw).decode("ascii"),
             "bodyBytes": len(raw),
             "contentType": "application/json; charset=UTF-8",
         }
@@ -116,6 +117,8 @@ def test_transport_raw_bytes_are_published_and_reloaded_for_all_nine_slots(
     manifest = json.loads((raw_dir / "manifest.json").read_text())
 
     assert result["rawComplete"] is True
+    assert result["completed"] is False
+    assert result["rawSemanticMismatch"] is True
     assert result["rawFailures"] == []
     assert len(result["rawBindings"]) == 9
     assert len(manifest["bindings"]) == 9
@@ -155,6 +158,27 @@ def test_missing_or_partial_raw_response_fails_closed_without_synthesizing_bytes
     assert any("response-bytes-unavailable" in item for item in result["rawFailures"])
     assert not (tmp_path / "receipt" / "raw" / "observation-02.raw").exists()
     assert not (tmp_path / "receipt" / "raw" / "observation-04.raw").exists()
+
+
+def test_incomplete_raw_receipts_do_not_count_as_complete_raw_run(tmp_path: Path) -> None:
+    plan = _plan()
+    transport = _transport(plan)
+
+    def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        receipt = transport(operation)
+        raw = json.dumps(receipt["body"], separators=(",", ":")).encode()
+        return {
+            **receipt,
+            "complete": False,
+            "rawBody": raw,
+            "bodyBytes": len(raw),
+            "contentType": "application/json",
+        }
+
+    result = collect_local(plan, execute, tmp_path / "receipt")
+
+    assert len(result["rawBindings"]) == 3
+    assert result["rawComplete"] is False
 
 
 def test_complete_namespace_mismatch_stops_before_create_and_preserves_receipt(tmp_path: Path) -> None:

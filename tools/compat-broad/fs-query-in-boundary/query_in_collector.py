@@ -21,6 +21,8 @@ _TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$"
 )
 _MAX_SERIALIZED_RECEIPT_BYTES = 131072
+_MAX_RAW_BYTES = 65536
+_MAX_RAW_BASE64 = 4 * ((_MAX_RAW_BYTES + 2) // 3)
 
 
 def _complete(receipt: Any) -> bool:
@@ -205,6 +207,8 @@ def _transport_raw(receipt: Any) -> tuple[bytes, int | None, str, bool] | None:
     raw: bytes | None = receipt.get("rawBody") if isinstance(receipt.get("rawBody"), bytes) else None
     encoded = receipt.get("rawBodyBase64")
     if raw is None and isinstance(encoded, str):
+        if len(encoded) > _MAX_RAW_BASE64:
+            return None
         try:
             raw = base64.b64decode(encoded, validate=True)
         except (ValueError, binascii.Error):
@@ -319,6 +323,8 @@ def collect_local(
         except Exception as error:  # noqa: BLE001 -- retain compact evidence and report raw failure.
             raw_failures.append(f"{phase}-{index}:raw-publication-{type(error).__name__}")
         else:
+            pass
+        finally:
             for key in ("rawBody", "rawBodyBase64", "rawBodyBytes", "bodyBytes"):
                 row.pop(key, None)
 
@@ -435,7 +441,9 @@ def collect_local(
         and _typed_not_found(cleanup[2])
     )
     recording_complete = len(rows) == 6 and all(_complete(row) for row in rows)
+    raw_semantic_mismatch = False
     if raw_journal is not None:
+        reloaded: RawJournal | None = None
         try:
             raw_journal.close()
             reloaded = RawJournal.reload(output / "raw")
@@ -443,9 +451,25 @@ def collect_local(
                 binding = candidate.get("raw")
                 if isinstance(binding, dict):
                     candidate["semanticView"] = reloaded.semantic_view(binding)
-            reloaded.close()
+            positive = next((row for row in rows if row.get("index") == 2), None)
+            if positive is not None:
+                view = positive.get("semanticView")
+                compact_documents = (
+                    positive.get("body", {}).get("documents")
+                    if isinstance(positive.get("body"), dict)
+                    else None
+                )
+                raw_semantic_mismatch = not (
+                    isinstance(view, dict)
+                    and isinstance(view.get("documents"), list)
+                    and view["documents"] == compact_documents
+                )
         except Exception as error:  # noqa: BLE001 -- compact publication remains available.
             raw_failures.append(f"raw-manifest:reload-{type(error).__name__}")
+            raw_semantic_mismatch = True
+        finally:
+            if reloaded is not None:
+                reloaded.close()
     result = {
         "productionExecuted": False,
         "localOnly": True,
@@ -453,7 +477,7 @@ def collect_local(
         "promotionReady": False,
         "recordingComplete": recording_complete and persistence_complete,
         "cleanupComplete": recovery_ok and persistence_complete,
-        "completed": recording_complete and recovery_ok and persistence_complete and not infrastructure,
+        "completed": recording_complete and recovery_ok and persistence_complete and not infrastructure and not raw_semantic_mismatch,
         "rows": rows,
         "cleanup": cleanup,
         "resourceAbsence": {plan["document"]: absence},
@@ -462,8 +486,13 @@ def collect_local(
         "infrastructureFailures": infrastructure + persistence_failures,
         "persistenceComplete": persistence_complete,
         "rawBindings": raw_bindings,
-        "rawComplete": len(raw_bindings) == 9 and not raw_failures,
+        "rawComplete": (
+            len(raw_bindings) == 9
+            and all(binding.get("complete") is True for binding in raw_bindings)
+            and not raw_failures
+        ),
         "rawFailures": raw_failures,
+        "rawSemanticMismatch": raw_semantic_mismatch,
         "rawManifest": "raw/manifest.json" if raw_bindings else None,
     }
     persist("collection.json", result)

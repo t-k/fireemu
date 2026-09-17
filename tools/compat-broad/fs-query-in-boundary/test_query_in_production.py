@@ -128,6 +128,19 @@ def test_raw_journal_manifest_can_be_reloaded_after_publication(tmp_path: Path) 
     reloaded.close()
 
 
+def test_raw_journal_reload_rejects_tampered_manifest_binding(tmp_path: Path) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    journal.add("observation", 2, 200, b"[]", complete=True, content_type="application/json")
+    journal.close()
+    manifest_path = tmp_path / "raw" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["bindings"][0]["sha256"] = "0" * 63
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="invalid raw journal binding"):
+        RawJournal.reload(tmp_path / "raw")
+
+
 def test_complete_unexpected_query_is_preserved(tmp_path: Path) -> None:
     journal = RawJournal(tmp_path / "raw")
     body = json.dumps(

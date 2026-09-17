@@ -5,22 +5,24 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from copy import deepcopy
+from types import MappingProxyType
 from typing import Any
 
 CASE_ID = "FS-LISTEN-SDK-002"
 _NONCE = re.compile(r"^[0-9a-f]{32}$")
-SDK = {
+_SDK = {
     "firebase": "12.18.0",
     "firebase-admin": "14.3.0",
     "firebase-functions": "7.3.2",
     "rules-unit-testing": "5.0.2",
 }
-SHADOW = {
+_SHADOW = {
     "firebase-tools": "15.28.2",
     "firestore-emulator": "1.22.0",
     "node": "24.14.0",
 }
-LIMITS = {
+_LIMITS = {
     "maxRuns": 3,
     "maxDurationSeconds": 120,
     "maxConcurrency": 1,
@@ -29,6 +31,13 @@ LIMITS = {
     "maxSnapshots": 6,
     "estimatedCostUsd": 1,
     "hardCostCeilingUsd": 10,
+}
+SDK = MappingProxyType(_SDK)
+SHADOW = MappingProxyType(_SHADOW)
+LIMITS = MappingProxyType(_LIMITS)
+LOCKFILES = {
+    "tools/sdk-smoke/package-lock.json": "77320cd304149c5c3e99289b7548757e307c08373bf02a811a5ae8518775704c",
+    "conformance/pnpm-lock.yaml": "a1287b8bf5d8ef937b0bd82d7cec0df65abe3fe8f6669a4d2e3d927874291432",
 }
 
 
@@ -44,6 +53,8 @@ def compile_plan(
 ) -> dict[str, Any]:
     if not isinstance(nonce, str) or not _NONCE.fullmatch(nonce):
         raise ValueError("nonce must be exactly 128-bit lowercase hexadecimal")
+    if project != "fireemu-35fe6" or database != "(default)":
+        raise ValueError("project/database are fixed to the oracle default")
     collection = f"o6_resume_{nonce}"
     one, two = f"{collection}/one", f"{collection}/two"
     operations = [
@@ -75,10 +86,19 @@ def compile_plan(
             {"path": one, "revision": [0, 1, 2]},
             {"path": two, "revision": [0]},
         ],
-        "sdk": SDK,
-        "shadow": SHADOW,
+        "sdk": deepcopy(_SDK),
+        "shadow": deepcopy(_SHADOW),
+        "sourceBinding": {
+            "lockfiles": deepcopy(LOCKFILES),
+            "entrypoint": "tools/compat-broad/fs-listen-resume",
+        },
+        "transportBinding": {
+            "kind": "grpc-listen",
+            "resumeBoundary": "sdk-managed",
+            "endpointPolicy": "declared-only",
+        },
         "resumeToken": {"persist": "sha256", "rawBytes": False},
-        "limits": LIMITS,
+        "limits": deepcopy(_LIMITS),
         "operations": operations,
         "negativeCases": ["stale-token", "compacted-token", "session-reset"],
         "cleanup": {
@@ -103,9 +123,9 @@ def validate_plan(plan: Any) -> bool:
         resources = [item["path"] for item in plan["ownedResources"]]
         if (
             len(resources) != 2
-            or plan["limits"] != LIMITS
-            or plan["sdk"] != SDK
-            or plan["shadow"] != SHADOW
+            or plan["limits"] != _LIMITS
+            or plan["sdk"] != _SDK
+            or plan["shadow"] != _SHADOW
         ):
             return False
         if (
@@ -123,5 +143,5 @@ def validate_plan(plan: Any) -> bool:
             return False
         expected = compile_plan(nonce, plan["project"], plan["database"])
         return plan == expected
-    except (KeyError, TypeError, IndexError):
+    except (KeyError, TypeError, IndexError, AttributeError):
         return False

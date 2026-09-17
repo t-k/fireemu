@@ -1,8 +1,8 @@
 import copy
 
-from comparator import compare_receipts
-from manifest import compile_plan
-from shadow import run_shadow
+from o6_listen_resume.comparator import compare_receipts
+from o6_listen_resume.manifest import compile_plan
+from o6_listen_resume.shadow import run_shadow
 
 
 def test_shadow_receipts_match_after_normalizing_nonsemantic_fields():
@@ -24,6 +24,7 @@ def test_duplicate_revision_is_a_semantic_mismatch():
     right = copy.deepcopy(left)
     right["events"].insert(4, copy.deepcopy(right["events"][3]))
     right["collector"]["eventCount"] = len(right["events"])
+    right["bounds"]["snapshotCount"] = 5
     assert compare_receipts(plan, left, right)["classification"] == "SEMANTIC_MISMATCH"
 
 
@@ -74,3 +75,45 @@ def test_future_production_marker_does_not_change_semantic_kernel_result():
     production = copy.deepcopy(shadow)
     production["productionExecuted"] = True
     assert compare_receipts(plan, production, shadow)["classification"] == "MATCH"
+
+
+def test_receipt_requires_pinned_sdk_reconnect_and_complete_budget_evidence():
+    plan = compile_plan("a" * 32)
+    left = run_shadow(plan)
+    right = copy.deepcopy(left)
+    right["sdk"]["firebase"] = "other"
+    assert "sdk-binding" in compare_receipts(plan, left, right)["errors"]
+    right = copy.deepcopy(left)
+    right["transport"]["reconnectObserved"] = False
+    assert "reconnect-unobserved" in compare_receipts(plan, left, right)["errors"]
+    right = copy.deepcopy(left)
+    right["bounds"]["requestCount"] = 33
+    assert "request-budget" in compare_receipts(plan, left, right)["errors"]
+
+
+def test_malformed_order_missing_revision_and_empty_cleanup_cannot_match():
+    plan = compile_plan("b" * 32)
+    left = run_shadow(plan)
+    right = copy.deepcopy(left)
+    right["events"][0]["revision"] = "0"
+    assert "event-shape" in compare_receipts(plan, left, right)["errors"]
+    right = copy.deepcopy(left)
+    right["events"].pop(2)
+    right["collector"]["eventCount"] = len(right["events"])
+    assert "revision-coverage" in compare_receipts(plan, left, right)["errors"]
+    right = copy.deepcopy(left)
+    right["cleanup"] = {}
+    assert "cleanup-binding" in compare_receipts(plan, left, right)["errors"]
+
+
+def test_receipt_source_binding_and_snapshot_cost_bounds_are_required():
+    plan = compile_plan("c" * 32)
+    left = run_shadow(plan)
+    right = copy.deepcopy(left)
+    right["sourceBinding"]["lockfiles"]["conformance/pnpm-lock.yaml"] = "drift"
+    assert "source-binding" in compare_receipts(plan, left, right)["errors"]
+    right = copy.deepcopy(left)
+    right["bounds"]["snapshotCount"] = 7
+    assert "snapshot-budget" in compare_receipts(plan, left, right)["errors"]
+    right["bounds"]["snapshotCount"] = 5
+    assert "snapshot-count" in compare_receipts(plan, left, right)["errors"]

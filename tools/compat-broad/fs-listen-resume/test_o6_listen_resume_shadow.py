@@ -1,5 +1,5 @@
-from manifest import compile_plan
-from shadow import run_shadow
+from o6_listen_resume.manifest import compile_plan
+from o6_listen_resume.shadow import run_shadow
 
 
 def test_shadow_is_offline_and_emits_one_revision_per_document():
@@ -8,6 +8,7 @@ def test_shadow_is_offline_and_emits_one_revision_per_document():
     assert receipt["productionExecuted"] is False
     assert receipt["sdk"]["firebase"] == "12.18.0"
     assert receipt["transport"]["interruptionObserved"] is True
+    assert receipt["transport"]["reconnectObserved"] is True
     assert receipt["cleanup"] == {
         resource["path"]: True for resource in plan["ownedResources"]
     }
@@ -25,5 +26,13 @@ def test_shadow_is_offline_and_emits_one_revision_per_document():
 def test_negative_shadow_refuses_stale_compacted_and_reset_tokens():
     plan = compile_plan("4" * 32)
     receipt = run_shadow(plan, scenario="negative")
-    errors = [event["errorCode"] for event in receipt["events"] if event["errorCode"]]
-    assert errors == ["FAILED_PRECONDITION", "FAILED_PRECONDITION", "ABORTED"]
+    errors = [
+        (event["tokenCase"], event["errorCode"])
+        for event in receipt["events"]
+        if event["errorCode"]
+    ]
+    assert errors == [
+        ("stale-token", "FAILED_PRECONDITION"),
+        ("compacted-token", "FAILED_PRECONDITION"),
+        ("session-reset", "ABORTED"),
+    ]

@@ -536,7 +536,15 @@ def test_saved_receipt_requires_validated_v2_and_released_final_gate(
 @pytest.mark.parametrize("drift", [None, "artifact", "checkout", "missing-artifact"])
 def test_finalization_persists_actual_facts_before_drift_is_restored(tmp_path, drift):
     import subprocess
-    from production import finalize_acquisition, sha_file, validate_acquisition, compare
+    from production import (
+        finalize_acquisition,
+        sha_file,
+        validate_acquisition,
+        compare,
+        comparison_local_bundle,
+        frozen_checkout,
+        load,
+    )
     from shadow import save
 
     checkout = tmp_path / "checkout"
@@ -560,8 +568,13 @@ def test_finalization_persists_actual_facts_before_drift_is_restored(tmp_path, d
     commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=checkout, text=True
     ).strip()
-    artifact = tmp_path / "artifact"
-    artifact.write_bytes(b"admitted fixture")
+    try:
+        local_commit = frozen_checkout()
+    except ValueError:
+        pytest.skip("current-source comparison requires a committed clean checkout")
+    local_directory = tmp_path / "local"
+    artifact = local_fixture(local_directory, commit=local_commit)
+    admitted_artifact = artifact.read_bytes()
     receipt, inputs, _ = acquired_fixture(
         tmp_path, commit=commit, artifact_hash=sha_file(artifact)
     )
@@ -574,7 +587,7 @@ def test_finalization_persists_actual_facts_before_drift_is_restored(tmp_path, d
         artifact.unlink()
     finalize_acquisition(receipt, inputs, artifact, checkout_root=checkout)
     assert receipt["reservationReleased"] is True
-    artifact.write_bytes(b"admitted fixture")
+    artifact.write_bytes(admitted_artifact)
     if drift == "checkout":
         (checkout / "unexpected").unlink()
     if drift is None:
@@ -586,28 +599,29 @@ def test_finalization_persists_actual_facts_before_drift_is_restored(tmp_path, d
         assert receipt["acquisitionFailure"]
         with pytest.raises(ValueError):
             validate_acquisition(receipt, inputs)
-        directory = tmp_path / "production"
-        directory.mkdir()
-        save(directory / "inputs.json", inputs)
-        save(directory / "receipt.json", receipt)
-        result = compare(
-            directory, tmp_path / "absent-local", artifact, tmp_path / "comparison.json"
-        )
-        assert result["classification"] == "INDETERMINATE"
-        assert result["acquisitionValidated"] is False
-        import sys
-        from pathlib import Path
+    # Restoration leaves a completely valid downstream local bundle. The success
+    # case traverses the same comparator, so missing local inputs cannot explain
+    # the failed cases' INDETERMINATE results.
+    comparison_local_bundle(local_directory, artifact)
+    directory = tmp_path / "production"
+    directory.mkdir()
+    save(directory / "inputs.json", inputs)
+    save(directory / "receipt.json", receipt)
+    result = compare(directory, local_directory, artifact, tmp_path / "comparison.json")
+    assert result["acquisitionValidated"] is (drift is None)
+    assert (result["classification"] == "INDETERMINATE") is (drift is not None)
+    import sys
+    from pathlib import Path
 
-        sys.path.insert(
-            0, str(Path(__file__).resolve().parent.parent / "fs-write-limits-recompare")
-        )
-        from recompare import recompare
+    sys.path.insert(
+        0, str(Path(__file__).resolve().parent.parent / "fs-write-limits-recompare")
+    )
+    from recompare import recompare
 
-        derived = recompare(
-            directory, tmp_path / "absent-local", artifact, tmp_path / "derived"
-        )
-        assert derived["classification"] == "INDETERMINATE"
-        assert derived["acquisitionValidated"] is False
+    derived = recompare(directory, local_directory, artifact, tmp_path / "derived")
+    binding = load(tmp_path / "derived/binding.json")
+    assert binding["acquisitionValidated"] is (drift is None)
+    assert (derived["classification"] == "INDETERMINATE") is (drift is not None)
     final = receipt["finalBinding"]
     assert final["sourceCommit"] == commit
     assert final["dirty"] is (drift == "checkout")

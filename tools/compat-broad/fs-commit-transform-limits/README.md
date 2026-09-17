@@ -12,7 +12,9 @@ The fixed `006df2e0c` owned run completed 11 observation and six recovery reques
 
 `commit_production_bridge.py` regenerates the canonical compiler plan before binding each request, including every embedded Commit transform target. It preserves complete semantic HTTP errors and separates incomplete transport failures. `gate_adapter.py` connects those operations to the existing charged shared Gate callback. Cleanup requires the original conditional-create proof, an exact nonce-bound ownership marker, and a valid current UTC timestamp; unexpected semantic field changes do not by themselves prevent owned cleanup. Typed final absence remains required before resource responsibility can be released.
 
-The Gate adapter is a tested preparation component, not an executable production campaign. Production integration must still connect the bounded wire and collector, metadata preflight, current permission, shared reservations and budgets, and immutable acquisition evidence. The local runner and Gate adapter cannot authorize that execution.
+`commit_production.py` connects all 11 observation and six recovery operations to the Gate. Complete semantic errors remain in the journal. A receipt persistence failure stops observation but still attempts safely owned recovery; incomplete recording prevents final ownership release. Receipt publication uses an fsynced temporary file and atomic no-replace linking so a concurrent destination cannot be overwritten. Independent review approved this collector and the dependency-origin checks; integration at `0042b0725` passed 125 combined Commit and real Limits transport tests.
+
+These are tested preparation components, not an executable production campaign. Production integration must still connect the bounded wire, metadata preflight, current permission, shared reservations and budgets, and immutable acquisition evidence. The local runner, collector and Gate adapter cannot authorize that execution.
 
 Run the focused checks with:
 

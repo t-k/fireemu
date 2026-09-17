@@ -64,3 +64,21 @@ def test_cap_above_approved_range_and_non_loopback_are_rejected(origin):
     with pytest.raises(ValueError):
         request("https://example.com", operation)
     assert RESPONSE_BYTES == 2 * 1024 * 1024
+
+
+def test_transport_preserves_exact_response_bytes(origin):
+    import base64
+
+    plan = compile_request_bytes_plan("local-project", "(default)", "0123456789abcdef0123456789abcdef")
+    operation = next(row for row in plan["observation"] if row["kind"] == "conditional-create-commit")
+    result = request(origin, operation)
+    raw = base64.b64decode(result["rawBodyBase64"], validate=True)
+    assert raw == json.dumps({"writeResults": [{"updateTime": "2026-01-01T00:00:00.000000Z"}] * 17}).encode()
+    assert result["bodyBytes"] == len(raw)
+
+
+def test_transport_rejects_unbound_delete(origin):
+    plan = compile_request_bytes_plan("local-project", "(default)", "0123456789abcdef0123456789abcdef")
+    operation = next(row for row in plan["recovery"] if row["kind"] == "cleanup-version-bound-delete")
+    with pytest.raises(ValueError, match="unbound cleanup delete"):
+        request(origin, operation)

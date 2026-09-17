@@ -44,3 +44,48 @@ def test_schedule_mutation_is_rejected():
     value["executionSchedule"][35], value["executionSchedule"][36] = value["executionSchedule"][36], value["executionSchedule"][35]
     with pytest.raises(ValueError):
         validate_schedule(value)
+
+
+def test_failed_preflight_never_sends_commit_or_next_probe(tmp_path):
+    from request_bytes_collector import collect_local
+
+    value = plan()
+    dispatched = []
+
+    def execute(operation):
+        dispatched.append(operation)
+        if operation["kind"] == "preflight-typed-absence" and len(dispatched) == 1:
+            return {"complete": True, "failure": None, "status": 200, "body": {"name": operation["resource"]}}
+        return {"complete": True, "failure": None, "status": 404, "body": {"error": {"code": 404, "status": "NOT_FOUND"}}}
+
+    result = collect_local(value, execute, tmp_path / "run")
+    assert not result["completed"]
+    assert not any(item["kind"] == "conditional-create-commit" for item in dispatched)
+    assert not any(item["probe"] != "under" for item in dispatched)
+    assert not any(item["method"] == "DELETE" for item in dispatched)
+
+
+def test_lost_commit_response_holds_cleanup_responsibility(tmp_path):
+    from request_bytes_collector import collect_local
+
+    value = plan()
+    dispatched = []
+
+    def execute(operation):
+        dispatched.append(operation)
+        if operation["kind"] == "conditional-create-commit":
+            return {"complete": False, "failure": "response-lost"}
+        return {"complete": True, "failure": None, "status": 404, "body": {"error": {"code": 404, "status": "NOT_FOUND"}}}
+
+    result = collect_local(value, execute, tmp_path / "run")
+    assert not result["completed"]
+    assert not any(item["method"] == "DELETE" for item in dispatched)
+    assert not any(item["probe"] != "under" for item in dispatched)
+    assert result["resourceAbsence"] is False
+
+
+def test_timestamp_accepts_firestore_precision_variants():
+    from request_bytes_collector import commit_versions
+
+    for timestamp in ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00.1Z", "2026-01-01T00:00:00.123456789Z"):
+        assert commit_versions({"complete": True, "failure": None, "status": 200, "body": {"writeResults": [{"updateTime": timestamp}]}}, ["resource"]) == [timestamp]

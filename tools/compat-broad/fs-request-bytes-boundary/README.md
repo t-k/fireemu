@@ -28,10 +28,6 @@ shared transport used by other campaigns. The transport records the canonical
 request byte count and digest passed to HTTP; this remains a local observation
 hypothesis and is not a wire-level metric.
 
-`request_bytes_collector.py` validates the independent compiler plan before
-dispatch, follows `executionSchedule`, persists bounded create-only rows, keeps
-the three raw Commit bodies separately, and uses only the immediately
-preceding ownership read to construct a conditional cleanup delete. It writes
-no credentials and never contacts production. The collector reports resource
-absence separately from supervisor process cleanup, which must be supplied by
-the owning local runner.
+`request_bytes_collector.py` validates the independent compiler plan before dispatch and follows `executionSchedule`. Every preflight must return a typed `NOT_FOUND` before its Commit can be sent. Cleanup DELETE requires both a successful positional Commit response from this run and a matching ownership read with the same update time; uncertain Commit responses leave the run incomplete and do not authorize a DELETE. Each probe must establish typed absence before the next probe starts.
+
+The collector writes create-only bounded per-operation rows and exact raw HTTP response bodies as separate sidecars. `result.json` is a compact summary with row counts, failure reasons, and the typed resource-absence conclusion; individual receipts are in `row-*.json`. Response byte counts and hashes derive from the captured body bytes, not reconstructed JSON. This remains a local observation hypothesis, with no production credentials or production execution. The owning runner must still account for supervisor process cleanup.

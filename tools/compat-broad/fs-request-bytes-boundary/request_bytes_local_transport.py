@@ -6,11 +6,15 @@ claim to observe bytes at a server or network boundary.
 
 from __future__ import annotations
 
-import copy
+import base64
+import time
+import urllib.error
+import urllib.request
 import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -56,6 +60,22 @@ def _validate(operation: dict[str, Any], request_limit: int, response_limit: int
     path = operation.get("path")
     if not isinstance(path, str) or not path.startswith("/v1/") or path.startswith("//") or "#" in path:
         raise ValueError("malformed compiled request path")
+    kind = operation.get("kind")
+    resource = operation.get("resource")
+    if kind == "conditional-create-commit":
+        if not re.fullmatch(r"/v1/projects/[A-Za-z0-9_-]+/databases/(?:\(default\)|[A-Za-z0-9_-]+)/documents:commit", path):
+            raise ValueError("invalid Commit path")
+    elif kind in {"preflight-typed-absence", "probe-readback", "cleanup-ownership-read", "cleanup-verify-absence", "cleanup-version-bound-delete"}:
+        if not isinstance(resource, str) or not re.fullmatch(r"projects/[A-Za-z0-9_-]+/databases/(?:\(default\)|[A-Za-z0-9_-]+)/documents/oracle/[0-9a-f]{32}/request-bytes-0[1-3]/probe-[ueo][0-9]{2}/items/(?:control|payload-[0-9]{2})", resource):
+            raise ValueError("invalid resource")
+        base = "/v1/" + resource
+        if kind == "cleanup-version-bound-delete":
+            if operation.get("method") != "DELETE" or not re.fullmatch(re.escape(base) + r"\?currentDocument\.updateTime=[A-Za-z0-9%._:-]+", path):
+                raise ValueError("unbound cleanup delete")
+        elif path != base or operation.get("method") != "GET":
+            raise ValueError("resource path drift")
+    else:
+        raise ValueError("unknown operation kind")
     if response_limit != RESPONSE_BYTES:
         raise ValueError(f"response_byte_limit must equal {RESPONSE_BYTES}")
     body = _canonical_body(operation)
@@ -75,15 +95,39 @@ def _perform(origin: str, operation: dict[str, Any], request_limit: int, respons
     headers = {"Content-Type": "application/json"} if body else {}
     if operation.get("privileged"):
         headers["Authorization"] = "Bearer owner"
-    result = _shared._exchange(
-        origin + operation["path"],
-        operation["method"],
-        body or None,
-        headers,
-        response_limit,
-        timeout,
-    )
-    result = copy.deepcopy(result)
+    req = urllib.request.Request(origin + operation["path"], data=body or None, headers=headers, method=operation["method"])
+    opener = urllib.request.build_opener(_shared.NoRedirect(), urllib.request.ProxyHandler({}))
+    started = time.monotonic()
+    try:
+        response = opener.open(req, timeout=min(timeout, 12.0))
+    except urllib.error.HTTPError as error:
+        with error:
+            payload, failure = _shared._read_bounded(error, response_limit)
+            status, headers_obj = error.code, error.headers
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return {"kind": "transport-error", "complete": False, "failure": "transport-error"}
+    else:
+        with response:
+            payload, failure = _shared._read_bounded(response, response_limit)
+            status, headers_obj = response.status, response.headers
+    if 300 <= status < 400:
+        failure = "redirect"
+    result = {
+        "status": status,
+        "headers": {"content-type": headers_obj.get("Content-Type", "")[:512]},
+        "bodyBytes": len(payload),
+        "rawBodyBase64": base64.b64encode(payload).decode("ascii"),
+        "complete": failure is None,
+        "failure": failure,
+        "elapsedSeconds": time.monotonic() - started,
+    }
+    if failure:
+        result.update(kind=failure, body=payload.decode("utf-8", errors="replace"))
+    else:
+        try:
+            result.update(kind="api-error" if status >= 400 else "json", body=json.loads(payload))
+        except (ValueError, UnicodeDecodeError):
+            result.update(kind="non-json", body=payload.decode("utf-8", errors="replace"))
     result["requestBytes"] = len(body)
     result["requestSha256"] = hashlib.sha256(body).hexdigest()
     result["rawHttpMetricStatus"] = "observation hypothesis"

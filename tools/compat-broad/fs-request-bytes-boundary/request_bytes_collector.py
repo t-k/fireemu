@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import base64
 import hashlib
 import json
 import os
@@ -17,7 +18,7 @@ from request_bytes_compiler import compact_utf8, logical_fields_digest, validate
 
 MAX_ROW_BYTES = 131_072
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
+_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$")
 
 
 def complete(receipt: Any) -> bool:
@@ -33,7 +34,7 @@ def typed_not_found(receipt: Any) -> bool:
 def _error_status(receipt: Any, status: str) -> bool:
     body = receipt.get("body") if isinstance(receipt, dict) else None
     error = body.get("error") if isinstance(body, dict) else None
-    return complete(receipt) and receipt["status"] == 400 and isinstance(error, dict) and error.get("status") == status
+    return complete(receipt) and receipt["status"] == 400 and isinstance(error, dict) and error.get("code") == 400 and error.get("status") == status
 
 
 def _document_fields(receipt: Any) -> dict[str, Any] | None:
@@ -100,8 +101,8 @@ def _safe_json(value: Any) -> bytes:
     return encoded
 
 
-def _publish(directory: Path, name: str, value: Any) -> None:
-    encoded = _safe_json(value) + b"\n"
+def _publish(directory: Path, name: str, value: Any, *, bounded: bool = True) -> None:
+    encoded = (_safe_json(value) if bounded else compact_utf8(value)) + b"\n"
     if "/" in name or name.startswith("."):
         raise ValueError("unsafe output filename")
     path = directory / name
@@ -134,15 +135,19 @@ def _row(phase: str, index: int, operation: dict[str, Any], receipt: dict[str, A
         "requestBytes": len(request_bytes),
         "requestSha256": hashlib.sha256(request_bytes).hexdigest(),
         "status": status,
-        "receipt": {key: value for key, value in receipt.items() if key not in {"body", "rawBody"}},
+        "receipt": {key: value for key, value in receipt.items() if key not in {"body", "rawBody", "rawBodyBase64"}},
     }
     if skipped is not None:
         row["skipped"] = skipped
-    response_body = receipt.get("body")
-    if response_body is not None:
-        raw = compact_utf8(response_body)
-        row["responseBytes"] = min(len(raw), MAX_RESPONSE_BYTES)
-        row["responseSha256"] = hashlib.sha256(raw[:MAX_RESPONSE_BYTES]).hexdigest()
+    raw_encoded = receipt.get("rawBodyBase64")
+    if isinstance(raw_encoded, str):
+        raw = base64.b64decode(raw_encoded, validate=True)
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise ValueError("response exceeds cap")
+        row["responseBytes"] = len(raw)
+        row["responseSha256"] = hashlib.sha256(raw).hexdigest()
+    elif receipt.get("body") is not None:
+        row["responseEvidence"] = "unavailable"
     return row
 
 
@@ -167,73 +172,104 @@ def collect_local(plan: dict[str, Any], execute: Callable[[dict[str, Any]], dict
 
     rows: list[dict[str, Any]] = []
     recovery: list[dict[str, Any]] = []
-    versions: dict[str, list[str]] = {}
+    versions: dict[str, dict[str, str]] = {}
     ownership_reads: dict[tuple[str, str], dict[str, Any]] = {}
+    preflight_ok: dict[str, bool] = {probe["label"]: True for probe in plan["probes"]}
+    commit_sent: set[str] = set()
+    commit_refused: set[str] = set()
+    stopped = False
     dispatches = 0
     failures: list[str] = []
+    absence_proofs: dict[str, set[str]] = {probe["label"]: set() for probe in plan["probes"]}
     for sequence, slot in enumerate(plan["executionSchedule"]):
         phase, index = slot["phase"], slot["index"]
-        table = plan[phase]
-        operation = copy.deepcopy(table[index])
-        expected = copy.deepcopy(operation)
-        if phase == "recovery" and operation["kind"] == "cleanup-version-bound-delete":
-            key = (operation["probe"], operation["resource"])
-            previous = ownership_reads.get(key)
-            if previous is None or not owned_document(previous, operation["resource"], plan["documents"][operation["resource"]]["fieldsSha256"], plan["nonce"]):
-                row = _row(phase, index, operation, {"complete": True, "failure": None}, "skipped", skipped="ownership-not-proven")
-                recovery.append(row)
-                _publish(output, f"row-{sequence:03d}.json", row)
-                continue
-            operation["path"] += "?currentDocument.updateTime=" + quote(previous["body"]["updateTime"], safe="")
-        if phase == "recovery" and operation["kind"] == "cleanup-version-bound-delete":
-            if operation["path"].split("?", 1)[0] != expected["path"]:
-                raise ValueError("cleanup target drift")
-        if operation.get("kind") == "conditional-create-commit":
-            body = compact_utf8(operation["body"])
-            if len(body) not in (10_485_759, 10_485_760, 10_485_761) or hashlib.sha256(body).hexdigest() != hashlib.sha256(compact_utf8(plan["probes"][{"under": 0, "exact": 1, "over": 2}[operation["probe"]]]["body"])).hexdigest():
-                raise ValueError("compiled Commit identity drift")
-        dispatches += 1
-        try:
-            receipt = execute(copy.deepcopy(operation))
-            if not isinstance(receipt, dict):
-                raise ValueError("executor returned non-object")
-        except Exception as error:  # noqa: BLE001 - lost responses remain recoverable.
-            receipt = {"complete": False, "failure": f"executor:{type(error).__name__}"}
-        status = "complete" if complete(receipt) else "infrastructure-incomplete"
-        if phase == "recovery" and operation["kind"] == "cleanup-ownership-read":
-            ownership_reads[(operation["probe"], operation["resource"])] = receipt
-        row = _row(phase, index, operation, receipt, status)
+        operation = copy.deepcopy(plan[phase][index])
+        probe = operation["probe"]
+        kind = operation["kind"]
+        resource = operation.get("resource")
+        skip = None
+        if stopped:
+            skip = "earlier-probe-incomplete"
+        elif phase == "observation" and kind != "preflight-typed-absence" and not preflight_ok[probe]:
+            skip = "preflight-not-proven"
+        elif kind == "conditional-create-commit" and not preflight_ok[probe]:
+            skip = "preflight-not-proven"
+        elif kind == "cleanup-version-bound-delete":
+            prior = ownership_reads.get((probe, resource))
+            proved_version = versions.get(probe, {}).get(resource)
+            expected_digest = plan["documents"][resource]["fieldsSha256"]
+            if proved_version is None or prior is None or not readback_matches(prior, resource, expected_digest, plan["nonce"], proved_version):
+                skip = "creation-and-current-version-not-proven"
+            else:
+                operation["path"] += "?currentDocument.updateTime=" + quote(proved_version, safe="")
+        if skip:
+            row = _row(phase, index, operation, {"complete": False, "failure": "skipped"}, "skipped", skipped=skip)
+            failures.append(f"{phase}:{index}:{skip}")
+        else:
+            if kind == "conditional-create-commit":
+                commit_sent.add(probe)
+            dispatches += 1
+            try:
+                receipt = execute(copy.deepcopy(operation))
+                if not isinstance(receipt, dict):
+                    raise ValueError("executor returned non-object")
+            except Exception as error:  # noqa: BLE001 - lost responses remain recoverable.
+                receipt = {"complete": False, "failure": f"executor:{type(error).__name__}"}
+            status = "complete" if complete(receipt) else "infrastructure-incomplete"
+            if kind == "cleanup-ownership-read":
+                ownership_reads[(probe, resource)] = receipt
+            row = _row(phase, index, operation, receipt, status)
+            raw_encoded = receipt.get("rawBodyBase64")
+            if isinstance(raw_encoded, str):
+                raw = base64.b64decode(raw_encoded, validate=True)
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    raise ValueError("response exceeds cap")
+                sidecar = f"response-{sequence:03d}.body"
+                fd = os.open(output / sidecar, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(raw)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                row["responseBodyFile"] = sidecar
+            if kind == "preflight-typed-absence" and not typed_not_found(receipt):
+                preflight_ok[probe] = False
+                failures.append(f"{phase}:{index}:preflight-not-absent")
+            elif kind == "conditional-create-commit":
+                probe_resources = next(item["resources"] for item in plan["probes"] if item["label"] == probe)
+                found = commit_versions(receipt, probe_resources)
+                if found is not None and probe != "over":
+                    versions[probe] = dict(zip(probe_resources, found))
+                elif probe == "over" and _error_status(receipt, "INVALID_ARGUMENT"):
+                    commit_refused.add(probe)
+                else:
+                    failures.append(f"{probe}:commit-proof-missing")
+            elif kind == "probe-readback":
+                expected_digest = plan["documents"][resource]["fieldsSha256"]
+                matched = typed_not_found(receipt) if probe == "over" else readback_matches(receipt, resource, expected_digest, plan["nonce"], versions.get(probe, {}).get(resource)) and resource in versions.get(probe, {})
+                if not matched:
+                    failures.append(f"{phase}:{index}:readback-mismatch")
+            elif kind == "cleanup-ownership-read":
+                expected_digest = plan["documents"][resource]["fieldsSha256"]
+                if not (typed_not_found(receipt) or owned_document(receipt, resource, expected_digest, plan["nonce"])):
+                    failures.append(f"{phase}:{index}:unsafe-ownership-read")
+            elif kind == "cleanup-version-bound-delete" and not (complete(receipt) and receipt["status"] == 200):
+                failures.append(f"{phase}:{index}:delete-failure")
+            elif kind == "cleanup-verify-absence":
+                if typed_not_found(receipt):
+                    absence_proofs[probe].add(resource)
+                else:
+                    failures.append(f"{phase}:{index}:cleanup-not-absent")
+            if not complete(receipt):
+                failures.append(f"{phase}:{index}:incomplete")
         (rows if phase == "observation" else recovery).append(row)
         _publish(output, f"row-{sequence:03d}.json", row)
-        if operation["kind"] == "conditional-create-commit":
-            probe = next(p for p in plan["probes"] if p["label"] == operation["probe"])
-            found = commit_versions(receipt, probe["resources"])
-            if found is not None:
-                versions[operation["probe"]] = found
-            elif operation["probe"] == "over" and not _error_status(receipt, "INVALID_ARGUMENT"):
-                failures.append(f"{operation['probe']}:typed-refusal")
-            elif operation["probe"] != "over" and complete(receipt):
-                failures.append(f"{operation['probe']}:commit-proof")
-        elif operation["kind"] == "preflight-typed-absence" and not typed_not_found(receipt):
-            failures.append(f"{phase}:{index}:preflight-not-absent")
-        elif operation["kind"] == "probe-readback":
-            probe = next(p for p in plan["probes"] if p["label"] == operation["probe"])
-            expected_document = plan["documents"][operation["resource"]]
-            version = versions.get(operation["probe"], [None] * len(probe["resources"]))[probe["resources"].index(operation["resource"])] if operation["probe"] != "over" else None
-            matches = typed_not_found(receipt) if operation["probe"] == "over" else readback_matches(receipt, operation["resource"], expected_document["fieldsSha256"], plan["nonce"], version)
-            if not matches:
-                failures.append(f"{phase}:{index}:readback-mismatch")
-        elif operation["kind"] == "cleanup-ownership-read":
-            expected_document = plan["documents"][operation["resource"]]
-            if not (typed_not_found(receipt) or owned_document(receipt, operation["resource"], expected_document["fieldsSha256"], plan["nonce"])):
-                failures.append(f"{phase}:{index}:unsafe-ownership-read")
-        elif operation["kind"] == "cleanup-version-bound-delete" and not (status == "skipped" or (complete(receipt) and receipt["status"] == 200)):
-            failures.append(f"{phase}:{index}:delete-failure")
-        elif operation["kind"] == "cleanup-verify-absence" and not typed_not_found(receipt):
-            failures.append(f"{phase}:{index}:cleanup-not-absent")
-        if not complete(receipt) and operation["kind"] != "cleanup-version-bound-delete":
-            failures.append(f"{phase}:{index}:incomplete")
-    absence = all(row.get("kind") == "cleanup-verify-absence" and row.get("status") == "complete" for row in recovery if row.get("kind") == "cleanup-verify-absence")
+        next_slot = plan["executionSchedule"][sequence + 1] if sequence + 1 < len(plan["executionSchedule"]) else None
+        if next_slot is not None and next_slot["phase"] == "observation" and phase == "recovery":
+            probe_resources = next(item["resources"] for item in plan["probes"] if item["label"] == probe)
+            if set(probe_resources) != absence_proofs[probe] or (probe in commit_sent and probe not in versions and probe not in commit_refused) or not preflight_ok[probe]:
+                stopped = True
+    all_resources = {item for probe in plan["probes"] for item in probe["resources"]}
+    absence = all_resources == set().union(*absence_proofs.values())
     result = {
         "productionExecuted": False,
         "localOnly": True,
@@ -241,13 +277,13 @@ def collect_local(plan: dict[str, Any], execute: Callable[[dict[str, Any]], dict
         "rawHttpMetricStatus": "observation hypothesis",
         "canonicalRequestBytesMeasuredLocally": True,
         "planDigest": hashlib.sha256(compact_utf8(plan)).hexdigest(),
-        "rows": rows,
-        "recovery": recovery,
+        "rowCount": len(rows),
+        "recoveryRowCount": len(recovery),
         "requestCount": dispatches,
         "resourceAbsence": absence,
         "cleanupComplete": absence and not failures,
         "completed": not failures,
         "failures": failures,
     }
-    _publish(output, "result.json", result)
+    _publish(output, "result.json", result, bounded=False)
     return result

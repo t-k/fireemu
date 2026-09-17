@@ -129,7 +129,7 @@ def _publish(directory_fd: int, filename: str, value: Any) -> None:
     finally:
         if temporary is not None:
             try:
-                os.unlink(temporary)
+                os.unlink(temporary, dir_fd=directory_fd)
             except FileNotFoundError:
                 pass
 

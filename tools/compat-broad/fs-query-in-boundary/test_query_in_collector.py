@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 from typing import Any
 
-from query_in_collector import collect_local
+from query_in_collector import _publish, collect_local
 from query_in_compiler import compile_plan
 
 
@@ -243,3 +244,23 @@ def test_existing_output_symlink_fails_closed_without_unowned_delete(tmp_path: P
     assert result["resourceAbsence"][plan["document"]] is True
     assert result["completed"] is False
     assert not list(attacker.iterdir())
+
+
+def test_exclusive_publication_failure_cleans_temp_in_owned_inode(tmp_path: Path) -> None:
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    (owned / "row.json").write_text("existing")
+    before_cwd = {path.name for path in Path.cwd().glob(".receipt-*")}
+    directory_fd = os.open(owned, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        try:
+            _publish(directory_fd, "row.json", {"complete": True})
+        except FileExistsError:
+            pass
+        else:
+            raise AssertionError("publication must remain exclusive")
+    finally:
+        os.close(directory_fd)
+
+    assert not list(owned.glob(".receipt-*"))
+    assert {path.name for path in Path.cwd().glob(".receipt-*")} == before_cwd

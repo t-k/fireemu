@@ -19,3 +19,9 @@ Cleanup is fail-closed. Each resource is read, its ownership marker and exact up
 5. Freeze a new manifest, environmental preflight allocation, resource locks, artifact/collector/comparator identities, and the concrete permission envelope through O7. Historical v1 files are not rewritten to appear newly approved.
 
 These four limits cases overlap the limits portion of the prepared stream/transaction campaign. O3 must remove duplicate scheduling at freeze time; no new production observation is needed for conditions already covered by an eligible saved receipt. The remaining stream/transaction-precedence conditions are still separate.
+
+## Production integration checkpoint (2026-09-17)
+
+Source `3883f3717` adds the offline 40-request allocation (22 observation, 18 recovery including management), derives Coordinator phase limits from the frozen Gate plan, and supplies an exact-request semantic comparison kernel. The kernel deliberately does not certify acquisition, cleanup, or promotion. Broad offline checks: 752 passed, 10 skipped. Independent review found no required fix within this scope.
+
+The local recovery preparation condition is complete as recorded above. Production transport/collector, full comparison admission, current executable artifact binding, and concrete O7 envelope admission remain incomplete. No production operation or production-unobserved condition reduction occurred. `FS-DATA-WRITE` remains `IMPLEMENTING`; production-ready queue size remains zero.

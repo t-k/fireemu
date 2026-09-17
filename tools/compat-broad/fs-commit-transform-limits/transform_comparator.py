@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import quote
 
-from compiler import compile_plan
+from transform_compiler import compile_plan
 
 _TIMESTAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$")
 

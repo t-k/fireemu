@@ -4,8 +4,8 @@ import copy
 from urllib.parse import quote
 
 import pytest
-from comparator import compare_rows
-from compiler import compile_plan
+from transform_comparator import compare_rows
+from transform_compiler import compile_plan
 
 
 def _rows(plan: dict) -> list[dict]:

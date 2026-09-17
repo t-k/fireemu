@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 
 import pytest
-from compiler import MAX_TRANSFORMS, compile_plan
+from transform_compiler import MAX_TRANSFORMS, compile_plan
 
 
 def test_plan_is_deterministic_and_has_two_owned_documents() -> None:

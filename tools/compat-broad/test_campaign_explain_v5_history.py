@@ -7,9 +7,6 @@ import json
 import subprocess
 from pathlib import Path
 
-from fs_write_binding_test_support import historical_sha256
-
-
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_DIR = ROOT / "spec/compatibility/broad-runs"
 MANIFEST_PATH = PACKAGE_DIR / "prod-campaign-explain-01-v5.json"

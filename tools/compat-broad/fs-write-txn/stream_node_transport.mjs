@@ -1,8 +1,7 @@
 import {
-  classifyTerminal,
   createLocalClient,
-  plainError,
-  plainStatus,
+  runUnaryCore,
+  runWriteCore,
 } from './transport_internal.mjs';
 
 export { classifyTerminal } from './transport_internal.mjs';
@@ -128,46 +127,6 @@ export const validateWriteRequest = (request, options) => {
   }
 };
 
-const grpcCallName = operation => operation === 'BeginTransaction' ? 'beginTransaction' : operation === 'GetDocument' ? 'getDocument' : 'rollback';
-
-const statusReceipt = (operation, request, error) => ({
-  kind: 'grpc_status',
-  complete: true,
-  operation,
-  request,
-  status: plainStatus(error),
-  error: plainError(error),
-});
-
-export const runUnary = async (operation, options, input = {}) => {
-  const validated = validateTransportOptions(options);
-  const request = buildUnaryRequest(operation, validated, input);
-  const client = createLocalClient(validated);
-  let timer;
-  let call;
-  try {
-    call = client[grpcCallName(operation)](request, {
-      deadline: new Date(Date.now() + validated.deadlineMs),
-      otherArgs: { headers: { ...validated.metadata } },
-    });
-    const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => {
-        call?.cancel?.();
-        reject(Object.assign(new Error('client deadline exceeded'), { code: 'client_deadline' }));
-      }, validated.deadlineMs);
-    });
-    const result = await Promise.race([call, timeout]);
-    return { kind: 'grpc_status', complete: true, operation, request, response: result[0] ?? result };
-  } catch (error) {
-    if (error?.code === 'client_deadline') return { kind: 'client_deadline', complete: false, operation, request, error: plainError(error) };
-    if (typeof error?.code === 'number') return statusReceipt(operation, request, error);
-    return { kind: 'incomplete_stream', complete: false, operation, request, error: plainError(error) };
-  } finally {
-    clearTimeout(timer);
-    client.close();
-  }
-};
-
 export const listWriteFrames = (requests, response) => {
   if (!Array.isArray(requests)) throw fail('write frames must be an array');
   const streamToken = response?.streamToken;
@@ -179,138 +138,19 @@ export const listWriteFrames = (requests, response) => {
   });
 };
 
+export const runUnary = async (operation, options, input = {}) => {
+  const validated = validateTransportOptions(options);
+  const request = buildUnaryRequest(operation, validated, input);
+  return runUnaryCore(operation, request, validated, { createClient: () => createLocalClient(validated) });
+};
+
 export const runWrite = async (requests, options) => {
   const validated = validateTransportOptions(options);
-  const client = createLocalClient(validated);
-  let stream;
-  try {
-    stream = client.write({
-      deadline: new Date(Date.now() + validated.deadlineMs),
-      otherArgs: { headers: { ...validated.metadata } },
-    });
-  } catch (error) {
-    client.close();
-    return Object.freeze({ kind: 'incomplete_stream', complete: false, error: plainError(error), sentFrames: 0, receivedFrames: 0, events: Object.freeze([]) });
-  }
-  const events = [];
-  let frameCount = 0;
-  let sentFrames = 0;
-  let receivedFrames = 0;
-  let status;
-  let terminalError;
-  let sawEnd = false;
-  let sawClose = false;
-  let settled = false;
-  let timer;
-  let terminalGraceTimer;
-  const responseQueue = [];
-  const responseWaiters = [];
-  let settleTerminal;
-  const terminal = new Promise(resolve => { settleTerminal = resolve; });
-  const push = (event, value) => {
-    if (settled) return;
-    if (byteLength(value) > validated.maxMessageBytes) throw fail('stream event exceeds maxMessageBytes', 'message_limit');
-    events.push(Object.freeze({ type: event, value }));
-  };
-  const finish = result => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      clearTimeout(terminalGraceTimer);
-      settleTerminal(Object.freeze({ ...result, status: result.status ? plainStatus(result.status) : undefined, error: result.error ? plainError(result.error) : undefined, sentFrames, receivedFrames, events: Object.freeze(events.slice()) }));
-  };
-  const maybeFinish = () => {
-    if (settled || !(sawEnd || sawClose)) return;
-    const classified = classifyTerminal({ status, error: terminalError, sawEnd, sawClose });
-    if (classified?.kind === 'grpc_status') finish({ kind: 'grpc_status', complete: true, status });
-    else if (!terminalGraceTimer) {
-      terminalGraceTimer = setTimeout(() => {
-        if (terminalError) finish({ kind: 'incomplete_stream', complete: false, error: terminalError });
-        else finish({ kind: 'incomplete_stream', complete: false });
-      }, 100);
-    }
-  };
-  const rejectWaiters = error => {
-    while (responseWaiters.length > 0) responseWaiters.shift().reject(error);
-  };
-  const waitResponse = () => new Promise((resolve, reject) => {
-    if (responseQueue.length > 0) resolve(responseQueue.shift());
-    else if (terminalError) reject(terminalError);
-    else responseWaiters.push({ resolve, reject });
+  const buildNextFrame = (request, response) => listWriteFrames([request], response)[0];
+  buildNextFrame.validate = request => validateWriteRequest(request, validated);
+  return runWriteCore(requests, validated, {
+    createClient: () => createLocalClient(validated),
+    handshake: { database: databaseName(validated.projectId) },
+    buildNextFrame,
   });
-  const sendFrame = request => {
-    if (++frameCount > validated.maxFrames) throw fail('stream exceeds maxFrames', 'frame_limit');
-    sentFrames += 1;
-    validateWriteRequest(request, validated);
-    stream.write(request);
-  };
-  stream.on('data', response => {
-    if (settled) return;
-    try {
-      push('data', response);
-      receivedFrames += 1;
-      if (++frameCount > validated.maxFrames) {
-        stream.destroy(fail('stream exceeds maxFrames', 'frame_limit'));
-        return;
-      }
-      if (responseWaiters.length > 0) responseWaiters.shift().resolve(response);
-      else responseQueue.push(response);
-    } catch (error) { stream.destroy(error); }
-  });
-  stream.on('status', value => {
-    if (settled) return;
-    status = value;
-    try { push('status', plainStatus(value)); } catch (error) { stream.destroy(error); }
-    maybeFinish();
-  });
-  stream.on('error', error => {
-    if (settled) return;
-    terminalError = error;
-    try { push('error', plainError(error)); } catch { /* retain the typed error in the receipt */ }
-    rejectWaiters(error);
-    // grpc-js may emit error before status and close; defer classification until
-    // the terminal status/close pair has had a chance to arrive. The bounded
-    // grace below deliberately reports incomplete_stream when a peer never
-    // supplies a terminal status, keeping the collector from waiting forever.
-    terminalGraceTimer = setTimeout(maybeFinish, 100);
-    maybeFinish();
-  });
-  stream.on('end', () => {
-    if (settled) return;
-    sawEnd = true;
-    try { push('end', { status: status ? plainStatus(status) : undefined }); } catch { /* terminal event remains bounded */ }
-    maybeFinish();
-  });
-  stream.on('close', () => {
-    if (settled) return;
-    sawClose = true;
-    try { push('close', { status: status ? plainStatus(status) : undefined }); } catch { /* terminal event remains bounded */ }
-    maybeFinish();
-  });
-  timer = setTimeout(() => {
-    const error = Object.assign(new Error('client deadline exceeded'), { code: 'client_deadline' });
-    terminalError = error;
-    rejectWaiters(error);
-    stream.destroy(error);
-    finish({ kind: 'client_deadline', complete: false, error, status });
-  }, validated.deadlineMs);
-  try {
-    sendFrame({ database: databaseName(validated.projectId) });
-    let response = await waitResponse();
-    for await (const request of requests) {
-      const frame = listWriteFrames([request], response)[0];
-      sendFrame(frame);
-      response = await waitResponse();
-    }
-    stream.end();
-  } catch (error) {
-    if (!terminalError) {
-      terminalError = error;
-      rejectWaiters(error);
-      stream.destroy(error);
-    }
-  }
-  const receipt = await terminal;
-  client.close();
-  return receipt;
 };

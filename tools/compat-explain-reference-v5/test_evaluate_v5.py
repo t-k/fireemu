@@ -100,3 +100,24 @@ def test_actual_current_validator_rejects_control_tampering(
         module.current_validation(
             base / ".worktree/query-current-collector-cce4a4f9b", changed
         )
+
+
+def test_private_output_is_exclusive_and_mode_0600(tmp_path):
+    module = load()
+    writer = getattr(module, "write_private_result", None)
+    assert writer is not None, "private output writer required"
+    path = tmp_path / "comparison.json"
+    previous = os.umask(0)
+    try:
+        writer(path, {"productionExecuted": False})
+    finally:
+        os.umask(previous)
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert json.loads(path.read_bytes()) == {"productionExecuted": False}
+    with pytest.raises(FileExistsError):
+        writer(path, {})
+    link = tmp_path / "link.json"
+    link.symlink_to(path)
+    with pytest.raises(FileExistsError):
+        writer(link, {})
+    assert json.loads(path.read_bytes()) == {"productionExecuted": False}

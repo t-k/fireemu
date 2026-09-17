@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -179,6 +180,13 @@ def evaluate(roots, old_root, current_root):
     return result
 
 
+def write_private_result(output, result):
+    descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w") as stream:
+        json.dump(result, stream, indent=2)
+        stream.write("\n")
+
+
 def main():
     if len(sys.argv) == 4 and sys.argv[1] == "--current-worker":
         print(
@@ -214,9 +222,7 @@ def main():
     result = evaluate(
         roots, args.collector_root.resolve(), args.current_collector_root.resolve()
     )
-    with output.open("x") as stream:
-        json.dump(result, stream, indent=2)
-        stream.write("\n")
+    write_private_result(output, result)
     print(
         json.dumps(
             {

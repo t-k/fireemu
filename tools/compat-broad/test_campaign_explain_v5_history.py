@@ -24,7 +24,9 @@ def load_json(path: Path) -> dict:
 
 def digest(value: object) -> str:
     return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
     ).hexdigest()
 
 
@@ -74,7 +76,11 @@ def historical_observer_digest() -> str:
         ],
         text=True,
     ).splitlines()
-    excluded = {"campaign_explain.py", "campaign_explain_shadow.py", "test_campaign_explain.py"}
+    excluded = {
+        "campaign_explain.py",
+        "campaign_explain_shadow.py",
+        "test_campaign_explain.py",
+    }
     shared = {
         Path(path).name: hashlib.sha256(historical_blob(path)).hexdigest()
         for path in shared_files
@@ -92,9 +98,7 @@ def historical_observer_digest() -> str:
         for name in ("owned_runner.py", "evidence_common.py")
     }
     baseline = hashlib.sha256(
-        historical_blob(
-            "tools/compat-broad/fixtures/database-settings-7be6cf08.json"
-        )
+        historical_blob("tools/compat-broad/fixtures/database-settings-7be6cf08.json")
     ).hexdigest()
     return digest(
         {

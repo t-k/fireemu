@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import io
+import os
 import zipfile
 from pathlib import Path
 
@@ -122,13 +123,10 @@ def test_read_only_fd_zipapp_ignores_local_shadow_and_child_inherits_fd(
     manifest["__main__.py"] = digest(main)
     archive, sha = o8_bundle.build_archive(source, manifest)
     o8_bundle.verify_archive(archive, manifest, sha)
-    archive_path = tmp_path / "bundle.pyz"
-    archive_path.write_bytes(archive)
     shadow = tmp_path / "shadow"
     shadow.mkdir()
     (shadow / "argparse.py").write_text("raise RuntimeError('shadow imported')\n")
-    with archive_path.open("rb") as opened:
-        fd = opened.fileno()
+    with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
         result = subprocess.run(
             [sys.executable, "-I", "-S", "-B", f"/dev/fd/{fd}"],
             cwd=shadow,
@@ -139,3 +137,48 @@ def test_read_only_fd_zipapp_ignores_local_shadow_and_child_inherits_fd(
             check=True,
         )
     assert result.stdout == "ok\nok\n"
+
+
+def test_unlinked_snapshot_rejects_path_replacement_and_detects_fd_mutation(
+    tmp_path: Path,
+) -> None:
+    archive = b"reviewed archive"
+    with o8_bundle.unlinked_archive_fd(archive, digest(archive)) as fd:
+        assert o8_bundle.verify_archive_fd(fd, digest(archive)) is None
+        assert os.fstat(fd).st_nlink == 0
+        replacement = tmp_path / "bundle.pyz"
+        replacement.write_bytes(b"tampered")
+        assert o8_bundle.verify_archive_fd(fd, digest(archive)) is None
+        os.lseek(fd, 0, os.SEEK_SET)
+        assert os.read(fd, len(archive)) == archive
+        replacement.unlink()
+
+
+def test_unlinked_snapshot_rejects_bad_digest_and_writable_fd(tmp_path: Path) -> None:
+    with (
+        pytest.raises(ValueError, match="digest"),
+        o8_bundle.unlinked_archive_fd(b"archive", digest(b"wrong")),
+    ):
+        pass
+    writable = tmp_path / "writable"
+    writable.write_bytes(b"archive")
+    with writable.open("r+b") as source, pytest.raises(ValueError, match="read-only"):
+        o8_bundle.verify_archive_fd(source.fileno(), digest(b"archive"))
+
+
+def test_unlinked_fd_rejects_mutation_through_preexisting_writer(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "archive.pyz"
+    path.write_bytes(b"reviewed")
+    writer = os.open(path, os.O_RDWR)
+    reader = os.open(path, os.O_RDONLY)
+    try:
+        path.unlink()
+        o8_bundle.verify_archive_fd(reader, digest(b"reviewed"))
+        os.pwrite(writer, b"tampered", 0)
+        with pytest.raises(ValueError, match="digest"):
+            o8_bundle.verify_archive_fd(reader, digest(b"reviewed"))
+    finally:
+        os.close(reader)
+        os.close(writer)

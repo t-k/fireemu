@@ -25,6 +25,10 @@ _ROW_LIMIT = 8192
 _ENVELOPE_LIMIT = 32768
 
 
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON constant: {value}")
+
+
 def source_inputs() -> dict[str, str]:
     """Bind all case code and the compiler's imported policy inputs by source bytes."""
     files = [
@@ -265,8 +269,8 @@ class RawJournal:
             result["difference"] = "unexpected-query-content-type"
             return result
         try:
-            parsed = json.loads(body)
-        except (UnicodeError, json.JSONDecodeError):
+            parsed = json.loads(body, parse_constant=_reject_json_constant)
+        except (UnicodeError, ValueError):
             result["difference"] = "malformed-query-json"
             return result
         if not isinstance(parsed, list):

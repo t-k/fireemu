@@ -204,6 +204,23 @@ def test_malformed_complete_json_remains_raw_without_projection(tmp_path: Path) 
     assert (tmp_path / "raw" / binding["path"]).read_bytes() == body
 
 
+@pytest.mark.parametrize("constant", [b"NaN", b"Infinity", b"-Infinity"])
+def test_nonfinite_json_constant_remains_raw_without_projection(
+    tmp_path: Path, constant: bytes
+) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    body = (
+        b'[{"document":{"name":"x","fields":{"n":{"doubleValue":' + constant + b"}}}}]"
+    )
+    binding = journal.add(
+        "observation", 2, 200, body, complete=True, content_type="application/json"
+    )
+    view = journal.semantic_view(binding)
+    assert view["difference"] == "malformed-query-json"
+    assert "documents" not in view
+    assert (tmp_path / "raw" / binding["path"]).read_bytes() == body
+
+
 @pytest.mark.parametrize("status", [200.0, True, "200"])
 def test_numeric_or_boolean_status_cannot_become_typed_success(
     tmp_path: Path, status: object

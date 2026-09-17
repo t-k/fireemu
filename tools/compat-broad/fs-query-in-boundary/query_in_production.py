@@ -365,7 +365,7 @@ class RawJournal:
         self._manifest_loaded = False
 
     @classmethod
-    def reload(cls, directory: Path) -> "RawJournal":
+    def reload(cls, directory: Path) -> RawJournal:
         """Reload an already published journal without trusting its directory listing."""
         self = cls.__new__(cls)
         self.directory = Path(directory)
@@ -390,7 +390,7 @@ class RawJournal:
         for binding in bindings:
             if not isinstance(binding, dict):
                 os.close(self._fd)
-                raise ValueError("invalid raw journal binding")
+                raise TypeError("invalid raw journal binding")
             path = binding.get("path")
             if not isinstance(path, str) or path in self._bindings:
                 os.close(self._fd)

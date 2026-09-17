@@ -356,6 +356,36 @@ class Gate:
                 state["stopped"] = True
             _save(self.path, state)
 
+    def _validate_cleanup_ownership(self, operation, recovery, resource, source, job):
+        """Validate the immutable creation proof for a conditional cleanup."""
+        proof = job.get("creationProofs", {}).get(resource)
+        capture = job["captures"].get(str(source), {})
+        if (
+            not recovery
+            or proof is None
+            or capture.get("name") != resource
+            or capture.get("fieldsDigest") != proof["fieldsDigest"]
+            or operation["path"]
+            != "/v1/"
+            + resource
+            + "?currentDocument.updateTime="
+            + quote(proof["updateTime"], safe="")
+        ):
+            raise ValueError("cleanup requires journaled creation ownership/version")
+
+    def _recovery_capture(self, operation, status, body):
+        """Return the bounded default recovery read receipt."""
+        return {
+            "status": status,
+            "name": body.get("name") if isinstance(body, dict) else None,
+            "fieldsDigest": digest(body.get("fields"))
+            if isinstance(body, dict)
+            else None,
+            "updateTime": body.get("updateTime")
+            if isinstance(body, dict)
+            else None,
+        }
+
     def dispatch(self, operation, recovery, send):
         with self.locked() as state:
             job, plan = state["jobs"][self.job], state["plan"]
@@ -407,22 +437,9 @@ class Gate:
                 if operation["method"] == "DELETE" and (
                     source is None or valid_version
                 ):
-                    proof = job.get("creationProofs", {}).get(resource)
-                    capture = job["captures"].get(str(source), {})
-                    if (
-                        not recovery
-                        or proof is None
-                        or capture.get("name") != resource
-                        or capture.get("fieldsDigest") != proof["fieldsDigest"]
-                        or operation["path"]
-                        != "/v1/"
-                        + resource
-                        + "?currentDocument.updateTime="
-                        + quote(proof["updateTime"], safe="")
-                    ):
-                        raise ValueError(
-                            "cleanup requires journaled creation ownership/version"
-                        )
+                    self._validate_cleanup_ownership(
+                        operation, recovery, resource, source, job
+                    )
             if recovery:
                 job["stopped"] = True  # Recovery is a one-way transition.
             if source is not None and not valid_version:
@@ -534,16 +551,9 @@ class Gate:
                         job["stopped"] = True
                         raise ValueError("readback identity/body mismatch")
                 if recovery:
-                    job["captures"][str(index)] = {
-                        "status": status,
-                        "name": body.get("name") if isinstance(body, dict) else None,
-                        "fieldsDigest": digest(body.get("fields"))
-                        if isinstance(body, dict)
-                        else None,
-                        "updateTime": body.get("updateTime")
-                        if isinstance(body, dict)
-                        else None,
-                    }
+                    job["captures"][str(index)] = self._recovery_capture(
+                        operation, status, body
+                    )
                 return result
             finally:
                 # Normal exception paths have returned from bounded transport. A killed

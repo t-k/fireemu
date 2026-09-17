@@ -149,8 +149,9 @@ def recompare(
             or v1_result.get("productionReceiptSha256") != receipt_hash
         ):
             raise ValueError("v1 comparison bindings changed before v2 analysis")
-        _production.validate_frozen(inputs, receipt)
-        production_plan = _production.validate_acquisition(receipt, inputs)
+        production_plan = _production.validate_saved_acquisition(
+            receipt, inputs, receipt_hash, inputs_hash
+        )
         with tempfile.TemporaryDirectory(prefix="fs-write-limits-v2-") as temporary:
             snapshot, artifact_snapshot, captured_hashes, artifact_hash = (
                 capture_local_bundle(
@@ -162,9 +163,7 @@ def recompare(
             captured_digest = digest(captured_hashes)
             if captured_digest != v1_result.get("localBundleDigest"):
                 raise ValueError("local bundle changed before v2 analysis")
-            local = _production.local_bundle(
-                snapshot, artifact_snapshot, _production.frozen_checkout()
-            )
+            local = _production.comparison_local_bundle(snapshot, artifact_snapshot)
             local_digest = local["digest"]
             if local_digest != captured_digest:
                 raise ValueError("local bundle changed before v2 analysis")

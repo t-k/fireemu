@@ -230,3 +230,41 @@ def test_recompare_preserves_indeterminate_for_invalid_v1_acquisition(tmp_path):
         binding["v2ResultSha256"]
         == hashlib.sha256((output / "v2-result.json").read_bytes()).hexdigest()
     )
+
+
+def test_recompare_retained_repaired_artifact_against_immutable_production(tmp_path):
+    """Optional private-evidence integration; no credentials or production dispatch."""
+    import subprocess
+
+    from recompare import recompare
+
+    common = Path(
+        subprocess.check_output(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=HERE,
+            text=True,
+        ).strip()
+    )
+    retained = common.parent / "docs.local/logs/2026-09-17"
+    production = retained / "limits-production-40dfc0da3"
+    local = retained / "limits-repair-shadow-8b33aac4d"
+    if not production.is_dir() or not local.is_dir():
+        pytest.skip("private immutable evidence not retained in this checkout")
+    expected = {
+        "receipt.json": "ca418bcf1eed6d906baebc7d22090161752071c7d845ab19a10bd3b6ddc429a7",
+        "inputs.json": "27f62136d95e85ae514ffd4ec7ae885d806d09540bfbf8a4281f837c06323499",
+    }
+    for name, checksum in expected.items():
+        assert hashlib.sha256((production / name).read_bytes()).hexdigest() == checksum
+    result = recompare(production, local, local / "fireemu", tmp_path / "derived")
+    binding = json.loads((tmp_path / "derived/binding.json").read_bytes())
+    assert binding["acquisitionValidated"] is True
+    assert result["classification"] == "EXPECTED_NONDETERMINISM"
+    assert binding["productionReceiptSha256"] == expected["receipt.json"]
+    assert binding["frozenInputsSha256"] == expected["inputs.json"]
+    assert (
+        binding["artifactSha256"]
+        == "76f855367910ad237de6ffd491091f20bcdccdb2e5eb8ee417e80b94bf6ac397"
+    )
+    for name, checksum in expected.items():
+        assert hashlib.sha256((production / name).read_bytes()).hexdigest() == checksum

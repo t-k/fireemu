@@ -33,6 +33,7 @@ from broad_contract import ROOT, digest
 from evidence_common import runtime_inputs
 from owned_runner import reject_mutation_artifact, validate_build
 from shared_gate import create
+from limits_evidence_history import SOURCE_SHA256 as HISTORICAL_VALIDATOR_SHA256
 
 SHARED_ROOT = Path.home() / ".local/state/fireemu-broad/production-admission-v1"
 MAX_INPUT_BYTES = 128 * 1024 * 1024
@@ -59,7 +60,9 @@ def manifest():
 
 def contract():
     return {
-        "kind": "fs-write-limits-acquisition-comparison-v1",
+        "kind": "fs-write-limits-acquisition-comparison-v2",
+        "receiptKind": "fs-write-limits-production-receipt-v2",
+        "historicalValidatorSha256": HISTORICAL_VALIDATOR_SHA256,
         "semanticKernelSha256": sha_file(Path(__file__).with_name("comparator.py")),
         "acquisitionSha256": sha_file(Path(__file__)),
         "databaseProjectionContractDigest": digest(DATABASE_PROJECTION),
@@ -263,7 +266,32 @@ def metadata_valid(entries, events, permission):
 
 
 def validate_acquisition(receipt, inputs):
-    """Full acquisition and cleanup, independent of expected negative-case semantics."""
+    """Validate persisted success, never reconstructing final facts from this checkout."""
+    if receipt.get("acquisitionValidated") is not True:
+        raise ValueError("saved acquisition was not validated")
+    return _validate_acquisition(receipt, inputs)
+
+
+def _validate_acquisition(receipt, inputs):
+    """Validate live completion before setting the persisted success marker."""
+    if (
+        "acquisitionFailure" in receipt
+        or "reservationFailure" in receipt
+        or receipt.get("kind") != "fs-write-limits-production-receipt-v2"
+    ):
+        raise ValueError("failed or unsupported acquisition receipt")
+    final = receipt.get("finalBinding")
+    if (
+        not isinstance(final, dict)
+        or final.get("sourceCommit") != inputs["sourceCommit"]
+        or final.get("dirty") is not False
+        or final.get("artifactSha256") != inputs["artifactSha256"]
+        or final.get("collectorSourceDigest")
+        != inputs["permission"]["collectorSourceDigest"]
+        or final.get("captureFailures") != {}
+    ):
+        raise ValueError("final acquisition binding incomplete or different")
+    validate_frozen(inputs, receipt)
     permission, plan = inputs["permission"], inputs["plan"]
     compiled = compile_limits_plan(PROJECT, DATABASE, plan["nonce"])
     collection, state = receipt["collection"], receipt["gate"]
@@ -498,10 +526,10 @@ def execute(permission, local_directory, artifact, output, api_key):
             except Exception as error:  # noqa: BLE001 -- Preserve cleanup admission failure separately.
                 failure = failure or type(error).__name__
         receipt = {
-            "kind": "fs-write-limits-production-receipt-v1",
+            "kind": "fs-write-limits-production-receipt-v2",
             "inputsDigest": digest(inputs),
             "productionExecuted": gate.snapshot()["total"] > 0,
-            "sourceDigestAfter": source_digest(),
+            "sourceDigestAfter": None,
             "collection": collection,
             "metadataEvidence": coordinator.metadata_evidence,
             "gate": gate.snapshot(),
@@ -511,16 +539,6 @@ def execute(permission, local_directory, artifact, output, api_key):
             "reservationReleased": False,
         }
         try:
-            if (
-                frozen_checkout() != commit
-                or sha_file(artifact) != local["artifactSha256"]
-            ):
-                raise ValueError("final source or artifact drift")
-            validate_acquisition(receipt, inputs)
-            receipt["acquisitionValidated"] = True
-        except Exception as error:  # noqa: BLE001 -- Preserve acquisition failure separately from cleanup.
-            receipt["acquisitionFailure"] = type(error).__name__
-        try:
             ledger.finish(ticket)
             receipt["reservationFinal"] = ledger.snapshot()["reservations"][
                 ticket["reservation"]
@@ -529,8 +547,47 @@ def execute(permission, local_directory, artifact, output, api_key):
         except Exception as error:  # noqa: BLE001 -- Retain shared ownership on uncertain cleanup.
             receipt["acquisitionValidated"] = False
             receipt["reservationFailure"] = type(error).__name__
+        finalize_acquisition(receipt, inputs, artifact)
         save(output / "receipt.json", receipt)
     return receipt
+
+
+def capture_final_binding(artifact, *, checkout_root=ROOT):
+    """Persist independent final observations, including unavailable measurements."""
+    observations = {
+        "sourceCommit": lambda: subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=checkout_root, text=True
+        ).strip(),
+        "dirty": lambda: bool(
+            subprocess.check_output(
+                ["git", "status", "--porcelain"], cwd=checkout_root
+            ).strip()
+        ),
+        "artifactSha256": lambda: sha_file(artifact),
+        "collectorSourceDigest": source_digest,
+    }
+    final = {"captureFailures": {}}
+    for field, observe in observations.items():
+        final[field] = None
+        try:
+            final[field] = observe()
+        except Exception as error:  # noqa: BLE001 -- Record unavailable facts without sensitive messages.
+            final["captureFailures"][field] = type(error).__name__
+    return final
+
+
+def finalize_acquisition(receipt, inputs, artifact, *, checkout_root=ROOT):
+    """Run after independently attempted ledger release; failure is permanent."""
+    receipt["acquisitionValidated"] = False
+    receipt["finalBinding"] = capture_final_binding(
+        artifact, checkout_root=checkout_root
+    )
+    receipt["sourceDigestAfter"] = receipt["finalBinding"]["collectorSourceDigest"]
+    try:
+        _validate_acquisition(receipt, inputs)
+        receipt["acquisitionValidated"] = True
+    except Exception as error:  # noqa: BLE001 -- Keep finalization failures separate from cleanup.
+        receipt["acquisitionFailure"] = type(error).__name__
 
 
 def validate_frozen(inputs, receipt):
@@ -582,6 +639,63 @@ def validate_frozen(inputs, receipt):
         raise ValueError("frozen contract drift")
 
 
+def load_hashed(path):
+    """Parse exactly the bounded evidence bytes whose hash is returned."""
+    path = Path(path)
+    if path.is_symlink() or path.stat().st_size > MAX_INPUT_BYTES:
+        raise ValueError("bounded regular evidence input required")
+    data = path.read_bytes()
+    if len(data) > MAX_INPUT_BYTES:
+        raise ValueError("bounded evidence input required")
+    return json.loads(data), hashlib.sha256(data).hexdigest()
+
+
+def validate_saved_acquisition(receipt, inputs, receipt_hash, inputs_hash):
+    """Select the current contract or the single immutable legacy acquisition."""
+    if (
+        "acquisitionFailure" in receipt
+        or receipt.get("acquisitionValidated") is not True
+    ):
+        raise ValueError("saved acquisition failed")
+    if receipt.get("kind") == "fs-write-limits-production-receipt-v1":
+        from limits_evidence_history import validate_production
+
+        validate_production(receipt, inputs, receipt_hash, inputs_hash)
+        return compile_limits_plan(PROJECT, DATABASE, inputs["plan"]["nonce"])
+    permission = inputs["permission"]
+    approve(
+        permission,
+        permission["nonce"],
+        inputs["localBundleDigest"],
+        inputs["artifactSha256"],
+        inputs["sourceCommit"],
+        permission["apiKeyDigest"],
+        permission["ledgerIdentity"],
+        now=inputs["admittedAt"],
+    )
+    return validate_acquisition(receipt, inputs)
+
+
+def comparison_local_bundle(directory, artifact):
+    """Keep new local admission strict; preserve only the exact retained old bundle."""
+    from limits_evidence_history import LOCAL_COMMIT, validate_local
+
+    parent = load(Path(directory) / "manifest.json")
+    if parent.get("executionCommit") != LOCAL_COMMIT:
+        return local_bundle(directory, artifact, frozen_checkout())
+    validated = validate_local(directory, artifact)
+    result = validated["result"]
+    plan = compile_limits_plan(
+        "demo-firestore-probe", DATABASE, result["manifest"]["nonce"]
+    )
+    return {
+        "digest": validated["digest"],
+        "artifactSha256": validated["artifactSha256"],
+        "plan": plan,
+        "result": result,
+    }
+
+
 def compare(production_directory, local_directory, artifact, output):
     """Credential-free comparison; incomplete acquisition produces INDETERMINATE."""
     result = {
@@ -592,29 +706,17 @@ def compare(production_directory, local_directory, artifact, output):
     }
     try:
         directory = Path(production_directory)
-        inputs, receipt = (
-            load(directory / "inputs.json"),
-            load(directory / "receipt.json"),
+        inputs, inputs_hash = load_hashed(directory / "inputs.json")
+        receipt, receipt_hash = load_hashed(directory / "receipt.json")
+        production_compiled = validate_saved_acquisition(
+            receipt, inputs, receipt_hash, inputs_hash
         )
-        permission = inputs["permission"]
-        approve(
-            permission,
-            permission["nonce"],
-            inputs["localBundleDigest"],
-            inputs["artifactSha256"],
-            inputs["sourceCommit"],
-            permission["apiKeyDigest"],
-            permission["ledgerIdentity"],
-            now=inputs["admittedAt"],
-        )
-        validate_frozen(inputs, receipt)
-        production_compiled = validate_acquisition(receipt, inputs)
-        local = local_bundle(local_directory, artifact, frozen_checkout())
+        local = comparison_local_bundle(local_directory, artifact)
         result = {
             "kind": "fs-write-limits-production-comparison-v1",
             "promotionReady": False,
-            "productionReceiptSha256": sha_file(directory / "receipt.json"),
-            "frozenInputsSha256": sha_file(directory / "inputs.json"),
+            "productionReceiptSha256": receipt_hash,
+            "frozenInputsSha256": inputs_hash,
             "localBundleDigest": local["digest"],
             "artifactSha256": local["artifactSha256"],
             "acquisitionValidated": True,
@@ -626,7 +728,14 @@ def compare(production_directory, local_directory, artifact, output):
             ),
         }
         result["classification"] = result["semantic"]["classification"]
-    except (ValueError, TypeError, KeyError, IndexError, OSError) as error:
+    except (
+        ValueError,
+        TypeError,
+        KeyError,
+        IndexError,
+        OSError,
+        subprocess.SubprocessError,
+    ) as error:
         result["acquisitionFailure"] = type(error).__name__
     save(Path(output), result)
     return result

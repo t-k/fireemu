@@ -87,7 +87,7 @@ def test_incomplete_or_expanded_permission_is_refused(key, value):
         )
 
 
-def acquired_fixture(tmp_path, *, mismatch=False):
+def acquired_fixture(tmp_path, *, mismatch=False, commit=None, artifact_hash=None):
     """Real Gate transitions around finite in-memory wire fixtures, never a cloud receipt."""
     import time
     from compiler import compile_limits_plan
@@ -98,6 +98,8 @@ def acquired_fixture(tmp_path, *, mismatch=False):
 
     value = permission()
     value.update(issuedAt=time.time() - 1, expiresAt=time.time() + 2000)
+    value["frozenCommit"] = commit or value["frozenCommit"]
+    value["artifactSha256"] = artifact_hash or value["artifactSha256"]
     plan = execution_plan(value, value["nonce"])
     create(tmp_path / "gate", plan)
     gate = LimitsGate(tmp_path / "gate")
@@ -189,7 +191,14 @@ def acquired_fixture(tmp_path, *, mismatch=False):
         before_recovery=coordinator.recover_credentials,
     )
     phase_metadata()
-    inputs = {"permission": value, "plan": plan}
+    inputs = {
+        "permission": value,
+        "plan": plan,
+        "sourceCommit": value["frozenCommit"],
+        "artifactSha256": value["artifactSha256"],
+        "localBundleDigest": value["localBundleDigest"],
+        "admittedAt": value["issuedAt"] + 1,
+    }
     receipt = {
         "productionExecuted": True,
         "inputsDigest": digest(inputs),
@@ -200,6 +209,18 @@ def acquired_fixture(tmp_path, *, mismatch=False):
         "gate": gate.snapshot(),
         "metadataEvidence": metadata,
     }
+    receipt.update(
+        kind="fs-write-limits-production-receipt-v2",
+        acquisitionValidated=True,
+        finalBinding={
+            "sourceCommit": inputs["sourceCommit"],
+            "dirty": False,
+            "artifactSha256": inputs["artifactSha256"],
+            "collectorSourceDigest": value["collectorSourceDigest"],
+            "captureFailures": {},
+        },
+    )
+    bind_frozen_fixture(tmp_path, receipt, inputs)
     assert stored == {}
     return receipt, inputs, compiled
 
@@ -244,7 +265,7 @@ def test_acquisition_rejects_forged_completion_and_journal_tampering(tmp_path):
             validate_acquisition(changed, inputs)
 
 
-def local_fixture(tmp_path):
+def local_fixture(tmp_path, *, commit="3" * 40):
     from production import sha_file
     from compiler import compile_limits_plan
     from shadow import save, source_inputs
@@ -276,7 +297,7 @@ def local_fixture(tmp_path):
     save(tmp_path / "cases.json", cases)
     save(tmp_path / "result.json", result)
     parent = {
-        "executionCommit": "3" * 40,
+        "executionCommit": commit,
         "artifactSha256": sha_file(artifact),
         "build": {
             "command": BUILD_COMMAND,
@@ -321,12 +342,10 @@ def test_local_bundle_preserves_complete_failed_semantics_and_refuses_tampering(
         local_bundle(directory, artifact, "3" * 40)
 
 
-def test_frozen_receipt_requires_exact_reservation_and_manifest(tmp_path):
-    import copy
-    from production import SHARED_ROOT, envelope, validate_frozen
+def bind_frozen_fixture(tmp_path, receipt, inputs):
+    from production import SHARED_ROOT, envelope
     from production_plan import production_plan
 
-    receipt, inputs, _ = acquired_fixture(tmp_path)
     value, plan = inputs["permission"], inputs["plan"]
     allocation = production_plan(value["nonce"])
     claim = {
@@ -369,6 +388,15 @@ def test_frozen_receipt_requires_exact_reservation_and_manifest(tmp_path):
             "finalGateDigest": digest(receipt["gate"]),
         },
     )
+    receipt["inputsDigest"] = digest(inputs)
+
+
+def test_frozen_receipt_requires_exact_reservation_and_manifest(tmp_path):
+    import copy
+    from production import validate_frozen
+
+    receipt, inputs, _ = acquired_fixture(tmp_path)
+    bind_frozen_fixture(tmp_path, receipt, inputs)
     validate_frozen(inputs, receipt)
     for field in (
         "ledgerPath",
@@ -448,3 +476,160 @@ def test_admission_failure_keeps_immutable_sanitized_recovery_record(tmp_path):
         raise RuntimeError("later failure")
     assert isinstance(failure.value.__cause__, FileExistsError)
     assert (tmp_path / "admission-failure.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("failure", ["ValueError", None, "", False])
+def test_saved_acquisition_failure_is_permanent_even_with_true_marker(
+    tmp_path, failure
+):
+    from production import validate_acquisition
+
+    receipt, inputs, _ = acquired_fixture(tmp_path)
+    receipt.update(acquisitionValidated=True, acquisitionFailure=failure)
+    with pytest.raises(ValueError):
+        validate_acquisition(receipt, inputs)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("sourceCommit", "0" * 40),
+        ("dirty", True),
+        ("dirty", 0),
+        ("artifactSha256", "0" * 64),
+        ("collectorSourceDigest", "0" * 64),
+        ("captureFailures", {"artifactSha256": "OSError"}),
+    ],
+)
+def test_saved_v2_requires_exact_final_observations(tmp_path, field, value):
+    from production import validate_acquisition
+
+    receipt, inputs, _ = acquired_fixture(tmp_path)
+    receipt["finalBinding"][field] = value
+    with pytest.raises(ValueError):
+        validate_acquisition(receipt, inputs)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing-binding", "unvalidated", "unreleased", "legacy", "wrong-gate"]
+)
+def test_saved_receipt_requires_validated_v2_and_released_final_gate(
+    tmp_path, mutation
+):
+    from production import validate_acquisition
+
+    receipt, inputs, _ = acquired_fixture(tmp_path)
+    if mutation == "missing-binding":
+        del receipt["finalBinding"]
+    elif mutation == "unvalidated":
+        receipt["acquisitionValidated"] = False
+    elif mutation == "unreleased":
+        receipt["reservationReleased"] = False
+    elif mutation == "legacy":
+        receipt["kind"] = "fs-write-limits-production-receipt-v1"
+    else:
+        receipt["reservationFinal"]["finalGateDigest"] = "0" * 64
+    with pytest.raises(ValueError):
+        validate_acquisition(receipt, inputs)
+
+
+@pytest.mark.parametrize("drift", [None, "artifact", "checkout", "missing-artifact"])
+def test_finalization_persists_actual_facts_before_drift_is_restored(tmp_path, drift):
+    import subprocess
+    from production import finalize_acquisition, sha_file, validate_acquisition, compare
+    from shadow import save
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "fixture",
+        ],
+        cwd=checkout,
+        check=True,
+    )
+    commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=checkout, text=True
+    ).strip()
+    artifact = tmp_path / "artifact"
+    artifact.write_bytes(b"admitted fixture")
+    receipt, inputs, _ = acquired_fixture(
+        tmp_path, commit=commit, artifact_hash=sha_file(artifact)
+    )
+    receipt["acquisitionValidated"] = False
+    if drift == "artifact":
+        artifact.write_bytes(b"final drift")
+    elif drift == "checkout":
+        (checkout / "unexpected").write_text("dirty")
+    elif drift == "missing-artifact":
+        artifact.unlink()
+    finalize_acquisition(receipt, inputs, artifact, checkout_root=checkout)
+    assert receipt["reservationReleased"] is True
+    artifact.write_bytes(b"admitted fixture")
+    if drift == "checkout":
+        (checkout / "unexpected").unlink()
+    if drift is None:
+        assert receipt["acquisitionValidated"] is True
+        assert "acquisitionFailure" not in receipt
+        validate_acquisition(receipt, inputs)
+    else:
+        assert receipt["acquisitionValidated"] is False
+        assert receipt["acquisitionFailure"]
+        with pytest.raises(ValueError):
+            validate_acquisition(receipt, inputs)
+        directory = tmp_path / "production"
+        directory.mkdir()
+        save(directory / "inputs.json", inputs)
+        save(directory / "receipt.json", receipt)
+        result = compare(
+            directory, tmp_path / "absent-local", artifact, tmp_path / "comparison.json"
+        )
+        assert result["classification"] == "INDETERMINATE"
+        assert result["acquisitionValidated"] is False
+        import sys
+        from pathlib import Path
+
+        sys.path.insert(
+            0, str(Path(__file__).resolve().parent.parent / "fs-write-limits-recompare")
+        )
+        from recompare import recompare
+
+        derived = recompare(
+            directory, tmp_path / "absent-local", artifact, tmp_path / "derived"
+        )
+        assert derived["classification"] == "INDETERMINATE"
+        assert derived["acquisitionValidated"] is False
+    final = receipt["finalBinding"]
+    assert final["sourceCommit"] == commit
+    assert final["dirty"] is (drift == "checkout")
+    if drift == "artifact":
+        assert final["artifactSha256"] != inputs["artifactSha256"]
+    if drift == "missing-artifact":
+        assert final["artifactSha256"] is None
+        assert final["captureFailures"] == {"artifactSha256": "FileNotFoundError"}
+
+
+def test_new_local_bundle_uses_current_strict_validator_when_checkout_is_frozen(
+    tmp_path,
+):
+    from production import comparison_local_bundle, frozen_checkout
+
+    try:
+        commit = frozen_checkout()
+    except ValueError:
+        pytest.skip("current-source comparison requires a committed clean checkout")
+    artifact = local_fixture(tmp_path / "local", commit=commit)
+    result = comparison_local_bundle(tmp_path / "local", artifact)
+    assert result["result"]["recordingComplete"] is True
+    artifact.write_bytes(b"tampered")
+    with pytest.raises(ValueError):
+        comparison_local_bundle(tmp_path / "local", artifact)

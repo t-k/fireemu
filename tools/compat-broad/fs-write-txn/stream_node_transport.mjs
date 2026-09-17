@@ -39,13 +39,9 @@ const byteLength = value => {
   return Buffer.byteLength(encoded);
 };
 
-export const validateTransportOptions = options => {
+export const validateRequestOptions = options => {
   if (!options || typeof options !== 'object') throw fail('options are required');
-  const { host, port, projectId, documentPrefix } = options;
-  if (typeof host !== 'string' || !LOOPBACK_HOSTS.has(host)) {
-    throw fail('host must be an explicit loopback address');
-  }
-  assertInteger(port, 'port', 1, 65535);
+  const { projectId, documentPrefix } = options;
   if (typeof projectId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]{4,62}$/.test(projectId)) {
     throw fail('projectId is invalid');
   }
@@ -64,7 +60,17 @@ export const validateTransportOptions = options => {
       throw fail('metadata must contain string header values');
     }
   }
-  return { host, port, projectId, documentPrefix, deadlineMs, maxFrames, maxMessageBytes, metadata: options.metadata ?? {} };
+  return { projectId, documentPrefix, deadlineMs, maxFrames, maxMessageBytes, metadata: options.metadata ?? {} };
+};
+
+export const validateTransportOptions = options => {
+  if (!options || typeof options !== 'object') throw fail('options are required');
+  const { host, port } = options;
+  if (typeof host !== 'string' || !LOOPBACK_HOSTS.has(host)) {
+    throw fail('host must be an explicit loopback address');
+  }
+  assertInteger(port, 'port', 1, 65535);
+  return { host, port, ...validateRequestOptions(options) };
 };
 
 export const databaseName = projectId => `projects/${projectId}/databases/(default)`;
@@ -104,7 +110,7 @@ const requestTargets = request => {
 };
 
 export const validateWriteRequest = (request, options) => {
-  const validated = validateTransportOptions(options);
+  const validated = validateRequestOptions(options);
   if (!request || typeof request !== 'object') throw fail('write request must be an object');
   if (Object.hasOwn(request, 'database') && request.database !== databaseName(validated.projectId)) {
     throw fail('write database is transport-owned');

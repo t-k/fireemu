@@ -2,153 +2,205 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compareStreamReceipts } from './stream_comparison.mjs';
 
-const contract = {
-  version: 1,
-  projectId: 'fireemu-test',
-  database: 'projects/fireemu-test/databases/(default)',
-  documentPrefix: 'compat/o3/run-fixed',
-  resources: [
-    { path: 'compat/o3/run-fixed/control', role: 'control' },
-    { path: 'compat/o3/run-fixed/locked', role: 'locked' },
-    { path: 'compat/o3/run-fixed/contended-tail', role: 'suffix' },
-  ],
-  maxRpc: 24,
-  maxFramesPerRpc: 32,
-};
+const base = { projectId: 'fireemu-test', documentPrefix: 'compat/o3/run-fixed' };
+const contract = { version: 1, ...base, resources: ['control', 'locked', { suffix: 'contended-tail', role: 'suffix' }], maxRpc: 24, maxFramesPerRpc: 32 };
+const stamp = n => ({ seconds: String(n), nanos: 0 });
+const bytes = n => ({ type: 'Buffer', data: [n, 1, 2] });
+const status = code => ({ code, details: code ? 'server diagnostic' : '' });
+const fields = (owner, role, value) => ({ owner: { stringValue: `o3-stream:${owner}` }, role: { stringValue: role }, ...(value === undefined ? {} : { value: { stringValue: value } }) });
 
-const phases = [
-  ['preflight-create-absence', 'GetDocument'], ['preflight-create-absence', 'GetDocument'],
-  ['setup-control', 'Write'], ['setup-locked', 'Write'], ['positive-uncontended-stream', 'Write'],
-  ['readback-control', 'GetDocument'], ['begin-rw-transaction', 'BeginTransaction'],
-  ['get-locked-with-transaction', 'GetDocument'], ['preflight-suffix-absence', 'GetDocument'],
-  ['contended-multiwrite-stream', 'Write'], ['readback-contention', 'GetDocument'],
-  ['rollback', 'Rollback'], ['post-rollback-positive-stream', 'Write'],
-  ['readback-post-rollback', 'GetDocument'], ['cleanup', 'Write'],
-];
-
-const timestamp = value => ({ seconds: String(value), nanos: 0 });
-const streamToken = value => ({ type: 'Buffer', data: [0, 0, 0, value] });
-const transaction = value => ({ type: 'Buffer', data: [value, 1, 2, 3] });
-const frame = (database, writes, token) => ({ database, ...(token ? { streamToken: token } : {}), ...(writes ? { writes } : {}) });
-const name = path => `${contract.database}/documents/${path}`;
-const fields = (owner, role, value) => ({ owner: { stringValue: `o3-stream:${owner}` }, role: { stringValue: role }, ...(value ? { value: { stringValue: value } } : {}) });
-const doc = (path, owner, role, value, updateTime = 100) => ({ name: name(path), fields: fields(owner, role, value), updateTime: timestamp(updateTime) });
-const status = code => ({ code, details: code === 0 ? '' : 'unexpected' });
-const unary = (operation, request, response, code = 0) => ({ kind: 'grpc_status', operation, request, complete: true, ...(response ? { response } : {}), ...(code === 0 ? {} : { status: status(code), error: { code } }) });
-const write = (writes, token, code = 0, moved = false) => {
-  const responseToken = streamToken(token + 1);
-  return {
-    transportReceiptVersion: 2, kind: 'grpc_status', complete: true, status: status(code), sentFrames: 2, completedSendFrames: 2, receivedFrames: 2,
-    events: [
-      { type: 'send', value: frame(contract.database) },
-      { type: 'data', value: { writeResults: [], streamToken: streamToken(token), streamId: `stream-${token}` } },
-      { type: 'send', value: frame(contract.database, writes, streamToken(token)) },
-      { type: 'data', value: { writeResults: [{ updateTime: moved ? timestamp(999) : timestamp(100 + token) }], streamToken: responseToken } },
+// Public synthetic journal follows transport v2 and collector's exact finite shape.
+// No credentials, oracle payloads, or private receipt fixtures are embedded here.
+const fixture = ({ projectId = base.projectId, documentPrefix = base.documentPrefix, owner = 'owner-a', shift = 0, tokenShift = 0, reusedToken = false, contentionCode = 10 } = {}) => {
+  const database = `projects/${projectId}/databases/(default)`;
+  const paths = { control: `${documentPrefix}/control`, locked: `${documentPrefix}/locked`, suffix: `${documentPrefix}/contended-tail` };
+  const name = role => `${database}/documents/${paths[role]}`;
+  const ts = n => stamp(n + shift);
+  const doc = (role, value, time, created) => ({ name: name(role), fields: fields(owner, role, value), createTime: ts(created), updateTime: ts(time) });
+  const unary = (operation, request, response, code = 0) => ({ kind: 'grpc_status', complete: true, operation, request, ...(code ? { status: status(code), error: { name: 'Error', ...status(code), message: `${code} server diagnostic` } } : { response }) });
+  const get = (role, response, transaction) => unary('GetDocument', { name: name(role), ...(transaction ? { transaction } : {}) }, response, response ? 0 : 5);
+  const update = (role, value, create = false) => ({ update: { name: name(role), fields: fields(owner, role, value) }, ...(create ? { currentDocument: { exists: false } } : {}) });
+  let serial = 0;
+  const write = (writes, time, code = 0) => {
+    const token = bytes(++serial + tokenShift);
+    const next = reusedToken ? token : bytes(serial + tokenShift + 50);
+    const events = [
+      { type: 'send', value: { database } },
+      { type: 'data', value: { writeResults: [], streamId: `stream-${serial + tokenShift}`, streamToken: token, commitTime: null } },
+      { type: 'send', value: { writes, streamToken: token } },
+      ...(code === 0 ? [{ type: 'data', value: { writeResults: writes.map(w => ({ updateTime: w.delete ? null : ts(time), transformResults: [] })), streamId: '', streamToken: next, commitTime: ts(time) } }] : []),
       { type: 'status', value: status(code) },
-      { type: code === 0 ? 'end' : 'close', value: { status: status(code) } },
-    ],
+      ...(code ? [{ type: 'error', value: { name: 'Error', ...status(code), message: `${code} server diagnostic` } }] : []),
+      { type: code ? 'close' : 'end', value: { status: status(code) } },
+    ];
+    return { transportReceiptVersion: 2, kind: 'grpc_status', complete: true, status: status(code), sentFrames: 2, completedSendFrames: 2, receivedFrames: code ? 1 : 2, events };
   };
-};
-const deleteReceipt = (path, token) => write([{ delete: name(path), currentDocument: { updateTime: timestamp(105) } }], token);
-
-const update = (path, owner, role, value, currentDocument) => ({ update: { name: name(path), fields: fields(owner, role, value) }, ...(currentDocument ? { currentDocument } : {}) });
-const absent = path => unary('GetDocument', { name: name(path) }, undefined, 5);
-
-const makeReceipt = ({ owner = 'owner-a', moved = false, old = false, omitSend = false, unexpected = false } = {}) => {
-  const control = 'compat/o3/run-fixed/control';
-  const locked = 'compat/o3/run-fixed/locked';
-  const suffix = 'compat/o3/run-fixed/contended-tail';
-  const ownerId = old ? 'old-owner' : owner;
   const observations = [];
-  const add = (phase, receipt, extra = {}) => observations.push({ phase, receipt, complete: receipt.complete, ...extra });
-  add('preflight-create-absence', absent(control));
-  add('preflight-create-absence', absent(locked));
-  const setupControl = write([update(control, ownerId, 'control', undefined, { exists: false })], 1);
-  const setupLocked = write([update(locked, ownerId, 'locked', 'before', { exists: false })], 2);
-  const positive = write([update(control, ownerId, 'control', 'accepted')], 3);
-  const strip = receipt => omitSend ? { ...receipt, events: receipt.events.filter(event => event.type !== 'send') } : receipt;
-  add('setup-control', strip(setupControl)); add('setup-locked', strip(setupLocked)); add('positive-uncontended-stream', strip(positive));
-  add('readback-control', unary('GetDocument', { name: name(control) }, doc(control, ownerId, 'control', 'accepted', 103)));
-  const beginToken = transaction(9);
-  add('begin-rw-transaction', unary('BeginTransaction', { database: contract.database, options: { readWrite: {} } }, { transaction: beginToken }));
-  add('get-locked-with-transaction', unary('GetDocument', { name: name(locked), transaction: beginToken }, doc(locked, ownerId, 'locked', 'before', 102)));
-  add('preflight-suffix-absence', absent(suffix));
-  const contention = write([
-    update(locked, ownerId, 'locked', 'must-not-commit'),
-    update(suffix, ownerId, 'suffix', 'must-not-commit', { exists: false }),
-  ], 4, unexpected ? 0 : 10, moved);
-  add('contended-multiwrite-stream', strip(contention));
-  add('readback-contention', unary('GetDocument', { name: name(locked) }, doc(locked, ownerId, 'locked', moved ? 'must-not-commit' : 'before', 104)));
-  add('rollback', unary('Rollback', { database: contract.database, transaction: beginToken }, {}));
-  add('post-rollback-positive-stream', strip(write([update(locked, ownerId, 'locked', 'after-rollback')], 5)));
-  add('readback-post-rollback', unary('GetDocument', { name: name(locked) }, doc(locked, ownerId, 'locked', 'after-rollback', 105)));
-  const cleanup = [control, locked, suffix].map((path, index) => ({ path, skipped: path === suffix, complete: true, absent: true, receipt: path === suffix ? absent(path) : deleteReceipt(path, 6 + index), absence: absent(path) }));
-  add('cleanup', { kind: 'grpc_status', complete: true, status: status(0), events: [], sentFrames: 0, receivedFrames: 0 }, { cleanup });
-  return { observations, cleanup, ownerId, readback: { complete: true }, contention: observations[9].receipt };
-};
-
-test('accepts two complete receipts with opaque token and timestamp normalization', () => {
-  const result = compareStreamReceipts({ production: makeReceipt({ owner: 'prod-owner' }), local: makeReceipt({ owner: 'local-owner' }), expected: contract });
-  assert.equal(result.classification, 'EXPECTED_NONDETERMINISM');
-  assert.equal(result.acquisitionValidated, false);
-  assert.equal(result.promotionReady, false);
-});
-
-test('binds production and local resource identities independently', () => {
-  const result = compareStreamReceipts({
-    production: makeReceipt({ owner: 'prod-owner' }),
-    local: makeReceipt({ owner: 'local-owner' }),
-    expected: {
-      version: 1,
-      production: { projectId: 'fireemu-test', documentPrefix: 'compat/o3/run-fixed' },
-      local: { projectId: 'fireemu-test', documentPrefix: 'compat/o3/run-fixed' },
-      resources: [{ path: 'control', role: 'control' }, { path: 'locked', role: 'locked' }, { path: 'contended-tail', role: 'suffix' }],
-    },
+  const add = (phase, receipt) => observations.push({ phase, complete: true, receipt });
+  add('preflight-create-absence', get('control'));
+  add('preflight-create-absence', get('locked'));
+  add('setup-control', write([update('control', undefined, true)], 100));
+  add('setup-locked', write([update('locked', 'before', true)], 101));
+  add('positive-uncontended-stream', write([update('control', 'accepted')], 102));
+  add('readback-control', get('control', doc('control', 'accepted', 102, 100)));
+  const transaction = bytes(200 + tokenShift);
+  add('begin-rw-transaction', unary('BeginTransaction', { database, options: { readWrite: {} } }, { transaction }));
+  add('get-locked-with-transaction', get('locked', doc('locked', 'before', 101, 101), transaction));
+  add('preflight-suffix-absence', get('suffix'));
+  add('contended-multiwrite-stream', write([update('locked', 'must-not-commit'), update('suffix', 'must-not-commit', true)], 103, contentionCode));
+  const moved = contentionCode === 0;
+  add('readback-contention', { locked: get('locked', doc('locked', moved ? 'must-not-commit' : 'before', moved ? 103 : 101, 101)), suffix: get('suffix', moved ? doc('suffix', 'must-not-commit', 103, 103) : undefined) });
+  add('rollback', unary('Rollback', { database, transaction }, {}));
+  add('post-rollback-positive-stream', write([update('locked', 'after-rollback')], 104));
+  add('readback-post-rollback', get('locked', doc('locked', 'after-rollback', 104, 101)));
+  const cleanup = Object.keys(paths).map((role, index) => {
+    if (role === 'suffix' && !moved) return { path: paths[role], skipped: true, complete: true, absent: true, receipt: get(role) };
+    const time = role === 'control' ? 102 : role === 'locked' ? 104 : 103;
+    const value = role === 'control' ? 'accepted' : role === 'locked' ? 'after-rollback' : 'must-not-commit';
+    return { path: paths[role], skipped: false, complete: true, absent: true, ownedRead: get(role, doc(role, value, time, role === 'control' ? 100 : role === 'locked' ? 101 : 103)), receipt: write([{ delete: name(role), currentDocument: { updateTime: ts(time) } }], 105 + index), absence: get(role) };
   });
-  assert.equal(result.classification, 'EXPECTED_NONDETERMINISM');
+  observations.push({ phase: 'cleanup', complete: true, cleanup });
+  return { ownerId: owner, observations, cleanup, contention: observations[9].receipt, readback: { complete: true, lockedUnchanged: !moved, suffixAbsent: !moved, postRollbackWriteAccepted: true }, outcome: { complete: true, semantic: {} } };
+};
+const compare = (production, local = structuredClone(production), expected = contract) => compareStreamReceipts({ production, local, expected });
+const request = (r, i = 2) => r.observations[i].receipt.events.find(e => e.type === 'send' && e.value.writes).value;
+const data = (r, i = 2) => r.observations[i].receipt.events.filter(e => e.type === 'data').at(-1).value;
+
+test('matches complete captured proof including skipped absence without duplicate absence field', () => assert.equal(compare(fixture()).classification, 'MATCH'));
+test('never elevates comparison to acquisition or promotion authority', () => { const r = compare(fixture()); assert.equal(r.acquisitionValidated, false); assert.equal(r.promotionReady, false); });
+test('normalizes declared project, resource, owner, token, stream ID and ordered timestamps only', () => {
+  const p = fixture(); const side = { projectId: 'other-project', documentPrefix: 'compat/o3/other-run' };
+  const l = fixture({ ...side, owner: 'other-owner', shift: 1000, tokenShift: 10 });
+  assert.equal(compare(p, l, { ...contract, production: base, local: side }).classification, 'EXPECTED_NONDETERMINISM');
+});
+test('opaque stream tokens may repeat without requiring freshness beyond latest-response use', () => assert.equal(compare(fixture({ reusedToken: true })).classification, 'MATCH'));
+test('complete unexpected contention is semantic mismatch even if both peers agree', () => assert.equal(compare(fixture({ contentionCode: 0 })).classification, 'SEMANTIC_MISMATCH'));
+
+const invalid = {
+  'all terminal events missing': r => { r.observations[2].receipt.events = r.observations[2].receipt.events.filter(e => ['send', 'data'].includes(e.type)); },
+  'status without end or close': r => { r.observations[2].receipt.events.pop(); },
+  'status summary conflicts with terminal event': r => { r.observations[2].receipt.events.find(e => e.type === 'status').value = status(10); },
+  'error conflicts with status': r => { r.observations[9].receipt.events.find(e => e.type === 'error').value.code = 7; },
+  'missing unary request': r => { delete r.observations[0].receipt.request; },
+  'foreign BeginTransaction database': r => { r.observations[6].receipt.request.database = 'projects/foreign/databases/(default)'; },
+  'transactional read token differs from BeginTransaction': r => { r.observations[7].receipt.request.transaction = bytes(201); },
+  'rollback token differs from BeginTransaction': r => { r.observations[11].receipt.request.transaction = bytes(201); },
+  'extra Write updateMask': r => { request(r).writes[0].updateMask = { fieldPaths: ['value'] }; },
+  'extra unary field': r => { r.observations[0].receipt.request.mask = { fieldPaths: ['owner'] }; },
+  'foreign write resource': r => { request(r).writes[0].update.name += '-foreign'; },
+  'unknown write frame field': r => { request(r).labels = {}; },
+  'missing captured send events': r => { r.observations[2].receipt.events = r.observations[2].receipt.events.filter(e => e.type !== 'send'); },
+  'stale latest response token': r => { request(r).streamToken = bytes(77); },
+  'send attempt not completed': r => { r.observations[2].receipt.completedSendFrames = 1; },
+  'received counter differs': r => { r.observations[2].receipt.receivedFrames = 1; },
+  'empty successful write results': r => { data(r).writeResults = []; },
+  'missing aggregate suffix readback': r => { delete r.observations[10].receipt.suffix; },
+  'same cleanup resource repeated three times': r => { r.observations[14].cleanup = Array(3).fill(r.cleanup[0]); r.cleanup = r.observations[14].cleanup; },
+  'missing final ownership read': r => { delete r.cleanup[0].ownedRead; },
+  'foreign cleanup owner': r => { r.cleanup[0].ownedRead.response.fields.owner.stringValue = 'o3-stream:foreign'; },
+  'cleanup read wrong target': r => { r.cleanup[0].ownedRead.request.name = r.cleanup[1].ownedRead.request.name; },
+  'delete version not ownership read version': r => { r.cleanup[0].receipt.events[2].value.writes[0].currentDocument.updateTime = stamp(99); },
+  'ownership read and delete use stale version': r => { r.cleanup[0].ownedRead.response.updateTime = stamp(99); r.cleanup[0].receipt.events[2].value.writes[0].currentDocument.updateTime = stamp(99); },
+  'absence read targets wrong resource': r => { r.cleanup[0].absence.request.name = r.cleanup[1].absence.request.name; },
+  'skipped cleanup lacks typed absence': r => { delete r.cleanup[2].receipt.status; },
+  'incomplete stream': r => { r.observations[2].receipt.complete = false; },
+  'invalid timestamp boolean seconds': r => { data(r).writeResults[0].updateTime.seconds = true; },
+  'invalid timestamp range': r => { data(r).writeResults[0].updateTime = { seconds: '1', nanos: 1000000000 }; },
+  'malformed token bytes': r => { request(r).streamToken.data = [256]; },
+};
+for (const [name, mutate] of Object.entries(invalid)) test(`independently rejects ${name}`, () => { const r = fixture(); mutate(r); assert.equal(compare(r).classification, 'INDETERMINATE'); });
+
+test('counts every unary, aggregate read and cleanup RPC against explicit budget', () => assert.equal(compare(fixture(), fixture(), { ...contract, maxRpc: 21 }).classification, 'INDETERMINATE'));
+test('counts send and receive frames together against explicit budget', () => assert.equal(compare(fixture(), fixture(), { ...contract, maxFramesPerRpc: 3 }).classification, 'INDETERMINATE'));
+for (const field of ['owner-string', 'resource-string', 'timestamp-shaped']) test(`retains arbitrary ${field} user payload literally`, () => {
+  const p = fixture(); const l = fixture({ owner: 'other-owner' });
+  const a = p.observations[5].receipt.response; const b = l.observations[5].receipt.response;
+  if (field === 'owner-string') { a.extra = { userString: p.ownerId }; b.extra = { userString: l.ownerId }; }
+  if (field === 'resource-string') { a.extra = { name: a.name }; b.extra = { name: 'different-user-string' }; }
+  if (field === 'timestamp-shaped') { a.extra = { updateTime: stamp(1) }; b.extra = { updateTime: { seconds: true, nanos: 0 } }; }
+  assert.equal(compare(p, l).classification, 'SEMANTIC_MISMATCH');
+});
+test('preserves timestamp order rather than first-occurrence labels', () => {
+  const p = fixture(); const l = fixture();
+  for (const r of [p, l]) r.observations[5].receipt.response.createTime = stamp(r === p ? 90 : 110);
+  assert.equal(compare(p, l).classification, 'SEMANTIC_MISMATCH');
+});
+test('complete unchanged status but moved locked poststate is semantic mismatch', () => { const l = fixture(); l.observations[10].receipt.locked.response.fields.value.stringValue = 'moved'; assert.equal(compare(fixture(), l).classification, 'SEMANTIC_MISMATCH'); });
+test('collector outcome booleans cannot conceal raw semantic differences', () => { const l = fixture(); l.observations[13].receipt.response.fields.value.stringValue = 'wrong'; assert.equal(compare(fixture(), l).classification, 'SEMANTIC_MISMATCH'); });
+test('redundant collector booleans are not the semantic source', () => { const l = fixture(); l.outcome.semantic = { madeUp: false }; l.readback.lockedUnchanged = false; assert.equal(compare(fixture(), l).classification, 'MATCH'); });
+test('malformed public inputs fail closed without throwing', () => { for (const value of [null, [], 'x', 42, {}]) assert.equal(compare(value).classification, 'INDETERMINATE'); });
+
+test('user keys named timestamp cannot collide with generated timestamp tags', () => {
+  const p = fixture(); const l = fixture();
+  p.observations[5].receipt.response.extra = { timestamp: 'production user content' };
+  l.observations[5].receipt.response.extra = { timestamp: 'local user content' };
+  assert.equal(compare(p, l).classification, 'SEMANTIC_MISMATCH');
+});
+test('rejects events after both terminal status and closure have completed the receipt', () => {
+  const r = fixture(); r.observations[9].receipt.events.push({ type: 'data', value: data(r) }); r.observations[9].receipt.receivedFrames++;
+  assert.equal(compare(r).classification, 'INDETERMINATE');
+});
+test('rejects an error inserted after terminal status and closure', () => {
+  const r = fixture(); const events = r.observations[9].receipt.events; const e = events.splice(events.findIndex(e => e.type === 'error'), 1)[0]; events.push(e);
+  assert.equal(compare(r).classification, 'INDETERMINATE');
+});
+test('cleanup owned read preserves semantic fields as well as ownership and version', () => {
+  const r = fixture(); r.cleanup[0].ownedRead.response.fields.value.stringValue = 'changed';
+  assert.equal(compare(r).classification, 'SEMANTIC_MISMATCH');
+});
+test('an acknowledged document unexpectedly absent at cleanup is semantic mismatch', () => {
+  const r = fixture(); const item = r.cleanup[0];
+  r.cleanup[0] = { path: item.path, complete: true, absent: true, skipped: true, receipt: item.absence }; r.observations[14].cleanup = r.cleanup;
+  assert.equal(compare(r).classification, 'SEMANTIC_MISMATCH');
+});
+test('observation summary booleans do not produce expected nondeterminism', () => {
+  const p = fixture(); const l = fixture(); p.observations[5].controlAccepted = true; l.observations[5].controlAccepted = false;
+  assert.equal(compare(p, l).classification, 'MATCH');
+});
+test('unexpected transform results are semantic mismatch even when both sides agree', () => {
+  const r = fixture(); data(r).writeResults[0].transformResults = [{ integerValue: '1' }];
+  assert.equal(compare(r).classification, 'SEMANTIC_MISMATCH');
 });
 
-test('matches an identical complete receipt', () => {
-  const receipt = makeReceipt();
-  const result = compareStreamReceipts({ production: receipt, local: structuredClone(receipt), expected: contract });
-  assert.equal(result.classification, 'MATCH');
+test('Gate skipped cleanup retains and budgets a separate registered final absence', () => {
+  const r = fixture(); r.cleanup[2].absence = structuredClone(r.cleanup[2].receipt);
+  assert.equal(compare(r).classification, 'MATCH');
+  assert.equal(compare(r, structuredClone(r), { ...contract, maxRpc: 22 }).classification, 'INDETERMINATE');
+});
+test('Gate separate final absence cannot target a different resource', () => {
+  const r = fixture(); r.cleanup[2].absence = structuredClone(r.cleanup[0].absence);
+  assert.equal(compare(r).classification, 'INDETERMINATE');
+});
+test('supports frozen Gate budget of 25 slots without permitting larger budgets', () => {
+  assert.equal(compare(fixture(), fixture(), { ...contract, maxRpc: 25 }).classification, 'MATCH');
+  assert.equal(compare(fixture(), fixture(), { ...contract, maxRpc: 26 }).classification, 'INDETERMINATE');
+});
+test('public null input fails closed', () => assert.equal(compareStreamReceipts(null).classification, 'INDETERMINATE'));
+test('nonfinite user numbers cannot be silently converted to null', () => {
+  const p = fixture(); const l = fixture(); p.observations[5].receipt.response.extra = NaN; l.observations[5].receipt.response.extra = null;
+  assert.equal(compare(p, l).classification, 'INDETERMINATE');
 });
 
-test('returns indeterminate when the historical receipt lacks outgoing send facts', () => {
-  const result = compareStreamReceipts({ production: makeReceipt({ omitSend: true }), local: makeReceipt(), expected: contract });
-  assert.equal(result.classification, 'INDETERMINATE');
+const recoveryJournal = r => {
+  const entries = [{ index: 0, phase: 'rollback-finally', skipped: true }];
+  for (const [i, role] of ['control', 'locked', 'suffix'].entries()) {
+    const item = r.cleanup[i];
+    if (item.skipped) item.absence = structuredClone(item.receipt);
+    entries.push({ index: 1 + i * 3, phase: `owned-read-${role}`, skipped: false, receipt: item.skipped ? item.receipt : item.ownedRead });
+    entries.push({ index: 2 + i * 3, phase: `conditional-delete-${role}`, skipped: item.skipped, ...(item.skipped ? {} : { receipt: item.receipt }) });
+    entries.push({ index: 3 + i * 3, phase: `typed-absence-${role}`, skipped: false, receipt: item.absence });
+  }
+  r.recoveryObservations = entries;
+  return r;
+};
+test('binds the optional Gate recovery journal to exact canonical cleanup receipts without double counting', () => {
+  const r = recoveryJournal(fixture()); assert.equal(compare(r, structuredClone(r), { ...contract, maxRpc: 23 }).classification, 'MATCH');
 });
-
-test('returns semantic mismatch for complete unexpected contention and moved poststate', () => {
-  const result = compareStreamReceipts({ production: makeReceipt(), local: makeReceipt({ unexpected: true, moved: true }), expected: contract });
-  assert.equal(result.classification, 'SEMANTIC_MISMATCH');
-});
-
-test('rejects a stale stream version as indeterminate evidence', () => {
-  const local = makeReceipt();
-  const request = local.observations.find(item => item.phase === 'setup-control').receipt.events.find(event => event.type === 'send' && event.value.writes)?.value;
-  request.streamToken = streamToken(99);
-  const result = compareStreamReceipts({ production: makeReceipt(), local, expected: contract });
-  assert.equal(result.classification, 'INDETERMINATE');
-});
-
-test('rejects a foreign cleanup owner marker as indeterminate evidence', () => {
-  const local = makeReceipt();
-  local.cleanup[0].ownedRead = doc('compat/o3/run-fixed/control', 'foreign-owner', 'control', 'accepted');
-  const result = compareStreamReceipts({ production: makeReceipt(), local, expected: contract });
-  assert.equal(result.classification, 'INDETERMINATE');
-});
-
-test('rejects a partial stream even when its peer is complete', () => {
-  const local = makeReceipt();
-  local.observations.find(item => item.phase === 'positive-uncontended-stream').receipt.complete = false;
-  const result = compareStreamReceipts({ production: makeReceipt(), local, expected: contract });
-  assert.equal(result.classification, 'INDETERMINATE');
-});
-
-test('rejects a transaction token sequence that does not reach rollback', () => {
-  const local = makeReceipt();
-  local.observations.find(item => item.phase === 'rollback').receipt.request.transaction = transaction(88);
-  const result = compareStreamReceipts({ production: makeReceipt(), local, expected: contract });
-  assert.equal(result.classification, 'INDETERMINATE');
-});
+for (const [name, mutate] of Object.entries({
+  'missing recovery slot': r => { r.recoveryObservations.pop(); },
+  'duplicate recovery index': r => { r.recoveryObservations[2].index = 1; },
+  'wrong recovery phase': r => { r.recoveryObservations[1].phase = 'typed-absence-control'; },
+  'unbound extra recovery receipt': r => { r.recoveryObservations[1].receipt = structuredClone(r.cleanup[1].ownedRead); },
+  'skipped slot has extra receipt': r => { r.recoveryObservations[0].receipt = r.observations[11].receipt; },
+  'extra executed rollback after complete nominal sequence': r => { r.recoveryObservations[0].skipped = false; r.recoveryObservations[0].receipt = r.observations[11].receipt; },
+})) test(`rejects Gate ${name}`, () => { const r = recoveryJournal(fixture()); mutate(r); assert.equal(compare(r).classification, 'INDETERMINATE'); });

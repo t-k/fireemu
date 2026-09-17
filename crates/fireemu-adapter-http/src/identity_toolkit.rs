@@ -1757,6 +1757,7 @@ fn dispatch_with_blocking_hook(
     handler: routes::Handler,
     store_arc: &Arc<Mutex<AuthStore>>,
     store: std::sync::MutexGuard<'_, AuthStore>,
+    operation_gate: Option<&Arc<Mutex<()>>>,
     query: Option<&str>,
     body: &Value,
     headers: &RequestHeaders,
@@ -2146,6 +2147,17 @@ fn dispatch_with_blocking_hook(
         *live = committed;
         committed_response
     };
+    // Do not hold the namespace gate while invoking the synchronous hook: hooks may re-enter
+    // Auth routes (for example, an Admin update) before returning. Acquire it only after the
+    // callback completes, before reading metadata or locking the live store. This preserves the
+    // registry's gate-before-metadata/store order at the commit boundary.
+    let _operation = match operation_gate {
+        Some(gate) => match gate.lock() {
+            Ok(operation) => Some(operation),
+            Err(_) => return error(500, "INTERNAL"),
+        },
+        None => None,
+    };
     match (tenant.as_deref(), state.registry.as_ref()) {
         (Some(tenant), Some(registry)) => {
             registry.with_existing_tenant_metadata(&project, tenant, commit)
@@ -2300,6 +2312,11 @@ fn handle_with_policy(
             Err(response) => return response,
         }
     };
+    let end_user_request = matches!(
+        resolution,
+        routes::Resolution::Matched { route, .. }
+            if route.class == routes::RouteClass::EndUser
+    );
     let (store_project, store_tenant) = {
         let Ok(store) = store_arc.lock() else {
             return error(500, "INTERNAL");
@@ -2316,27 +2333,53 @@ fn handle_with_policy(
                 if handler_may_invoke_blocking_auth(blocking, route.handler)
         ) && blocking_hook_applies_to_project(state, blocking, &store_project)
     });
-    let operation_gate = if blocking_auth && state.registry.is_some() {
+    // End-user requests take the namespace gate before acquiring the store guard. Configuration
+    // PATCHes use this same gate and then lock the store, so keeping one order prevents a signup
+    // from holding the store while a concurrent PATCH waits for the gate. The gate also covers
+    // ordinary reads in a routed namespace; this is deliberately conservative because deciding
+    // whether a request creates an account requires the store snapshot.
+    // A registry-backed namespace has one gate shared by end-user admission and config PATCHes.
+    // The legacy single-store blocking bridge may synchronously call back into that store from
+    // its hook (some test and embedding bridges do), so preserve its re-entrant store behavior
+    // when no registry exists instead of introducing a store/gate deadlock. End-user requests
+    // without a blocking hook still use the adapter-wide gate, which is also used by the
+    // single-store config route.
+    let operation_gate = if state.registry.is_none() && state.blocking.is_some() {
+        // The legacy single-store bridge already serializes blocking admission with the outer
+        // settings boundary, but releases the store before invoking the hook. Keep non-hooking
+        // routes able to read that store while the hook is delayed; putting them behind the same
+        // gate would starve ordinary Auth traffic behind an external callback.
+        None
+    } else if blocking_auth || end_user_request {
         let gate = match state.registry.as_ref() {
-            Some(registry) => {
-                let Some(gate) = registry.operation_gate(&store_project, store_tenant.as_deref())
-                else {
-                    return error(500, "INTERNAL");
-                };
-                gate
-            }
-            None => unreachable!("registry presence checked above"),
+            Some(registry) => registry
+                // Project and tenant management both commit through the project gate. A
+                // tenant-specific request therefore uses that same parent gate so a project
+                // update cannot race a tenant policy admission or store commit.
+                .operation_gate(&store_project, None)
+                .ok_or_else(|| error(500, "INTERNAL")),
+            None => Ok(state.operation_gate.clone()),
         };
-        Some(gate)
+        Some(match gate {
+            Ok(gate) => gate,
+            Err(response) => return response,
+        })
     } else {
         None
     };
-    let _operation = match operation_gate.as_ref() {
-        Some(gate) => match gate.lock() {
-            Ok(operation) => Some(operation),
-            Err(_) => return error(500, "INTERNAL"),
-        },
-        None => None,
+    // Non-blocking end-user requests keep the gate through admission and commit. Blocking hooks
+    // release it while the external callback runs and reacquire it in the commit boundary below,
+    // so a synchronous hook can safely re-enter Auth.
+    let _operation = if blocking_auth {
+        None
+    } else {
+        match operation_gate.as_ref() {
+            Some(gate) => match gate.lock() {
+                Ok(operation) => Some(operation),
+                Err(_) => return error(500, "INTERNAL"),
+            },
+            None => None,
+        }
     };
     let tenant_metadata = store_tenant.as_deref().and_then(|tenant| {
         state
@@ -2500,24 +2543,6 @@ fn handle_with_policy(
     store.sweep_transient_credentials(at);
     let quota_request = route.class == routes::RouteClass::EndUser
         && request_may_create_end_user(route.handler, &store, body, at);
-    // Configuration PATCHes use this same namespace gate. Hold it for the complete
-    // end-user creation transaction so a quota reservation cannot be committed against a
-    // configuration snapshot that was replaced while the handler was running.
-    let quota_gate = if quota_request && !blocking_auth {
-        match state.registry.as_ref() {
-            Some(registry) => registry.operation_gate(&store_project, store_tenant.as_deref()),
-            None => Some(state.operation_gate.clone()),
-        }
-    } else {
-        None
-    };
-    let _quota_operation = match quota_gate.as_ref() {
-        Some(gate) => match gate.lock() {
-            Ok(operation) => Some(operation),
-            Err(_) => return error(500, "INTERNAL"),
-        },
-        None => None,
-    };
     let mut quota_reservation = if quota_request {
         let peer_ip = headers.peer_ip.as_deref().unwrap_or("127.0.0.1");
         match store.reserve_signup(AuthPrincipal::EndUser, peer_ip, at) {
@@ -2573,6 +2598,7 @@ fn handle_with_policy(
             route.handler,
             &store_arc,
             store,
+            operation_gate.as_ref(),
             query,
             body,
             headers,
@@ -5382,7 +5408,7 @@ fn tenant_policy_denial_with_metadata(
         }
     }
     if handler == routes::Handler::SignUp {
-        let links_existing_user = body.get("idToken").is_some();
+        let links_existing_user = body.get("idToken").is_some_and(|value| !value.is_null());
         let has_password = str_field(body, "password").is_some();
         let has_email = str_field(body, "email").is_some();
         if has_password && !links_existing_user && !metadata.allow_password_signup {

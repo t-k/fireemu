@@ -1831,6 +1831,248 @@ fn admin(state: &AuthState, method: &str, path: &str, body: &Value) -> (u16, Val
     (r.status, r.body)
 }
 
+/// Holds a namespace gate while a signup starts, then races the signup with a settings PATCH.
+/// The store must remain available while the signup waits for the gate; otherwise the old
+/// store-before-gate order can deadlock the PATCH's gate-before-store path.
+fn concurrent_signup_and_patch(
+    state: Arc<AuthState>,
+    gate: &Arc<Mutex<()>>,
+    store: &Arc<Mutex<AuthStore>>,
+    signup_body: Value,
+    patch_path: String,
+    patch_body: Value,
+) -> ((u16, Value), (u16, Value)) {
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+
+    let held = gate.lock().unwrap();
+    let signup_started = Arc::new(std::sync::Barrier::new(2));
+    let (signup_tx, signup_rx) = channel();
+    let signup_state = state.clone();
+    let signup_started_thread = signup_started.clone();
+    let signup = std::thread::spawn(move || {
+        signup_started_thread.wait();
+        signup_tx
+            .send(handle_with(
+                &signup_state,
+                "POST",
+                &format!("{V1}/accounts:signUp"),
+                &RequestHeaders::default(),
+                &signup_body,
+            ))
+            .unwrap();
+    });
+    signup_started.wait();
+
+    // Give the signup a bounded opportunity to reach its namespace gate. The corrected order
+    // may briefly read the store to resolve its namespace, but it must release that guard while
+    // waiting for the gate. Requiring an available store here catches the old store-before-gate
+    // inversion without depending on a sleep-based scheduling assumption.
+    let mut store_available = false;
+    for _ in 0..10_000 {
+        if store.try_lock().is_ok() {
+            store_available = true;
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert!(
+        store_available,
+        "signup held the store while waiting for the namespace gate"
+    );
+
+    let (patch_tx, patch_rx) = channel();
+    let patch_state = state;
+    let patch = std::thread::spawn(move || {
+        patch_tx
+            .send(handle_with(
+                &patch_state,
+                "PATCH",
+                &patch_path,
+                &owner(),
+                &patch_body,
+            ))
+            .unwrap();
+    });
+    drop(held);
+
+    let signup_response = signup_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("signup did not complete after releasing the namespace gate");
+    let patch_response = patch_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("settings PATCH did not complete after releasing the namespace gate");
+    signup.join().unwrap();
+    patch.join().unwrap();
+    (
+        (signup_response.status, signup_response.body),
+        (patch_response.status, patch_response.body),
+    )
+}
+
+#[test]
+fn signup_and_project_patch_have_a_bounded_shared_gate() {
+    use fireemu_core_auth::signup_quota::{QuotaMode, SignupQuotaConfig};
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut initial = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", initial.store.clone()));
+    initial
+        .store
+        .lock()
+        .unwrap()
+        .set_signup_quota_config(SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            default_quota_per_hour: 1,
+            ..SignupQuotaConfig::default()
+        })
+        .unwrap();
+    initial.registry = Some(registry.clone());
+    let store = initial.store.clone();
+    let state = Arc::new(initial);
+    let gate = registry.operation_gate("demo-app", None).unwrap();
+    let ((signup_status, signup_body), (patch_status, patch_body)) = concurrent_signup_and_patch(
+        state.clone(),
+        &gate,
+        &store,
+        json!({
+            "email": "concurrent-project@example.com",
+            "password": "password1",
+        }),
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=client.permissions.disabledUserSignup"
+            .to_owned(),
+        json!({"client": {"permissions": {"disabledUserSignup": true}}}),
+    );
+    assert_eq!(patch_status, 200, "{patch_body}");
+    assert!(
+        signup_status == 200 || signup_status == 400,
+        "unexpected signup response: {signup_status} {signup_body}"
+    );
+    let store_guard = store.lock().unwrap();
+    if signup_status == 200 {
+        assert!(store_guard
+            .user_by_email("concurrent-project@example.com")
+            .is_some());
+        assert_eq!(
+            store_guard.signup_quota().usage(
+                "demo-app",
+                "127.0.0.1",
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ),
+            (1, 0)
+        );
+    } else {
+        assert_eq!(signup_body["error"]["message"], "OPERATION_NOT_ALLOWED");
+        assert!(store_guard
+            .user_by_email("concurrent-project@example.com")
+            .is_none());
+        assert_eq!(
+            store_guard.signup_quota().usage(
+                "demo-app",
+                "127.0.0.1",
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ),
+            (0, 0)
+        );
+    }
+    drop(store_guard);
+    let final_config = admin(
+        &state,
+        "GET",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config",
+        &Value::Null,
+    );
+    assert_eq!(final_config.0, 200, "{}", final_config.1);
+    assert_eq!(
+        final_config.1["client"]["permissions"]["disabledUserSignup"],
+        true
+    );
+}
+
+#[test]
+fn signup_and_tenant_patch_have_a_bounded_shared_gate() {
+    use fireemu_core_auth::signup_quota::{QuotaMode, SignupQuotaConfig};
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut initial = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", initial.store.clone()));
+    registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    let tenant = registry.tenant_store("demo-app", "tenant-a").unwrap();
+    tenant
+        .lock()
+        .unwrap()
+        .set_signup_quota_config(SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            default_quota_per_hour: 1,
+            ..SignupQuotaConfig::default()
+        })
+        .unwrap();
+    initial.registry = Some(registry.clone());
+    let state = Arc::new(initial);
+    // Tenant management uses the project gate for metadata/store publication, so tenant
+    // end-user admission must share that parent gate as well.
+    let gate = registry.operation_gate("demo-app", None).unwrap();
+    let ((signup_status, signup_body), (patch_status, patch_body)) = concurrent_signup_and_patch(
+        state.clone(),
+        &gate,
+        &tenant,
+        json!({
+            "tenantId": "tenant-a",
+            "email": "concurrent-tenant@example.com",
+            "password": "password1",
+        }),
+        "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/tenant-a?updateMask=client.permissions.disabledUserSignup"
+            .to_owned(),
+        json!({
+            "client": {"permissions": {"disabledUserSignup": true}},
+        }),
+    );
+    assert_eq!(patch_status, 200, "{patch_body}");
+    assert!(
+        signup_status == 200 || signup_status == 400,
+        "unexpected signup response: {signup_status} {signup_body}"
+    );
+    let store_guard = tenant.lock().unwrap();
+    if signup_status == 200 {
+        assert!(store_guard
+            .user_by_email("concurrent-tenant@example.com")
+            .is_some());
+        assert_eq!(
+            store_guard.signup_quota().usage(
+                "demo-app",
+                "127.0.0.1",
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ),
+            (1, 0)
+        );
+    } else {
+        assert_eq!(signup_body["error"]["message"], "OPERATION_NOT_ALLOWED");
+        assert!(store_guard
+            .user_by_email("concurrent-tenant@example.com")
+            .is_none());
+        assert_eq!(
+            store_guard.signup_quota().usage(
+                "demo-app",
+                "127.0.0.1",
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ),
+            (0, 0)
+        );
+    }
+    drop(store_guard);
+    let final_config = admin(
+        &state,
+        "GET",
+        "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/tenant-a",
+        &Value::Null,
+    );
+    assert_eq!(final_config.0, 200, "{}", final_config.1);
+    assert_eq!(
+        final_config.1["client"]["permissions"]["disabledUserSignup"],
+        true
+    );
+}
+
 #[test]
 fn project_blocking_settings_get_patch_preserves_masked_values_and_rejects_atomically() {
     let settings = Arc::new(Mutex::new(json!({
@@ -2360,15 +2602,14 @@ fn blocking_auth_rechecks_tenant_disablement_and_deletion_before_commit() {
 }
 
 #[test]
-fn a_poisoned_tenant_operation_gate_fails_closed_before_authentication() {
+fn a_poisoned_namespace_operation_gate_fails_closed_before_authentication() {
     use fireemu_core_auth::store::AuthRegistry;
 
     let mut state = state();
     let registry = Arc::new(AuthRegistry::new("demo-app", state.store.clone()));
     registry.ensure_tenant("demo-app", "customer").unwrap();
-    let gate = registry
-        .operation_gate("demo-app", Some("customer"))
-        .unwrap();
+    // Tenant management and tenant authentication share the project namespace gate.
+    let gate = registry.operation_gate("demo-app", None).unwrap();
     let poison = gate.clone();
     let _ = std::thread::spawn(move || {
         let _guard = poison.lock().unwrap();
@@ -8200,6 +8441,113 @@ fn project_config_rejects_malformed_unmasked_fields_without_mutation() {
             "{label}"
         );
     }
+}
+
+#[test]
+fn tenant_signup_policy_treats_null_id_token_as_a_new_account() {
+    use fireemu_core_auth::signup_quota::{QuotaMode, SignupQuotaConfig};
+    use fireemu_core_auth::store::{AuthRegistry, TenantMetadataPatch};
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    s.registry = Some(registry.clone());
+
+    // Create a pre-existing anonymous account while the tenant still permits anonymous signup.
+    // A later non-null session token must continue to support credential linking after policy
+    // changes disable new account creation.
+    let (status, anonymous) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": "tenant-a"}),
+    );
+    assert_eq!(status, 200, "{anonymous}");
+    let link_token = anonymous["idToken"].clone();
+
+    registry
+        .patch_tenant(
+            "demo-app",
+            "tenant-a",
+            TenantMetadataPatch {
+                allow_password_signup: Some(false),
+                enable_anonymous_user: Some(false),
+                ..TenantMetadataPatch::default()
+            },
+        )
+        .unwrap();
+    let tenant = registry.tenant_store("demo-app", "tenant-a").unwrap();
+    tenant
+        .lock()
+        .unwrap()
+        .set_signup_quota_config(SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            default_quota_per_hour: 10,
+            ..SignupQuotaConfig::default()
+        })
+        .unwrap();
+
+    let before_count = tenant.lock().unwrap().user_count();
+    let before_usage = tenant.lock().unwrap().signup_quota().usage(
+        "demo-app",
+        "127.0.0.1",
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    );
+    for (label, body) in [
+        (
+            "omitted password session",
+            json!({
+                "tenantId": "tenant-a",
+                "email": "blocked-omitted@example.com",
+                "password": "password1",
+            }),
+        ),
+        (
+            "null password session",
+            json!({
+                "tenantId": "tenant-a",
+                "idToken": null,
+                "email": "blocked-null@example.com",
+                "password": "password1",
+            }),
+        ),
+        (
+            "null anonymous session",
+            json!({"tenantId": "tenant-a", "idToken": null}),
+        ),
+    ] {
+        let (status, refused) = post(&s, &format!("{V1}/accounts:signUp"), &body);
+        assert_eq!(status, 400, "{label}: {refused}");
+        assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED");
+        assert!(refused.get("idToken").is_none(), "{label}: {refused}");
+        assert!(refused.get("refreshToken").is_none(), "{label}: {refused}");
+        let store = tenant.lock().unwrap();
+        assert_eq!(store.user_count(), before_count, "{label}");
+        assert!(store
+            .user_by_email(body["email"].as_str().unwrap_or_default())
+            .is_none());
+        assert_eq!(
+            store.signup_quota().usage(
+                "demo-app",
+                "127.0.0.1",
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ),
+            before_usage,
+            "{label}"
+        );
+    }
+
+    let (status, linked) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "tenantId": "tenant-a",
+            "idToken": link_token,
+            "email": "linked-after-policy@example.com",
+            "password": "password1",
+        }),
+    );
+    assert_eq!(status, 200, "{linked}");
+    assert_eq!(linked["localId"], anonymous["localId"]);
 }
 
 #[test]

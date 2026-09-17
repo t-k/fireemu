@@ -12,7 +12,7 @@ CAMPAIGN_ID = "AUTH-MFA-TOTP-ENROLL-RETRY-01"
 SOURCE_COMMIT = "f3be8df11f9096a44b45272681744b406c9713d5"
 
 
-def _operation(stage: str, method: str, path: str, resource: str, *, body: dict | None = None) -> dict:
+def _operation(stage: str, method: str, path: str, resource: str, principal: str, *, body: dict | None = None) -> dict:
     return {
         "stage": stage,
         "service": "auth",
@@ -20,7 +20,7 @@ def _operation(stage: str, method: str, path: str, resource: str, *, body: dict 
         "path": path,
         "body": body,
         "resource": resource,
-        "principal": "owned-account:{freshNonce}",
+        "principal": principal,
         "origin": "loopback-only",
         "productionAllowed": False,
     }
@@ -31,22 +31,23 @@ def campaign_manifest(nonce: str) -> dict:
         raise ValueError("fresh hexadecimal nonce required")
     account = f"accounts/{nonce}"
     session = f"mfaSessions/{nonce}"
+    principal = f"owned-account:{nonce}"
     operations = [
-        _operation("C0-create-user", "POST", "/v1/accounts:signUp", account),
-        _operation("C0-verify-email", "POST", "/v1/accounts:sendOobCode", account),
-        _operation("C0-read-user", "POST", "/v1/accounts:lookup", account),
-        _operation("C1-start", "POST", "/v2/accounts:mfaEnrollmentStart", session),
-        _operation("C1-read-user", "POST", "/v1/accounts:lookup", account),
-        _operation("C1-read-session", "GET", f"/v2/{session}", session),
-        _operation("C2-wrong-code", "POST", "/v2/accounts:mfaEnrollmentFinalize", session, body={"otp": "$classified:wrong"}),
-        _operation("C2-read-state", "POST", "/v1/accounts:lookup", account),
-        _operation("C3-correct-code", "POST", "/v2/accounts:mfaEnrollmentFinalize", session, body={"otp": "$classified:correct"}),
-        _operation("C3-read-user", "POST", "/v1/accounts:lookup", account),
-        _operation("C4-replay", "POST", "/v2/accounts:mfaEnrollmentFinalize", session, body={"otp": "$classified:correct"}),
-        _operation("C4-read-user", "POST", "/v1/accounts:lookup", account),
-        _operation("N0-unverified-start", "POST", "/v2/accounts:mfaEnrollmentStart", f"negative/{nonce}"),
-        _operation("N1-wrong-tenant-start", "POST", "/v2/accounts:mfaEnrollmentStart", f"tenant/{nonce}"),
-        _operation("cleanup-read", "POST", "/v1/accounts:lookup", account),
+        _operation("C0-create-user", "POST", "/v1/accounts:signUp", account, principal),
+        _operation("C0-verify-email", "POST", "/v1/accounts:sendOobCode", account, principal),
+        _operation("C0-read-user", "POST", "/v1/accounts:lookup", account, principal),
+        _operation("C1-start", "POST", "/v2/accounts/mfaEnrollment:start", session, principal, body={"idToken": "$owned:idToken", "totpEnrollmentInfo": {}}),
+        _operation("C1-read-user", "POST", "/v1/accounts:lookup", account, principal),
+        _operation("C1-read-session", "GET", f"/v2/{session}", session, principal),
+        _operation("C2-wrong-code", "POST", "/v2/accounts/mfaEnrollment:finalize", session, principal, body={"idToken": "$owned:idToken", "totpVerificationInfo": {"sessionInfo": "$owned:sessionInfo", "verificationCode": "$classified:wrong", "displayName": "O2 TOTP"}}),
+        _operation("C2-read-state", "POST", "/v1/accounts:lookup", account, principal),
+        _operation("C3-correct-code", "POST", "/v2/accounts/mfaEnrollment:finalize", session, principal, body={"idToken": "$owned:idToken", "totpVerificationInfo": {"sessionInfo": "$owned:sessionInfo", "verificationCode": "$classified:correct", "displayName": "O2 TOTP"}}),
+        _operation("C3-read-user", "POST", "/v1/accounts:lookup", account, principal),
+        _operation("C4-replay", "POST", "/v2/accounts/mfaEnrollment:finalize", session, principal, body={"idToken": "$owned:idToken", "totpVerificationInfo": {"sessionInfo": "$owned:sessionInfo", "verificationCode": "$classified:correct", "displayName": "O2 TOTP"}}),
+        _operation("C4-read-user", "POST", "/v1/accounts:lookup", account, principal),
+        _operation("N0-unverified-start", "POST", "/v2/accounts/mfaEnrollment:start", f"negative/{nonce}", principal, body={"idToken": "$owned:unverifiedIdToken", "totpEnrollmentInfo": {}}),
+        _operation("N1-wrong-tenant-start", "POST", "/v2/accounts/mfaEnrollment:start", f"tenant/{nonce}", principal, body={"idToken": "$owned:idToken", "totpEnrollmentInfo": {}}),
+        _operation("cleanup-read", "POST", "/v1/accounts:lookup", account, principal),
     ]
     return {
         "campaignId": CAMPAIGN_ID,

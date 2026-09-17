@@ -23,6 +23,8 @@ class TotpShadow:
         self.uid, self.secret, self.now, self.tenant = uid, secret, now, tenant
         self.pending: dict[str, bool] = {}
         self.enrollments: list[str] = []
+        self._session_counter = 0
+        self.cleaned = False
         self.events = 0
         self.consumptions = 0
 
@@ -31,7 +33,8 @@ class TotpShadow:
             return {"status": 400, "error": {"code": "TENANT_MISMATCH"}}
         if not email_verified:
             return {"status": 400, "error": {"code": "EMAIL_NOT_VERIFIED"}}
-        session = f"session-{len(self.pending) + 1}"
+        self._session_counter += 1
+        session = f"session-{self._session_counter}"
         self.pending[session] = True
         self.events += 1
         return {"status": 200, "sessionId": session, "secretDigest": hashlib.sha256(self.secret.encode()).hexdigest()}
@@ -44,6 +47,8 @@ class TotpShadow:
     def finalize(self, session: str, otp: str) -> dict:
         if session not in self.pending:
             return {"status": 400, "error": {"code": "SESSION_ALREADY_FINALIZED"}}
+        if not isinstance(otp, str) or len(otp) != 6 or not otp.isdecimal():
+            return {"status": 400, "error": {"code": "INVALID_TOTP_FORMAT"}}
         if not hmac.compare_digest(otp, _code(self.secret, self.now)):
             return {"status": 400, "error": {"code": "INVALID_TOTP"}}
         del self.pending[session]
@@ -56,6 +61,14 @@ class TotpShadow:
     def state(self) -> dict:
         return {"pendingSessions": len(self.pending), "enrollments": len(self.enrollments), "codeConsumptions": self.consumptions, "events": self.events}
 
+    def cleanup(self, nonce: str) -> dict:
+        if not nonce or self.cleaned or self.uid != f"uid-{nonce}":
+            return {"complete": False, "reason": "ownership-or-recovery-invalid"}
+        self.pending.clear()
+        self.enrollments.clear()
+        self.cleaned = True
+        return {"complete": True, "owner": f"uid-{nonce}", "deleted": True, "remainingState": self.state()}
+
 
 def run(output: Path, *, nonce: str) -> dict:
     """Run the bounded shadow and checkpoint before returning the secret-free receipt."""
@@ -65,8 +78,11 @@ def run(output: Path, *, nonce: str) -> dict:
     correct = shadow.current_code(start["sessionId"])
     success = shadow.finalize(start["sessionId"], correct)
     replay = shadow.finalize(start["sessionId"], correct)
-    result = {"status": "completed", "recordingComplete": True, "cleanupComplete": True, "productionExecuted": False, "rows": [start, wrong, success, replay], "state": shadow.state()}
+    before_cleanup = shadow.state()
+    recovery = shadow.cleanup(nonce)
+    result = {"status": "completed" if recovery["complete"] else "incomplete", "recordingComplete": True, "cleanupComplete": recovery["complete"], "productionExecuted": False, "rows": [start, wrong, success, replay], "state": before_cleanup, "recovery": recovery}
     output.mkdir(parents=True, exist_ok=False)
     (output / "checkpoint.json").write_text(json.dumps({"stage": "C4", "nonce": nonce}, indent=2) + "\n")
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+    (output / "recovery-receipt.json").write_text(json.dumps(recovery, indent=2) + "\n")
     return result

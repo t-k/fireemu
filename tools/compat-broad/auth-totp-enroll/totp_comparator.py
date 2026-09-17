@@ -22,12 +22,18 @@ def _normalize(value: Any, key: str = "") -> Any:
 def compare(left: dict, right: dict) -> dict:
     if not left.get("recordingComplete", False) or not right.get("recordingComplete", False):
         classification = "INCONCLUSIVE"
+    elif not left.get("cleanupComplete", False) or not right.get("cleanupComplete", False):
+        classification = "INDETERMINATE"
+    elif not left.get("rows") or not right.get("rows"):
+        classification = "SEMANTIC_MISMATCH"
     else:
-        same_rows = _normalize(left.get("rows", [])) == _normalize(right.get("rows", []))
+        normalized_left = _normalize(left["rows"])
+        normalized_right = _normalize(right["rows"])
+        same_rows = normalized_left == normalized_right
         if not same_rows:
-            classification = "DIFF"
-        elif left.get("cleanupComplete") != right.get("cleanupComplete"):
-            classification = "CLEANUP_DIFF"
+            classification = "SEMANTIC_MISMATCH"
+        elif left["rows"] != right["rows"]:
+            classification = "EXPECTED_NONDETERMINISM"
         else:
             classification = "MATCH"
     return {

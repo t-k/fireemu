@@ -146,10 +146,7 @@ def prepared_fixture(tmp_path, metadata_server, stale=None):
     if stale == "plan":
         plan["observerSha256"] = "0" * 64
     ledger = Ledger.create(tmp_path / "ledger")
-    scope = {
-        "key": f"project/{PROJECT}/firestore/(default)/documents/{plan['documentPrefix']}",
-        "mode": "EXCLUSIVE",
-    }
+    locks = module.resource_locks(plan)
     budget = {
         "requests": 33,
         "accounts": 0,
@@ -162,7 +159,7 @@ def prepared_fixture(tmp_path, metadata_server, stale=None):
         "expiresAt": permission["expiresAt"],
         "limits": budget,
         "concurrency": 1,
-        "scopes": [scope],
+        "scopes": locks,
     }
     claim = {
         "campaignId": permission["nonce"],
@@ -170,7 +167,7 @@ def prepared_fixture(tmp_path, metadata_server, stale=None):
         "nonceDigest": digest(permission["nonce"]),
         "gatePath": str((tmp_path / "gate").resolve()),
         "gatePlanDigest": digest(plan),
-        "locks": [scope],
+        "locks": locks,
         "budget": budget,
         "durationSeconds": 1100,
     }
@@ -622,3 +619,76 @@ def test_pricing_sdk_binding_rejects_unattested_installed_client(tmp_path):
     source.write_text("const maxMessageLength = 17 * 1024 * 1024;")
     with pytest.raises(ValueError, match="SDK"):
         module.pricing_sdk_binding(tmp_path)
+
+
+def test_stream_locks_exclude_shared_mutation_but_allow_independent_readers():
+    from reservations import conflicts
+
+    module = production()
+    plan = module.prepared_plan("stream-lock-a", "owner-a", "a" * 64)
+    locks = module.resource_locks(plan)
+    prefix = "project/fireemu-35fe6"
+    expected_reads = {
+        f"{prefix}/firestore/(default)/indexes",
+        f"{prefix}/firestore/(default)/ruleset",
+        f"{prefix}/firestore/(default)/database",
+        f"{prefix}/auth/config",
+        f"{prefix}/api-key-binding",
+    }
+    assert {lock["key"] for lock in locks if lock["mode"] == "READ"} == expected_reads
+    for key in expected_reads:
+        assert any(conflicts(lock, {"key": key, "mode": "WRITE"}) for lock in locks)
+        assert not any(conflicts(lock, {"key": key, "mode": "READ"}) for lock in locks)
+    other = module.resource_locks(
+        module.prepared_plan("stream-lock-b", "owner-b", "b" * 64)
+    )
+    assert not any(conflicts(left, right) for left in locks for right in other)
+    assert all(lock["key"] != prefix for lock in locks)
+
+
+def test_actual_ledger_retains_configuration_reads_across_independent_campaigns(
+    tmp_path, metadata_server
+):
+    import copy
+    import time
+
+    from broad_contract import digest
+
+    module, _permission, _plan, ledger, ticket, _credential = prepared_fixture(
+        tmp_path, metadata_server
+    )
+    plan = module.prepared_plan("independent-stream", "owner-other", "b" * 64)
+    locks = module.resource_locks(plan)
+    budget = ledger.bound_claim(ticket)["budget"]
+    envelope = {
+        "permissionDigest": "b" * 64,
+        "issuedAt": time.time() - 1,
+        "expiresAt": time.time() + 1800,
+        "limits": budget,
+        "concurrency": 1,
+        "scopes": locks,
+    }
+    claim = {
+        "campaignId": "independent-stream",
+        "manifestDigest": digest(plan),
+        "nonceDigest": digest(plan["nonce"]),
+        "gatePath": str((tmp_path / "other-gate").resolve()),
+        "gatePlanDigest": digest(plan),
+        "locks": locks,
+        "budget": budget,
+        "durationSeconds": 1100,
+    }
+    before = ledger.snapshot()
+    for index, lock in enumerate(locks):
+        if lock["mode"] != "READ":
+            continue
+        changed = copy.deepcopy(locks)
+        changed[index]["mode"] = "WRITE"
+        with pytest.raises(ValueError, match="resource lock conflict"):
+            ledger.reserve(
+                {**envelope, "scopes": changed}, {**claim, "locks": changed}, plan
+            )
+        assert ledger.snapshot() == before
+    other = ledger.reserve(envelope, claim, plan)
+    assert ledger.bound_claim(other)["locks"] == locks
+    assert ledger.bound_claim(ticket)["locks"] != locks

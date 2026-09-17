@@ -204,10 +204,7 @@ def child(output, nonce):
         execution = output / "execution"
         execution.mkdir(mode=0o700)
         ledger = Ledger.create(output / "ledger")
-        scope = {
-            "key": f"project/{PROJECT}/firestore/(default)/documents/{plan['documentPrefix']}",
-            "mode": "EXCLUSIVE",
-        }
+        locks = production.resource_locks(plan)
         budget = {
             "requests": 33,
             "accounts": 0,
@@ -220,7 +217,7 @@ def child(output, nonce):
             "expiresAt": permission["expiresAt"],
             "limits": budget,
             "concurrency": 1,
-            "scopes": [scope],
+            "scopes": locks,
         }
         claim = {
             "campaignId": nonce,
@@ -228,7 +225,7 @@ def child(output, nonce):
             "nonceDigest": digest(nonce),
             "gatePath": str(execution / "gate"),
             "gatePlanDigest": digest(plan),
-            "locks": [scope],
+            "locks": locks,
             "budget": budget,
             "durationSeconds": 1100,
         }

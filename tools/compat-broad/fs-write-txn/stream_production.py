@@ -661,12 +661,26 @@ def compare_bound(collection, local, plan):
     return value
 
 
+def resource_locks(plan):
+    """Keep shared configuration stable without serializing unrelated documents."""
+    project = f"project/{PROJECT}"
+    firestore = f"{project}/firestore/(default)"
+    return [
+        {"key": f"{firestore}/documents/{plan['documentPrefix']}", "mode": "EXCLUSIVE"},
+        {"key": f"{firestore}/indexes", "mode": "READ"},
+        {"key": f"{firestore}/ruleset", "mode": "READ"},
+        {"key": f"{firestore}/database", "mode": "READ"},
+        {"key": f"{project}/auth/config", "mode": "READ"},
+        {"key": f"{project}/api-key-binding", "mode": "READ"},
+    ]
+
+
 def manifest(nonce, owner):
+    allocation = with_management(stream_bridge.compile_plan(PROJECT, nonce, owner))
     return {
         "kind": "stream-prepared-manifest-v1",
-        "allocation": with_management(
-            stream_bridge.compile_plan(PROJECT, nonce, owner)
-        ),
+        "allocation": allocation,
+        "resourceLocks": resource_locks(allocation),
         "sourceDigest": stream_bridge.source_digest(),
         "pricingBasis": pricing_basis(),
         "pricingSdk": pricing_sdk_binding(),
@@ -715,6 +729,7 @@ def _prepared_inputs(permission_path, local_path, artifact_path):
         "quotaProject": PROJECT,
         "database": "(default)",
         "manifestSha256": digest(frozen),
+        "resourceLocks": frozen["resourceLocks"],
         "collectorSourceDigest": binding["sourceDigest"],
         "comparisonContractDigest": digest(comparison_contract(frozen["allocation"])),
         "comparatorSha256": binding["comparatorSha256"],
@@ -910,10 +925,9 @@ def execute_prepared(config_path, output, credential_fd):
     if output != output.resolve() or output.exists():
         raise ValueError("fresh canonical execution output required")
     ledger = Ledger(SHARED_ROOT)
-    scope = {
-        "key": f"project/{PROJECT}/firestore/(default)/documents/{plan['documentPrefix']}",
-        "mode": "EXCLUSIVE",
-    }
+    locks = resource_locks(plan)
+    if value["manifest"]["resourceLocks"] != locks:
+        raise ValueError("frozen resource locks differ")
     budget = {
         "requests": 33,
         "accounts": 0,
@@ -926,7 +940,7 @@ def execute_prepared(config_path, output, credential_fd):
         "expiresAt": permission["expiresAt"],
         "limits": budget,
         "concurrency": 1,
-        "scopes": [scope],
+        "scopes": locks,
     }
     claim = {
         "campaignId": plan["nonce"],
@@ -934,7 +948,7 @@ def execute_prepared(config_path, output, credential_fd):
         "nonceDigest": digest(plan["nonce"]),
         "gatePath": str(output / "gate"),
         "gatePlanDigest": digest(plan),
-        "locks": [scope],
+        "locks": locks,
         "budget": budget,
         "durationSeconds": 1100,
     }

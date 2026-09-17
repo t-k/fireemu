@@ -370,10 +370,11 @@ impl AuthBlockingHook for RevisionBumpBeforeDispatchHook {
 impl AuthBlockingHook for RevisionChangeAfterPostCallbackHook {
     fn blocking_auth_revision(&self) -> u64 {
         let call = self.revision_calls.fetch_add(1, Ordering::SeqCst);
+        let revision = self.revision.load(Ordering::SeqCst);
         if call == 4 {
             self.post_callback_checked.store(true, Ordering::SeqCst);
         }
-        self.revision.load(Ordering::SeqCst) as u64
+        revision as u64
     }
 
     fn invoke(

@@ -29,3 +29,9 @@ uv run --project tools/compat-inventory --locked --python 3.12 \
 The same immutable production receipts were replayed through the current feature source `577eaad53c7e914f141405a715b246248dcd6ae8`. One freshly built local artifact (`95ffc5825108db895c0e298d10865c288ffe423038eee8d6cef74f0a6ba774e6`) completed all four owned corpora with 48/48 `MATCH` rows. The generated run manifest is bound by `5cb9484c8b16f5dac23e22e26e07ff84459ecea77b2bd8b8dae78d67b595cdbb`, and the comparison digest is `ef054f4ee9ef0daea008042466b6081dc693be3cfb023e3b649cbc9a1ba7aaff`. The candidate result is [`577eaad5-auth-saved-reference-replay.json`](../../spec/compatibility/broad-runs/577eaad5-auth-saved-reference-replay.json).
 
 This is a saved-production-reference comparison only. It does not add production traffic or promote `AUTH-ACCOUNT`; provider lifecycle, alternate hash formats, policy boundaries, MFA, OOB, tenant, blocking, token-signature and SDK conditions remain separately declared.
+
+## Retained current-source checkpoint (2026-09-17)
+
+Source `cce4a4f9b7369938c89bd32a5106e8d3cab59f83` replayed all four immutable corpora against one newly retained artifact, SHA-256 `be2771b9f2093cced55e8158d8d5a72ed35e6ac5e32edddb068daa45511e12ae`. All 48 cases matched. The materialized comparison and its hash-bound provenance summary are retained as `spec/compatibility/broad-runs/cce4a4f9b-auth-saved-reference-replay.json` and the adjacent `-binding.json`. Independent evidence review verified source, artifact, collector/comparator, reference bindings and cleanup. Owned accounts were absent, listeners closed and processes stopped.
+
+This is a new saved-reference comparison, not new production traffic or an amendment to historical v9/source-9830 preparation. Configuration projections remain separate evidence; provider, hash-format and configured-policy gaps are not discharged by these 48 cases. No Auth parent was promoted.

@@ -21,6 +21,13 @@ use crate::mfa::{
     PendingSignInContext, PhoneFactor, TotpEnrollmentMaterial, TotpFactor, TotpPolicy, TotpSecret,
     MAX_FACTORS_PER_USER,
 };
+
+/// Reservations grouped by the reset generation that created them.
+///
+/// The adapter's reservation guard carries only the generated UID, so a release cannot name its
+/// generation. Keeping old generations until their guards drop lets a pre-reset guard release
+/// its own entry before a same-UID reservation from the current generation.
+type GeneratedLocalIdReservations = BTreeMap<LocalId, BTreeSet<u64>>;
 use crate::password_policy::{Operation as PasswordPolicyOperation, PasswordPolicy, ViolationCode};
 use crate::signup_quota::{QuotaError, SignupQuota, SignupQuotaConfig, SignupReservation};
 
@@ -875,10 +882,10 @@ pub struct AuthStore {
     /// credential is resolved directly rather than by scanning every user
     /// (`AUTH-TRANSIENT-04`). Kept in step with the users' own pending maps.
     pending_sign_in_owners: Arc<BTreeMap<String, LocalId>>,
-    /// Generated IDs held by in-flight blocking Auth candidates. This registry is shared by
-    /// snapshots so concurrent candidates avoid each other's IDs without advancing the live
-    /// random stream that ordinary nested Admin requests use.
-    generated_local_id_reservations: Arc<Mutex<BTreeSet<LocalId>>>,
+    /// Generated IDs held by in-flight blocking Auth candidates, grouped by reset generation.
+    /// This registry is shared by snapshots so concurrent candidates avoid each other's IDs
+    /// without advancing the live random stream that ordinary nested Admin requests use.
+    generated_local_id_reservations: Arc<Mutex<GeneratedLocalIdReservations>>,
     /// Monotonic count of ordinary generated-ID allocations that skipped an in-flight blocking
     /// reservation. A blocking candidate captures this before its hook runs; a change at commit
     /// means a nested ordinary Admin allocation changed the identity allocation boundary.
@@ -1108,7 +1115,7 @@ impl AuthStore {
             oob_codes: Arc::new(BTreeMap::new()),
             verification_codes: Arc::new(BTreeMap::new()),
             pending_sign_in_owners: Arc::new(BTreeMap::new()),
-            generated_local_id_reservations: Arc::new(Mutex::new(BTreeSet::new())),
+            generated_local_id_reservations: Arc::new(Mutex::new(BTreeMap::new())),
             generated_id_interference: Arc::new(AtomicU64::new(0)),
             pending_user_ids: BTreeSet::new(),
             created_users: Vec::new(),
@@ -1383,10 +1390,6 @@ impl AuthStore {
         self.oob_codes = Arc::new(BTreeMap::new());
         self.verification_codes = Arc::new(BTreeMap::new());
         self.pending_sign_in_owners = Arc::new(BTreeMap::new());
-        self.generated_local_id_reservations
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
         self.reset_generation.fetch_add(1, Ordering::AcqRel);
         self.pending_user_ids.clear();
         if let Some(epoch) = self.credential_epoch {
@@ -2118,6 +2121,7 @@ impl AuthStore {
     /// keeps concurrent blocking candidates distinct while preserving the established identity
     /// change check when an ordinary nested Admin request consumes the same generated ID.
     pub fn reserve_next_generated_local_id(&mut self) -> String {
+        let generation = self.reset_generation();
         loop {
             let candidate = LocalId(self.random_id28());
             if self.users.contains_key(&candidate) {
@@ -2127,24 +2131,61 @@ impl AuthStore {
                 .generated_local_id_reservations
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if reservations.insert(candidate.clone()) {
+            let generations = reservations.entry(candidate.clone()).or_default();
+            if generations.insert(generation) {
                 self.next_id_override = Some(candidate.as_str().to_owned());
                 return candidate.as_str().to_owned();
             }
         }
     }
 
-    /// Uses a previously reserved ID for the next generated account.
+    /// Uses a previously reserved ID for the next generated account and retires its current
+    /// generation reservation. The adapter's Drop guard remains safe because its later release
+    /// sees no current entry and only retires an older generation, if one exists.
     pub fn use_reserved_generated_local_id(&mut self, id: &str) {
         self.next_id_override = Some(id.to_owned());
+        let generation = self.reset_generation();
+        let mut reservations = self
+            .generated_local_id_reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::release_reservation_generation(&mut reservations, id, generation);
     }
 
-    /// Releases a generated ID held by an in-flight blocking candidate.
+    /// Releases a generated ID held by an in-flight blocking candidate. When the same ID was
+    /// reserved across a reset, retire the oldest generation first so an old guard cannot remove
+    /// the current generation's reservation.
     pub fn release_reserved_generated_local_id(&self, id: &str) {
-        self.generated_local_id_reservations
+        let mut reservations = self
+            .generated_local_id_reservations
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&LocalId(id.to_owned()));
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let key = LocalId(id.to_owned());
+        let Some(generations) = reservations.get_mut(&key) else {
+            return;
+        };
+        let Some(generation) = generations.iter().next().copied() else {
+            return;
+        };
+        generations.remove(&generation);
+        if generations.is_empty() {
+            reservations.remove(&key);
+        }
+    }
+
+    fn release_reservation_generation(
+        reservations: &mut GeneratedLocalIdReservations,
+        id: &str,
+        generation: u64,
+    ) {
+        let key = LocalId(id.to_owned());
+        let Some(generations) = reservations.get_mut(&key) else {
+            return;
+        };
+        generations.remove(&generation);
+        if generations.is_empty() {
+            reservations.remove(&key);
+        }
     }
 
     /// Creates the provider-scoped account used by `IdP` sign-in when email uniqueness is off.
@@ -2181,7 +2222,8 @@ impl AuthStore {
                     .generated_local_id_reservations
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .contains(&candidate);
+                    .get(&candidate)
+                    .is_some_and(|generations| generations.contains(&self.reset_generation()));
                 if reserved {
                     self.generated_id_interference
                         .fetch_add(1, Ordering::AcqRel);
@@ -3791,12 +3833,9 @@ impl AuthSnapshot {
         // after this replacement, including when the snapshot came from another namespace.
         live.reset_generation.fetch_add(1, Ordering::AcqRel);
         restored.reset_generation = live.reset_generation.clone();
-        // Reservations belong to the live operation epoch, never to an imported snapshot. Drop
-        // them at the same boundary so a stale candidate cannot pin an ID after restore.
-        live.generated_local_id_reservations
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
+        // Reservations belong to the live operation epoch, never to an imported snapshot. Keep
+        // the destination ledger so old guards can retire their entries without touching a new
+        // generation, while discarding reservations captured from the source snapshot.
         restored.generated_local_id_reservations = live.generated_local_id_reservations.clone();
         restored.generated_id_interference = live.generated_id_interference.clone();
         // A snapshot intentionally has no provider configurations. Preserve the destination's
@@ -9603,6 +9642,23 @@ mod generated_id_tests {
         assert_eq!(report, super::RestoreReport::default());
         let fresh_reserved = live.clone().reserve_next_generated_local_id();
         assert_eq!(fresh_reserved, reserved);
+        live.release_reserved_generated_local_id(&reserved);
+        let next_reserved = live.clone().reserve_next_generated_local_id();
+        assert_ne!(next_reserved, fresh_reserved);
+    }
+
+    #[test]
+    fn releasing_a_pre_reset_reservation_keeps_the_new_same_id_reservation() {
+        let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let old_reservation = live.clone().reserve_next_generated_local_id();
+
+        live.clear();
+        let new_reservation = live.clone().reserve_next_generated_local_id();
+        assert_eq!(new_reservation, old_reservation);
+
+        live.release_reserved_generated_local_id(&old_reservation);
+        let next_reservation = live.clone().reserve_next_generated_local_id();
+        assert_ne!(next_reservation, new_reservation);
     }
 }
 

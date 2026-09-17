@@ -420,6 +420,7 @@ class RawJournal:
                 or re.fullmatch(r"[0-9a-f]{64}", binding["sha256"]) is None
                 or (binding.get("status") is not None and (type(binding["status"]) is not int or not 100 <= binding["status"] <= 599))
                 or type(binding.get("complete")) is not bool
+                or (binding["complete"] and binding["status"] is None)
                 or not isinstance(binding.get("contentType"), str)
                 or len(binding["contentType"]) > 128
             ):

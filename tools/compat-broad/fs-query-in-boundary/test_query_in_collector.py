@@ -160,6 +160,30 @@ def test_missing_or_partial_raw_response_fails_closed_without_synthesizing_bytes
     assert not (tmp_path / "receipt" / "raw" / "observation-04.raw").exists()
 
 
+def test_conflicting_raw_representations_fail_closed_across_nine_slots(tmp_path: Path) -> None:
+    plan = _plan()
+    transport = _transport(plan)
+
+    def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        receipt = transport(operation)
+        raw = json.dumps(receipt["body"], separators=(",", ":")).encode()
+        result = {
+            **receipt,
+            "rawBody": raw,
+            "rawBodyBase64": base64.b64encode(raw + b"x").decode("ascii"),
+            "bodyBytes": len(raw),
+            "rawBodyBytes": len(raw) + 1,
+            "contentType": "application/json",
+        }
+        return result
+
+    result = collect_local(plan, execute, tmp_path / "receipt")
+
+    assert result["rawComplete"] is False
+    assert result["completed"] is False
+    assert result["rawBindings"] == []
+
+
 def test_incomplete_raw_receipts_do_not_count_as_complete_raw_run(tmp_path: Path) -> None:
     plan = _plan()
     transport = _transport(plan)

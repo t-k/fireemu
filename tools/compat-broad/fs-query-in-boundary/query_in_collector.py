@@ -206,17 +206,28 @@ def _transport_raw(receipt: Any) -> tuple[bytes, int | None, str, bool] | None:
         return None
     raw: bytes | None = receipt.get("rawBody") if isinstance(receipt.get("rawBody"), bytes) else None
     encoded = receipt.get("rawBodyBase64")
-    if raw is None and isinstance(encoded, str):
+    decoded: bytes | None = None
+    if isinstance(encoded, str):
         if len(encoded) > _MAX_RAW_BASE64:
             return None
         try:
-            raw = base64.b64decode(encoded, validate=True)
+            decoded = base64.b64decode(encoded, validate=True)
         except (ValueError, binascii.Error):
             return None
+    if raw is not None and decoded is not None:
+        if raw != decoded:
+            return None
+    elif raw is None:
+        raw = decoded
     if raw is None:
         return None
-    byte_count = receipt.get("bodyBytes", receipt.get("rawBodyBytes", len(raw)))
-    if type(byte_count) is not int or byte_count != len(raw):
+    body_bytes = receipt.get("bodyBytes")
+    raw_body_bytes = receipt.get("rawBodyBytes")
+    if body_bytes is not None and (type(body_bytes) is not int or body_bytes != len(raw)):
+        return None
+    if raw_body_bytes is not None and (
+        type(raw_body_bytes) is not int or raw_body_bytes != len(raw)
+    ):
         return None
     status = receipt.get("status")
     if status is not None and (type(status) is not int or not 100 <= status <= 599):

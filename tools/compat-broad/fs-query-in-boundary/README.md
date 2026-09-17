@@ -26,6 +26,10 @@ The final test-only follow-up `c0a41b55c87dcbc092d3fcbc9e41de0da53c6b13` passed 
 
 This verifies the local observation tooling and the finite local API controls. It is not a production observation, saved-production comparison, or parent compatibility promotion.
 
+## Offline comparator
+
+`query_in_comparator.py` compares two retained bundles after validating each plan digest, every ordered operation request, typed receipt envelope, and ownership/cleanup evidence. It canonicalizes only the compiled owned document/parent identities and bounded timestamps; Firestore Value types, error objects, query shapes, and invalid path refusals remain exact. Complete differing responses are `SEMANTIC_MISMATCH`, equivalent semantics with run-specific values are `EXPECTED_NONDETERMINISM`, and missing or unbound evidence is `INDETERMINATE`. The result is semantic-only and always keeps `acquisitionValidated` and `promotionReady` false. Raw sidecar projections may be supplied as typed views; malformed or unbound views are indeterminate.
+
 ## Production bridge preparation
 
 `query_in_production.py` contains offline preparation only. Its attempt ledger models the fixed two OAuth, four preflight metadata, six observation, three recovery, and four postflight metadata slots. A skipped conditional delete consumes its recovery position without counting a wire send. The compact journal limits each row to 8,192 serialized bytes and its envelope to 32,768 bytes. Raw data responses have separate, exclusive 65,536-byte sidecars; a positive-query semantic view is derived only from a complete successful observation slot 2 response after verifying its raw hash and JSON content type. Duplicate JSON keys, malformed row metadata, invalid document or field names, malformed Firestore Value objects, and response fields outside the compiled query shape remain raw evidence with an indeterminate projection. The bounded recursive Value validator rejects numeric overflow and arrays directly nested in arrays while accepting well-formed unexpected documents for later comparison. The original response bytes remain the comparison authority.

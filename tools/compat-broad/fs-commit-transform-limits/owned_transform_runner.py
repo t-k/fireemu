@@ -29,6 +29,29 @@ from transform_compiler import compile_plan
 
 ARTIFACT_SHA = "be2771b9f2093cced55e8158d8d5a72ed35e6ac5e32edddb068daa45511e12ae"
 RUNTIME_COMMIT = "cce4a4f9b7369938c89bd32a5106e8d3cab59f83"
+BUILD_COMMAND = [
+    "cargo",
+    "build",
+    "--locked",
+    "-p",
+    "fireemu",
+    "--message-format=json",
+]
+DEFAULT_PROFILE = {
+    "name": "historical-default",
+    "artifactSha256": ARTIFACT_SHA,
+    "runtimeCommit": RUNTIME_COMMIT,
+    "manifestCommitField": "sourceCommit",
+    "requireTopLevelArtifactSha": True,
+}
+REPAIRED_PROFILE = {
+    "name": "repaired-567565bdd",
+    "artifactSha256": "e792e0bc1947bbd227b3ee9778eca093cda94fbde767911dd6139a6cbfd90be4",
+    "runtimeCommit": "567565bdd654cab00dbb84101edcc7bdc628e230",
+    "manifestCommitField": "executionCommit",
+    "requireTopLevelArtifactSha": False,
+}
+PROFILES = {item["name"]: item for item in (DEFAULT_PROFILE, REPAIRED_PROFILE)}
 PROJECT = "demo-firestore-probe"
 CONFIGURATION = {
     "schemaVersion": 1,
@@ -43,17 +66,66 @@ def sha_file(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def validate_runtime_provenance(manifest: dict) -> dict:
+def resolve_profile(profile: dict | str = DEFAULT_PROFILE) -> dict:
+    if isinstance(profile, str):
+        try:
+            return PROFILES[profile]
+        except KeyError:
+            raise ValueError("unknown artifact profile") from None
+    if not isinstance(profile, dict) or profile.get("name") not in PROFILES:
+        raise ValueError("unregistered artifact profile")
+    registered = PROFILES[profile["name"]]
+    if profile != registered:
+        raise ValueError("unregistered artifact profile")
+    return registered
+
+
+def validate_runtime_provenance(
+    manifest: dict, profile: dict | str = DEFAULT_PROFILE
+) -> dict:
     """Compare the entire manifest input map to the fixed Git tree, not itself."""
-    expected = runtime_inputs_at_commit(RUNTIME_COMMIT, ROOT)
+    profile = resolve_profile(profile)
+    runtime_commit = profile["runtimeCommit"]
+    expected = runtime_inputs_at_commit(runtime_commit, ROOT)
     actual = manifest.get("build", {}).get("inputs")
-    if manifest.get("sourceCommit") != RUNTIME_COMMIT or not _exact(actual, expected):
+    if manifest.get(profile["manifestCommitField"]) != runtime_commit or not _exact(
+        actual, expected
+    ):
         raise ValueError("retained runtime input map differs from fixed Git tree")
     return {
         "runtimeInputsDigest": digest(actual),
         "expectedRuntimeInputsDigest": digest(expected),
         "runtimeInputCount": len(expected),
-        "runtimeInputsVerifiedAgainst": "git-tree:" + RUNTIME_COMMIT,
+        "runtimeInputsVerifiedAgainst": "git-tree:" + runtime_commit,
+    }
+
+
+def validate_manifest_payload(
+    manifest: dict, manifest_bytes: bytes, profile: dict | str
+) -> dict:
+    profile = resolve_profile(profile)
+    artifact_sha = profile["artifactSha256"]
+    build = manifest.get("build", {})
+    if (
+        manifest.get(profile["manifestCommitField"]) != profile["runtimeCommit"]
+        or (
+            profile["requireTopLevelArtifactSha"]
+            and manifest.get("artifactSha256") != artifact_sha
+        )
+        or build.get("artifactSha256") != artifact_sha
+        or type(build.get("exitCode")) is not int
+        or build["exitCode"] != 0
+        or build.get("command") != BUILD_COMMAND
+        or not isinstance(build.get("inputs"), dict)
+        or not build["inputs"]
+    ):
+        raise ValueError("retained artifact/build/source binding differs")
+    return {
+        "artifactSha256": artifact_sha,
+        "runtimeSourceCommit": profile["runtimeCommit"],
+        "retainedManifestSha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "artifactProfile": profile["name"],
+        **validate_runtime_provenance(manifest, profile),
     }
 
 
@@ -77,32 +149,20 @@ def owned_artifact(source: Path, expected_sha: str = ARTIFACT_SHA):
         yield executable, identity
 
 
-def validate_retained_artifact(artifact: Path, manifest_path: Path) -> dict:
+def validate_retained_artifact(
+    artifact: Path, manifest_path: Path, profile: dict | str = DEFAULT_PROFILE
+) -> dict:
     """Validate the authorized saved artifact, never build or accept arbitrary code."""
+    profile = resolve_profile(profile)
+    artifact_sha = profile["artifactSha256"]
     if artifact.is_symlink() or manifest_path.is_symlink():
         raise ValueError("retained inputs must be regular files")
     manifest_bytes = manifest_path.read_bytes()
     manifest = json.loads(manifest_bytes)
-    build = manifest.get("build", {})
-    if (
-        manifest.get("sourceCommit") != RUNTIME_COMMIT
-        or manifest.get("artifactSha256") != ARTIFACT_SHA
-        or build.get("artifactSha256") != ARTIFACT_SHA
-        or type(build.get("exitCode")) is not int
-        or build["exitCode"] != 0
-        or build.get("command")
-        != ["cargo", "build", "--locked", "-p", "fireemu", "--message-format=json"]
-        or not isinstance(build.get("inputs"), dict)
-        or not build["inputs"]
-        or sha_file(artifact) != ARTIFACT_SHA
-    ):
+    runtime = validate_manifest_payload(manifest, manifest_bytes, profile)
+    if sha_file(artifact) != artifact_sha:
         raise ValueError("retained artifact/build/source binding differs")
-    return {
-        "artifactSha256": ARTIFACT_SHA,
-        "runtimeSourceCommit": RUNTIME_COMMIT,
-        "retainedManifestSha256": hashlib.sha256(manifest_bytes).hexdigest(),
-        **validate_runtime_provenance(manifest),
-    }
+    return runtime
 
 
 def source_inputs() -> dict:
@@ -117,11 +177,53 @@ def source_inputs() -> dict:
     return inputs
 
 
-def child(output: Path, nonce: str) -> None:
+def copy_exclusive(source: Path, destination: Path) -> None:
+    with destination.open("xb") as stream:
+        stream.write(source.read_bytes())
+    destination.chmod(0o400)
+
+
+def validate_copied_manifest(output: Path, inputs: dict, profile: dict | str) -> dict:
+    profile = resolve_profile(profile)
+    expected_path = output / "retained-manifest.json"
+    copied_path = Path(inputs.get("retainedManifestPath", ""))
+    if (
+        copied_path != expected_path
+        or copied_path.is_symlink()
+        or not copied_path.is_file()
+    ):
+        raise ValueError("retained manifest copy is not bound")
+    manifest_bytes = copied_path.read_bytes()
+    if hashlib.sha256(manifest_bytes).hexdigest() != inputs.get(
+        "retainedManifestSha256"
+    ):
+        raise ValueError("retained manifest digest differs")
+    runtime = validate_manifest_payload(
+        json.loads(manifest_bytes), manifest_bytes, profile
+    )
+    for key in (
+        "artifactProfile",
+        "artifactSha256",
+        "runtimeSourceCommit",
+        "retainedManifestSha256",
+        "runtimeInputsDigest",
+        "expectedRuntimeInputsDigest",
+        "runtimeInputCount",
+        "runtimeInputsVerifiedAgainst",
+    ):
+        if inputs.get(key) != runtime[key]:
+            raise ValueError("retained manifest provenance differs")
+    return runtime
+
+
+def child(output: Path, nonce: str, profile_name: str) -> None:
     inputs = json.loads((output / "run-inputs.json").read_bytes())
+    profile = resolve_profile(profile_name)
+    validate_copied_manifest(output, inputs, profile)
     plan = compile_plan(PROJECT, "(default)", nonce)
     if (
         inputs["nonce"] != nonce
+        or inputs["artifactProfile"] != profile["name"]
         or inputs["project"] != PROJECT
         or inputs["sourceInputs"] != source_inputs()
         or not _exact(json.loads((output / "plan.json").read_bytes()), plan)
@@ -227,11 +329,19 @@ def child(output: Path, nonce: str) -> None:
     )
 
 
-def run(output: Path, artifact: Path, retained_manifest: Path) -> dict:
+def run(
+    output: Path,
+    artifact: Path,
+    retained_manifest: Path,
+    profile: dict | str = DEFAULT_PROFILE,
+) -> dict:
     """Own the verified executable copy, child, and all OS-assigned listeners."""
-    runtime = validate_retained_artifact(artifact, retained_manifest)
-    with owned_artifact(artifact) as (executable, identity):
-        sealed = _run_pinned(output, executable, runtime, identity)
+    profile = resolve_profile(profile)
+    runtime = validate_retained_artifact(artifact, retained_manifest, profile)
+    with owned_artifact(artifact, profile["artifactSha256"]) as (executable, identity):
+        sealed = _run_pinned(
+            output, executable, retained_manifest, runtime, identity, profile
+        )
     sealed["ownedArtifactRemoved"] = not executable.exists()
     if not sealed["ownedArtifactRemoved"]:
         sealed["status"] = "incomplete"
@@ -239,7 +349,14 @@ def run(output: Path, artifact: Path, retained_manifest: Path) -> dict:
     return sealed
 
 
-def _run_pinned(output: Path, artifact: Path, runtime: dict, identity: dict) -> dict:
+def _run_pinned(
+    output: Path,
+    artifact: Path,
+    retained_manifest: Path,
+    runtime: dict,
+    identity: dict,
+    profile: dict,
+) -> dict:
     if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).strip():
         raise ValueError("freeze the collector checkout before execution")
     before = source_inputs()
@@ -247,12 +364,18 @@ def _run_pinned(output: Path, artifact: Path, runtime: dict, identity: dict) -> 
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
     ).strip()
     output.mkdir(parents=True, mode=0o700, exist_ok=False)
+    copied_manifest = output / "retained-manifest.json"
+    copy_exclusive(retained_manifest, copied_manifest)
+    if sha_file(copied_manifest) != runtime["retainedManifestSha256"]:
+        raise ValueError("retained manifest copy changed")
     nonce = uuid.uuid4().hex
     plan = compile_plan(PROJECT, "(default)", nonce)
     save_new(output / "plan.json", plan)
     save_new(output / "config.json", CONFIGURATION)
     inputs = {
         **runtime,
+        "artifactProfile": profile["name"],
+        "retainedManifestPath": str(copied_manifest),
         "ownedArtifact": identity,
         "collectorSourceCommit": commit,
         "sourceInputs": before,
@@ -293,6 +416,8 @@ def _run_pinned(output: Path, artifact: Path, runtime: dict, identity: dict) -> 
         str(output),
         "--nonce",
         nonce,
+        "--profile",
+        profile["name"],
     ]
     save_new(output / "command.json", {"argv": command, "binding": digest(inputs)})
     report = {
@@ -303,11 +428,17 @@ def _run_pinned(output: Path, artifact: Path, runtime: dict, identity: dict) -> 
     }
     broad.supervise(command, output, nonce, report, timeout=270, recovery_grace=30)
     save_new(output / "supervisor-final.json", report)
+    manifest_stable = True
+    try:
+        validate_copied_manifest(output, inputs, profile)
+    except ValueError:
+        manifest_stable = False
     stable = (
         source_inputs() == before
-        and sha_file(artifact) == ARTIFACT_SHA
+        and sha_file(artifact) == profile["artifactSha256"]
         and artifact.stat().st_dev == identity["device"]
         and artifact.stat().st_ino == identity["inode"]
+        and manifest_stable
     )
     files = {
         str(path.relative_to(output)): sha_file(path)
@@ -337,18 +468,32 @@ def main() -> int:
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--retained-manifest", type=Path)
     parser.add_argument("--nonce")
+    parser.add_argument(
+        "--profile", choices=sorted(PROFILES), default=DEFAULT_PROFILE["name"]
+    )
     args = parser.parse_args()
     if args.child:
-        if not args.nonce or args.artifact or args.retained_manifest:
-            parser.error("child requires only --nonce")
-        child(args.child.resolve(), args.nonce)
+        if (
+            not args.nonce
+            or not args.profile
+            or args.artifact
+            or args.retained_manifest
+        ):
+            parser.error("child requires --nonce and --profile")
+        child(args.child.resolve(), args.nonce, args.profile)
         return 0
-    if not args.artifact or not args.retained_manifest or args.nonce:
-        parser.error("output requires --artifact and --retained-manifest")
+    if (
+        not args.artifact
+        or not args.retained_manifest
+        or args.nonce
+        or not args.profile
+    ):
+        parser.error("output requires --artifact, --retained-manifest and --profile")
     result = run(
         args.output.resolve(),
         args.artifact.absolute(),
         args.retained_manifest.absolute(),
+        profile=args.profile,
     )
     print(
         json.dumps({"status": result["status"], "ownedProcess": result["ownedProcess"]})

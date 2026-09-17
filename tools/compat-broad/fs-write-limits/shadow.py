@@ -315,159 +315,86 @@ def _real_child(output: Path, nonce: str, *, rehearsal: str | None = None) -> No
     create(output / "gate", gate_plan)
     gate = Gate(output / "gate", "limits")
     gate.claim()
-    observation = gate_plan["jobs"]["limits"]["observation"]
-    rows, cleanup, infrastructure = [], [], []
+    from collector import collect
 
-    def dispatch(operation, recovery, index, request_index):
-        entry = {"index": index, "request": operation}
-        phase = "cleanup" if recovery else "observation"
+    def wire(operation, _recovery, _index, request_index):
+        return request(
+            firestore,
+            operation,
+            request_byte_limit=max(
+                1,
+                len(json.dumps(operation["body"]).encode())
+                if operation["body"] is not None
+                else 0,
+            ),
+            response_byte_limit=plan["requests"][request_index]["responseByteLimit"],
+            timeout=12,
+        )
 
-        def send():
-            result = request(
-                firestore,
-                operation,
-                request_byte_limit=max(
-                    1,
-                    len(json.dumps(operation["body"]).encode())
-                    if operation["body"] is not None
-                    else 0,
-                ),
-                response_byte_limit=plan["requests"][request_index][
-                    "responseByteLimit"
-                ],
-                timeout=12,
-            )
-            entry.update(result)
-            # Preserve complete unexpected responses even if Gate rejects their identity.
-            save(output / f"{phase}-{index:02d}-wire.json", entry)
-            if result["complete"] is not True:
-                raise ValueError(
-                    "incomplete bounded transport:"
-                    + str(result.get("failure", result.get("kind")))
-                )
-            return result["status"], result["body"]
-
-        try:
-            status, body = gate.dispatch(operation, recovery, send)
-            if "complete" not in entry:
-                entry.update(
-                    status=status, body=body, complete=True, failure=None, skipped=True
-                )
-        except Exception as error:  # noqa: BLE001 -- Persist failures and retain cleanup ownership.
-            entry["dispatchFailure"] = type(error).__name__ + ":" + str(error)
-            infrastructure.append(
-                {"phase": phase, "index": index, "failure": entry["dispatchFailure"]}
-            )
-        save(output / f"{phase}-{index:02d}.json", entry)
-        return entry
-
-    try:
-        for index, operation in enumerate(observation):
-            # Finish current readback group, but never write after an unproven invariant.
-            if operation["method"] == "PATCH" and evaluate_rows(rows, plan):
-                break
-            entry = dispatch(operation, False, index, index)
-            rows.append(entry)
-            if entry.get("dispatchFailure"):
-                break
-            if index < 4 and evaluate_rows(rows, plan):
-                break
-            if injected_fault is not None and should_interrupt(rehearsal, rows, plan):
-                injected_fault["triggered"] = True
-                break
-    except Exception as error:  # noqa: BLE001 -- Persist failures and retain cleanup ownership.
+    collected = collect(gate, plan, output / "collection", wire, rehearsal=rehearsal)
+    rows, cleanup = collected["rows"], collected["cleanup"]
+    infrastructure = collected["infrastructureFailures"]
+    after = source_inputs()
+    if before != after:
         infrastructure.append(
-            {"phase": "observation", "failure": type(error).__name__ + ":" + str(error)}
+            {"phase": "provenance", "failure": "source inputs changed"}
         )
-    finally:
-        gate.stop()
-        for index, declared in enumerate(gate_plan["jobs"]["limits"]["recovery"]):
-            operation = resolve_recovery(declared, cleanup)
-            cleanup.append(dispatch(operation, True, index, len(observation) + index))
-        absence = {}
-        for index, declared in enumerate(gate_plan["jobs"]["limits"]["recovery"]):
-            if (
-                plan["requests"][len(observation) + index]["kind"]
-                == "cleanup-verify-absence"
-            ):
-                row = cleanup[index]
-                resource = declared["path"].removeprefix("/v1/")
-                absence[resource] = row.get("complete") is True and typed_absence(
-                    row.get("status"), row.get("body")
-                )
-        cleanup_complete = False
-        try:
-            gate.finish()
-            cleanup_complete = all(absence.values()) and not any(
-                row.get("dispatchFailure") for row in cleanup
-            )
-        except Exception as error:  # noqa: BLE001 -- Persist failures and retain cleanup ownership.
-            infrastructure.append(
-                {"phase": "finish", "failure": type(error).__name__ + ":" + str(error)}
-            )
-        after = source_inputs()
-        if before != after:
-            infrastructure.append(
-                {"phase": "provenance", "failure": "source inputs changed"}
-            )
-        mismatches = evaluate_rows(rows, plan)
-        recording = len(rows) == len(observation) and all(
-            row.get("complete") is True for row in rows
-        )
-        state_valid = recording and not mismatches
-        result = {
+    mismatches = collected["expectationMismatches"]
+    recording = collected["recordingComplete"]
+    cleanup_complete = collected["cleanupComplete"]
+    state_valid = recording and not mismatches
+    injected_fault = collected["injectedFault"]
+    result = {
+        "productionExecuted": False,
+        "formalCompatibilityClaim": False,
+        "injectedFault": injected_fault,
+        "recordingComplete": recording,
+        "stateValidation": state_valid,
+        "cleanupComplete": cleanup_complete,
+        "completed": state_valid and cleanup_complete and not infrastructure,
+        "rows": rows,
+        "cleanup": cleanup,
+        "resourceAbsence": collected["resourceAbsence"],
+        "semanticMismatches": mismatches,
+        "infrastructureFailures": infrastructure,
+        "gate": collected["gate"],
+        "planDigest": digest(plan),
+        "manifest": {
+            "sourceInputs": before,
+            "sourceInputsAfter": after,
+            "nonce": nonce,
+            "injectedFault": injected_fault,
+        },
+    }
+    save(output / "result.json", result)
+    save(
+        output / "cases.json",
+        {
+            "schemaVersion": 1,
+            "kind": "fs-write-limits-local-shadow-v1",
+            "target": "owned-local-artifact",
+            "project": project,
             "productionExecuted": False,
             "formalCompatibilityClaim": False,
-            "injectedFault": injected_fault,
-            "recordingComplete": recording,
+            "recordingComplete": recording and cleanup_complete and not infrastructure,
             "stateValidation": state_valid,
-            "cleanupComplete": cleanup_complete,
-            "completed": state_valid and cleanup_complete and not infrastructure,
-            "rows": rows,
-            "cleanup": cleanup,
-            "resourceAbsence": absence,
-            "semanticMismatches": mismatches,
-            "infrastructureFailures": infrastructure,
-            "gate": gate.snapshot(),
-            "planDigest": digest(plan),
-            "manifest": {
-                "sourceInputs": before,
-                "sourceInputsAfter": after,
-                "nonce": nonce,
-                "injectedFault": injected_fault,
-            },
-        }
-        save(output / "result.json", result)
-        save(
-            output / "cases.json",
-            {
-                "schemaVersion": 1,
-                "kind": "fs-write-limits-local-shadow-v1",
-                "target": "owned-local-artifact",
-                "project": project,
-                "productionExecuted": False,
-                "formalCompatibilityClaim": False,
-                "recordingComplete": recording
-                and cleanup_complete
-                and not infrastructure,
-                "stateValidation": state_valid,
-                "manifest": result["manifest"],
-                "manifestDigest": digest(result["manifest"]),
-                "localObservations": rows,
-                "cases": [
-                    {
-                        "id": plan["campaignId"],
-                        "family": "firestore",
-                        "status": "pass"
-                        if result["completed"]
-                        else "mismatch"
-                        if mismatches
-                        else "fail",
-                        "basis": "Local typed state invariants and versioned cleanup; no production comparison.",
-                    }
-                ],
-            },
-        )
+            "manifest": result["manifest"],
+            "manifestDigest": digest(result["manifest"]),
+            "localObservations": rows,
+            "cases": [
+                {
+                    "id": plan["campaignId"],
+                    "family": "firestore",
+                    "status": "pass"
+                    if result["completed"]
+                    else "mismatch"
+                    if mismatches
+                    else "fail",
+                    "basis": "Local typed state invariants and versioned cleanup; no production comparison.",
+                }
+            ],
+        },
+    )
 
 
 def run(output: Path, *, rehearsal: str | None = None) -> dict:

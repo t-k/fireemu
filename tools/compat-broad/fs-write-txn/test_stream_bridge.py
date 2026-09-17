@@ -251,7 +251,7 @@ def test_failed_rollback_prevents_destructive_cleanup(tmp_path):
         policy.resolve(state, "stream", True)
 
 
-def test_dead_lease_denies_private_worker_before_loopback_wire(tmp_path):
+def test_dead_lease_denies_before_worker_startup_or_loopback_wire(tmp_path):
     import socket
     import time
 
@@ -274,10 +274,9 @@ def test_dead_lease_denies_private_worker_before_loopback_wire(tmp_path):
         with pytest.raises(TimeoutError):
             listener.accept()
     state = Gate(tmp_path / "gate", "stream").snapshot()
-    assert state["total"] == 1
-    assert state["jobs"]["stream"]["inflight"] is True
-    assert len(state["events"]) == 1
-    assert state["events"][0]["completed"] is False
+    assert state["total"] == 0
+    assert state["jobs"]["stream"]["inflight"] is False
+    assert state["events"] == []
     assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
 
 

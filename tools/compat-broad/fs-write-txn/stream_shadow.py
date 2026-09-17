@@ -82,6 +82,47 @@ def metadata_fixture():
             raise ValueError("owned metadata listener did not close")
 
 
+def listener_owner(origin, pid):
+    """Retain a live kernel listener observation for the exact owned process."""
+    from urllib.parse import urlsplit
+
+    port = urlsplit(origin).port
+    if type(pid) is not int or pid <= 1 or port is None:
+        raise ValueError("owned listener identity required")
+    result = subprocess.run(
+        [
+            "lsof",
+            "-nP",
+            "-a",
+            "-p",
+            str(pid),
+            "-iTCP:" + str(port),
+            "-sTCP:LISTEN",
+            "-Fpn",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    records = result.stdout.splitlines()
+    if (
+        result.returncode != 0
+        or "p" + str(pid) not in records
+        or not any(
+            line.startswith("n") and line.endswith(":" + str(port)) for line in records
+        )
+    ):
+        raise ValueError("owned process does not hold the expected listener")
+    return {
+        "pid": pid,
+        "origin": origin,
+        "port": port,
+        "listening": True,
+        "observedAt": time.time(),
+    }
+
+
 def child(output, nonce):
     stream_bridge.write_private_json(
         output / "child-identity.json",
@@ -122,6 +163,11 @@ def child(output, nonce):
             "firestoreOrigin": firestore,
             "controlOrigin": control,
             "metadataOrigin": origin,
+        }
+        instance["listenerOwners"] = {
+            "firestoreOrigin": listener_owner(firestore, os.getppid()),
+            "controlOrigin": listener_owner(control, os.getppid()),
+            "metadataOrigin": listener_owner(origin, os.getpid()),
         }
         stream_bridge.write_private_json(output / "instance.json", instance)
         permission = {
@@ -232,6 +278,18 @@ def validate_owned_receipt(receipt, artifact_sha):
         or owned.get("configurationDigest") != digest(CONFIG)
     ):
         raise ValueError("owned artifact acquisition binding incomplete")
+    listeners = instance.get("listenerOwners", {})
+    if set(listeners) != {"firestoreOrigin", "controlOrigin", "metadataOrigin"}:
+        raise ValueError("all owned listener observations required")
+    for key, proof in listeners.items():
+        expected_pid = instance["childPid"] if key == "metadataOrigin" else owned["pid"]
+        if (
+            proof.get("pid") != expected_pid
+            or proof.get("origin") != instance[key]
+            or proof.get("listening") is not True
+            or type(proof.get("observedAt")) not in (float, int)
+        ):
+            raise ValueError("live owned listener binding differs")
     validate_build(
         owned.get("build", {}), artifact_sha, runtime_inputs(production.ROOT)
     )
@@ -365,7 +423,7 @@ def run_shadow(artifact, build_manifest, output):
                 if process.poll() is None:
                     process.kill()
                     process.wait(timeout=5)
-        stream_bridge.write_private_json(output / "receipt.json", result)
+        production.write_atomic_receipt(output / "receipt.json", result)
     return result
 
 

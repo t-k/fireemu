@@ -292,7 +292,103 @@ def execution_facts(state, *, production):
     }
 
 
+def write_atomic_receipt(path, value):
+    """Publish a private immutable receipt only after its complete bytes are durable."""
+    import uuid
+
+    path = Path(path)
+    pending = path.with_name("." + path.name + "." + uuid.uuid4().hex + ".pending")
+    try:
+        stream_bridge.write_private_json(pending, value)
+        os.link(pending, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        pending.unlink(missing_ok=True)
+
+
+def retained_failure(output, ledger, ticket, error, *, production=True):
+    try:
+        reservation = ledger.snapshot()["reservations"][ticket["reservation"]]
+        released = reservation["state"] == "released"
+    except (OSError, ValueError, KeyError):
+        released = False
+    facts = execution_facts(
+        {"managementEvents": [], "events": []}, production=production
+    )
+    try:
+        facts = execution_facts(
+            StreamProductionGate(Path(output) / "gate").snapshot(),
+            production=production,
+        )
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, KeyError):
+        facts = {key: None for key in facts}
+    receipt = {
+        "kind": "stream-prepared-setup-failure-v1",
+        "acquisitionValidated": False,
+        "reservationReleased": released,
+        **facts,
+        "failures": [{"phase": "reserved-execution", "kind": type(error).__name__}],
+        "recoveryResponsibility": {
+            "state": "released" if released else "retained",
+            "ticket": ticket,
+            "gatePath": str(Path(output) / "gate"),
+        },
+    }
+    try:
+        write_atomic_receipt(Path(output) / "failure-receipt.json", receipt)
+    except OSError:
+        # If storage itself fails, retain the lease and expose only its non-secret recovery ID.
+        receipt["terminalReceiptPersisted"] = False
+        print(
+            json.dumps(
+                {
+                    "kind": "stream-recovery-required",
+                    "reservation": ticket["reservation"],
+                    "terminalReceiptPersisted": False,
+                }
+            ),
+            file=sys.stderr,
+        )
+    return receipt
+
+
 def execute_session(
+    plan,
+    permission,
+    output,
+    ledger,
+    ticket,
+    api_key,
+    credential,
+    *,
+    shadow=None,
+    final_binding=None,
+):
+    try:
+        return _execute_session(
+            plan,
+            permission,
+            output,
+            ledger,
+            ticket,
+            api_key,
+            credential,
+            shadow=shadow,
+            final_binding=final_binding,
+        )
+    except Exception as error:  # noqa: BLE001 -- Keep responsibility visible even before Gate setup succeeds.
+        return retained_failure(
+            output, ledger, ticket, error, production=shadow is None
+        )
+
+
+def _execute_session(
     plan,
     permission,
     output,
@@ -391,7 +487,7 @@ def execute_session(
         "gate": final_state,
         "metadataEvidence": coordinator.metadata_evidence,
     }
-    stream_bridge.write_private_json(output / "receipt.json", receipt)
+    write_atomic_receipt(output / "receipt.json", receipt)
     return receipt
 
 
@@ -643,7 +739,7 @@ def read_o8_handoff(fd, permission_digest):
     info = os.fstat(fd)
     if (
         info.st_uid != os.getuid()
-        or (stat.S_ISREG(info.st_mode) and info.st_mode & 0o077)
+        or info.st_mode & 0o077
         or not (
             stat.S_ISREG(info.st_mode)
             or stat.S_ISFIFO(info.st_mode)
@@ -736,27 +832,46 @@ def execute_prepared(config_path, output, credential_fd):
     }
     output.mkdir(mode=0o700)
     ticket = ledger.reserve(envelope, claim, plan)
-    stream_bridge.write_private_json(
-        output / "inputs.json",
-        {**value, "claim": claim, "ticket": ticket, "envelope": envelope},
-    )
-
-    def final_binding(collection):
-        validate_prepared(value)
-        return compare_bound(
-            collection, load_json(value["bindings"]["localReceiptPath"]), plan
-        )
-
-    return execute_session(
-        plan,
-        permission,
+    return execute_reserved_inputs(
+        value,
         output,
         ledger,
         ticket,
         api_key,
         credential,
-        final_binding=final_binding,
+        reservation_inputs={"claim": claim, "ticket": ticket, "envelope": envelope},
     )
+
+
+def execute_reserved_inputs(
+    value, output, ledger, ticket, api_key, credential, *, reservation_inputs=None
+):
+    """Own every operation after the one successful central reservation."""
+    try:
+        plan = value["plan"]
+        stream_bridge.write_private_json(
+            output / "inputs.json",
+            {**value, **(reservation_inputs or {})},
+        )
+
+        def final_binding(collection):
+            validate_prepared(value)
+            return compare_bound(
+                collection, load_json(value["bindings"]["localReceiptPath"]), plan
+            )
+
+        return execute_session(
+            plan,
+            value["permission"],
+            output,
+            ledger,
+            ticket,
+            api_key,
+            credential,
+            final_binding=final_binding,
+        )
+    except Exception as error:  # noqa: BLE001 -- Reservation ownership persists across every setup failure.
+        return retained_failure(output, ledger, ticket, error)
 
 
 def main(argv=None):

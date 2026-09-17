@@ -467,3 +467,95 @@ def test_prepared_json_rejects_non_regular_inputs(tmp_path):
     os.mkfifo(path, 0o600)
     with pytest.raises(ValueError, match="regular"):
         production().load_json(path)
+
+
+@pytest.mark.parametrize("stage", ["gate", "coordinator"])
+def test_reserved_setup_failure_retains_a_terminal_owner_receipt(
+    tmp_path, metadata_server, stage
+):
+    module, permission, plan, ledger, ticket, credential = prepared_fixture(
+        tmp_path, metadata_server
+    )
+    if stage == "gate":
+        (tmp_path / "gate").mkdir()
+    else:
+        permission["collectorSourceDigest"] = "0" * 64
+    receipt = module.execute_session(
+        plan,
+        permission,
+        tmp_path,
+        ledger,
+        ticket,
+        "local-shadow-key",
+        credential,
+        shadow={"metadataOrigin": metadata_server["origin"], "port": 1},
+    )
+    assert receipt["acquisitionValidated"] is False
+    assert receipt["reservationReleased"] is False
+    assert receipt["recoveryResponsibility"]["ticket"] == ticket
+    assert receipt["recoveryResponsibility"]["state"] == "retained"
+    assert (tmp_path / "failure-receipt.json").is_file()
+    assert metadata_server["requests"] == []
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+def test_o8_refuses_world_accessible_fifo_before_read(tmp_path):
+    import os
+
+    path = tmp_path / "credential.fifo"
+    os.mkfifo(path)
+    path.chmod(0o666)
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        with pytest.raises(ValueError, match="private"):
+            production().read_o8_handoff(fd, "a" * 64)
+    finally:
+        os.close(fd)
+
+
+def test_o8_refuses_unprotected_socket_before_read():
+    import socket
+
+    left, right = socket.socketpair()
+    try:
+        with pytest.raises(ValueError, match="private"):
+            production().read_o8_handoff(left.fileno(), "a" * 64)
+    finally:
+        left.close()
+        right.close()
+
+
+def test_atomic_receipt_is_private_complete_and_immutable(tmp_path):
+    import json
+
+    path = tmp_path / "receipt.json"
+    production().write_atomic_receipt(path, {"complete": True})
+    assert json.loads(path.read_text()) == {"complete": True}
+    assert path.stat().st_mode & 0o777 == 0o600
+    with pytest.raises(FileExistsError):
+        production().write_atomic_receipt(path, {"complete": False})
+    assert json.loads(path.read_text()) == {"complete": True}
+    assert list(tmp_path.glob("*.pending")) == []
+
+
+def test_reserved_input_write_failure_keeps_terminal_responsibility(
+    tmp_path, metadata_server
+):
+    module, permission, plan, ledger, ticket, credential = prepared_fixture(
+        tmp_path, metadata_server
+    )
+    (tmp_path / "inputs.json").write_text("existing")
+    receipt = module.execute_reserved_inputs(
+        {"plan": plan, "permission": permission},
+        tmp_path,
+        ledger,
+        ticket,
+        "local-shadow-key",
+        credential,
+    )
+    assert receipt["recoveryResponsibility"]["ticket"] == ticket
+    assert receipt["reservationReleased"] is False
+    assert receipt["productionExecuted"] is False
+    assert (tmp_path / "failure-receipt.json").is_file()
+    assert (tmp_path / "inputs.json").read_text() == "existing"
+    assert metadata_server["requests"] == []

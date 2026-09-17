@@ -51,3 +51,21 @@ def test_owned_configuration_has_required_schema_version():
     import stream_shadow
 
     assert stream_shadow.CONFIG == {"schemaVersion": 1, "profile": "strict"}
+
+
+def test_live_listener_proof_binds_the_actual_owner():
+    import os
+    import shutil
+
+    import stream_shadow
+
+    if shutil.which("lsof") is None:
+        pytest.skip("owned listener proof requires lsof")
+    assert hasattr(stream_shadow, "listener_owner")
+    with stream_shadow.metadata_fixture() as (origin, _):
+        proof = stream_shadow.listener_owner(origin, os.getpid())
+        assert proof["pid"] == os.getpid()
+        assert proof["origin"] == origin
+        assert proof["listening"] is True
+        with pytest.raises(ValueError):
+            stream_shadow.listener_owner(origin, 1)

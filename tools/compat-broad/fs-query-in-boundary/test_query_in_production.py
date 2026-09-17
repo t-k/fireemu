@@ -77,7 +77,7 @@ def test_pre_send_capacity_rejects_tenth_data_attempt() -> None:
 
 def test_raw_sidecars_preserve_bytes_and_bind_projection(tmp_path: Path) -> None:
     journal = RawJournal(tmp_path / "raw")
-    body = b'[{"document":{"name":"x","fields":{"s":{"stringValue":"\\u00e9"}}},"readTime":"t"}]'
+    body = b'[{"document":{"name":"x","fields":{"s":{"stringValue":"\\u00e9"}}},"readTime":"2026-09-18T00:00:00.000000Z"}]'
     binding = journal.add(
         "observation",
         2,
@@ -217,6 +217,61 @@ def test_nonfinite_json_constant_remains_raw_without_projection(
     )
     view = journal.semantic_view(binding)
     assert view["difference"] == "malformed-query-json"
+    assert "documents" not in view
+    assert (tmp_path / "raw" / binding["path"]).read_bytes() == body
+
+
+@pytest.mark.parametrize(
+    ("body", "difference"),
+    [
+        (
+            b'[{"document":{"name":"x","fields":{}},"document":{"name":"y","fields":{}}}]',
+            "malformed-query-json",
+        ),
+        (b'[{"document":{"name":"x","name":"y","fields":{}}}]', "malformed-query-json"),
+        (
+            b'[{"document":{"name":"x","fields":{"n":{"integerValue":"1","integerValue":"2"}}}}]',
+            "malformed-query-json",
+        ),
+        (
+            b'[{"document":{"name":"x","fields":{}},"readTime":{}}]',
+            "unexpected-query-row",
+        ),
+        (
+            b'[{"document":{"name":"x","fields":{}},"skippedResults":"1"}]',
+            "unexpected-query-row",
+        ),
+        (
+            b'[{"document":{"name":"x","fields":{}},"transaction":{}}]',
+            "unexpected-query-row",
+        ),
+        (
+            b'[{"document":{"name":"x","fields":{}},"skippedResults":1}]',
+            "unexpected-query-row",
+        ),
+        (
+            b'[{"document":{"name":"x","fields":{}},"transaction":"YQ=="}]',
+            "unexpected-query-row",
+        ),
+        (
+            b'[{"document":{"name":"x","fields":{}},"readTime":"bad"}]',
+            "unexpected-query-row",
+        ),
+        (
+            b'[{"document":{"name":"x","fields":{}},"unrecognized":1}]',
+            "unexpected-query-row",
+        ),
+    ],
+)
+def test_duplicate_keys_or_bad_metadata_never_project(
+    tmp_path: Path, body: bytes, difference: str
+) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    binding = journal.add(
+        "observation", 2, 200, body, complete=True, content_type="application/json"
+    )
+    view = journal.semantic_view(binding)
+    assert view["difference"] == difference
     assert "documents" not in view
     assert (tmp_path / "raw" / binding["path"]).read_bytes() == body
 

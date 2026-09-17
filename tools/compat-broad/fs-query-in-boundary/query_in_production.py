@@ -7,6 +7,8 @@ import hashlib
 import json
 import math
 import os
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,10 +25,54 @@ _PHASES = (
 _RAW_LIMIT = 65536
 _ROW_LIMIT = 8192
 _ENVELOPE_LIMIT = 32768
+_TIMESTAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$")
 
 
 def _reject_json_constant(value: str) -> None:
     raise ValueError(f"non-finite JSON constant: {value}")
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON key")
+        value[key] = item
+    return value
+
+
+def _typed_timestamp(value: Any) -> bool:
+    if not isinstance(value, str) or _TIMESTAMP.fullmatch(value) is None:
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
+def _typed_query_row(row: Any) -> bool:
+    # The compiled query requests neither a transaction nor result skipping.
+    if not isinstance(row, dict) or set(row) - {"document", "readTime"}:
+        return False
+    document = row.get("document")
+    if not isinstance(document, dict) or set(document) - {
+        "name",
+        "fields",
+        "createTime",
+        "updateTime",
+    }:
+        return False
+    if not isinstance(document.get("name"), str) or not isinstance(
+        document.get("fields"), dict
+    ):
+        return False
+    if any(
+        key in document and not _typed_timestamp(document[key])
+        for key in ("createTime", "updateTime")
+    ):
+        return False
+    return "readTime" not in row or _typed_timestamp(row["readTime"])
 
 
 def source_inputs() -> dict[str, str]:
@@ -269,7 +315,11 @@ class RawJournal:
             result["difference"] = "unexpected-query-content-type"
             return result
         try:
-            parsed = json.loads(body, parse_constant=_reject_json_constant)
+            parsed = json.loads(
+                body,
+                parse_constant=_reject_json_constant,
+                object_pairs_hook=_unique_json_object,
+            )
         except (UnicodeError, ValueError):
             result["difference"] = "malformed-query-json"
             return result
@@ -278,21 +328,10 @@ class RawJournal:
             return result
         documents = []
         for row in parsed:
-            if (
-                not isinstance(row, dict)
-                or (
-                    set(row) - {"document", "readTime", "skippedResults", "transaction"}
-                )
-                or not isinstance(row.get("document"), dict)
-            ):
+            if not _typed_query_row(row):
                 result["difference"] = "unexpected-query-row"
                 return result
             document = row["document"]
-            if not isinstance(document.get("name"), str) or not isinstance(
-                document.get("fields"), dict
-            ):
-                result["difference"] = "unexpected-query-row"
-                return result
             documents.append({"name": document["name"], "fields": document["fields"]})
         result["documents"] = documents
         return result

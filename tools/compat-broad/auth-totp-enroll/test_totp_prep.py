@@ -5,126 +5,91 @@ import json
 
 import pytest
 from totp_comparator import compare
-from totp_plan import campaign_manifest
-from totp_shadow import TotpShadow, run
+from totp_plan import CAMPAIGN_ID, STAGE_IDS, campaign_manifest
 
 
-def test_manifest_is_bounded_and_fail_closed() -> None:
-    manifest = campaign_manifest("a" * 32)
-
-    assert manifest["campaignId"] == "AUTH-MFA-TOTP-ENROLL-RETRY-01"
-    assert manifest["status"] == "PREPARED_NOT_READY"
-    assert manifest["productionExecuted"] is False
-    assert manifest["gate"]["productionAuthorization"] is False
-    assert manifest["limits"] == {"maxRequests": 15, "maxWallSeconds": 600, "maxCostUsd": 2.0}
-    assert manifest["nonce"] == "a" * 32
-    assert len(manifest["operations"]) == 15
-    assert all(operation["origin"] == "loopback-only" for operation in manifest["operations"])
-    start = next(operation for operation in manifest["operations"] if operation["stage"] == "C1-start")
-    finalize = next(operation for operation in manifest["operations"] if operation["stage"] == "C3-correct-code")
-    assert start["path"] == "/v2/accounts/mfaEnrollment:start"
-    assert start["body"] == {"idToken": "$owned:idToken", "totpEnrollmentInfo": {}}
-    assert finalize["path"] == "/v2/accounts/mfaEnrollment:finalize"
-    assert finalize["body"] == {
-        "idToken": "$owned:idToken",
-        "totpVerificationInfo": {
-            "sessionInfo": "$owned:sessionInfo",
-            "verificationCode": "$classified:correct",
-            "displayName": "O2 TOTP",
-        },
-    }
-    assert all("{freshNonce}" not in repr(operation) for operation in manifest["operations"])
-
-
-def test_wrong_otp_keeps_pending_enrollment_for_correct_retry_and_replay_fails() -> None:
-    shadow = TotpShadow("user-1", secret="JBSWY3DPEHPK3PXP", now=1_700_000_000)
-
-    start = shadow.start(email_verified=True)
-    wrong = shadow.finalize(start["sessionId"], "000000")
-    correct = shadow.current_code(start["sessionId"])
-    success = shadow.finalize(start["sessionId"], correct)
-    replay = shadow.finalize(start["sessionId"], correct)
-
-    assert wrong == {"status": 400, "error": {"code": "INVALID_TOTP"}}
-    assert success["status"] == 200
-    assert success["enrollment"]["id"]
-    assert replay == {"status": 400, "error": {"code": "SESSION_ALREADY_FINALIZED"}}
-    assert shadow.state() == {"pendingSessions": 0, "enrollments": 1, "codeConsumptions": 1, "events": 2}
-
-
-def test_unverified_email_and_wrong_namespace_do_not_create_state() -> None:
-    shadow = TotpShadow("user-1", secret="JBSWY3DPEHPK3PXP", now=1_700_000_000)
-
-    assert shadow.start(email_verified=False) == {
-        "status": 400,
-        "error": {"code": "EMAIL_NOT_VERIFIED"},
-    }
-    assert shadow.start(email_verified=True, tenant="other") == {
-        "status": 400,
-        "error": {"code": "TENANT_MISMATCH"},
-    }
-    assert shadow.state() == {"pendingSessions": 0, "enrollments": 0, "codeConsumptions": 0, "events": 0}
-
-
-def test_malformed_otp_is_typed_refusal_and_pending_state_is_retained() -> None:
-    shadow = TotpShadow("user-1", secret="JBSWY3DPEHPK3PXP", now=1_700_000_000)
-    start = shadow.start(email_verified=True)
-
-    assert shadow.finalize(start["sessionId"], "12") == {
-        "status": 400,
-        "error": {"code": "INVALID_TOTP_FORMAT"},
-    }
-    assert shadow.state()["pendingSessions"] == 1
-
-
-def test_comparator_redacts_secret_otp_and_tokens_and_keeps_failures_distinct() -> None:
-    left = {
+def receipt(side: str) -> dict:
+    return {
+        "caseId": CAMPAIGN_ID,
+        "side": side,
+        "sourceBinding": {"commit": "a" * 40, "artifactSha256": "b" * 64},
         "recordingComplete": True,
-        "cleanupComplete": True,
-        "rows": [{"stage": "start", "status": 200, "body": {"secret": "abc", "idToken": "token"}}],
-    }
-    right = copy.deepcopy(left)
-    right["rows"][0]["body"] = {"secret": "xyz", "idToken": "other"}
-    assert compare(left, right)["classification"] == "EXPECTED_NONDETERMINISM"
-
-    right["rows"][0]["status"] = 401
-    assert compare(left, right)["classification"] == "SEMANTIC_MISMATCH"
-    right = copy.deepcopy(left)
-    right["cleanupComplete"] = False
-    assert compare(left, right)["classification"] == "INDETERMINATE"
-    right = copy.deepcopy(left)
-    right["recordingComplete"] = False
-    assert compare(left, right)["classification"] == "INCONCLUSIVE"
-
-
-def test_comparator_never_matches_missing_rows_or_incomplete_cleanup() -> None:
-    base = {"recordingComplete": True, "cleanupComplete": True, "rows": [{"status": 200}]}
-    assert compare(base, {**base, "rows": []})["classification"] == "SEMANTIC_MISMATCH"
-    assert compare(base, {**base, "cleanupComplete": False})["classification"] == "INDETERMINATE"
-
-
-def test_session_ids_remain_unique_after_a_session_is_consumed() -> None:
-    shadow = TotpShadow("user-1", secret="JBSWY3DPEHPK3PXP", now=1_700_000_000)
-    first = shadow.start(email_verified=True)
-    shadow.finalize(first["sessionId"], shadow.current_code(first["sessionId"]))
-    second = shadow.start(email_verified=True)
-    assert second["sessionId"] != first["sessionId"]
-
-
-def test_shadow_writes_owned_recovery_receipt_and_readback(tmp_path) -> None:
-    output = tmp_path / "shadow"
-    result = run(output, nonce="c" * 32)
-
-    receipt = json.loads((output / "recovery-receipt.json").read_text())
-    assert result["cleanupComplete"] is True
-    assert receipt == {
-        "complete": True,
-        "owner": "uid-" + "c" * 32,
-        "deleted": True,
-        "remainingState": {"pendingSessions": 0, "enrollments": 0, "codeConsumptions": 1, "events": 2},
+        "stages": [
+            {"id": stage, "response": {"status": 400 if stage == "wrong-code" else 200, "errorCode": "INVALID_TOTP" if stage == "wrong-code" else None}}
+            for stage in STAGE_IDS
+        ],
+        "state": {"afterWrong": {"pendingSession": True, "factorCount": 0}, "afterSuccess": {"pendingSession": False, "factorCount": 1}},
+        "recovery": {"ownerVerified": True, "cleanupVerified": True, "remainingAccounts": 0},
     }
 
 
-def test_plan_rejects_reused_or_unbounded_nonce() -> None:
-    with pytest.raises(ValueError, match="fresh hexadecimal"):
+def test_manifest_is_only_unbound_logical_preparation() -> None:
+    manifest = campaign_manifest("a" * 32)
+    assert manifest["status"] == "PREPARATION"
+    assert manifest["productionExecuted"] is False
+    assert manifest["productionAllowed"] is False
+    assert manifest["sourceBinding"] == {"commit": None, "artifactSha256": None}
+    assert manifest["limits"]["enforced"] is False
+    assert manifest["uniqueObligation"] == "same TOTP session after wrong-code retry and after successful replay, with account and factor readback"
+    assert len(manifest["existingControls"]) == 3
+    assert [stage["id"] for stage in manifest["stages"]] == list(STAGE_IDS)
+    assert all(not ({"method", "path", "body", "cleanupComplete", "ownedOnly"} & set(stage)) for stage in manifest["stages"])
+    assert "operations" not in manifest
+
+
+def test_nonce_syntax_is_not_freshness_or_binding() -> None:
+    with pytest.raises(ValueError, match="hexadecimal nonce"):
         campaign_manifest("old")
+    first = campaign_manifest("a" * 32)
+    second = campaign_manifest("a" * 32)
+    assert first == second
+    assert first["nonceStatus"] == "syntax-only; freshness and ownership unverified"
+
+
+def test_identical_or_incomplete_receipts_fail_closed() -> None:
+    local = receipt("local")
+    assert compare(local, local)["classification"] == "INDETERMINATE"
+    assert compare(local, receipt("production"))["classification"] == "INDETERMINATE"
+    for mutation in (
+        lambda x: x.pop("sourceBinding"),
+        lambda x: x.update(recordingComplete=False),
+        lambda x: x["stages"].pop(),
+        lambda x: x["stages"].append(copy.deepcopy(x["stages"][-1])),
+        lambda x: x.update(side="local"),
+    ):
+        production = receipt("production")
+        mutation(production)
+        assert compare(local, production)["classification"] == "INDETERMINATE"
+
+
+def test_observed_differences_never_become_agreement() -> None:
+    local = receipt("local")
+    for mutation in (
+        lambda x: x["stages"][2]["response"].update(status=401),
+        lambda x: x["state"]["afterWrong"].update(pendingSession=False),
+        lambda x: x["state"]["afterSuccess"].update(factorCount=2),
+        lambda x: x["recovery"].update(remainingAccounts=1),
+    ):
+        production = receipt("production")
+        mutation(production)
+        assert compare(local, production)["classification"] == "SEMANTIC_MISMATCH"
+    production = receipt("production")
+    production["recovery"]["cleanupVerified"] = False
+    assert compare(local, production)["classification"] == "INDETERMINATE"
+
+
+def test_serialized_outputs_do_not_contain_secret_material() -> None:
+    local = receipt("local")
+    production = receipt("production")
+    for record in (local, production):
+        record["stages"][1]["response"]["totpSecret"] = "RAW_SECRET_123"
+        record["stages"][1]["response"]["otp"] = "123456"
+        record["stages"][1]["response"]["password"] = "RAW_PASSWORD_123"
+        record["stages"][1]["response"]["idToken"] = "RAW_TOKEN_123"
+        record["stages"][1]["response"]["refreshToken"] = "RAW_REFRESH_123"
+        record["stages"][1]["response"]["sessionInfo"] = "RAW_SESSION_123"
+    result = json.dumps(compare(local, production))
+    manifest = json.dumps(campaign_manifest("a" * 32))
+    for material in ("RAW_SECRET_123", "123456", "RAW_PASSWORD_123", "RAW_TOKEN_123", "RAW_REFRESH_123", "RAW_SESSION_123"):
+        assert material not in result + manifest
+    assert compare(local, production)["classification"] == "INDETERMINATE"

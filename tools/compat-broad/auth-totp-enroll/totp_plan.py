@@ -1,72 +1,55 @@
-"""Offline plan for AUTH-MFA-TOTP-ENROLL-RETRY-01.
-
-This module only describes a future observation. It does not contain a
-production transport or credentials.
-"""
+"""Non-executable logical preparation for a future TOTP observation."""
 
 from __future__ import annotations
 
+import json
 import re
 
 CAMPAIGN_ID = "AUTH-MFA-TOTP-ENROLL-RETRY-01"
-SOURCE_COMMIT = "f3be8df11f9096a44b45272681744b406c9713d5"
-
-
-def _operation(stage: str, method: str, path: str, resource: str, principal: str, *, body: dict | None = None) -> dict:
-    return {
-        "stage": stage,
-        "service": "auth",
-        "method": method,
-        "path": path,
-        "body": body,
-        "resource": resource,
-        "principal": principal,
-        "origin": "loopback-only",
-        "productionAllowed": False,
-    }
+STAGE_IDS = (
+    "verified-account-prerequisite",
+    "totp-start",
+    "wrong-code",
+    "same-session-correct-retry",
+    "successful-session-replay",
+    "account-factor-readback",
+    "owned-resource-cleanup",
+)
+_PREREQUISITES = (
+    "Production-capable verified-account setup and typed TOTP request contracts",
+    "Validated same-session pending-state observation and tenant selector",
+    "Real owned-resource cleanup finalizer and recovery evidence",
+    "Enforced request, wall-clock, and cost limits",
+    "Source-bound paired local and production receipts",
+)
 
 
 def campaign_manifest(nonce: str) -> dict:
-    if not re.fullmatch(r"[a-f0-9]{32}", nonce or ""):
-        raise ValueError("fresh hexadecimal nonce required")
-    account = f"accounts/{nonce}"
-    session = f"mfaSessions/{nonce}"
-    principal = f"owned-account:{nonce}"
-    operations = [
-        _operation("C0-create-user", "POST", "/v1/accounts:signUp", account, principal),
-        _operation("C0-verify-email", "POST", "/v1/accounts:sendOobCode", account, principal),
-        _operation("C0-read-user", "POST", "/v1/accounts:lookup", account, principal),
-        _operation("C1-start", "POST", "/v2/accounts/mfaEnrollment:start", session, principal, body={"idToken": "$owned:idToken", "totpEnrollmentInfo": {}}),
-        _operation("C1-read-user", "POST", "/v1/accounts:lookup", account, principal),
-        _operation("C1-read-session", "GET", f"/v2/{session}", session, principal),
-        _operation("C2-wrong-code", "POST", "/v2/accounts/mfaEnrollment:finalize", session, principal, body={"idToken": "$owned:idToken", "totpVerificationInfo": {"sessionInfo": "$owned:sessionInfo", "verificationCode": "$classified:wrong", "displayName": "O2 TOTP"}}),
-        _operation("C2-read-state", "POST", "/v1/accounts:lookup", account, principal),
-        _operation("C3-correct-code", "POST", "/v2/accounts/mfaEnrollment:finalize", session, principal, body={"idToken": "$owned:idToken", "totpVerificationInfo": {"sessionInfo": "$owned:sessionInfo", "verificationCode": "$classified:correct", "displayName": "O2 TOTP"}}),
-        _operation("C3-read-user", "POST", "/v1/accounts:lookup", account, principal),
-        _operation("C4-replay", "POST", "/v2/accounts/mfaEnrollment:finalize", session, principal, body={"idToken": "$owned:idToken", "totpVerificationInfo": {"sessionInfo": "$owned:sessionInfo", "verificationCode": "$classified:correct", "displayName": "O2 TOTP"}}),
-        _operation("C4-read-user", "POST", "/v1/accounts:lookup", account, principal),
-        _operation("N0-unverified-start", "POST", "/v2/accounts/mfaEnrollment:start", f"negative/{nonce}", principal, body={"idToken": "$owned:unverifiedIdToken", "totpEnrollmentInfo": {}}),
-        _operation("N1-wrong-tenant-start", "POST", "/v2/accounts/mfaEnrollment:start", f"tenant/{nonce}", principal, body={"idToken": "$owned:idToken", "totpEnrollmentInfo": {}}),
-        _operation("cleanup-read", "POST", "/v1/accounts:lookup", account, principal),
-    ]
+    """Return an inert observation outline; nonce validation proves syntax only."""
+    if not isinstance(nonce, str) or not re.fullmatch(r"[a-f0-9]{32}", nonce):
+        raise ValueError("32-character hexadecimal nonce required")
     return {
         "campaignId": CAMPAIGN_ID,
-        "status": "PREPARED_NOT_READY",
-        "technicalStatus": "LOCAL_SHADOW_ONLY",
+        "status": "PREPARATION",
         "productionExecuted": False,
+        "productionAllowed": False,
         "nonce": nonce,
-        "sourceBinding": {"commit": SOURCE_COMMIT, "artifactSha256": None},
-        "gate": {"productionAuthorization": False, "owner": None, "credential": None},
-        "limits": {"maxRequests": 15, "maxWallSeconds": 600, "maxCostUsd": 2.0},
-        "operations": operations,
-        "cleanup": {"ownedOnly": True, "recovery": "stop and retain recovery receipt; never unconditional delete"},
-        "outOfScope": ["production requests", "SMS/email delivery", "expired OTP", "clock skew", "multiple factors"],
+        "nonceStatus": "syntax-only; freshness and ownership unverified",
+        "sourceBinding": {"commit": None, "artifactSha256": None},
+        "uniqueObligation": "same TOTP session after wrong-code retry and after successful replay, with account and factor readback",
+        "existingControls": [
+            "conformance/fixtures/auth/mfa-error-shapes.json",
+            "conformance/fixtures/auth/mfa-enrollment-eligibility.json",
+            "conformance/src/auth-probe/programs.mjs",
+        ],
+        "stages": [{"id": stage, "status": "unresolved"} for stage in STAGE_IDS],
+        "prerequisites": list(_PREREQUISITES),
+        "limits": {"proposedMaxRequests": 15, "proposedMaxWallSeconds": 600, "proposedMaxCostUsd": 2.0, "enforced": False},
     }
 
 
 if __name__ == "__main__":
     import argparse
-    import json
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--nonce", required=True)

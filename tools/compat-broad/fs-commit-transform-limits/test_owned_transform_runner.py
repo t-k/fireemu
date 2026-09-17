@@ -3,9 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 
-import pytest
-
 import owned_transform_runner as runner
+import pytest
 from owned_transform_runner import (
     BUILD_COMMAND,
     PROFILES,
@@ -152,7 +151,6 @@ def test_symlink_artifact_is_not_an_immutable_identity(tmp_path):
 @pytest.mark.parametrize("mutation", ["extra", "missing", "changed"])
 def test_forged_runtime_input_map_is_rejected_against_fixed_git_tree(mutation):
     from evidence_common import runtime_inputs_at_commit
-
     from owned_transform_runner import ROOT, RUNTIME_COMMIT, validate_runtime_provenance
 
     manifest = {

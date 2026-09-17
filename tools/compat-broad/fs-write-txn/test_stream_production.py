@@ -11,6 +11,10 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE.parent / "production-admission"))
 
+from test_stream_bridge import (
+    trusted_node_runtime,  # noqa: F401 -- Shared owned-runtime fixture.
+)
+
 
 def production():
     assert importlib.util.find_spec("stream_production") is not None, (
@@ -115,7 +119,7 @@ def metadata_server():
         assert not thread.is_alive()
 
 
-def prepared_fixture(tmp_path, metadata_server):
+def prepared_fixture(tmp_path, metadata_server, stale=None):
     import time
 
     import stream_bridge
@@ -136,7 +140,11 @@ def prepared_fixture(tmp_path, metadata_server):
         )["projectionDigest"],
         "pricingLocation": "us-central1",
     }
+    if stale == "permission":
+        permission["collectorSourceDigest"] = "0" * 64
     plan = module.prepared_plan(permission["nonce"], "owner-003", digest(permission))
+    if stale == "plan":
+        plan["observerSha256"] = "0" * 64
     ledger = Ledger.create(tmp_path / "ledger")
     scope = {
         "key": f"project/{PROJECT}/firestore/(default)/documents/{plan['documentPrefix']}",
@@ -247,3 +255,97 @@ def test_real_outer_shadow_runs_postflight_before_cleanup_and_releases_only_vali
     assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == (
         "held" if drift else "released"
     )
+
+
+@pytest.mark.parametrize("stale", ["permission", "plan"])
+def test_common_admission_rejects_stale_source_before_metadata(
+    tmp_path, metadata_server, stale
+):
+    from shared_gate import create
+
+    module, permission, plan, ledger, ticket, credential = prepared_fixture(
+        tmp_path, metadata_server, stale=stale
+    )
+    create(tmp_path / "gate", plan)
+    gate = module.StreamProductionGate(tmp_path / "gate")
+    gate.claim()
+    with pytest.raises(ValueError, match="source"):
+        module.StreamCoordinator(
+            permission,
+            tmp_path / "coordinator",
+            gate,
+            "local-shadow-key",
+            ledger=ledger,
+            ticket=ticket,
+            credential=credential,
+            shadow_origin=metadata_server["origin"],
+        )
+    assert metadata_server["requests"] == []
+    assert gate.snapshot()["total"] == 0
+
+
+def test_management_phase_is_rechecked_after_adapter_wait(tmp_path, metadata_server):
+    import time
+
+    from shared_gate import _save, create
+
+    module, permission, plan, ledger, ticket, credential = prepared_fixture(
+        tmp_path, metadata_server
+    )
+    create(tmp_path / "gate", plan)
+    gate = module.StreamProductionGate(tmp_path / "gate")
+    gate.claim()
+    coordinator = module.StreamCoordinator(
+        permission,
+        tmp_path / "coordinator",
+        gate,
+        "local-shadow-key",
+        ledger=ledger,
+        ticket=ticket,
+        credential=credential,
+        shadow_origin=metadata_server["origin"],
+    )
+    with gate.locked() as state:
+        state["started"] = (
+            time.monotonic() - plan["wallSeconds"] + plan["recoverySeconds"] + 13.4
+        )
+        _save(gate.path, state)
+    coordinator.last_request = time.monotonic() + 0.5
+    with pytest.raises(ValueError, match="phase deadline"):
+        coordinator.checked_preflight(recovery=False)
+    assert metadata_server["requests"] == []
+    assert gate.snapshot()["total"] == 1
+
+
+def test_metadata_only_execution_is_reported_separately(tmp_path, metadata_server):
+    from shared_gate import create
+
+    module, permission, plan, ledger, ticket, credential = prepared_fixture(
+        tmp_path, metadata_server
+    )
+    create(tmp_path / "gate", plan)
+    gate = module.StreamProductionGate(tmp_path / "gate")
+    gate.claim()
+    coordinator = module.StreamCoordinator(
+        permission,
+        tmp_path / "coordinator",
+        gate,
+        "local-shadow-key",
+        ledger=ledger,
+        ticket=ticket,
+        credential=credential,
+        shadow_origin=metadata_server["origin"],
+    )
+    coordinator.checked_preflight(recovery=False)
+    assert hasattr(module, "execution_facts"), (
+        "metadata and data execution must be distinct"
+    )
+    facts = module.execution_facts(gate.snapshot(), production=True)
+    assert facts == {
+        "productionExecuted": True,
+        "productionRequests": 4,
+        "metadataRequests": 4,
+        "dataRequests": 0,
+        "productionDataExecuted": False,
+        "completedDataObservation": False,
+    }

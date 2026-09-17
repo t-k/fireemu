@@ -1748,6 +1748,21 @@ fn discard_pending_inbound_credentials(
     store.clear_pending_sign_in_credentials(pending);
 }
 
+struct GeneratedLocalIdReservation {
+    store: Arc<Mutex<AuthStore>>,
+    id: String,
+}
+
+impl Drop for GeneratedLocalIdReservation {
+    fn drop(&mut self) {
+        let store = self
+            .store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        store.release_reserved_generated_local_id(&self.id);
+    }
+}
+
 // The request parts stay separate here so the ordinary dispatcher remains the one source of
 // route behavior; grouping them in a second request type would duplicate that boundary.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -1777,6 +1792,13 @@ fn dispatch_with_blocking_hook(
             ))
         });
     let mut candidate = store.clone();
+    let _reserved_local_id = request_may_create_end_user(handler, &store, body, at).then(|| {
+        let id = candidate.reserve_next_generated_local_id();
+        GeneratedLocalIdReservation {
+            store: store_arc.clone(),
+            id,
+        }
+    });
     let response = dispatch(
         handler,
         &mut candidate,
@@ -1946,6 +1968,11 @@ fn dispatch_with_blocking_hook(
             return error(500, "INTERNAL");
         };
         let mut committed = live.clone();
+        if is_new {
+            if let Some(uid) = speculative_uid.as_ref().map(LocalId::as_str) {
+                committed.use_reserved_generated_local_id(uid);
+            }
+        }
         let mut committed_response = if handler == routes::Handler::SignUp && is_new {
             sign_up(
                 &mut committed,

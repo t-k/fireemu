@@ -872,6 +872,10 @@ pub struct AuthStore {
     /// credential is resolved directly rather than by scanning every user
     /// (`AUTH-TRANSIENT-04`). Kept in step with the users' own pending maps.
     pending_sign_in_owners: Arc<BTreeMap<String, LocalId>>,
+    /// Generated IDs held by in-flight blocking Auth candidates. This registry is shared by
+    /// snapshots so concurrent candidates avoid each other's IDs without advancing the live
+    /// random stream that ordinary nested Admin requests use.
+    generated_local_id_reservations: Arc<Mutex<BTreeSet<LocalId>>>,
     /// Users that currently own a pending enrollment or sign-in. Credential sweeping only
     /// visits this bounded subset instead of cloning or scanning every account.
     pending_user_ids: BTreeSet<LocalId>,
@@ -1096,6 +1100,7 @@ impl AuthStore {
             oob_codes: Arc::new(BTreeMap::new()),
             verification_codes: Arc::new(BTreeMap::new()),
             pending_sign_in_owners: Arc::new(BTreeMap::new()),
+            generated_local_id_reservations: Arc::new(Mutex::new(BTreeSet::new())),
             pending_user_ids: BTreeSet::new(),
             created_users: Vec::new(),
             deleted_users: Vec::new(),
@@ -2078,6 +2083,41 @@ impl AuthStore {
     /// Creates a user.
     pub fn create_user(&mut self, new: NewUser, now: LogicalInstant) -> Result<LocalId, AuthError> {
         self.create_user_with_email_policy(new, now, true)
+    }
+
+    /// Reserves the next generated local ID for a speculative blocking request.
+    ///
+    /// The reservation is shared by snapshots, but the live random stream is unchanged. This
+    /// keeps concurrent blocking candidates distinct while preserving the established identity
+    /// change check when an ordinary nested Admin request consumes the same generated ID.
+    pub fn reserve_next_generated_local_id(&mut self) -> String {
+        loop {
+            let candidate = LocalId(self.random_id28());
+            if self.users.contains_key(&candidate) {
+                continue;
+            }
+            let mut reservations = self
+                .generated_local_id_reservations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if reservations.insert(candidate.clone()) {
+                self.next_id_override = Some(candidate.as_str().to_owned());
+                return candidate.as_str().to_owned();
+            }
+        }
+    }
+
+    /// Uses a previously reserved ID for the next generated account.
+    pub fn use_reserved_generated_local_id(&mut self, id: &str) {
+        self.next_id_override = Some(id.to_owned());
+    }
+
+    /// Releases a generated ID held by an in-flight blocking candidate.
+    pub fn release_reserved_generated_local_id(&self, id: &str) {
+        self.generated_local_id_reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&LocalId(id.to_owned()));
     }
 
     /// Creates the provider-scoped account used by `IdP` sign-in when email uniqueness is off.

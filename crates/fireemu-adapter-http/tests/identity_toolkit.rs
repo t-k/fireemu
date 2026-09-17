@@ -2637,10 +2637,7 @@ fn an_unbound_blocking_hook_with_a_registry_default_store_does_not_deadlock() {
     use std::time::Duration;
 
     let mut auth = state();
-    auth.registry = Some(Arc::new(AuthRegistry::new(
-        "demo-app",
-        auth.store.clone(),
-    )));
+    auth.registry = Some(Arc::new(AuthRegistry::new("demo-app", auth.store.clone())));
     auth.blocking = Some(Arc::new(BeforeCreateOnlySuccessfulHook(Arc::new(
         Mutex::new(Vec::new()),
     ))));
@@ -9871,6 +9868,8 @@ fn body_tenant_mismatch_preserves_invalid_id_token_precedence() {
     for tenant in ["tenant-a", "tenant-b"] {
         registry.ensure_tenant("demo-app", tenant).unwrap();
     }
+    let tenant_a = registry.tenant_store("demo-app", "tenant-a").unwrap();
+    let tenant_b = registry.tenant_store("demo-app", "tenant-b").unwrap();
     s.registry = Some(registry);
 
     let (status, created) = post(
@@ -9897,6 +9896,8 @@ fn body_tenant_mismatch_preserves_invalid_id_token_precedence() {
     );
     assert_eq!(status, 400, "{refused}");
     assert_eq!(refused["error"]["message"], "INVALID_ID_TOKEN");
+    assert_eq!(tenant_a.lock().unwrap().user_count(), 1);
+    assert_eq!(tenant_b.lock().unwrap().user_count(), 0);
 }
 
 #[test]

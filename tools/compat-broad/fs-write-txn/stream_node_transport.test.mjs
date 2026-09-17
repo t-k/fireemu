@@ -4,6 +4,9 @@ import {
   buildUnaryRequest,
   databaseName,
   documentName,
+  listWriteFrames,
+  runWrite,
+  runUnary,
   validateTransportOptions,
 } from './stream_node_transport.mjs';
 
@@ -56,4 +59,57 @@ test('accepts explicit local metadata without consulting environment credentials
 
 test('refuses unary reads outside the owned document prefix', () => {
   assert.throws(() => buildUnaryRequest('GetDocument', options, { path: 'compat/other/doc' }), /owned prefix/);
+});
+
+test('refuses caller overrides of transport-owned request fields', () => {
+  assert.throws(() => buildUnaryRequest('BeginTransaction', options, { database: 'projects/other/databases/(default)' }), /cannot be supplied/);
+  assert.throws(() => buildUnaryRequest('GetDocument', options, { path: 'compat/o3/doc', name: 'projects/other/databases/(default)/documents/x' }), /cannot be supplied/);
+  assert.throws(() => buildUnaryRequest('Rollback', options, { database: 'projects/other/databases/(default)' }), /cannot be supplied/);
+});
+
+test('feeds only the freshest server stream token into the next write frame', () => {
+  const response = { streamToken: Buffer.from('fresh-token') };
+  assert.deepEqual(listWriteFrames([{ writes: [{ delete: documentName(options.projectId, 'compat/o3/doc') }] }], response), [
+    { streamToken: response.streamToken, writes: [{ delete: documentName(options.projectId, 'compat/o3/doc') }] },
+  ]);
+  assert.throws(() => listWriteFrames([{ streamToken: Buffer.from('caller-token') }], response), /transport-owned/);
+  assert.throws(() => listWriteFrames([{ database: 'projects/other/databases/(default)' }], response), /transport-owned/);
+});
+
+test('classifies a local deadline as incomplete', async () => {
+  const receipt = await runUnary('GetDocument', { ...options, port: 1, deadlineMs: 250 }, { path: 'compat/o3/doc' });
+  assert.equal(receipt.kind, 'client_deadline');
+  assert.equal(receipt.complete, false);
+});
+
+test('cancels a bounded Write stream at the client deadline', async () => {
+  const receipt = await runWrite([], { ...options, port: 1, deadlineMs: 100 });
+  assert.ok(receipt.kind === 'client_deadline' || receipt.kind === 'grpc_status');
+  if (receipt.kind === 'client_deadline') assert.equal(receipt.complete, false);
+  else assert.equal(typeof receipt.status.code, 'number');
+  assert.ok(receipt.events.some(event => event.type === 'error' || event.type === 'close'));
+});
+
+test('runs the local fireemu handshake, write, readback, transaction, and rollback', { skip: !process.env.FIREEMU_LIVE_PORT }, async () => {
+  const liveOptions = { ...options, port: Number(process.env.FIREEMU_LIVE_PORT), metadata: { authorization: 'Bearer owner' } };
+  const path = 'compat/o3/live/doc';
+  const begin = await runUnary('BeginTransaction', liveOptions, { options: { readWrite: {} } });
+  assert.equal(begin.kind, 'grpc_status');
+  assert.equal(begin.complete, true);
+  const write = await runWrite([{
+    writes: [{ update: {
+      name: documentName(liveOptions.projectId, path),
+      fields: { value: { stringValue: 'local' } },
+    } }],
+  }], liveOptions);
+  assert.equal(write.kind, 'grpc_status');
+  assert.equal(write.complete, true);
+  assert.ok(write.events.some(event => event.type === 'status'));
+  const read = await runUnary('GetDocument', liveOptions, { path });
+  assert.equal(read.kind, 'grpc_status');
+  assert.equal(read.complete, true);
+  assert.equal(read.response.fields.value.stringValue, 'local');
+  const rollback = await runUnary('Rollback', liveOptions, { transaction: begin.response.transaction });
+  assert.equal(rollback.kind, 'grpc_status');
+  assert.equal(rollback.complete, true);
 });

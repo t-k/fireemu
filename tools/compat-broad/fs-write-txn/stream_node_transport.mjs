@@ -1,6 +1,5 @@
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 
 const requireSdk = createRequire(new URL('../../sdk-smoke/package.json', import.meta.url));
 // Resolve the installed SDK from sdk-smoke's package boundary, then load its
@@ -8,7 +7,7 @@ const requireSdk = createRequire(new URL('../../sdk-smoke/package.json', import.
 // the generated v1 subpath.
 const firestoreEntry = requireSdk.resolve('@google-cloud/firestore');
 const { FirestoreClient } = requireSdk(join(dirname(firestoreEntry), 'v1/index.js'));
-const grpc = requireSdk('@grpc/grpc-js');
+const grpc = requireSdk(requireSdk.resolve('@grpc/grpc-js', { paths: [dirname(firestoreEntry)] }));
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 const OPERATIONS = new Set(['BeginTransaction', 'GetDocument', 'Rollback']);
@@ -25,7 +24,11 @@ const assertInteger = (value, name, minimum, maximum) => {
   }
 };
 
-const byteLength = value => Buffer.byteLength(JSON.stringify(value));
+const byteLength = value => {
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined) throw fail('stream value is not serializable', 'message_limit');
+  return Buffer.byteLength(encoded);
+};
 
 export const validateTransportOptions = options => {
   if (!options || typeof options !== 'object') throw fail('options are required');
@@ -64,6 +67,13 @@ export const documentName = (projectId, path) => `${databaseName(projectId)}/doc
 export const buildUnaryRequest = (operation, options, input = {}) => {
   const validated = validateTransportOptions(options);
   if (!OPERATIONS.has(operation)) throw fail(`unsupported unary operation: ${operation}`);
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail('unary input must be an object');
+  const protectedFields = operation === 'GetDocument'
+    ? ['name', 'database', 'writes', 'streamToken']
+    : ['database', 'name', 'path', 'writes', 'streamToken'];
+  for (const field of protectedFields) {
+    if (Object.hasOwn(input, field)) throw fail(`${field} cannot be supplied for ${operation}`);
+  }
   if (operation === 'BeginTransaction') return { database: databaseName(validated.projectId), ...input };
   if (operation === 'Rollback') return { database: databaseName(validated.projectId), ...input };
   const path = input.path;
@@ -86,6 +96,9 @@ const requestTargets = request => {
 
 const assertRequest = (request, options) => {
   if (!request || typeof request !== 'object') throw fail('write request must be an object');
+  if (Object.hasOwn(request, 'database') && request.database !== databaseName(options.projectId)) {
+    throw fail('write database is transport-owned');
+  }
   if (byteLength(request) > options.maxMessageBytes) throw fail('write request exceeds maxMessageBytes', 'message_limit');
   const prefix = documentName(options.projectId, options.documentPrefix);
   for (const target of requestTargets(request)) {
@@ -94,10 +107,22 @@ const assertRequest = (request, options) => {
 };
 
 const clientFor = options => new FirestoreClient({
-  apiEndpoint: `${options.host}:${options.port}`,
+  servicePath: options.host,
+  port: options.port,
   projectId: options.projectId,
   sslCreds: grpc.credentials.createInsecure(),
   fallback: false,
+});
+
+const grpcCallName = operation => operation === 'BeginTransaction' ? 'beginTransaction' : operation === 'GetDocument' ? 'getDocument' : 'rollback';
+
+const statusReceipt = (operation, request, error) => ({
+  kind: 'grpc_status',
+  complete: true,
+  operation,
+  request,
+  status: { code: error?.code, details: error?.details },
+  error,
 });
 
 export const runUnary = async (operation, options, input = {}) => {
@@ -106,22 +131,34 @@ export const runUnary = async (operation, options, input = {}) => {
   const client = clientFor(validated);
   let timer;
   try {
-    const call = client[operation === 'BeginTransaction' ? 'beginTransaction' : operation === 'GetDocument' ? 'getDocument' : 'rollback'](request, {
+    const call = client[grpcCallName(operation)](request, {
       deadline: new Date(Date.now() + validated.deadlineMs),
       otherArgs: { headers: { ...validated.metadata } },
     });
-    const result = await Promise.race([
-      call,
-      delay(validated.deadlineMs).then(() => { throw Object.assign(new Error('client deadline exceeded'), { code: 'client_deadline' }); }),
-    ]);
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(Object.assign(new Error('client deadline exceeded'), { code: 'client_deadline' })), validated.deadlineMs);
+    });
+    const result = await Promise.race([call, timeout]);
     return { kind: 'grpc_status', complete: true, operation, request, response: result[0] ?? result };
   } catch (error) {
     if (error?.code === 'client_deadline') return { kind: 'client_deadline', complete: false, operation, request, error };
-    return { kind: 'grpc_status', complete: true, operation, request, status: { code: error?.code, details: error?.details }, error };
+    if (typeof error?.code === 'number') return statusReceipt(operation, request, error);
+    return { kind: 'incomplete_stream', complete: false, operation, request, error };
   } finally {
     clearTimeout(timer);
     client.close();
   }
+};
+
+export const listWriteFrames = (requests, response) => {
+  if (!Array.isArray(requests)) throw fail('write frames must be an array');
+  const streamToken = response?.streamToken;
+  return requests.map(request => {
+    if (!request || typeof request !== 'object' || Array.isArray(request)) throw fail('write request must be an object');
+    if (Object.hasOwn(request, 'database')) throw fail('database is transport-owned');
+    if (Object.hasOwn(request, 'streamToken')) throw fail('streamToken is transport-owned');
+    return streamToken === undefined ? { ...request } : { ...request, streamToken };
+  });
 };
 
 export const runWrite = async (requests, options) => {
@@ -134,67 +171,105 @@ export const runWrite = async (requests, options) => {
   const events = [];
   let frameCount = 0;
   let status;
-  let ended = false;
+  let terminalError;
+  let sawEnd = false;
+  let sawClose = false;
+  let settled = false;
   let timer;
+  let terminalGraceTimer;
+  const responseQueue = [];
+  const responseWaiters = [];
+  let settleTerminal;
+  const terminal = new Promise(resolve => { settleTerminal = resolve; });
   const push = (event, value) => {
     if (byteLength(value) > validated.maxMessageBytes) throw fail('stream event exceeds maxMessageBytes', 'message_limit');
     events.push({ type: event, value });
   };
-  const receipt = await new Promise(resolve => {
-    const finish = result => {
-      if (ended) return;
-      ended = true;
+  const finish = result => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      resolve({ ...result, events });
-    };
-    stream.on('data', response => {
-      try {
-        frameCount += 1;
-        if (frameCount > validated.maxFrames) {
-          stream.destroy(fail('stream exceeds maxFrames', 'frame_limit'));
-          return;
-        }
-        push('data', response);
-      } catch (error) { stream.destroy(error); }
-    });
-    stream.on('status', value => {
-      status = value;
-      try { push('status', value); } catch (error) { stream.destroy(error); }
-    });
-    stream.on('error', error => {
-      try { push('error', error); } catch { /* preserve the original terminal error */ }
-      if (error?.code === 'client_deadline') finish({ kind: 'client_deadline', complete: false, error, status });
-      else if (status) finish({ kind: 'grpc_status', complete: true, error, status });
-      else finish({ kind: 'incomplete_stream', complete: false, error, status });
-    });
-    stream.on('end', () => {
-      push('end', { status });
-      if (status && status.code === grpc.status.OK) finish({ kind: 'grpc_status', complete: true, status });
-      else if (status) finish({ kind: 'grpc_status', complete: true, status });
-      else finish({ kind: 'incomplete_stream', complete: false, status });
-    });
-    timer = setTimeout(() => {
-      const error = Object.assign(new Error('client deadline exceeded'), { code: 'client_deadline' });
-      stream.destroy(error);
-    }, validated.deadlineMs);
-    void (async () => {
-      try {
-        const handshake = { database: databaseName(validated.projectId) };
-        assertRequest(handshake, validated);
-        frameCount = 1;
-        stream.write(handshake);
-        for await (const request of requests) {
-          frameCount += 1;
-          if (frameCount > validated.maxFrames) throw fail('stream exceeds maxFrames', 'frame_limit');
-          assertRequest(request, validated);
-          stream.write(request);
-        }
-        stream.end();
-      } catch (error) {
-        stream.destroy(error);
-      }
-    })();
+      clearTimeout(terminalGraceTimer);
+      settleTerminal({ ...result, events: events.slice() });
+  };
+  const maybeFinish = () => {
+    if (settled || !(sawEnd || sawClose)) return;
+    if (status) finish({ kind: 'grpc_status', complete: true, status });
+    else if (terminalError) finish({ kind: 'incomplete_stream', complete: false, error: terminalError });
+    else finish({ kind: 'incomplete_stream', complete: false });
+  };
+  const rejectWaiters = error => {
+    while (responseWaiters.length > 0) responseWaiters.shift().reject(error);
+  };
+  const waitResponse = () => new Promise((resolve, reject) => {
+    if (responseQueue.length > 0) resolve(responseQueue.shift());
+    else if (terminalError) reject(terminalError);
+    else responseWaiters.push({ resolve, reject });
   });
+  const sendFrame = request => {
+    if (++frameCount > validated.maxFrames) throw fail('stream exceeds maxFrames', 'frame_limit');
+    assertRequest(request, validated);
+    stream.write(request);
+  };
+  stream.on('data', response => {
+    try {
+      push('data', response);
+      if (++frameCount > validated.maxFrames) {
+        stream.destroy(fail('stream exceeds maxFrames', 'frame_limit'));
+        return;
+      }
+      if (responseWaiters.length > 0) responseWaiters.shift().resolve(response);
+      else responseQueue.push(response);
+    } catch (error) { stream.destroy(error); }
+  });
+  stream.on('status', value => {
+    status = value;
+    try { push('status', value); } catch (error) { stream.destroy(error); }
+    maybeFinish();
+  });
+  stream.on('error', error => {
+    terminalError = error;
+    try { push('error', error); } catch { /* retain the typed error in the receipt */ }
+    rejectWaiters(error);
+    // grpc-js may emit error before status and close; defer classification until
+    // the terminal status/close pair has had a chance to arrive.
+    terminalGraceTimer = setTimeout(maybeFinish, 100);
+    maybeFinish();
+  });
+  stream.on('end', () => {
+    sawEnd = true;
+    try { push('end', { status }); } catch { /* terminal event remains bounded */ }
+    maybeFinish();
+  });
+  stream.on('close', () => {
+    sawClose = true;
+    try { push('close', { status }); } catch { /* terminal event remains bounded */ }
+    maybeFinish();
+  });
+  timer = setTimeout(() => {
+    const error = Object.assign(new Error('client deadline exceeded'), { code: 'client_deadline' });
+    terminalError = error;
+    rejectWaiters(error);
+    stream.destroy(error);
+    finish({ kind: 'client_deadline', complete: false, error, status });
+  }, validated.deadlineMs);
+  try {
+    sendFrame({ database: databaseName(validated.projectId) });
+    let response = await waitResponse();
+    for await (const request of requests) {
+      const frame = listWriteFrames([request], response)[0];
+      sendFrame(frame);
+      response = await waitResponse();
+    }
+    stream.end();
+  } catch (error) {
+    if (!terminalError) {
+      terminalError = error;
+      rejectWaiters(error);
+      stream.destroy(error);
+    }
+  }
+  const receipt = await terminal;
   client.close();
   return receipt;
 };

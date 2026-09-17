@@ -170,7 +170,7 @@ def test_explain_validator_accepts_structured_comparable_api_errors(status, erro
 
 def test_manifest_is_exactly_six_owned_explain_cases():
     value = manifest()
-    assert value["kind"] == "production-campaign-explain-01-v7"
+    assert value["kind"] == "production-campaign-explain-01-v8"
     assert value["status"] == "prepared-offline"
     assert value["productionExecutable"] is True
     assert value["template"]["nonce"] == "{freshNonce}"

@@ -1,5 +1,5 @@
 {
-  "kind": "production-campaign-explain-01-v7",
+  "kind": "production-campaign-explain-01-v8",
   "status": "prepared-offline",
   "sourceCommit": "permission-bound-execution-HEAD",
   "collector": "existing-batch-adapter-shared-v1",
@@ -16,7 +16,7 @@
     "database": "(default)",
     "edition": "STANDARD",
     "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
-    "observerSha256": "ea102dbfbd14e894c99a7e85972ffbb1590fa8c656f6cb6f9077661a97e255b3",
+    "observerSha256": "b203f4f5b2e7053efe392d992a3d0cd9772bdf29e0f86a257eb19304b7b65f56",
     "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80"
   },
   "template": {
@@ -315,7 +315,7 @@
     "accounts": 0,
     "configurationChanges": 0,
     "metadataRequests": 0,
-    "observerSha256": "ea102dbfbd14e894c99a7e85972ffbb1590fa8c656f6cb6f9077661a97e255b3",
+    "observerSha256": "b203f4f5b2e7053efe392d992a3d0cd9772bdf29e0f86a257eb19304b7b65f56",
     "transport": "shared-explicit-production-v1",
     "collector": "existing-batch-adapter-shared-v1",
     "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80",

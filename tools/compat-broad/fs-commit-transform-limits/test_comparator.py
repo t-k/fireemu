@@ -13,7 +13,13 @@ def _rows(plan: dict) -> list[dict]:
     for index, request in enumerate(plan["observation"]):
         if request["kind"] == "commit-transform":
             if request["expect"]["outcome"] == "accepted":
-                body = {"commitTime": "2026-09-17T00:00:00Z", "writeResults": []}
+                body = {
+                    "commitTime": "2026-09-18T00:00:00Z",
+                    "writeResults": [
+                        {"updateTime": "2026-09-18T00:00:00Z"},
+                        {"updateTime": "2026-09-18T00:00:00Z"},
+                    ],
+                }
                 status = 200
             else:
                 body = {
@@ -51,7 +57,9 @@ def _rows(plan: dict) -> list[dict]:
                 {
                     "name": document["resource"],
                     "fields": fields,
-                    "updateTime": "2026-09-17T00:00:00Z",
+                    "updateTime": "2026-09-18T00:00:00Z"
+                    if request["expect"].get("postState") == "transformed"
+                    else "2026-09-17T00:00:00Z",
                 },
                 200,
             )
@@ -82,7 +90,9 @@ def _recovery_rows(plan: dict) -> list[dict]:
                 {
                     "name": resource,
                     "fields": copy.deepcopy(document["expectedFields"]),
-                    "updateTime": "2026-09-17T00:00:00Z",
+                    "updateTime": "2026-09-18T00:00:00Z"
+                    if document["transformCount"] == 500
+                    else "2026-09-17T00:00:00Z",
                 },
                 200,
             )
@@ -122,7 +132,11 @@ def test_timestamp_metadata_is_ignored_but_transformed_poststate_is_strict() -> 
     plan = compile_plan("demo", "(default)", "a" * 32)
     rows = _rows(plan)
     other = copy.deepcopy(rows)
-    other[6]["body"]["commitTime"] = "2026-09-18T00:00:00Z"
+    other[6]["body"]["commitTime"] = "2026-09-19T00:00:00Z"
+    for result in other[6]["body"]["writeResults"]:
+        result["updateTime"] = "2026-09-19T00:00:00Z"
+    for index in (7, 10):
+        other[index]["body"]["updateTime"] = "2026-09-19T00:00:00Z"
     assert compare_rows(plan, rows, plan, other)["classification"] == "MATCH"
     other[7]["body"]["fields"]["t0"] = {"integerValue": "999"}
     assert (
@@ -227,7 +241,7 @@ def test_resolved_cleanup_delete_must_bind_to_ownership_read_version() -> None:
     left = _recovery_rows(plan)
     right = copy.deepcopy(left)
     right[1]["request"]["path"] = right[1]["request"]["path"].replace(
-        "2026-09-17T00%3A00%3A00Z", "2026-09-17T00%3A00%3A01Z"
+        "2026-09-18T00%3A00%3A00Z", "2026-09-18T00%3A00%3A01Z"
     )
     result = compare_rows(
         plan, _rows(plan), plan, _rows(plan), left_recovery=left, right_recovery=right
@@ -243,3 +257,149 @@ def test_both_journals_are_structurally_validated_before_poststate_semantics() -
     right[0]["complete"] = False
     result = compare_rows(plan, left, plan, right)
     assert result["classification"] == "INDETERMINATE"
+
+
+@pytest.mark.parametrize(
+    "mutation,classification",
+    [
+        ("rejected-version", "SEMANTIC_MISMATCH"),
+        ("impossible-timestamp", "SEMANTIC_MISMATCH"),
+        ("placeholder-path", "INDETERMINATE"),
+        ("integer-privilege", "INDETERMINATE"),
+        ("foreign-delete", "INDETERMINATE"),
+        ("extra-delete-query", "INDETERMINATE"),
+        ("literal-timestamp", "SEMANTIC_MISMATCH"),
+        ("duplicate-delete-query", "INDETERMINATE"),
+        ("delete-fragment", "INDETERMINATE"),
+    ],
+)
+def test_review_counterexamples(mutation: str, classification: str) -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    left, right = _rows(plan), _rows(plan)
+    recovery = _recovery_rows(plan)
+    changed = copy.deepcopy(recovery)
+    if mutation == "rejected-version":
+        right[9]["body"]["updateTime"] = "2026-09-18T00:00:00Z"
+    elif mutation == "impossible-timestamp":
+        right[9]["body"]["updateTime"] = "2026-99-99T99:99:99Z"
+    elif mutation == "placeholder-path":
+        right[4]["request"]["path"] = "/v1/<exact-500>"
+    elif mutation == "integer-privilege":
+        right[0]["request"]["privileged"] = 1
+    elif mutation == "foreign-delete":
+        changed[1]["request"]["path"] = (
+            "https://foreign.example" + changed[1]["request"]["path"]
+        )
+    elif mutation == "extra-delete-query":
+        changed[1]["request"]["path"] += "&currentDocument.exists=false"
+    elif mutation == "duplicate-delete-query":
+        changed[1]["request"]["path"] += (
+            "&" + changed[1]["request"]["path"].split("?", 1)[1]
+        )
+    elif mutation == "delete-fragment":
+        changed[1]["request"]["path"] += "#ignored"
+    else:
+        left[4]["body"]["createTime"] = "2026-09-17T00:00:00Z"
+        right[4]["body"]["createTime"] = "<createTime>"
+    assert (
+        compare_rows(
+            plan, left, plan, right, left_recovery=recovery, right_recovery=changed
+        )["classification"]
+        == classification
+    )
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_incomplete_recovery_precedes_other_journal_semantics(side: str) -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    left, right = _rows(plan), _rows(plan)
+    left[6]["status"] = 500
+    recoveries = {"left": _recovery_rows(plan), "right": _recovery_rows(plan)}
+    recoveries[side].pop()
+    assert (
+        compare_rows(
+            plan,
+            left,
+            plan,
+            right,
+            left_recovery=recoveries["left"],
+            right_recovery=recoveries["right"],
+        )["classification"]
+        == "INDETERMINATE"
+    )
+
+
+def test_independent_scopes_and_clock_values_match_with_complete_recovery() -> None:
+    left_plan = compile_plan("left-project", "left-db", "1" * 32)
+    right_plan = compile_plan("right-project", "right-db", "2" * 32)
+    left, right = _rows(left_plan), _rows(right_plan)
+    left_recovery, right_recovery = (
+        _recovery_rows(left_plan),
+        _recovery_rows(right_plan),
+    )
+    # Advance only declared metadata; leave user strings and request bodies exact.
+    for row in right + right_recovery:
+        body = row["body"]
+        for key in ("createTime", "updateTime", "commitTime"):
+            if key in body:
+                body[key] = body[key].replace("2026-09", "2026-10")
+        for result in body.get("writeResults", []):
+            result["updateTime"] = result["updateTime"].replace("2026-09", "2026-10")
+        if row["request"]["kind"] == "cleanup-conditional-delete":
+            row["request"]["path"] = row["request"]["path"].replace(
+                "2026-09", "2026-10"
+            )
+    result = compare_rows(
+        left_plan,
+        left,
+        right_plan,
+        right,
+        left_recovery=left_recovery,
+        right_recovery=right_recovery,
+    )
+    assert result["classification"] == "MATCH"
+    assert result["promotionReady"] is result["acquisitionValidated"] is False
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "baseline",
+        "accepted",
+        "control",
+        "write-result",
+        "missing-results",
+        "cleanup-version",
+        "error-detail",
+        "non-leap-date",
+    ],
+)
+def test_version_relations_and_literal_error_details_are_not_erased(
+    mutation: str,
+) -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    left, right = _rows(plan), _rows(plan)
+    recovery, changed = _recovery_rows(plan), _recovery_rows(plan)
+    indices = {"baseline": 4, "accepted": 7, "control": 10}
+    if mutation in indices:
+        right[indices[mutation]]["body"]["updateTime"] = "2026-09-19T00:00:00Z"
+    elif mutation == "write-result":
+        right[6]["body"]["writeResults"][0]["updateTime"] = "2026-09-19T00:00:00Z"
+    elif mutation == "missing-results":
+        right[6]["body"]["writeResults"] = []
+    elif mutation == "cleanup-version":
+        changed[0]["body"]["updateTime"] = "2026-09-19T00:00:00Z"
+        changed[1]["request"]["path"] = changed[1]["request"]["path"].replace(
+            "2026-09-18", "2026-09-19"
+        )
+    elif mutation == "error-detail":
+        left[8]["body"]["error"]["details"] = [{"updateTime": "2026-09-17T00:00:00Z"}]
+        right[8]["body"]["error"]["details"] = [{"updateTime": "2026-09-18T00:00:00Z"}]
+    else:
+        right[9]["body"]["updateTime"] = "2026-02-29T00:00:00Z"
+    assert (
+        compare_rows(
+            plan, left, plan, right, left_recovery=recovery, right_recovery=changed
+        )["classification"]
+        == "SEMANTIC_MISMATCH"
+    )

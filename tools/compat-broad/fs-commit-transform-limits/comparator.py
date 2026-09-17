@@ -6,8 +6,9 @@ import copy
 import hashlib
 import json
 import re
+from datetime import datetime
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import quote
 
 from compiler import compile_plan
 
@@ -29,83 +30,72 @@ def _digest(value: Any) -> str:
 
 
 def _timestamp(value: Any) -> bool:
-    return isinstance(value, str) and _TIMESTAMP.fullmatch(value) is not None
+    if not isinstance(value, str) or _TIMESTAMP.fullmatch(value) is None:
+        return False
+    try:
+        datetime.strptime(value[:19] + "+0000", "%Y-%m-%dT%H:%M:%S%z")
+    except ValueError:
+        return False
+    return True
 
 
-def _resource_labels(plan: dict[str, Any]) -> dict[str, str]:
-    return {
-        document["resource"]: label for label, document in plan["documents"].items()
-    }
-
-
-def _canonical_request(request: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
-    """Normalize compiler-declared identity slots, never arbitrary strings."""
-    value = copy.deepcopy(request)
-    labels = _resource_labels(plan)
-    resource = value.get("resource")
-    if resource in labels:
-        value["resource"] = {"document": labels[resource]}
-    if isinstance(value.get("resources"), list):
-        value["resources"] = [{"document": labels[item]} for item in value["resources"]]
-    path = value.get("path")
-    if isinstance(path, str):
-        for resource_name, label in labels.items():
-            path = path.replace("/v1/" + resource_name, "/v1/<" + label + ">")
-        if value.get("kind") == "cleanup-conditional-delete":
-            parsed = urlsplit(path)
-            query = parse_qs(parsed.query, keep_blank_values=True)
-            if "currentDocument.updateTime" in query:
-                path = parsed.path + "?currentDocument.updateTime=<version>"
-        value["path"] = path
-    body = value.get("body")
-    if isinstance(body, dict):
-        body = copy.deepcopy(body)
-        if body.get("name") in labels:
-            body["name"] = {"document": labels[body["name"]]}
-        writes = body.get("writes")
-        if isinstance(writes, list):
-            for write in writes:
-                transform = write.get("transform") if isinstance(write, dict) else None
-                if isinstance(transform, dict) and transform.get("document") in labels:
-                    transform["document"] = {"document": labels[transform["document"]]}
-        fields = body.get("fields")
-        if isinstance(fields, dict):
-            owner = fields.get("_sharedOwner")
-            if isinstance(owner, dict) and owner.get("referenceValue") in labels:
-                owner["referenceValue"] = {"document": labels[owner["referenceValue"]]}
-        value["body"] = body
-    return value
+def _instant(value: str) -> tuple[str, str]:
+    return value[:19], value[19:-1].removeprefix(".").ljust(9, "0")
 
 
 def _canonical_body(body: Any, plan: dict[str, Any], *, kind: str) -> Any:
-    """Normalize only protocol-defined top-level metadata."""
-    value = copy.deepcopy(body)
-    if not isinstance(value, dict):
-        return value
-    labels = _resource_labels(plan)
-    if kind == "commit-transform":
-        if isinstance(value.get("commitTime"), str) and _timestamp(value["commitTime"]):
-            value["commitTime"] = "<commitTime>"
-        return value
-    if kind not in {
+    """Tag every literal before replacing explicitly declared protocol slots.
+
+    Internal metadata tokens cannot collide with any JSON literal, including a
+    user-supplied object that resembles the token's serialized representation.
+    """
+    document_kinds = {
         "create-only-patch",
         "baseline-readback",
         "poststate-readback",
         "poststate-control-readback",
         "cleanup-ownership-read",
-    }:
-        return value
-    if value.get("name") in labels:
-        value["name"] = {"document": labels[value["name"]]}
-    for key in ("createTime", "updateTime"):
-        if isinstance(value.get(key), str) and _timestamp(value[key]):
-            value[key] = "<" + key + ">"
-    fields = value.get("fields")
-    if isinstance(fields, dict):
-        owner = fields.get("_sharedOwner")
-        if isinstance(owner, dict) and owner.get("referenceValue") in labels:
-            owner["referenceValue"] = {"document": labels[owner["referenceValue"]]}
-    return value
+    }
+    labels = {item["resource"]: label for label, item in plan["documents"].items()}
+
+    def project(value: Any, path: tuple[Any, ...]) -> Any:
+        identity = kind in document_kinds and path in {
+            ("name",),
+            ("fields", "_sharedOwner", "referenceValue"),
+        }
+        timestamp = (
+            kind in document_kinds and path in {("createTime",), ("updateTime",)}
+        ) or (
+            kind == "commit-transform"
+            and (
+                path == ("commitTime",)
+                or len(path) == 3
+                and path[0] == "writeResults"
+                and path[2] == "updateTime"
+            )
+        )
+        if identity and isinstance(value, str) and value in labels:
+            return ("identity", labels[value])
+        if timestamp and _timestamp(value):
+            return ("metadata", path[-1])
+        if isinstance(value, dict):
+            return (
+                "object",
+                tuple(
+                    (key, project(item, (*path, key)))
+                    for key, item in sorted(value.items())
+                ),
+            )
+        if isinstance(value, list):
+            return (
+                "array",
+                tuple(
+                    project(item, (*path, index)) for index, item in enumerate(value)
+                ),
+            )
+        return ("literal", type(value).__name__, value)
+
+    return project(body, ())
 
 
 def _validate_plan(plan: dict[str, Any]) -> None:
@@ -138,19 +128,15 @@ def _resource_for(request: dict[str, Any]) -> str | None:
 def _resolved_delete_matches(
     request: dict[str, Any], expected: dict[str, Any], prior: dict[str, Any]
 ) -> bool:
-    actual = urlsplit(request.get("path", ""))
-    if actual.path != expected["path"]:
-        return False
-    versions = parse_qs(actual.query, keep_blank_values=True).get(
-        "currentDocument.updateTime"
-    )
     body = prior.get("body") if isinstance(prior, dict) else None
     version = body.get("updateTime") if isinstance(body, dict) else None
+    # Require the exact relative target emitted by the resolver, not URL parser
+    # equivalence (which can erase hosts, fragments and additional predicates).
     return (
         prior.get("status") == 200
-        and isinstance(body, dict)
         and _timestamp(version)
-        and versions == [version]
+        and request.get("path")
+        == expected["path"] + "?currentDocument.updateTime=" + quote(version, safe="")
     )
 
 
@@ -178,9 +164,9 @@ def _validate_row_shape(
             raise ValueError("cleanup delete version is not bound to ownership read")
         expected_copy = copy.deepcopy(expected)
         expected_copy["path"] = request["path"]
-        if _canonical_request(request, plan) != _canonical_request(expected_copy, plan):
+        if not _exact(request, expected_copy):
             raise ValueError("cleanup delete request differs")
-    elif _canonical_request(request, plan) != _canonical_request(expected, plan):
+    elif not _exact(request, expected):
         raise ValueError("request binding differs")
     json.dumps(row["body"], allow_nan=False)
 
@@ -203,8 +189,44 @@ def _semantic_issues(
     plan: dict[str, Any], rows: list[dict[str, Any]], requests: list[dict[str, Any]]
 ) -> list[str]:
     issues: list[str] = []
+    versions: dict[str, str] = {}
+    created: dict[str, str] = {}
     for index, (row, request) in enumerate(zip(rows, requests, strict=True)):
         status, body, kind = row["status"], row["body"], request["kind"]
+        if (
+            isinstance(body, dict)
+            and kind
+            in {
+                "create-only-patch",
+                "baseline-readback",
+                "poststate-readback",
+                "poststate-control-readback",
+                "cleanup-ownership-read",
+            }
+            and status == 200
+        ):
+            resource = _resource_for(request)
+            for key in ("createTime", "updateTime"):
+                if (key == "updateTime" or key in body) and not _timestamp(
+                    body.get(key)
+                ):
+                    issues.append(f"{index}:invalid-{key}")
+            version = body.get("updateTime")
+            if _timestamp(version):
+                if resource in versions and _instant(version) != _instant(
+                    versions[resource]
+                ):
+                    issues.append(f"{index}:version-relation")
+                versions[resource] = version
+            creation = body.get("createTime")
+            if _timestamp(creation):
+                if resource in created and _instant(creation) != _instant(
+                    created[resource]
+                ):
+                    issues.append(f"{index}:creation-relation")
+                if _timestamp(version) and _instant(creation) > _instant(version):
+                    issues.append(f"{index}:creation-after-update")
+                created[resource] = creation
         if kind == "preflight-typed-absence" and not (
             status == 404 and _typed_absence(body)
         ):
@@ -226,6 +248,30 @@ def _semantic_issues(
                 or not isinstance(body.get("writeResults"), list)
             ):
                 issues.append(f"{index}:accepted-commit")
+            if expectation["outcome"] == "accepted" and isinstance(body, dict):
+                commit = body.get("commitTime")
+                results = body.get("writeResults")
+                if not isinstance(results, list) or len(results) != len(
+                    request["body"]["writes"]
+                ):
+                    issues.append(f"{index}:write-results")
+                elif _timestamp(commit):
+                    for write_result in results:
+                        update = (
+                            write_result.get("updateTime")
+                            if isinstance(write_result, dict)
+                            else None
+                        )
+                        if not _timestamp(update) or _instant(update) != _instant(
+                            commit
+                        ):
+                            issues.append(f"{index}:commit-version")
+                    resource = request["resources"][0]
+                    if resource in versions and _instant(commit) <= _instant(
+                        versions[resource]
+                    ):
+                        issues.append(f"{index}:commit-not-newer")
+                    versions[resource] = commit
             if expectation["outcome"] == "refused" and (
                 not 400 <= status < 500
                 or not isinstance(body, dict)
@@ -324,15 +370,18 @@ def compare_rows(
         result["errors"].append("invalid-binding-or-journal")
         return result
 
-    left_issues = _semantic_issues(left_plan, left_rows, left_plan["observation"])
-    right_issues = _semantic_issues(right_plan, right_rows, right_plan["observation"])
-    if left_recovery is not None:
-        left_issues.extend(
-            _semantic_issues(left_plan, left_recovery, left_plan["recovery"])
-        )
-        right_issues.extend(
-            _semantic_issues(right_plan, right_recovery or [], right_plan["recovery"])
-        )
+    left_issues = _semantic_issues(
+        left_plan,
+        left_rows + (left_recovery or []),
+        left_plan["observation"]
+        + (left_plan["recovery"] if left_recovery is not None else []),
+    )
+    right_issues = _semantic_issues(
+        right_plan,
+        right_rows + (right_recovery or []),
+        right_plan["observation"]
+        + (right_plan["recovery"] if right_recovery is not None else []),
+    )
     if left_issues or right_issues:
         result["classification"] = "SEMANTIC_MISMATCH"
         result["errors"].extend(left_issues + right_issues)

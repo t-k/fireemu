@@ -517,6 +517,13 @@ pub trait AuthBlockingHook: Send + Sync {
     fn blocking_auth_project(&self) -> Option<&str> {
         None
     }
+
+    /// Monotonic revision of the selected blocking-function configuration. Bridges with mutable
+    /// function selection should increment it whenever the selection or token policy changes;
+    /// the default keeps legacy immutable in-process hooks compatible.
+    fn blocking_auth_revision(&self) -> u64 {
+        0
+    }
 }
 
 fn handler_may_invoke_blocking_auth(
@@ -1791,7 +1798,10 @@ fn dispatch_with_blocking_hook(
                 store.pending_sign_in_context(&pending)?.clone(),
             ))
         });
+    let blocking_revision = blocking.blocking_auth_revision();
+    let generated_id_interference = store.generated_id_interference_count();
     let mut candidate = store.clone();
+    let reset_generation = store.reset_generation();
     let _reserved_local_id = request_may_create_end_user(handler, &store, body, at).then(|| {
         let id = candidate.reserve_next_generated_local_id();
         GeneratedLocalIdReservation {
@@ -1808,6 +1818,9 @@ fn dispatch_with_blocking_hook(
         at,
         state.into(),
     );
+    if blocking.blocking_auth_revision() != blocking_revision {
+        return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
+    }
     let is_authentication = matches!(
         handler,
         routes::Handler::SignUp
@@ -1958,6 +1971,9 @@ fn dispatch_with_blocking_hook(
             }
         }
     }
+    if blocking.blocking_auth_revision() != blocking_revision {
+        return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
+    }
     let mut commit = |metadata: Option<&fireemu_core_auth::store::TenantMetadata>| {
         if tenant.is_some() {
             if let Some(denial) = tenant_policy_denial_with_metadata(handler, metadata, body) {
@@ -1967,6 +1983,15 @@ fn dispatch_with_blocking_hook(
         let Ok(mut live) = store_arc.lock() else {
             return error(500, "INTERNAL");
         };
+        if live.reset_generation() != reset_generation {
+            return error(409, "AUTH_STATE_RESET");
+        }
+        if live.generated_id_interference_count() != generated_id_interference {
+            return error(
+                400,
+                "BLOCKING_FUNCTION_ERROR_RESPONSE : identity changed while the hook was running",
+            );
+        }
         let mut committed = live.clone();
         if is_new {
             if let Some(uid) = speculative_uid.as_ref().map(LocalId::as_str) {
@@ -2250,8 +2275,21 @@ fn handle_with_policy(
         None => (path, None),
     };
     let at = now(state);
-    let _admitted = state.barrier.as_ref().map(|b| b.admit());
     let resolution = routes::resolve(method, path);
+    let emulator_clear = matches!(
+        resolution,
+        routes::Resolution::Matched {
+            route,
+            ..
+        } if route.handler == routes::Handler::EmulatorClearAccounts
+    );
+    // Account clearing is a lifecycle boundary. Take the shared session barrier exclusively so
+    // a blocking candidate cannot finish its callback and publish after the wipe. Ordinary Auth
+    // requests retain shared admission; embedded states without a barrier are protected by the
+    // store generation checked at the blocking commit boundary below.
+    let _exclusive =
+        emulator_clear.then(|| state.barrier.as_ref().map(|barrier| barrier.exclusive()));
+    let _admitted = (!emulator_clear).then(|| state.barrier.as_ref().map(|b| b.admit()));
     // Project configuration uses this adapter-level gate. Blocking Auth requests acquire the
     // same gate only at their commit boundary, after their synchronous callback has returned, so
     // a callback can re-enter an Admin configuration route without recursively locking it.
@@ -2358,6 +2396,10 @@ fn handle_with_policy(
                 if handler_may_invoke_blocking_auth(blocking, route.handler)
         ) && blocking_hook_applies_to_project(state, blocking, &store_project)
     });
+    let blocking_revision = state
+        .blocking
+        .as_deref()
+        .map_or(0, AuthBlockingHook::blocking_auth_revision);
     // End-user requests take the namespace gate before acquiring the store guard. Configuration
     // PATCHes use this same gate and then lock the store, so keeping one order prevents a signup
     // from holding the store while a concurrent PATCH waits for the gate. The gate also covers
@@ -2370,7 +2412,18 @@ fn handle_with_policy(
     // gate is reacquired by the blocking commit boundary after the callback returns. End-user
     // requests without a blocking hook still use the adapter-wide gate, which is also used by
     // the single-store config route.
-    let operation_gate = if state.registry.is_none() && state.blocking.is_some() {
+    let operation_gate = if emulator_clear {
+        let gate = match state.registry.as_ref() {
+            Some(registry) => registry
+                .operation_gate(&store_project, None)
+                .ok_or_else(|| error(500, "INTERNAL")),
+            None => Ok(state.operation_gate.clone()),
+        };
+        Some(match gate {
+            Ok(gate) => gate,
+            Err(response) => return response,
+        })
+    } else if state.registry.is_none() && state.blocking.is_some() {
         // Release the namespace gate before invoking a legacy single-store hook. The gate is
         // reacquired by dispatch_with_blocking_hook for its commit, while non-hooking routes can
         // continue to read the store during an external callback.
@@ -2613,10 +2666,31 @@ fn handle_with_policy(
         return finish_token_response(response, signer.as_deref(), &store_arc, at);
     }
     let signer = store.signer_arc();
-    let response = if let Some(blocking) = state.blocking.as_deref().filter(|blocking| {
-        handler_may_invoke_blocking_auth(*blocking, route.handler)
-            && blocking_hook_applies_to_project(state, *blocking, &store_project)
-    }) {
+    if !blocking_auth
+        && state.blocking.as_deref().is_some_and(|blocking| {
+            blocking.blocking_auth_revision() != blocking_revision
+                || (handler_may_invoke_blocking_auth(blocking, route.handler)
+                    && blocking_hook_applies_to_project(state, blocking, &store_project))
+        })
+    {
+        // A hook enabled after admission must not be silently skipped. Returning a conflict
+        // gives the caller a coherent retry point without dispatching while retaining a gate
+        // that the hook commit path would need to reacquire.
+        return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
+    }
+    let response = if blocking_auth {
+        let Some(blocking) = state.blocking.as_deref() else {
+            return error(500, "INTERNAL");
+        };
+        // The first decision also determines whether this request owns the namespace gate. A
+        // mutable Functions manifest may change between planning and dispatch; reject that
+        // transition instead of entering the hook path while retaining a guard that the commit
+        // path would acquire again (or silently using a stale allow/deny decision).
+        let still_applies = handler_may_invoke_blocking_auth(blocking, route.handler)
+            && blocking_hook_applies_to_project(state, blocking, &store_project);
+        if !still_applies || blocking.blocking_auth_revision() != blocking_revision {
+            return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
+        }
         dispatch_with_blocking_hook(
             state,
             blocking,

@@ -859,6 +859,9 @@ pub struct AuthStore {
     tokens_by_user: Arc<BTreeMap<LocalId, BTreeSet<String>>>,
     next_id_override: Option<String>,
     next_sequence: u64,
+    /// Shared generation invalidated by an Auth clear or restore. Blocking candidates capture
+    /// this value before an external callback and must not commit after it changes.
+    reset_generation: Arc<AtomicU64>,
     signer: Option<Arc<dyn crate::jwt::IdTokenSigner>>,
     /// Hidden lifecycle material for generated credential and action handles. Unlike
     /// `lifecycle_epoch`, this is never emitted in an ID token.
@@ -876,6 +879,10 @@ pub struct AuthStore {
     /// snapshots so concurrent candidates avoid each other's IDs without advancing the live
     /// random stream that ordinary nested Admin requests use.
     generated_local_id_reservations: Arc<Mutex<BTreeSet<LocalId>>>,
+    /// Monotonic count of ordinary generated-ID allocations that skipped an in-flight blocking
+    /// reservation. A blocking candidate captures this before its hook runs; a change at commit
+    /// means a nested ordinary Admin allocation changed the identity allocation boundary.
+    generated_id_interference: Arc<AtomicU64>,
     /// Users that currently own a pending enrollment or sign-in. Credential sweeping only
     /// visits this bounded subset instead of cloning or scanning every account.
     pending_user_ids: BTreeSet<LocalId>,
@@ -1094,6 +1101,7 @@ impl AuthStore {
             tokens_by_user: Arc::new(BTreeMap::new()),
             next_id_override: None,
             next_sequence: 0,
+            reset_generation: Arc::new(AtomicU64::new(0)),
             signer: None,
             credential_epoch: None,
             lifecycle_epoch: None,
@@ -1101,6 +1109,7 @@ impl AuthStore {
             verification_codes: Arc::new(BTreeMap::new()),
             pending_sign_in_owners: Arc::new(BTreeMap::new()),
             generated_local_id_reservations: Arc::new(Mutex::new(BTreeSet::new())),
+            generated_id_interference: Arc::new(AtomicU64::new(0)),
             pending_user_ids: BTreeSet::new(),
             created_users: Vec::new(),
             deleted_users: Vec::new(),
@@ -1374,6 +1383,11 @@ impl AuthStore {
         self.oob_codes = Arc::new(BTreeMap::new());
         self.verification_codes = Arc::new(BTreeMap::new());
         self.pending_sign_in_owners = Arc::new(BTreeMap::new());
+        self.generated_local_id_reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        self.reset_generation.fetch_add(1, Ordering::AcqRel);
         self.pending_user_ids.clear();
         if let Some(epoch) = self.credential_epoch {
             self.rekey_generated_values(epoch.next());
@@ -2085,6 +2099,19 @@ impl AuthStore {
         self.create_user_with_email_policy(new, now, true)
     }
 
+    /// The shared generation used to reject a blocking candidate that straddled a reset.
+    #[must_use]
+    pub fn reset_generation(&self) -> u64 {
+        self.reset_generation.load(Ordering::Acquire)
+    }
+
+    /// Returns the monotonic count of ordinary generated-ID allocations that crossed an
+    /// in-flight blocking candidate reservation.
+    #[must_use]
+    pub fn generated_id_interference_count(&self) -> u64 {
+        self.generated_id_interference.load(Ordering::Acquire)
+    }
+
     /// Reserves the next generated local ID for a speculative blocking request.
     ///
     /// The reservation is shared by snapshots, but the live random stream is unchanged. This
@@ -2150,7 +2177,17 @@ impl AuthStore {
             None => loop {
                 // Generated IDs share the namespace with caller-chosen ones: skip collisions.
                 let candidate = LocalId(self.random_id28());
-                if !self.users.contains_key(&candidate) {
+                let reserved = self
+                    .generated_local_id_reservations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .contains(&candidate);
+                if reserved {
+                    self.generated_id_interference
+                        .fetch_add(1, Ordering::AcqRel);
+                    continue;
+                }
+                if !self.users.contains_key(&candidate) && !reserved {
                     break candidate;
                 }
             },
@@ -3749,6 +3786,19 @@ impl AuthSnapshot {
     /// Replaces `live` with the snapshot, rebinding TOTP secrets from what `live` held.
     pub fn restore_into(&self, live: &mut AuthStore) -> RestoreReport {
         let mut restored = self.0.clone();
+        // A restore is a lifecycle boundary just like clear. Keep the destination's shared
+        // generation cell so blocking candidates captured from the live namespace cannot commit
+        // after this replacement, including when the snapshot came from another namespace.
+        live.reset_generation.fetch_add(1, Ordering::AcqRel);
+        restored.reset_generation = live.reset_generation.clone();
+        // Reservations belong to the live operation epoch, never to an imported snapshot. Drop
+        // them at the same boundary so a stale candidate cannot pin an ID after restore.
+        live.generated_local_id_reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        restored.generated_local_id_reservations = live.generated_local_id_reservations.clone();
+        restored.generated_id_interference = live.generated_id_interference.clone();
         // A snapshot intentionally has no provider configurations. Preserve the destination's
         // control-plane state instead of allowing a cross-project restore to transfer it.
         restored.oidc_configs = live.oidc_configs.clone();
@@ -9507,6 +9557,52 @@ mod password_policy_namespace_tests {
             (0, 0),
             "routed projects inherit quota configuration, not counters"
         );
+    }
+}
+
+#[cfg(test)]
+mod generated_id_tests {
+    use super::{AuthSnapshot, AuthStore, NewUser};
+    use crate::mfa::TotpPolicy;
+    use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_core_types::time::LogicalInstant;
+
+    const NOW: LogicalInstant = LogicalInstant::UNIX_EPOCH;
+
+    #[test]
+    fn ordinary_generated_accounts_skip_ids_reserved_by_blocking_candidates() {
+        let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let mut candidate = live.clone();
+        let reserved = candidate.reserve_next_generated_local_id();
+
+        let nested_admin = live
+            .create_user(NewUser::email("nested@example.test"), NOW)
+            .expect("nested Admin creation succeeds");
+
+        assert_ne!(nested_admin.as_str(), reserved);
+    }
+
+    #[test]
+    fn clearing_a_store_releases_reservations() {
+        let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let mut candidate = live.clone();
+        let reserved = candidate.reserve_next_generated_local_id();
+        live.clear();
+
+        let fresh_reserved = live.clone().reserve_next_generated_local_id();
+        assert_eq!(fresh_reserved, reserved);
+    }
+
+    #[test]
+    fn restoring_a_snapshot_releases_stale_reservations() {
+        let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let mut candidate = live.clone();
+        let reserved = candidate.reserve_next_generated_local_id();
+        let snapshot = AuthSnapshot::capture(&live);
+        let report = snapshot.restore_into(&mut live);
+        assert_eq!(report, super::RestoreReport::default());
+        let fresh_reserved = live.clone().reserve_next_generated_local_id();
+        assert_eq!(fresh_reserved, reserved);
     }
 }
 

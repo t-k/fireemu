@@ -212,6 +212,11 @@ struct DelayedBlockingHook {
     release: AtomicBool,
 }
 
+struct ToggleHandlesHook {
+    calls: AtomicUsize,
+    enabled_after_initial: bool,
+}
+
 struct BeforeCreateOnlyRejectingHook;
 
 struct BeforeCreateOnlySuccessfulHook(Arc<Mutex<Vec<BlockingAuthEvent>>>);
@@ -257,6 +262,29 @@ impl AuthBlockingHook for DelayedBlockingHook {
         }
         self.active.fetch_sub(1, Ordering::SeqCst);
         Ok(json!({}))
+    }
+}
+
+impl AuthBlockingHook for ToggleHandlesHook {
+    fn handles(&self, event: BlockingAuthEvent) -> bool {
+        assert!(matches!(
+            event,
+            BlockingAuthEvent::BeforeCreate | BlockingAuthEvent::BeforeSignIn
+        ));
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.enabled_after_initial {
+            call >= 2
+        } else {
+            call == 0
+        }
+    }
+
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        unreachable!("toggle barrier regression must reject before hook dispatch")
     }
 }
 
@@ -2787,6 +2815,106 @@ fn unbound_blocking_auth_runs_for_default_but_not_routed_projects() {
         .unwrap()
         .user_by_email("worker@example.com")
         .is_some());
+}
+
+#[test]
+fn emulator_clear_rejects_a_paused_blocking_candidate_and_allows_a_fresh_id() {
+    use std::sync::mpsc::sync_channel;
+    use std::time::Duration;
+
+    let hook = Arc::new(DelayedBlockingHook {
+        entered: AtomicUsize::new(0),
+        active: AtomicUsize::new(0),
+        limit: 1,
+        release: AtomicBool::new(false),
+    });
+    let mut auth = state();
+    auth.blocking = Some(hook.clone());
+    let state = Arc::new(auth);
+    let (sender, receiver) = sync_channel(1);
+    let request_state = state.clone();
+    std::thread::spawn(move || {
+        sender
+            .send(post(
+                &request_state,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email": "stale@example.com", "password": "hunter22"}),
+            ))
+            .unwrap();
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while hook.entered.load(Ordering::SeqCst) == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "blocking hook did not pause the candidate"
+        );
+        std::thread::yield_now();
+    }
+
+    let cleared = handle(
+        &state,
+        "DELETE",
+        "/emulator/v1/projects/demo-app/accounts",
+        &Value::Null,
+    );
+    assert_eq!(cleared.status, 200, "{}", cleared.body);
+    hook.release.store(true, Ordering::SeqCst);
+    let (status, body) = receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("paused candidate must finish after clear");
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["error"]["message"], "AUTH_STATE_RESET");
+    assert_eq!(state.store.lock().unwrap().user_count(), 0);
+
+    let (status, body) = post(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "fresh@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(state.store.lock().unwrap().user_count(), 1);
+}
+
+#[test]
+fn blocking_auth_disabled_to_enabled_transition_returns_a_retryable_conflict() {
+    let hook = Arc::new(ToggleHandlesHook {
+        calls: AtomicUsize::new(0),
+        enabled_after_initial: true,
+    });
+    let mut auth = state();
+    auth.blocking = Some(hook);
+    let (status, body) = post(
+        &auth,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "toggle-on@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
+    );
+    assert_eq!(auth.store.lock().unwrap().user_count(), 0);
+}
+
+#[test]
+fn blocking_auth_enabled_to_disabled_transition_returns_a_retryable_conflict() {
+    let hook = Arc::new(ToggleHandlesHook {
+        calls: AtomicUsize::new(0),
+        enabled_after_initial: false,
+    });
+    let mut auth = state();
+    auth.blocking = Some(hook);
+    let (status, body) = post(
+        &auth,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "toggle-off@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
+    );
+    assert_eq!(auth.store.lock().unwrap().user_count(), 0);
 }
 
 #[test]

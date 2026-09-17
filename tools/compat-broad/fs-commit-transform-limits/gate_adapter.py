@@ -6,6 +6,7 @@ import copy
 import importlib.util
 import re
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -41,9 +42,8 @@ _check_import_origins(
         "shared_gate": ROOT / "tools/compat-broad/shared_gate.py",
     }
 )
-from broad_contract import digest  # noqa: E402
-from shared_gate import create  # noqa: E402
-
+from broad_contract import digest
+from shared_gate import create
 
 _compiler_path = HERE / "transform_compiler.py"
 _check_import_origins({"transform_compiler": _compiler_path})
@@ -66,9 +66,11 @@ _limits_origins = {
         "shadow": "shadow.py",
         "compiler": "compiler.py",
         "transport": "transport.py",
-}.items()
+    }.items()
 }
-_limits_origins["reservations"] = ROOT / "tools/compat-broad/production-admission/reservations.py"
+_limits_origins["reservations"] = (
+    ROOT / "tools/compat-broad/production-admission/reservations.py"
+)
 _limits_origins.update(
     {
         name: ROOT / "tools/compat-broad" / f"{name}.py"
@@ -94,9 +96,7 @@ _limits_bridge = _load(
 )
 _check_import_origins(_limits_origins)
 LimitsGate = _limits_bridge.LimitsGate
-_TIMESTAMP = re.compile(
-    r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$"
-)
+_TIMESTAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$")
 
 
 def compiler_plan(project: str, database: str, nonce: str) -> dict:
@@ -132,23 +132,54 @@ def gate_plan(plan: dict) -> dict:
 class CommitGate(LimitsGate):
     """LimitsGate with mutation-aware, current-version cleanup authority."""
 
-    def __init__(self, path, plan: dict):
+    def __init__(self, path, plan: dict, *, production_binding=None):
+        self.production_binding = copy.deepcopy(production_binding)
+        self._commit_permit = None
         self.compiler = copy.deepcopy(plan)
         expected = compiler_plan(plan["project"], plan["database"], plan["nonce"])
         if digest(self.compiler) != digest(expected):
             raise ValueError("compiler plan differs from canonical output")
         super().__init__(path, "commit")
-        if digest(self.snapshot()["plan"]) != digest(gate_plan(self.compiler)):
+        expected_gate = (
+            gate_plan(self.compiler)
+            if production_binding is None
+            else production_gate_plan(self.compiler, production_binding)
+        )
+        if digest(self.snapshot()["plan"]) != digest(expected_gate):
             raise ValueError("commit Gate plan binding differs")
 
+    def consume_wire(self, operation, recovery):
+        deadline = super().consume_wire(operation, recovery)
+        if self.production_binding is not None:
+            self._commit_permit = (
+                threading.get_ident(),
+                digest(operation),
+                recovery,
+                deadline,
+            )
+        return deadline
+
+    def consume_commit_permit(self, operation):
+        permit, self._commit_permit = self._commit_permit, None
+        if permit is None or permit[:2] != (threading.get_ident(), digest(operation)):
+            raise ValueError("Commit wire requires the charged collector callback")
+        return permit[2:]
+
     def dispatch(self, operation, recovery, send):
+        if self.production_binding is not None and digest(
+            self.snapshot()["plan"]
+        ) != digest(production_gate_plan(self.compiler, self.production_binding)):
+            raise ValueError("reserved Commit plan changed")
         if operation.get("kind") == "commit-transform":
             _commit_bridge.validate_commit_operation(self.compiler, operation)
             resource = operation["resources"][0]
             state = self.snapshot()
             if state["jobs"][self.job]["creationProofs"].get(resource) is None:
                 raise ValueError("Commit requires immutable conditional-create proof")
-        return super().dispatch(operation, recovery, send)
+        try:
+            return super().dispatch(operation, recovery, send)
+        finally:
+            self._commit_permit = None
 
     def _recovery_capture(self, operation, status, body):
         capture = super()._recovery_capture(operation, status, body)
@@ -201,3 +232,73 @@ def create_commit_gate(path, plan: dict) -> CommitGate:
     created = gate_plan(plan)
     create(path, created)
     return CommitGate(path, plan)
+
+
+def production_cost_model() -> dict:
+    """Planning ceilings, not live SKU tariffs; independent owner confirmation required."""
+    transfer = 17 * (2 * 1024 * 1024 * 2) + 10 * (16384 + 65536)
+    storage = 64 * 1024 * 1024
+    fixed = ((transfer + storage) * 1_000_000 + 2**30 - 1) // 2**30
+    return {
+        "dataCalls": 17,
+        "dataRequestBytes": 2 * 1024 * 1024,
+        "dataResponseBytes": 2 * 1024 * 1024,
+        "managementSlots": 10,
+        "managementRequestBytes": 16384,
+        "managementResponseBytes": 65536,
+        "transferBytesUpper": transfer,
+        "storageBytesUpper": storage,
+        "storageMonthsUpper": 1,
+        "transferMicrousdPerGiB": 1_000_000,
+        "storageMicrousdPerGiBMonth": 1_000_000,
+        "requestMicrousd": 100,
+        "fixedCostMicrousd": fixed,
+        "totalCostMicrousd": fixed + 27 * 100,
+        "basis": "bounded wire payloads; conservative 64 MiB document/index storage for one month; no free quota",
+    }
+
+
+def production_gate_plan(plan: dict, binding: dict) -> dict:
+    """Versioned production allocation; the historical local plan stays unchanged.
+
+    A fresh Coordinator charges two credential acquisition slots and eight
+    metadata requests, in addition to the 17 data slots. The derived fixed
+    allowance covers bounded storage and response egress; owner tariff
+    confirmation remains a separate admission requirement.
+    """
+    if (
+        not isinstance(binding, dict)
+        or set(binding) != {"permissionDigest", "collectorSourceDigest"}
+        or any(
+            not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in binding.values()
+        )
+    ):
+        raise ValueError("closed production binding required")
+    from shared_production import management
+
+    projected = gate_plan(plan)
+    projected.update(
+        transport="commit-reserved-production-v1",
+        nonce=plan["nonce"],
+        **copy.deepcopy(binding),
+        observationRequests=17,
+        recoverySeconds=180,
+        fixedCostMicrousd=production_cost_model()["fixedCostMicrousd"],
+        costMicrousd=production_cost_model()["totalCostMicrousd"],
+        management={
+            "observation": [
+                {"id": "oauth-refresh", "duration": 12, "timeout": 13},
+                {"id": "oauth-tokeninfo", "duration": 12, "timeout": 13},
+            ]
+            + management()[2:],
+            "recovery": management()[2:],
+        },
+    )
+    return projected
+
+
+def create_production_commit_gate(path, plan: dict, binding: dict) -> CommitGate:
+    projected = production_gate_plan(plan, binding)
+    create(path, projected)
+    return CommitGate(path, plan, production_binding=binding)

@@ -10,7 +10,9 @@ This directory contains a credential-free compiler, semantic comparison contract
 
 The fixed `006df2e0c` owned run completed 11 observation and six recovery requests against retained runtime `cce4a4f9b`, verified typed absence for both resources, and stopped its process and listeners. Independent review approved the runner after provenance and executable-replacement regressions were addressed. These are local results, not production observations.
 
-Production integration must still bind Commit POST containment, mutation-aware cleanup, metadata preflight, permission, budgets, and immutable acquisition evidence to the existing shared Gate. The local runner cannot authorize that execution.
+`commit_production_bridge.py` regenerates the canonical compiler plan before binding each request, including every embedded Commit transform target. It preserves complete semantic HTTP errors and separates incomplete transport failures. `gate_adapter.py` connects those operations to the existing charged shared Gate callback. Cleanup requires the original conditional-create proof, an exact nonce-bound ownership marker, and a valid current UTC timestamp; unexpected semantic field changes do not by themselves prevent owned cleanup. Typed final absence remains required before resource responsibility can be released.
+
+The Gate adapter is a tested preparation component, not an executable production campaign. Production integration must still connect the bounded wire and collector, metadata preflight, current permission, shared reservations and budgets, and immutable acquisition evidence. The local runner and Gate adapter cannot authorize that execution.
 
 Run the focused checks with:
 

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,7 @@ from query_in_compiler import validate_plan
 _TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$"
 )
+_MAX_SERIALIZED_RECEIPT_BYTES = 131072
 
 
 def _complete(receipt: Any) -> bool:
@@ -64,17 +67,57 @@ def _row(index: int, operation: dict[str, Any], receipt: dict[str, Any]) -> dict
 
 
 def _normalize(receipt: Any) -> dict[str, Any]:
-    json.dumps(receipt, allow_nan=False)
+    serialized = json.dumps(receipt, allow_nan=False, separators=(",", ":"))
+    if len(serialized.encode("utf-8")) > _MAX_SERIALIZED_RECEIPT_BYTES:
+        return {
+            "complete": False,
+            "failure": "receipt-too-large",
+            "status": None,
+            "body": None,
+        }
     if not isinstance(receipt, dict) or any(
         key in receipt for key in ("index", "request", "phase", "skipped", "absent")
     ):
         raise ValueError("invalid receipt envelope")
-    normalized = copy.deepcopy(receipt)
+    normalized = json.loads(serialized)
     if not _complete(normalized):
         normalized.update(
             complete=False, failure=normalized.get("failure") or "invalid-receipt"
         )
     return normalized
+
+
+def _publish(output: Path, filename: str, value: Any) -> None:
+    """Publish one bounded JSON row atomically without replacing an existing row."""
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(
+        "utf-8"
+    )
+    if len(encoded) > _MAX_SERIALIZED_RECEIPT_BYTES:
+        raise ValueError("row-too-large")
+    temporary: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=output, prefix=".receipt-", delete=False
+        ) as stream:
+            temporary = stream.name
+            stream.write(encoded)
+            stream.write(b"\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, output / filename)
+        os.unlink(temporary)
+        temporary = None
+        directory = os.open(output, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
 
 
 def _semantic_match(plan: dict[str, Any], operation: dict[str, Any], receipt: dict[str, Any]) -> bool:
@@ -140,7 +183,11 @@ def collect_local(
     persistence_complete = True
     persistence_failures: list[str] = []
     try:
-        output.mkdir(mode=0o700, parents=False, exist_ok=False)
+        if output.exists():
+            if not output.is_dir():
+                raise NotADirectoryError(output)
+        else:
+            output.mkdir(mode=0o700, parents=False, exist_ok=False)
     except Exception as error:  # noqa: BLE001 -- report local recording failure.
         persistence_complete = False
         persistence_failures.append(f"output-init:{type(error).__name__}")
@@ -150,10 +197,7 @@ def collect_local(
         if not persistence_complete and persistence_failures:
             return
         try:
-            encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-            with (output / filename).open("x", encoding="utf-8") as stream:
-                stream.write(encoded)
-                stream.write("\n")
+            _publish(output, filename, value)
         except Exception as error:  # noqa: BLE001 -- preserve rows and cleanup responsibility.
             persistence_complete = False
             persistence_failures.append(f"{filename}:{type(error).__name__}")
@@ -182,6 +226,10 @@ def collect_local(
         row = _row(index, operation, receipt)
         rows.append(row)
         persist(f"observation-{index:02d}.json", row)
+        if not persistence_complete:
+            infrastructure.append(f"observation-{index}:publication-failure")
+            stop_observation = True
+            continue
         if not _complete(receipt):
             infrastructure.append(f"observation-{index}:incomplete")
             stop_observation = True

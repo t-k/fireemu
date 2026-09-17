@@ -178,3 +178,55 @@ def test_incomplete_executor_receipt_stops_observation_but_runs_safe_recovery(tm
     assert result["cleanup"][1]["skipped"] == "already-absent"
     assert result["infrastructureFailures"]
     assert result["completed"] is False
+
+
+def test_oversized_receipt_is_bounded_but_owned_recovery_still_deletes(tmp_path: Path) -> None:
+    plan = _plan()
+
+    def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        if operation["kind"] == "preflight-typed-absence":
+            return _not_found()
+        if operation["kind"] == "create-only-patch":
+            return _ok({"largeDiagnostic": "x" * 200_000})
+        if operation["kind"] == "cleanup-ownership-read":
+            return _owned(plan)
+        if operation["kind"] == "cleanup-conditional-delete":
+            return _ok({})
+        if operation["kind"] == "cleanup-verify-absence":
+            return _not_found()
+        raise AssertionError("observation must stop after oversized mutation response")
+
+    result = collect_local(plan, execute, tmp_path / "receipt")
+
+    assert result["rows"][1]["failure"] == "receipt-too-large"
+    assert len(json.dumps(result["rows"][1])) < 2_000
+    assert result["cleanup"][1]["status"] == 200
+    assert result["resourceAbsence"][plan["document"]] is True
+    assert result["completed"] is False
+
+
+def test_publication_failure_before_create_releases_no_unowned_delete(tmp_path: Path) -> None:
+    plan = _plan()
+    output = tmp_path / "receipt"
+    output.mkdir()
+    (output / "observation-00.json").write_text("occupied")
+    calls: list[str] = []
+
+    def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        calls.append(operation["kind"])
+        if operation["kind"] in {"preflight-typed-absence", "cleanup-ownership-read", "cleanup-verify-absence"}:
+            return _not_found()
+        raise AssertionError("create and delete require ownership evidence")
+
+    result = collect_local(plan, execute, output)
+
+    assert calls == [
+        "preflight-typed-absence",
+        "cleanup-ownership-read",
+        "cleanup-verify-absence",
+    ]
+    assert result["cleanup"][1]["skipped"] == "already-absent"
+    assert result["attemptedResources"] == []
+    assert result["resourceAbsence"][plan["document"]] is True
+    assert result["completed"] is False
+    assert not list(output.glob(".receipt-*"))

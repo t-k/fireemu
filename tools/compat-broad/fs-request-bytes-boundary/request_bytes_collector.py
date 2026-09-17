@@ -266,7 +266,7 @@ def collect_local(plan: dict[str, Any], execute: Callable[[dict[str, Any]], dict
         next_slot = plan["executionSchedule"][sequence + 1] if sequence + 1 < len(plan["executionSchedule"]) else None
         if next_slot is not None and next_slot["phase"] == "observation" and phase == "recovery":
             probe_resources = next(item["resources"] for item in plan["probes"] if item["label"] == probe)
-            if set(probe_resources) != absence_proofs[probe] or (probe in commit_sent and probe not in versions and probe not in commit_refused) or not preflight_ok[probe]:
+            if failures or set(probe_resources) != absence_proofs[probe] or (probe in commit_sent and probe not in versions and probe not in commit_refused) or not preflight_ok[probe]:
                 stopped = True
     all_resources = {item for probe in plan["probes"] for item in probe["resources"]}
     absence = all_resources == set().union(*absence_proofs.values())

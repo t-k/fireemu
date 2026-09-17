@@ -1,13 +1,11 @@
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import {
+  classifyTerminal,
+  createLocalClient,
+  plainError,
+  plainStatus,
+} from './transport_internal.mjs';
 
-const requireSdk = createRequire(new URL('../../sdk-smoke/package.json', import.meta.url));
-// Resolve the installed SDK from sdk-smoke's package boundary, then load its
-// generated gRPC client by absolute path because the package does not export
-// the generated v1 subpath.
-const firestoreEntry = requireSdk.resolve('@google-cloud/firestore');
-const { FirestoreClient } = requireSdk(join(dirname(firestoreEntry), 'v1/index.js'));
-const grpc = requireSdk(requireSdk.resolve('@grpc/grpc-js', { paths: [dirname(firestoreEntry)] }));
+export { classifyTerminal } from './transport_internal.mjs';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 const OPERATIONS = new Set(['BeginTransaction', 'GetDocument', 'Rollback']);
@@ -39,24 +37,6 @@ const byteLength = value => {
   const encoded = JSON.stringify(value);
   if (encoded === undefined) throw fail('stream value is not serializable', 'message_limit');
   return Buffer.byteLength(encoded);
-};
-
-const plainError = error => Object.freeze({
-  name: error?.name,
-  code: error?.code,
-  details: error?.details,
-  message: error?.message,
-});
-
-const plainStatus = status => Object.freeze({
-  code: status?.code,
-  details: status?.details,
-  message: status?.message,
-});
-
-export const classifyTerminal = ({ status, error, sawEnd, sawClose }) => {
-  if (status && (sawEnd || sawClose)) return { kind: 'grpc_status', complete: true, status: plainStatus(status), error: error ? plainError(error) : undefined };
-  return undefined;
 };
 
 export const validateTransportOptions = options => {
@@ -142,14 +122,6 @@ export const validateWriteRequest = (request, options) => {
   }
 };
 
-const clientFor = options => new FirestoreClient({
-  servicePath: options.host,
-  port: options.port,
-  projectId: options.projectId,
-  sslCreds: grpc.credentials.createInsecure(),
-  fallback: false,
-});
-
 const grpcCallName = operation => operation === 'BeginTransaction' ? 'beginTransaction' : operation === 'GetDocument' ? 'getDocument' : 'rollback';
 
 const statusReceipt = (operation, request, error) => ({
@@ -164,7 +136,7 @@ const statusReceipt = (operation, request, error) => ({
 export const runUnary = async (operation, options, input = {}) => {
   const validated = validateTransportOptions(options);
   const request = buildUnaryRequest(operation, validated, input);
-  const client = clientFor(validated);
+  const client = createLocalClient(validated);
   let timer;
   let call;
   try {
@@ -203,7 +175,7 @@ export const listWriteFrames = (requests, response) => {
 
 export const runWrite = async (requests, options) => {
   const validated = validateTransportOptions(options);
-  const client = clientFor(validated);
+  const client = createLocalClient(validated);
   let stream;
   try {
     stream = client.write({

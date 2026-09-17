@@ -1,29 +1,60 @@
 from __future__ import annotations
 
+import hashlib
 import json
-from pathlib import Path
 
 import pytest
+
+import owned_transform_runner as runner
 from owned_transform_runner import (
+    BUILD_COMMAND,
+    PROFILES,
     REPAIRED_PROFILE,
     validate_copied_manifest,
     validate_retained_artifact,
 )
 
 
-def test_repaired_profile_accepts_original_build_manifest_without_derived_fields():
-    root = Path(__file__).parents[5]
-    artifact = root / (
-        "docs.local/logs/2026-09-17/stream-repair-shadow-567565bdd/owned-run/fireemu"
-    )
-    manifest = root / (
-        "docs.local/logs/2026-09-17/stream-repair-shadow-567565bdd/run-manifest.json"
-    )
+@pytest.fixture
+def generated_repaired_fixture(tmp_path, monkeypatch):
+    artifact = tmp_path / "fireemu"
+    artifact.write_bytes(b"#!/bin/sh\nprintf generated\n")
+    artifact.chmod(0o500)
+    profile = {
+        **REPAIRED_PROFILE,
+        "name": "test-generated-repaired",
+        "artifactSha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+    }
+    monkeypatch.setitem(PROFILES, profile["name"], profile)
 
-    result = validate_retained_artifact(artifact, manifest, profile=REPAIRED_PROFILE)
+    manifest = tmp_path / "run-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "executionCommit": profile["runtimeCommit"],
+                "build": {
+                    "artifactSha256": profile["artifactSha256"],
+                    "exitCode": 0,
+                    "command": BUILD_COMMAND,
+                    "inputs": runner.runtime_inputs_at_commit(
+                        profile["runtimeCommit"], runner.ROOT
+                    ),
+                },
+            }
+        )
+    )
+    return artifact, manifest, profile
 
-    assert result["runtimeSourceCommit"] == REPAIRED_PROFILE["runtimeCommit"]
-    assert result["artifactSha256"] == REPAIRED_PROFILE["artifactSha256"]
+
+def test_repaired_profile_accepts_original_build_manifest_without_derived_fields(
+    generated_repaired_fixture,
+):
+    artifact, manifest, profile = generated_repaired_fixture
+
+    result = validate_retained_artifact(artifact, manifest, profile=profile)
+
+    assert result["runtimeSourceCommit"] == profile["runtimeCommit"]
+    assert result["artifactSha256"] == profile["artifactSha256"]
     assert result["retainedManifestSha256"]
 
 
@@ -35,63 +66,51 @@ def test_unknown_profile_is_rejected_before_artifact_validation(tmp_path):
 
 
 @pytest.mark.parametrize("mutation", ["hash", "source", "inputs"])
-def test_repaired_profile_rejects_manifest_binding_mutations(tmp_path, mutation):
-    root = Path(__file__).parents[5]
-    artifact = root / (
-        "docs.local/logs/2026-09-17/stream-repair-shadow-567565bdd/owned-run/fireemu"
-    )
-    original = root / (
-        "docs.local/logs/2026-09-17/stream-repair-shadow-567565bdd/run-manifest.json"
-    )
+def test_repaired_profile_rejects_manifest_binding_mutations(
+    generated_repaired_fixture, tmp_path, mutation
+):
+    artifact, original, profile = generated_repaired_fixture
     manifest = json.loads(original.read_text())
     if mutation == "hash":
         manifest["build"]["artifactSha256"] = "0" * 64
     elif mutation == "source":
-        manifest["executionCommit"] = "0" * 40
+        manifest["executionCommit"] = "f" * 40
     else:
         manifest["build"]["inputs"]["Cargo.toml"] = "0" * 64
     mutated = tmp_path / "run-manifest.json"
     mutated.write_text(json.dumps(manifest))
 
     with pytest.raises(ValueError):
-        validate_retained_artifact(artifact, mutated, profile=REPAIRED_PROFILE)
+        validate_retained_artifact(artifact, mutated, profile=profile)
 
 
-def test_copied_manifest_binds_profile_and_full_provenance_before_io(tmp_path):
-    root = Path(__file__).parents[5]
-    original = root / (
-        "docs.local/logs/2026-09-17/stream-repair-shadow-567565bdd/run-manifest.json"
-    )
-    artifact = root / (
-        "docs.local/logs/2026-09-17/stream-repair-shadow-567565bdd/owned-run/fireemu"
-    )
-    validated = validate_retained_artifact(artifact, original, profile=REPAIRED_PROFILE)
+def test_copied_manifest_binds_profile_and_full_provenance_before_io(
+    generated_repaired_fixture, tmp_path
+):
+    artifact, original, profile = generated_repaired_fixture
+    validated = validate_retained_artifact(artifact, original, profile=profile)
     copied = tmp_path / "retained-manifest.json"
     copied.write_bytes(original.read_bytes())
     inputs = {
         **validated,
-        "artifactProfile": REPAIRED_PROFILE["name"],
+        "artifactProfile": profile["name"],
         "retainedManifestPath": str(copied),
     }
 
-    assert validate_copied_manifest(tmp_path, inputs, REPAIRED_PROFILE) == validated
+    assert validate_copied_manifest(tmp_path, inputs, profile) == validated
 
 
 @pytest.mark.parametrize("mutation", ["missing", "profile", "tuple", "tamper"])
-def test_copied_manifest_mutations_are_rejected(tmp_path, mutation):
-    root = Path(__file__).parents[5]
-    original = root / (
-        "docs.local/logs/2026-09-17/stream-repair-shadow-567565bdd/run-manifest.json"
-    )
-    artifact = root / (
-        "docs.local/logs/2026-09-17/stream-repair-shadow-567565bdd/owned-run/fireemu"
-    )
-    validated = validate_retained_artifact(artifact, original, profile=REPAIRED_PROFILE)
+def test_copied_manifest_mutations_are_rejected(
+    generated_repaired_fixture, tmp_path, mutation
+):
+    artifact, original, profile = generated_repaired_fixture
+    validated = validate_retained_artifact(artifact, original, profile=profile)
     copied = tmp_path / "retained-manifest.json"
     copied.write_bytes(original.read_bytes())
     inputs = {
         **validated,
-        "artifactProfile": REPAIRED_PROFILE["name"],
+        "artifactProfile": profile["name"],
         "retainedManifestPath": str(copied),
     }
     if mutation == "missing":
@@ -104,7 +123,7 @@ def test_copied_manifest_mutations_are_rejected(tmp_path, mutation):
         copied.write_bytes(copied.read_bytes() + b"\n")
 
     with pytest.raises(ValueError):
-        validate_copied_manifest(tmp_path, inputs, REPAIRED_PROFILE)
+        validate_copied_manifest(tmp_path, inputs, profile)
 
 
 def test_unapproved_executable_is_rejected_without_starting_it(tmp_path):
@@ -133,6 +152,7 @@ def test_symlink_artifact_is_not_an_immutable_identity(tmp_path):
 @pytest.mark.parametrize("mutation", ["extra", "missing", "changed"])
 def test_forged_runtime_input_map_is_rejected_against_fixed_git_tree(mutation):
     from evidence_common import runtime_inputs_at_commit
+
     from owned_transform_runner import ROOT, RUNTIME_COMMIT, validate_runtime_provenance
 
     manifest = {

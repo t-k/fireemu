@@ -105,6 +105,15 @@ def _fields(value: Any, depth: int, budget: list[int]) -> bool:
     )
 
 
+def _finite_number(value: Any) -> bool:
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except OverflowError:
+        return False
+
+
 def _firestore_value(value: Any, depth: int, budget: list[int]) -> bool:
     budget[0] -= 1
     if (
@@ -122,11 +131,12 @@ def _firestore_value(value: Any, depth: int, budget: list[int]) -> bool:
     if kind == "integerValue":
         return (
             isinstance(item, str)
+            and len(item) <= 20
             and _INTEGER.fullmatch(item) is not None
             and -(2**63) <= int(item) < 2**63
         )
     if kind == "doubleValue":
-        return (type(item) in (int, float) and math.isfinite(item)) or (
+        return _finite_number(item) or (
             isinstance(item, str) and item in {"NaN", "Infinity", "-Infinity"}
         )
     if kind == "timestampValue":
@@ -149,10 +159,7 @@ def _firestore_value(value: Any, depth: int, budget: list[int]) -> bool:
         return (
             isinstance(item, dict)
             and set(item) == {"latitude", "longitude"}
-            and all(
-                type(item[key]) in (int, float) and math.isfinite(item[key])
-                for key in ("latitude", "longitude")
-            )
+            and all(_finite_number(item[key]) for key in ("latitude", "longitude"))
             and -90 <= item["latitude"] <= 90
             and -180 <= item["longitude"] <= 180
         )
@@ -162,7 +169,9 @@ def _firestore_value(value: Any, depth: int, budget: list[int]) -> bool:
             and set(item) <= {"values"}
             and isinstance(item.get("values", []), list)
             and all(
-                _firestore_value(child, depth + 1, budget)
+                isinstance(child, dict)
+                and "arrayValue" not in child
+                and _firestore_value(child, depth + 1, budget)
                 for child in item.get("values", [])
             )
         )

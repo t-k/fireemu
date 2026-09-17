@@ -299,16 +299,21 @@ def test_duplicate_keys_or_bad_metadata_never_project(
         {"integerValue": True},
         {"integerValue": "01"},
         {"integerValue": "9223372036854775808"},
+        {"integerValue": "9" * 5000},
         {"doubleValue": True},
         {"doubleValue": "1.5"},
+        {"doubleValue": 10**309},
         {"timestampValue": "bad"},
         {"bytesValue": "***"},
         {"referenceValue": "x"},
         {"arrayValue": {"values": [3]}},
+        {"arrayValue": {"values": [{"arrayValue": {"values": []}}]}},
         {"arrayValue": {"values": "bad"}},
         {"mapValue": {"fields": {"n": {"integerValue": "01"}}}},
         {"mapValue": {"fields": []}},
         {"geoPointValue": {"latitude": 91, "longitude": 0}},
+        {"geoPointValue": {"latitude": 10**309, "longitude": 0}},
+        {"geoPointValue": {"latitude": 0, "longitude": 10**309}},
         {"nullValue": "bad"},
         {"stringValue": "\ud800"},
     ],
@@ -394,13 +399,28 @@ def test_wide_value_exceeding_node_budget_remains_raw(tmp_path: Path) -> None:
         {"nullValue": "NULL_VALUE"},
         {"booleanValue": False},
         {"integerValue": "-9223372036854775808"},
+        {"integerValue": "9223372036854775807"},
         {"doubleValue": 1.5},
+        {"doubleValue": 10**308},
         {"doubleValue": "NaN"},
         {"timestampValue": "2026-09-18T00:00:00Z"},
         {"bytesValue": "YQ=="},
         {"referenceValue": _DOC},
         {"geoPointValue": {"latitude": 90, "longitude": -180}},
         {"arrayValue": {"values": [{"stringValue": "x"}]}},
+        {
+            "arrayValue": {
+                "values": [
+                    {
+                        "mapValue": {
+                            "fields": {
+                                "n": {"arrayValue": {"values": [{"integerValue": "1"}]}}
+                            }
+                        }
+                    }
+                ]
+            }
+        },
         {"mapValue": {"fields": {"a": {"integerValue": "0"}}}},
     ],
 )

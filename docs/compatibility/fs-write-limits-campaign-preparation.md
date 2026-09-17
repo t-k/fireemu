@@ -45,3 +45,11 @@ The initial bridge review required preservation of legacy credential and service
 An executable reuse audit found that the existing Gate reserves requests and cost per campaign but does not arbitrate the proposal's cross-campaign resource locks or approval-envelope reservations. The declarations alone therefore cannot admit parallel production work. Extending existing admission with an atomic shared reservation remains a technical prerequisite; this is not a request to increase campaign scope or build a new orchestration platform.
 
 Independent re-review approved `f8f5a9e6e` within internal-component scope. No Must Fix remains. The suite also retains the requested after-controls 429/503 continuation regression. This review does not approve O7 execution or parent promotion.
+
+## Shared reservation integration checkpoint
+
+Source `3428b399f` implements the bounded [shared reservation library](../../tools/compat-broad/production-admission/README.md), reusing the existing private flock and atomic Gate state-save protocol. Full campaign request/account/resource/cost upper bounds are reserved atomically with ancestor-aware resource locks; allocation is not refunded. Nonce reuse, envelope multiplication under the same permission, expired dispatch, and incomplete cleanup are refused. Worker interruption retains ownership. A closing state avoids Gate/ledger lock inversion during final cleanup.
+
+`ReservedCoordinator` and `bind_reserved_wire` connect metadata and data attempts to this lease after rate waiting, and the reservation code is source-bound. Focused filesystem/process/bridge checks passed 61 tests. These are local admission and failure tests, not production observations. O7 permission validation, the canonical shared-root selection, immutable run inputs/artifact/environment binding, and final production acquisition/comparison remain unconnected in the outer runner. No production worker is eligible yet and no parent was promoted.
+
+Independent review of this initial reservation implementation found three required fixes: time checks preceding flock waits, declared scopes not covering actual Gate resources, and mutable Coordinator lease substitution. The 61 passing checks did not establish those properties. The checkpoint is not approved for production, and the corrections require focused regressions and a new fixed-source review.

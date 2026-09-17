@@ -51,13 +51,27 @@ def _read_bounded(response: Any, cap: int) -> tuple[bytes, str | None]:
     return payload, None
 
 
-def _perform(
-    origin: str,
-    operation: dict[str, Any],
-    request_cap: int,
-    response_cap: int,
-    timeout: float,
-) -> dict[str, Any]:
+def _validate(origin, operation, request_byte_limit, response_byte_limit, timeout):
+    origin = local_origin(origin)
+    request_cap = _cap(request_byte_limit, "request_byte_limit")
+    _cap(response_byte_limit, "response_byte_limit")
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(timeout)
+        or timeout <= 0
+        or timeout > 12
+    ):
+        raise ValueError("timeout must be positive and at most 12")
+    path = operation.get("path")
+    if (
+        not isinstance(path, str)
+        or not path.startswith("/v1/")
+        or path.startswith("//")
+        or "#" in path
+        or ("?" not in path and operation.get("method") == "PATCH")
+    ):
+        raise ValueError("malformed compiled request path")
     body = operation.get("body")
     data = (
         b""
@@ -66,6 +80,20 @@ def _perform(
             body, separators=(",", ":"), ensure_ascii=False, allow_nan=False
         ).encode()
     )
+    if len(data) > request_cap:
+        raise ValueError("request exceeds request_byte_limit before I/O")
+    return data
+
+
+def _perform(
+    origin: str,
+    operation: dict[str, Any],
+    request_cap: int,
+    response_cap: int,
+    timeout: float,
+) -> dict[str, Any]:
+    data = _validate(origin, operation, request_cap, response_cap, timeout)
+    body = operation.get("body")
     url = origin + operation["path"]
     headers = {"Content-Type": "application/json"} if body is not None else {}
     if operation.get("privileged"):
@@ -133,36 +161,8 @@ def request(
     timeout: float = 12.0,
 ) -> dict[str, Any]:
     """Execute one compiled request via a hard-deadline stdin worker."""
-    origin = local_origin(origin)
-    request_cap = _cap(request_byte_limit, "request_byte_limit")
-    response_cap = _cap(response_byte_limit, "response_byte_limit")
-    if (
-        isinstance(timeout, bool)
-        or not isinstance(timeout, (int, float))
-        or not math.isfinite(timeout)
-        or timeout <= 0
-        or timeout > 12
-    ):
-        raise ValueError("timeout must be positive and at most 12")
-    path = operation.get("path")
-    if (
-        not isinstance(path, str)
-        or not path.startswith("/v1/")
-        or path.startswith("//")
-        or "#" in path
-        or ("?" not in path and operation.get("method") == "PATCH")
-    ):
-        raise ValueError("malformed compiled request path")
-    body = operation.get("body")
-    data = (
-        b""
-        if body is None
-        else json.dumps(
-            body, separators=(",", ":"), ensure_ascii=False, allow_nan=False
-        ).encode()
-    )
-    if len(data) > request_cap:
-        raise ValueError("request exceeds request_byte_limit before I/O")
+    _validate(origin, operation, request_byte_limit, response_byte_limit, timeout)
+    request_cap, response_cap = request_byte_limit, response_byte_limit
     payload = json.dumps(
         {
             "origin": origin,

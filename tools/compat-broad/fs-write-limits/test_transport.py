@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
+from typing import ClassVar
 
 import pytest
 
@@ -15,9 +18,12 @@ from transport import request
 
 
 class Handler(BaseHTTPRequestHandler):
+    received: ClassVar[list] = []
     do_POST = lambda self: self.do_GET()
 
     def do_GET(self):
+        data = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        self.received.append((self.path, data, self.headers.get("Authorization")))
         if self.path.startswith("/v1/slow"):
             self.send_response(200)
             self.send_header("Content-Length", "20")
@@ -63,6 +69,7 @@ class Handler(BaseHTTPRequestHandler):
 
 @pytest.fixture()
 def origin():
+    Handler.received.clear()
     server = ThreadingHTTPServer(
         ("127.0.0.1", int(os.environ.get("PORT", "0"))), Handler
     )
@@ -85,8 +92,10 @@ def test_request_cap_exact_and_plus_one_rejected_before_io(origin):
         ]
         == "json"
     )
+    before = len(Handler.received)
     with pytest.raises(ValueError):
         request(origin, operation, request_byte_limit=size - 1, response_byte_limit=100)
+    assert len(Handler.received) == before
 
 
 def test_response_cap_exact_and_plus_one(origin):
@@ -112,6 +121,7 @@ def test_large_request_roundtrips_and_privileged_header_is_fixed(origin):
         origin, operation, request_byte_limit=100_000, response_byte_limit=100
     )
     assert result["kind"] == "json"
+    assert json.loads(Handler.received[-1][1]) == operation["body"]
     privileged = {"method": "POST", "path": "/v1/ok", "body": {}, "privileged": True}
     assert (
         request(origin, privileged, request_byte_limit=100, response_byte_limit=100)[
@@ -119,6 +129,8 @@ def test_large_request_roundtrips_and_privileged_header_is_fixed(origin):
         ]
         == "json"
     )
+
+    assert Handler.received[-1][2] == "Bearer owner"
 
 
 def test_complete_api_error_and_redirect_are_distinct(origin):
@@ -193,3 +205,25 @@ def test_caps_and_deadline_are_strict(origin):
             response_byte_limit=100,
             timeout=13,
         )
+
+
+def test_worker_rejects_oversized_body_before_io(origin):
+    module = Path(__file__).with_name("transport.py").resolve()
+    payload = {
+        "origin": origin,
+        "operation": {"method": "POST", "path": "/v1/ok", "body": {"blob": "x" * 100}},
+        "request_cap": 8,
+        "response_cap": 100,
+        "timeout": 1,
+    }
+    result = subprocess.run(
+        [sys.executable, str(module), "--worker"],
+        input=json.dumps(payload),
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=3,
+        env={"PYTHONPATH": str(module.parents[1])},
+    )
+    assert result.returncode != 0
+    assert Handler.received == []

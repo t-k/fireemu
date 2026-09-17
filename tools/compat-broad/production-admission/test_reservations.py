@@ -2,6 +2,8 @@
 """Real filesystem/process tests of bounded shared admission; no production I/O."""
 
 import multiprocessing
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -30,7 +32,7 @@ def plan(label="a"):
     operation = {
         "service": "firestore",
         "method": "GET",
-        "path": "/v1/projects/p/databases/(default)/documents/owned/a",
+        "path": f"/v1/projects/p/databases/(default)/documents/owned/{label}",
         "body": None,
         "privileged": True,
     }
@@ -54,13 +56,20 @@ def plan(label="a"):
 
 
 def claim(tmp_path, label, locks=None):
+    owned = {
+        "key": f"project/p/firestore/(default)/documents/owned/{label}",
+        "mode": "WRITE",
+    }
+    locks = list(locks or [])
+    if owned not in locks:
+        locks.append(owned)
     return {
         "campaignId": label,
         "manifestDigest": digest(label),
         "nonceDigest": digest(plan(label)["nonce"]),
         "gatePath": str((tmp_path / label).resolve()),
         "gatePlanDigest": digest(plan(label)),
-        "locks": locks or [{"key": "project/p/data/" + label, "mode": "WRITE"}],
+        "locks": locks,
         "budget": {"requests": 2, "accounts": 0, "resources": 1, "costMicrousd": 10},
         "durationSeconds": 100,
     }
@@ -141,7 +150,13 @@ def test_expiry_never_releases_locks_and_nonce_is_never_reused(tmp_path):
     second = claim(tmp_path, "b", first["locks"])
     with pytest.raises(ValueError):
         ledger.reserve(envelope(), second, plan("b"), now=1201)
-    second["locks"] = [{"key": "project/p/data/b", "mode": "WRITE"}]
+    second["locks"] = [
+        {"key": "project/p/data/b", "mode": "WRITE"},
+        {
+            "key": "project/p/firestore/(default)/documents/owned/a",
+            "mode": "WRITE",
+        },
+    ]
     second["nonceDigest"] = first["nonceDigest"]
     second["gatePlanDigest"] = first["gatePlanDigest"]
     with pytest.raises(ValueError, match="reuse"):
@@ -358,4 +373,124 @@ def test_production_gate_cannot_borrow_another_permission_budget(tmp_path):
     before = ledger.snapshot()
     with pytest.raises(ValueError, match="permission differs"):
         ledger.reserve(envelope(), request, frozen, now=1100)
+    assert ledger.snapshot() == before
+
+
+def test_validate_samples_default_clock_after_waiting_for_ledger_lock(tmp_path):
+    now = time.time()
+    policy = envelope()
+    policy.update(issuedAt=now - 1, expiresAt=now + 4.5)
+    request = claim(tmp_path, "a")
+    short_plan = plan()
+    short_plan["wallSeconds"] = 3
+    short_plan["recoverySeconds"] = 0.5
+    request["gatePlanDigest"] = digest(short_plan)
+    request["durationSeconds"] = 3
+    ledger = Ledger.create(tmp_path / "ledger")
+    ticket = ledger.reserve(policy, request, short_plan, now=now)
+    entered = threading.Event()
+    errors = []
+
+    def validate():
+        entered.set()
+        try:
+            ledger.validate(ticket, duration=1)
+        except ValueError as error:
+            assert "unavailable" in str(error)
+            errors.append(error)
+        else:
+            errors.append(
+                AssertionError("validate accepted after the reservation deadline")
+            )
+
+    with ledger._locked():
+        worker = threading.Thread(target=validate)
+        worker.start()
+        assert entered.wait(2)
+        time.sleep(2.2)
+    worker.join(timeout=3)
+    assert not worker.is_alive()
+    assert errors and isinstance(errors[0], ValueError)
+
+
+def test_reserve_samples_default_clock_after_waiting_for_ledger_lock(tmp_path):
+    now = time.time()
+    policy = envelope()
+    policy.update(issuedAt=now - 1, expiresAt=now + 3.5)
+    request = claim(tmp_path, "a")
+    short_plan = plan()
+    short_plan["wallSeconds"] = 3
+    short_plan["recoverySeconds"] = 0.5
+    request["gatePlanDigest"] = digest(short_plan)
+    request["durationSeconds"] = 3
+    ledger = Ledger.create(tmp_path / "ledger")
+    entered = threading.Event()
+    errors = []
+
+    def reserve():
+        entered.set()
+        try:
+            ledger.reserve(policy, request, short_plan)
+        except ValueError as error:
+            errors.append(error)
+
+    with ledger._locked():
+        worker = threading.Thread(target=reserve)
+        worker.start()
+        assert entered.wait(2)
+        time.sleep(3.2)
+    worker.join(timeout=3)
+    assert not worker.is_alive()
+    assert any("permission window" in str(error) for error in errors)
+    assert ledger.snapshot()["reservations"] == {}
+
+
+@pytest.mark.parametrize(
+    "locks",
+    [
+        [],
+        [{"key": "project/p/firestore/(default)/documents/other", "mode": "WRITE"}],
+        [{"key": "project/p/firestore/(default)/documents/owned/a", "mode": "READ"}],
+        [{"key": "project/q/firestore/(default)/documents/owned/a", "mode": "WRITE"}],
+    ],
+)
+def test_gate_firestore_resources_require_covering_write_lock(tmp_path, locks):
+    ledger = Ledger.create(tmp_path / "ledger")
+    request = claim(tmp_path, "a", locks)
+    request["locks"] = locks
+    before = ledger.snapshot()
+    with pytest.raises(ValueError):
+        ledger.reserve(envelope(), request, plan(), now=1100)
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.parametrize("covered", [True, False])
+def test_gate_resource_lock_prevents_same_document_escape(tmp_path, covered):
+    ledger = Ledger.create(tmp_path / "ledger")
+    ledger.reserve(envelope(), claim(tmp_path, "a"), plan(), now=1100)
+    before = ledger.snapshot()
+    other_plan = plan("b")
+    other_plan["jobs"]["limits"]["recovery"][0]["path"] = plan()["jobs"]["limits"][
+        "recovery"
+    ][0]["path"]
+    other_plan["jobs"]["limits"]["resources"] = [
+        other_plan["jobs"]["limits"]["recovery"][0]["path"].removeprefix("/v1/")
+    ]
+    request = claim(
+        tmp_path,
+        "b",
+        [
+            {"key": "project/p/data/alternate", "mode": "WRITE"},
+            {
+                "key": "project/p/firestore/(default)/documents/owned/*",
+                "mode": "WRITE",
+            },
+        ],
+    )
+    if not covered:
+        request["locks"] = claim(tmp_path, "b")["locks"]
+    request["gatePlanDigest"] = digest(other_plan)
+    request["nonceDigest"] = digest(other_plan["nonce"])
+    with pytest.raises(ValueError, match="conflict" if covered else "not covered"):
+        ledger.reserve(envelope(), request, other_plan, now=1100)
     assert ledger.snapshot() == before

@@ -17,12 +17,11 @@ from broad_contract import digest
 from shared_gate import create
 
 
-def setup(tmp_path):
+def setup(tmp_path, *, ledger=None, nonce="d" * 32):
     now = time.time()
-    nonce = "d" * 32
     permission = {"expiresAt": now + 2000, "collectorSourceDigest": source_digest()}
     plan = execution_plan(permission, nonce)
-    ledger = Ledger.create(tmp_path / "ledger")
+    ledger = ledger or Ledger.create(tmp_path / "ledger")
     envelope = {
         "permissionDigest": digest(permission),
         "issuedAt": now - 1,
@@ -100,6 +99,38 @@ def test_reserved_wire_charges_gate_within_full_shared_allocation(tmp_path):
         == 40
     )
     assert ledger.validate(ticket) == ticket["claimDigest"]
+
+
+@pytest.mark.parametrize("same_ledger", [True, False])
+@pytest.mark.parametrize("kind", ["data", "metadata"])
+def test_held_replacement_ticket_cannot_bypass_closing_original(
+    tmp_path, same_ledger, kind
+):
+    coordinator, gate, ledger, ticket, plan = setup(tmp_path / "first")
+    _, _, replacement_ledger, replacement_ticket, _ = setup(
+        tmp_path / "second", ledger=ledger if same_ledger else None, nonce="e" * 32
+    )
+    sent = []
+    wire = bind_reserved_wire(
+        coordinator, plan, transmit=lambda value: sent.append(value)
+    )
+    # Real finalization uses this same transition before waiting for the Gate.
+    with ledger._locked() as state:
+        state["reservations"][ticket["reservation"]]["state"] = "closing"
+        ledger._save(state)
+    assert replacement_ledger.validate(replacement_ticket)
+    coordinator.ledger = replacement_ledger
+    coordinator.reservation_ticket = replacement_ticket
+    operation = plan["jobs"]["limits"]["observation"][0]
+    with pytest.raises(ValueError, match="binding changed"):
+        if kind == "data":
+            gate.dispatch(operation, False, lambda: wire(operation, False, 0, 0))
+        else:
+            gate.manage(coordinator, "project", lambda: coordinator.reserve("metadata"))
+    assert sent == []
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "closing"
+    )
 
 
 @pytest.mark.parametrize("kind", ["data", "metadata"])

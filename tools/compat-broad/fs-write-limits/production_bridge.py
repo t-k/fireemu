@@ -175,6 +175,13 @@ class ReservedCoordinator(Coordinator):
             raise ValueError("reservation belongs to another Gate")
         self.ledger = ledger
         self.reservation_ticket = json.loads(json.dumps(ticket))
+        self._reserved_ledger = ledger
+        self._reserved_ledger_path = str(ledger.path)
+        self._reserved_ledger_identity = ledger.identity
+        self._reserved_ticket_digest = digest(self.reservation_ticket)
+        self._reserved_gate_path = str(gate.path.resolve())
+        self._reserved_gate_plan_digest = digest(frozen_plan)
+        self._reserved_claim_digest = digest(claim)
         self.reserved_permission_digest = frozen_plan["permissionDigest"]
         self.reserved_source_digest = frozen_plan["collectorSourceDigest"]
         ledger.validate(self.reservation_ticket)
@@ -187,11 +194,21 @@ class ReservedCoordinator(Coordinator):
 
     def validate_reservation(self, duration=13):
         if (
-            digest(self.permission) != self.reserved_permission_digest
+            self.ledger is not self._reserved_ledger
+            or str(self.ledger.path) != self._reserved_ledger_path
+            or self.ledger.identity != self._reserved_ledger_identity
+            or digest(self.reservation_ticket) != self._reserved_ticket_digest
+            or digest(self.permission) != self.reserved_permission_digest
             or source_digest() != self.reserved_source_digest
         ):
             raise ValueError("reserved production binding changed")
-        self.ledger.validate(self.reservation_ticket, duration=duration)
+        if str(self.gate.path.resolve()) != self._reserved_gate_path:
+            raise ValueError("reserved production binding changed")
+        if (
+            self.ledger.validate(self.reservation_ticket, duration=duration)
+            != self._reserved_claim_digest
+        ):
+            raise ValueError("reserved production binding changed")
 
 
 def bind_reserved_wire(coordinator, plan, *, transmit=request):

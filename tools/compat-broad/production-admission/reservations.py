@@ -74,6 +74,24 @@ def _ancestor(parent, child):
     return child[: len(parent)] == parent
 
 
+def _firestore_resource_scope(resource):
+    if not isinstance(resource, str):
+        raise TypeError("canonical Firestore resource required")
+    parts = resource.split("/")
+    if (
+        len(parts) < 7
+        or parts[0] != "projects"
+        or parts[2] != "databases"
+        or parts[4] != "documents"
+        or (len(parts) - 5) % 2 != 0
+    ):
+        raise ValueError("canonical Firestore resource required")
+    key = "/".join(
+        ("project", parts[1], "firestore", parts[3], "documents", *parts[5:])
+    )
+    return _scope({"key": key, "mode": "WRITE"})
+
+
 def conflicts(left, right):
     a, b = _scope(left), _scope(right)
     return (_ancestor(a, b) or _ancestor(b, a)) and not (
@@ -238,15 +256,10 @@ class Ledger:
             return state
 
     def reserve(self, envelope, claim, gate_plan, *, now=None):
-        now = time.time() if now is None else now
-        _number(now)
+        if now is not None:
+            _number(now)
         _envelope(envelope)
         _claim(claim)
-        if (
-            not envelope["issuedAt"] <= now
-            or now + claim["durationSeconds"] > envelope["expiresAt"]
-        ):
-            raise ValueError("campaign outside permission window")
         if (
             digest(gate_plan) != claim["gatePlanDigest"]
             or digest(gate_plan["nonce"]) != claim["nonceDigest"]
@@ -281,6 +294,21 @@ class Ledger:
                 raise ValueError("resource lock exceeds permission scope")
         key = digest(envelope)
         with self._locked() as state:
+            decision_now = time.time() if now is None else now
+            _number(decision_now)
+            if (
+                not envelope["issuedAt"] <= decision_now
+                or decision_now + claim["durationSeconds"] > envelope["expiresAt"]
+            ):
+                raise ValueError("campaign outside permission window")
+            for resource in resources:
+                resource_scope = _firestore_resource_scope(resource)
+                if not any(
+                    _ancestor(_scope(lock), resource_scope)
+                    and MODES[lock["mode"]] >= MODES["WRITE"]
+                    for lock in claim["locks"]
+                ):
+                    raise ValueError("Gate resource lock is not covered")
             if any(
                 entry["envelope"]["permissionDigest"] == envelope["permissionDigest"]
                 and existing != key
@@ -330,7 +358,7 @@ class Ledger:
                 "claimDigest": ticket["claimDigest"],
                 "envelopeDigest": key,
                 "state": "held",
-                "deadline": now + claim["durationSeconds"],
+                "deadline": decision_now + claim["durationSeconds"],
             }
             self._save(state)
             return ticket
@@ -352,13 +380,15 @@ class Ledger:
             return self._row(state, ticket)["claim"]
 
     def validate(self, ticket, *, now=None, duration=13):
-        now = time.time() if now is None else now
-        _number(now)
+        if now is not None:
+            _number(now)
         if type(duration) is not int or duration < 1:
             raise ValueError("positive bounded operation required")
         with self._locked() as state:
             row = self._row(state, ticket)
-            if row["state"] != "held" or now + duration > row["deadline"]:
+            decision_now = time.time() if now is None else now
+            _number(decision_now)
+            if row["state"] != "held" or decision_now + duration > row["deadline"]:
                 raise ValueError("shared reservation unavailable")
             return row["claimDigest"]
 

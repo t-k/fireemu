@@ -6,7 +6,6 @@ publishes Rules, starts a server, or sends a Firestore request.
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import re
@@ -37,10 +36,10 @@ def _rules_source(nonce: str, *, deny_owned: bool) -> str:
             "rules_version = '2';",
             "service cloud.firestore {",
             "  match /databases/{database}/documents {",
-            f"    match /o5-rules-transition/{nonce}/owned {{",
+            f"    match /o5-rules-transition/{nonce}/cases/owned {{",
             f"      allow read: if {owned};",
             "    }",
-            f"    match /o5-rules-transition/{nonce}/public {{",
+            f"    match /o5-rules-transition/{nonce}/cases/public {{",
             "      allow read: if true;",
             "    }",
             "  }",
@@ -72,7 +71,7 @@ def _compile_plan(project: str, database: str, nonce: str) -> dict[str, Any]:
     if not isinstance(nonce, str) or not _NONCE.fullmatch(nonce):
         raise ValueError("nonce must be 32 lowercase hexadecimal characters")
 
-    root = ("o5-rules-transition", nonce)
+    root = ("o5-rules-transition", nonce, "cases")
     owned = _resource(project, database, *root, "owned")
     public = _resource(project, database, *root, "public")
     uid, uid2 = f"o5-u-{nonce}", f"o5-u2-{nonce}"
@@ -96,28 +95,10 @@ def _compile_plan(project: str, database: str, nonce: str) -> dict[str, Any]:
     ]
     for operation, expect in zip(observations, expectations, strict=True):
         operation["expect"] = expect
-    recovery = [
-        {
-            "kind": "cleanup-owned-document",
-            "resource": owned,
-            "mode": "conditional-owned-delete",
-            "wireRequestsMaximum": 3,
-        },
-        {
-            "kind": "cleanup-public-document",
-            "resource": public,
-            "mode": "conditional-owned-delete",
-            "wireRequestsMaximum": 3,
-        },
-        {
-            "kind": "cleanup-users-and-rules",
-            "uids": [uid2, uid],
-            "mode": "readback-then-delete",
-            "wireRequestsMaximum": 3,
-        },
-    ]
     plan = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
+        "status": "PREPARATION_ONLY",
+        "productionExecuted": False,
         "campaignId": CAMPAIGN,
         "project": project,
         "database": database,
@@ -139,25 +120,16 @@ def _compile_plan(project: str, database: str, nonce: str) -> dict[str, Any]:
                 "decision": "deny-owned-user",
                 "publicDecision": "allow-public",
             },
-            "recovery": {"decision": "fixed-deny-all"},
-        },
+            },
         "observation": observations,
-        "recovery": recovery,
         "negativeCredentials": ["empty-bearer", "malformed-bearer", "admin-shaped-credential"],
-        "nonceReservation": {
-            "fresh": True,
-            "reused": False,
-            "lockKey": f"firestore-rules/{project}/{database}/o5/{nonce}",
-        },
-        "budget": {
-            "authUsersMaximum": 2,
-            "documentsMaximum": 2,
-            "rulesPublicationsMaximum": 3,
-            "userSdkReadsMaximum": 6,
-            "observationRequests": 6,
-            "recoveryRequests": 9,
-            "requestUpperBound": 15,
-        },
+        "unresolved": [
+            "project/database binding", "nonce reservation and shared publication lock",
+            "typed user-token collector", "Rules publication and readback",
+            "version-bound resource cleanup and final absence",
+            "conditional restoration of preexisting database Rules",
+            "wire, cost, and execution-window enforcement",
+        ],
         "productionReady": False,
         "evidenceBoundary": (
             "local-shadow-and-admin-publication-receipts-never-prove-"
@@ -182,46 +154,3 @@ def validate_plan(plan: dict[str, Any]) -> None:
         raise ValueError("invalid plan identity") from error
     if plan != expected:
         raise ValueError("compiled plan drift")
-    project, database, nonce = plan.get("project"), plan.get("database"), plan.get("nonce")
-    if (
-        not isinstance(project, str)
-        or not _NAME.fullmatch(project)
-        or not isinstance(database, str)
-        or not isinstance(nonce, str)
-        or not _NONCE.fullmatch(nonce)
-    ):
-        raise ValueError("invalid plan identity")
-    # Rebuild without recursion while keeping validation useful to callers.
-    if plan.get("ownedResources") != [plan.get("ownedDocument"), plan.get("publicDocument")]:
-        raise ValueError("owned resource drift")
-    if any(nonce not in value for value in plan["ownedResources"]):
-        raise ValueError("resource escaped nonce")
-    if len(plan.get("observation", [])) != 6 or len(plan.get("recovery", [])) != 3:
-        raise ValueError("operation budget drift")
-    if plan.get("budget", {}).get("requestUpperBound") != 15:
-        raise ValueError("request budget drift")
-    reservation = plan.get("nonceReservation")
-    if (
-        not isinstance(reservation, dict)
-        or reservation.get("fresh") is not True
-        or reservation.get("reused") is not False
-        or reservation.get("lockKey") != f"firestore-rules/{project}/{database}/o5/{nonce}"
-    ):
-        raise ValueError("nonce reservation drift")
-    for index, operation in enumerate(plan["observation"]):
-        if operation.get("transport") != "official-user-sdk" or operation.get(
-            "authUid"
-        ) not in {"o5-u-" + nonce, "o5-u2-" + nonce}:
-            raise ValueError("user SDK binding drift")
-        expected_kinds = [
-            "user-sdk-owned-a",
-            "user-sdk-owned-a-control",
-            "user-sdk-owned-a-repeat",
-            "user-sdk-owned-b-denied",
-            "user-sdk-public-b-control",
-            "user-sdk-owned-u2-denied",
-        ]
-        if operation.get("kind") != expected_kinds[index]:
-            raise ValueError("operation order drift")
-    if plan.get("productionReady") is not False:
-        raise ValueError("production must remain unbound")

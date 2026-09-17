@@ -1,4 +1,4 @@
-"""Offline publication manifest and admission contract for O5."""
+"""Digest an offline observation case without granting execution authority."""
 
 from __future__ import annotations
 
@@ -9,58 +9,46 @@ from compiler import CAMPAIGN, compile_plan, digest
 
 
 def manifest() -> dict[str, Any]:
-    plan = compile_plan("template-project", "(default)", "0" * 32)
-    # Placeholders make the checked-in contract reproducible; a run must bind
-    # both project and fresh nonce before any data operation.
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "campaignId": CAMPAIGN,
         "status": "PREPARATION_ONLY",
         "productionExecuted": False,
         "productionReady": False,
-        "planTemplate": plan,
-        "sourceBoundary": "official Auth user SDK plus published Firestore Rules only",
-        "forbiddenEvidence": [
-            "admin-rest",
-            "admin-credential",
-            "local-rules-evaluator",
-            "local-token",
-        ],
-        "requiredBeforeExecution": [
-            "owner and recovery-owner approval",
-            "fresh nonce reservation and shared lock",
-            "project/database and SDK package-lock binding",
-            "Rules A/B source and artifact digests",
-            "bounded cost, retention, and execution window",
-            "typed user-SDK receipt collector and independent comparator review",
+        "planTemplate": compile_plan("template-project", "(default)", "0" * 32),
+        "unresolved": [
+            "project and database identity confirmation",
+            "execution commit and SDK lock digest",
+            "Rules A/B and restoration source and artifact byte digests",
+            "resource owner and recovery owner",
+            "nonce reservation and shared Rules publication lock",
+            "wire request, cost, and execution-window limits",
+            "typed production receipt collector",
+            "conditional restoration of preexisting Rules and readback",
         ],
     }
 
 
 def bound_manifest(project: str, nonce: str) -> dict[str, Any]:
     value = manifest()
-    value["plan"] = compile_plan(project, "(default)", nonce)
-    value["planDigest"] = digest(value["plan"])
-    value["manifestDigest"] = digest(value)
+    value["observationCase"] = compile_plan(project, "(default)", nonce)
+    value["caseDigest"] = digest(value["observationCase"])
+    value["templateDigest"] = digest(value)
     return value
 
 
-def validate_manifest(value: dict[str, Any]) -> None:
-    if not isinstance(value, dict) or value.get("campaignId") != CAMPAIGN:
-        raise ValueError("manifest campaign drift")
-    if value.get("productionExecuted") is not False or value.get("productionReady") is not False:
-        raise ValueError("manifest cannot authorize production")
-    supplied_digest = value.get("manifestDigest")
-    unsigned = copy.deepcopy(value)
-    unsigned.pop("manifestDigest", None)
-    if not isinstance(supplied_digest, str) or digest(unsigned) != supplied_digest:
-        raise ValueError("manifest digest mismatch")
-    plan = value.get("plan")
-    if not isinstance(plan, dict) or value.get("planDigest") != digest(plan):
-        raise ValueError("plan digest mismatch")
-    expected = bound_manifest(plan["project"], plan["nonce"])
-    expected.pop("manifestDigest")
-    actual = copy.deepcopy(value)
-    actual.pop("manifestDigest", None)
-    if actual != expected:
-        raise ValueError("manifest binding drift")
+def validate_manifest(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("invalid manifest")
+    case = value.get("observationCase")
+    if not isinstance(case, dict):
+        raise ValueError("invalid observation case")
+    project, nonce = case.get("project"), case.get("nonce")
+    if not isinstance(project, str) or not isinstance(nonce, str):
+        raise ValueError("invalid case identity")
+    try:
+        expected = bound_manifest(project, nonce)
+    except (TypeError, ValueError) as error:
+        raise ValueError("invalid case identity") from error
+    if value != expected:
+        raise ValueError("manifest preparation drift")

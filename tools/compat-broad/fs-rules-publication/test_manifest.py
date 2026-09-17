@@ -7,33 +7,28 @@ import pytest
 from manifest import bound_manifest, manifest, validate_manifest
 
 
-def test_template_is_explicitly_preparation_only() -> None:
-    value = manifest()
+def test_manifest_is_preparation_only() -> None:
+    value = bound_manifest("demo", "a" * 32)
+    validate_manifest(value)
     assert value["status"] == "PREPARATION_ONLY"
     assert value["productionExecuted"] is False
     assert value["productionReady"] is False
-    assert "local-rules-evaluator" in value["forbiddenEvidence"]
+    assert "typed production receipt collector" in value["unresolved"]
+    assert "plan" not in value
+    assert manifest()["status"] == "PREPARATION_ONLY"
 
 
-def test_bound_manifest_has_stable_plan_digest() -> None:
+@pytest.mark.parametrize("replacement", [None, [], {"project": []}, {"project": "demo", "nonce": []}])
+def test_malformed_nested_case_rejected(replacement) -> None:
     value = bound_manifest("demo", "a" * 32)
-    validate_manifest(value)
-    assert value["planDigest"] == bound_manifest("demo", "a" * 32)["planDigest"]
-    changed = copy.deepcopy(value)
-    changed["manifestDigest"] = "0" * 64
+    value["observationCase"] = replacement
     with pytest.raises(ValueError):
-        validate_manifest(changed)
+        validate_manifest(value)
 
 
-@pytest.mark.parametrize("mutation", ["plan", "digest", "ready"])
-def test_manifest_mutations_are_rejected(mutation: str) -> None:
-    value = bound_manifest("demo", "b" * 32)
+def test_mutation_rejected() -> None:
+    value = bound_manifest("demo", "a" * 32)
     changed = copy.deepcopy(value)
-    if mutation == "plan":
-        changed["plan"]["nonce"] = "c" * 32
-    elif mutation == "digest":
-        changed["planDigest"] = "0" * 64
-    else:
-        changed["productionReady"] = True
+    changed["productionReady"] = True
     with pytest.raises(ValueError):
         validate_manifest(changed)

@@ -1,60 +1,24 @@
 from __future__ import annotations
 
-import copy
+import pytest
 
 from comparator import compare_receipts
 from compiler import compile_plan
-from local_shadow import shadow_receipt
 
 
-def _production_receipt(plan):
-    value = shadow_receipt(plan)
-    value["productionExecuted"] = True
-    value["rows"][0]["requestId"] = "prod-request"
-    value["rows"][0]["timestamp"] = "2026-09-18T01:02:03Z"
-    return value
-
-
-def test_comparator_excludes_request_ids_and_timestamps_but_never_promotes() -> None:
+@pytest.mark.parametrize(
+    "production,local",
+    [({}, {}), ({"productionExecuted": True}, {}), (None, []), ({"cleanup": {"lock": None}}, {})],
+)
+def test_uncollected_or_malformed_receipts_remain_indeterminate(production, local) -> None:
     plan = compile_plan("demo", "(default)", "a" * 32)
-    result = compare_receipts(_production_receipt(plan), shadow_receipt(plan), plan)
-    assert result["classification"] == "EXPECTED_NONDETERMINISM"
-    assert result["promotionReady"] is False
-    assert result["acquisitionValidated"] is False
-
-
-def test_comparator_never_matches_two_local_receipts() -> None:
-    plan = compile_plan("demo", "(default)", "a" * 32)
-    result = compare_receipts(shadow_receipt(plan), shadow_receipt(plan), plan)
+    result = compare_receipts(production, local, plan)
     assert result["classification"] == "INDETERMINATE"
-    assert "production-role" in result["errors"]
+    assert result["status"] == "PREPARATION_ONLY"
+    assert result["productionExecuted"] is False
+    assert result["productionReady"] is False
+    assert result["rows"] == []
 
 
-def test_comparator_requires_user_sdk_identity_on_every_row() -> None:
-    plan = compile_plan("demo", "(default)", "a" * 32)
-    production = _production_receipt(plan)
-    del production["rows"][0]["credentialKind"]
-    result = compare_receipts(production, shadow_receipt(plan), plan)
-    assert result["classification"] == "INDETERMINATE"
-    assert "row-credential" in result["errors"]
-
-
-def test_comparator_rejects_admin_or_local_token_evidence() -> None:
-    plan = compile_plan("demo", "(default)", "b" * 32)
-    production = _production_receipt(plan)
-    production["credentialKind"] = "admin-rest"
-    result = compare_receipts(production, shadow_receipt(plan), plan)
-    assert result["classification"] == "INDETERMINATE"
-    assert "wrong-credential-kind" in result["errors"]
-
-
-def test_comparator_reports_denied_body_leak_and_plan_drift() -> None:
-    plan = compile_plan("demo", "(default)", "c" * 32)
-    production = _production_receipt(plan)
-    production["rows"][3]["body"] = {"document": "secret"}
-    result = compare_receipts(production, shadow_receipt(plan), plan)
-    assert "denied-body-leak" in result["errors"]
-    drifted = copy.deepcopy(plan)
-    drifted["nonce"] = "d" * 32
-    result = compare_receipts(shadow_receipt(plan), shadow_receipt(plan), drifted)
-    assert "plan-drift" in result["errors"]
+def test_malformed_plan_remains_indeterminate() -> None:
+    assert compare_receipts({}, {}, {"project": []})["classification"] == "INDETERMINATE"

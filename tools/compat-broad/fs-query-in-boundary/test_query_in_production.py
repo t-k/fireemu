@@ -79,7 +79,12 @@ def test_raw_sidecars_preserve_bytes_and_bind_projection(tmp_path: Path) -> None
     journal = RawJournal(tmp_path / "raw")
     body = b'[{"document":{"name":"x","fields":{"s":{"stringValue":"\\u00e9"}}},"readTime":"t"}]'
     binding = journal.add(
-        "observation", 2, 200, body, complete=True, content_type="application/json"
+        "observation",
+        2,
+        200,
+        body,
+        complete=True,
+        content_type="application/json; charset=UTF-8",
     )
     assert (tmp_path / "raw" / binding["path"]).read_bytes() == body
     view = journal.semantic_view(binding)
@@ -91,6 +96,10 @@ def test_raw_sidecars_preserve_bytes_and_bind_projection(tmp_path: Path) -> None
     assert (tmp_path / "raw" / second["path"]).read_bytes() == b"\xff"
     with pytest.raises(ValueError):
         journal.semantic_view({**binding, "sha256": "0" * 64})
+    with pytest.raises(ValueError):
+        journal.semantic_view({**binding, "status": 500})
+    with pytest.raises(ValueError):
+        journal.semantic_view({**binding, "contentType": "text/html"})
     with pytest.raises(FileExistsError):
         journal.add(
             "observation", 2, 200, body, complete=True, content_type="application/json"
@@ -107,6 +116,91 @@ def test_complete_unexpected_query_is_preserved(tmp_path: Path) -> None:
     )
     view = journal.semantic_view(binding)
     assert view["difference"] == "unexpected-query-row"
+    assert "documents" not in view
+    assert (tmp_path / "raw" / binding["path"]).read_bytes() == body
+
+
+@pytest.mark.parametrize(
+    ("phase", "index", "status", "content_type", "body", "difference"),
+    [
+        (
+            "observation",
+            2,
+            500,
+            "application/json",
+            b'[{"document":{"name":"x","fields":{}}}]',
+            "unexpected-query-status",
+        ),
+        (
+            "observation",
+            2,
+            200,
+            "text/html",
+            b'[{"document":{"name":"x","fields":{}}}]',
+            "unexpected-query-content-type",
+        ),
+        (
+            "observation",
+            2,
+            200,
+            "application/problem+json",
+            b'[{"document":{"name":"x","fields":{}}}]',
+            "unexpected-query-content-type",
+        ),
+        (
+            "observation",
+            2,
+            200,
+            "application/json",
+            b'{"document":{"name":"x","fields":{}}}',
+            "unexpected-query-shape",
+        ),
+        (
+            "observation",
+            2,
+            200,
+            "application/json",
+            b'[{"document":{"name":"x","fields":{}}},7]',
+            "unexpected-query-row",
+        ),
+        (
+            "observation",
+            3,
+            200,
+            "application/json",
+            b'[{"document":{"name":"x","fields":{}}}]',
+            "not-positive-query-slot",
+        ),
+    ],
+)
+def test_only_typed_positive_query_projects_documents(
+    tmp_path: Path,
+    phase: str,
+    index: int,
+    status: int,
+    content_type: str,
+    body: bytes,
+    difference: str,
+) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    binding = journal.add(
+        phase, index, status, body, complete=True, content_type=content_type
+    )
+    view = journal.semantic_view(binding)
+    assert view["difference"] == difference
+    assert "documents" not in view
+    assert (tmp_path / "raw" / binding["path"]).read_bytes() == body
+
+
+def test_malformed_complete_json_remains_raw_without_projection(tmp_path: Path) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    body = b"\xff"
+    binding = journal.add(
+        "observation", 2, 200, body, complete=True, content_type="application/json"
+    )
+    view = journal.semantic_view(binding)
+    assert view["difference"] == "malformed-query-json"
+    assert "documents" not in view
     assert (tmp_path / "raw" / binding["path"]).read_bytes() == body
 
 

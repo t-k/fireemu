@@ -177,6 +177,7 @@ class RawJournal:
         self.directory = Path(directory)
         self.directory.mkdir(mode=0o700, parents=False, exist_ok=False)
         self._fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        self._bindings: dict[str, dict[str, Any]] = {}
 
     def add(
         self,
@@ -214,7 +215,7 @@ class RawJournal:
             stream.flush()
             os.fsync(stream.fileno())
         os.fsync(self._fd)
-        return {
+        binding = {
             "path": name,
             "byteCount": len(body),
             "sha256": hashlib.sha256(body).hexdigest(),
@@ -222,6 +223,8 @@ class RawJournal:
             "complete": complete,
             "contentType": content_type,
         }
+        self._bindings[name] = copy.deepcopy(binding)
+        return binding
 
     def semantic_view(self, binding: dict[str, Any]) -> dict[str, Any]:
         path = binding.get("path")
@@ -231,6 +234,8 @@ class RawJournal:
             for index in range(count)
         ):
             raise ValueError("unknown raw sidecar")
+        if binding != self._bindings.get(path):
+            raise ValueError("raw receipt metadata binding differs")
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=self._fd)
         with os.fdopen(fd, "rb") as stream:
             body = stream.read(_RAW_LIMIT + 1)
@@ -239,18 +244,31 @@ class RawJournal:
             raise ValueError("raw sidecar binding differs")
         if binding.get("complete") is not True:
             raise ValueError("incomplete raw response has no semantic view")
-        try:
-            parsed = json.loads(body)
-        except (UnicodeError, json.JSONDecodeError) as error:
-            raise ValueError("malformed raw JSON") from error
         result: dict[str, Any] = {
             "projectionVersion": 1,
             "sourceRawSha256": actual,
-            "documents": [],
         }
+        if path != "observation-02.raw":
+            result["difference"] = "not-positive-query-slot"
+            return result
+        if binding.get("status") != 200:
+            result["difference"] = "unexpected-query-status"
+            return result
+        if (
+            binding.get("contentType", "").split(";", 1)[0].strip().lower()
+            != "application/json"
+        ):
+            result["difference"] = "unexpected-query-content-type"
+            return result
+        try:
+            parsed = json.loads(body)
+        except (UnicodeError, json.JSONDecodeError):
+            result["difference"] = "malformed-query-json"
+            return result
         if not isinstance(parsed, list):
             result["difference"] = "unexpected-query-shape"
             return result
+        documents = []
         for row in parsed:
             if (
                 not isinstance(row, dict)
@@ -260,16 +278,15 @@ class RawJournal:
                 or not isinstance(row.get("document"), dict)
             ):
                 result["difference"] = "unexpected-query-row"
-                continue
+                return result
             document = row["document"]
             if not isinstance(document.get("name"), str) or not isinstance(
                 document.get("fields"), dict
             ):
                 result["difference"] = "unexpected-query-row"
-                continue
-            result["documents"].append(
-                {"name": document["name"], "fields": document["fields"]}
-            )
+                return result
+            documents.append({"name": document["name"], "fields": document["fields"]})
+        result["documents"] = documents
         return result
 
     def close(self) -> None:

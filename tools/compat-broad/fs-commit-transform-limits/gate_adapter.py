@@ -6,7 +6,6 @@ import copy
 import importlib.util
 import re
 import sys
-import types
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -39,13 +38,6 @@ _limits_dir = ROOT / "tools/compat-broad/fs-write-limits"
 for _path in (str(_limits_dir),):
     if _path not in sys.path:
         sys.path.insert(0, _path)
-# The bridge's transport module is intentionally not part of this adapter. A
-# tiny import stub keeps loading the already-reviewed Gate subclass independent
-# of the transport runtime (and its newer Python-only dependencies).
-_transport_stub = types.ModuleType("remote_transport")
-_transport_stub.prepare = lambda value: value
-_transport_stub.request = lambda value: value
-sys.modules.setdefault("remote_transport", _transport_stub)
 _limits_bridge = _load(
     "_commit_gate_limits_bridge", _limits_dir / "production_bridge.py"
 )

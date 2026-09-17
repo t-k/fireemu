@@ -19,7 +19,8 @@ from pathlib import Path
 # ruff: noqa: I001 -- Production bootstraps sibling imports for direct CLI execution.
 import stream_production as production
 import stream_bridge
-from batch_contract import NUMBER, PROJECT, Credential, database_evidence
+import credential_prep
+from batch_contract import NUMBER, PROJECT, database_evidence
 from broad_contract import digest
 from evidence_common import runtime_inputs
 from owned_runner import (
@@ -33,6 +34,16 @@ from owned_runner import (
 from reservations import Ledger
 
 CONFIG = {"schemaVersion": 1, "profile": "strict"}
+SHADOW_ADC = {
+    "type": "authorized_user",
+    "client_id": "local-client.apps.googleusercontent.com",
+    "client_secret": "synthetic-client-secret",
+    "refresh_token": "synthetic-refresh-secret",
+}
+SHADOW_PRINCIPAL = {
+    "clientId": SHADOW_ADC["client_id"],
+    "requiredScopes": [credential_prep.SCOPE],
+}
 
 
 @contextlib.contextmanager
@@ -57,7 +68,57 @@ def metadata_fixture():
         },
     }
 
+    payloads["credentialRequests"] = []
+
     class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            from urllib.parse import parse_qs, urlsplit
+
+            target = urlsplit(self.path)
+            count = len(payloads["credentialRequests"])
+            size = int(self.headers.get("Content-Length", "0"))
+            if size > credential_prep.MAX_BYTES:
+                self.send_error(413)
+                return
+            form = parse_qs(self.rfile.read(size).decode())
+            if (
+                count == 0
+                and target.path == "/token"
+                and form
+                == {
+                    "grant_type": ["refresh_token"],
+                    "client_id": [SHADOW_ADC["client_id"]],
+                    "client_secret": [SHADOW_ADC["client_secret"]],
+                    "refresh_token": [SHADOW_ADC["refresh_token"]],
+                }
+            ):
+                result = {
+                    "access_token": "synthetic-access-secret",
+                    "token_type": "Bearer",
+                    "expires_in": 3600,
+                }
+            elif (
+                count == 1
+                and target.path == "/oauth2/v1/tokeninfo"
+                and parse_qs(target.query)
+                == {"access_token": ["synthetic-access-secret"]}
+                and not form
+            ):
+                result = {
+                    "issued_to": SHADOW_ADC["client_id"],
+                    "scope": credential_prep.SCOPE,
+                    "expires_in": 3599,
+                }
+            else:
+                self.send_error(400)
+                return
+            payloads["credentialRequests"].append(target.path)
+            body = json.dumps(result).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self):
             body = json.dumps(payloads[self.path.removeprefix("/")]).encode()
             self.send_response(200)
@@ -190,6 +251,11 @@ def child(output, nonce):
         stream_bridge.write_private_json(output / "instance.json", instance)
         permission = {
             "kind": "local-stream-shadow-only",
+            "credentialMode": credential_prep.MODE,
+            "credentialPreparationDigest": digest(credential_prep.contract()),
+            "credentialPrincipal": SHADOW_PRINCIPAL,
+            "authorizedUserDigest": digest(SHADOW_ADC),
+            "apiKeyDigest": digest("local-shadow-only"),
             "project": PROJECT,
             "nonce": nonce,
             "expiresAt": time.time() + 1800,
@@ -206,10 +272,10 @@ def child(output, nonce):
         ledger = Ledger.create(output / "ledger")
         locks = production.resource_locks(plan)
         budget = {
-            "requests": 33,
+            "requests": 35,
             "accounts": 0,
             "resources": 3,
-            "costMicrousd": production.TOTAL_COST_MICROUSD,
+            "costMicrousd": credential_prep.OUTER_COST_MICROUSD,
         }
         envelope = {
             "permissionDigest": digest(permission),
@@ -227,11 +293,39 @@ def child(output, nonce):
             "gatePlanDigest": digest(plan),
             "locks": locks,
             "budget": budget,
-            "durationSeconds": 1100,
+            "durationSeconds": credential_prep.OUTER_SECONDS,
         }
         ticket = ledger.reserve(envelope, claim, plan)
-        credential = Credential()
-        credential.accept("local-shadow-only", {"expires_in": 1800}, time.monotonic())
+        stream_bridge.write_private_json(
+            execution / "inputs.json",
+            {
+                "permission": permission,
+                "plan": plan,
+                "claim": claim,
+                "envelope": envelope,
+                "ticket": ticket,
+            },
+        )
+        try:
+            credential, preparation_proof = credential_prep.prepare_credentials(
+                execution,
+                ledger,
+                ticket,
+                permission,
+                plan,
+                {
+                    "kind": "stream-o8-authorized-user-v1",
+                    "permissionDigest": digest(permission),
+                    "adc": SHADOW_ADC,
+                    "apiKey": "local-shadow-only",
+                },
+                fixture_origin=origin,
+            )
+        except Exception as error:  # noqa: BLE001 -- Local synthetic setup retains reservation responsibility.
+            production.retained_failure(
+                execution, ledger, ticket, error, production=False
+            )
+            raise ValueError("owned synthetic preparation failed") from None
         result = production.execute_session(
             plan,
             permission,
@@ -241,6 +335,7 @@ def child(output, nonce):
             "local-shadow-only",
             credential,
             shadow={"metadataOrigin": origin, "port": int(firestore.rsplit(":", 1)[1])},
+            preparation_proof=preparation_proof,
         )
         if not result["acquisitionValidated"]:
             raise ValueError("owned stream acquisition failed")

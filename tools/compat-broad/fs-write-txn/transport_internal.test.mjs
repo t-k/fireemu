@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   assertReadyForWire,
   createLocalClient,
+  createFixedTlsTransport,
   plainError,
   prepareFixedTlsTransport,
 } from './transport_internal.mjs';
@@ -44,12 +45,25 @@ test('checks metadata expiry and absolute phase deadline after asynchronous read
   const readiness = Promise.resolve().then(() => { current = 3_000; });
   await assert.rejects(() => assertReadyForWire(phaseExpired, { waitForReady: readiness, now: () => current }), /phase deadline/);
   assert.equal(await assertReadyForWire(prepared, { waitForReady: Promise.resolve(), now: () => 1_000 }), prepared);
+  await assert.rejects(() => assertReadyForWire(prepared, { waitForReady: Promise.resolve(), now: () => 1_000, callDeadlineMs: 1_000 }), /metadata expired/);
+  const phaseBoundary = prepareFixedTlsTransport({ ...base, metadataExpiresAt: 4_000, phaseDeadlineAt: 2_000 });
+  await assert.rejects(() => assertReadyForWire(phaseBoundary, { waitForReady: Promise.resolve(), now: () => 1_000, callDeadlineMs: 1_000 }), /phase deadline/);
 });
 
 test('connects the readiness gate to the future fixed TLS entrypoints without executing production RPCs', async () => {
-  const transport = (await import('./transport_internal.mjs')).createFixedTlsTransport(base);
-  await assert.rejects(() => transport.runUnary('GetDocument', { path: 'compat/o3/doc' }, { admit: () => Promise.resolve(), now: () => 4_000 }), /metadata expired/);
-  await assert.rejects(() => transport.runWrite([], { admit: () => Promise.resolve(), now: () => 4_000 }), /metadata expired|phase deadline/);
+  const transport = createFixedTlsTransport(base, { admit: () => Promise.resolve() });
+  await assert.rejects(() => transport.runUnary('GetDocument', { path: 'compat/o3/doc' }), /metadata expired/);
+  await assert.rejects(() => transport.runWrite([], { deadlineMs: 0 }), /deadlineMs/);
+});
+
+test('prevalidates finite writes before admission or client construction', async () => {
+  let admitted = false;
+  const transport = createFixedTlsTransport(base, { admit: () => { admitted = true; return Promise.resolve(); } });
+  await assert.rejects(() => transport.runWrite([{ writes: [{ delete: 'projects/other/databases/(default)/documents/compat/o3/doc' }] }]), /owned prefix/);
+  assert.equal(admitted, false);
+  for (const deadlineMs of [Number.NaN, -1, Infinity, 120_001]) {
+    await assert.rejects(() => transport.runUnary('GetDocument', { path: 'compat/o3/doc' }, { deadlineMs }), /deadlineMs/);
+  }
 });
 
 test('serializes terminal errors into comparator-safe fields', () => {

@@ -18,6 +18,11 @@ const assertInteger = (value, name, minimum, maximum) => {
   if (!Number.isInteger(value) || value < minimum || value > maximum) throw fail(`${name} must be an integer between ${minimum} and ${maximum}`);
 };
 
+const validateDeadlineMs = value => {
+  assertInteger(value, 'deadlineMs', 1, 120_000);
+  return value;
+};
+
 const pathSegments = (value, name) => {
   if (typeof value !== 'string' || value.length === 0 || value.startsWith('/') || value.endsWith('/')) throw fail(`${name} must be a non-empty relative path`);
   const segments = value.split('/');
@@ -144,6 +149,10 @@ export const runUnaryCore = async (operation, request, options, { createClient }
 };
 
 export const runWriteCore = async (requests, options, { createClient, handshake, buildNextFrame }) => {
+  if (Array.isArray(requests)) {
+    if (requests.length + 1 > options.maxFrames) throw fail('stream exceeds maxFrames', 'frame_limit');
+    for (const request of requests) buildNextFrame.validate(request);
+  }
   const client = createClient();
   let stream;
   try {
@@ -271,20 +280,24 @@ export const prepareFixedTlsTransport = input => {
   });
 };
 
-export const createFixedTlsTransport = input => {
+export const createFixedTlsTransport = (input, { admit } = {}) => {
   const prepared = prepareFixedTlsTransport(input);
-  const beforeWire = ({ admit, now, deadlineMs = prepared.deadlineMs } = {}) => {
-    if (typeof admit !== 'function') throw fail('trusted production admission callback is required');
-    return assertReadyForWire(prepared, { waitForReady: admit(), now, callDeadlineMs: deadlineMs });
+  if (typeof admit !== 'function') throw fail('trusted production admission callback is required');
+  const beforeWire = ({ deadlineMs = prepared.deadlineMs } = {}) => {
+    validateDeadlineMs(deadlineMs);
+    return assertReadyForWire(prepared, { waitForReady: admit(), callDeadlineMs: deadlineMs });
   };
   const createClient = () => new FirestoreClient({ servicePath: prepared.servicePath, port: prepared.port, projectId: prepared.projectId, sslCreds: prepared.sslCreds, fallback: false });
-  const runUnary = async (operation, input, { admit, now, deadlineMs = prepared.deadlineMs } = {}) => {
-    await beforeWire({ admit, now, deadlineMs });
+  const runUnary = async (operation, input, { deadlineMs = prepared.deadlineMs } = {}) => {
     const request = buildUnaryRequest(operation, prepared, input);
+    await beforeWire({ deadlineMs });
     return runUnaryCore(operation, request, { ...prepared, deadlineMs }, { createClient });
   };
-  const runWrite = async (requests, { admit, now, deadlineMs = prepared.deadlineMs } = {}) => {
-    await beforeWire({ admit, now, deadlineMs });
+  const runWrite = async (requests, { deadlineMs = prepared.deadlineMs } = {}) => {
+    if (!Array.isArray(requests)) throw fail('production write requests must be a finite array');
+    if (requests.length + 1 > prepared.maxFrames) throw fail('stream exceeds maxFrames', 'frame_limit');
+    for (const request of requests) validateWriteRequest(request, prepared);
+    await beforeWire({ deadlineMs });
     const buildNextFrame = (request, response) => ({ ...request, streamToken: response?.streamToken });
     buildNextFrame.validate = request => validateWriteRequest(request, prepared);
     return runWriteCore(requests, { ...prepared, deadlineMs }, { createClient, handshake: { database: databaseName(prepared.projectId) }, buildNextFrame });
@@ -295,7 +308,7 @@ export const createFixedTlsTransport = input => {
 export const assertReadyForWire = async (prepared, { waitForReady = Promise.resolve(), now = () => Date.now(), callDeadlineMs = prepared.deadlineMs ?? 10_000 } = {}) => {
   await waitForReady;
   const current = now();
-  if (prepared.metadataExpiresAt <= current || prepared.metadataExpiresAt < current + callDeadlineMs) throw fail('metadata expired before wire', 'metadata_expired');
-  if (prepared.phaseDeadlineAt <= current || prepared.phaseDeadlineAt < current + callDeadlineMs) throw fail('phase deadline expired before wire', 'phase_deadline');
+  if (prepared.metadataExpiresAt <= current || prepared.metadataExpiresAt <= current + callDeadlineMs) throw fail('metadata expired before wire', 'metadata_expired');
+  if (prepared.phaseDeadlineAt <= current || prepared.phaseDeadlineAt <= current + callDeadlineMs) throw fail('phase deadline expired before wire', 'phase_deadline');
   return prepared;
 };

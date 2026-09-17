@@ -63,6 +63,19 @@ def test_cleanup_requires_exact_resolved_version():
         prepare(value, local_origin="http://127.0.0.1:1234")
 
 
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://:secret@127.0.0.1:1234",
+        "http://user@127.0.0.1:1234",
+        "http://user:secret@127.0.0.1:1234",
+    ],
+)
+def test_local_origin_rejects_userinfo_before_io(origin):
+    with pytest.raises(ValueError):
+        prepare(payload(), local_origin=origin)
+
+
 class Handler(BaseHTTPRequestHandler):
     received: ClassVar[list] = []
     slow = False

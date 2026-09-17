@@ -44,7 +44,15 @@ def _json(value):
 
 def _local_origin(value: str) -> str:
     parts = urlsplit(value)
-    if parts.scheme != "http" or parts.hostname not in {"127.0.0.1", "localhost"} or parts.path not in {"", "/"} or parts.query or parts.fragment:
+    if (
+        parts.scheme != "http"
+        or parts.hostname not in {"127.0.0.1", "localhost"}
+        or parts.username is not None
+        or parts.password is not None
+        or parts.path not in {"", "/"}
+        or parts.query
+        or parts.fragment
+    ):
         raise ValueError("local origin must be an unqualified loopback HTTP origin")
     return value.rstrip("/")
 

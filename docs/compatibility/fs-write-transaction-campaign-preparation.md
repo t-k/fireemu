@@ -58,3 +58,9 @@ Runtime source `567565bdd654cab00dbb84101edcc7bdc628e230` corrects the GetDocume
 The separately versioned, independently reviewed comparator integrated at `6dff3192a6b8b23ea462730bfc105747849a7788` revalidates the fixed acquisition files, historical permission, charged journals, released ledger, original comparison and new artifact/build evidence. It normalizes only the exact request resource slot, retaining diagnostic grammar. The pre-fix saved pair remains `SEMANTIC_MISMATCH`; the repaired pair is `EXPECTED_NONDETERMINISM`. Integration passed 92 Node tests without skips and the actual saved-input authority test. No new production request was sent.
 
 The immutable result summary is `spec/compatibility/broad-runs/fs-write-txn-567565bdd-saved-result.json`. One finite diagnostic mismatch cluster is repaired. This does not close all Write/transaction conditions or promote either parent; `COMPAT_VERIFIED` remains 0/14.
+
+## Integrated workspace verification
+
+At fixed source `4658dc3b520728cc874453daddb78ca858e6f2fc`, `cargo nextest run --workspace --profile pr` completed with 2,623 passes, 14 slow tests and 81 skips in 103.504 seconds of test execution. The [ignored-test audit](ignored-test-audit-20260917.md) explains the separate verification obligations; a skip is not a pass. This run does not replace explicitly selected SDK or formal verification lanes.
+
+[Normal CI](https://github.com/t-k/fireemu/actions/runs/35236075018) and [compatibility inventory CI](https://github.com/t-k/fireemu/actions/runs/35236074922) both completed successfully at that same source. Normal CI formatting and compilation are separate from the local workspace execution reported above. These checks add local regression evidence, with no new production observation or parent promotion.

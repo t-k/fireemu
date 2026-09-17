@@ -17,3 +17,7 @@ From a clean fixed checkout, run `uv run --project tools/compat-inventory --lock
 A complete response is not necessarily an expected result. `result.json` retains `recordingComplete`, `stateValidation`, `semanticMismatches`, `infrastructureFailures`, and `cleanupComplete` separately. A violated state invariant stops subsequent writes while permitting the current readback group and ownership-checked recovery. The wrapper deliberately refuses successful shadow admission when state validation is false; it retains the original responses for triage. These local expectation checks are not a production-reference comparator.
 
 See [the fixed-source execution record](../../../docs/compatibility/fs-write-limits-local-shadow-20260917.md). Production collector/comparator bindings, environment preflight budgets, failure/recovery rehearsals, and O7 frozen admission remain required.
+
+## Fixed local recovery rehearsal
+
+Run `uv run --project tools/compat-inventory --locked python tools/compat-broad/fs-write-limits/rehearsal.py --output <new-private-directory>` from a clean fixed checkout. The fixed entrypoint stops after both controls are created and validated (observation index 7), then uses normal Gate recovery. It retains the incomplete campaign and writes a separate `rehearsal.json`; rehearsal success must never be used as a completed production/local campaign receipt. The injected-fault provenance and entrypoint source are bound with the compiler catalog. The normal shadow remains available through `shadow.py` and still requires all 16 observations.

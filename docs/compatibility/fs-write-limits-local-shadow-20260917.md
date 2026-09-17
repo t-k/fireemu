@@ -24,3 +24,13 @@ A new run at source `a9ab812de51fb1f9a7b824ab52246474f13ebeba`, artifact SHA-256
 Validation after remediation: compiler/shadow 48 passed; actual-loopback transport 10 passed; Ruff and type checks passed. The oversized direct-worker regression failed before the fix and passes with zero received requests afterward. Catalog-only mutation and missing/reordered/altered cleanup records are rejected. These checks remain local evidence and do not reduce production-unobserved conditions.
 
 Independent security/correctness re-review of `a9ab812de` approved this bounded local slice with no remaining Must Fix or Should Fix findings. The approval explicitly excludes production readiness and production compatibility. The earlier catalog-binding, cleanup-validator, and worker-cap findings were reviewed as resolved; the original review and receipts remain retained.
+
+## Fixed interruption and recovery rehearsal
+
+Source `b5cc86d4ab762f65cca6a79a856226e42d6ca7a9` adds a fixed local `stop-after-controls` rehearsal entrypoint. It intentionally stops after the eight validated preflight/control observations, then runs the unchanged Gate recovery sequence. No environment flag, production request, or arbitrary injection script is used.
+
+The real artifact run (SHA-256 `5b8b4239e0b4ebd53eb49f92b08bba8a57c677d73d6f04369540cce9fec0c115`) observed the expected stop, completed all 12 recovery stages with 18 Gate-accounted Firestore requests overall, and verified all four resource paths absent. Source/catalog binding, process termination, and listener closure passed. The campaign remains `recordingComplete=false`, `stateValidation=false`, and `completed=false`; the normal full-campaign validator rejects it. A separate immutable `rehearsal.json` records `rehearsalPassed=true` and `campaignCompleted=false`. There were no semantic mismatches or infrastructure failures.
+
+A separate normal shadow at the same source, artifact SHA-256 `c3324c186dd51cf8cab577b8eaa097267aa70da482cbe7f3b2f792992fbd6890`, completed all 16 observations and 12 recovery stages (26 Gate-accounted requests), passed full receipt validation, and closed its process/listeners. The two builds have distinct artifact digests and are not represented as the same binary.
+
+Focused compiler/shadow/rehearsal tests: 59 passed. A real Gate refusal test proves that an unowned conditional deletion never invokes its send callback and cannot mark cleanup complete. This rehearsal proves the declared orderly interruption/recovery boundary; it does not claim recovery from every crash or ambiguous production transport outcome. Production collector/comparator and frozen O7 admission remain outstanding. Production-unobserved closure conditions reduced: **0**.

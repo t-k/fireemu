@@ -12,7 +12,7 @@ Cleanup is fail-closed. Each resource is read, its ownership marker and exact up
 
 ## Next technical work
 
-1. Complete bounded real-artifact interruption/recovery rehearsal without marking the interrupted campaign complete.
+1. The bounded real-artifact stop-after-controls recovery rehearsal is complete (see the linked execution record). Its interrupted campaign remains incomplete; ambiguous production transport/crash recovery is not inferred from that rehearsal.
 2. Add a limits-specific production plan and runner using the existing `shared_production.approve`, `Coordinator`, and `ProductionGate` authorization/ownership primitives. Existing hard-coded shared-campaign dispatch cannot execute this campaign unchanged.
 3. Provide a bounded large-body production transport; the new local transport deliberately refuses non-loopback origins.
 4. Bind a versioned limits comparator covering ordered requests, typed refusals/readbacks, unchanged controls, cleanup, and integrity failures separately from semantic mismatches.

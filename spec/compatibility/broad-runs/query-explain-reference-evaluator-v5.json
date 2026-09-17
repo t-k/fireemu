@@ -1,10 +1,10 @@
 {
-  "kind": "query-explain-saved-reference-evaluator-v4",
-  "sourceCommit": "7e28e7287ecbb00146b66064a132ee95893a3111",
+  "kind": "query-explain-saved-reference-evaluator-v5",
+  "sourceCommit": "153669857cd5159141b2986539c00137c61b7493",
   "sourceFiles": {
-    "tools/compat-explain-reference-v4/evaluate.py": "27d3e986dc52c77e9b4ed65f2537f82588cab2822d3da80930665c1214ebcfbe",
-    "tools/compat-explain-reference-v4/test_evaluate_v4.py": "ef7f02badce091849e76f6295f2a470d9951a807b2e10e4a69d7e0a5f795a43b",
-    "spec/compatibility/broad-runs/query-explain-reference-inputs-v4.json": "1a7373b08f4233f075ef9940d37849368395a58dea1eb7b53b6dd4a80c30dd86"
+    "tools/compat-explain-reference-v5/evaluate.py": "c97cd4c59d9ce037cce1898b0b43ea0b78fe2bccbcd1f7fc6b3cc8a48900bf5a",
+    "tools/compat-explain-reference-v5/test_evaluate_v5.py": "4b6033af6007593a3a27f6266fb854930887b65e9a43087cfa4ef67619de05e4",
+    "spec/compatibility/broad-runs/query-explain-reference-inputs-v5.json": "cf4e3db863a1233d962c9c3fbaadcd16906562c5488ccf2965816e1f09ff23d1"
   },
-  "contractDigest": "d6c3915e803415eb111828d97e661803206ac6353c5d4236245bf6d3819eab36"
+  "contractDigest": "8b0819d851aa7c97af34c9da5d4e2996fd36d2f933fd2265f3916d5a3d58e6d2"
 }

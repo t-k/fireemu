@@ -140,6 +140,98 @@ def test_cleanup_uses_latest_update_time_and_refuses_foreign_namespace(tmp_path:
     assert result["cleanupComplete"] is True
 
 
+def test_preexisting_same_fields_are_never_deleted_without_successful_create(tmp_path: Path) -> None:
+    plan = _plan()
+    calls: list[str] = []
+
+    def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        calls.append(operation["kind"])
+        if operation["kind"] == "preflight-typed-absence":
+            return _not_found()
+        if operation["kind"] == "create-only-patch":
+            return _ok({"error": {"code": 409, "status": "ALREADY_EXISTS"}}, 409)
+        if operation["kind"] == "cleanup-ownership-read":
+            return _owned(plan)
+        if operation["kind"] == "cleanup-verify-absence":
+            return _owned(plan)
+        raise AssertionError("preexisting document must not be deleted")
+
+    result = collect_local(plan, execute, tmp_path / "receipt")
+
+    assert calls == [
+        "preflight-typed-absence",
+        "create-only-patch",
+        "cleanup-ownership-read",
+        "cleanup-verify-absence",
+    ]
+    assert result["cleanup"][1]["skipped"] == "create-not-proven"
+    assert result["cleanupComplete"] is False
+
+
+def test_lost_create_response_retains_cleanup_responsibility_and_never_deletes(tmp_path: Path) -> None:
+    plan = _plan()
+
+    def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        if operation["kind"] == "preflight-typed-absence":
+            return _not_found()
+        if operation["kind"] == "create-only-patch":
+            return {"complete": False, "failure": "transport-timeout"}
+        if operation["kind"] == "cleanup-ownership-read":
+            return _owned(plan)
+        if operation["kind"] == "cleanup-verify-absence":
+            return _owned(plan)
+        raise AssertionError("lost create response must not authorize delete")
+
+    result = collect_local(plan, execute, tmp_path / "receipt")
+
+    assert result["attemptedResources"] == [plan["document"]]
+    assert result["cleanup"][1]["skipped"] == "create-not-proven"
+    assert result["cleanupComplete"] is False
+
+
+def test_final_collection_publication_failure_is_returned_without_erasing_cleanup_fact(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plan = _plan()
+    original_publish = __import__("query_in_collector")._publish
+
+    def fail_final(directory_fd: int, filename: str, value: Any) -> None:
+        if filename == "collection.json":
+            raise OSError("final-link-failure")
+        original_publish(directory_fd, filename, value)
+
+    monkeypatch.setattr("query_in_collector._publish", fail_final)
+    result = collect_local(plan, _transport(plan), tmp_path / "receipt")
+
+    assert result["cleanupComplete"] is True
+    assert result["persistenceComplete"] is False
+    assert result["completed"] is False
+    assert any("collection.json:OSError" in item for item in result["infrastructureFailures"])
+
+
+def test_output_initialization_failure_sends_no_wire_operations(tmp_path: Path, monkeypatch) -> None:
+    plan = _plan()
+    calls: list[str] = []
+    original_open = os.open
+
+    def fail_output(path, flags, *args, **kwargs):
+        if path == tmp_path:
+            raise OSError("output-init-failure")
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr("query_in_collector.os.open", fail_output)
+
+    def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        calls.append(operation["kind"])
+        raise AssertionError("wire must not run when output initialization fails")
+
+    result = collect_local(plan, execute, tmp_path / "receipt")
+
+    assert calls == []
+    assert result["attemptedResources"] == []
+    assert result["persistenceComplete"] is False
+
+
 def test_directory_path_swap_cannot_redirect_durable_rows(tmp_path: Path) -> None:
     plan = _plan()
     output = tmp_path / "receipt"
@@ -197,7 +289,7 @@ def test_incomplete_executor_receipt_stops_observation_but_runs_safe_recovery(tm
     assert result["completed"] is False
 
 
-def test_oversized_receipt_is_bounded_but_owned_recovery_still_deletes(tmp_path: Path) -> None:
+def test_oversized_receipt_is_bounded_but_retains_cleanup_responsibility(tmp_path: Path) -> None:
     plan = _plan()
 
     def execute(operation: dict[str, Any]) -> dict[str, Any]:
@@ -217,7 +309,7 @@ def test_oversized_receipt_is_bounded_but_owned_recovery_still_deletes(tmp_path:
 
     assert result["rows"][1]["failure"] == "receipt-too-large"
     assert len(json.dumps(result["rows"][1])) < 2_000
-    assert result["cleanup"][1]["status"] == 200
+    assert result["cleanup"][1]["skipped"] == "create-not-proven"
     assert result["resourceAbsence"][plan["document"]] is True
     assert result["completed"] is False
 
@@ -238,10 +330,10 @@ def test_existing_output_symlink_fails_closed_without_unowned_delete(tmp_path: P
 
     result = collect_local(plan, execute, output)
 
-    assert calls == ["preflight-typed-absence", "cleanup-ownership-read", "cleanup-verify-absence"]
-    assert result["cleanup"][1]["skipped"] == "already-absent"
+    assert calls == []
+    assert result["cleanup"] == []
     assert result["attemptedResources"] == []
-    assert result["resourceAbsence"][plan["document"]] is True
+    assert result["resourceAbsence"][plan["document"]] is False
     assert result["completed"] is False
     assert not list(attacker.iterdir())
 

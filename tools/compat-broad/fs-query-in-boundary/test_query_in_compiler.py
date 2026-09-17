@@ -16,6 +16,19 @@ def test_plan_is_deterministic_and_nonce_scoped() -> None:
     assert plan["ownedScope"] in plan["document"]
 
 
+def test_owned_scope_has_root_document_before_relative_collection_document() -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    assert plan["parent"].endswith("/o4-query-in-boundary/root")
+    assert plan["document"] == plan["parent"] + "/cur/c"
+
+
+def test_validator_rejects_a_parent_that_is_not_a_document_path() -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    plan["parent"] = plan["parent"].removesuffix("/root")
+    with pytest.raises(ValueError, match="document parent"):
+        validate_plan(plan)
+
+
 def test_plan_has_exact_six_observation_and_three_recovery_operations() -> None:
     plan = compile_plan("demo", "(default)", "a" * 32)
     assert len(plan["observation"]) == 6

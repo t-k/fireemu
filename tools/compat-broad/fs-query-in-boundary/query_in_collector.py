@@ -235,10 +235,35 @@ def collect_local(
                 "failure": f"local-executor:{type(error).__name__}",
             }
 
+    # Without an owned journal directory, no wire result can be retained.
+    if output_fd is None or not persistence_complete:
+        result = {
+            "productionExecuted": False,
+            "localOnly": True,
+            "acquisitionValidated": False,
+            "promotionReady": False,
+            "recordingComplete": False,
+            "cleanupComplete": False,
+            "completed": False,
+            "rows": [],
+            "cleanup": [],
+            "resourceAbsence": {plan["document"]: False},
+            "attemptedResources": [],
+            "semanticMismatches": [],
+            "infrastructureFailures": persistence_failures,
+            "persistenceComplete": False,
+        }
+        if output_fd is not None:
+            os.close(output_fd)
+        if parent_fd is not None:
+            os.close(parent_fd)
+        return result
+
     rows: list[dict[str, Any]] = []
     semantic: list[dict[str, Any]] = []
     infrastructure: list[str] = []
     attempted = False
+    create_proven = False
     stop_observation = False
     for index, declared in enumerate(plan["observation"]):
         if stop_observation:
@@ -247,6 +272,8 @@ def collect_local(
         if operation["kind"] == "create-only-patch":
             attempted = True
         receipt = dispatch(operation)
+        if operation["kind"] == "create-only-patch":
+            create_proven = _owned(receipt, plan["document"], plan["fixtureFields"])
         row = _row(index, operation, receipt)
         rows.append(row)
         persist(f"observation-{index:02d}.json", row)
@@ -270,13 +297,19 @@ def collect_local(
             prior = cleanup[0]
             if _typed_not_found(prior):
                 row = _skip(index, operation, "already-absent")
-            elif _owned(prior, plan["document"], plan["fixtureFields"]):
+            elif create_proven and _owned(
+                prior, plan["document"], plan["fixtureFields"]
+            ):
                 operation["path"] += "?currentDocument.updateTime=" + quote(
                     prior["body"]["updateTime"], safe=""
                 )
                 row = _row(index, operation, dispatch(operation))
             else:
-                row = _skip(index, operation, "unsafe-delete")
+                row = _skip(
+                    index,
+                    operation,
+                    "create-not-proven" if attempted else "unsafe-delete",
+                )
         else:
             receipt = dispatch(operation)
             row = _row(index, operation, receipt)
@@ -284,8 +317,11 @@ def collect_local(
         persist(f"recovery-{index:02d}.json", row)
         if operation["kind"] != "cleanup-conditional-delete" and not _complete(row):
             infrastructure.append(f"recovery-{index}:incomplete")
-        if operation["kind"] == "cleanup-conditional-delete" and row.get("skipped") == "unsafe-delete":
-            semantic.append({"phase": "recovery", "index": index, "reason": "unsafe-delete"})
+        if (
+            operation["kind"] == "cleanup-conditional-delete"
+            and row.get("skipped") in {"unsafe-delete", "create-not-proven"}
+        ):
+            semantic.append({"phase": "recovery", "index": index, "reason": row["skipped"]})
         elif operation["kind"] != "cleanup-conditional-delete" and _complete(row) and not _semantic_match(plan, operation, row):
             semantic.append({"phase": "recovery", "index": index, "reason": operation["kind"]})
 
@@ -314,6 +350,13 @@ def collect_local(
         "persistenceComplete": persistence_complete,
     }
     persist("collection.json", result)
+    # Cleanup is an observed fact even when final journal publication fails.
+    if not persistence_complete:
+        result["persistenceComplete"] = False
+        result["recordingComplete"] = False
+        result["cleanupComplete"] = recovery_ok
+        result["completed"] = False
+        result["infrastructureFailures"] = infrastructure + persistence_failures
     if output_fd is not None:
         os.close(output_fd)
     if parent_fd is not None:

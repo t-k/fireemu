@@ -68,6 +68,52 @@ def _fixture_fields() -> dict[str, dict[str, Any]]:
     }
 
 
+def _document_path(project: str, database: str, *segments: str) -> str:
+    if not segments or any(
+        not isinstance(segment, str) or not _TARGET.fullmatch(segment)
+        for segment in segments
+    ):
+        raise ValueError("document path segments must be non-empty target names")
+    return f"projects/{project}/databases/{database}/documents/" + "/".join(segments)
+
+
+def _validate_document_path(path: Any, project: str, database: str, label: str) -> None:
+    if not isinstance(path, str):
+        raise ValueError(f"{label} must be a document path")
+    prefix = f"projects/{project}/databases/{database}/documents/"
+    if not path.startswith(prefix):
+        raise ValueError(f"{label} is outside the compiled resource")
+    segments = path[len(prefix) :].split("/")
+    if (
+        len(segments) == 0
+        or any(not _TARGET.fullmatch(segment) for segment in segments)
+        or len(segments) % 2
+    ):
+        raise ValueError(f"{label} must be a document path")
+
+
+def _validate_plan_paths(plan: dict[str, Any]) -> None:
+    project, database = plan.get("project"), plan.get("database")
+    parent = plan.get("parent")
+    document = plan.get("document")
+    _validate_document_path(parent, project, database, "document parent")
+    _validate_document_path(document, project, database, "document")
+    if document != parent + "/cur/c":
+        raise ValueError("document must be the compiled relative collection/document")
+    if plan.get("ownedScope") != parent or plan.get("ownedResources") != [document]:
+        raise ValueError("owned scope drift")
+    for phase in ("observation", "recovery"):
+        for operation in plan.get(phase, []):
+            if operation.get("resource") not in (None, document):
+                raise ValueError("operation resource escaped owned document")
+            if operation.get("parent") not in (None, parent):
+                raise ValueError("query parent escaped owned document")
+            for resource in operation.get("targetResources", []):
+                _validate_document_path(resource, project, database, "target resource")
+                if resource != document:
+                    raise ValueError("target resource escaped owned document")
+
+
 def _query(parent: str, count: int) -> dict[str, Any]:
     return {
         "structuredQuery": {
@@ -99,7 +145,9 @@ def compile_plan(project: str, database: str, nonce: str) -> dict[str, Any]:
     if not isinstance(nonce, str) or not _NONCE.fullmatch(nonce):
         raise ValueError("nonce must be 32 lowercase hexadecimal characters")
     catalog_maximum = _catalog_maximum()
-    parent = f"projects/{project}/databases/{database}/documents/oracle/{nonce}/o4-query-in-boundary"
+    parent = _document_path(
+        project, database, "oracle", nonce, "o4-query-in-boundary", "root"
+    )
     document = parent + "/cur/c"
     fixture_fields = _fixture_fields()
     expected_document = {"name": document, "fields": copy.deepcopy(fixture_fields)}
@@ -223,6 +271,7 @@ def validate_plan(plan: dict[str, Any]) -> None:
     """Reject any changed request, scope, fixture, budget, or digest input."""
     if not isinstance(plan, dict):
         raise TypeError("plan must be an object")
+    _validate_plan_paths(plan)
     try:
         expected = compile_plan(plan["project"], plan["database"], plan["nonce"])
     except (KeyError, TypeError, ValueError) as error:

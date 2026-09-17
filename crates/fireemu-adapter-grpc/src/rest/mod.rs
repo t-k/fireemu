@@ -573,7 +573,18 @@ impl RestState {
     pub fn handle(&self, req: &RestRequest) -> RestResponse {
         match self.dispatch(req) {
             Ok(r) => r,
-            Err(s) => error_response(&s),
+            Err(s) => {
+                let resource = decode_path(&req.path)
+                    .ok()
+                    .and_then(|path| path.strip_prefix("/v1/").map(str::to_owned))
+                    .unwrap_or_else(|| {
+                        req.path
+                            .strip_prefix("/v1/")
+                            .unwrap_or(req.path.as_str())
+                            .to_owned()
+                    });
+                error_response(&crate::local::rest_limit_diagnostic(&s, &resource))
+            }
         }
     }
 
@@ -834,11 +845,21 @@ impl RestState {
         params: &BTreeMap<String, Vec<String>>,
         body: &Value,
     ) -> Result<RestResponse, Status> {
+        let document_id = first(params, "documentId").unwrap_or("");
+        let document_resource =
+            (!document_id.is_empty()).then(|| format!("{parent}/{collection_id}/{document_id}"));
         let req = pb::CreateDocumentRequest {
             parent: parent.to_owned(),
             collection_id: collection_id.to_owned(),
-            document_id: first(params, "documentId").unwrap_or("").to_owned(),
-            document: Some(document_from_json(body).map_err(|e| bad(&e))?),
+            document_id: document_id.to_owned(),
+            document: Some(document_from_json(body).map_err(|e| {
+                let status = bad(&e);
+                document_resource
+                    .as_deref()
+                    .map_or(status.clone(), |resource| {
+                        crate::local::rest_limit_diagnostic(&status, resource)
+                    })
+            })?),
             mask: mask_from_paths(params.get("mask.fieldPaths").map_or(&[][..], Vec::as_slice)),
             request_options: None,
         };

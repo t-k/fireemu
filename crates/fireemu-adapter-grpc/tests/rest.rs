@@ -157,6 +157,10 @@ fn document_crud_over_rest() {
     );
     assert_eq!(status, 404, "{err}");
     assert_eq!(err["error"]["status"], "NOT_FOUND");
+    assert_eq!(
+        err["error"]["message"],
+        "Document \"projects/demo-app/databases/(default)/documents/users/nobody\" not found."
+    );
 
     let (status, listed) = call(&s, "GET", &format!("{DOCS}/users"), json!({}));
     assert_eq!(status, 200);
@@ -302,6 +306,10 @@ fn rest_document_size_and_nesting_boundaries_refuse_without_publishing() {
     );
     assert_eq!(status, 400, "{body}");
     assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+    assert_eq!(
+        body["error"]["message"],
+        "Document 'projects/demo-app/databases/(default)/documents/limits/overx' cannot be written because its size (1,048,577 bytes) exceeds the maximum allowed size of 1,048,576 bytes."
+    );
 
     let (status, body) = call(
         &s,
@@ -328,10 +336,14 @@ fn rest_document_size_and_nesting_boundaries_refuse_without_publishing() {
         &s,
         "PATCH",
         &format!("{DOCS}/limits/too-deep"),
-        json!({"fields": {"value": nested(21)}}),
+        json!({"fields": {"nested": nested(21)}}),
     );
     assert_eq!(status, 400, "{body}");
     assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+    assert_eq!(
+        body["error"]["message"],
+        "Property nested contains an invalid nested entity."
+    );
     let (status, missing) = call(&s, "GET", &format!("{DOCS}/limits/too-deep"), Value::Null);
     assert_eq!(status, 404, "{missing}");
 
@@ -342,6 +354,60 @@ fn rest_document_size_and_nesting_boundaries_refuse_without_publishing() {
         json!({"fields": {"value": nested(20)}}),
     );
     assert_eq!(status, 200, "{accepted}");
+}
+
+#[test]
+fn rest_nested_limit_diagnostics_keep_the_property_and_route_context() {
+    let s = state(None);
+    let nested = |levels: usize| {
+        (0..levels).fold(
+            json!({"integerValue": "1"}),
+            |value, _| json!({"mapValue": {"fields": {"nested": value}}}),
+        )
+    };
+
+    let (status, body) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/limits/other-depth"),
+        json!({"fields": {"other": nested(21)}}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "Property other contains an invalid nested entity."
+    );
+
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}/limits?documentId=post-depth"),
+        json!({"fields": {"nested": nested(21)}}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "Property nested contains an invalid nested entity."
+    );
+
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({
+            "writes": [{
+                "update": {
+                    "name": "projects/demo-app/databases/(default)/documents/limits/commit-depth",
+                    "fields": {"nested": nested(21)}
+                }
+            }]
+        }),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH"));
 }
 
 #[test]

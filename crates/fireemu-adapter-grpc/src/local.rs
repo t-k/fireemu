@@ -1207,6 +1207,83 @@ impl DocumentSnapshot {
     }
 }
 
+/// Rewrites limit diagnostics for the REST transport while retaining the internal status text
+/// used by gRPC and core diagnostics.
+pub fn rest_limit_diagnostic(status: &Status, resource: &str) -> Status {
+    if status.code() == tonic::Code::NotFound
+        && (status.message() == format!("No document to update: {resource}")
+            || status.message() == format!("Document not found: {resource}"))
+    {
+        return Status::not_found(format!("Document \"{resource}\" not found."));
+    }
+    if status.code() == tonic::Code::InvalidArgument
+        && is_document_resource(resource)
+        && status
+            .message()
+            .starts_with("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH ")
+    {
+        let Some(property) = status
+            .message()
+            .split_once("; property=")
+            .map(|(_, name)| name)
+        else {
+            return status.clone();
+        };
+        return Status::invalid_argument(format!(
+            "Property {property} contains an invalid nested entity."
+        ));
+    }
+    if status.code() != tonic::Code::InvalidArgument
+        || !is_document_resource(resource)
+        || status
+            .metadata()
+            .get("fireemu-limit-id")
+            .and_then(|value| value.to_str().ok())
+            != Some(fireemu_core_firestore::limits::DOCUMENT_BYTES)
+    {
+        return status.clone();
+    }
+    let Some((current, maximum)) = status.message().split_once(':').and_then(|(_, message)| {
+        let mut words = message.split_whitespace();
+        let current = words.next()?.parse::<u64>().ok()?;
+        if words.next()? != "exceeds" {
+            return None;
+        }
+        let maximum = words.next()?.parse::<u64>().ok()?;
+        Some((current, maximum))
+    }) else {
+        return status.clone();
+    };
+    Status::invalid_argument(format!(
+        "Document '{resource}' cannot be written because its size ({} bytes) exceeds the maximum allowed size of {} bytes.",
+        format_decimal(current),
+        format_decimal(maximum),
+    ))
+}
+
+fn is_document_resource(resource: &str) -> bool {
+    let Some(relative) = resource.split_once("/documents/").map(|(_, rest)| rest) else {
+        return false;
+    };
+    !relative.is_empty() && relative.split('/').count() % 2 == 0
+}
+
+fn format_decimal(value: u64) -> String {
+    let digits = value.to_string();
+    let first = digits.len() % 3;
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+    if first != 0 {
+        formatted.push_str(&digits[..first]);
+    }
+    for (index, chunk) in digits.as_bytes()[first..].chunks(3).enumerate() {
+        if first != 0 || index != 0 {
+            formatted.push(',');
+        }
+        formatted.push_str(std::str::from_utf8(chunk).expect("digits are ASCII"));
+    }
+    formatted
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -513,7 +513,14 @@ fn fields_from_json_at(
         return err("fields must be an object");
     };
     for (k, v) in obj {
-        out.insert(k.clone(), value_from_json_at(v, parent_depth)?);
+        let value = value_from_json_at(v, parent_depth).map_err(|error| {
+            if parent_depth == 0 && error.0.starts_with("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH ") {
+                JsonError(format!("{}; property={k}", error.0))
+            } else {
+                error
+            }
+        })?;
+        out.insert(k.clone(), value);
     }
     Ok(out)
 }

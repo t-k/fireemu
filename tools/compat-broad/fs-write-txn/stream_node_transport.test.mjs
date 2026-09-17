@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import {
   buildUnaryRequest,
   classifyTerminal,
@@ -11,6 +12,10 @@ import {
   validateTransportOptions,
   validateWriteRequest,
 } from './stream_node_transport.mjs';
+
+const requireSdk = createRequire(new URL('../../sdk-smoke/package.json', import.meta.url));
+const grpc = requireSdk('@grpc/grpc-js');
+const { FirestoreClient } = requireSdk('@google-cloud/firestore').v1;
 
 const options = {
   host: '127.0.0.1',
@@ -105,10 +110,41 @@ test('waits for status after error and close, and keeps terminal values serializ
   assert.match(JSON.stringify({ error: receipt.error }), /permission denied/);
 });
 
-test('classifies a local deadline as incomplete', async () => {
-  const receipt = await runUnary('GetDocument', { ...options, port: 1, deadlineMs: 250 }, { path: 'compat/o3/doc' });
-  assert.equal(receipt.kind, 'client_deadline');
-  assert.equal(receipt.complete, false);
+test('classifies an accepted unanswered local RPC as an incomplete client deadline', async () => {
+  const server = new grpc.Server();
+  let accepted = false;
+  const descriptorClient = new FirestoreClient({
+    servicePath: '127.0.0.1',
+    port: 1,
+    projectId: options.projectId,
+    sslCreds: grpc.credentials.createInsecure(),
+    fallback: false,
+  });
+  server.addService({
+    GetDocument: descriptorClient._protos.google.firestore.v1.Firestore.service.GetDocument,
+  }, {
+    GetDocument: () => {
+      accepted = true;
+    },
+  });
+  const port = await new Promise((resolve, reject) => {
+    server.bindAsync('127.0.0.1:0', grpc.ServerCredentials.createInsecure(), (error, boundPort) => {
+      if (error) reject(error);
+      else {
+        server.start();
+        resolve(boundPort);
+      }
+    });
+  });
+  try {
+    const receipt = await runUnary('GetDocument', { ...options, port, deadlineMs: 100 }, { path: 'compat/o3/doc' });
+    assert.equal(accepted, true);
+    assert.equal(receipt.kind, 'client_deadline');
+    assert.equal(receipt.complete, false);
+  } finally {
+    server.forceShutdown();
+    descriptorClient.close();
+  }
 });
 
 test('cancels a bounded Write stream at the client deadline', async () => {

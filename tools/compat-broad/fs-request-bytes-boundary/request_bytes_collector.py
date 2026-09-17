@@ -315,6 +315,7 @@ def collect_local(
         commit_refused: set[str] = set()
         over_refusal_observation: dict[str, Any] | None = None
         stopped = False
+        observation_stopped = False
         dispatches = 0
         failures: list[str] = []
         absence_proofs: dict[str, set[str]] = {
@@ -327,7 +328,7 @@ def collect_local(
             kind = operation["kind"]
             resource = operation.get("resource")
             skip = None
-            if stopped:
+            if stopped or (observation_stopped and phase == "observation"):
                 skip = "earlier-probe-incomplete"
             elif (
                 phase == "observation"
@@ -438,6 +439,7 @@ def collect_local(
                         failures.append(
                             f"recording:response-{sequence:03d}.body:{type(error).__name__}"
                         )
+                        observation_stopped = True
                 if kind == "preflight-typed-absence" and not typed_not_found(receipt):
                     preflight_ok[probe] = False
                     failures.append(f"{phase}:{index}:preflight-not-absent")
@@ -507,6 +509,7 @@ def collect_local(
                 failures.append(
                     f"recording:row-{sequence:03d}.json:{type(error).__name__}"
                 )
+                observation_stopped = True
             next_slot = (
                 plan["executionSchedule"][sequence + 1]
                 if sequence + 1 < len(plan["executionSchedule"])

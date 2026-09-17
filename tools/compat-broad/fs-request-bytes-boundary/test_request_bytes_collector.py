@@ -379,9 +379,16 @@ def test_unexpected_over_success_keeps_creation_proof_for_cleanup(tmp_path):
     assert "over:unexpected-success" in result["failures"]
 
 
-@pytest.mark.parametrize("failure_kind", ["row", "sidecar"])
+@pytest.mark.parametrize(
+    ("failure_kind", "failure_sequence"),
+    [
+        (failure_kind, failure_sequence)
+        for failure_kind in ("row", "sidecar")
+        for failure_sequence in (0, 17)
+    ],
+)
 def test_recording_failure_stops_observation_but_runs_recovery(
-    tmp_path, monkeypatch, failure_kind
+    tmp_path, monkeypatch, failure_kind, failure_sequence
 ):
     import request_bytes_collector
     from request_bytes_collector import collect_local
@@ -402,8 +409,11 @@ def test_recording_failure_stops_observation_but_runs_recovery(
     def publish(directory, name, value, *, bounded=True):
         nonlocal failed
         if not failed and (
-            (failure_kind == "row" and name == "row-017.json")
-            or (failure_kind == "sidecar" and name == "response-017.body")
+            (failure_kind == "row" and name == f"row-{failure_sequence:03d}.json")
+            or (
+                failure_kind == "sidecar"
+                and name == f"response-{failure_sequence:03d}.body"
+            )
         ):
             failed = True
             raise OSError("injected recording failure")
@@ -415,7 +425,7 @@ def test_recording_failure_stops_observation_but_runs_recovery(
 
         def open_file(path, flags, mode=0o777, *, dir_fd=None):
             nonlocal failed
-            if path == "response-017.body" and not failed:
+            if path == f"response-{failure_sequence:03d}.body" and not failed:
                 failed = True
                 raise OSError("injected recording failure")
             return original_open(path, flags, mode, dir_fd=dir_fd)
@@ -467,8 +477,13 @@ def test_recording_failure_stops_observation_but_runs_recovery(
     result = collect_local(value, execute, tmp_path / "run")
     assert result["completed"] is False
     assert result["resourceAbsence"] is False
-    assert len(deletes) == 17
+    assert len(deletes) == (17 if failure_sequence == 17 else 0)
     assert not any(item["probe"] != "under" for item in calls)
+    if failure_sequence == 0:
+        assert not any(item["kind"] == "conditional-create-commit" for item in calls)
+    else:
+        assert any(item["kind"] == "conditional-create-commit" for item in calls)
+        assert not any(item["kind"] == "probe-readback" for item in calls)
     assert any(failure.startswith("recording:") for failure in result["failures"])
 
 

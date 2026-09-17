@@ -2632,6 +2632,38 @@ fn blocking_auth_can_reenter_project_config_without_deadlocking() {
 }
 
 #[test]
+fn an_unbound_blocking_hook_with_a_registry_default_store_does_not_deadlock() {
+    use std::sync::mpsc::sync_channel;
+    use std::time::Duration;
+
+    let mut auth = state();
+    auth.registry = Some(Arc::new(AuthRegistry::new(
+        "demo-app",
+        auth.store.clone(),
+    )));
+    auth.blocking = Some(Arc::new(BeforeCreateOnlySuccessfulHook(Arc::new(
+        Mutex::new(Vec::new()),
+    ))));
+    let auth = Arc::new(auth);
+    let (sender, receiver) = sync_channel(1);
+    let request_state = auth.clone();
+    std::thread::spawn(move || {
+        sender
+            .send(post(
+                &request_state,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email": "registry-default@example.com", "password": "hunter22"}),
+            ))
+            .unwrap();
+    });
+
+    let (status, body) = receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("an unbound hook must not re-lock the selected default store");
+    assert_eq!(status, 200, "{body}");
+}
+
+#[test]
 fn blocking_auth_rechecks_tenant_disablement_and_deletion_before_commit() {
     use fireemu_core_auth::store::AuthRegistry;
 

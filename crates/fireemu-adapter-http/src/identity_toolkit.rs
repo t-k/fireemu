@@ -566,9 +566,9 @@ fn blocking_hook_applies_to_project(
         return true;
     }
     state
-        .store
-        .lock()
-        .is_ok_and(|store| store.project_id() == project)
+        .registry
+        .as_ref()
+        .is_some_and(|registry| registry.default_project() == project)
 }
 
 pub(crate) fn request_may_invoke_blocking_auth(

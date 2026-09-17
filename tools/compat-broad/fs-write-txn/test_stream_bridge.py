@@ -221,6 +221,59 @@ def test_authentication_refusal_fails_parent_credential_and_stops_gate(tmp_path,
     assert gate.snapshot()["stopped"] is True
 
 
+@pytest.mark.parametrize("code", [7, 16])
+@pytest.mark.parametrize("rpc", ["Write", "GetDocument", "Rollback"])
+def test_recorded_auth_refusal_stops_before_next_grant(tmp_path, code, rpc):
+    """The parent records the refusal, then denies the worker's next request."""
+    from batch_contract import Credential
+    from shared_gate import Gate, create
+
+    policy = bridge()
+    plan = policy.compile_plan(
+        "demo-stream-gate", f"stream-run-sequence-{code}-{rpc}", "owner-sequence"
+    )
+    create(tmp_path / "gate", plan)
+    gate = Gate(tmp_path / "gate", "stream")
+    gate.claim()
+    credential = Credential()
+    credential.accept("synthetic", {"expires_in": 1200}, 0)
+    messages = [
+        {"type": "grant", "rpc": rpc},
+        {
+            "type": "receipt",
+            "receipt": {
+                "raw": {
+                    "kind": "grpc_status",
+                    "complete": True,
+                    "status": {"code": code},
+                    "error": {"code": code},
+                }
+            },
+        },
+        {"type": "recorded"},
+        {"type": "request", "rpc": "next"},
+    ]
+    grants = []
+    recorded = []
+    while messages:
+        message = messages.pop(0)
+        if message["type"] == "grant":
+            grants.append(message["rpc"])
+        elif message["type"] == "receipt":
+            recorded.append(message["receipt"])
+        elif message["type"] == "recorded":
+            with pytest.raises(ValueError, match="credential rejected"):
+                policy.stop_after_credential_rejection(
+                    recorded[-1], credential, gate
+                )
+            break
+    assert grants == [rpc]
+    assert recorded[0]["raw"]["status"]["code"] == code
+    assert messages[-1] == {"type": "request", "rpc": "next"}
+    assert credential.failed is True
+    assert gate.snapshot()["stopped"] is True
+
+
 def test_aborted_rpc_keeps_credential_and_gate_usable_for_planned_recovery(tmp_path):
     from batch_contract import Credential
     from shared_gate import Gate, create
@@ -241,6 +294,32 @@ def test_aborted_rpc_keeps_credential_and_gate_usable_for_planned_recovery(tmp_p
         }
     }
     policy.stop_after_credential_rejection(receipt, credential, gate)
+    assert credential.failed is False
+    assert gate.snapshot()["stopped"] is False
+
+
+def test_aborted_rpc_allows_the_next_planned_grant(tmp_path):
+    from batch_contract import Credential
+    from shared_gate import Gate, create
+
+    policy = bridge()
+    plan = policy.compile_plan("demo-stream-gate", "stream-run-abort-next", "owner-auth")
+    create(tmp_path / "gate", plan)
+    gate = Gate(tmp_path / "gate", "stream")
+    gate.claim()
+    credential = Credential()
+    credential.accept("synthetic", {"expires_in": 1200}, 0)
+    aborted = {
+        "raw": {
+            "kind": "grpc_status",
+            "complete": True,
+            "status": {"code": 10},
+            "error": {"code": 10},
+        }
+    }
+    policy.stop_after_credential_rejection(aborted, credential, gate)
+    next_grant = {"type": "grant", "rpc": "readback-rollback-recovery"}
+    assert next_grant["type"] == "grant"
     assert credential.failed is False
     assert gate.snapshot()["stopped"] is False
 

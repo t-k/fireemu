@@ -17,3 +17,21 @@ uv run --offline --project tools/compat-inventory --locked pytest -q tools/compa
 ```
 
 No credentials, network request, emulator, or production runner is used.
+
+## Local collector and transport
+
+`request_bytes_local_transport.py` is a campaign-specific loopback adapter. It
+accepts only numeric loopback origins, the compiled Firestore REST operation
+shape, request caps through 10,485,761 bytes, and the fixed 2 MiB response cap.
+It reuses the existing bounded exchange implementation without widening the
+shared transport used by other campaigns. The transport records the canonical
+request byte count and digest passed to HTTP; this remains a local observation
+hypothesis and is not a wire-level metric.
+
+`request_bytes_collector.py` validates the independent compiler plan before
+dispatch, follows `executionSchedule`, persists bounded create-only rows, keeps
+the three raw Commit bodies separately, and uses only the immediately
+preceding ownership read to construct a conditional cleanup delete. It writes
+no credentials and never contacts production. The collector reports resource
+absence separately from supervisor process cleanup, which must be supplied by
+the owning local runner.

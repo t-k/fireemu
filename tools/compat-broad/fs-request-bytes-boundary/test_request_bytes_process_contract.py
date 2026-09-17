@@ -195,12 +195,12 @@ def test_stdout_flood_is_stopped_at_wire_cap_and_worker_reaped(tmp_path, monkeyp
 
     monkeypatch.setattr(transport.os, "read", counted_read)
     result, elapsed = _exchange(tmp_path, 0, 2.0, FLOOD_WORKER)
-    assert read_total <= 2 * 1024 + 1025
+    assert read_total <= 6 * 1024 + 1025
     status, content_type, raw, failure = result
     assert status == 200
     assert content_type == "text/plain"
     assert failure == "ipc-oversize"
-    assert len(raw) < 1024
+    assert 0 < len(raw) <= 1024
     assert elapsed < 1.0
 
 
@@ -265,3 +265,19 @@ sys.stdout.buffer.flush()
 """
     result, _ = _exchange(tmp_path, 0, 1.0, worker)
     assert result == (None, "", b"", "ipc-malformed")
+
+
+def test_one_byte_frames_up_to_body_cap_are_valid(tmp_path):
+    worker = """
+import json, os, struct, sys
+request = json.loads(sys.stdin.buffer.readline())
+with open(request["pid_file"], "w") as stream: stream.write(str(os.getpid()))
+header = b'{"status":200,"contentType":"text/plain"}'
+sys.stdout.buffer.write(b"H" + struct.pack(">I", len(header)) + header)
+for _ in range(600):
+    sys.stdout.buffer.write(b"B\\x00\\x00\\x00\\x01x")
+sys.stdout.buffer.write(b"E\\x00\\x00\\x00\\x00")
+sys.stdout.buffer.flush()
+"""
+    result, _ = _exchange(tmp_path, 0, 1.0, worker)
+    assert result == (200, "text/plain", b"x" * 600, None)

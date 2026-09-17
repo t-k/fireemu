@@ -67,7 +67,9 @@ def _run_process_exchange(
     pending = bytearray()
     sent = 0
     wire = 0
-    wire_cap = 2 * response_cap + 1024
+    # A one-byte B frame costs six wire bytes. Permit the worst legal
+    # fragmentation, one header, and the terminal frame.
+    wire_cap = 6 * response_cap + 1024
     terminal: str | None = None
     failure: str | None = None
     try:
@@ -116,9 +118,7 @@ def _run_process_exchange(
                         failure = "ipc-incomplete"
                         break
                     wire += len(chunk)
-                    if wire > wire_cap:
-                        failure = "ipc-oversize"
-                        break
+                    crossed_wire_cap = wire > wire_cap
                     pending.extend(chunk)
                     while len(pending) >= 5:
                         kind = pending[0]
@@ -192,6 +192,8 @@ def _run_process_exchange(
                                     terminal = "failure"
                                     failure = code
                             break
+                    if crossed_wire_cap and failure is None:
+                        failure = "ipc-oversize"
                     if failure or terminal:
                         break
             if process.poll() is not None and terminal is None and not events:

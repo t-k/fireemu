@@ -339,5 +339,72 @@ def test_symlinked_output_parent_is_rejected(tmp_path):
     real.mkdir()
     (tmp_path / "link").symlink_to(real, target_is_directory=True)
     with pytest.raises(ValueError, match="symlink"):
-        collect_local(plan(), lambda _operation: pytest.fail("unexpected dispatch"), tmp_path / "link" / "run")
+        collect_local(
+            plan(),
+            lambda _operation: pytest.fail("unexpected dispatch"),
+            tmp_path / "link" / "run",
+        )
     assert not (real / "run").exists()
+
+
+@pytest.mark.parametrize(
+    "bad_raw", ["%%%", base64.b64encode(b"x" * (2 * 1024 * 1024 + 1)).decode()]
+)
+def test_incomplete_malformed_recovery_receipt_keeps_responsibility(tmp_path, bad_raw):
+    from request_bytes_collector import collect_local
+
+    value = plan()
+    resources = value["probes"][0]["resources"]
+    fields = {
+        write["update"]["name"]: write["update"]["fields"]
+        for write in value["probes"][0]["body"]["writes"]
+    }
+    version = "2026-01-01T00:00:00Z"
+    live = set()
+    deletes = []
+
+    def execute(operation):
+        kind, resource = operation["kind"], operation.get("resource")
+        if kind == "conditional-create-commit":
+            live.update(resources)
+            body = {"writeResults": [{"updateTime": version} for _ in resources]}
+            status = 200
+        elif kind == "cleanup-ownership-read" and resource == resources[0]:
+            return {
+                "complete": False,
+                "failure": "response-lost",
+                "rawBodyBase64": bad_raw,
+            }
+        elif kind == "cleanup-version-bound-delete":
+            deletes.append(resource)
+            live.remove(resource)
+            body, status = {}, 200
+        elif resource in live:
+            body, status = (
+                {"name": resource, "fields": fields[resource], "updateTime": version},
+                200,
+            )
+        else:
+            body, status = {"error": {"code": 404, "status": "NOT_FOUND"}}, 404
+        raw = json.dumps(body, separators=(",", ":")).encode()
+        return {
+            "complete": True,
+            "failure": None,
+            "status": status,
+            "body": body,
+            "rawBodyBase64": base64.b64encode(raw).decode(),
+            "bodyBytes": len(raw),
+        }
+
+    result = collect_local(value, execute, tmp_path / "run")
+    assert result["completed"] is False
+    assert result["cleanupComplete"] is False
+    assert resources[0] in live
+    assert resources[0] not in deletes
+    assert (tmp_path / "run" / "result.json").exists()
+    rows = [
+        json.loads(path.read_text()) for path in (tmp_path / "run").glob("row-*.json")
+    ]
+    assert any(
+        row["receipt"].get("failure") == "response-bytes-unavailable" for row in rows
+    )

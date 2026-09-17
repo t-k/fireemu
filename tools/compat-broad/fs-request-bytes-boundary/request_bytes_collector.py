@@ -356,34 +356,30 @@ def collect_local(
                     receipt = execute(copy.deepcopy(operation))
                     if not isinstance(receipt, dict):
                         raise TypeError("executor returned non-object")
-                    if complete(receipt):
-                        encoded = receipt.get("rawBodyBase64")
+                    encoded = receipt.get("rawBodyBase64")
+                    raw = None
+                    if isinstance(encoded, str) and len(encoded) <= 4 * (
+                        (MAX_RESPONSE_BYTES + 2) // 3
+                    ):
                         try:
-                            raw = (
-                                base64.b64decode(encoded, validate=True)
-                                if isinstance(encoded, str)
-                                else None
-                            )
+                            raw = base64.b64decode(encoded, validate=True)
                         except (ValueError, base64.binascii.Error):
-                            raw = None
-                        if (
-                            raw is None
-                            or len(raw) > MAX_RESPONSE_BYTES
-                            or (
-                                "bodyBytes" in receipt
-                                and receipt["bodyBytes"] != len(raw)
-                            )
-                            or (
-                                raw is not None
-                                and not _raw_matches_body(raw, receipt["body"])
-                            )
-                        ):
-                            receipt = {
-                                **receipt,
-                                "complete": False,
-                                "failure": "response-bytes-unavailable",
-                            }
-                            receipt.pop("rawBodyBase64", None)
+                            pass
+                    raw_invalid = encoded is not None and (
+                        raw is None
+                        or len(raw) > MAX_RESPONSE_BYTES
+                        or ("bodyBytes" in receipt and receipt["bodyBytes"] != len(raw))
+                    )
+                    if raw_invalid or (
+                        complete(receipt)
+                        and (raw is None or not _raw_matches_body(raw, receipt["body"]))
+                    ):
+                        receipt = {
+                            **receipt,
+                            "complete": False,
+                            "failure": "response-bytes-unavailable",
+                        }
+                        receipt.pop("rawBodyBase64", None)
                 except Exception as error:  # noqa: BLE001 - lost responses remain recoverable.
                     receipt = {
                         "complete": False,

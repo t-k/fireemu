@@ -15,3 +15,11 @@ Run the focused checks with:
 ```text
 uv run --project tools/compat-inventory --locked pytest tools/compat-broad/fs-query-in-boundary
 ```
+
+## Reviewed local verification
+
+Collector source `8b0f12166a0115a9ad32edd6efaf986a609ef7da` was exercised against retained fireemu artifact SHA-256 `be2771b9f2093cced55e8158d8d5a72ed35e6ac5e32edddb068daa45511e12ae` using an owned loopback process. The nine responses were: typed absence 404, conditional creation 200, IN30 query 200, readback 200, IN31 query 400/INVALID_ARGUMENT, unchanged readback 200, ownership read 200, conditional deletion 200, and typed absence 404. Recording and cleanup completed; the process stopped and its port reservation was released.
+
+The final test-only follow-up `c0a41b55c87dcbc092d3fcbc9e41de0da53c6b13` passed 40 focused tests and Ruff. Independent review approved the final change with no remaining blocker or high finding. The regression set includes preexisting matching and nonmatching documents, refused and ambiguous creation, replacement-version rejection, and final write/fsync/link/collision failures. Directory-fsync failure can leave an already-linked file with optimistic flags; callers must use the returned publication failure and must not promote that file alone as validated acquisition evidence.
+
+This verifies the local observation tooling and the finite local API controls. It is not a production observation, saved-production comparison, or parent compatibility promotion.

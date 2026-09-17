@@ -403,3 +403,55 @@ def test_version_relations_and_literal_error_details_are_not_erased(
         )["classification"]
         == "SEMANTIC_MISMATCH"
     )
+
+
+def test_identical_valid_commit_time_later_than_final_write_version_matches() -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    rows = _rows(plan)
+    rows[6]["body"]["commitTime"] = "2026-09-19T00:00:00Z"
+    assert (
+        compare_rows(plan, rows, plan, copy.deepcopy(rows))["classification"] == "MATCH"
+    )
+
+
+def test_creation_and_initial_update_equality_is_not_erased() -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    left, right = _rows(plan), _rows(plan)
+    for index in (2, 4, 7, 10):
+        left[index]["body"]["createTime"] = "2026-09-17T00:00:00Z"
+        right[index]["body"]["createTime"] = "2026-09-16T00:00:00Z"
+    assert (
+        compare_rows(plan, left, plan, right)["classification"] == "SEMANTIC_MISMATCH"
+    )
+
+
+def test_commit_and_final_update_equality_is_compared_as_a_relation() -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    left, right = _rows(plan), _rows(plan)
+    right[6]["body"]["commitTime"] = "2026-09-19T00:00:00Z"
+    assert (
+        compare_rows(plan, left, plan, right)["classification"] == "SEMANTIC_MISMATCH"
+    )
+
+
+def test_independent_clock_shifts_preserve_later_commit_and_creation_relations() -> (
+    None
+):
+    left_plan = compile_plan("left", "db-left", "a" * 32)
+    right_plan = compile_plan("right", "db-right", "b" * 32)
+    left, right = _rows(left_plan), _rows(right_plan)
+    for rows, month in ((left, "09"), (right, "10")):
+        for row in rows:
+            body = row["body"]
+            for key in ("updateTime", "commitTime"):
+                if key in body:
+                    body[key] = body[key].replace("-09-", f"-{month}-")
+            for result in body.get("writeResults", []):
+                result["updateTime"] = result["updateTime"].replace(
+                    "-09-", f"-{month}-"
+                )
+            if "name" in body:
+                body["createTime"] = f"2026-{month}-16T00:00:00Z"
+        rows[6]["body"]["commitTime"] = f"2026-{month}-19T00:00:00Z"
+        rows[6]["body"]["writeResults"][0]["updateTime"] = f"2026-{month}-17T12:00:00Z"
+    assert compare_rows(left_plan, left, right_plan, right)["classification"] == "MATCH"

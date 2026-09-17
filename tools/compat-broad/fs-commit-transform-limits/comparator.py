@@ -262,16 +262,23 @@ def _semantic_issues(
                             if isinstance(write_result, dict)
                             else None
                         )
-                        if not _timestamp(update) or _instant(update) != _instant(
+                        if not _timestamp(update) or _instant(update) > _instant(
                             commit
                         ):
                             issues.append(f"{index}:commit-version")
                     resource = request["resources"][0]
-                    if resource in versions and _instant(commit) <= _instant(
-                        versions[resource]
-                    ):
-                        issues.append(f"{index}:commit-not-newer")
-                    versions[resource] = commit
+                    final_result = results[-1]
+                    final_update = (
+                        final_result.get("updateTime")
+                        if isinstance(final_result, dict)
+                        else None
+                    )
+                    if _timestamp(final_update):
+                        if resource in versions and _instant(final_update) <= _instant(
+                            versions[resource]
+                        ):
+                            issues.append(f"{index}:final-write-not-newer")
+                        versions[resource] = final_update
             if expectation["outcome"] == "refused" and (
                 not 400 <= status < 500
                 or not isinstance(body, dict)
@@ -336,6 +343,59 @@ def _semantic_issues(
     return issues
 
 
+def _timestamp_relations(plan: dict[str, Any], rows: list[dict[str, Any]]) -> Any:
+    """Preserve equality and order of declared timestamps within each resource.
+
+    Ranks describe relations only: independent projects can have independent
+    clocks, while an equality becoming an inequality remains observable.
+    """
+    labels = {item["resource"]: label for label, item in plan["documents"].items()}
+    slots: dict[str, list[tuple[Any, tuple[str, str]]]] = {
+        label: [] for label in labels.values()
+    }
+    for index, row in enumerate(rows):
+        request, body = row["request"], row["body"]
+        if not isinstance(body, dict):
+            continue
+        kind = request["kind"]
+        if kind == "commit-transform":
+            resource = request["resources"][0]
+            values = [(("commitTime",), body.get("commitTime"))]
+            results = body.get("writeResults")
+            for number, result in enumerate(
+                results if isinstance(results, list) else []
+            ):
+                if isinstance(result, dict):
+                    values.append(
+                        (
+                            ("writeResults", number, "updateTime"),
+                            result.get("updateTime"),
+                        )
+                    )
+        elif kind in {
+            "create-only-patch",
+            "baseline-readback",
+            "poststate-readback",
+            "poststate-control-readback",
+            "cleanup-ownership-read",
+        }:
+            resource = _resource_for(request)
+            values = [((key,), body.get(key)) for key in ("createTime", "updateTime")]
+        else:
+            continue
+        for path, value in values:
+            if _timestamp(value):
+                slots[labels[resource]].append(((index, path), _instant(value)))
+    projection = {}
+    for label, entries in slots.items():
+        ranks = {
+            instant: rank
+            for rank, instant in enumerate(sorted({instant for _, instant in entries}))
+        }
+        projection[label] = [(slot, ranks[instant]) for slot, instant in entries]
+    return projection
+
+
 def compare_rows(
     left_plan: dict[str, Any],
     left_rows: list[dict[str, Any]],
@@ -385,6 +445,14 @@ def compare_rows(
     if left_issues or right_issues:
         result["classification"] = "SEMANTIC_MISMATCH"
         result["errors"].extend(left_issues + right_issues)
+        return result
+
+    if not _exact(
+        _timestamp_relations(left_plan, left_rows + (left_recovery or [])),
+        _timestamp_relations(right_plan, right_rows + (right_recovery or [])),
+    ):
+        result["classification"] = "SEMANTIC_MISMATCH"
+        result["errors"].append("timestamp-relations-differ")
         return result
 
     pairs = list(zip(left_rows, right_rows, strict=True))

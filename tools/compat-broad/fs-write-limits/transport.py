@@ -86,8 +86,8 @@ def _perform(
             status, headers_obj = error.code, error.headers
         finally:
             error.close()
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
-        return {"kind": "transport-error", "complete": False, "error": str(error)}
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return {"kind": "transport-error", "complete": False}
     else:
         with response:
             status, headers_obj, payload, failure = (

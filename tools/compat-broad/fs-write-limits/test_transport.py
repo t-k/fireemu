@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import subprocess
+import os
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -63,30 +63,9 @@ class Handler(BaseHTTPRequestHandler):
 
 @pytest.fixture()
 def origin():
-    registry = "/Users/tk/.agents/skills/port-registry/scripts/portctl.py"
-    claim = subprocess.run(
-        [
-            "python3",
-            registry,
-            "claim",
-            "--service",
-            "o3-transport-test",
-            "--preferred",
-            "18080",
-            "--range",
-            "18080-18090",
-            "--ttl",
-            "5m",
-            "--format",
-            "json",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", int(os.environ.get("PORT", "0"))), Handler
     )
-    token = json.loads(claim.stdout)["token"]
-    port = json.loads(claim.stdout)["port"]
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     thread = Thread(target=server.serve_forever)
     thread.start()
     try:
@@ -95,11 +74,6 @@ def origin():
         server.shutdown()
         thread.join()
         server.server_close()
-        subprocess.run(
-            ["python3", registry, "release", "--token", token],
-            check=True,
-            capture_output=True,
-        )
 
 
 def test_request_cap_exact_and_plus_one_rejected_before_io(origin):

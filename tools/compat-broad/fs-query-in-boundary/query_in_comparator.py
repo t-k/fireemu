@@ -195,10 +195,11 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
     if not _owned_read(rows[1], plan):
         raise ValueError("create ownership is not proven")
     created_time = rows[1]["body"]["updateTime"]
+    created_create_time = rows[1]["body"].get("createTime")
     for index in (3, 5):
-        if not _owned_read(rows[index], plan) or rows[index]["body"]["updateTime"] != created_time:
+        if not _owned_read(rows[index], plan) or rows[index]["body"]["updateTime"] != created_time or (created_create_time is not None and rows[index]["body"].get("createTime") != created_create_time):
             raise ValueError("readback version is not bound to creation")
-    if _owned_read(cleanup[0], plan) and cleanup[0]["body"]["updateTime"] != created_time:
+    if _owned_read(cleanup[0], plan) and (cleanup[0]["body"]["updateTime"] != created_time or (created_create_time is not None and cleanup[0]["body"].get("createTime") != created_create_time)):
         raise ValueError("cleanup version is not bound to creation")
     ownership = bundle.get("ownership", {})
     if not isinstance(ownership, dict) or ownership.get("cleanupComplete") is not True:
@@ -237,11 +238,10 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
                 raise ValueError("raw receipt body differs from journal row")
         try:
             parsed = json.loads(raw["2"]["rawBody"], parse_constant=_reject_json_constant, object_pairs_hook=_unique_json_object)
-            derived = [
+            derived = ([
                 {"name": item["document"]["name"], "fields": item["document"]["fields"]}
                 for item in parsed
-                if _typed_query_row(item)
-            ] if isinstance(parsed, list) else None
+            ] if isinstance(parsed, list) and all(_typed_query_row(item) for item in parsed) else None)
         except (UnicodeError, ValueError, RecursionError):
             derived = None
         if (

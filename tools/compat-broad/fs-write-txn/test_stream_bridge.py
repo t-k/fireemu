@@ -12,6 +12,29 @@ sys.path.insert(0, str(ROOT / "production-admission"))
 sys.path.insert(0, str(Path(__file__).parent))
 
 
+@pytest.fixture(scope="module", autouse=True)
+def trusted_node_runtime(tmp_path_factory):
+    """CI distributions may be group-writable; freeze an owned test runtime."""
+    import hashlib
+    import os
+    import shutil
+
+    source = Path(shutil.which("node")).resolve(strict=True)
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    directory = tmp_path_factory.mktemp("stream-node-runtime")
+    directory.chmod(0o700)
+    executable = directory / "node"
+    shutil.copyfile(source, executable)
+    executable.chmod(0o700)
+    assert hashlib.sha256(executable.read_bytes()).hexdigest() == expected
+    previous = os.environ["PATH"]
+    os.environ["PATH"] = str(directory) + os.pathsep + previous
+    try:
+        yield executable
+    finally:
+        os.environ["PATH"] = previous
+
+
 def bridge():
     spec = importlib.util.find_spec("stream_bridge")
     assert spec is not None, "the stream protocol must use the existing shared Gate"
@@ -454,3 +477,14 @@ def test_failed_recovery_ledger_finish_keeps_original_reservation(tmp_path):
     with pytest.raises(ValueError, match="incomplete"):
         ledger.finish(ticket)
     assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+def test_group_writable_runtime_remains_refused(trusted_node_runtime):
+    policy = bridge()
+    trusted_node_runtime.chmod(0o770)
+    try:
+        with pytest.raises(ValueError, match="private trusted Node runtime"):
+            policy.node_runtime()
+    finally:
+        trusted_node_runtime.chmod(0o700)
+    assert policy.node_runtime()["path"] == str(trusted_node_runtime.resolve())

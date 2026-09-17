@@ -1804,13 +1804,18 @@ fn dispatch_with_blocking_hook(
     }
     let generated_id_interference = store.generated_id_interference_count();
     let mut candidate = store.clone();
+    let live_snapshot = store.clone();
     let reset_generation = store.reset_generation();
-    let _reserved_local_id = request_may_create_end_user(handler, &store, body, at).then(|| {
-        let id = candidate.reserve_next_generated_local_id();
-        GeneratedLocalIdReservation {
-            store: store_arc.clone(),
-            id,
-        }
+    let reserve_local_id = request_may_create_end_user(handler, &store, body, at)
+        .then(|| candidate.reserve_next_generated_local_id());
+    // Register the reservation while the candidate still shares its reservation registry with
+    // the live store, then release the request's store guard before constructing the Drop guard.
+    // Every subsequent early return may therefore safely release the reservation without trying
+    // to re-lock this still-held mutex.
+    drop(store);
+    let _reserved_local_id = reserve_local_id.map(|id| GeneratedLocalIdReservation {
+        store: store_arc.clone(),
+        id,
     });
     let response = dispatch(
         handler,
@@ -1847,7 +1852,7 @@ fn dispatch_with_blocking_hook(
     let speculative_uid = uid.clone();
     let is_new = is_authentication
         && uid_text.as_deref().is_some_and(|uid| {
-            store.user_by_id(uid).is_none() && candidate.user_by_id(uid).is_some()
+            live_snapshot.user_by_id(uid).is_none() && candidate.user_by_id(uid).is_some()
         });
     let signed_in = is_authentication
         && response.status == 200
@@ -1870,9 +1875,8 @@ fn dispatch_with_blocking_hook(
         .any()
         .then(|| inbound_credentials_from_request(body, retained_policy))
         .flatten();
-    let project = store.project_id().to_owned();
-    let tenant = store.tenant_id().map(str::to_owned);
-    drop(store);
+    let project = live_snapshot.project_id().to_owned();
+    let tenant = live_snapshot.tenant_id().map(str::to_owned);
     let mut blocking_responses = Vec::new();
     if response.status == 200 {
         if let Some(uid) = uid {
@@ -1978,6 +1982,9 @@ fn dispatch_with_blocking_hook(
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
     }
     let mut commit = |metadata: Option<&fireemu_core_auth::store::TenantMetadata>| {
+        if blocking.blocking_auth_revision() != expected_blocking_revision {
+            return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
+        }
         if tenant.is_some() {
             if let Some(denial) = tenant_policy_denial_with_metadata(handler, metadata, body) {
                 return denial;

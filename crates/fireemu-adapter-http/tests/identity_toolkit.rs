@@ -222,6 +222,12 @@ struct RevisionBumpBeforeDispatchHook {
     revision_calls: AtomicUsize,
 }
 
+struct RevisionChangeAfterPostCallbackHook {
+    revision: AtomicUsize,
+    revision_calls: AtomicUsize,
+    post_callback_checked: AtomicBool,
+}
+
 struct BeforeCreateOnlyRejectingHook;
 
 struct BeforeCreateOnlySuccessfulHook(Arc<Mutex<Vec<BlockingAuthEvent>>>);
@@ -346,7 +352,7 @@ impl AuthBlockingHook for ToggleHandlesHook {
 impl AuthBlockingHook for RevisionBumpBeforeDispatchHook {
     fn blocking_auth_revision(&self) -> u64 {
         let call = self.revision_calls.fetch_add(1, Ordering::SeqCst);
-        if call >= 2 {
+        if call >= 3 {
             self.revision.store(1, Ordering::SeqCst);
         }
         self.revision.load(Ordering::SeqCst) as u64
@@ -358,6 +364,24 @@ impl AuthBlockingHook for RevisionBumpBeforeDispatchHook {
         _user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Value, BlockingFunctionFailure> {
         unreachable!("revision drift must be rejected before hook dispatch")
+    }
+}
+
+impl AuthBlockingHook for RevisionChangeAfterPostCallbackHook {
+    fn blocking_auth_revision(&self) -> u64 {
+        let call = self.revision_calls.fetch_add(1, Ordering::SeqCst);
+        if call == 4 {
+            self.post_callback_checked.store(true, Ordering::SeqCst);
+        }
+        self.revision.load(Ordering::SeqCst) as u64
+    }
+
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        Ok(json!({}))
     }
 }
 
@@ -2962,22 +2986,87 @@ fn unbound_blocking_auth_runs_for_default_but_not_routed_projects() {
 
 #[test]
 fn blocking_auth_revision_drift_between_plan_and_dispatch_is_rejected() {
-    let mut auth = state();
-    auth.blocking = Some(Arc::new(RevisionBumpBeforeDispatchHook {
-        revision: AtomicUsize::new(0),
-        revision_calls: AtomicUsize::new(0),
-    }));
-    let (status, body) = post(
-        &auth,
-        &format!("{V1}/accounts:signUp"),
-        &json!({"email": "revision-drift@example.com", "password": "hunter22"}),
-    );
+    let auth = Arc::new({
+        let mut auth = state();
+        auth.blocking = Some(Arc::new(RevisionBumpBeforeDispatchHook {
+            revision: AtomicUsize::new(0),
+            revision_calls: AtomicUsize::new(0),
+        }));
+        auth
+    });
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let request_auth = auth.clone();
+    std::thread::spawn(move || {
+        sender
+            .send(post(
+                &request_auth,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email": "revision-drift@example.com", "password": "hunter22"}),
+            ))
+            .unwrap();
+    });
+    let (status, body) = receiver
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("candidate revision drift must not deadlock reservation cleanup");
     assert_eq!(status, 409, "{body}");
     assert_eq!(
         body["error"]["message"],
         "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
     );
     assert_eq!(auth.store.lock().unwrap().user_count(), 0);
+    let mut store = auth.store.lock().unwrap().clone();
+    let fresh_id = store.reserve_next_generated_local_id();
+    let mut clean = AuthStore::new("demo-app", SplitMix64::new(5), TotpPolicy::default());
+    assert_eq!(fresh_id, clean.reserve_next_generated_local_id());
+}
+
+#[test]
+fn blocking_auth_revision_drift_after_callback_before_commit_is_rejected() {
+    let hook = Arc::new(RevisionChangeAfterPostCallbackHook {
+        revision: AtomicUsize::new(0),
+        revision_calls: AtomicUsize::new(0),
+        post_callback_checked: AtomicBool::new(false),
+    });
+    let auth = Arc::new({
+        let mut auth = state();
+        auth.blocking = Some(hook.clone());
+        auth
+    });
+    let commit_gate = auth.operation_gate.lock().unwrap();
+    let request_auth = auth.clone();
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        sender
+            .send(post(
+                &request_auth,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email": "commit-revision-drift@example.com", "password": "hunter22"}),
+            ))
+            .unwrap();
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while !hook.post_callback_checked.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "blocking request did not reach its post-callback revision check"
+        );
+        std::thread::yield_now();
+    }
+    hook.revision.store(1, Ordering::SeqCst);
+    drop(commit_gate);
+    let (status, body) = receiver
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("commit revision drift must not leave the request waiting");
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
+    );
+    assert_eq!(auth.store.lock().unwrap().user_count(), 0);
+    let mut store = auth.store.lock().unwrap().clone();
+    let fresh_id = store.reserve_next_generated_local_id();
+    let mut clean = AuthStore::new("demo-app", SplitMix64::new(5), TotpPolicy::default());
+    assert_eq!(fresh_id, clean.reserve_next_generated_local_id());
 }
 
 #[test]

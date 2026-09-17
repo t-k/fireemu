@@ -2,7 +2,7 @@
 
 ## Current execution boundary
 
-The Write/transaction campaign now has a bounded gRPC transport, shared Gate and Ledger admission, metadata coordinator, immutable acquisition receipt, and credential-free comparator. The reviewed execution source is `dee737c14e68eb4f546b7ca4c827871fc48a2503`. This is a prepared campaign with completed local rehearsal, not a production observation. The owner approved the bounded envelope on 2026-09-17; final fresh binding and O7 admission remain mandatory before execution. `FS-DATA-WRITE` and `FS-TRANSACTION` remain below `COMPAT_VERIFIED`.
+The Write/transaction campaign now has a bounded gRPC transport, shared Gate and Ledger admission, metadata coordinator, immutable acquisition receipt, and credential-free comparator. The reviewed execution source is `dee737c14e68eb4f546b7ca4c827871fc48a2503`. The owner-approved bounded campaign executed once on 2026-09-17 after fresh binding and O7 admission. The [immutable public result summary](../../spec/compatibility/broad-runs/fs-write-txn-dee737c14-production-result.json) records validated production acquisition and its original semantic mismatch. The single-iteration permission is consumed. `FS-DATA-WRITE` and `FS-TRANSACTION` remain below `COMPAT_VERIFIED`.
 
 The earlier combined [`v9 package`](../../spec/compatibility/broad-runs/fs-write-txn-precedence-01-v9.json), [binding](../../spec/compatibility/broad-runs/fs-write-txn-precedence-01-v9-binding.json), and [local plan](../../spec/compatibility/broad-runs/fs-write-txn-precedence-01-v9-local-shadow.json) are historical preparation artifacts. Their bytes, earlier versions, source identities, and budgets remain unchanged. They are not the current executable stream envelope. In particular, the former absence of a production gRPC collector has been resolved; the historical package must not be reinterpreted as current approval.
 
@@ -12,7 +12,7 @@ The byte/depth cases were separated into `FS-DATA-WRITE-LIMITS-02`. Its [origina
 
 | Queue position | Campaign | Remaining boundary |
 | --- | --- | --- |
-| CURRENT | Write stream / transaction precedence at `dee737c14` | Owner approved the concrete envelope on 2026-09-17. Fresh permission, nonce and manifest binding are being finalized for O7 admission, followed by charged environment checks before execution. |
+| CURRENT | Write stream / transaction precedence at `dee737c14` | `PROD_COMPLETE`; acquisition independently validated, diagnostic repair and saved-reference comparison pending. The original permission is consumed. |
 | NEXT | `FS-DATA-WRITE-COMMIT-TRANSFORMS-03` | Canonical 500/501 transform compiler, local collector, comparator, Gate and fixed wire are reviewed. Outer permission, metadata, shared reservation and immutable acquisition integration remains preparation work. |
 | BACKLOG | Transaction SDK retry / retention | Separate pinned SDK and bounded time campaigns; no automatic reuse of current permission. |
 | BACKLOG | Remaining declared request / operation / catalog limits | Reuse eligible saved receipts before defining any new observation. Queue position does not waive parent scope. |
@@ -39,8 +39,14 @@ Independent review covered terminal ordering through the actual bridge/comparato
 
 ## Execution and evidence gates
 
-The owner explicitly approved the exact envelope, recorded at 2026-09-17T13:50:23Z with a conservative expiry of 2026-09-18T13:50:23Z. Fresh permission binding, nonce, final manifest digest and O7 admission are still required before O8 may perform any OAuth or production request. The additional general US$10 instruction does not expand this campaign's narrower approved bound. Expected configuration projections are historical baselines only; they must pass fresh, charged preflight checks within the approved envelope.
+The owner explicitly approved the exact envelope, recorded at 2026-09-17T13:50:23Z with a conservative expiry of 2026-09-18T13:50:23Z. Fresh permission binding, nonce, final manifest digest and O7 admission were verified before O8 executed the single approved iteration. The additional general US$10 instruction does not expand this campaign's narrower approved bound. Expected configuration projections are historical baselines only; they must pass fresh, charged preflight checks within the approved envelope.
 
 Cleanup requires this execution's ownership evidence, exact resource identity, current version and typed final absence. Ambiguous ownership, credential rejection, configuration drift or incomplete recording retains the journal and recovery responsibility; no unconditional deletion or automatic credential replacement is permitted. A failed final source/artifact binding remains failed during later comparison, even if files are subsequently restored.
 
 The comparator distinguishes `MATCH`, `SEMANTIC_MISMATCH`, `INDETERMINATE` and `EXPECTED_NONDETERMINISM`. Complete unexpected semantics remain comparable; infrastructure, binding and cleanup failures are not semantic mismatches. A valid production receipt may be compared against a repaired local artifact without repeating production, but local success alone does not establish the receipt's acquisition validity or promote a parent.
+
+## Production result and repair boundary
+
+The approved iteration completed 33 requests (two OAuth preparation, eight metadata, 23 data) in approximately 63.48 seconds. Accounting reserved US$1.3035 and charged US$1.3033; this is not a measured invoice. Independent validation confirmed the frozen permission/source/artifact, charged journals, unchanged metadata, typed absence cleanup and released shared reservation. Two earlier local descriptor setup refusals occurred before any reservation or network request; their diagnostics remain preserved, and they did not create additional production iterations.
+
+The original comparison is `SEMANTIC_MISMATCH`. Independent recomputation isolates GetDocument `NOT_FOUND` diagnostic wording and request-bound resource identities: production returned `Document "<owned-resource>" not found.`, while the retained local artifact returned `Document not found: <owned-resource>`. Codes, event order and document state do not differ in this finite case. The original receipt and v1 comparison remain immutable. Runtime repair and separately versioned, narrow resource-identity normalization must continue to detect the pre-fix wording difference; neither may turn incomplete acquisition into a match. Verification uses the saved production receipt rather than another production observation.

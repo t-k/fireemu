@@ -45,6 +45,42 @@ def schedule(nonce):
     return plan
 
 
+def plan_limits(plan):
+    """Validate and derive bounded phase limits from a closed Gate plan."""
+    values = {
+        key: plan.get(key)
+        for key in (
+            "wallSeconds",
+            "recoverySeconds",
+            "observationRequests",
+            "requestCostMicrousd",
+            "intervalSeconds",
+        )
+    }
+    if (
+        type(values["wallSeconds"]) is not int
+        or not 1 <= values["wallSeconds"] <= 1200
+        or type(values["recoverySeconds"]) is not int
+        or not 1 <= values["recoverySeconds"] < values["wallSeconds"]
+        or type(values["observationRequests"]) is not int
+        or not 1 <= values["observationRequests"] <= 2400
+        or type(values["requestCostMicrousd"]) is not int
+        or not 1 <= values["requestCostMicrousd"] <= 1_000_000
+        or type(values["intervalSeconds"]) not in (int, float)
+        or not 0.25 <= values["intervalSeconds"] <= 60
+    ):
+        raise ValueError("invalid production phase budget")
+    return {
+        "observationDeadline": values["wallSeconds"] - values["recoverySeconds"],
+        "recoveryDeadline": values["wallSeconds"],
+        "observationRequests": values["observationRequests"],
+        "requestCostMicrousd": values["requestCostMicrousd"],
+        "intervalSeconds": values["intervalSeconds"],
+        "observationCredentialSeconds": values["wallSeconds"],
+        "recoveryCredentialSeconds": values["recoverySeconds"],
+    }
+
+
 def manifest():
     return {
         "kind": "shared-two-production-v1",
@@ -172,8 +208,13 @@ class Coordinator(Adapter):
         return self.credential.token
 
     def acquire(self, recovery=False):
+        limits = plan_limits(self.gate.snapshot()["plan"])
         self.budget.recovery = recovery
-        required = 300 if recovery else 1200
+        required = (
+            limits["recoveryCredentialSeconds"]
+            if recovery
+            else limits["observationCredentialSeconds"]
+        )
         if self.credential.usable(time.monotonic(), required):
             return
         self.credential.token = ""
@@ -196,6 +237,7 @@ class Coordinator(Adapter):
             else action
         )
         entries = state["plan"]["management"][phase]
+        limits = plan_limits(state["plan"])
         entry = next((item for item in entries if item["id"] == key), None)
         identity = phase + ":" + key
         if (
@@ -208,14 +250,24 @@ class Coordinator(Adapter):
             )
         ):
             raise ValueError("closed management operation/attempt limit")
-        delay = max(0, state["lastSent"] + 0.25 - time.monotonic())
-        deadline = state["started"] + (1200 if self.budget.recovery else 900)
+        delay = max(
+            0, state["lastSent"] + limits["intervalSeconds"] - time.monotonic()
+        )
+        deadline = state["started"] + (
+            limits["recoveryDeadline"]
+            if self.budget.recovery
+            else limits["observationDeadline"]
+        )
         remaining = state["reservedRecovery"] - int(self.budget.recovery)
         if (
             time.monotonic() + delay + duration + 1 > deadline
             or time.time() + delay + duration + 1 > (self.permission or {})["expiresAt"]
-            or (not self.budget.recovery and state["observation"] >= 18)
-            or state["costMicrousd"] + (1 + remaining) * 100
+            or (
+                not self.budget.recovery
+                and state["observation"] >= limits["observationRequests"]
+            )
+            or state["costMicrousd"]
+            + (1 + remaining) * limits["requestCostMicrousd"]
             > state["plan"]["costMicrousd"]
         ):
             raise ValueError("shared management capacity/deadline")
@@ -229,7 +281,7 @@ class Coordinator(Adapter):
         state["total"] += 1
         state[phase] += 1
         state["reservedRecovery"] = remaining
-        state["costMicrousd"] += 100
+        state["costMicrousd"] += limits["requestCostMicrousd"]
         state["lastSent"] = time.monotonic()
         state["managementEvents"].append(
             {"id": identity, "started": state["lastSent"], "durationReserved": duration}

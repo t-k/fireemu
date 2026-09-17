@@ -163,7 +163,7 @@ class Backend:
             return (
                 (200, result, "application/json")
                 if result is not None
-                else (404, {"error": {"code": 404}}, "application/json")
+                else (404, {"error": {"code": 404, "status": "NOT_FOUND"}}, "application/json")
             )
         if method == "PATCH":
             self.docs[path] = {

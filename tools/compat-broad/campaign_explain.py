@@ -111,7 +111,7 @@ def manifest() -> dict:
     plan = _schedule("0" * 32)
     template = _replace_namespace(plan, "0" * 32, "{freshNonce}")
     return {
-        "kind": "production-campaign-explain-01-v3",
+        "kind": "production-campaign-explain-01-v4",
         "status": "prepared-offline",
         "sourceCommit": "permission-bound-execution-HEAD",
         "collector": "existing-batch-adapter-shared-v1",

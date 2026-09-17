@@ -41,7 +41,7 @@ def compete(path, key, ready, start, results, crash=False):
         def send():
             if crash:
                 os._exit(7)
-            return 404, {}
+            return 404, {"error": {"code": 404, "status": "NOT_FOUND"}}
 
         gate.dispatch(plan()["jobs"][key]["observation"][0], False, send)
         results.put("sent")
@@ -93,14 +93,26 @@ def test_local_stop_preserves_other_job_and_global_stop_allows_recovery(tmp_path
     a, b = Gate(path, "a"), Gate(path, "b")
     a.claim()
     b.claim()
-    a.dispatch(p["jobs"]["a"]["observation"][0], False, lambda: (404, {}))
+    a.dispatch(
+        p["jobs"]["a"]["observation"][0],
+        False,
+        lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+    )
     a.stop()
     with pytest.raises(ValueError):
         a.dispatch(p["jobs"]["a"]["observation"][0], False, lambda: (200, {}))
-    b.dispatch(p["jobs"]["b"]["observation"][0], False, lambda: (404, {}))
+    b.dispatch(
+        p["jobs"]["b"]["observation"][0],
+        False,
+        lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+    )
     b.stop(environment=True)
     for key, gate in [("a", a), ("b", b)]:
-        gate.dispatch(p["jobs"][key]["recovery"][0], True, lambda: (404, {}))
+        gate.dispatch(
+            p["jobs"][key]["recovery"][0],
+            True,
+            lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+        )
         gate.finish()
     state = a.snapshot()
     assert state["total"] == 4
@@ -154,7 +166,11 @@ def test_deadline_cost_and_wrong_operation_refuse_before_callback(tmp_path):
         if variant == "method":
             operation["method"] = "DELETE"
         if variant == "duplicate":
-            gate.dispatch(operation, False, lambda: (404, {}))
+            gate.dispatch(
+                operation,
+                False,
+                lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+            )
         called = []
         with pytest.raises(ValueError):
             gate.dispatch(operation, False, lambda called=called: called.append(True))
@@ -175,7 +191,11 @@ def test_failed_callback_stops_only_local_job(tmp_path):
 
     with pytest.raises(TimeoutError):
         a.dispatch(p["jobs"]["a"]["observation"][0], False, timeout)
-    b.dispatch(p["jobs"]["b"]["observation"][0], False, lambda: (404, {}))
+    b.dispatch(
+        p["jobs"]["b"]["observation"][0],
+        False,
+        lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+    )
     assert a.snapshot()["jobs"]["a"]["stopped"]
     assert not a.snapshot()["stopped"]
     with pytest.raises(ValueError):
@@ -233,12 +253,16 @@ def test_absent_or_failed_cleanup_read_never_sends_unconditional_delete(tmp_path
         create(path, p)
         gate = Gate(path, "a")
         gate.claim()
-        gate.dispatch(p["jobs"]["a"]["observation"][0], False, lambda: (404, {}))
+        gate.dispatch(
+            p["jobs"]["a"]["observation"][0],
+            False,
+            lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+        )
 
         def read(failed=failed):
             if failed:
                 raise TimeoutError()
-            return 404, {}
+            return 404, {"error": {"code": 404, "status": "NOT_FOUND"}}
 
         if failed:
             with pytest.raises(TimeoutError):
@@ -254,7 +278,11 @@ def test_absent_or_failed_cleanup_read_never_sends_unconditional_delete(tmp_path
         )
         assert status is None and result["skipped"]
         assert sent == []
-        gate.dispatch(p["jobs"]["a"]["recovery"][2], True, lambda: (404, {}))
+        gate.dispatch(
+            p["jobs"]["a"]["recovery"][2],
+            True,
+            lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+        )
         gate.finish()
         assert gate.snapshot()["total"] == 3
 
@@ -278,15 +306,27 @@ def recover_in_process(path, key, ready, start, results):
     gate = Gate(path, key)
     gate.claim()
     p = gate.snapshot()["plan"]
-    gate.dispatch(p["jobs"][key]["observation"][0], False, lambda: (404, {}))
+    gate.dispatch(
+        p["jobs"][key]["observation"][0],
+        False,
+        lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+    )
     ready.put(key)
     start.wait(5)
     refused = False
     try:
-        gate.dispatch(p["jobs"][key]["observation"][1], False, lambda: (404, {}))
+        gate.dispatch(
+            p["jobs"][key]["observation"][1],
+            False,
+            lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+        )
     except ValueError:
         refused = True
-    gate.dispatch(p["jobs"][key]["recovery"][0], True, lambda: (404, {}))
+    gate.dispatch(
+        p["jobs"][key]["recovery"][0],
+        True,
+        lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+    )
     gate.finish()
     results.put(refused)
 
@@ -375,7 +415,9 @@ def test_invalid_recovery_version_keeps_independent_cleanup_available(
     create(path, p)
     gate = Gate(path, "a")
     gate.claim()
-    gate.dispatch(read, False, lambda: (404, {}))
+    gate.dispatch(
+        read, False, lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}})
+    )
     gate.dispatch(
         read, True, lambda: (200, {"name": "a", "fields": {}, "updateTime": version})
     )

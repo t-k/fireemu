@@ -69,3 +69,11 @@ The shadow now retains its exact executable as `fireemu` inside its output direc
 The shared supervisor source change requires a new prepared Explain observer binding. `prod-campaign-explain-01-v3.json` is the new preparation manifest; v2 and all historical receipts remain unchanged. This is not new production authorization.
 
 This implementation remains under local end-to-end verification and O7 preparation. No production campaign is approved by these code changes. Parent count remains **0 / 14**, and production-unobserved conditions reduced remain **0**.
+
+## Typed cleanup and post-wait deadline repair
+
+The shared Gate now records each final typed Firestore NOT_FOUND response together with its event index. Both Gate completion and shared-ledger release validate the resource's final declared recovery GET, exact request/response digests, typed status, completion, and phase. An `absent` list or completion boolean alone cannot release a lease. HTML404, a mismatched error status, non-integer error codes, and incomplete transport preserve ownership. Raw observations are retained.
+
+The limits wire carries its immutable phase deadline into the charged callback without reacquiring the Gate lock. After shared admission waiting and request preparation, it rechecks the complete transfer reservation against that phase deadline. Metadata uses the state already held by `manage` and rechecks phase and permission deadlines after shared admission. Observation cannot consume recovery-reserved time through ledger contention; recovery also remains bounded by its own deadline.
+
+New local regressions cover real Gate/collector/ledger cleanup after owned creations and deterministic shared waiting across data/metadata and observation/recovery. Normal absence fixtures now contain genuine typed NOT_FOUND responses; malformed response cases remain explicit negative tests. The changed shared source has a new prepared Explain manifest, `prod-campaign-explain-01-v4.json`; earlier preparation manifests and historical receipts are preserved. These are execution-safety repairs, not new Firebase compatibility gaps or production evidence.

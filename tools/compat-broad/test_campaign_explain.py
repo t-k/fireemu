@@ -170,7 +170,7 @@ def test_explain_validator_accepts_structured_comparable_api_errors(status, erro
 
 def test_manifest_is_exactly_six_owned_explain_cases():
     value = manifest()
-    assert value["kind"] == "production-campaign-explain-01-v3"
+    assert value["kind"] == "production-campaign-explain-01-v4"
     assert value["status"] == "prepared-offline"
     assert value["productionExecutable"] is True
     assert value["template"]["nonce"] == "{freshNonce}"
@@ -219,7 +219,7 @@ def test_manifest_binds_metadata_and_recovery_budget():
 def test_checked_in_manifest_and_binding_are_stable():
     path = (
         __import__("pathlib").Path(__file__).parents[2]
-        / "spec/compatibility/broad-runs/prod-campaign-explain-01-v3.json"
+        / "spec/compatibility/broad-runs/prod-campaign-explain-01-v4.json"
     )
     assert json.loads(path.read_bytes()) == manifest()
     assert binding()["manifestDigest"] == digest(manifest())

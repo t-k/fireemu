@@ -494,3 +494,82 @@ def test_gate_resource_lock_prevents_same_document_escape(tmp_path, covered):
     with pytest.raises(ValueError, match="conflict" if covered else "not covered"):
         ledger.reserve(envelope(), request, other_plan, now=1100)
     assert ledger.snapshot() == before
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"nonJson": "<html>not found</html>"},
+        {"error": {"code": 404, "status": "PERMISSION_DENIED"}},
+        {"error": {"code": "404", "status": "NOT_FOUND"}},
+        {"error": {"code": 404.0, "status": "NOT_FOUND"}},
+    ],
+)
+def test_untyped_absence_never_releases_shared_ownership(tmp_path, body):
+    ledger = Ledger.create(tmp_path / "ledger")
+    first = claim(tmp_path, "a")
+    ticket = ledger.reserve(envelope(), first, plan(), now=1100)
+    create(Path(first["gatePath"]), plan())
+    gate = Gate(first["gatePath"], "limits")
+    gate.claim()
+    operation = plan()["jobs"]["limits"]["recovery"][0]
+    with pytest.raises(ValueError, match="typed.*absence"):
+        gate.dispatch(operation, True, lambda: (404, body))
+    with pytest.raises(ValueError):
+        gate.finish()
+    with pytest.raises(ValueError):
+        ledger.finish(ticket)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+    with pytest.raises(ValueError):
+        ledger.reserve(
+            envelope(), claim(tmp_path, "b", first["locks"]), plan("b"), now=1110
+        )
+
+
+def test_absent_boolean_cannot_replace_bound_cleanup_evidence(tmp_path):
+    from shared_gate import _save
+
+    ledger = Ledger.create(tmp_path / "ledger")
+    first = claim(tmp_path, "a")
+    ticket = ledger.reserve(envelope(), first, plan(), now=1100)
+    create(Path(first["gatePath"]), plan())
+    gate = Gate(first["gatePath"], "limits")
+    gate.claim()
+    with gate.locked() as state:
+        job = state["jobs"]["limits"]
+        job.update(complete=True, absent=list(job["resources"]), recovery=1)
+        _save(gate.path, state)
+    with pytest.raises(ValueError):
+        ledger.finish(ticket)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("requestDigest", "wrong-resource"),
+        ("responseDigest", "wrong-body"),
+        ("completed", False),
+        ("phase", "observation"),
+    ],
+)
+def test_absence_release_checks_request_response_and_completion(tmp_path, field, value):
+    from shared_gate import _save
+
+    ledger = Ledger.create(tmp_path / "ledger")
+    first = claim(tmp_path, "a")
+    ticket = ledger.reserve(envelope(), first, plan(), now=1100)
+    create(Path(first["gatePath"]), plan())
+    gate = Gate(first["gatePath"], "limits")
+    gate.claim()
+    operation = plan()["jobs"]["limits"]["recovery"][0]
+    gate.dispatch(
+        operation, True, lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}})
+    )
+    gate.finish()
+    with gate.locked() as state:
+        state["events"][0][field] = value
+        _save(gate.path, state)
+    with pytest.raises(ValueError):
+        ledger.finish(ticket)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"

@@ -74,7 +74,9 @@ def dispatch(adapter, operation, response, *, recovery=False):
 def test_unproved_creation_never_adopts_foreign_recovery_version(tmp_path, variant):
     plan, adapter, gate, name, document = harness(tmp_path)
     observations = plan["jobs"]["transaction-field"]["observation"]
-    dispatch(adapter, observations[0], (404, {}))
+    dispatch(
+        adapter, observations[0], (404, {"error": {"code": 404, "status": "NOT_FOUND"}})
+    )
     response = (200, copy.deepcopy(document))
     if variant == "conflict":
         response = (409, {"error": {"code": 409}})
@@ -123,7 +125,9 @@ def test_unproved_creation_never_adopts_foreign_recovery_version(tmp_path, varia
 def test_successful_conditional_create_cleans_up_only_exact_created_version(tmp_path):
     plan, adapter, gate, name, document = harness(tmp_path)
     operations = plan["jobs"]["transaction-field"]["observation"]
-    dispatch(adapter, operations[0], (404, {}))
+    dispatch(
+        adapter, operations[0], (404, {"error": {"code": 404, "status": "NOT_FOUND"}})
+    )
     assert gate.snapshot()["jobs"]["transaction-field"]["owned"] == []
     dispatch(adapter, operations[1], (200, document))
     dispatch(adapter, op(name), (200, document), recovery=True)
@@ -133,7 +137,12 @@ def test_successful_conditional_create_cleans_up_only_exact_created_version(tmp_
         (200, {}),
         recovery=True,
     )
-    dispatch(adapter, op(name), (404, {}), recovery=True)
+    dispatch(
+        adapter,
+        op(name),
+        (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+        recovery=True,
+    )
     gate.finish()
     assert gate.snapshot()["jobs"]["transaction-field"]["complete"]
 
@@ -142,7 +151,7 @@ def test_replacement_read_cannot_transfer_ownership_or_consume_delete_budget(tmp
     plan, adapter, gate, name, document = harness(tmp_path)
     for operation, response in zip(
         plan["jobs"]["transaction-field"]["observation"][:2],
-        [(404, {}), (200, document)],
+        [(404, {"error": {"code": 404, "status": "NOT_FOUND"}}), (200, document)],
         strict=True,
     ):
         dispatch(adapter, operation, response)
@@ -195,7 +204,11 @@ def document_server():
             fault = state["fault"] if "transaction-field" in name else None
             status, response = 200, {}
             if self.command == "GET":
-                status, response = (200, docs[name]) if name in docs else (404, {})
+                status, response = (
+                    (200, docs[name])
+                    if name in docs
+                    else (404, {"error": {"code": 404, "status": "NOT_FOUND"}})
+                )
             elif self.command == "PATCH":
                 if fault == "conflict":
                     docs[name] = {
@@ -346,7 +359,11 @@ def test_batch_conditional_creation_requires_typed_per_write_acknowledgements(
     partial.claim()
     job = plan["jobs"][key]
     for operation in job["observation"][:3]:
-        partial.dispatch(operation, False, lambda: (404, {}))
+        partial.dispatch(
+            operation,
+            False,
+            lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+        )
     setup = job["observation"][3]
     partial.dispatch(
         setup,
@@ -427,7 +444,9 @@ def test_current_generic_manifest_does_not_reuse_historical_collector_identity()
 def test_interrupted_creation_retains_uncertainty_and_cannot_be_reclaimed(tmp_path):
     plan, adapter, gate, name, _document = harness(tmp_path)
     operations = plan["jobs"]["transaction-field"]["observation"]
-    dispatch(adapter, operations[0], (404, {}))
+    dispatch(
+        adapter, operations[0], (404, {"error": {"code": 404, "status": "NOT_FOUND"}})
+    )
     with pytest.raises(KeyboardInterrupt):
         dispatch(adapter, operations[1], KeyboardInterrupt())
     state = gate.snapshot()
@@ -436,13 +455,20 @@ def test_interrupted_creation_retains_uncertainty_and_cannot_be_reclaimed(tmp_pa
     with pytest.raises(ValueError, match="ownership retained"):
         Gate(gate.path, "transaction-field").claim()
     with pytest.raises(ValueError, match="uncertain"):
-        dispatch(adapter, op(name), (404, {}), recovery=True)
+        dispatch(
+            adapter,
+            op(name),
+            (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+            recovery=True,
+        )
 
 
 def test_recovery_marker_change_cannot_adopt_even_same_version(tmp_path):
     plan, adapter, gate, name, document = harness(tmp_path)
     operations = plan["jobs"]["transaction-field"]["observation"]
-    dispatch(adapter, operations[0], (404, {}))
+    dispatch(
+        adapter, operations[0], (404, {"error": {"code": 404, "status": "NOT_FOUND"}})
+    )
     dispatch(adapter, operations[1], (200, document))
     changed = copy.deepcopy(document)
     changed["fields"]["_sharedOwner"] = {"referenceValue": name + "-foreign"}

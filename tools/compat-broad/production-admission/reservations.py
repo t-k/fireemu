@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from broad_contract import digest
-from shared_gate import Gate, _save
+from shared_gate import Gate, _save, validate_absence_proofs
 
 DIMENSIONS = {"requests", "accounts", "resources", "costMicrousd"}
 MODES = {"READ": 0, "WRITE": 1, "EXCLUSIVE": 2}
@@ -418,6 +418,8 @@ class Ledger:
                 or gate["costMicrousd"] > claim["budget"]["costMicrousd"]
             ):
                 raise ValueError("registered Gate cleanup/accounting incomplete")
+            for job_name in gate["jobs"]:
+                validate_absence_proofs(gate, job_name)
         except Exception:
             with self._locked() as state:
                 self._row(state, ticket)["state"] = "held"

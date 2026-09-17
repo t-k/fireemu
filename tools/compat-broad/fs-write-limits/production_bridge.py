@@ -42,8 +42,21 @@ class LimitsGate(ProductionGate):
         self._wire_context = None
 
     def dispatch(self, operation, recovery, send):
+        # Capture immutable phase timing before entering dispatch's held Gate lock.
+        state = self.snapshot()
+        deadline = (
+            state["started"]
+            + state["plan"]["wallSeconds"]
+            - (0 if recovery else state["plan"]["recoverySeconds"])
+        )
+
         def admitted():
-            self._wire_context = (threading.get_ident(), digest(operation), recovery)
+            self._wire_context = (
+                threading.get_ident(),
+                digest(operation),
+                recovery,
+                deadline,
+            )
             try:
                 return send()
             finally:
@@ -52,9 +65,15 @@ class LimitsGate(ProductionGate):
         return super().dispatch(operation, recovery, admitted)
 
     def consume_wire(self, operation, recovery):
-        if self._wire_context != (threading.get_ident(), digest(operation), recovery):
+        if self._wire_context is None or self._wire_context[:3] != (
+            threading.get_ident(),
+            digest(operation),
+            recovery,
+        ):
             raise ValueError("wire requires the charged Gate callback")
+        deadline = self._wire_context[3]
         self._wire_context = None
+        return deadline
 
 
 def source_digest():
@@ -137,7 +156,7 @@ def bind_wire(coordinator, plan, *, transmit=request):
         offset = len(frozen["jobs"]["limits"]["observation"]) if recovery else 0
         if request_index != offset + index:
             raise ValueError("collector position differs")
-        bound_gate.consume_wire(operation, recovery)
+        phase_deadline = bound_gate.consume_wire(operation, recovery)
         validate(recovery)
         value = {
             "nonce": nonce,
@@ -147,6 +166,8 @@ def bind_wire(coordinator, plan, *, transmit=request):
             "token": coordinator.access(),
         }
         prepare(value)
+        if time.monotonic() + 13 > phase_deadline:
+            raise ValueError("phase deadline after shared admission wait")
         result = transmit(value)
         if result.get("status") in {401, 403}:
             # Retain the complete response for the collector before it stops.
@@ -191,6 +212,20 @@ class ReservedCoordinator(Coordinator):
         # super.reserve performs the existing rate wait and durable attempt debit.
         super().reserve(service, duration)
         self.validate_reservation(duration + 1)
+        # manage already holds this state; never reacquire Gate.snapshot here.
+        context = self.management_context
+        if context is None:
+            raise ValueError("management context changed")
+        state, _ = context
+        deadline = (
+            state["started"]
+            + state["plan"]["wallSeconds"]
+            - (0 if self.budget.recovery else state["plan"]["recoverySeconds"])
+        )
+        if time.monotonic() + duration + 1 > deadline:
+            raise ValueError("phase deadline after shared admission wait")
+        if time.time() + duration + 1 > (self.permission or {})["expiresAt"]:
+            raise ValueError("permission deadline after shared admission wait")
 
     def validate_reservation(self, duration=13):
         if (

@@ -175,3 +175,133 @@ def test_closing_lease_blocks_post_wait_data_and_metadata_attempts(tmp_path, kin
     assert sent == []
     assert gate.snapshot()["total"] == 1
     assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+@pytest.mark.parametrize("recovery", [False, True])
+@pytest.mark.parametrize("kind", ["data", "metadata"])
+@pytest.mark.parametrize("shared_wait", [0, 1, 14])
+def test_shared_wait_rechecks_phase_deadline_before_transmission(
+    tmp_path, monkeypatch, recovery, kind, shared_wait
+):
+    from contextlib import contextmanager
+
+    coordinator, gate, ledger, _, plan = setup(tmp_path)
+    sent = []
+
+    def transmit(value):
+        sent.append(value)
+        return {
+            "complete": True,
+            "status": 404,
+            "body": {"error": {"code": 404, "status": "NOT_FOUND"}},
+        }
+
+    wire = bind_reserved_wire(coordinator, plan, transmit=transmit)
+    coordinator.budget.recovery = recovery
+    state = gate.snapshot()
+    deadline = (
+        state["started"]
+        + plan["wallSeconds"]
+        - (0 if recovery else plan["recoverySeconds"])
+    )
+    clock = [deadline - 13]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    original_locked = ledger._locked
+
+    @contextmanager
+    def waited_lock():
+        with original_locked() as live:
+            clock[0] += shared_wait
+            yield live
+
+    monkeypatch.setattr(ledger, "_locked", waited_lock)
+    phase = "recovery" if recovery else "observation"
+    operation = plan["jobs"]["limits"][phase][0]
+
+    def data():
+        value = wire(operation, recovery, 0, 16 if recovery else 0)
+        return value["status"], value["body"]
+
+    def metadata():
+        coordinator.reserve("metadata")
+        sent.append("metadata-sent")
+
+    def attempt():
+        if kind == "data":
+            gate.dispatch(operation, recovery, data)
+        else:
+            gate.manage(coordinator, "project", metadata)
+
+    if shared_wait:
+        with pytest.raises(ValueError, match="phase deadline"):
+            attempt()
+        assert sent == []
+    else:
+        attempt()
+        assert len(sent) == 1
+
+
+@pytest.mark.parametrize(
+    "response_kind", ["valid", "html", "wrong-status", "incomplete"]
+)
+def test_cleanup_proof_controls_ledger_release_after_owned_creation(
+    tmp_path, response_kind
+):
+    from collector import collect
+    from compiler import compile_limits_plan
+
+    _, gate, ledger, ticket, plan = setup(tmp_path)
+    compiled = compile_limits_plan("fireemu-35fe6", "(default)", plan["nonce"])
+    stored, deleted = {}, []
+    absent = {"error": {"code": 404, "status": "NOT_FOUND"}}
+
+    def wire(operation, recovery, index, request_index):
+        resource = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+        status, body, complete = 404, absent, True
+        if recovery and operation["method"] == "GET" and response_kind != "valid":
+            if response_kind == "html":
+                body = {"nonJson": "<html>missing route</html>"}
+            elif response_kind == "wrong-status":
+                body = {"error": {"code": 404, "status": "PERMISSION_DENIED"}}
+            else:
+                complete = False
+        elif operation["method"] == "PATCH":
+            if index in (4, 6):
+                stored[resource] = {
+                    "name": resource,
+                    "fields": operation["body"]["fields"],
+                    "updateTime": "2026-09-17T00:00:00Z",
+                }
+                status, body = 200, stored[resource]
+            else:
+                status, body = (
+                    400,
+                    {"error": {"code": 400, "status": "INVALID_ARGUMENT"}},
+                )
+        elif operation["method"] == "DELETE":
+            del stored[resource]
+            deleted.append(resource)
+            status, body = 200, {}
+        elif resource in stored:
+            status, body = 200, stored[resource]
+        return {"complete": complete, "status": status, "body": body, "failure": None}
+
+    result = collect(gate, compiled, tmp_path / "collection", wire)
+    if response_kind == "valid":
+        assert result["cleanupComplete"] is True
+        ledger.finish(ticket)
+        assert stored == {}
+        assert len(deleted) == 2
+        assert (
+            ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+            == "released"
+        )
+    else:
+        assert result["cleanupComplete"] is False
+        assert len(stored) == 2
+        assert deleted == []
+        with pytest.raises(ValueError):
+            ledger.finish(ticket)
+        assert (
+            ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+        )

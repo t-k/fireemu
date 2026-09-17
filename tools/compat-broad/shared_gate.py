@@ -23,6 +23,55 @@ from broad_contract import digest
 REQUEST_SECONDS = 13  # 12-second wire deadline plus adapter spacing allowance.
 
 
+def typed_absence(status, body):
+    error = body.get("error") if isinstance(body, dict) else None
+    return (
+        type(status) is int
+        and status == 404
+        and isinstance(error, dict)
+        and type(error.get("code")) is int
+        and error["code"] == 404
+        and error.get("status") == "NOT_FOUND"
+    )
+
+
+def validate_absence_proofs(state, job_name):
+    """Validate final typed readback against the registered recovery plan and journal."""
+    job = state["jobs"][job_name]
+    proofs = job.get("absenceProofs", {})
+    if set(proofs) != set(job["resources"]):
+        raise ValueError("typed cleanup absence evidence incomplete")
+    operations = state["plan"]["jobs"][job_name]["recovery"]
+    for resource, proof in proofs.items():
+        candidates = [
+            index
+            for index, operation in enumerate(operations)
+            if operation["method"] == "GET"
+            and operation["service"] == "firestore"
+            and operation["path"] == "/v1/" + resource
+        ]
+        index = proof.get("eventIndex")
+        if (
+            not candidates
+            or type(index) is not int
+            or not 0 <= index < len(state["events"])
+        ):
+            raise ValueError("typed cleanup absence event missing")
+        event = state["events"][index]
+        if (
+            event.get("job") != job_name
+            or event.get("phase") != "recovery"
+            or type(event.get("index")) is not int
+            or event["index"] != candidates[-1]
+            or event.get("requestDigest") != digest(operations[candidates[-1]])
+            or event.get("completed") is not True
+            or event.get("failure") is not None
+            or not typed_absence(event.get("status"), proof.get("body"))
+            or event.get("responseDigest") != digest(proof["body"])
+        ):
+            raise ValueError("typed cleanup absence evidence differs")
+
+
 def _save(path, state):
     temporary = path / "state.tmp"
     fd = os.open(
@@ -379,6 +428,8 @@ class Gate:
             job[phase] += 1
             if recovery and resource in job["absent"]:
                 job["absent"].remove(resource)
+            if recovery:
+                job.setdefault("absenceProofs", {}).pop(resource, None)
             job["inflight"] = True
             event = {
                 "job": self.job,
@@ -419,8 +470,16 @@ class Gate:
                             job["owned"].append(proof["name"])
                 if operation["method"] == "GET" and resource in job["resources"]:
                     if status == 404:
-                        if recovery and resource not in job["absent"]:
-                            job["absent"].append(resource)
+                        if not typed_absence(status, body):
+                            job["stopped"] = True
+                            raise ValueError("typed Firestore absence required")
+                        if recovery:
+                            if resource not in job["absent"]:
+                                job["absent"].append(resource)
+                            job.setdefault("absenceProofs", {})[resource] = {
+                                "eventIndex": len(state["events"]) - 1,
+                                "body": body,
+                            }
                     elif status == 200 and (
                         not isinstance(body, dict)
                         or body.get("name") != resource
@@ -461,6 +520,7 @@ class Gate:
                 or set(job["absent"]) != set(job["resources"])
             ):
                 raise ValueError("cleanup incomplete; ownership retained")
+            validate_absence_proofs(state, self.job)
             job["complete"] = True
             _save(self.path, state)
 

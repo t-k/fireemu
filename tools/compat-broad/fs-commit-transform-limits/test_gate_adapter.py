@@ -192,7 +192,19 @@ def test_default_gate_still_rejects_changed_creation_fields(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "foreign_name", ["remote_transport", "batch_adapter", "broad_contract", "shared_production"]
+    "foreign_name",
+    [
+        "remote_transport",
+        "batch_adapter",
+        "batch_contract",
+        "batch_pair",
+        "broad_cases",
+        "broad_contract",
+        "shared_cases",
+        "shared_gate",
+        "shared_production",
+        "shared_production_pair",
+    ],
 )
 def test_foreign_limits_module_is_rejected_before_adapter_import(tmp_path, foreign_name):
     script = """

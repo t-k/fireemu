@@ -72,7 +72,17 @@ _limits_origins["reservations"] = ROOT / "tools/compat-broad/production-admissio
 _limits_origins.update(
     {
         name: ROOT / "tools/compat-broad" / f"{name}.py"
-        for name in ("batch_adapter", "broad_contract", "shared_production")
+        for name in (
+            "batch_adapter",
+            "batch_contract",
+            "batch_pair",
+            "broad_cases",
+            "broad_contract",
+            "shared_cases",
+            "shared_gate",
+            "shared_production",
+            "shared_production_pair",
+        )
     }
 )
 _check_import_origins(_limits_origins)

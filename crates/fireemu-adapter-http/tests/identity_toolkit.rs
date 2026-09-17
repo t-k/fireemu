@@ -1,7 +1,7 @@
 //! Identity Toolkit flows through the pure handlers, plus one socket-level smoke test.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 
 use fireemu_adapter_http::identity_toolkit::{
     handle, AuthBlockingHook, AuthQueryLimits, AuthState, BlockingFunctionCode,
@@ -228,6 +228,16 @@ struct BeforeCreateOnlySuccessfulHook(Arc<Mutex<Vec<BlockingAuthEvent>>>);
 
 struct DelayedHookRelease(Arc<DelayedBlockingHook>);
 
+struct ConcurrentBeforeCreateHook {
+    state: Mutex<ConcurrentBeforeCreateState>,
+    ready: Condvar,
+}
+
+struct ConcurrentBeforeCreateState {
+    observed_uids: Vec<String>,
+    release: bool,
+}
+
 struct AdvancingQuotaHook {
     clock: Arc<Mutex<VirtualClock>>,
     advance: LogicalDuration,
@@ -238,6 +248,46 @@ struct DeletingUnrelatedUserHook {
     store: Arc<Mutex<AuthStore>>,
     uid: String,
     deleted: AtomicBool,
+}
+
+impl ConcurrentBeforeCreateHook {
+    fn wait_for_both(&self) -> Vec<String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut state = self.state.lock().unwrap();
+        while state.observed_uids.len() < 2 {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(!remaining.is_zero(), "both signups must reach BeforeCreate");
+            state = self.ready.wait_timeout(state, remaining).unwrap().0;
+        }
+        state.observed_uids.clone()
+    }
+
+    fn release(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.release = true;
+        self.ready.notify_all();
+    }
+}
+
+impl AuthBlockingHook for ConcurrentBeforeCreateHook {
+    fn handles(&self, event: BlockingAuthEvent) -> bool {
+        event == BlockingAuthEvent::BeforeCreate
+    }
+
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        assert_eq!(event, BlockingAuthEvent::BeforeCreate);
+        let mut state = self.state.lock().unwrap();
+        state.observed_uids.push(user.local_id.to_string());
+        self.ready.notify_all();
+        while !state.release {
+            state = self.ready.wait(state).unwrap();
+        }
+        Ok(json!({}))
+    }
 }
 
 impl Drop for DelayedHookRelease {
@@ -607,6 +657,76 @@ fn blocking_auth_rejection_rolls_back_user_creation() {
             LogicalInstant::from_unix_seconds(1_788_004_860)
         ),
         (0, 0)
+    );
+}
+
+#[test]
+fn concurrent_signups_assign_distinct_uids_before_create_commits() {
+    let mut auth = state();
+    let hook = Arc::new(ConcurrentBeforeCreateHook {
+        state: Mutex::new(ConcurrentBeforeCreateState {
+            observed_uids: Vec::new(),
+            release: false,
+        }),
+        ready: Condvar::new(),
+    });
+    auth.blocking = Some(hook.clone());
+    let auth = Arc::new(auth);
+
+    let first_auth = auth.clone();
+    let first = std::thread::spawn(move || {
+        post(
+            &first_auth,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "concurrent-first@example.com", "password": "hunter22"}),
+        )
+    });
+    let second_auth = auth.clone();
+    let second = std::thread::spawn(move || {
+        post(
+            &second_auth,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "concurrent-second@example.com", "password": "hunter22"}),
+        )
+    });
+
+    let observed_uids = hook.wait_for_both();
+    assert_eq!(observed_uids.len(), 2);
+    assert_ne!(observed_uids[0], observed_uids[1]);
+    hook.release();
+
+    let (first_status, first_body) = first.join().unwrap();
+    let (second_status, second_body) = second.join().unwrap();
+    assert_eq!(first_status, 200, "{first_body}");
+    assert_eq!(second_status, 200, "{second_body}");
+
+    let first_uid = first_body["localId"].as_str().unwrap();
+    let second_uid = second_body["localId"].as_str().unwrap();
+    assert_ne!(first_uid, second_uid);
+    assert_eq!(
+        observed_uids
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::HashSet<_>>(),
+        [first_uid, second_uid].into_iter().collect()
+    );
+
+    let store = auth.store.lock().unwrap();
+    assert_eq!(
+        store
+            .user_by_email("concurrent-first@example.com")
+            .unwrap()
+            .local_id
+            .to_string(),
+        first_uid
+    );
+    assert_eq!(
+        store
+            .user_by_email("concurrent-second@example.com")
+            .unwrap()
+            .local_id
+            .to_string(),
+        second_uid
     );
 }
 

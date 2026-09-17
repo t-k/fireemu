@@ -3,14 +3,13 @@ import hashlib
 import json
 
 import pytest
-
 from query_in_comparator import (
     compare_evidence,
     compare_rows,
     load_collected_bundle,
 )
-from query_in_production import RawJournal
 from query_in_compiler import compile_plan
+from query_in_production import RawJournal
 
 
 def _bundle(project: str = "demo", nonce: str = "a" * 32) -> dict:

@@ -68,7 +68,7 @@ def load_collected_bundle(directory: str | Path) -> dict[str, Any]:
     rows = bundle.get("rows")
     cleanup = bundle.get("cleanup")
     if not isinstance(rows, list) or not isinstance(cleanup, list):
-        raise ValueError("collection bundle journals are missing")
+        raise TypeError("collection bundle journals are missing")
     if len(rows) != 6 or len(cleanup) != 3:
         raise ValueError("collection bundle does not contain nine journal rows")
 

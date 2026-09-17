@@ -6574,11 +6574,16 @@ fn assert_custom_token_claims(body: &Value, tenant: &str, uid: &str) {
 }
 
 fn sign_in_custom_token(state: &AuthState, tenant: &str, uid: &str) -> Value {
-    let token = custom_token(
-        uid,
-        &json!({"role": "token", "tokenOnly": true}),
-        1_788_008_460,
-    );
+    let token = custom_token_from_payload(&json!({
+        "aud": fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE,
+        "iss": "firebase-auth-emulator@example.com",
+        "sub": "firebase-auth-emulator@example.com",
+        "uid": uid,
+        "claims": {"role": "token", "tokenOnly": true},
+        "tenant_id": tenant,
+        "iat": 1_788_004_860,
+        "exp": 1_788_008_460,
+    }));
     let (status, body) = post(
         state,
         &format!("{V1}/accounts:signInWithCustomToken?key=worker-key"),

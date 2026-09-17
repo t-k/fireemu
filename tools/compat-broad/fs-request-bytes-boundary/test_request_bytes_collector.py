@@ -307,3 +307,37 @@ def test_fractional_and_boolean_over_refusal_codes_are_rejected():
             },
             "INVALID_ARGUMENT",
         )
+
+
+def test_contradictory_raw_response_cannot_prove_preflight(tmp_path):
+    from request_bytes_collector import collect_local
+
+    value = plan()
+    dispatched = []
+
+    def execute(operation):
+        dispatched.append(operation)
+        raw = b"not-the-parsed-json"
+        return {
+            "complete": True,
+            "failure": None,
+            "status": 404,
+            "body": {"error": {"code": 404, "status": "NOT_FOUND"}},
+            "rawBodyBase64": base64.b64encode(raw).decode(),
+            "bodyBytes": len(raw),
+        }
+
+    result = collect_local(value, execute, tmp_path / "run")
+    assert result["completed"] is False
+    assert not any(item["kind"] == "conditional-create-commit" for item in dispatched)
+
+
+def test_symlinked_output_parent_is_rejected(tmp_path):
+    from request_bytes_collector import collect_local
+
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "link").symlink_to(real, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        collect_local(plan(), lambda _operation: pytest.fail("unexpected dispatch"), tmp_path / "link" / "run")
+    assert not (real / "run").exists()

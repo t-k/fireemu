@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import errno
 import hashlib
 import json
 import os
@@ -33,6 +34,14 @@ def _valid_timestamp(value: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _raw_matches_body(raw: bytes, body: Any) -> bool:
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        return isinstance(body, str) and body == raw.decode("utf-8", errors="replace")
+    return type(parsed) is type(body) and parsed == body
 
 
 def complete(receipt: Any) -> bool:
@@ -155,13 +164,12 @@ def _safe_json(value: Any) -> bytes:
     return encoded
 
 
-def _publish(directory: Path, name: str, value: Any, *, bounded: bool = True) -> None:
+def _publish(directory: int, name: str, value: Any, *, bounded: bool = True) -> None:
     encoded = (_safe_json(value) if bounded else compact_utf8(value)) + b"\n"
     if "/" in name or name.startswith("."):
         raise ValueError("unsafe output filename")
-    path = directory / name
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
-    fd = os.open(path, flags, 0o600)
+    fd = os.open(name, flags, 0o600, dir_fd=directory)
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(encoded)
@@ -169,10 +177,32 @@ def _publish(directory: Path, name: str, value: Any, *, bounded: bool = True) ->
             os.fsync(stream.fileno())
     except BaseException:
         try:
-            path.unlink()
+            os.unlink(name, dir_fd=directory)
         except FileNotFoundError:
             pass
         raise
+
+
+def _create_output_directory(output: Path) -> int:
+    absolute = output.absolute()
+    parts = absolute.parts[1:]
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise ValueError("unsafe output path")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory = os.open(absolute.anchor, flags)
+    try:
+        for part in parts[:-1]:
+            next_directory = os.open(part, flags, dir_fd=directory)
+            os.close(directory)
+            directory = next_directory
+        os.mkdir(parts[-1], 0o700, dir_fd=directory)
+        return os.open(parts[-1], flags, dir_fd=directory)
+    except OSError as error:
+        if error.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise ValueError("symlink or non-directory output ancestor") from error
+        raise
+    finally:
+        os.close(directory)
 
 
 def _row(
@@ -225,237 +255,263 @@ def collect_local(
     """Execute the immutable schedule and persist bounded rows in an exclusive directory."""
     validate_schedule(plan)
     plan = copy.deepcopy(plan)
-    output = Path(output)
-    output.mkdir(mode=0o700, parents=False, exist_ok=False)
-    if output.is_symlink():
-        raise ValueError("output directory must not be a symlink")
-    for probe in plan["probes"]:
-        body = compact_utf8(probe["body"])
-        if len(body) != probe["bodyBytes"] or len(body) > MAX_RESPONSE_BYTES * 8:
-            # The request bodies are intentionally retained outside bounded rows.
-            raise ValueError("unexpected compiled Commit body")
-        _publish(
-            output,
-            f"request-{probe['label']}.json",
-            {
-                "probe": probe["label"],
-                "bytes": len(body),
-                "sha256": hashlib.sha256(body).hexdigest(),
-            },
-        )
-        with (output / f"request-{probe['label']}.body").open("xb") as stream:
-            stream.write(body)
-            stream.flush()
-            os.fsync(stream.fileno())
-
-    rows: list[dict[str, Any]] = []
-    recovery: list[dict[str, Any]] = []
-    versions: dict[str, dict[str, str]] = {}
-    ownership_reads: dict[tuple[str, str], dict[str, Any]] = {}
-    preflight_ok: dict[str, bool] = {probe["label"]: True for probe in plan["probes"]}
-    commit_sent: set[str] = set()
-    commit_refused: set[str] = set()
-    stopped = False
-    dispatches = 0
-    failures: list[str] = []
-    absence_proofs: dict[str, set[str]] = {
-        probe["label"]: set() for probe in plan["probes"]
-    }
-    for sequence, slot in enumerate(plan["executionSchedule"]):
-        phase, index = slot["phase"], slot["index"]
-        operation = copy.deepcopy(plan[phase][index])
-        probe = operation["probe"]
-        kind = operation["kind"]
-        resource = operation.get("resource")
-        skip = None
-        if stopped:
-            skip = "earlier-probe-incomplete"
-        elif (
-            phase == "observation"
-            and kind != "preflight-typed-absence"
-            and not preflight_ok[probe]
-            or kind == "conditional-create-commit"
-            and not preflight_ok[probe]
-        ):
-            skip = "preflight-not-proven"
-        elif kind == "cleanup-version-bound-delete":
-            prior = ownership_reads.get((probe, resource))
-            proved_version = versions.get(probe, {}).get(resource)
-            expected_digest = plan["documents"][resource]["fieldsSha256"]
-            if (
-                proved_version is None
-                or prior is None
-                or not readback_matches(
-                    prior, resource, expected_digest, plan["nonce"], proved_version
-                )
-            ):
-                skip = "creation-and-current-version-not-proven"
-            else:
-                operation["path"] += "?currentDocument.updateTime=" + quote(
-                    proved_version, safe=""
-                )
-        if skip:
-            row = _row(
-                phase,
-                index,
-                operation,
-                {"complete": False, "failure": "skipped"},
-                "skipped",
-                skipped=skip,
+    output_fd = _create_output_directory(Path(output))
+    try:
+        for probe in plan["probes"]:
+            body = compact_utf8(probe["body"])
+            if len(body) != probe["bodyBytes"] or len(body) > MAX_RESPONSE_BYTES * 8:
+                # The request bodies are intentionally retained outside bounded rows.
+                raise ValueError("unexpected compiled Commit body")
+            _publish(
+                output_fd,
+                f"request-{probe['label']}.json",
+                {
+                    "probe": probe["label"],
+                    "bytes": len(body),
+                    "sha256": hashlib.sha256(body).hexdigest(),
+                },
             )
-            expected_refusal_skip = (
-                kind == "cleanup-version-bound-delete"
-                and probe in commit_refused
-                and typed_not_found(ownership_reads.get((probe, resource)))
-            )
-            if not expected_refusal_skip:
-                failures.append(f"{phase}:{index}:{skip}")
-        else:
-            if kind == "conditional-create-commit":
-                commit_sent.add(probe)
-            dispatches += 1
-            try:
-                receipt = execute(copy.deepcopy(operation))
-                if not isinstance(receipt, dict):
-                    raise TypeError("executor returned non-object")
-                if complete(receipt):
-                    encoded = receipt.get("rawBodyBase64")
-                    try:
-                        raw = (
-                            base64.b64decode(encoded, validate=True)
-                            if isinstance(encoded, str)
-                            else None
-                        )
-                    except (ValueError, base64.binascii.Error):
-                        raw = None
-                    if (
-                        raw is None
-                        or len(raw) > MAX_RESPONSE_BYTES
-                        or ("bodyBytes" in receipt and receipt["bodyBytes"] != len(raw))
-                    ):
-                        receipt = {
-                            **receipt,
-                            "complete": False,
-                            "failure": "response-bytes-unavailable",
-                        }
-                        receipt.pop("rawBodyBase64", None)
-            except Exception as error:  # noqa: BLE001 - lost responses remain recoverable.
-                receipt = {
-                    "complete": False,
-                    "failure": f"executor:{type(error).__name__}",
-                }
-            status = "complete" if complete(receipt) else "infrastructure-incomplete"
-            if kind == "cleanup-ownership-read":
-                ownership_reads[(probe, resource)] = receipt
-            row = _row(phase, index, operation, receipt, status)
-            raw_encoded = receipt.get("rawBodyBase64")
-            if isinstance(raw_encoded, str):
-                raw = base64.b64decode(raw_encoded, validate=True)
-                if len(raw) > MAX_RESPONSE_BYTES:
-                    raise ValueError("response exceeds cap")
-                sidecar = f"response-{sequence:03d}.body"
-                fd = os.open(
-                    output / sidecar,
+            with os.fdopen(
+                os.open(
+                    f"request-{probe['label']}.body",
                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                     0o600,
+                    dir_fd=output_fd,
+                ),
+                "wb",
+            ) as stream:
+                stream.write(body)
+                stream.flush()
+                os.fsync(stream.fileno())
+
+        rows: list[dict[str, Any]] = []
+        recovery: list[dict[str, Any]] = []
+        versions: dict[str, dict[str, str]] = {}
+        ownership_reads: dict[tuple[str, str], dict[str, Any]] = {}
+        preflight_ok: dict[str, bool] = {
+            probe["label"]: True for probe in plan["probes"]
+        }
+        commit_sent: set[str] = set()
+        commit_refused: set[str] = set()
+        stopped = False
+        dispatches = 0
+        failures: list[str] = []
+        absence_proofs: dict[str, set[str]] = {
+            probe["label"]: set() for probe in plan["probes"]
+        }
+        for sequence, slot in enumerate(plan["executionSchedule"]):
+            phase, index = slot["phase"], slot["index"]
+            operation = copy.deepcopy(plan[phase][index])
+            probe = operation["probe"]
+            kind = operation["kind"]
+            resource = operation.get("resource")
+            skip = None
+            if stopped:
+                skip = "earlier-probe-incomplete"
+            elif (
+                phase == "observation"
+                and kind != "preflight-typed-absence"
+                and not preflight_ok[probe]
+                or kind == "conditional-create-commit"
+                and not preflight_ok[probe]
+            ):
+                skip = "preflight-not-proven"
+            elif kind == "cleanup-version-bound-delete":
+                prior = ownership_reads.get((probe, resource))
+                proved_version = versions.get(probe, {}).get(resource)
+                expected_digest = plan["documents"][resource]["fieldsSha256"]
+                if (
+                    proved_version is None
+                    or prior is None
+                    or not readback_matches(
+                        prior, resource, expected_digest, plan["nonce"], proved_version
+                    )
+                ):
+                    skip = "creation-and-current-version-not-proven"
+                else:
+                    operation["path"] += "?currentDocument.updateTime=" + quote(
+                        proved_version, safe=""
+                    )
+            if skip:
+                row = _row(
+                    phase,
+                    index,
+                    operation,
+                    {"complete": False, "failure": "skipped"},
+                    "skipped",
+                    skipped=skip,
                 )
-                with os.fdopen(fd, "wb") as stream:
-                    stream.write(raw)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                row["responseBodyFile"] = sidecar
-            if kind == "preflight-typed-absence" and not typed_not_found(receipt):
-                preflight_ok[probe] = False
-                failures.append(f"{phase}:{index}:preflight-not-absent")
-            elif kind == "conditional-create-commit":
+                expected_refusal_skip = (
+                    kind == "cleanup-version-bound-delete"
+                    and probe in commit_refused
+                    and typed_not_found(ownership_reads.get((probe, resource)))
+                )
+                if not expected_refusal_skip:
+                    failures.append(f"{phase}:{index}:{skip}")
+            else:
+                if kind == "conditional-create-commit":
+                    commit_sent.add(probe)
+                dispatches += 1
+                try:
+                    receipt = execute(copy.deepcopy(operation))
+                    if not isinstance(receipt, dict):
+                        raise TypeError("executor returned non-object")
+                    if complete(receipt):
+                        encoded = receipt.get("rawBodyBase64")
+                        try:
+                            raw = (
+                                base64.b64decode(encoded, validate=True)
+                                if isinstance(encoded, str)
+                                else None
+                            )
+                        except (ValueError, base64.binascii.Error):
+                            raw = None
+                        if (
+                            raw is None
+                            or len(raw) > MAX_RESPONSE_BYTES
+                            or (
+                                "bodyBytes" in receipt
+                                and receipt["bodyBytes"] != len(raw)
+                            )
+                            or (
+                                raw is not None
+                                and not _raw_matches_body(raw, receipt["body"])
+                            )
+                        ):
+                            receipt = {
+                                **receipt,
+                                "complete": False,
+                                "failure": "response-bytes-unavailable",
+                            }
+                            receipt.pop("rawBodyBase64", None)
+                except Exception as error:  # noqa: BLE001 - lost responses remain recoverable.
+                    receipt = {
+                        "complete": False,
+                        "failure": f"executor:{type(error).__name__}",
+                    }
+                status = (
+                    "complete" if complete(receipt) else "infrastructure-incomplete"
+                )
+                if kind == "cleanup-ownership-read":
+                    ownership_reads[(probe, resource)] = receipt
+                row = _row(phase, index, operation, receipt, status)
+                raw_encoded = receipt.get("rawBodyBase64")
+                if isinstance(raw_encoded, str):
+                    raw = base64.b64decode(raw_encoded, validate=True)
+                    if len(raw) > MAX_RESPONSE_BYTES:
+                        raise ValueError("response exceeds cap")
+                    sidecar = f"response-{sequence:03d}.body"
+                    fd = os.open(
+                        sidecar,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                        0o600,
+                        dir_fd=output_fd,
+                    )
+                    with os.fdopen(fd, "wb") as stream:
+                        stream.write(raw)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    row["responseBodyFile"] = sidecar
+                if kind == "preflight-typed-absence" and not typed_not_found(receipt):
+                    preflight_ok[probe] = False
+                    failures.append(f"{phase}:{index}:preflight-not-absent")
+                elif kind == "conditional-create-commit":
+                    probe_resources = next(
+                        item["resources"]
+                        for item in plan["probes"]
+                        if item["label"] == probe
+                    )
+                    found = commit_versions(receipt, probe_resources)
+                    if found is not None and probe != "over":
+                        versions[probe] = dict(zip(probe_resources, found))
+                    elif probe == "over" and _error_status(receipt, "INVALID_ARGUMENT"):
+                        commit_refused.add(probe)
+                    else:
+                        failures.append(f"{probe}:commit-proof-missing")
+                elif kind == "probe-readback":
+                    expected_digest = plan["documents"][resource]["fieldsSha256"]
+                    matched = (
+                        typed_not_found(receipt)
+                        if probe == "over"
+                        else readback_matches(
+                            receipt,
+                            resource,
+                            expected_digest,
+                            plan["nonce"],
+                            versions.get(probe, {}).get(resource),
+                        )
+                        and resource in versions.get(probe, {})
+                    )
+                    if not matched:
+                        failures.append(f"{phase}:{index}:readback-mismatch")
+                elif kind == "cleanup-ownership-read":
+                    expected_digest = plan["documents"][resource]["fieldsSha256"]
+                    if not (
+                        typed_not_found(receipt)
+                        or owned_document(
+                            receipt, resource, expected_digest, plan["nonce"]
+                        )
+                    ):
+                        failures.append(f"{phase}:{index}:unsafe-ownership-read")
+                elif kind == "cleanup-version-bound-delete" and not (
+                    complete(receipt) and receipt["status"] == 200
+                ):
+                    failures.append(f"{phase}:{index}:delete-failure")
+                elif kind == "cleanup-verify-absence":
+                    if typed_not_found(receipt):
+                        absence_proofs[probe].add(resource)
+                    else:
+                        failures.append(f"{phase}:{index}:cleanup-not-absent")
+                if not complete(receipt):
+                    failures.append(f"{phase}:{index}:incomplete")
+            (rows if phase == "observation" else recovery).append(row)
+            _publish(output_fd, f"row-{sequence:03d}.json", row)
+            next_slot = (
+                plan["executionSchedule"][sequence + 1]
+                if sequence + 1 < len(plan["executionSchedule"])
+                else None
+            )
+            if (
+                next_slot is not None
+                and next_slot["phase"] == "observation"
+                and phase == "recovery"
+            ):
                 probe_resources = next(
                     item["resources"]
                     for item in plan["probes"]
                     if item["label"] == probe
                 )
-                found = commit_versions(receipt, probe_resources)
-                if found is not None and probe != "over":
-                    versions[probe] = dict(zip(probe_resources, found))
-                elif probe == "over" and _error_status(receipt, "INVALID_ARGUMENT"):
-                    commit_refused.add(probe)
-                else:
-                    failures.append(f"{probe}:commit-proof-missing")
-            elif kind == "probe-readback":
-                expected_digest = plan["documents"][resource]["fieldsSha256"]
-                matched = (
-                    typed_not_found(receipt)
-                    if probe == "over"
-                    else readback_matches(
-                        receipt,
-                        resource,
-                        expected_digest,
-                        plan["nonce"],
-                        versions.get(probe, {}).get(resource),
+                if (
+                    failures
+                    or set(probe_resources) != absence_proofs[probe]
+                    or (
+                        probe in commit_sent
+                        and probe not in versions
+                        and probe not in commit_refused
                     )
-                    and resource in versions.get(probe, {})
-                )
-                if not matched:
-                    failures.append(f"{phase}:{index}:readback-mismatch")
-            elif kind == "cleanup-ownership-read":
-                expected_digest = plan["documents"][resource]["fieldsSha256"]
-                if not (
-                    typed_not_found(receipt)
-                    or owned_document(receipt, resource, expected_digest, plan["nonce"])
+                    or not preflight_ok[probe]
                 ):
-                    failures.append(f"{phase}:{index}:unsafe-ownership-read")
-            elif kind == "cleanup-version-bound-delete" and not (
-                complete(receipt) and receipt["status"] == 200
-            ):
-                failures.append(f"{phase}:{index}:delete-failure")
-            elif kind == "cleanup-verify-absence":
-                if typed_not_found(receipt):
-                    absence_proofs[probe].add(resource)
-                else:
-                    failures.append(f"{phase}:{index}:cleanup-not-absent")
-            if not complete(receipt):
-                failures.append(f"{phase}:{index}:incomplete")
-        (rows if phase == "observation" else recovery).append(row)
-        _publish(output, f"row-{sequence:03d}.json", row)
-        next_slot = (
-            plan["executionSchedule"][sequence + 1]
-            if sequence + 1 < len(plan["executionSchedule"])
-            else None
-        )
-        if (
-            next_slot is not None
-            and next_slot["phase"] == "observation"
-            and phase == "recovery"
-        ):
-            probe_resources = next(
-                item["resources"] for item in plan["probes"] if item["label"] == probe
-            )
-            if (
-                failures
-                or set(probe_resources) != absence_proofs[probe]
-                or (
-                    probe in commit_sent
-                    and probe not in versions
-                    and probe not in commit_refused
-                )
-                or not preflight_ok[probe]
-            ):
-                stopped = True
-    all_resources = {item for probe in plan["probes"] for item in probe["resources"]}
-    absence = all_resources == set().union(*absence_proofs.values())
-    result = {
-        "productionExecuted": False,
-        "localOnly": True,
-        "formalCompatibilityClaim": False,
-        "rawHttpMetricStatus": "observation hypothesis",
-        "canonicalRequestBytesMeasuredLocally": True,
-        "planDigest": hashlib.sha256(compact_utf8(plan)).hexdigest(),
-        "rowCount": len(rows),
-        "recoveryRowCount": len(recovery),
-        "requestCount": dispatches,
-        "resourceAbsence": absence,
-        "cleanupComplete": absence and not failures,
-        "completed": not failures,
-        "failures": failures,
-    }
-    _publish(output, "result.json", result)
-    return result
+                    stopped = True
+        all_resources = {
+            item for probe in plan["probes"] for item in probe["resources"]
+        }
+        absence = all_resources == set().union(*absence_proofs.values())
+        result = {
+            "productionExecuted": False,
+            "localOnly": True,
+            "formalCompatibilityClaim": False,
+            "rawHttpMetricStatus": "observation hypothesis",
+            "canonicalRequestBytesMeasuredLocally": True,
+            "planDigest": hashlib.sha256(compact_utf8(plan)).hexdigest(),
+            "rowCount": len(rows),
+            "recoveryRowCount": len(recovery),
+            "requestCount": dispatches,
+            "resourceAbsence": absence,
+            "cleanupComplete": absence and not failures,
+            "completed": not failures,
+            "failures": failures,
+        }
+        _publish(output_fd, "result.json", result)
+        return result
+    finally:
+        os.close(output_fd)

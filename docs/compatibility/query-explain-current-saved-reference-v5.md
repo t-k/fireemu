@@ -22,6 +22,6 @@ uv run --offline --project tools/compat-inventory --locked python -I tools/compa
   --output "$NEW_COMPARISON_FILE"
 ```
 
-The output must be a new file outside every frozen input. No production credentials are required. The existing local acquisition supervisor binds all services to OS-assigned port zero and verifies process termination and listener closure.
+The output must be a new file outside every frozen input and is exclusively created with mode `0600`, independent of the process umask. No production credentials are required. The existing local acquisition supervisor binds all services to OS-assigned port zero and verifies process termination and listener closure.
 
-Validation: nine v5 tests passed against the actual private inputs, including byte tampering of each operand and independent artifact/process/cleanup mutations. The unchanged v2/v3 suites passed 115 tests. Private-input integration tests require `EXPLAIN_V5_PRIVATE_ROOT`; without it, seven integration cases skip explicitly. No Rust runtime behavior changed.
+Validation: ten v5 tests passed against the actual private inputs, including byte tampering of each operand and independent artifact/process/cleanup mutations. The unchanged v2/v3 suites passed 115 tests. Private-input integration tests require `EXPLAIN_V5_PRIVATE_ROOT`; without it, seven integration cases skip explicitly. No Rust runtime behavior changed.

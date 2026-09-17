@@ -8,6 +8,7 @@ The O7 caller must use one shared root and bind its identity into every campaign
 from __future__ import annotations
 
 import contextlib
+import copy
 import fcntl
 import json
 import math
@@ -22,6 +23,17 @@ from broad_contract import digest
 from shared_gate import Gate, _save, validate_absence_proofs
 
 DIMENSIONS = {"requests", "accounts", "resources", "costMicrousd"}
+COMMIT_SOURCE_COMMIT = "09c02557e9a537208a7912f039edb23c1131b1fc"
+COMMIT_COLLECTOR_SOURCE_DIGEST = (
+    "b9ae95ca922873d477fc171b08b2bc542721a699c5c0c6714ef22a4f846b54ca"
+)
+COMMIT_SOURCE_DIGESTS = {
+    "shared_gate.py": "7913f62224ffe89a943adc5fa88437a3e94f38ff9c6eac5037599ee9233d7bcc",
+    "reservations.py": "96adb8b4d6c482914f0eaf155fb70a9a3b6fc2b5f7f642d24638d2daac0bb7c9",
+    "commit_reserved_adapter.py": "bd3baf3d46a0a252237d1b7b9cda950d4db8eb2658b2f7502a27d0d04b6fc2e3",
+    "gate_adapter.py": "a5221f4c4d572a95018772067e5a8364fffea0bd199528da43cf45b470cdd2fa",
+    "commit_acquisition.py": "b5c1df452eed0f4c322083b233e94fa77da3c1db27f443c3328e780e3d2d10b0",
+}
 MODES = {"READ": 0, "WRITE": 1, "EXCLUSIVE": 2}
 MAX_BYTES = 16 * 1024 * 1024
 MAX_RESERVATIONS = 10000
@@ -242,6 +254,7 @@ class Ledger:
                     "held",
                     "closing",
                     "released",
+                    "aborted-no-data",
                 }:
                     raise ValueError("reservation binding changed")
             yield state
@@ -322,7 +335,9 @@ class Ledger:
                 for r in rows
             ):
                 raise ValueError("reservation capacity or nonce/Gate reuse")
-            active = [r for r in rows if r["state"] != "released"]
+            active = [
+                r for r in rows if r["state"] not in {"released", "aborted-no-data"}
+            ]
             if any(
                 conflicts(a, b)
                 for r in active
@@ -431,4 +446,136 @@ class Ledger:
                 raise ValueError("closing reservation changed")
             row["state"] = "released"
             row["finalGateDigest"] = digest(gate)
+            self._save(state)
+
+    def abort_no_data(self, ticket, record):
+        """Retire a failed attempt only after persisted evidence proves no data dispatch."""
+        if (
+            not isinstance(record, dict)
+            or set(record)
+            != {
+                "kind",
+                "ticket",
+                "planDigest",
+                "gateDigest",
+                "receiptPath",
+                "receiptDigest",
+                "collectorSourceDigest",
+                "sourceCommit",
+                "sourceDigests",
+            }
+            or record["kind"] != "shared-no-data-abort-v1"
+            or record["ticket"] != ticket
+        ):
+            raise ValueError("exact no-data abort record required")
+        for key in (
+            "planDigest",
+            "gateDigest",
+            "receiptDigest",
+            "collectorSourceDigest",
+        ):
+            _hash(record[key])
+        if (
+            record["sourceCommit"] != COMMIT_SOURCE_COMMIT
+            or record["sourceDigests"] != COMMIT_SOURCE_DIGESTS
+            or record["collectorSourceDigest"] != COMMIT_COLLECTOR_SOURCE_DIGEST
+        ):
+            raise ValueError("reviewed frozen source closure required")
+        receipt_path = Path(record["receiptPath"])
+        if (
+            str(receipt_path.resolve()) != record["receiptPath"]
+            or receipt_path.is_symlink()
+            or receipt_path.name != "receipt.json"
+            or not receipt_path.is_file()
+        ):
+            raise ValueError("persisted canonical receipt required")
+        with receipt_path.open("rb") as source:
+            raw = source.read(MAX_BYTES + 1)
+        if len(raw) > MAX_BYTES:
+            raise ValueError("bounded receipt required")
+        receipt = json.loads(raw)
+        if digest(receipt) != record["receiptDigest"]:
+            raise ValueError("receipt digest changed")
+        with self._locked() as state:
+            row = self._row(state, ticket)
+            if row["state"] == "aborted-no-data":
+                if row.get("abortRecordDigest") != digest(record):
+                    raise ValueError("different terminal abort record")
+                return
+            if row["state"] not in {"held", "closing"} or (
+                row["state"] == "closing"
+                and row.get("abortRecordDigest") != digest(record)
+            ):
+                raise ValueError("reservation unavailable for no-data abort")
+            claim = row["claim"]
+            if (
+                record["planDigest"] != claim["gatePlanDigest"]
+                or receipt.get("kind") != "commit-acquisition-receipt-v2"
+                or receipt.get("ticket") != ticket
+                or receipt.get("claimDigest") != row["claimDigest"]
+                or receipt.get("planDigest") != record["planDigest"]
+                or receipt.get("reservationStateAtPublication") != "held"
+                or receipt.get("executionKind") != "fixed-production-wire"
+                or receipt.get("productionExecuted") is not False
+                or receipt.get("collection", object()) is not None
+                or receipt.get("releaseEligible") is not False
+                or not isinstance(receipt.get("failure"), str)
+                or not receipt["failure"]
+                or receipt.get("chargedCalls") != receipt.get("gate", {}).get("total")
+                or [item.get("slot") for item in receipt.get("credentialEvidence", [])]
+                != ["refresh", "tokeninfo"]
+                or any(
+                    item.get("workerReaped") is not True
+                    or item.get("complete") is not True
+                    or item.get("verified") is not True
+                    or item.get("status") != 200
+                    for item in receipt["credentialEvidence"]
+                )
+                or [item.get("id") for item in receipt.get("metadata", [])]
+                != ["observation:project", "observation:database"]
+                or any(item.get("status") != 200 for item in receipt["metadata"])
+                or receipt["gate"].get("managementUsed")
+                != [
+                    "observation:oauth-refresh",
+                    "observation:oauth-tokeninfo",
+                    "observation:project",
+                    "observation:database",
+                ]
+                or digest(receipt.get("gate")) != record["gateDigest"]
+                or receipt["gate"]["total"] > claim["budget"]["requests"]
+                or receipt["gate"]["costMicrousd"] > claim["budget"]["costMicrousd"]
+                or receipt["gate"]["plan"].get("collectorSourceDigest")
+                != record["collectorSourceDigest"]
+                or str(receipt_path.parent / "gate") != claim["gatePath"]
+            ):
+                raise ValueError("receipt does not bind failed no-data attempt")
+            if row["state"] == "held":
+                row["state"] = "closing"
+                row["abortRecordDigest"] = digest(record)
+                self._save(state)
+        gate = Gate(claim["gatePath"], "limits")
+        stopped = gate.abort_no_data(
+            record["planDigest"], record["gateDigest"], digest(record)
+        )
+        expected = copy.deepcopy(receipt["gate"])
+        expected["stopped"] = True
+        for job in expected["jobs"].values():
+            job["stopped"] = True
+        expected["noDataAbort"] = {
+            "preGateDigest": record["gateDigest"],
+            "recordDigest": digest(record),
+        }
+        if stopped != expected:
+            raise ValueError("terminal Gate differs from reviewed abort proof")
+        final_digest = digest(stopped)
+        if digest(gate.snapshot()) != final_digest:
+            raise ValueError("terminal Gate snapshot changed")
+        with self._locked() as state:
+            row = self._row(state, ticket)
+            if row["state"] != "closing" or row.get("abortRecordDigest") != digest(
+                record
+            ):
+                raise ValueError("closing abort reservation changed")
+            row["state"] = "aborted-no-data"
+            row["finalGateDigest"] = final_digest
             self._save(state)

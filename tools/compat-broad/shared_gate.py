@@ -305,7 +305,8 @@ class Gate:
         """Two prepaid local ownership-control calls, before worker claims."""
         with self.locked() as state:
             if (
-                state["coordinatorPid"] != os.getpid()
+                state.get("noDataAbort") is not None
+                or state["coordinatorPid"] != os.getpid()
                 or state["coordinatorInflight"]
                 or index != state["coordinatorDone"]
                 or index >= state["plan"].get("coordinatorRequests", 0)
@@ -344,13 +345,19 @@ class Gate:
     def claim(self):
         with self.locked() as state:
             job = state["jobs"][self.job]
-            if job["pid"] is not None or job["complete"]:
+            if (
+                state.get("noDataAbort") is not None
+                or job["pid"] is not None
+                or job["complete"]
+            ):
                 raise ValueError("job already claimed; ownership retained")
             job["pid"] = os.getpid()
             _save(self.path, state)
 
     def stop(self, *, environment=False):
         with self.locked() as state:
+            if state.get("noDataAbort") is not None:
+                raise ValueError("terminal Gate abort")
             state["jobs"][self.job]["stopped"] = True
             if environment:
                 state["stopped"] = True
@@ -381,9 +388,7 @@ class Gate:
             "fieldsDigest": digest(body.get("fields"))
             if isinstance(body, dict)
             else None,
-            "updateTime": body.get("updateTime")
-            if isinstance(body, dict)
-            else None,
+            "updateTime": body.get("updateTime") if isinstance(body, dict) else None,
         }
 
     def dispatch(self, operation, recovery, send):
@@ -396,6 +401,7 @@ class Gate:
                 or state["coordinatorInflight"]
                 or state["coordinatorDone"] != plan.get("coordinatorRequests", 0)
                 or any(j["inflight"] for j in state["jobs"].values())
+                or state.get("noDataAbort") is not None
                 or (not recovery and (job["stopped"] or state["stopped"]))
             ):
                 raise ValueError("job or environment stopped/uncertain")
@@ -570,7 +576,8 @@ class Gate:
         with self.locked() as state:
             job = state["jobs"][self.job]
             if (
-                job["pid"] != os.getpid()
+                state.get("noDataAbort") is not None
+                or job["pid"] != os.getpid()
                 or job["inflight"]
                 or job["recovery"] != len(state["plan"]["jobs"][self.job]["recovery"])
                 or set(job["absent"]) != set(job["resources"])
@@ -580,6 +587,77 @@ class Gate:
                 validate_absence_proofs(state, self.job)
             job["complete"] = True
             _save(self.path, state)
+
+    def abort_no_data(self, plan_digest, pre_gate_digest, record_digest):
+        """Stop all Gate paths after a bound, empty data journal is verified."""
+        with self.locked() as state:
+            existing = state.get("noDataAbort")
+            if existing is not None:
+                if existing != {
+                    "preGateDigest": pre_gate_digest,
+                    "recordDigest": record_digest,
+                }:
+                    raise ValueError("different Gate abort proof")
+                return state
+            if digest(state) != pre_gate_digest or state["planDigest"] != plan_digest:
+                raise ValueError("Gate abort snapshot changed")
+            if (
+                state["coordinatorInflight"] is not False
+                or state["events"] != []
+                or state.get("skips", []) != []
+                or state.get("managementUsed")
+                != [
+                    "observation:" + operation["id"]
+                    for operation in state["plan"]
+                    .get("management", {})
+                    .get("observation", [])
+                ][: len(state.get("managementUsed", []))]
+                or [event.get("id") for event in state.get("managementEvents", [])]
+                != state.get("managementUsed", [])
+                or state["total"] != len(state.get("managementUsed", []))
+                or state["observation"] != state["total"]
+                or state["observation"] > state["plan"]["observationRequests"]
+                or state["costMicrousd"]
+                != state["plan"].get("fixedCostMicrousd", 0)
+                + state["total"] * state["plan"]["requestCostMicrousd"]
+                or state["recovery"] != 0
+                or state["coordinatorDone"] != 0
+                or any(
+                    type(job[key]) is not int or job[key] != 0
+                    for job in state["jobs"].values()
+                    for key in ("observation", "recovery")
+                )
+                or any(
+                    job["inflight"] is not False
+                    or job["owned"] != []
+                    or job["creationProofs"] != {}
+                    or job["absent"] != []
+                    or job["captures"] != {}
+                    or job["complete"] is not False
+                    for job in state["jobs"].values()
+                )
+            ):
+                raise ValueError("positive or uncertain data Gate evidence")
+            pids = {state["coordinatorPid"]} | {
+                job["pid"] for job in state["jobs"].values()
+            }
+            for pid in pids - {None}:
+                if type(pid) is not int or pid <= 0:
+                    raise ValueError("invalid worker identity")
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    continue
+                raise ValueError("worker exit not proven")
+            state["stopped"] = True
+            for job in state["jobs"].values():
+                job["stopped"] = True
+            state["noDataAbort"] = {
+                "preGateDigest": pre_gate_digest,
+                "recordDigest": record_digest,
+            }
+            _save(self.path, state)
+            return state
 
     def adapter_request(self, adapter, operation, send):
         if not adapter.local:

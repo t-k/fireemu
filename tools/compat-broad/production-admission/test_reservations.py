@@ -2,14 +2,22 @@
 """Real filesystem/process tests of bounded shared admission; no production I/O."""
 
 import multiprocessing
+import json
+import os
 import threading
 import time
 from pathlib import Path
 
 import pytest
-from reservations import Ledger, conflicts
+from reservations import (
+    COMMIT_COLLECTOR_SOURCE_DIGEST,
+    COMMIT_SOURCE_COMMIT,
+    COMMIT_SOURCE_DIGESTS,
+    Ledger,
+    conflicts,
+)
 from broad_contract import digest
-from shared_gate import Gate, create
+from shared_gate import Gate, _save, create
 
 
 def envelope():
@@ -186,6 +194,231 @@ def test_cleanup_releases_scope_but_never_returns_budget(tmp_path):
         ledger.finish(ticket)
     ledger.reserve(
         envelope(), claim(tmp_path, "b", first["locks"]), plan("b"), now=1110
+    )
+
+
+def _stopped_pid():
+    child = multiprocessing.get_context("spawn").Process(target=time.sleep, args=(0,))
+    child.start()
+    pid = child.pid
+    child.join(timeout=10)
+    assert child.exitcode == 0
+    return pid
+
+
+def _no_data_attempt(tmp_path):
+    ledger = Ledger.create(tmp_path / "ledger")
+    first = claim(tmp_path, "a")
+    first["gatePath"] = str((tmp_path / "a" / "gate").resolve())
+    frozen = plan()
+    frozen["collectorSourceDigest"] = COMMIT_COLLECTOR_SOURCE_DIGEST
+    frozen["observationRequests"] = 4
+    frozen["management"] = {
+        "observation": [
+            {"id": name, "timeout": 13, "duration": 12}
+            for name in ("oauth-refresh", "oauth-tokeninfo", "project", "database")
+        ],
+        "recovery": [],
+    }
+    first["gatePlanDigest"] = digest(frozen)
+    first["budget"]["requests"] = 5
+    ticket = ledger.reserve(envelope(), first, frozen, now=1100)
+    create(Path(first["gatePath"]), frozen)
+    gate = Gate(first["gatePath"], "limits")
+    with gate.locked() as state:
+        state["coordinatorPid"] = _stopped_pid()
+        state["jobs"]["limits"]["pid"] = state["coordinatorPid"]
+        state["total"] = 4
+        state["observation"] = 4
+        state["costMicrousd"] = 4
+        state["managementUsed"] = [
+            "observation:oauth-refresh",
+            "observation:oauth-tokeninfo",
+            "observation:project",
+            "observation:database",
+        ]
+        state["managementEvents"] = [
+            {"id": item, "started": index, "durationReserved": 12}
+            for index, item in enumerate(state["managementUsed"])
+        ]
+        _save(gate.path, state)
+    snapshot = gate.snapshot()
+    receipt = {
+        "kind": "commit-acquisition-receipt-v2",
+        "ticket": ticket,
+        "planDigest": first["gatePlanDigest"],
+        "claimDigest": ticket["claimDigest"],
+        "gate": snapshot,
+        "chargedCalls": 4,
+        "collection": None,
+        "productionExecuted": False,
+        "failure": "ValueError",
+        "releaseEligible": False,
+        "reservationStateAtPublication": "held",
+        "executionKind": "fixed-production-wire",
+        "metadata": [
+            {"id": "observation:project", "status": 200},
+            {"id": "observation:database", "status": 200},
+        ],
+        "credentialEvidence": [
+            {
+                "slot": "refresh",
+                "workerReaped": True,
+                "complete": True,
+                "verified": True,
+                "status": 200,
+            },
+            {
+                "slot": "tokeninfo",
+                "workerReaped": True,
+                "complete": True,
+                "verified": True,
+                "status": 200,
+            },
+        ],
+    }
+    path = tmp_path / "a" / "receipt.json"
+    path.write_text(json.dumps(receipt))
+    record = {
+        "kind": "shared-no-data-abort-v1",
+        "ticket": ticket,
+        "planDigest": first["gatePlanDigest"],
+        "gateDigest": digest(snapshot),
+        "receiptPath": str(path.resolve()),
+        "receiptDigest": digest(receipt),
+        "collectorSourceDigest": frozen["collectorSourceDigest"],
+        "sourceCommit": COMMIT_SOURCE_COMMIT,
+        "sourceDigests": COMMIT_SOURCE_DIGESTS,
+    }
+    return ledger, gate, ticket, record
+
+
+def test_no_data_abort_releases_only_lock_and_keeps_budget_and_nonce(tmp_path):
+    ledger, gate, ticket, record = _no_data_attempt(tmp_path)
+    ledger.abort_no_data(ticket, record)
+    row = ledger.snapshot()["reservations"][ticket["reservation"]]
+    assert row["state"] == "aborted-no-data"
+    assert row["abortRecordDigest"] == digest(record)
+    assert gate.snapshot()["stopped"] is True
+    with pytest.raises(ValueError):
+        gate.dispatch(plan()["jobs"]["limits"]["recovery"][0], True, lambda: None)
+    with pytest.raises(ValueError):
+        ledger.finish(ticket)
+    ledger.abort_no_data(ticket, record)
+    assert (
+        ledger.snapshot()["envelopes"][digest(envelope())]["allocated"]
+        == row["claim"]["budget"]
+    )
+    ledger.reserve(
+        envelope(),
+        claim(tmp_path, "b", claim(tmp_path, "a")["locks"]),
+        plan("b"),
+        now=1110,
+    )
+    reuse = claim(tmp_path, "a")
+    reuse["gatePath"] = str((tmp_path / "other-gate").resolve())
+    with pytest.raises(ValueError, match="reuse"):
+        ledger.reserve(envelope(), reuse, plan(), now=1110)
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "event",
+        "counter",
+        "inflight",
+        "owned",
+        "proof",
+        "live-worker",
+        "management",
+        "cost",
+    ],
+)
+def test_no_data_abort_rejects_positive_or_uncertain_data(tmp_path, damage):
+    ledger, gate, ticket, record = _no_data_attempt(tmp_path)
+    with gate.locked() as state:
+        job = state["jobs"]["limits"]
+        if damage == "event":
+            state["events"].append({"completed": False})
+        elif damage == "counter":
+            job["observation"] = 1
+        elif damage == "inflight":
+            job["inflight"] = True
+        elif damage == "owned":
+            job["owned"].append(job["resources"][0])
+        elif damage == "proof":
+            job["creationProofs"][job["resources"][0]] = {}
+        elif damage == "management":
+            state["managementEvents"].pop()
+        elif damage == "cost":
+            state["costMicrousd"] += 1
+        else:
+            job["pid"] = os.getpid()
+        _save(gate.path, state)
+    with pytest.raises(ValueError):
+        ledger.abort_no_data(ticket, record)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        != "aborted-no-data"
+    )
+
+
+@pytest.mark.parametrize(
+    "damage", ["receipt", "ticket", "source", "gate", "missing-gate"]
+)
+def test_no_data_abort_rejects_changed_binding(tmp_path, damage):
+    ledger, gate, ticket, record = _no_data_attempt(tmp_path)
+    record = dict(record)
+    if damage == "receipt":
+        Path(record["receiptPath"]).write_text("{}")
+    elif damage == "ticket":
+        record["ticket"] = {**ticket, "reservation": "0" * 64}
+    elif damage == "source":
+        record["collectorSourceDigest"] = "0" * 64
+    elif damage == "gate":
+        record["gateDigest"] = "0" * 64
+    else:
+        (gate.path / "state.json").unlink()
+    with pytest.raises((ValueError, FileNotFoundError)):
+        ledger.abort_no_data(ticket, record)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        != "aborted-no-data"
+    )
+
+
+@pytest.mark.parametrize("gate_stopped", [False, True])
+def test_no_data_abort_recovers_closing_crash(tmp_path, gate_stopped):
+    ledger, gate, ticket, record = _no_data_attempt(tmp_path)
+    with ledger._locked() as state:
+        row = ledger._row(state, ticket)
+        row["state"] = "closing"
+        row["abortRecordDigest"] = digest(record)
+        ledger._save(state)
+    if gate_stopped:
+        gate.abort_no_data(record["planDigest"], record["gateDigest"], digest(record))
+    ledger.abort_no_data(ticket, record)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        == "aborted-no-data"
+    )
+
+
+def test_no_data_abort_rejects_tampered_gate_after_stop(tmp_path):
+    ledger, gate, ticket, record = _no_data_attempt(tmp_path)
+    with ledger._locked() as state:
+        row = ledger._row(state, ticket)
+        row["state"] = "closing"
+        row["abortRecordDigest"] = digest(record)
+        ledger._save(state)
+    gate.abort_no_data(record["planDigest"], record["gateDigest"], digest(record))
+    with gate.locked() as state:
+        state["jobs"]["limits"]["owned"].append(state["jobs"]["limits"]["resources"][0])
+        _save(gate.path, state)
+    with pytest.raises(ValueError, match="terminal Gate"):
+        ledger.abort_no_data(ticket, record)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "closing"
     )
 
 

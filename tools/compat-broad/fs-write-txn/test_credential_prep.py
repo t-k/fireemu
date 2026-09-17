@@ -415,3 +415,26 @@ def test_preparation_journal_tampering_cannot_become_final_proof(
             {"total": 0, "costMicrousd": 1_300_000},
         )
     assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+def test_owned_shadow_http_fixture_performs_same_two_slot_protocol(tmp_path):
+    import stream_shadow
+
+    assert hasattr(stream_shadow, "SHADOW_ADC")
+    output, ledger, ticket, permission, plan, handoff = reserved_fixture(tmp_path)
+    # The owned shadow uses exactly these public synthetic fixtures.
+    assert stream_shadow.SHADOW_ADC == ADC
+    with stream_shadow.metadata_fixture() as (origin, payloads):
+        _, proof = prep().prepare_credentials(
+            output, ledger, ticket, permission, plan, handoff, fixture_origin=origin
+        )
+        assert payloads["credentialRequests"] == ["/token", "/oauth2/v1/tokeninfo"]
+    combined = prep().validate_preparation(
+        output,
+        ledger,
+        ticket,
+        permission,
+        proof,
+        {"total": 31, "costMicrousd": 1_303_100},
+    )
+    assert combined == {"requests": 33, "costMicrousd": 1_303_300}

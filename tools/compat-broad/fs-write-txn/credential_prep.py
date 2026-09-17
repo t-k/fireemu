@@ -214,9 +214,10 @@ def _http_request(slot, secret, fixture_origin=None):
         connection.close()
 
 
-def private_request(slot, secret, *, fixture_origin=None, deadline=REQUEST_SECONDS):
+def _private_request(slot, secret, *, fixture_origin=None, deadline=REQUEST_SECONDS):
     import os
     import subprocess
+    import time
 
     from broad_contract import local_origin
 
@@ -232,6 +233,8 @@ def private_request(slot, secret, *, fixture_origin=None, deadline=REQUEST_SECON
     raw = json.dumps(payload, allow_nan=False).encode()
     if len(raw) > 65536:
         raise ValueError("bounded private credential request required")
+    deadline_at = time.monotonic() + deadline
+    cleanup_margin = min(0.25, deadline / 4)
     worker = subprocess.Popen(
         [sys.executable, str(Path(__file__).resolve()), flag],
         stdin=subprocess.PIPE,
@@ -240,7 +243,9 @@ def private_request(slot, secret, *, fixture_origin=None, deadline=REQUEST_SECON
         env={"PATH": os.defpath, "LANG": "C"},
     )
     try:
-        stdout, _ = worker.communicate(raw, timeout=deadline)
+        stdout, _ = worker.communicate(
+            raw, timeout=max(0, deadline_at - time.monotonic() - cleanup_margin)
+        )
         if worker.returncode != 0 or len(stdout) > 65536:
             return {
                 "complete": False,
@@ -253,12 +258,20 @@ def private_request(slot, secret, *, fixture_origin=None, deadline=REQUEST_SECON
         return {**result, "workerReaped": True}
     except subprocess.TimeoutExpired:
         worker.kill()
-        worker.communicate(timeout=5)
+        try:
+            worker.communicate(timeout=max(0, deadline_at - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            return {
+                "complete": False,
+                "failure": "deadline",
+                "workerReaped": False,
+                "workerPid": worker.pid,
+            }
         return {"complete": False, "failure": "deadline", "workerReaped": True}
     finally:
         if worker.poll() is None:
             worker.kill()
-            worker.wait(timeout=5)
+            worker.poll()  # Nonblocking; an unreaped child remains explicit uncertainty.
 
 
 def _worker():
@@ -276,6 +289,270 @@ def _worker():
     result = _http_request(value["slot"], value["secret"], value.get("fixtureOrigin"))
     sys.stdout.write(json.dumps(result, allow_nan=False))
     return 0
+
+
+def lifetime(value):
+    if (
+        type(value) not in (int, str)
+        or not str(value).isdigit()
+        or not 1 < int(value) <= 3600
+    ):
+        raise ValueError("bounded credential lifetime required")
+    return int(value)
+
+
+def refresh_result(body, sent):
+    if (
+        not isinstance(body, dict)
+        or body.get("token_type") != "Bearer"
+        or not private_string(body.get("access_token"), 8192)
+    ):
+        raise ValueError("typed OAuth refresh response required")
+    return body["access_token"], sent + lifetime(body.get("expires_in")) - 1
+
+
+def verified_credential(token, refresh_expiry, body, principal, sent):
+    import time
+
+    from batch_contract import Credential
+
+    validate_principal(principal)
+    if not isinstance(body, dict):
+        raise TypeError("typed tokeninfo response required")
+    clients = [body[key] for key in ("issued_to", "audience") if key in body]
+    if not clients or any(value != principal["clientId"] for value in clients):
+        raise ValueError("verified OAuth client differs")
+    scope = body.get("scope")
+    if (
+        not isinstance(scope, str)
+        or len(scope) > MAX_BYTES
+        or not set(principal["requiredScopes"]).issubset(scope.split())
+    ):
+        raise ValueError("verified credential scope insufficient")
+    expiry = min(refresh_expiry, sent + lifetime(body.get("expires_in")) - 1)
+    now = time.monotonic()
+    credential = Credential()
+    credential.accept(token, {"expires_in": int(expiry - now)}, now)
+    if not credential.usable(now, INNER_SECONDS + 2):
+        raise ValueError("credential does not cover complete inner session")
+    return credential, {
+        "clientVerified": True,
+        "principalDigest": digest(principal),
+        "scopeDigest": digest(sorted(set(scope.split()))),
+        "expiresAt": time.time() + credential.expiry - now,
+    }
+
+
+JOURNAL_FILES = (
+    "binding",
+    "refresh-charge",
+    "refresh-receipt",
+    "tokeninfo-charge",
+    "tokeninfo-receipt",
+    "complete",
+)
+
+
+def prepare_credentials(
+    output,
+    ledger,
+    ticket,
+    permission,
+    plan,
+    handoff,
+    *,
+    fixture_origin=None,
+    binding_check=None,
+):
+    """Acquire only after two ordered, durably charged and validated responses."""
+    import time
+
+    from stream_bridge import source_digest
+    from stream_production import write_atomic_receipt
+
+    validate_handoff(handoff, permission)
+    if digest(handoff["apiKey"]) != permission.get("apiKeyDigest"):
+        raise ValueError("API key binding differs")
+    if (
+        fixture_origin is not None
+        and permission.get("kind") != "local-stream-shadow-only"
+    ):
+        raise ValueError("local fixture permission required")
+    if (
+        fixture_origin is None
+        and permission.get("kind") != "stream-prepared-refresh-owner-permission-v1"
+    ):
+        raise ValueError("refresh owner permission required")
+    if permission.get("credentialMode") != MODE or permission.get(
+        "credentialPreparationDigest"
+    ) != digest(contract()):
+        raise ValueError("frozen preparation contract required")
+    claim = ledger.bound_claim(ticket)
+    if (
+        claim["budget"]
+        != {
+            "requests": 35,
+            "accounts": 0,
+            "resources": 3,
+            "costMicrousd": OUTER_COST_MICROUSD,
+        }
+        or claim["durationSeconds"] != OUTER_SECONDS
+        or claim["gatePlanDigest"] != digest(plan)
+    ):
+        raise ValueError("complete outer reservation required")
+    reservation = ledger.snapshot()["reservations"][ticket["reservation"]]
+    reservation_start = reservation["deadline"] - OUTER_SECONDS
+    monotonic_end = time.monotonic() + reservation["deadline"] - time.time()
+    frozen_permission = digest(permission)
+
+    def current():
+        ledger.validate(ticket, duration=INNER_SECONDS + REQUEST_SECONDS + 2)
+        if (
+            digest(permission) != frozen_permission
+            or plan.get("permissionDigest") != frozen_permission
+            or plan.get("observerSha256") != source_digest()
+            or time.time() - reservation_start >= PREPARATION_SECONDS
+            or time.monotonic() + INNER_SECONDS + REQUEST_SECONDS + 2 > monotonic_end
+            or time.time() + INNER_SECONDS + REQUEST_SECONDS + 2
+            > permission["expiresAt"]
+        ):
+            raise ValueError("preparation binding or lease changed")
+        if binding_check is not None:
+            binding_check()
+
+    current()
+    directory = Path(output) / "credential-preparation"
+    try:
+        directory.mkdir(mode=0o700)
+    except FileExistsError:
+        raise ValueError("preparation cannot be resumed or repeated") from None
+    binding = {
+        "kind": contract()["kind"],
+        "contractDigest": digest(contract()),
+        "permissionDigest": frozen_permission,
+        "ticketDigest": digest(ticket),
+        "planDigest": digest(plan),
+        "claimDigest": digest(claim),
+        "reservationStartedAt": reservation_start,
+        "observerSha256": source_digest(),
+    }
+    write_atomic_receipt(directory / "binding.json", binding)
+    token = None
+    refresh_expiry = None
+    credential = None
+    facts = None
+    for ordinal, slot in enumerate(("refresh", "tokeninfo"), 1):
+        current()
+        charge = {
+            "slot": slot,
+            "ordinal": ordinal,
+            "costMicrousd": 100,
+            "bindingDigest": digest(binding),
+            "chargedAt": time.time(),
+        }
+        write_atomic_receipt(directory / f"{slot}-charge.json", charge)
+        current()  # The durable charge is not authorization to send after drift.
+        sent = time.monotonic()
+        result = _private_request(
+            slot,
+            handoff["adc"] if slot == "refresh" else token,
+            fixture_origin=fixture_origin,
+        )
+        receipt = {
+            "slot": slot,
+            "chargeDigest": digest(charge),
+            "verified": False,
+            "complete": result.get("complete") is True,
+            "workerReaped": result.get("workerReaped") is True,
+            "status": result.get("status"),
+            "receivedBytes": result.get("receivedBytes", 0),
+        }
+        try:
+            if not receipt["complete"] or not receipt["workerReaped"]:
+                raise ValueError("bounded private request incomplete")
+            if slot == "refresh":
+                token, refresh_expiry = refresh_result(result.get("body"), sent)
+            else:
+                credential, facts = verified_credential(
+                    token,
+                    refresh_expiry,
+                    result.get("body"),
+                    permission["credentialPrincipal"],
+                    sent,
+                )
+                receipt["claims"] = facts
+            receipt["verified"] = True
+        except (ValueError, TypeError, KeyError):
+            receipt["failure"] = "response-or-claims-invalid"
+            write_atomic_receipt(directory / f"{slot}-receipt.json", receipt)
+            raise ValueError(
+                "credential preparation failed; reservation retained"
+            ) from None
+        write_atomic_receipt(directory / f"{slot}-receipt.json", receipt)
+    current()
+    write_atomic_receipt(
+        directory / "complete.json",
+        {
+            "attempts": 2,
+            "verified": True,
+            "bindingDigest": digest(binding),
+            "finishedAt": time.time(),
+        },
+    )
+    records = {
+        name: decode_json((directory / f"{name}.json").read_bytes())
+        for name in JOURNAL_FILES
+    }
+    proof = {
+        "attempts": 2,
+        "journalDigest": digest(records),
+        "monotonicDeadline": monotonic_end,
+        "reservationStartedAt": reservation_start,
+    }
+    return credential, proof
+
+
+def validate_preparation(output, ledger, ticket, permission, proof, state):
+    """Require the original sealed two-slot acquisition before inner release."""
+    import time
+
+    from stream_bridge import source_digest
+
+    directory = Path(output) / "credential-preparation"
+    records = {
+        name: decode_json((directory / f"{name}.json").read_bytes())
+        for name in JOURNAL_FILES
+    }
+    binding = records["binding"]
+    ledger.validate(ticket, duration=1)
+    if (
+        proof.get("attempts") != 2
+        or proof.get("journalDigest") != digest(records)
+        or binding["ticketDigest"] != digest(ticket)
+        or binding["permissionDigest"] != digest(permission)
+        or binding["claimDigest"] != digest(ledger.bound_claim(ticket))
+        or binding["observerSha256"] != source_digest()
+        or binding["contractDigest"] != digest(contract())
+        or records["complete"].get("verified") is not True
+        or time.monotonic() >= proof["monotonicDeadline"]
+        or time.time() - binding["reservationStartedAt"] >= OUTER_SECONDS
+        or state["total"] + 2 > 35
+        or state["costMicrousd"] + 200 > OUTER_COST_MICROUSD
+    ):
+        raise ValueError("preparation proof or combined bound differs")
+    for ordinal, slot in enumerate(("refresh", "tokeninfo"), 1):
+        charge = records[f"{slot}-charge"]
+        receipt = records[f"{slot}-receipt"]
+        if (
+            charge["ordinal"] != ordinal
+            or charge["slot"] != slot
+            or charge["bindingDigest"] != digest(binding)
+            or receipt["chargeDigest"] != digest(charge)
+            or receipt.get("verified") is not True
+            or receipt.get("workerReaped") is not True
+        ):
+            raise ValueError("ordered preparation proof required")
+    return {"requests": state["total"] + 2, "costMicrousd": state["costMicrousd"] + 200}
 
 
 if __name__ == "__main__":

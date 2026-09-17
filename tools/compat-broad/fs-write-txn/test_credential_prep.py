@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from broad_contract import digest
+from test_stream_bridge import trusted_node_runtime  # noqa: F401
 
 ADC = {
     "type": "authorized_user",
@@ -113,6 +114,8 @@ def oauth_server():
         def do_POST(self):
             path = urlsplit(self.path).path
             state["requests"].append(("POST", path))
+            if "before_response" in state:
+                state["before_response"]()
             self.rfile.read(int(self.headers.get("Content-Length", "0")))
             body = (
                 {
@@ -190,10 +193,10 @@ def test_private_worker_is_bounded_and_never_retries(oauth_server, scenario):
     import time
 
     module = prep()
-    assert hasattr(module, "private_request")
+    assert hasattr(module, "_private_request")
     oauth_server["scenario"] = scenario
     started = time.monotonic()
-    result = module.private_request(
+    result = module._private_request(
         "refresh",
         ADC,
         fixture_origin=oauth_server["origin"],
@@ -209,3 +212,206 @@ def test_private_worker_is_bounded_and_never_retries(oauth_server, scenario):
         assert "synthetic" not in json.dumps(
             {k: v for k, v in result.items() if k != "body"}
         )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing-client",
+        "wrong-client",
+        "conflicting-client",
+        "scope",
+        "short",
+        "boolean-expiry",
+    ],
+)
+def test_verified_token_requires_bound_client_scope_and_lifetime(mutation):
+    import time
+
+    module = prep()
+    assert hasattr(module, "verified_credential")
+    body = {"audience": ADC["client_id"], "scope": SCOPE, "expires_in": 3500}
+    if mutation == "missing-client":
+        body.pop("audience")
+    elif mutation == "wrong-client":
+        body["audience"] = "different"
+    elif mutation == "conflicting-client":
+        body["issued_to"] = "different"
+    elif mutation == "scope":
+        body["scope"] = "unrelated"
+    elif mutation == "short":
+        body["expires_in"] = 100
+    else:
+        body["expires_in"] = True
+    with pytest.raises(ValueError):
+        module.verified_credential(
+            "synthetic-access-secret",
+            time.monotonic() + 3600,
+            body,
+            PRINCIPAL,
+            time.monotonic(),
+        )
+
+
+def test_verified_token_does_not_require_unknown_email_claims():
+    import time
+
+    module = prep()
+    assert hasattr(module, "verified_credential")
+    credential, facts = module.verified_credential(
+        "synthetic-access-secret",
+        time.monotonic() + 3500,
+        {"issued_to": ADC["client_id"], "scope": SCOPE, "expires_in": 3600},
+        PRINCIPAL,
+        time.monotonic(),
+    )
+    assert credential.usable(time.monotonic(), 1102)
+    assert credential.expiry < time.monotonic() + 3500
+    assert "synthetic-access-secret" not in json.dumps(facts)
+
+
+def reserved_fixture(tmp_path):
+    import time
+
+    import stream_production as production
+    from reservations import Ledger
+
+    output = tmp_path / "execution"
+    output.mkdir(mode=0o700)
+    permission = {
+        "kind": "local-stream-shadow-only",
+        "credentialMode": prep().MODE,
+        "credentialPreparationDigest": digest(prep().contract()),
+        "authorizedUserDigest": digest(ADC),
+        "credentialPrincipal": PRINCIPAL,
+        "apiKeyDigest": digest("synthetic-key"),
+        "expiresAt": time.time() + 1800,
+    }
+    plan = production.prepared_plan(
+        "local-credential-prep", "local-owner", digest(permission)
+    )
+    locks = production.resource_locks(plan)
+    budget = {"requests": 35, "accounts": 0, "resources": 3, "costMicrousd": 1_303_500}
+    ledger = Ledger.create(tmp_path / "ledger")
+    envelope = {
+        "permissionDigest": digest(permission),
+        "issuedAt": time.time() - 1,
+        "expiresAt": permission["expiresAt"],
+        "limits": budget,
+        "concurrency": 1,
+        "scopes": locks,
+    }
+    claim = {
+        "campaignId": plan["nonce"],
+        "manifestDigest": digest(plan),
+        "nonceDigest": digest(plan["nonce"]),
+        "gatePath": str((output / "gate").resolve()),
+        "gatePlanDigest": digest(plan),
+        "locks": locks,
+        "budget": budget,
+        "durationSeconds": 1200,
+    }
+    ticket = ledger.reserve(envelope, claim, plan)
+    handoff = {
+        "kind": "stream-o8-authorized-user-v1",
+        "permissionDigest": digest(permission),
+        "apiKey": "synthetic-key",
+        "adc": dict(ADC),
+    }
+    return output, ledger, ticket, permission, plan, handoff
+
+
+def test_two_spent_slots_require_live_ticket_and_leave_no_secret_artifacts(
+    tmp_path, oauth_server
+):
+    import time
+
+    module = prep()
+    assert hasattr(module, "prepare_credentials")
+    output, ledger, ticket, permission, plan, handoff = reserved_fixture(tmp_path)
+
+    def check_reservation():
+        ledger.validate(ticket, duration=1102)
+        assert ledger.bound_claim(ticket)["budget"]["requests"] == 35
+
+    oauth_server["before_response"] = check_reservation
+    credential, proof = module.prepare_credentials(
+        output,
+        ledger,
+        ticket,
+        permission,
+        plan,
+        handoff,
+        fixture_origin=oauth_server["origin"],
+    )
+    assert credential.usable(time.monotonic(), 1102)
+    assert oauth_server["requests"] == [
+        ("POST", "/token"),
+        ("POST", "/oauth2/v1/tokeninfo"),
+    ]
+    assert proof["attempts"] == 2
+    artifacts = "".join(p.read_text() for p in output.rglob("*.json"))
+    for secret in (
+        ADC["client_secret"],
+        ADC["refresh_token"],
+        "synthetic-access-secret",
+        "synthetic-key",
+    ):
+        assert secret not in artifacts
+    with pytest.raises(ValueError):
+        module.prepare_credentials(
+            output,
+            ledger,
+            ticket,
+            permission,
+            plan,
+            handoff,
+            fixture_origin=oauth_server["origin"],
+        )
+    assert len(oauth_server["requests"]) == 2
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+def test_failed_refresh_spends_one_slot_and_never_runs_tokeninfo(
+    tmp_path, oauth_server
+):
+    module = prep()
+    assert hasattr(module, "prepare_credentials")
+    args = reserved_fixture(tmp_path)
+    oauth_server["scenario"] = "redirect"
+    with pytest.raises(ValueError):
+        module.prepare_credentials(*args, fixture_origin=oauth_server["origin"])
+    assert oauth_server["requests"] == [("POST", "/token")]
+    assert (args[0] / "credential-preparation/refresh-charge.json").is_file()
+    assert not (args[0] / "credential-preparation/tokeninfo-charge.json").exists()
+
+
+def test_preparation_journal_tampering_cannot_become_final_proof(
+    tmp_path, oauth_server
+):
+    module = prep()
+    assert hasattr(module, "prepare_credentials")
+    output, ledger, ticket, permission, plan, handoff = reserved_fixture(tmp_path)
+    _, proof = module.prepare_credentials(
+        output,
+        ledger,
+        ticket,
+        permission,
+        plan,
+        handoff,
+        fixture_origin=oauth_server["origin"],
+    )
+    path = output / "credential-preparation/tokeninfo-receipt.json"
+    record = json.loads(path.read_text())
+    record["verified"] = False
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError):
+        module.validate_preparation(
+            output,
+            ledger,
+            ticket,
+            permission,
+            proof,
+            {"total": 0, "costMicrousd": 1_300_000},
+        )
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"

@@ -728,6 +728,12 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
         raise TypeError("the maximum cost must be published alongside the forecast")
     if abs(worst - round(_usage_cost(_maximum_usage()), 6)) > 1e-9:
         raise ValueError("the maximum cost does not follow from the maximum usage")
+    if worst < estimate:
+        raise ValueError("the maximum cost cannot be below the forecast")
+    # The ceiling has to clear what the run can actually cost, not what it is
+    # expected to cost. Only the forecast was checked against it before.
+    if ceiling < worst:
+        raise ValueError("the hard ceiling must clear the maximum cost")
     if not isinstance(estimate, (int, float)) or isinstance(estimate, bool):
         raise TypeError("cost estimate malformed")
     if not isinstance(ceiling, (int, float)) or estimate >= ceiling:
@@ -823,8 +829,20 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
             raise ValueError(f"recovery window is missing {key}")
     if window["reserveSeconds"] >= budget.get("maxDurationSeconds", 0):
         raise ValueError("the recovery reserve must fit inside the run duration")
-    if window["reserveDeletes"] < accounting["documentDeletes"]:
-        raise ValueError("the recovery reserve cannot cover fewer deletes than planned")
+    # The reserve exists for the worst legitimate outcome, so it is sized by the
+    # maximum. Checking it against the forecast let reserveDeletes 34 stand
+    # beside maxDeletes 51.
+    if window["reserveDeletes"] < maximum["documentDeletes"]:
+        raise ValueError(
+            "the recovery reserve cannot cover fewer deletes than the maximum"
+        )
+    # Recovery reads each owned resource twice: one ownership read and one
+    # absence proof. Without this guard any positive number was accepted.
+    if window["reserveReads"] < maximum["distinctResources"] * 2:
+        raise ValueError(
+            "the recovery reserve must cover an ownership read and an absence "
+            "proof for every owned resource"
+        )
 
     digest_plan = campaign.get("planDigest")
     if not isinstance(digest_plan, str) or len(digest_plan) != 64:

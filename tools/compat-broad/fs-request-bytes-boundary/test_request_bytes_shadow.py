@@ -341,3 +341,32 @@ def test_every_declared_comparison_field_is_actually_compared() -> None:
         altered = {key: expected[key] for key in BASELINE_COMPARISON_FIELDS}
         altered[field] = "definitely-not-the-expected-value"
         assert [item["field"] for item in refusal_field_mismatches(altered)] == [field]
+
+
+@pytest.mark.parametrize("status", [500, 429, 403])
+def test_a_status_outside_the_refusal_vocabulary_is_an_untyped_refusal(
+    tmp_path, status
+) -> None:
+    """Not a shadow failure: the collector records it, unproven, and recovers."""
+    result = run_collector(
+        tmp_path / f"status-{status}",
+        over={
+            "status": status,
+            "body": {"error": {"code": status, "status": "INTERNAL"}},
+        },
+    )
+    verdict = classify_local_result(result)
+    gates = shadow_gates(result, verdict, source_bound=True)
+    assert verdict["classification"] == "local-untyped-transport-refusal"
+    assert verdict["matchesBaseline"] is False
+    assert gates == {"recordingComplete": False, "stateValidation": True}
+    assert result["resourceAbsence"] is True
+    assert result["untypedOverRefusal"]["httpStatus"] == status
+    assert result["untypedOverRefusal"]["refusalShapeProven"] is False
+
+
+def test_shadow_failure_is_only_for_a_result_the_collector_cannot_produce() -> None:
+    """An overRefusal naming a status the typed predicate never accepts."""
+    verdict = classify_local_result({**BASELINE, "overRefusal": {"httpStatus": 500}})
+    assert verdict["classification"] == "shadow-failure"
+    assert "could have produced" in verdict["summary"]

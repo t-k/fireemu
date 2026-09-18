@@ -620,3 +620,53 @@ def test_validator_rejects_a_budget_that_assumes_the_outcome(
     mutate(mutated)
     with pytest.raises((ValueError, TypeError, KeyError)):
         validate_request_bytes_campaign(mutated)
+
+
+# --- The reserve and the ceiling are sized by the maximum ---------------------
+
+
+def test_the_recovery_reserve_covers_two_reads_per_owned_resource(
+    campaign: dict,
+) -> None:
+    """An ownership read and an absence proof for each of the 51 resources."""
+    window = campaign["budget"]["recoveryWindow"]
+    assert window["reserveReads"] >= campaign["maximumUsage"]["distinctResources"] * 2
+
+
+def test_the_hard_ceiling_clears_the_maximum_cost(campaign: dict) -> None:
+    cost = campaign["cost"]
+    assert cost["hardCostCeilingUsd"] >= cost["maximumCostUsd"]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(
+            lambda c: c["budget"]["recoveryWindow"].update(reserveDeletes=34),
+            id="reserve-deletes-sized-by-the-forecast",
+        ),
+        pytest.param(
+            lambda c: c["budget"]["recoveryWindow"].update(reserveReads=1),
+            id="reserve-reads-unbounded",
+        ),
+        pytest.param(
+            lambda c: c["budget"]["recoveryWindow"].update(reserveReads=101),
+            id="reserve-reads-one-short",
+        ),
+        pytest.param(
+            lambda c: c["cost"].update(hardCostCeilingUsd=0.0002),
+            id="ceiling-below-the-maximum-cost",
+        ),
+        pytest.param(
+            lambda c: c["cost"].update(maximumCostUsd=0.0000001),
+            id="maximum-cost-below-the-forecast",
+        ),
+    ],
+)
+def test_validator_rejects_a_reserve_or_ceiling_sized_by_the_forecast(
+    campaign: dict, mutate
+) -> None:
+    mutated = copy.deepcopy(campaign)
+    mutate(mutated)
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        validate_request_bytes_campaign(mutated)

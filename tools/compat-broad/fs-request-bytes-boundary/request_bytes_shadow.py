@@ -256,11 +256,17 @@ def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
       recovery facts stand; only `matchesBaseline` goes false.
     - `local-boundary-not-enforced` means the over-boundary Commit was accepted,
       so the bound was removed or raised.
-    - `local-untyped-transport-refusal` means something refused the Commit
-      without Firestore's typed envelope. The boundary question stays
-      unanswered and recovery stays read-only.
+    - `local-untyped-transport-refusal` covers every complete refusal that is
+      not the typed over-boundary envelope: a status outside 400 and 413, such
+      as 500, 429 or 403, an HTML error page, or a body that is not a Firestore
+      error at all. The collector cannot read any of these as a refusal proof,
+      so the boundary question stays unanswered, recovery stays read-only, and
+      the run reports `recordingComplete` false with `stateValidation` true.
 
-    Anything else is a shadow failure and is reported as such.
+    `shadow-failure` is not the bucket for an unfamiliar status. It is reached
+    only by a result the collector could not have produced, such as an
+    `overRefusal` block naming a status the typed predicate never accepts, which
+    means the record was assembled rather than observed.
     """
     if not isinstance(result, dict):
         raise TypeError("result must be an object")
@@ -320,7 +326,10 @@ def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
         )
     else:
         classification = "shadow-failure"
-        summary = "The local run matched none of the four recognised local outcomes."
+        summary = (
+            "The local run matched none of the four recognised local outcomes, "
+            "so this result is not one the collector could have produced."
+        )
     return {
         "classification": classification,
         "summary": summary,
@@ -385,6 +394,34 @@ def refusal_field_mismatches(refusal: Any) -> list[dict[str, Any]]:
         }
         for field in BASELINE_COMPARISON_FIELDS
         if refusal.get(field, "<absent>") != expected[field]
+    ]
+
+
+def shadow_cases(
+    campaign_cases: list[dict[str, Any]], shadow: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Derive the published case table from the compiled cases and the verdict.
+
+    Every field follows from an input that is itself bound: the case identity,
+    request size and production expectation come from the compiled campaign, and
+    the local column comes from the declared expectation and the classification.
+    Nothing here is free text a person could edit without the evidence suite
+    noticing.
+    """
+    return [
+        {
+            "id": case["id"],
+            "family": "firestore",
+            "requestBytes": case["requestBytes"],
+            "productionExpectation": case["productionExpectation"],
+            "localObserved": LOCAL_EXPECTATION["observedProbeOutcomes"][case["probe"]],
+            "status": "refusal-shape-difference"
+            if case["productionExpectation"] == "refused"
+            and shadow["classification"] == "local-boundary-enforced-shape-differs"
+            else "local-only",
+            "basis": "Local typed state invariants and version-bound cleanup; no production comparison.",
+        }
+        for case in campaign_cases
     ]
 
 
@@ -521,24 +558,7 @@ def _child(output: Path, nonce: str) -> None:
             "formalCompatibilityClaim": False,
             "recordingComplete": recording_complete,
             "stateValidation": state_validation,
-            "cases": [
-                {
-                    "id": case["id"],
-                    "family": "firestore",
-                    "requestBytes": case["requestBytes"],
-                    "productionExpectation": case["productionExpectation"],
-                    "localObserved": LOCAL_EXPECTATION["observedProbeOutcomes"][
-                        case["probe"]
-                    ],
-                    "status": "refusal-shape-difference"
-                    if case["productionExpectation"] == "refused"
-                    and shadow["classification"]
-                    == "local-boundary-enforced-shape-differs"
-                    else "local-only",
-                    "basis": "Local typed state invariants and version-bound cleanup; no production comparison.",
-                }
-                for case in campaign["cases"]
-            ],
+            "cases": shadow_cases(campaign["cases"], shadow),
             "shadow": shadow,
         },
     )

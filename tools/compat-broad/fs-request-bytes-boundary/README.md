@@ -86,7 +86,12 @@ rather than observed, which is what this campaign exists to settle, so
 legacy 413 from a strict-profile build is `local-boundary-enforced-shape-differs`
 and now means the implemented shape was lost. An accepted over probe is
 `local-boundary-not-enforced`. A refusal without a typed envelope is
-`local-untyped-transport-refusal`. Anything else is a shadow failure.
+`local-untyped-transport-refusal`, which covers every complete refusal that is
+not the typed over-boundary envelope, including a status outside 400 and 413
+such as 500, 429 or 403. Those report `recordingComplete` false and
+`stateValidation` true, because nothing was written but the boundary question is
+unanswered. `shadow-failure` is not the bucket for an unfamiliar status: it is
+reached only by a result the collector could not have produced.
 
 The comparison is field by field. `BASELINE_COMPARISON_FIELDS` names the HTTP
 status, the error code, the error status and the message, and a verdict claiming

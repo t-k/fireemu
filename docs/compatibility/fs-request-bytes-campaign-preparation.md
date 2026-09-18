@@ -137,7 +137,11 @@ and ingress is not billed, and under 1 MiB is returned. The 30 MiB upload is the
 unusual quantity here, not the money.
 
 The recovery window reserves 300 seconds, 102 reads and 51 delete slots inside
-the 900-second run, so the reserve covers the maximum rather than the forecast.
+the 900-second run. The reserve is sized by the maximum, not the forecast: 51
+deletes for every document the worst outcome creates, and two reads per owned
+resource for an ownership read and an absence proof. The validator enforces
+both, and enforces that the hard ceiling clears the maximum cost rather than the
+forecast.
 It opens on any probe that reaches an observation failure, an uncertain Commit or
 an interrupted run. Its authority is read-only unless the same run holds a
 conditional-creation proof and a matching version-bound ownership read. It exits
@@ -242,9 +246,13 @@ The shadow recognises four local outcomes and masks none of them.
 `local-shape-matches-production-expectation` is the baseline.
 `local-boundary-enforced-shape-differs` is the lost-shape regression above.
 `local-boundary-not-enforced` means the bound was removed or raised.
-`local-untyped-transport-refusal` means something refused without a typed
-envelope. Anything else is a `shadow-failure`, which drives `stateValidation`
-false and keeps the supervisor run incomplete.
+`local-untyped-transport-refusal` covers every complete refusal that is not the
+typed over-boundary envelope, including a status outside 400 and 413 such as
+500, 429 or 403. Those report `recordingComplete` false and `stateValidation`
+true: nothing was written, and the boundary question is unanswered.
+`shadow-failure` is not the bucket for an unfamiliar status. It is reached only
+by a result the collector could not have produced, and it drives
+`stateValidation` false so the supervisor run stays incomplete.
 
 ## Artifacts
 

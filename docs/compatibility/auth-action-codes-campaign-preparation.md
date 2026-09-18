@@ -85,11 +85,11 @@ The shadow owns the artifact it measures: it copies the binary into a private di
 
 | Item | Value |
 | --- | --- |
-| Collector source commit | `69c852dbac3a94f0327ebd68357001ab9447d18e` |
+| Collector source commit | `e0d0cd925fbab2ecdd07fc127a4b45d4fcde86f1` |
 | Artifact SHA-256 | `bad6b9280e895f90484b5a89056c62ce7c4f3f44e8571891f5175986e99f53a6` (version 0.7.0) |
 | Artifact binding | `retained-external`; not rebuilt from the collector source commit |
 | Campaign package SHA-256 | `98e80129235a85fcd355e213c6ef47ac090462ccd478131db5f652621ceb5b63` |
-| Receipt SHA-256 | `d36aafbbb222f34af3daa1549eeb0228894628d30233143daca8ef4e67325591` |
+| Receipt SHA-256 | `e7676d7ccc1c017970cdcff872420998b7adfc33bfff19a6a1461b0837dcb658` |
 | Result | 26 stages recorded, cleanup complete, 0 accounts remaining, process exit 0, listeners closed |
 
 The artifact binding is the honest limit of this evidence. The digest of the executed binary is recorded, but the package does not claim it was built from the collector source commit, so the local side is not yet a bound comparison input. Rebuilding the artifact from the execution commit is an owner precondition, not a step this package performed.

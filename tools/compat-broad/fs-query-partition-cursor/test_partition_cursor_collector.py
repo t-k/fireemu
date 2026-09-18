@@ -390,3 +390,19 @@ def test_an_unreadable_sidecar_still_publishes_the_receipt(tmp_path) -> None:
     assert result["raw"]["complete"] is False
     assert result["status"] == "incomplete"
     assert json.loads((directory / "collection.json").read_bytes()) == result
+
+
+def test_a_throwing_sidecar_verification_marks_the_publication_incomplete(
+    tmp_path, monkeypatch
+) -> None:
+    import partition_cursor_collector as module
+
+    def explode(raw_fd, bindings):
+        raise OSError("sidecar unreadable")
+
+    monkeypatch.setattr(module, "_verify_raw", explode)
+    result, _ = run(tmp_path / "out")
+    assert result["publication"]["complete"] is False
+    assert result["publication"]["failures"][0]["file"] == "raw"
+    assert result["raw"]["complete"] is False
+    assert result["status"] == "incomplete"

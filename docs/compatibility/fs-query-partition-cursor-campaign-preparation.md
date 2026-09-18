@@ -116,9 +116,14 @@ instance rather than the source.
 
 | Binding | Value |
 | --- | --- |
-| Source commit | `d4d92c5be` |
+| Artifact source commit | `0d1477487` |
 | Rust sources | unchanged from base `3d0e56bdf` |
-| Artifact SHA-256 | `5523cde837b3b0c02e873d1400101e41ffd046003eace990fadeb2c9ae0244f1` |
+| Artifact SHA-256 | `47b2b5bb3833235704f851c647a85c2343dd92422753593313cbe83c785b4e91` |
+
+The record also carries the SHA-256 of every lane module it was produced by, so
+the withdrawal of `O4-REPAIR-001` and every other recorded result can be
+reproduced from the recorded commit and those digests rather than taken on
+trust. A lane edit that is not followed by a regeneration fails its binding test.
 
 All 37 slots were dispatched and all 37 raw sidecars were published and verified,
 cleanup completed, and an independent residual scan proved zero owned documents

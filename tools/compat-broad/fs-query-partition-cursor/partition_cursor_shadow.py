@@ -205,9 +205,11 @@ def validate_shadow(bundle: Any, plan: dict[str, Any]) -> dict[str, Any]:
                 "ticket": None,
             }
         )
-    if not differences and bundle.get("status") != "pass":
-        # Every row matching with complete retention must also be a passing
-        # bundle; anything else is an unexplained disagreement.
+    if bundle.get("status") != ("pass" if not differences else "incomplete"):
+        # The bundle status carries facts no row does, the verified partition
+        # reconstruction among them. A status that disagrees with the rows is an
+        # unexplained disagreement whether or not any row differs, so it must
+        # never be read as a verdict.
         return _indeterminate("status-disagrees-with-rows")
     if not differences:
         status = "MATCHED"
@@ -363,6 +365,8 @@ def shadow_record(output: Path) -> dict[str, Any]:
     executed, so the published claim is reproducible from the run rather than
     copied into prose.
     """
+    from partition_cursor_manifest import source_inputs
+
     report = json.loads((output / "manifest.json").read_bytes())
     summary = json.loads((output / "shadow.json").read_bytes())
     bundle = json.loads((output / "bundle" / "collection.json").read_bytes())
@@ -374,6 +378,7 @@ def shadow_record(output: Path) -> dict[str, Any]:
         "promotionReady": False,
         "target": bundle["target"],
         "artifact": report["artifact"],
+        "sourceInputs": source_inputs(),
         "run": {
             "parentStatus": report["status"],
             "bundleStatus": bundle["status"],
@@ -458,6 +463,8 @@ def _child(output: Path, nonce: str, fail_at: int | None = None) -> int:
         and result["cleanup"]["complete"]
         and result["raw"]["complete"]
         and result["publication"]["complete"]
+        and result["reconstruction"]["matches"] is True
+        and result["status"] in ("pass", "incomplete")
         and residual == 0
     )
     return 0 if healthy else 1

@@ -620,7 +620,9 @@ def _result(
     try:
         verified = bool(dispatched) and _verify_raw(raw_fd, bindings)
     except Exception as error:
-        # An unreadable sidecar must not stop the receipt from being published.
+        # An unreadable sidecar must not stop the receipt from being published,
+        # but it is a publication failure and must be recorded as one.
+        publication["complete"] = False
         publication["failures"].append({"file": "raw", "error": type(error).__name__})
     raw_complete = (
         verified

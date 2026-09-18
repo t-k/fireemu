@@ -73,6 +73,7 @@ def test_a_mismatched_bundle_names_every_differing_slot(tmp_path) -> None:
     by_kind = {row["kind"]: row for row in collected["rows"]}
     by_kind["cursor-start-at-value"]["status"] = "mismatch"
     by_kind["cursor-end-before-value"]["status"] = "failed"
+    collected["status"] = "incomplete"
     result = validate_shadow(collected, plan())
     assert result["status"] == "DIFFERENT"
     assert [difference["kind"] for difference in result["differences"]] == [
@@ -84,6 +85,7 @@ def test_a_mismatched_bundle_names_every_differing_slot(tmp_path) -> None:
 def test_an_incomplete_cleanup_is_a_difference(tmp_path) -> None:
     collected = bundle(tmp_path)
     collected["cleanup"]["complete"] = False
+    collected["status"] = "incomplete"
     result = validate_shadow(collected, plan())
     assert result["status"] == "DIFFERENT"
     assert any(
@@ -135,6 +137,7 @@ def test_only_ticketed_local_differences_are_classified_as_known(tmp_path) -> No
     by_kind = {row["kind"]: row for row in collected["rows"]}
     for kind in KNOWN_LOCAL_DIFFERENCES:
         by_kind[kind]["status"] = "mismatch"
+    collected["status"] = "incomplete"
     result = validate_shadow(collected, plan())
     assert result["status"] == "DIFFERENT_KNOWN"
     assert {difference["ticket"] for difference in result["differences"]} == set(
@@ -148,6 +151,7 @@ def test_one_unticketed_difference_downgrades_the_whole_run(tmp_path) -> None:
     for kind in KNOWN_LOCAL_DIFFERENCES:
         by_kind[kind]["status"] = "mismatch"
     by_kind["baseline-collection-order"]["status"] = "mismatch"
+    collected["status"] = "incomplete"
     assert validate_shadow(collected, plan())["status"] == "DIFFERENT"
 
 
@@ -343,3 +347,55 @@ def test_the_withdrawn_ticket_is_no_longer_claimed_anywhere() -> None:
     assert "cursor-too-many-values" not in {
         difference["kind"] for difference in record["differences"]
     }
+
+
+def test_a_broken_reconstruction_is_never_a_verdict(tmp_path) -> None:
+    """R1 reproduction: every row passes, but the ranges do not rebuild the
+    baseline, so the bundle status disagrees with the rows."""
+    value = plan()
+
+    class Truncated(Transport):
+        def _body(self, request: dict) -> tuple[int, dict]:
+            status, body = super()._body(request)
+            if request["kind"] == "partition-reconstruction-range-0":
+                body = body[:2]
+            return status, body
+
+    collected = collect_local(value, Truncated(value), tmp_path / "out")
+    assert collected["reconstruction"]["matches"] is False
+    assert all(
+        row["status"] in ("pass", "skipped")
+        for row in collected["rows"] + collected["cleanup"]["rows"]
+    )
+    result = validate_shadow(collected, value)
+    assert result["status"] == "INDETERMINATE"
+    assert result["reason"] == "status-disagrees-with-rows"
+
+
+def test_the_status_guard_fires_when_differences_are_present_too(tmp_path) -> None:
+    collected = bundle(tmp_path)
+    by_kind = {row["kind"]: row for row in collected["rows"]}
+    for kind in KNOWN_LOCAL_DIFFERENCES:
+        by_kind[kind]["status"] = "mismatch"
+    collected["status"] = "pass"
+    result = validate_shadow(collected, plan())
+    assert result["status"] == "INDETERMINATE"
+    assert result["reason"] == "status-disagrees-with-rows"
+
+
+def test_the_committed_shadow_record_carries_the_lane_code_it_ran() -> None:
+    """R2: the retraction is reproducible from the recorded commit and digests."""
+    import json
+
+    from partition_cursor_manifest import source_inputs
+    from partition_cursor_shadow import SHADOW_RECORD
+
+    record = json.loads(SHADOW_RECORD.read_bytes())
+    assert record["sourceInputs"] == source_inputs()
+    assert any(
+        name.endswith("partition_cursor_case.py") for name in record["sourceInputs"]
+    )
+    assert any(
+        name.endswith("partition_cursor_collector.py")
+        for name in record["sourceInputs"]
+    )

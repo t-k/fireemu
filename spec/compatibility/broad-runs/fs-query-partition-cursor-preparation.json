@@ -2769,11 +2769,11 @@
  "schemaVersion": 1,
  "sourceInputs": {
   "tools/compat-broad/fs-query-partition-cursor/partition_cursor_case.py": "4f2dee90a4fbabcff4370baa972b014425aee524c0aaf5aca176e45e133907bc",
-  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_collector.py": "d75e059a06922560ac874cbc620f3829f627f9aa519e76d677ab7bbba1b0360e",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_collector.py": "71f66c515a2a0846b39be702d3fe2bedf8b714af95b941c61f1351db07910ea8",
   "tools/compat-broad/fs-query-partition-cursor/partition_cursor_comparator.py": "6dab93bc33d2928e55a87d3bfa2011a285359d2fee54c923a7d7182385ebb128",
   "tools/compat-broad/fs-query-partition-cursor/partition_cursor_manifest.py": "b157d11eb6ce86f809c651267ff5130f9234afcbd6a5433612f704ade2f18500",
   "tools/compat-broad/fs-query-partition-cursor/partition_cursor_offline_fixture.py": "b015e95a172fafcaeef548a7e5b57a0c5b2ac8d8d697ca6b5612bff5132a5729",
-  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_shadow.py": "87d13cf707a00a813cbacd1e0e77db246d23695dd321349345f88e20a2fa460e"
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_shadow.py": "6f49d9e0a1a9b750c5fb835d02e09e5928177be03bbacb37367f8a11f135ac87"
  },
  "status": "PREPARATION_ONLY",
  "unresolved": [

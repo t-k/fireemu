@@ -1437,6 +1437,29 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
     1
 }
 
+/// Wipes the default session's Pub/Sub project and recreates the resources the Functions
+/// manifest owns.
+///
+/// Reprovisioning is not guaranteed to succeed. Topics are a daemon-wide budget that a
+/// loopback gRPC client fills from any project, so the recreate can be refused with
+/// `RESOURCE_EXHAUSTED` by state this session does not own. That refusal used to be an
+/// `expect`, which panicked while both the publication gate and the Pub/Sub state lock were
+/// held: both were poisoned and every later Pub/Sub request panicked on the poisoned lock, so
+/// one reset took the service down for the life of the daemon. The reset is refused instead.
+fn reset_function_pubsub_resources(
+    pubsub: &Mutex<fireemu_core_pubsub::PubSubState>,
+    project: &str,
+    resources: &[functions::FunctionPubSubResource],
+) -> Result<(), String> {
+    let Ok(mut state) = pubsub.lock() else {
+        return Err("the Pub/Sub state lock is poisoned".to_owned());
+    };
+    state.clear_project(project);
+    functions::provision_function_pubsub_resources(&mut state, resources).map_err(|e| {
+        format!("Functions Pub/Sub resources could not be reprovisioned after the reset: {e}")
+    })
+}
+
 /// The process exit status fireemu reports for a child exit code.
 ///
 /// A process exit status is one byte, but a child's reported code is not. Windows reports the
@@ -2353,7 +2376,7 @@ fn control_state(
     }
     // The default session's scope is wiped by the project hooks; the shared functions
     // runtime is reset afterwards.
-    let mut reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>> = Vec::new();
+    let mut reset_hooks: Vec<Arc<dyn Fn() -> Result<(), String> + Send + Sync>> = Vec::new();
     let pubsub_for_reset = pubsub.clone();
     let pubsub_handle_for_reset = pubsub_handle.clone();
     let functions_for_reset = functions.cloned();
@@ -2364,11 +2387,7 @@ fn control_state(
         if let Some(runtime) = &functions_for_reset {
             runtime.reset();
         }
-        if let Ok(mut state) = pubsub_for_reset.lock() {
-            state.clear_project(&pubsub_project);
-            functions::provision_function_pubsub_resources(&mut state, &pubsub_resources)
-                .expect("validated Functions Pub/Sub resources reprovision after reset");
-        }
+        reset_function_pubsub_resources(&pubsub_for_reset, &pubsub_project, &pubsub_resources)
     }));
     // Resource diagnostics, one hook per service (spec 15); collected one after another.
     let mut resource_hooks: Vec<Arc<dyn fireemu_adapter_http::control::ResourceHook>> = vec![
@@ -3348,5 +3367,67 @@ mod exit_code_tests {
         for code in [256, 300, 512, 0x0100_0000, i32::MAX] {
             assert_eq!(reportable_exit_code(code), 1);
         }
+    }
+}
+
+#[cfg(test)]
+mod reset_pubsub_tests {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    use fireemu_core_pubsub::{PubSubState, TopicName};
+
+    use super::{functions, reset_function_pubsub_resources};
+
+    fn manifest_resources(project: &str) -> Vec<functions::FunctionPubSubResource> {
+        let manifest = fireemu_adapter_functions::manifest_json::parse_manifest(
+            &serde_json::json!({"functions": [
+                {"name": "worker", "trigger": {"type": "pubsub", "topic": "shared-jobs"}}
+            ]}),
+        )
+        .expect("the manifest parses");
+        functions::function_pubsub_resources(project, &manifest).expect("the resources resolve")
+    }
+
+    /// RSTPS-2: topics are a daemon-wide budget that any project can fill, so recreating the
+    /// Functions resources after a reset can be refused by state this session does not own.
+    /// The refusal is reported; it must not panic while the Pub/Sub state lock is held,
+    /// because that poisons the lock and every later Pub/Sub request panics on it in turn.
+    #[test]
+    fn a_refused_reprovision_is_reported_and_leaves_the_lock_usable() {
+        let resources = manifest_resources("demo-app");
+        let pubsub = Mutex::new(PubSubState::new(11));
+        {
+            let mut state = pubsub.lock().expect("the fresh lock is usable");
+            // Another project fills the daemon-wide topic budget. Wiping `demo-app` frees
+            // nothing, so the recreate below has nowhere to go.
+            for index in 0..fireemu_core_pubsub::state::MAX_TOPICS {
+                let name = TopicName::new("demo-other", format!("filler-{index}"))
+                    .expect("the topic name is valid");
+                state
+                    .create_topic(name, BTreeMap::new())
+                    .expect("the budget admits this topic");
+            }
+        }
+
+        let error = reset_function_pubsub_resources(&pubsub, "demo-app", &resources)
+            .expect_err("a reprovision with no room must be refused");
+
+        assert!(error.contains("reprovisioned"), "{error}");
+        assert!(error.contains("shared-jobs"), "{error}");
+        // The lock is still usable, which a panic through the guard would have prevented.
+        let mut state = pubsub
+            .lock()
+            .expect("the refusal must not poison the Pub/Sub state lock");
+        assert!(state.list_topics("demo-app").is_empty());
+        state.clear_project("demo-other");
+        drop(state);
+
+        // With the budget free, the same reset succeeds and the manifest's resources are back.
+        reset_function_pubsub_resources(&pubsub, "demo-app", &resources)
+            .expect("the reset succeeds once there is room");
+        let state = pubsub.lock().expect("the lock is still usable");
+        assert_eq!(state.list_topics("demo-app").len(), 1);
+        assert_eq!(state.list_subscriptions("demo-app").len(), 1);
     }
 }

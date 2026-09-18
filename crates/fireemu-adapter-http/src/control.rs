@@ -252,7 +252,10 @@ pub struct ControlState {
     pub storage_rules: Arc<crate::storage::StorageRulesRegistry>,
     /// Hooks run by a reset of the default session after its scope is wiped (the shared
     /// parts: the functions runtime).
-    pub reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>>,
+    /// The default session's shared parts. A hook reports a refusal instead of panicking:
+    /// it runs holding the locks the services it resets are behind, so a panic here poisons
+    /// them and every later request against those services panics in turn.
+    pub reset_hooks: Vec<Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     /// Snapshot capture / restore, one hook per adapter.
     pub snapshot_hooks: Vec<Arc<dyn SnapshotHook>>,
     /// Snapshots kept in memory, by session then name (at most
@@ -1059,7 +1062,12 @@ fn reset_session(
     if is_default {
         // The shared parts (functions) belong to the default session.
         for hook in &state.reset_hooks {
-            hook();
+            if let Err(e) = hook() {
+                return error(
+                    500,
+                    &format!("INTERNAL : resetting session {session:?}: {e}"),
+                );
+            }
         }
         return ok(
             json!({"session": session, "project": project, "reset": true, "scope": "default", "hooks": state.reset_hooks.len()}),

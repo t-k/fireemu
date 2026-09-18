@@ -11,6 +11,7 @@ verification/tla/states/
 verification/tla/**/states/
 verification/quint/.fireemu-quint-publication.lock
 spec/compatibility/broad-runs/.fireemu-request-bytes-publication.lock
+*.publish-tmp
 *.tlaps
 .tools/
 # cargo-mutants default output (use --output docs.local/mutants/... for kept runs)

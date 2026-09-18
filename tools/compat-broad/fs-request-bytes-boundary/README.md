@@ -194,3 +194,11 @@ again rather than leaving a silent half-generation. Publishers of the same targe
 serialize on `spec/compatibility/broad-runs/.fireemu-request-bytes-publication.lock`,
 which is gitignored for the same reason the Quint lane's is: a lock file showing
 up in `git status` would make the next run refuse the checkout as dirty.
+
+A publisher killed between writing a side file and replacing its target leaves
+that `.publish-tmp` behind, which would dirty the checkout the same way, so the
+suffix is gitignored too and each publisher sweeps stale side files while holding
+the lock, where nothing being swept can belong to a publication still running.
+Pre-images are restored as the bytes they were read as, never decoded: decoding
+one could raise out of the handler doing the restoring and skip the restores
+still to come.

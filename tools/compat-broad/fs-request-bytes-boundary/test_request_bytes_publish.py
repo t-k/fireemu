@@ -114,12 +114,12 @@ def test_a_failure_writing_the_second_temporary_touches_nothing(tmp_path, monkey
 
     real_write = shadow_module._write_temporary
 
-    def flaky(target, text):
+    def flaky(target, data):
         # `_write_temporary` is handed the final path and derives the temporary
         # name itself, so the document is the one ending in `.md`.
         if str(target).endswith(".md"):
             raise OSError("injected temporary write refusal")
-        return real_write(target, text)
+        return real_write(target, data)
 
     monkeypatch.setattr(shadow_module, "_write_temporary", flaky)
     with pytest.raises(OSError, match="injected temporary write refusal"):
@@ -176,7 +176,80 @@ def test_concurrent_publishers_never_cross_a_record_with_another_citation(tmp_pa
     )
 
 
+def _check_ignore(relative: str) -> bool:
+    """Ask git itself, rather than reading .gitignore and hoping."""
+    import subprocess
+
+    return (
+        subprocess.run(
+            ["git", "check-ignore", "-q", relative],
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
 def test_the_lock_is_kept_out_of_the_tracked_tree():
     """A lock file in `git status` makes the next run refuse the checkout."""
-    ignored = (ROOT / ".gitignore").read_text()
-    assert shadow_module.PUBLICATION_LOCK in ignored
+    assert _check_ignore(shadow_module.PUBLICATION_LOCK)
+
+
+@pytest.mark.parametrize("published", shadow_module.PUBLISHED_PATHS)
+def test_a_stale_temporary_is_kept_out_of_the_tracked_tree(published):
+    """A killed publisher must not leave a file that dirties the checkout."""
+    assert _check_ignore(published + shadow_module.TEMPORARY_SUFFIX)
+
+
+def test_a_stale_temporary_is_swept_when_the_lock_is_taken(tmp_path):
+    """A publisher killed mid-write leaves side files; the next one clears them."""
+    root = _sandbox(tmp_path)
+    stale = [
+        shadow_module._temporary_for(root / relative)
+        for relative in shadow_module.PUBLISHED_PATHS
+    ]
+    for path in stale:
+        path.write_bytes(b"left behind by a killed publisher")
+
+    shadow_module.publish_run(_run(tmp_path, "a"), root=root)
+
+    assert [path for path in stale if path.exists()] == []
+    assert _identities(root) == ("a", "a")
+
+
+def test_the_sweep_reports_what_it_removed(tmp_path):
+    root = _sandbox(tmp_path)
+    temporary = shadow_module._temporary_for(root / shadow_module.PUBLISHED_RECORD)
+    temporary.write_bytes(b"stale")
+    swept = shadow_module._sweep_stale_temporaries(root)
+    assert swept == [shadow_module.PUBLISHED_RECORD + shadow_module.TEMPORARY_SUFFIX]
+    assert not temporary.exists()
+    assert shadow_module._sweep_stale_temporaries(root) == []
+
+
+def test_a_non_utf8_pre_image_is_restored_as_bytes(tmp_path, monkeypatch):
+    """The restore must not decode: a decode error would escape the handler."""
+    root = _sandbox(tmp_path)
+    record_path = root / shadow_module.PUBLISHED_RECORD
+    document_path = root / shadow_module.PREPARATION_DOC
+    # A pre-image that cannot be decoded as UTF-8. Contrived, but the restore
+    # path must not depend on the old content being text at all.
+    record_path.write_bytes(b"\xff\xfe not valid utf-8")
+    before_document = document_path.read_text()
+
+    real_replace = os.replace
+
+    def flaky(source, destination, *args, **kwargs):
+        if str(destination).endswith(".md"):
+            raise OSError("injected document replace refusal")
+        return real_replace(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", flaky)
+    with pytest.raises(OSError, match="injected document replace refusal"):
+        shadow_module.publish_run(_run(tmp_path, "a"), root=root)
+    monkeypatch.undo()
+
+    assert record_path.read_bytes() == b"\xff\xfe not valid utf-8"
+    assert document_path.read_text() == before_document
+    assert sorted(path.name for path in root.rglob("*.publish-tmp")) == []

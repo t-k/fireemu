@@ -5980,6 +5980,15 @@ fn sign_up(
     if body.get("localId").is_some_and(|v| !v.is_null()) {
         return error(400, "UNEXPECTED_PARAMETER : User ID");
     }
+    match opt_str(body, "displayName") {
+        Ok(Some(name)) => {
+            if let Err(r) = reject_control_characters(name, "displayName") {
+                return r;
+            }
+        }
+        Ok(None) => {}
+        Err(r) => return r,
+    }
     let email = match opt_str(body, "email") {
         Ok(email) => email,
         Err(r) => return r,
@@ -6709,6 +6718,21 @@ struct UpdatePlan {
 /// being silently dropped.
 const UNSUPPORTED_UPDATE_FIELDS: &[&str] = &["mfaInfo"];
 
+/// Refuses a profile string a request states directly when it carries a NUL or another
+/// control character. [`AuthStore::import_user`] already refuses these at its own boundary,
+/// so a value that cannot be imported cannot be created through a request either.
+/// Production's refusal shape for this input is unobserved, and so are the length bounds it
+/// applies, which are therefore not imposed here.
+fn reject_control_characters(value: &str, field: &str) -> Result<(), JsonResponse> {
+    if value.chars().any(char::is_control) {
+        return Err(error(
+            400,
+            &format!("INVALID_ARGUMENT : {field} must not contain control characters"),
+        ));
+    }
+    Ok(())
+}
+
 /// `{providerId, rawId, email?, displayName?, photoUrl?}` of a link request.
 fn parse_identity(v: &Value) -> Result<FederatedIdentity, JsonResponse> {
     let provider_id = opt_str(v, "providerId")?
@@ -6722,6 +6746,11 @@ fn parse_identity(v: &Value) -> Result<FederatedIdentity, JsonResponse> {
             400,
             "INVALID_ARGUMENT : linkProviderUserInfo takes a federated providerId",
         ));
+    }
+    for field in ["email", "displayName", "photoUrl"] {
+        if let Some(value) = opt_str(v, field)? {
+            reject_control_characters(value, field)?;
+        }
     }
     Ok(FederatedIdentity {
         provider_id: provider_id.to_owned(),
@@ -6858,6 +6887,11 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     let change = |key: &str| -> Result<Change, JsonResponse> {
         Ok(opt_str(body, key)?.map_or(Change::Keep, |v| Change::Set(v.to_owned())))
     };
+    for field in ["displayName", "photoUrl"] {
+        if let Some(value) = opt_str(body, field)? {
+            reject_control_characters(value, field)?;
+        }
+    }
     let mut display_name = change("displayName")?;
     let mut photo_url = change("photoUrl")?;
     let mut phone_number = change("phoneNumber")?;

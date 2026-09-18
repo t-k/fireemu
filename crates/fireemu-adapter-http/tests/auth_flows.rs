@@ -504,6 +504,79 @@ fn reset_password_check_mode_describes_every_out_of_band_code_type() {
     assert_eq!(status, 200, "{signed_in}");
 }
 
+/// ITKM-2. The end-user profile routes took whatever string arrived, so a NUL or another
+/// control character reached the store and every later rendering of it. `import_user`
+/// already refuses those at its own boundary; the request boundary now agrees. Production's
+/// refusal shape for this input is unobserved, and the length bounds it applies are not
+/// recorded either, so only the control-character check is made here.
+#[test]
+fn profile_strings_reject_control_characters_on_every_route_that_stores_them() {
+    let s = state();
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "control@example.com", "password": "hunter22", "displayName": "na\u{0000}me"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : displayName must not contain control characters"
+    );
+    // The refused sign-up left no account behind.
+    let (_, methods) = post(
+        &s,
+        &format!("{V1}/accounts:createAuthUri"),
+        &json!({"identifier": "control@example.com", "continueUri": "http://localhost"}),
+    );
+    assert_eq!(methods["registered"], false);
+
+    let user = sign_up(&s, "control@example.com");
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    for (field, value) in [
+        ("displayName", "na\u{0007}me"),
+        ("photoUrl", "https://p.example/a.png\u{0000}"),
+    ] {
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": id_token, field: value}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(
+            refused["error"]["message"],
+            format!("INVALID_ARGUMENT : {field} must not contain control characters")
+        );
+    }
+
+    // The Admin link route reaches the same parser.
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({
+            "localId": user["localId"],
+            "linkProviderUserInfo": {
+                "providerId": "github.com",
+                "rawId": "gh-1",
+                "displayName": "gh\u{0001}user"
+            }
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : displayName must not contain control characters"
+    );
+
+    // Ordinary values still pass.
+    let (status, updated) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": id_token, "displayName": "Ada Lovelace", "photoUrl": "https://p.example/a.png"}),
+    );
+    assert_eq!(status, 200, "{updated}");
+    assert_eq!(updated["displayName"], "Ada Lovelace");
+}
+
 fn password_with_utf16_units(units: usize) -> String {
     assert!(units >= 2);
     let mut password = "a".repeat(units - 2);

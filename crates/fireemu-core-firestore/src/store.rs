@@ -6282,6 +6282,20 @@ mod scope_index_tests {
                 modelled, summed,
                 "{scope:?}: the two document charges differ"
             );
+
+            // The total validation itself accumulates, assembled the way `document_size`
+            // assembles one: the document name, the fixed charge, and every field name and
+            // validated value. This is the end-to-end tie between the two implementations.
+            let mut validated_total = crate::size::document_name_size(&document.path).unwrap() + 32;
+            for (name, value) in &document.fields {
+                let property_path = PropertyPath::root(name);
+                validated_total += u64::try_from(name.len()).unwrap() + 1;
+                validated_total += validate_value(value, false, &property_path, scope).unwrap();
+            }
+            assert_eq!(
+                validated_total, modelled,
+                "{scope:?}: the validated document total is not the size model's"
+            );
         }
     }
 

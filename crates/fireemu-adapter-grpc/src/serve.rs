@@ -205,31 +205,75 @@ enum BodyRejection {
     TooLarge,
     /// The sender held the request open past [`BODY_READ_DEADLINE`] without finishing it.
     Deadline,
+    /// The request declared no body and sent one anyway. Distinct from [`Self::TooLarge`] so
+    /// that a single stray byte is not reported as a 10 MiB overflow.
+    Undeclared,
 }
 
-/// Whether a request can carry a body at all.
+/// Whether a request *declares* a body.
 ///
-/// A `GET` never does, and a declared length of zero says there is nothing to read. Deciding
+/// A `GET` does not, and a declared length of zero says there is nothing to read. Deciding
 /// this before admission keeps a body-less request off the pool: a `Listen` back channel is a
 /// bare `GET`, and refusing one because writers are busy would be a load-caused refusal
 /// neither production nor the official emulator has.
-fn carries_a_body<B>(req: &Request<B>) -> bool {
+///
+/// This is a statement about the declaration, not a guarantee about the wire: a chunked `GET`
+/// declares nothing and can still send bytes. So the declaration only decides admission, and
+/// a request that declares no body is read with a limit of zero
+/// ([`body_limit_for`]) rather than trusted. An empty body satisfies that limit, so the back
+/// channel is unchanged, and a request that sends bytes it never declared is refused instead
+/// of buffered off the pool.
+fn declares_a_body<B>(req: &Request<B>) -> bool {
     req.method() != hyper::Method::GET && header(req, "content-length") != Some("0")
+}
+
+/// How much body a request is allowed to send, and what it means to exceed it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BodyAllowance {
+    /// The request declared a body and took a permit for it; this many bytes are accepted.
+    Declared(usize),
+    /// The request declared no body, so it took no permit. An empty body satisfies this;
+    /// anything else is refused rather than buffered off the pool.
+    Undeclared,
+}
+
+impl BodyAllowance {
+    const fn limit(self) -> usize {
+        match self {
+            Self::Declared(maximum) => maximum,
+            Self::Undeclared => 0,
+        }
+    }
+
+    const fn exceeded(self) -> BodyRejection {
+        match self {
+            Self::Declared(_) => BodyRejection::TooLarge,
+            Self::Undeclared => BodyRejection::Undeclared,
+        }
+    }
+
+    const fn for_request(declared: bool, maximum: usize) -> Self {
+        if declared {
+            Self::Declared(maximum)
+        } else {
+            Self::Undeclared
+        }
+    }
 }
 
 async fn read_body<B>(
     req: Request<B>,
-    limit: usize,
+    allowance: BodyAllowance,
     deadline: std::time::Duration,
 ) -> Result<Bytes, BodyRejection>
 where
     B: Body<Data = Bytes>,
     B::Error: Into<BoxError>,
 {
-    let read = fireemu_adapter_support::body::collect_limited(req.into_body(), limit);
+    let read = fireemu_adapter_support::body::collect_limited(req.into_body(), allowance.limit());
     match tokio::time::timeout(deadline, read).await {
         Ok(Ok(bytes)) => Ok(bytes),
-        Ok(Err(_)) => Err(BodyRejection::TooLarge),
+        Ok(Err(_)) => Err(allowance.exceeded()),
         Err(_) => Err(BodyRejection::Deadline),
     }
 }
@@ -251,10 +295,26 @@ fn body_read_deadline_exceeded() -> RestResponse {
     }
 }
 
+/// The refusal a request that declared no body and sent one anyway gets.
+///
+/// It is not an over-boundary answer: the request sent one byte more than the zero it
+/// declared, which says nothing about `FS-LIMIT-API-REQUEST-BYTES`. Local only.
+fn undeclared_body() -> RestResponse {
+    RestResponse {
+        status: 400,
+        body: fireemu_adapter_support::api_error::google_rpc(
+            400,
+            "request body was not declared",
+            "INVALID_ARGUMENT",
+        ),
+    }
+}
+
 fn body_rejection_response(rejection: BodyRejection, enforce_limits: bool) -> RestResponse {
     match rejection {
         BodyRejection::TooLarge => api_request_too_large(enforce_limits),
         BodyRejection::Deadline => body_read_deadline_exceeded(),
+        BodyRejection::Undeclared => undeclared_body(),
     }
 }
 
@@ -262,8 +322,12 @@ fn body_rejection_response(rejection: BodyRejection, enforce_limits: bool) -> Re
 async fn rest_call(
     state: Arc<RestState>,
     req: Request<Incoming>,
+    body_deadline: std::time::Duration,
 ) -> Result<Response<OutBody>, std::io::Error> {
     let origin = header(&req, "origin").map(str::to_owned);
+    // REST admits every request, body or not: the permit covers the `spawn_blocking`
+    // execution below as well as the body, so it bounds the blocking pool and not only
+    // memory. The channel path has no such execution and admits only a declared body.
     let Some(permit) = try_admit_rest_work(rest_work_limiter()) else {
         return Ok(json_response(
             &too_many_concurrent_requests(),
@@ -284,7 +348,13 @@ async fn rest_call(
         .iter()
         .map(|v| v.to_str().unwrap_or_default().to_owned())
         .collect();
-    let bytes = match read_body(req, MAX_REST_BODY_BYTES, BODY_READ_DEADLINE).await {
+    let bytes = match read_body(
+        req,
+        BodyAllowance::Declared(MAX_REST_BODY_BYTES),
+        body_deadline,
+    )
+    .await
+    {
         Ok(bytes) => bytes,
         Err(rejection) => {
             return Ok(json_response(
@@ -376,17 +446,22 @@ where
     // the same pool: without this, peak body memory on this path was bounded only by how
     // fast clients connect.
     //
-    // Only a request that carries a body takes a permit. A `Listen` back channel is a bare
+    // Only a request that declares a body takes a permit. A `Listen` back channel is a bare
     // `GET` and reads nothing, so it must never be refused because writers are busy: that
     // would be a load-caused refusal on a surface where neither production nor the official
     // emulator has one.
+    //
+    // A declaration is not a promise, so one that declared no body is read with a limit of
+    // zero: an empty body passes, and a chunked `GET` that sends bytes anyway is refused
+    // rather than buffered outside the pool it never joined.
     //
     // The permit covers reading and parsing the body and the synchronous `Hub::handle`, and
     // is released when this function returns. A streaming back channel produces its frames
     // from the body returned here, after the permit is gone, so a `Listen` client long-polling
     // for up to `LONG_POLL_MAX` never holds one -- which would otherwise let a handful of
     // idle listeners starve every write surface.
-    let _permit = if carries_a_body(&req) {
+    let declared = declares_a_body(&req);
+    let _permit = if declared {
         match try_admit_rest_work(limiter) {
             Some(permit) => Some(permit),
             None => return json_response(&too_many_concurrent_requests(), origin.as_deref()),
@@ -405,7 +480,8 @@ where
         .iter()
         .map(|v| v.to_str().unwrap_or_default().to_owned())
         .collect();
-    let bytes = match read_body(req, crate::webchannel::MAX_FORM_BYTES, body_deadline).await {
+    let allowance = BodyAllowance::for_request(declared, crate::webchannel::MAX_FORM_BYTES);
+    let bytes = match read_body(req, allowance, body_deadline).await {
         Ok(bytes) => bytes,
         Err(rejection) => {
             return json_response(
@@ -559,6 +635,30 @@ where
         + 'static,
     S::Future: Send + 'static,
 {
+    serve_multiplexed_with(listener, grpc, rest, BODY_READ_DEADLINE).await
+}
+
+/// [`serve_multiplexed`] with an explicit body-read deadline.
+///
+/// The deadline is a parameter so that a test can watch a stalled sender give its permit back
+/// without waiting out [`BODY_READ_DEADLINE`], which is sized for a real client on a real
+/// connection. Production callers use [`serve_multiplexed`].
+pub async fn serve_multiplexed_with<S>(
+    listener: TcpListener,
+    grpc: S,
+    rest: Arc<RestState>,
+    body_deadline: std::time::Duration,
+) -> std::io::Result<()>
+where
+    S: Service<
+            Request<tonic::body::Body>,
+            Response = Response<tonic::body::Body>,
+            Error = Infallible,
+        > + Clone
+        + Send
+        + 'static,
+    S::Future: Send + 'static,
+{
     let hub = Arc::new(Hub::new(rest.clone()));
     loop {
         let stream = accept_connection(&listener).await?;
@@ -625,11 +725,11 @@ where
                             req,
                             enforce_limits,
                             rest_work_limiter(),
-                            BODY_READ_DEADLINE,
+                            body_deadline,
                         )
                         .await);
                     }
-                    rest_call(rest, req).await
+                    rest_call(rest, req, body_deadline).await
                 }
             });
             // Connection errors are per-client; the accept loop keeps running.
@@ -1032,6 +1132,124 @@ mod tests {
                     streaming.status().as_u16(),
                     200,
                     "a back channel reads no body and must not need a permit"
+                );
+            });
+        }
+
+        /// A declaration is not a promise. A chunked `GET` declares no body, so it takes no
+        /// permit; before this it was then read with the full transport limit and could buffer
+        /// a megabyte outside the pool it never joined. It is read with a limit of zero now, so
+        /// bytes it never declared are refused rather than buffered.
+        #[test]
+        fn an_undeclared_body_is_refused_rather_than_buffered_off_the_pool() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let exhausted = Arc::new(tokio::sync::Semaphore::new(0));
+                let request = Request::builder()
+                    .method("GET")
+                    .uri("/google.firestore.v1.Firestore/Listen/channel?SID=none&RID=rpc&AID=0&CI=1&TYPE=xmlhttp")
+                    .header("transfer-encoding", "chunked")
+                    .body(Full::new(Bytes::from(vec![b'x'; 1024 * 1024])))
+                    .expect("a chunked GET that carries bytes anyway");
+
+                let (status, body) = body_of(
+                    channel_call(
+                        hub(),
+                        StreamKind::Listen,
+                        request,
+                        true,
+                        &exhausted,
+                        BODY_READ_DEADLINE,
+                    )
+                    .await,
+                )
+                .await;
+                assert_ne!(status, 503, "it declared no body, so it needs no permit");
+                assert_eq!(status, 400, "{body}");
+                assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+                // Not the over-boundary wording: one stray byte past a declared zero says
+                // nothing about FS-LIMIT-API-REQUEST-BYTES.
+                assert_eq!(body["error"]["message"], "request body was not declared");
+                assert_eq!(
+                    exhausted.available_permits(),
+                    0,
+                    "no permit was taken and none was returned"
+                );
+            });
+        }
+
+        /// A `POST` that declares an empty body declares no body, so it takes no permit and
+        /// is served from an empty pool like the back channel is.
+        #[test]
+        fn a_zero_length_post_takes_no_permit_and_is_served_from_an_exhausted_pool() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let exhausted = Arc::new(tokio::sync::Semaphore::new(0));
+                let request = Request::builder()
+                    .method("POST")
+                    .uri("/google.firestore.v1.Firestore/Write/channel?VER=8&RID=1&CI=0")
+                    .header("content-length", "0")
+                    .body(Full::new(Bytes::new()))
+                    .expect("a declared-empty forward channel request");
+
+                let (status, body) = body_of(
+                    channel_call(
+                        hub(),
+                        StreamKind::Write,
+                        request,
+                        true,
+                        &exhausted,
+                        BODY_READ_DEADLINE,
+                    )
+                    .await,
+                )
+                .await;
+                assert_ne!(status, 503, "a declared-empty body needs no permit");
+                assert_eq!(status, 200, "{body}");
+                assert_eq!(exhausted.available_permits(), 0);
+            });
+        }
+
+        /// A request declaring both a length and a chunked encoding still declares a body, so
+        /// it is admitted. This pins the input shape the admission check reads; hyper decides
+        /// separately whether such a request reaches a handler at all.
+        #[test]
+        fn a_request_declaring_both_a_length_and_an_encoding_takes_a_permit() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let exhausted = Arc::new(tokio::sync::Semaphore::new(0));
+                let request = Request::builder()
+                    .method("POST")
+                    .uri("/google.firestore.v1.Firestore/Write/channel?VER=8&RID=1&CI=0")
+                    .header("content-length", "5")
+                    .header("transfer-encoding", "chunked")
+                    .body(Full::new(Bytes::from_static(b"count=1&ofs=0")))
+                    .expect("a request declaring both");
+
+                let (status, _) = body_of(
+                    channel_call(
+                        hub(),
+                        StreamKind::Write,
+                        request,
+                        true,
+                        &exhausted,
+                        BODY_READ_DEADLINE,
+                    )
+                    .await,
+                )
+                .await;
+                assert_eq!(
+                    status, 503,
+                    "a declared body must be admitted, so an empty pool refuses it"
                 );
             });
         }

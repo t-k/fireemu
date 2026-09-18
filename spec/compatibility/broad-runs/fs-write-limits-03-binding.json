@@ -7,6 +7,9 @@
     "the declared index exemption is not deployed"
   ],
   "campaignId": "FS-WRITE-LIMITS-03",
+  "campaignIds": [
+    "FS-WRITE-LIMITS-03"
+  ],
   "collector": {
     "differenceFromLimits02": "Every mutating method is gated by the write-safety predicate, not PATCH alone, because this campaign sends writes over :batchWrite. The preflight prefix length is read from the plan. A row the campaign has declared it cannot predict locally is excused from the safety predicate, though its journal integrity is still checked. collector.py is byte-for-byte unchanged, so the frozen limits-02 collector source digest still resolves.",
     "digest": "185f13258c5b14d7b4d462ea065f7f3782e10503a793fc35d2ae411cf1bc6288",
@@ -52,25 +55,20 @@
   "localShadow": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03-local-shadow.json",
     "productionExecuted": false,
-    "sha256": "7c410051cc043173659fb7de79fdef6af4fa4cc52f148b02719fa67ee403f2fa",
+    "sha256": "59789ba750f4daf91d4594d51858ee794a14990c7121322f8a39bf61ecc7e08f",
     "status": "completed"
   },
   "manifest": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03.json",
-    "sha256": "039de6c4072a3872cbafa5c60a7ae27ccee1055ab7910fc9e81da05ce59bab84"
+    "sha256": "40a90265df0a6fa8237856b77b5e1705d9c8dc0f6767fdf5943853bdc708f5b6"
   },
-  "parts": [
-    "FS-WRITE-LIMITS-03A",
-    "FS-WRITE-LIMITS-03B"
-  ],
   "productionExecuted": false,
   "source": {
-    "codeSourceHead": "befd12ef83f8327a13a0a09f479e0848d324fe44",
-    "commit": "befd12ef83f8327a13a0a09f479e0848d324fe44",
+    "codeSourceHead": "c9a3611ae326646a70c3bd367a42962f68b7a918",
+    "commit": "c9a3611ae326646a70c3bd367a42962f68b7a918",
     "productionArtifactSha256": null,
     "shadowArtifactSha256": {
-      "A": "082f61b82807cd3e56632feabf92262388a9f856a67388a55f9d818ce7c2425d",
-      "B": "d281f626908042b1a88ebd4a49a8b291efcf7eeed29e3a5f8e64d3d0271825c5"
+      "ALL": "98f89a4c0df4d69de918d6e0efe7f08aed64070c11471e45d9f63233e2ef15b2"
     }
   },
   "status": "BLOCKED_OWNER",

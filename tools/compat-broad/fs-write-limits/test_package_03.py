@@ -10,7 +10,10 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from compiler_03 import (
     CAMPAIGN,
@@ -25,7 +28,7 @@ PACKAGE = ROOT / "spec/compatibility/broad-runs"
 MANIFEST = PACKAGE / "fs-write-limits-03.json"
 BINDING = PACKAGE / "fs-write-limits-03-binding.json"
 SHADOW = PACKAGE / "fs-write-limits-03-local-shadow.json"
-PARTS = ("A", "B")
+PARTS = ("ALL",)
 
 # Split so this file does not itself carry the prefixes it forbids: the
 # publication-hygiene check greps published sources for these literals.
@@ -79,22 +82,20 @@ def test_the_package_never_publishes_a_nonce_or_an_absolute_path() -> None:
             )
 
 
-def test_both_parts_are_declared_and_carry_the_whole_scope() -> None:
+def test_one_allocation_carries_the_whole_scope() -> None:
     manifest = load(MANIFEST)
-    assert set(manifest["parts"]) == set(PARTS)
-    assert manifest["partitionReason"]
+    assert manifest["campaignId"] == CAMPAIGN
+    assert manifest["allocation"]["parts"] == 1
+    assert manifest["allocation"]["chargedBy"] == "shared_gate"
+    assert manifest["allocation"]["scheduleStopConsequence"]
     limits, residues = set(), set()
-    for part in PARTS:
-        declared = manifest["parts"][part]
-        assert declared["campaignId"] == f"{CAMPAIGN}{part}"
-        assert declared["scope"]
-        for case in declared["cases"]:
-            residues.add(case["residue"])
-            if "limitId" in case:
-                limits.add(case["limitId"])
-            assert case["semantics"]
-            assert case["expected"]
-            assert case["localBasis"].startswith("artifact shadow at")
+    for case in manifest["cases"]:
+        residues.add(case["residue"])
+        if "limitId" in case:
+            limits.add(case["limitId"])
+        assert case["semantics"]
+        assert case["expected"]
+        assert case["localBasis"].startswith("artifact shadow at")
     assert residues == {"R3", "R4"}
     assert limits == {
         "FS-LIMIT-COLLECTION-ID",
@@ -115,13 +116,12 @@ def test_both_parts_are_declared_and_carry_the_whole_scope() -> None:
     assert limits == set(manifest["requirementSurfaces"][1:])
 
 
-def test_the_package_says_why_it_declines_a_per_slot_schedule() -> None:
-    """Declining the Gate's per-slot reservation is a decision, so it is recorded."""
-    manifest = load(MANIFEST)
-    declined = manifest["scheduleDeclined"]
-    assert declined["declared"] is False
-    assert "fail-closed" in declined["reason"]
-    assert "1200" in manifest["partitionReason"]
+def test_the_package_states_what_the_frozen_schedule_costs() -> None:
+    """A per-slot reservation the Gate can enforce has a price, so it is recorded."""
+    allocation = load(MANIFEST)["allocation"]
+    assert "no-data abort" in allocation["scheduleStopConsequence"]
+    assert "recovery owner" in allocation["scheduleStopConsequence"]
+    assert allocation["gateWallCapSeconds"] == 1200
 
 
 def test_the_only_index_configuration_change_is_the_declared_exemption() -> None:
@@ -146,12 +146,7 @@ def test_the_only_index_configuration_change_is_the_declared_exemption() -> None
     )
     # The campaign itself never mutates configuration.
     assert manifest["configuration"]["writes"] == 0
-    exemption = next(
-        case
-        for part in PARTS
-        for case in manifest["parts"][part]["cases"]
-        if case.get("indexExemption")
-    )
+    exemption = next(case for case in manifest["cases"] if case.get("indexExemption"))
     assert exemption["limitId"] == "FS-LIMIT-DOCUMENT-NAME-BYTES"
     assert exemption["indexExemptionReason"]
 
@@ -160,8 +155,7 @@ def test_a_truncating_maximum_is_not_recorded_as_a_refusal() -> None:
     manifest = load(MANIFEST)
     case = next(
         case
-        for part in PARTS
-        for case in manifest["parts"][part]["cases"]
+        for case in manifest["cases"]
         if case.get("limitId") == "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES"
     )
     assert case["kind"] == "truncating-maximum"
@@ -171,12 +165,7 @@ def test_a_truncating_maximum_is_not_recorded_as_a_refusal() -> None:
 
 def test_the_aggregate_metric_is_probed_in_both_readings() -> None:
     manifest = load(MANIFEST)
-    cases = [
-        case
-        for part in PARTS
-        for case in manifest["parts"][part]["cases"]
-        if case.get("aggregateShape")
-    ]
+    cases = [case for case in manifest["cases"] if case.get("aggregateShape")]
     assert {case["aggregateShape"] for case in cases} == {"string", "nested-map"}
     for case in cases:
         assert case["kind"] == "metric-discriminator"
@@ -190,8 +179,7 @@ def test_the_field_path_boundary_is_probed_in_every_shape() -> None:
     manifest = load(MANIFEST)
     cases = [
         case
-        for part in PARTS
-        for case in manifest["parts"][part]["cases"]
+        for case in manifest["cases"]
         if case.get("limitId") == "FS-LIMIT-FIELD-PATH-BYTES"
     ]
     assert len(cases) == 3
@@ -203,7 +191,7 @@ def test_the_field_path_boundary_is_probed_in_every_shape() -> None:
 def test_budgets_match_the_compiled_plans_and_stay_inside_the_cap() -> None:
     manifest = load(MANIFEST)
     for part in PARTS:
-        budgets = manifest["parts"][part]["budgets"]
+        budgets = manifest["budgets"]
         plan = compile_limits_plan("fireemu-35fe6", "(default)", "0" * 32, part)
         accounting, gate = plan["budgetAccounting"], plan["localGatePlan"]
         assert budgets["observationRequests"] == accounting["observationRequests"]
@@ -223,12 +211,17 @@ def test_budgets_match_the_compiled_plans_and_stay_inside_the_cap() -> None:
         )
         assert budgets["envelopeCostMicrousd"] < budgets["costCapUsd"] * 1_000_000
         assert budgets["tariffsConfirmed"] is False
-        # Each part must fit the shared Gate's own ceiling, which is why the
-        # campaign is partitioned at all. No schedule is declared, so every
-        # request reserves the lane default and recovery survives an early stop.
-        assert "schedule" not in gate["jobs"]["limits"]
-        assert gate["recoverySeconds"] >= accounting["recoveryRequests"] * 13.25
+        # The allocation must fit the Gate's own ceiling, and its reserve must
+        # cover what the Gate itself will charge for this schedule.
+        import compiler_03
+
+        job = gate["jobs"]["limits"]
+        charge = compiler_03.gate_charge(
+            job["schedule"], job["recovery"], job["observation"] + job["recovery"]
+        )
+        assert gate["recoverySeconds"] >= charge["recoverySeconds"]
         assert gate["recoverySeconds"] < gate["wallSeconds"] <= 1200
+        assert gate["transportCeilingSeconds"] == compiler_03.TRANSPORT_CEILING_SECONDS
 
 
 def test_binding_and_source_digests_resolve_at_the_declared_commit() -> None:
@@ -253,14 +246,14 @@ def test_binding_and_source_digests_resolve_at_the_declared_commit() -> None:
     assert (
         manifest["sourceBinding"]["shadowArtifactSha256"]
         == binding["source"]["shadowArtifactSha256"]
-        == {part: shadow["parts"][part]["artifact"]["sha256"] for part in PARTS}
+        == {part: shadow["execution"][part]["artifact"]["sha256"] for part in PARTS}
     )
 
 
 def test_both_recorded_shadows_are_complete_and_reclaimed_everything() -> None:
     shadow = load(SHADOW)
     for part in PARTS:
-        execution = shadow["parts"][part]["execution"]
+        execution = shadow["execution"][part]["execution"]
         assert execution["semanticMismatches"] == []
         assert execution["infrastructureFailures"] == []
         for key in (
@@ -279,28 +272,24 @@ def test_both_recorded_shadows_are_complete_and_reclaimed_everything() -> None:
         assert execution["observationRequests"] == accounting["observationRequests"]
         assert execution["recoveryRequests"] == accounting["recoveryRequests"]
         assert execution["ownedDocuments"] == accounting["ownedDocuments"]
-        assert shadow["parts"][part]["digests"]["sourceInputsBound"] is True
+        assert shadow["execution"][part]["digests"]["sourceInputsBound"] is True
 
 
 def test_pending_rows_are_recorded_with_their_reasons() -> None:
     manifest, shadow = load(MANIFEST), load(SHADOW)
     pending = manifest["pendingLocalImplementation"]
     assert pending["meaning"]
-    for part in PARTS:
-        assert (
-            pending["parts"][part]["differences"]
-            == shadow["parts"][part]["execution"]["pendingDifferences"]
-        )
-        for difference in pending["parts"][part]["differences"]:
-            assert difference["pending"] is True
-            assert difference["reason"]
+    assert (
+        pending["differences"]
+        == shadow["execution"]["ALL"]["execution"]["pendingDifferences"]
+    )
+    for difference in pending["differences"]:
+        assert difference["pending"] is True
+        assert difference["reason"]
     # Every pending row must trace to a case that says why it is pending, and
     # the only reason left is one the local shadow cannot remove.
     reasons = {
-        case["pendingReason"]
-        for part in PARTS
-        for case in manifest["parts"][part]["cases"]
-        if case.get("pendingReason")
+        case["pendingReason"] for case in manifest["cases"] if case.get("pendingReason")
     }
     assert len(reasons) == 1
     assert "index configuration" in next(iter(reasons))
@@ -311,8 +300,7 @@ def test_the_document_name_figures_are_computed_not_written_by_hand() -> None:
     manifest = load(MANIFEST)
     case = next(
         case
-        for part in PARTS
-        for case in manifest["parts"][part]["cases"]
+        for case in manifest["cases"]
         if case.get("limitId") == "FS-LIMIT-DOCUMENT-NAME-BYTES"
     )
     prefix = len("projects/fireemu-35fe6/databases/(default)/documents/")
@@ -345,7 +333,7 @@ def test_the_shadow_index_configuration_is_cross_checked() -> None:
     assert configuration["shadowDifference"]
     for part in PARTS:
         declared = configuration["shadowRanUnder"][part]
-        recorded = shadow["parts"][part]["execution"]["indexConfiguration"]
+        recorded = shadow["execution"][part]["execution"]["indexConfiguration"]
         assert declared == recorded, part
         assert declared["sha256"] != configuration["conformanceIndexesSha256Before"]
 
@@ -354,7 +342,7 @@ def test_the_declared_data_cost_is_accounted_for_in_the_envelope() -> None:
     """S2: a ceiling that omits a cost the same object declares is not a ceiling."""
     manifest = load(MANIFEST)
     for part in PARTS:
-        budgets = manifest["parts"][part]["budgets"]
+        budgets = manifest["budgets"]
         assert budgets["dataCostIsIncludedInEnvelope"] is True
         assert budgets["costNote"]
         charged = budgets["requestUpperBound"] * budgets["requestCostMicrousd"]
@@ -364,18 +352,16 @@ def test_the_declared_data_cost_is_accounted_for_in_the_envelope() -> None:
 
 def test_every_boundary_says_which_unit_it_is_expressed_in() -> None:
     """S3: the catalog's unit field and its notes disagree for the field value."""
-    for part in PARTS:
-        for case in load(MANIFEST)["parts"][part]["cases"]:
-            if "limitId" not in case:
-                continue
-            assert case["boundaryUnit"], case["id"]
-            assert case["catalogUnit"] == catalog_status(case["limitId"])["catalogUnit"]
-            assert case["catalogImplemented"] == "implemented"
+    for case in load(MANIFEST)["cases"]:
+        if "limitId" not in case:
+            continue
+        assert case["boundaryUnit"], case["id"]
+        assert case["catalogUnit"] == catalog_status(case["limitId"])["catalogUnit"]
+        assert case["catalogImplemented"] == "implemented"
     # The field-value cases must between them cover both readings.
     units = {
         case["boundaryUnit"]
-        for part in PARTS
-        for case in load(MANIFEST)["parts"][part]["cases"]
+        for case in load(MANIFEST)["cases"]
         if case.get("limitId") == "FS-LIMIT-FIELD-VALUE-BYTES"
     }
     assert any("raw payload" in unit for unit in units)
@@ -387,8 +373,7 @@ def test_the_duplicate_control_cites_the_receipt_it_rests_on() -> None:
     manifest = load(MANIFEST)
     case = next(
         case
-        for part in PARTS
-        for case in manifest["parts"][part]["cases"]
+        for case in manifest["cases"]
         if case["id"].endswith("/batch-duplicate-document")
     )
     assert "firestore-production-matrix.json" in case["derivation"]

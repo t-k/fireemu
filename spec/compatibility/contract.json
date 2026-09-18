@@ -835,7 +835,7 @@
               "precision": "exact-for-local-semantics"
             },
             {
-              "behaviour": "the strict profile refuses a map or array field value whose storage size exceeds FS-LIMIT-FIELD-VALUE-BYTES (1,048,487 logical bytes). Production documents that limit but has only been observed refusing a single oversized string or bytes payload, which is measured on its raw payload and refused under both profiles. The aggregate rule is therefore a strict-profile-only refusal, published here as required: documented, production observation pending.",
+              "behaviour": "two strict-profile-only write-path refusals, published here as the contract requires. First, a map or array field value whose storage size exceeds FS-LIMIT-FIELD-VALUE-BYTES (1,048,487 logical bytes): production documents that limit but has only been observed refusing a single oversized string or bytes payload, which is measured on its raw payload and refused under both profiles. Second, a field path over FS-LIMIT-FIELD-PATH-BYTES (1,500 bytes) implied through an array element: the equivalent path implied through nested maps was already refused under both profiles by automatic index accounting, which does not walk into arrays. Both are documented, production observation pending.",
               "precision": "documented-not-observed"
             }
           ],

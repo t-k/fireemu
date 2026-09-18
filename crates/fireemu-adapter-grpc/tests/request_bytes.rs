@@ -33,6 +33,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 const DB: &str = "projects/demo-app/databases/(default)";
 const NAMES: &str = "projects/demo-app/databases/(default)/documents";
 const COMMIT: &str = "/v1/projects/demo-app/databases/(default)/documents:commit";
+const CHANNEL: &str = "/google.firestore.v1.Firestore/Write/channel";
 
 /// Documents per boundary request. Each one stays well inside `FS-LIMIT-DOCUMENT-BYTES`
 /// (1 MiB), so a 10 MiB request is refused for its own size and nothing else.
@@ -295,6 +296,17 @@ async fn boundary_cases() {
             "the refused message must publish nothing"
         );
     }
+
+    // WebChannel: the same bound on a form body. The exact maximum is read and handed to the
+    // channel, which then answers on its own merits; one more byte never reaches it.
+    let at_maximum = http(addr, "POST", CHANNEL, &"x".repeat(API_REQUEST_BYTES)).await;
+    assert!(
+        !at_maximum.starts_with("HTTP/1.1 413"),
+        "the inclusive maximum must reach the channel: {at_maximum}"
+    );
+    let over = http(addr, "POST", CHANNEL, &"x".repeat(API_REQUEST_BYTES + 1)).await;
+    assert!(over.starts_with("HTTP/1.1 413"), "{over}");
+    assert!(over.contains("request body too large"), "{over}");
 
     // The daemon survives both refusals.
     let ready = http(addr, "GET", "/", "").await;

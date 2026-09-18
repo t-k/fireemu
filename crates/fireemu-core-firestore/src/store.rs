@@ -4972,6 +4972,13 @@ fn validate_document(doc: &Document, scope: LimitScope) -> Result<(), FirestoreE
     let size = document_size(&doc.path, &doc.fields)
         .map_err(|e| FirestoreError::InvalidArgument(e.to_string()))?;
     check_limit(limits::DOCUMENT_BYTES, size.total)?;
+    // After the document charge, so that an oversized document still reports its size the
+    // way it did before this check existed and the way production was observed reporting it.
+    if scope == LimitScope::Production {
+        for (name, value) in &doc.fields {
+            check_stored_field_paths(value, &PropertyPath::root(name))?;
+        }
+    }
     Ok(())
 }
 
@@ -5024,7 +5031,7 @@ fn validate_value(
     inside_array: bool,
     property_path: &PropertyPath,
     scope: LimitScope,
-) -> Result<(), FirestoreError> {
+) -> Result<u64, FirestoreError> {
     // Production counts the payload, not storage accounting's trailing string byte. This
     // boundary was observed against production on 2026-09-07 (`conformance/
     // firestore-production-matrix.json`, `errors/rest-shapes` /
@@ -5037,41 +5044,74 @@ fn validate_value(
     if payload_bytes > limits::MAX_FIELD_PAYLOAD_BYTES {
         return Err(field_value_too_long(property_path));
     }
-    match value {
+    // Each value is measured once, on the way back up, and a parent reuses what its children
+    // reported: walking the subtree again at every level would let one 10 MiB request cost
+    // the nesting depth times its own size before any limit refused it.
+    let size = match value {
         Value::Array(items) => {
             if inside_array {
                 return Err(FirestoreError::InvalidArgument(
                     "Nested arrays are not allowed".into(),
                 ));
             }
-            items
-                .iter()
-                .try_for_each(|v| validate_value(v, true, property_path, scope))?;
+            let mut total = 0u64;
+            for item in items {
+                total = add_size(total, validate_value(item, true, property_path, scope)?)?;
+            }
+            total
         }
-        Value::Map(fields) => fields.iter().try_for_each(|(name, value)| {
-            validate_stored_field_name(name)?;
-            let nested_path = property_path.child(name);
-            check_stored_field_path(&nested_path)?;
-            validate_value(value, false, &nested_path, scope)
-        })?,
-        Value::Reference(name) => validate_reference(name)?,
-        Value::Vector(dimensions) => validate_vector(dimensions)?,
-        _ => {}
-    }
+        Value::Map(fields) => {
+            let mut total = 32u64;
+            for (name, value) in fields {
+                validate_stored_field_name(name)?;
+                let nested_path = property_path.child(name);
+                total = add_size(total, string_size(name)?)?;
+                total = add_size(total, validate_value(value, false, &nested_path, scope)?)?;
+            }
+            total
+        }
+        Value::Reference(name) => {
+            validate_reference(name)?;
+            scalar_size(value)?
+        }
+        Value::Vector(dimensions) => {
+            validate_vector(dimensions)?;
+            scalar_size(value)?
+        }
+        _ => scalar_size(value)?,
+    };
     // `FS-LIMIT-FIELD-VALUE-BYTES` on an aggregate. The catalog's unit is logical bytes, so
     // a map or an array is measured with the official storage-size formula; a string or a
     // bytes payload keeps the raw-payload metric observed above. Production has not been
     // observed on an aggregate value, so only the strict profile refuses one: the
     // compatibility contract forbids adding a refusal to the `emulator` profile. The check
     // runs after the recursion so that the innermost violation is the one reported.
-    if scope == LimitScope::Production && matches!(value, Value::Array(_) | Value::Map(_)) {
-        let bytes =
-            field_value_size(value).map_err(|e| FirestoreError::InvalidArgument(e.to_string()))?;
-        if bytes > limits::MAX_FIELD_PAYLOAD_BYTES as u64 {
-            return Err(field_value_too_long(property_path));
-        }
+    if scope == LimitScope::Production
+        && matches!(value, Value::Array(_) | Value::Map(_))
+        && size > limits::MAX_FIELD_PAYLOAD_BYTES as u64
+    {
+        return Err(field_value_too_long(property_path));
     }
-    Ok(())
+    Ok(size)
+}
+
+fn add_size(a: u64, b: u64) -> Result<u64, FirestoreError> {
+    a.checked_add(b)
+        .ok_or_else(|| FirestoreError::InvalidArgument("size calculation overflow".into()))
+}
+
+fn string_size(s: &str) -> Result<u64, FirestoreError> {
+    add_size(
+        u64::try_from(s.len())
+            .map_err(|_| FirestoreError::InvalidArgument("size calculation overflow".into()))?,
+        1,
+    )
+}
+
+/// The storage size of a value that has no children, deferred to the one size model.
+fn scalar_size(value: &Value) -> Result<u64, FirestoreError> {
+    debug_assert!(!matches!(value, Value::Array(_) | Value::Map(_)));
+    field_value_size(value).map_err(|e| FirestoreError::InvalidArgument(e.to_string()))
 }
 
 /// The production wording for a field value over `FS-LIMIT-FIELD-VALUE-BYTES`.
@@ -5083,17 +5123,22 @@ fn field_value_too_long(property_path: &PropertyPath) -> FirestoreError {
     ))
 }
 
-/// `FS-LIMIT-FIELD-PATH-BYTES` on the path a nested field implies.
+/// `FS-LIMIT-FIELD-PATH-BYTES` on every path a document implies by nesting.
 ///
 /// A path a client names -- an update mask, a field transform, an order or a filter -- is
-/// bounded by [`FieldPath::from_segments`] when it is parsed. A path that only exists
-/// because a document nests maps was bounded only as a side effect of automatic index
-/// accounting, which builds the same [`FieldPath`] for every nested field
-/// (`crate::index_usage::IndexSet::automatic_usage`). This is the same refusal at the same
-/// inclusive boundary with the same wording, made deliberate and reached before index
-/// accounting, so a document is refused for its shape rather than for what indexing it
-/// happens to attract. It is therefore not a new refusal and is not profile-gated.
-fn check_stored_field_path(property_path: &PropertyPath) -> Result<(), FirestoreError> {
+/// bounded by [`FieldPath::from_segments`] when it is parsed. A path that exists only
+/// because a document nests values is bounded here, with the same wording.
+///
+/// This is strict-profile only. Automatic index accounting already refused the same path at
+/// the same boundary, but only where it walks: `automatic_usage` recurses into a map held
+/// directly by a field and never into the elements of an array
+/// (`crate::index_usage::IndexSet::automatic_usage`). A map inside an array therefore had an
+/// unbounded implied path, and bounding it under `OfficialEmulator` would add a refusal the
+/// compatibility contract does not allow.
+fn check_stored_field_paths(
+    value: &Value,
+    property_path: &PropertyPath,
+) -> Result<(), FirestoreError> {
     if property_path.bytes > MAX_FIELD_PATH_BYTES {
         return Err(FirestoreError::InvalidArgument(
             crate::field_path::FieldPathError::PathTooLong {
@@ -5103,7 +5148,15 @@ fn check_stored_field_path(property_path: &PropertyPath) -> Result<(), Firestore
             .to_string(),
         ));
     }
-    Ok(())
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .try_for_each(|item| check_stored_field_paths(item, property_path)),
+        Value::Map(fields) => fields.iter().try_for_each(|(name, value)| {
+            check_stored_field_paths(value, &property_path.child(name))
+        }),
+        _ => Ok(()),
+    }
 }
 
 /// Production checks the dimension count before the component values, so an oversized
@@ -6119,6 +6172,42 @@ mod scope_index_tests {
             FirestoreState::with_limit_scope(LimitScope::OfficialEmulator).limit_scope(),
             LimitScope::OfficialEmulator
         );
+    }
+
+    /// `FS-LIMIT-FIELD-VALUE-BYTES` on an aggregate is measured on the way back up, reusing
+    /// what each child reported. Measuring top-down instead would walk every subtree once
+    /// per enclosing level, so one request bounded only by `FS-LIMIT-API-REQUEST-BYTES`
+    /// would cost its nesting depth times its own size before any limit refused it.
+    #[test]
+    fn validating_a_deep_document_measures_each_value_a_bounded_number_of_times() {
+        // 20 nested maps, each holding one scalar besides the next level: 41 values.
+        const DEPTH: usize = 20;
+        const VALUES: usize = DEPTH * 2 + 1;
+        let mut value = Value::Integer(1);
+        for level in 0..DEPTH {
+            value = Value::Map(BTreeMap::from([
+                (format!("n{level}"), value),
+                (format!("s{level}"), Value::String("x".repeat(64))),
+            ]));
+        }
+        let document = Document {
+            path: path("deep/doc"),
+            fields: BTreeMap::from([("root".to_owned(), value)]),
+            create_time: LogicalInstant::UNIX_EPOCH,
+            update_time: LogicalInstant::UNIX_EPOCH,
+            version: CommitVersion::default(),
+        };
+        for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+            crate::size::FIELD_VALUE_SIZE_CALLS.with(|count| count.set(0));
+            validate_document(&document, scope).expect("the document is inside every limit");
+            let calls = crate::size::FIELD_VALUE_SIZE_CALLS.with(std::cell::Cell::get);
+            // One pass for the document charge plus at most one call per value from
+            // validation itself. Quadratic behaviour would need DEPTH times this.
+            assert!(
+                calls <= VALUES * 3,
+                "{scope:?}: field_value_size ran {calls} times for {VALUES} values"
+            );
+        }
     }
 
     #[test]

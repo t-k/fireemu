@@ -301,6 +301,90 @@ fn a_single_field_name_over_the_name_limit_is_refused_under_both_scopes() {
     }
 }
 
+/// A map inside an array has an implied path too, but automatic index accounting never
+/// walks into array elements, so nothing bounded that path before. Bounding it is a new
+/// refusal and belongs to the strict profile alone.
+#[test]
+fn a_field_path_implied_through_an_array_is_strict_only() {
+    let deep = |len: usize| {
+        Value::Array(vec![Value::Map(BTreeMap::from([(
+            "z".repeat(len),
+            Value::Integer(1),
+        )]))])
+    };
+    // "arr" + "." + 1497 = 1501 canonical bytes; the name alone is inside FS-LIMIT-FIELD-NAME.
+    let over = deep(1_497);
+    let at = deep(1_496);
+
+    let mut store = state(LimitScope::OfficialEmulator);
+    store
+        .commit(&[set("a/b", "arr", over.clone())], None, t(0))
+        .expect("the emulator profile may not gain a refusal");
+    assert!(store.get(&path("a/b")).is_some());
+
+    let mut store = state(LimitScope::Production);
+    store
+        .commit(&[set("a/at", "arr", at)], None, t(0))
+        .expect("the inclusive maximum is accepted");
+    let refused = store.commit(&[set("a/over", "arr", over)], None, t(1));
+    assert!(
+        matches!(refused, Err(FirestoreError::InvalidArgument(ref m))
+            if m == "field path is 1501 bytes, maximum is 1500"),
+        "{}",
+        outcome(&refused)
+    );
+    assert!(store.get(&path("a/over")).is_none());
+}
+
+/// A path implied by nested maps was already refused by automatic index accounting, so it
+/// stays refused under either scope. This pins the asymmetry with the array case above.
+#[test]
+fn a_field_path_implied_through_nested_maps_is_refused_under_both_scopes() {
+    for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+        let mut store = state(scope);
+        let (name, value) = nested_path_field(&PATH_OVER_MAXIMUM);
+        let refused = store.commit(&[set("a/b", &name, value)], None, t(0));
+        assert!(
+            matches!(refused, Err(FirestoreError::InvalidArgument(ref m))
+                if m == "field path is 1501 bytes, maximum is 1500"),
+            "{scope:?}: {}",
+            outcome(&refused)
+        );
+    }
+}
+
+/// A document that breaks two limits at once must still report the one it reported before:
+/// the document charge is production-observed wording, the path limit is not.
+#[test]
+fn an_oversized_document_with_an_over_long_path_still_reports_the_document_charge() {
+    for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+        let mut store = state(scope);
+        let (name, value) = nested_path_field(&PATH_OVER_MAXIMUM);
+        let refused = store.commit(
+            &[Write {
+                op: WriteOp::Set {
+                    path: path("a/b"),
+                    fields: BTreeMap::from([
+                        (name, value),
+                        ("big".to_owned(), Value::String("x".repeat(1_048_400))),
+                    ]),
+                    update_mask: None,
+                },
+                precondition: None,
+                transforms: vec![],
+            }],
+            None,
+            t(0),
+        );
+        assert!(
+            matches!(refused, Err(FirestoreError::ResourceExhausted(_))),
+            "{scope:?}: {}",
+            outcome(&refused)
+        );
+        assert!(store.get(&path("a/b")).is_none(), "{scope:?}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Import applies the same rules
 // ---------------------------------------------------------------------------

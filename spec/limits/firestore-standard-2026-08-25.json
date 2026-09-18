@@ -114,7 +114,7 @@
       "enforcementStage": "request",
       "implemented": "implemented",
       "officialText": "Maximum size of a field path: 1,500 bytes",
-      "notes": "Measured on the canonical field path: the raw segment bytes plus one separator per join, with backtick quoting excluded as a client-side notation. Enforced on every path a client names (FieldPath::from_segments) and on every path a document implies by nesting maps (fireemu_core_firestore::store::check_stored_field_path), before index accounting and whatever single-field exemptions are in force. Not profile-gated: the same refusal was already reached through automatic index accounting. Production has not been observed on this boundary."
+      "notes": "Measured on the canonical field path: the raw segment bytes plus one separator per join, with backtick quoting excluded as a client-side notation. Every path a client names is bounded by FieldPath::from_segments. Every path a document implies by nesting is bounded by fireemu_core_firestore::store::check_stored_field_paths, after the document charge so that an oversized document still reports its size. A path implied by nested maps was already refused at the same boundary through automatic index accounting and stays refused under both profiles; a path implied through an array element was not, because index_usage::automatic_usage does not walk into arrays, so that case is refused in the strict profile only. Production has not been observed on this boundary."
     },
     {
       "id": "FS-LIMIT-FIELD-VALUE-BYTES",

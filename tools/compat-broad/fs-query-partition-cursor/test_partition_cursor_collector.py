@@ -287,3 +287,24 @@ def test_the_result_is_never_marked_production(tmp_path) -> None:
     assert result["promotionReady"] is False
     assert result["campaignId"] == plan()["campaignId"]
     assert result["planDigest"] == plan()["planDigest"]
+
+
+def test_cleanup_is_skipped_when_the_ownership_read_does_not_return_our_document(
+    tmp_path,
+) -> None:
+    value = plan()
+
+    class Replaced(Transport):
+        def _body(self, request: dict) -> tuple[int, dict]:
+            status, body = super()._body(request)
+            if request["kind"] == "cleanup-ownership-read":
+                body = dict(body, fields={"marker": {"stringValue": "someone-else"}})
+            return status, body
+
+    transport = Replaced(value)
+    result = collect_local(value, transport, tmp_path / "out")
+    kinds = [request["kind"] for request in transport.sent]
+    assert "cleanup-seed-delete" not in kinds
+    assert "cleanup-root-delete" not in kinds
+    assert result["cleanup"]["rows"][1]["skipReason"] == "no-current-run-ownership"
+    assert result["cleanup"]["rows"][2]["skipReason"] == "no-current-run-ownership"

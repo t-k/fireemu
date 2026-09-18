@@ -321,8 +321,18 @@ def _bind_recovery(
     plan: dict[str, Any],
     rows: list[dict[str, Any]],
     index: int,
+    cleanup: list[dict[str, Any]],
 ) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
-    if rows[1]["status"] != "pass":
+    created = next(
+        (row for row in rows if row["kind"] == "create-only-patch"), {"status": None}
+    )
+    ownership = next(
+        (row for row in cleanup if row["kind"] == "cleanup-ownership-read"),
+        {"status": None},
+    )
+    if created["status"] != "pass" or ownership["status"] != "pass":
+        # Only a creation this run made, still readable as ours, authorizes a
+        # delete. The recorded version precondition is the second guard.
         return None, "no-current-run-ownership", None
     request = _request("recovery", index, operation)
     if operation["kind"] == "cleanup-seed-delete":
@@ -526,7 +536,9 @@ def _run_recovery(
         row = _row("recovery", index, operation)
         cleanup.append(row)
         if "versionFrom" in operation:
-            request, reason, bound = _bind_recovery(operation, plan, rows, index)
+            request, reason, bound = _bind_recovery(
+                operation, plan, rows, index, cleanup
+            )
             if reason:
                 row["skipReason"] = reason
                 _record(publication, directory_fd, row)

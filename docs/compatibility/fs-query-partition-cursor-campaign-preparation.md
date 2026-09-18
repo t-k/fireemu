@@ -108,8 +108,8 @@ always refuses; `validate_permission` accepts no permission while they stand.
 ## Local shadow
 
 The plan was driven against a locally built artifact with SHA-256
-`a2839d0a4d07434a2efc91f6d11d332ef5eb078d1bc73e2807dfcf98d801a94a` at plan digest
-`50a0c6c418969a5ddbe5c3a42f4ea85aee0c32a1413faf0934a1de7e78b1fb92`. All 37 slots
+`a2839d0a4d07434a2efc91f6d11d332ef5eb078d1bc73e2807dfcf98d801a94a` at template plan digest
+`496fbb0ad7661a8395b83669b97fdb831a2c24cf792d979d37d6907e69fb06b7`. All 37 slots
 were dispatched, 37 raw sidecars were published and verified, cleanup completed,
 and an independent residual scan found zero owned documents. The owned process
 stopped and its listener closed.

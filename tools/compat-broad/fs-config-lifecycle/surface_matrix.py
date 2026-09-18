@@ -69,6 +69,8 @@ _IMPORT_EXPORT = "crates/fireemu/src/import_export.rs"
 _METADATA = "crates/fireemu-core-export/src/metadata.rs"
 _EXPORT_FS = "crates/fireemu-core-export/src/firestore.rs"
 _IDS = "crates/fireemu-core-types/src/ids.rs"
+_FIELDS = "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs"
+_TTL = "crates/fireemu-core-firestore/src/ttl.rs"
 
 _NOT_SERVED = "not-implemented"
 _IMPLEMENTED = "implemented"
@@ -224,20 +226,20 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         DATA_PLANE,
         "Field configuration carries the TTL policy and the single-field index exemption, "
         "both of which change document lifetime and query acceptance.",
-        "A caller cannot read back whether TTL or an exemption is in force, so the "
-        "expiry and refusal behavior it implies stays unverifiable.",
-        _NOT_SERVED,
-        (),
+        "A caller can read back the TTL policy and the single-field index configuration, "
+        "so the expiry and refusal behavior each implies is observable locally.",
+        _IMPLEMENTED,
+        (f"{_FIELDS}:218", f"{_FIELDS}:314", f"{_FIELDS}:189", f"{_TTL}:127"),
     ),
     _row(
         "databases.collectionGroups.fields.list",
         DATA_PLANE,
         "Enumeration with the ttlConfig and indexConfig filters is how tooling discovers "
         "every non-default field policy affecting the data plane.",
-        "Divergent exemption sets change which queries are refused without any read path "
-        "exposing the difference.",
-        _NOT_SERVED,
-        (),
+        "Both documented filters are served and any other filter is refused, so an "
+        "exemption set and a TTL policy set are each discoverable through a read path.",
+        _IMPLEMENTED,
+        (f"{_FIELDS}:426", f"{_FIELDS}:137", f"{_INDEX}:133"),
     ),
     _row(
         "databases.collectionGroups.fields.patch",
@@ -245,30 +247,37 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "Patching ttlConfig schedules server-side document deletion and patching "
         "indexConfig exempts a field from single-field indexing; both change what later "
         "reads and queries return.",
-        "The local runtime accepts exemptions only from static configuration and has no "
-        "TTL concept at all, so neither transition can be driven at runtime.",
-        _EXTENSION,
-        (f"{_CONTROL}:148", f"{_INDEX}:133"),
+        "The ttlConfig transition is driven at runtime and an expiry sweep applies it. "
+        "The indexConfig transition is refused with UNIMPLEMENTED: the local runtime "
+        "still accepts exemptions only from static configuration, so that half of the "
+        "surface cannot be driven at runtime.",
+        _PARTIAL,
+        (f"{_FIELDS}:335", f"{_TTL}:142", f"{_LOCAL}:2841", f"{_CONTROL}:148"),
     ),
     _row(
         "databases.operations.get",
         MANAGED,
         "Long-running operation state belongs to the managed control plane; the local "
-        "runtime performs configuration changes synchronously at startup.",
-        "Any campaign that drives a management method must still bound its own polling, "
-        "which the collector contract handles rather than the runtime.",
-        _NOT_SERVED,
-        (),
+        "runtime applies a field configuration synchronously and records the resulting "
+        "operation only so the name its patch returned can still be polled.",
+        "A campaign that drives fields.patch can poll the operation it was handed, and "
+        "it is always already done; every other long-running operation of the Admin API "
+        "remains managed infrastructure the runtime does not hold. A campaign must still "
+        "bound its own polling, which the collector contract handles.",
+        _PARTIAL,
+        (f"{_FIELDS}:527", f"{_LOCAL}:2747", f"{_LOCAL}:2783"),
     ),
     _row(
         "databases.operations.list",
         MANAGED,
         "Operation enumeration reflects managed scheduling and retention, not any "
-        "behavior a local emulator can hold.",
-        "Enumeration is how an interrupted campaign resumes its cleanup, so the collector "
-        "depends on it even though the runtime does not implement it.",
-        _NOT_SERVED,
-        (),
+        "behavior a local emulator can hold; the local listing reports only the bounded "
+        "tail of field-configuration operations this runtime produced.",
+        "Enumeration is how an interrupted campaign resumes its cleanup. Locally it "
+        "enumerates the field-configuration operations alone, and the record is bounded, "
+        "so a campaign must not treat it as the managed operation history.",
+        _PARTIAL,
+        (f"{_FIELDS}:527", f"{_LOCAL}:2794"),
     ),
     _row(
         "databases.operations.cancel",
@@ -835,14 +844,18 @@ _REPAIR_TICKETS: tuple[dict[str, Any], ...] = (
     ),
     _ticket(
         "FS-CONFIG-RT-004",
-        "No field configuration surface exists, so TTL is unreachable",
-        "collectionGroups.fields is not served and no ttlConfig or expiration sweep "
-        "exists anywhere in the runtime, so a document whose TTL has elapsed is still "
-        "returned locally.",
-        "Search the crates tree for ttlConfig or expirationOffset; there is no match. A "
-        "document with an elapsed TTL field is returned by an ordinary get, while "
-        "production deletes it within the documented delay.",
-        (f"{_REST}:683", f"{_CONTROL}:148"),
+        "The indexConfig half of fields.patch has no runtime transition",
+        "The field configuration surface is served and the ttlConfig half is complete: "
+        "the policy is stored per database, read back as ACTIVE, and an expiry sweep on "
+        "the virtual clock deletes documents whose TTL field has elapsed. Patching "
+        "indexConfig is refused with UNIMPLEMENTED, because single-field exemptions are "
+        "still taken from the project's index configuration at startup and there is no "
+        "runtime path that changes them.",
+        "Issue PATCH on "
+        "projects/{project}/databases/(default)/collectionGroups/{group}/fields/{field} "
+        "with updateMask=indexConfig and observe UNIMPLEMENTED, while production applies "
+        "the exemption and reports usesAncestorConfig false on the next get.",
+        (f"{_FIELDS}:335", f"{_CONTROL}:148", f"{_INDEX}:133"),
         DATA_PLANE,
     ),
     _ticket(

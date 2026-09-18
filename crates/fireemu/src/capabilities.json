@@ -571,7 +571,7 @@
       "production applies a field configuration through a long-running operation, so the intermediate CREATING and the NEEDS_REPAIR states exist in the shape but are never observable locally: the patch returns an operation that is already done",
       "patching indexConfig is refused with UNIMPLEMENTED; single-field exemptions are taken from the project's index configuration and have no runtime transition",
       "the official Firestore emulator serves no field-configuration surface and performs no expiry sweep at all, so this capability diverges from it in the direction of production",
-      "the expiry sweep runs when the shared virtual clock moves and on the control route POST .../projects/{project}:firestore/ttl:sweep, which a test or a campaign uses to observe the post-expiry state without advancing a day",
+      "the expiry sweep runs when the shared virtual clock moves and on the control route POST /v1/sessions/{session}/firestore/ttl:sweep, which a test or a campaign uses to observe the post-expiry state without advancing a day",
       "conformance input: the Firestore Admin v1 reference for collectionGroups.fields and the documented time-to-live semantics; the FS-CONFIG-LIFECYCLE campaign will compare them against production"
     ],
     "precision": "bounded-local-semantics",

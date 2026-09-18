@@ -46,10 +46,24 @@ def test_classes_are_closed_and_each_row_carries_a_rationale_and_consequence() -
 
 
 def test_managed_infrastructure_rows_never_claim_a_local_obligation_to_serve() -> None:
+    """A managed row may be partly served, but never claims to reproduce the managed surface.
+
+    Classifying a method as managed-infrastructure says fireemu is not obliged to serve it.
+    It does not forbid serving a bounded slice: the field-configuration operations the local
+    runtime produced are answered at operations.get and operations.list so the name a patch
+    returned can be polled. What stays forbidden is "implemented", which would claim the
+    whole managed surface, including the operations, retention and scheduling only Google
+    holds.
+    """
     matrix = build_matrix()
     for row in matrix["methods"]:
         if row["class"] == "managed-infrastructure":
-            assert row["local"]["status"] in {"not-implemented", "local-extension-only"}
+            assert row["local"]["status"] in {
+                "not-implemented",
+                "local-extension-only",
+                "partial",
+            }
+            assert row["local"]["status"] != "implemented"
 
 
 def test_every_local_citation_resolves_to_an_existing_line_in_this_checkout() -> None:

@@ -665,7 +665,7 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "The expiry sweep interval is configurable (firestore.ttlSweepIntervalSeconds, default 86400, maximum 259200) and a control route POST .../projects/{project}:firestore/ttl:sweep runs one sweep at once, so a test observes the post-expiry state without advancing the virtual clock by a day.",
+              "behaviour": "The expiry sweep interval is configurable (firestore.ttlSweepIntervalSeconds, default 86400, maximum 259200) and a control route POST /v1/sessions/{session}/firestore/ttl:sweep runs one sweep at once, so a test observes the post-expiry state without advancing the virtual clock by a day.",
               "reason": "Production's deletion delay is documented as typically 24 hours and at most 72 hours, which is not a boundary a deterministic local run can wait out; the configurable interval and the immediate sweep make both ends of that window reachable without inventing a deletion production would not perform."
             },
             {

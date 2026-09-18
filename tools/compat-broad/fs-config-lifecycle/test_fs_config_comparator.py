@@ -102,7 +102,13 @@ def test_the_shadow_declares_local_expectations_without_running_anything() -> No
         assert row["expectedLocalOutcome"] in {"served", "not-served"}
 
 
-def test_only_the_two_served_inventory_methods_are_expected_to_answer_locally() -> None:
+def test_only_the_locally_served_methods_are_expected_to_answer_locally() -> None:
+    """The served set is the database inventory, the field configuration and its operations.
+
+    fields.patch is partial: the ttlConfig transition is driven at runtime, the indexConfig
+    one is refused with UNIMPLEMENTED (FS-CONFIG-RT-004). operations.get and operations.list
+    answer only the field-configuration operations this runtime produced.
+    """
     receipt = run_shadow(NONCE)
     served = {
         row["method"]
@@ -112,6 +118,10 @@ def test_only_the_two_served_inventory_methods_are_expected_to_answer_locally() 
     assert served == {
         "firestore.projects.databases.get",
         "firestore.projects.databases.list",
+        "firestore.projects.databases.collectionGroups.fields.get",
+        "firestore.projects.databases.collectionGroups.fields.list",
+        "firestore.projects.databases.collectionGroups.fields.patch",
+        "firestore.projects.databases.operations.get",
     }
     assert served_case_count(receipt) > 0
 

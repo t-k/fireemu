@@ -579,7 +579,7 @@ pub fn handle_with(
 ///
 /// `limit` caps the number of requests returned (default and maximum
 /// [`fireemu_core_rules::coverage::REQUEST_TRACE_CAPACITY`]).
-/// `POST .../projects/{project}:firestore/ttl:sweep`: runs one expiry sweep at once.
+/// `POST /v1/sessions/{session}/firestore/ttl:sweep`: runs one expiry sweep at once.
 ///
 /// The sweep otherwise runs when the virtual clock passes the configured interval, which is
 /// how production's deletion delay is reproduced. A test or a campaign that wants to observe

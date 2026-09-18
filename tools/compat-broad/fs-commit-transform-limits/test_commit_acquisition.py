@@ -206,6 +206,8 @@ def test_real_admission_charges_metadata_around_collection_and_releases(
     ] + ["observation"] * 11 + ["recovery"] * 6 + ["project", "database", "auth", "key"]
     assert result["chargedCalls"] == 27
     assert result["productionExecuted"] is False
+    assert result["executionKind"] == "injected-transport"
+    assert result["workerArchiveSha256"] is None
     assert result["reservationReleased"] is True
     assert (
         ledger.snapshot()["reservations"][result["ticket"]["reservation"]]["state"]

@@ -324,3 +324,24 @@ def test_cli_refuses_a_source_checkout_that_no_longer_matches_the_frozen_map(
     argv[argv.index("--source") + 1] = str(checkout)
     assert commit_o8.main(argv) == 2
     assert calls == {}
+
+
+def test_cli_refuses_a_stale_permission_before_any_wire_call(tmp_path, monkeypatch):
+    calls = {}
+    _inputs, argv, _secret = _cli_fixture(tmp_path, monkeypatch, calls)
+    permission_path = Path(argv[argv.index("--permission") + 1])
+    permission_path.write_text(json.dumps({"kind": "rebound"}))
+    assert commit_o8.main(argv) == 2
+    assert calls == {}
+
+
+def test_cli_refuses_a_rejected_handoff_before_any_wire_call(tmp_path, monkeypatch):
+    calls = {}
+    _inputs, argv, _secret = _cli_fixture(tmp_path, monkeypatch, calls)
+
+    def refuse(*_args):
+        raise ValueError("bound Commit credential handoff required")
+
+    monkeypatch.setattr(commit_o8, "validate_handoff", refuse)
+    assert commit_o8.main(argv) == 2
+    assert calls == {}

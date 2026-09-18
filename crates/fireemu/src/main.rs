@@ -2217,20 +2217,94 @@ impl hub::ExportRunner for Exporter {
     }
 }
 
-/// Resolves on SIGTERM (so a killed daemon still stops its runner); never on platforms
-/// without it.
-async fn terminate_signal() {
-    #[cfg(unix)]
-    {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut s) => {
-                s.recv().await;
-            }
-            Err(_) => std::future::pending::<()>().await,
+/// The stop signals, installed before the daemon advertises readiness.
+///
+/// Installing a handler is what replaces a signal's default disposition, and the default
+/// disposition for SIGTERM terminates the process without running a single destructor.
+/// Registering lazily inside the serving `select!` left a window that opened the moment the
+/// readiness banner was printed: a SIGTERM arriving there killed the daemon outright, so the
+/// Hub locator outlived the process that wrote it. The handlers therefore go up before the
+/// suite is assembled; a signal that arrives before the `select!` first polls them is
+/// buffered and delivered on that poll.
+pub(crate) struct ShutdownSignals {
+    /// SIGINT, which is also what Ctrl-C raises.
+    pub(crate) interrupt: InterruptSignal,
+    /// SIGTERM, so a killed daemon still stops its runner.
+    pub(crate) terminate: TerminateSignal,
+}
+
+impl ShutdownSignals {
+    /// Installs both handlers. Called from inside the runtime, before anything an operator
+    /// or a test can observe as readiness. A handler that cannot be installed never
+    /// resolves, which is what a platform without the signal already did.
+    pub(crate) fn install() -> Self {
+        Self {
+            interrupt: InterruptSignal::install(),
+            terminate: TerminateSignal::install(),
         }
     }
-    #[cfg(not(unix))]
-    std::future::pending::<()>().await;
+}
+
+/// The installed SIGINT handler.
+pub(crate) struct InterruptSignal {
+    #[cfg(unix)]
+    signal: Option<tokio::signal::unix::Signal>,
+}
+
+impl InterruptSignal {
+    fn install() -> Self {
+        Self {
+            #[cfg(unix)]
+            signal: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok(),
+        }
+    }
+
+    /// Resolves on the first interrupt.
+    pub(crate) async fn recv(&mut self) {
+        #[cfg(unix)]
+        {
+            match &mut self.signal {
+                Some(signal) => {
+                    signal.recv().await;
+                }
+                None => std::future::pending::<()>().await,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+    }
+}
+
+/// The installed SIGTERM handler; never resolves on a platform without the signal.
+pub(crate) struct TerminateSignal {
+    #[cfg(unix)]
+    signal: Option<tokio::signal::unix::Signal>,
+}
+
+impl TerminateSignal {
+    fn install() -> Self {
+        Self {
+            #[cfg(unix)]
+            signal: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok(),
+        }
+    }
+
+    /// Resolves on the first termination request.
+    pub(crate) async fn recv(&mut self) {
+        #[cfg(unix)]
+        {
+            match &mut self.signal {
+                Some(signal) => {
+                    signal.recv().await;
+                }
+                None => std::future::pending::<()>().await,
+            }
+        }
+        #[cfg(not(unix))]
+        std::future::pending::<()>().await;
+    }
 }
 
 /// A 128-bit secret from the operating system's entropy source; the daemon refuses to start

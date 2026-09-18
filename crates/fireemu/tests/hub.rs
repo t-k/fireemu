@@ -372,6 +372,22 @@ impl Daemon {
         graceful && owned_locator
     }
 
+    /// Sends SIGTERM and waits for the daemon, reporting how it exited. A daemon that dies
+    /// from the signal's default disposition runs no destructor, which is the regression
+    /// `a_sigterm_the_instant_the_daemon_is_ready_still_removes_the_locator` watches for.
+    #[cfg(unix)]
+    fn terminate_and_wait(&mut self) -> ExitStatus {
+        // Signalled from this process rather than through `kill(1)`: the point of the
+        // scenario is how little time the daemon is given between reporting ready and being
+        // asked to stop, and a fork and exec would hand it milliseconds of head start.
+        let pid = rustix::process::Pid::from_raw(i32::try_from(self.child.id()).expect("a pid"))
+            .expect("a live pid");
+        rustix::process::kill_process(pid, rustix::process::Signal::TERM).expect("SIGTERM is sent");
+        let status = self.child.wait().expect("the daemon is waited for");
+        self.stopped = true;
+        status
+    }
+
     fn stop(mut self) {
         let graceful = self.cleanup();
         assert!(
@@ -555,6 +571,34 @@ fn the_locator_file_is_written_at_start_and_removed_at_exit() {
     while path.exists() && gone.elapsed() < Duration::from_secs(5) {
         std::thread::sleep(Duration::from_millis(50));
     }
+    assert!(
+        !path.exists(),
+        "{} outlived the daemon that wrote it",
+        path.display()
+    );
+}
+
+/// LOCEXIT-1: the stop signals are installed before the daemon prints the banner a caller
+/// waits on, so a SIGTERM that arrives the instant the suite is ready runs the shutdown
+/// sequence instead of terminating the process outright. A daemon killed by the default
+/// disposition would leave its locator behind, and `FIREBASE_EMULATOR_HUB` discovery would
+/// keep pointing at a suite that no longer answers.
+///
+/// The scenario is deterministic: the window this closes was the whole distance between the
+/// banner and the serving `select!`, and the test signals as soon as the banner is read.
+#[cfg(unix)]
+#[test]
+fn a_sigterm_the_instant_the_daemon_is_ready_still_removes_the_locator() {
+    let mut daemon = Daemon::start("demo-hub-locator-sigterm", &[]);
+    let path = daemon.locator();
+    assert!(path.exists(), "{} was written", path.display());
+
+    let status = daemon.terminate_and_wait();
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "the daemon handled SIGTERM rather than dying from it: {status:?}"
+    );
     assert!(
         !path.exists(),
         "{} outlived the daemon that wrote it",

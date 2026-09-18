@@ -14,9 +14,17 @@ plus the line within it. The digests are recomputed from those bytes with the
 same derivations the preflight uses, so a baseline no recorded observation
 produces is refused offline, before a campaign is ever frozen.
 
+A hash-bound journal and a hash-bound live receipt are not enough on their own:
+both can be intact and correctly named while belonging to different runs, so a
+replay journal carried by an unrelated live receipt would pass every individual
+check. Each observation is therefore bound to the run that produced it: the
+live receipt carries the run's own record of what each privileged route
+answered, and the selected journal line is accepted only when its response
+digest appears in that record under the same phase and route.
+
 Reading an observation journal is not proof that the observation was made
-honestly; it is proof that the bound value came from a recorded response rather
-than from someone's memory.
+honestly; it is proof that the bound value came from a recorded response of the
+named live run rather than from someone's memory or from another run.
 """
 
 from __future__ import annotations
@@ -45,6 +53,8 @@ EXCLUDED_PATH_SEGMENTS = frozenset(
         "cli-fixtures",
         "fixture",
         "fixtures",
+        "replay",
+        "replays",
         "testdata",
         "tests",
         "test",
@@ -65,6 +75,16 @@ ROUTES = {
         f"identitytoolkit.googleapis.com/admin/v2/projects/{PROJECT}/config"
     ),
 }
+# The metadata action each privileged route is recorded under in a live run's
+# own response record, and the phases that record can name. A journal line is
+# only evidence when the receipt's record for that phase and action holds the
+# same response digest.
+ROUTE_ACTIONS = {
+    ROUTES["projectIdentity"]: "project",
+    ROUTES["database"]: "database",
+    ROUTES["authConfig"]: "auth",
+}
+METADATA_PHASES = ("observation", "recovery")
 BASELINE_FIELDS = (
     "projectIdentity",
     "databaseProjection",
@@ -144,11 +164,42 @@ def _live_production(evidence_root, marker, *, production_roots):
         kind == "fixed-production-wire" or receipt.get("productionExecuted") is True
     ):
         raise ValueError("live production execution evidence required")
+    return receipt
+
+
+def _produced_by(receipt, *, phase, action, response_digest) -> None:
+    """Require the live run's own record to hold this exact response.
+
+    The receipt records, per phase and privileged route, the digest of the
+    response that run received. A journal line whose response is absent from
+    that record was produced by some other run, so the receipt is no evidence
+    for it, however well the journal's own digest checks out.
+
+    Two runs that received byte-identical responses are indistinguishable here,
+    and deliberately so: the value derived from either is the same one the named
+    live run observed.
+    """
+    metadata = receipt.get("metadata")
+    if not isinstance(metadata, list) or not metadata:
+        raise ValueError("live run response record required")
+    identity = phase + ":" + action
+    for item in metadata:
+        if not isinstance(item, dict):
+            raise ValueError(  # noqa: TRY004 -- refusal class, not a type report
+                "live run response record required"
+            )
+        if (
+            item.get("id") == identity
+            and item.get("status") == 200
+            and item.get("responseDigest") == response_digest
+        ):
+            return
+    raise ValueError("observation journal line the live run did not produce")
 
 
 def _journal_line(evidence_root, entry, *, production_roots):
     """Read one recorded response out of a journal bound by path and digest."""
-    _live_production(
+    receipt = _live_production(
         evidence_root, entry.get("production"), production_roots=production_roots
     )
     path = _bounded_path(
@@ -173,6 +224,15 @@ def _journal_line(evidence_root, entry, *, production_roots):
         raise ValueError("successful recorded observation required")
     if recorded.get("route") != entry.get("route"):
         raise ValueError("named observation route differs")
+    phase, action = recorded.get("phase"), ROUTE_ACTIONS.get(entry.get("route"))
+    if action is None or phase not in METADATA_PHASES:
+        raise ValueError("named observation phase required")
+    _produced_by(
+        receipt,
+        phase=phase,
+        action=action,
+        response_digest=digest(response["body"]),
+    )
     return response["body"]
 
 

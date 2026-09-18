@@ -511,10 +511,22 @@ def collect_local(
                         commit_refused.add(probe)
                         body = receipt["body"]
                         error = body["error"]
+                        # The message is part of the refusal shape a reader
+                        # compares against production, so it is recorded here
+                        # rather than left in the row sidecar. It is bound to
+                        # the response digest: `typed_over_refusal` only accepts
+                        # a complete receipt whose raw bytes agree with the
+                        # parsed body, so this message is the one on the wire.
+                        raw_refusal = base64.b64decode(
+                            receipt.get("rawBodyBase64") or "", validate=True
+                        )
                         over_refusal_observation = {
                             "httpStatus": receipt["status"],
                             "errorCode": error["code"],
                             "errorStatus": error["status"],
+                            "message": error.get("message"),
+                            "responseBytes": len(raw_refusal),
+                            "responseSha256": hashlib.sha256(raw_refusal).hexdigest(),
                             "classification": over_refusal_classification(receipt),
                         }
                     else:

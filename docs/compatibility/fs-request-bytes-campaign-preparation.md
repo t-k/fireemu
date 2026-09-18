@@ -104,69 +104,50 @@ in total and at most 17 live at any moment.
 
 ## Budget, accounting and cost
 
-| Quantity | Bound |
-| --- | ---: |
-| HTTP requests | 258 |
-| Document reads | 204 |
-| Document writes | 34 |
-| Document deletes | 34 |
-| Uploaded request bytes | 31,457,280 |
-| Concurrency | 1 |
-| Per-request timeout, seconds | 12 |
-| Run duration, seconds | 900 |
+Two figures, kept apart on purpose. The **forecast** is what the run costs if
+production behaves as expected. The **maximum** is what the permission and the
+reservation must cover, and it assumes every probe is accepted, including the
+over-boundary one. Budgeting the forecast would leave the campaign unable to pay
+for the single result it exists to detect.
+
+| Quantity | Forecast | Maximum |
+| --- | ---: | ---: |
+| Document writes | 34 | 51 |
+| Document deletes | 34 | 51 |
+| Document reads | 204 | 204 |
+| HTTP requests | 258 | 258 |
+| Peak coexisting documents | 17 | 17 |
+| Cost, USD | 0.00019 | 0.000224 |
+
+An unexpectedly accepted over-boundary Commit creates 17 more documents and
+recovers all 51. The collector already does that correctly; the budget now pays
+for it. Two figures deliberately do not rise with the outcome. Peak coexisting
+documents stays at one probe's set, because each probe is cleaned up before the
+next begins. The request count is fixed by the schedule, because a refused
+probe's delete slots are consumed as zero-wire skips rather than saved.
 
 The 258 bound is four reads and one delete slot per owned resource plus one
-Commit per probe. Delete slots on the refused probe are consumed as zero-wire
-skips, so the number actually sent is lower.
+Commit per probe. Every one of the eight accept/refuse combinations of the three
+probes fits inside the published maxima, which the validator checks rather than
+asserts.
 
-Estimated cost is 0.00019 USD at published Firestore Native unit prices, against
-a hard ceiling of 0.50 USD. The network component is zero to the published
-precision: about 30 MiB is uploaded and ingress is not billed, and under 1 MiB is
-returned. The 30 MiB upload is the unusual quantity here, not the money.
+The hard ceiling is 0.50 USD and must clear the maximum, not the forecast. The
+network component is zero to the published precision: about 30 MiB is uploaded
+and ingress is not billed, and under 1 MiB is returned. The 30 MiB upload is the
+unusual quantity here, not the money.
 
 The recovery window reserves 300 seconds, 102 reads and 51 delete slots inside
-the 900-second run. It opens on any probe that reaches an observation failure, an
-uncertain Commit or an interrupted run. Its authority is read-only unless the same
-run holds a conditional-creation proof and a matching version-bound ownership
-read. It exits when all 51 owned resources return a typed `NOT_FOUND`. On
-exhaustion the run stops, records the remaining resources as unresolved and
-escalates to the owner; it never widens scope and never retries a Commit.
-
-## The transport deadline
-
-Every probe must finish inside one total wire deadline of **60 seconds**, covering
-connection setup, TLS, the upload, server processing and the bounded response
-read. The transport enforces that ceiling and the HTTPS worker re-checks it
-independently, so the campaign cannot raise it at run time.
-
-The derivation, for a 10,485,761-byte body:
-
-| Component | Seconds |
-| --- | ---: |
-| upload, 83,886,088 bits at a conservative 5 Mbit/s sustained | 16.8 |
-| DNS, TCP and TLS 1.3 setup | 1.5 |
-| server processing of one 17-document conditional-create Commit | 8.0 |
-| bounded response read | 0.5 |
-| **derived requirement** | **26.8** |
-
-The published 60 seconds is that requirement with roughly a 2x margin. Reserving
-10 seconds for everything that is not the upload leaves 50 seconds for the body,
-so the slowest link that can complete a boundary probe sustains about
-1.7 Mbit/s upstream.
-
-If the deadline is missed the receipt is incomplete, the Commit is uncertain, and
-the run holds no conditional-creation proof. The version-bound delete is then a
-zero-wire skip by design, so cleanup **detects** the residue as
-`cleanup-not-absent` but cannot remove it: up to 17 documents stay in the project
-pending manual owner action. This is detected, never silent, because an absence
-proof is only recorded on a typed `NOT_FOUND`. Run the campaign from a link that
-sustains the rate above; if a probe times out, the owner removes the residue
-under the recorded owned scope. The campaign never retries a Commit to
-compensate.
-
-The 10,485,761-byte path through the process exchange and the worker is covered
-offline by a loopback test that sends the boundary body through the same code,
-with TLS replaced by plaintext to a local server.
+the 900-second run. The reserve is sized by the maximum, not the forecast: 51
+deletes for every document the worst outcome creates, and two reads per owned
+resource for an ownership read and an absence proof. The validator enforces
+both, and enforces that the hard ceiling clears the maximum cost rather than the
+forecast.
+It opens on any probe that reaches an observation failure, an uncertain Commit or
+an interrupted run. Its authority is read-only unless the same run holds a
+conditional-creation proof and a matching version-bound ownership read. It exits
+when all 51 owned resources return a typed `NOT_FOUND`. On exhaustion the run
+stops, records the remaining resources as unresolved and escalates to the owner;
+it never widens scope and never retries a Commit.
 
 ## Owner preconditions
 
@@ -234,8 +215,8 @@ has lost the implemented shape.
 
 The recorded run is published as
 `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, at source
-`02e1a51c31580de493ee2d103d03c1d06231612d`, artifact SHA-256
-`e95e323ec078e48d0e738c14e77c83ee06b569e65dd93466c77bdba024f0c341`, nonce `14a76ead49f448b8834bbb2fa311b739`, with supervisor status
+`1f34e786349b4a9ce1c0cf7aa03ebd819fae2bd0`, artifact SHA-256
+`ada6236ed317e21f928cd92388a3a2f2e489a128938cb66512e5510482129e52`, nonce `af62e3add5a7480484efec59db88ad3e`, with supervisor status
 `completed`, `recordingComplete` and `stateValidation` true, the owned process
 stopped and all listeners closed. It completed 105 observation rows and 153
 recovery rows, sent 241 of the 258 bounded requests, and proved all 51 owned
@@ -252,13 +233,26 @@ observation, so a hand-edited verdict fails the suite. The shadow uses its own
 per-run nonce against `demo-firestore-probe`; it is not the campaign nonce and it
 writes nothing to the oracle project.
 
+The refusal shape is compared field by field. `BASELINE_COMPARISON_FIELDS` names
+the HTTP status, the error code, the error status and the message, and a
+classification that reports a match has compared all four. The collector records
+the message alongside the response byte count and digest, so the message a
+verdict rests on is the one that was on the wire rather than one recovered from a
+sidecar. A refusal at the right boundary whose code, status or message differs
+lists the differing fields in `refusalFieldMismatches`, keeps the run's recording
+and recovery facts, and sets only `matchesBaseline` false.
+
 The shadow recognises four local outcomes and masks none of them.
 `local-shape-matches-production-expectation` is the baseline.
 `local-boundary-enforced-shape-differs` is the lost-shape regression above.
 `local-boundary-not-enforced` means the bound was removed or raised.
-`local-untyped-transport-refusal` means something refused without a typed
-envelope. Anything else is a `shadow-failure`, which drives `stateValidation`
-false and keeps the supervisor run incomplete.
+`local-untyped-transport-refusal` covers every complete refusal that is not the
+typed over-boundary envelope, including a status outside 400 and 413 such as
+500, 429 or 403. Those report `recordingComplete` false and `stateValidation`
+true: nothing was written, and the boundary question is unanswered.
+`shadow-failure` is not the bucket for an unfamiliar status. It is reached only
+by a result the collector could not have produced, and it drives
+`stateValidation` false so the supervisor run stays incomplete.
 
 ## Artifacts
 

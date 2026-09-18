@@ -263,10 +263,17 @@ def test_three_probe_run_completes_with_typed_over_refusal(
     assert result["completed"] is True
     assert result["cleanupComplete"] is True
     assert result["resourceAbsence"] is True
+    refusal_raw = json.dumps(
+        {"error": {"code": over_status, "status": "INVALID_ARGUMENT"}},
+        separators=(",", ":"),
+    ).encode()
     assert result["overRefusal"] == {
         "httpStatus": over_status,
         "errorCode": over_status,
         "errorStatus": "INVALID_ARGUMENT",
+        "message": None,
+        "responseBytes": len(refusal_raw),
+        "responseSha256": hashlib.sha256(refusal_raw).hexdigest(),
         "classification": over_classification,
     }
     assert len(deletes) == 34
@@ -761,3 +768,34 @@ def test_incomplete_malformed_recovery_receipt_keeps_responsibility(tmp_path, ba
     assert any(
         row["receipt"].get("failure") == "response-bytes-unavailable" for row in rows
     )
+
+
+def test_the_refusal_message_is_recorded_and_bound_to_the_response_digest(tmp_path):
+    """The message is part of the shape, so it cannot live only in a sidecar."""
+    import sys as _sys
+
+    _sys.path.insert(0, "tools/compat-broad/fs-request-bytes-boundary")
+    from request_bytes_run_fixture import run_collector
+
+    message = "Request payload size exceeds the limit: 10485760 bytes."
+    result = run_collector(
+        tmp_path / "run",
+        over={
+            "status": 400,
+            "body": {
+                "error": {
+                    "code": 400,
+                    "message": message,
+                    "status": "INVALID_ARGUMENT",
+                }
+            },
+        },
+    )
+    refusal = result["overRefusal"]
+    assert refusal["message"] == message
+    raw = json.dumps(
+        {"error": {"code": 400, "message": message, "status": "INVALID_ARGUMENT"}},
+        separators=(",", ":"),
+    ).encode()
+    assert refusal["responseBytes"] == len(raw)
+    assert refusal["responseSha256"] == hashlib.sha256(raw).hexdigest()

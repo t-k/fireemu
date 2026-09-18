@@ -29,11 +29,14 @@
     ]
   },
   "budget": {
+    "budgetBasis": "maxima cover every probe being accepted; expectedWrites and expectedDeletes are the forecast under the expected outcome and bind nothing",
+    "expectedDeletes": 34,
+    "expectedWrites": 34,
     "maxAccounts": 1,
     "maxConcurrency": 1,
-    "maxDeletes": 34,
+    "maxDeletes": 51,
     "maxDistinctResources": 51,
-    "maxDocuments": 34,
+    "maxDocuments": 51,
     "maxDurationSeconds": 900,
     "maxHttpRequests": 258,
     "maxInFlightRequests": 1,
@@ -42,7 +45,7 @@
     "maxRequestBytes": 10485761,
     "maxResponseBytes": 2097152,
     "maxRuns": 1,
-    "maxWrites": 34,
+    "maxWrites": 51,
     "perRequestTimeoutSeconds": 60.0,
     "recoveryWindow": {
       "authority": "read-only unless the same run holds a conditional-creation proof and a matching version-bound ownership read",
@@ -180,6 +183,7 @@
     "basis": "Firestore Native published unit prices; a planning bound, not a billing record.",
     "estimatedCostUsd": 0.00019,
     "hardCostCeilingUsd": 0.5,
+    "maximumCostUsd": 0.000224,
     "networkCostUsd": 0.0,
     "networkNote": "About 30 MiB is uploaded across the three Commits and under 1 MiB is returned. Ingress is not billed and the returned volume is negligible, so the network component of this campaign is zero to the published precision.",
     "unitPricesUsd": {
@@ -256,6 +260,16 @@
       }
     },
     "supersededBaseline": "Until the limits layer landed, the local runtime refused with HTTP 413 `request body too large` from a transport body cap, which the shadow classified as `local-boundary-enforced-shape-differs`. That classification is retained as a regression outcome: a strict-profile build answering 413 has lost the implemented shape."
+  },
+  "maximumUsage": {
+    "basis": "every probe accepted, which is the outcome the campaign exists to detect",
+    "distinctResources": 51,
+    "documentDeletes": 51,
+    "documentReads": 204,
+    "documentWrites": 51,
+    "httpRequests": 258,
+    "peakLiveDocuments": 17,
+    "uploadedBytes": 31457280
   },
   "operations": [
     "Commit"

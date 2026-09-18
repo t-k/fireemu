@@ -23,6 +23,7 @@ for entry in (str(HERE), str(HERE.parent), str(ROOT / "tools/compat-inventory"))
     if entry not in sys.path:
         sys.path.insert(0, entry)
 
+import pytest
 import request_bytes_shadow as shadow_module
 from request_bytes_campaign import (
     LOCAL_EXPECTATION,
@@ -102,6 +103,32 @@ def test_the_published_gates_recompute_from_the_published_observation():
         "recordingComplete": value["recordingComplete"],
         "stateValidation": value["stateValidation"],
     }, "the recorded gates do not follow from the recorded observation"
+
+
+def test_the_published_cases_recompute_from_the_compiled_campaign():
+    """A hand-edited status, localObserved or requestBytes must fail here."""
+    value = record()
+    campaign = compile_request_bytes_campaign(
+        value["project"], value["database"], value["nonce"]
+    )
+    assert value["cases"] == shadow_module.shadow_cases(
+        campaign["cases"], value["shadow"]
+    ), "the recorded case table does not follow from the compiled campaign"
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["status", "localObserved", "requestBytes", "productionExpectation", "basis"],
+)
+def test_a_tampered_case_row_is_rejected(field):
+    """The case block used to be an unbound input fed straight back in."""
+    value = record()
+    campaign = compile_request_bytes_campaign(
+        value["project"], value["database"], value["nonce"]
+    )
+    tampered = json.loads(json.dumps(value["cases"]))
+    tampered[-1][field] = "tampered"
+    assert tampered != shadow_module.shadow_cases(campaign["cases"], value["shadow"])
 
 
 def test_the_published_digests_recompute_from_the_published_nonce():

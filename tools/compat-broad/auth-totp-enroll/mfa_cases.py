@@ -285,10 +285,13 @@ def _totp_cases() -> list[dict[str, Any]]:
 def _enrollment_session_age_cases() -> list[dict[str, Any]]:
     cases = []
     for age in SAMPLED_AGES_SECONDS:
-        # fireemu accepts the boundary instant itself and keeps an expired session for one
-        # further lifetime so a late finalize answers SESSION_EXPIRED rather than an unknown
-        # session; both of those are declared local policies, not production claims.
-        within_ttl = age <= _LOCAL_ENROLLMENT_TTL_SECONDS
+        # Each sample is taken just past its target age, as the production recorder does.
+        # fireemu keeps an expired session for one further lifetime so a late finalize
+        # answers SESSION_EXPIRED, then reaps it and answers INVALID_SESSION_INFO. Both are
+        # declared local policies, not production claims.
+        within_ttl = age < _LOCAL_ENROLLMENT_TTL_SECONDS
+        reaped = age >= 2 * _LOCAL_ENROLLMENT_TTL_SECONDS
+        expired_code = "INVALID_SESSION_INFO" if reaped else "SESSION_EXPIRED"
         cases.append(
             _case(
                 f"totp-enroll-session-age-{age}s",
@@ -301,7 +304,7 @@ def _enrollment_session_age_cases() -> list[dict[str, Any]]:
                 "a code that is correct for the moment of submission, so only the session age can "
                 "explain a refusal.",
                 200 if within_ttl else 400,
-                None if within_ttl else "SESSION_EXPIRED",
+                None if within_ttl else expired_code,
                 age,
             )
         )
@@ -348,10 +351,11 @@ def _interaction_cases() -> list[dict[str, Any]]:
             "second-factor-limit",
             "interaction",
             "negative",
-            "accounts/mfaEnrollment:finalize",
-            "mfa-enrollment-finalize",
+            "accounts/mfaEnrollment:start",
+            "mfa-enrollment-start",
             "totp-lifecycle",
-            "Enrolling a second TOTP factor on an account that already has one is refused.",
+            "Starting a second TOTP enrollment on an account that already has one is refused; "
+            "fireemu refuses at start, so the step production refuses at is worth recording.",
             400,
             "SECOND_FACTOR_EXISTS",
         ),

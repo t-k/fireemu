@@ -93,6 +93,9 @@ def test_observations_carrying_secret_material_are_refused_before_storage() -> N
         with pytest.raises(SensitiveMaterialError):
             record_step(state, CASE_IDS[0], observation, ORIGIN)
     assert state["steps"][0]["status"] == "pending" and state["requests"] == 0
+    # The error code is the field the whole comparison rests on and must survive.
+    record_step(state, CASE_IDS[0], {"status": 400, "errorCode": "INVALID_CODE"}, ORIGIN)
+    assert state["steps"][0]["observation"]["errorCode"] == "INVALID_CODE"
 
 
 def test_the_request_budget_latches_an_abort_that_still_demands_cleanup() -> None:

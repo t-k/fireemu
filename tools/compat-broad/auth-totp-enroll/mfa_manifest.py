@@ -63,8 +63,10 @@ _PERMISSION_ENVELOPE = {
         "any account the run did not create",
         "any tenant operation",
         "any blocking function deployment",
-        "recording a shared secret, a one-time code, an ID or refresh token, a pending "
-        "credential or a session identifier in any published artifact",
+        (
+            "recording a shared secret, a one-time code, an ID or refresh token, a pending "
+            "credential or a session identifier in any published artifact"
+        ),
     ],
     "configurationMutation": {
         "allowed": ["multi-factor state and enabled providers", "test phone numbers"],
@@ -74,18 +76,28 @@ _PERMISSION_ENVELOPE = {
 }
 
 _OWNER_PRECONDITIONS = (
-    "Identity Platform (not legacy Firebase Authentication) is enabled on the project, "
-    "because multi-factor configuration lives there.",
-    "Multi-factor authentication is set to ENABLED with TOTP among the enabled providers; "
-    "the pre-run configuration is captured and its digest recorded first.",
-    "Phone multi-factor is enabled with one test phone number and a fixed code, so the "
-    "pending-age rows send no SMS and incur no per-message charge.",
+    (
+        "Identity Platform (not legacy Firebase Authentication) is enabled on the project, "
+        "because multi-factor configuration lives there."
+    ),
+    (
+        "Multi-factor authentication is set to ENABLED with TOTP among the enabled providers; "
+        "the pre-run configuration is captured and its digest recorded first."
+    ),
+    (
+        "Phone multi-factor is enabled with one test phone number and a fixed code, so the "
+        "pending-age rows send no SMS and incur no per-message charge."
+    ),
     "The SMS region policy allows the test number's region for the duration of the run.",
     "No tenant, blocking function or identity-provider change happens during the run.",
-    "The executing principal may create, read, update and delete accounts it created, and "
-    "may read and restore the project configuration.",
-    "A named owner approves one run, bound to this manifest digest and a fresh nonce, and "
-    "acknowledges that the run creates up to twelve accounts it will delete.",
+    (
+        "The executing principal may create, read, update and delete accounts it created, "
+        "and may read and restore the project configuration."
+    ),
+    (
+        "A named owner approves one run, bound to this manifest digest and a fresh nonce, "
+        "and acknowledges that the run creates up to twelve accounts it will delete."
+    ),
 )
 
 _UNSUPPORTED_OBLIGATIONS = (

@@ -21,16 +21,24 @@ from mfa_cases import CAMPAIGN_ID, observation_cases
 
 SCHEMA = "o2-mfa-collector-v1"
 ACTIONS = ("RUN", "WAIT", "CLEANUP", "DONE")
+# A bare "code" substring would also swallow `errorCode`, which is the field the whole
+# comparison rests on, so the policy is exact names plus unambiguous substrings.
 _SENSITIVE_KEY_PARTS = (
     "secret",
-    "otp",
-    "code",
     "password",
     "token",
-    "session",
     "credential",
     "verifier",
+    "otp",
+    "sessioninfo",
 )
+_SENSITIVE_KEY_NAMES = frozenset({"code", "verificationcode", "smscode", "session", "pin"})
+
+
+def is_sensitive_key(key: str) -> bool:
+    """Return True when a field name names secret or credential material."""
+    lowered = key.lower()
+    return lowered in _SENSITIVE_KEY_NAMES or any(part in lowered for part in _SENSITIVE_KEY_PARTS)
 
 
 class CheckpointError(RuntimeError):
@@ -56,7 +64,7 @@ def digest(value: Any) -> str:
 
 
 def _contains_sensitive(value: Any, key: str = "") -> bool:
-    if any(part in key.lower() for part in _SENSITIVE_KEY_PARTS):
+    if key and is_sensitive_key(key):
         return True
     if isinstance(value, dict):
         return any(_contains_sensitive(item, name) for name, item in value.items())

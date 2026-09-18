@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from mfa_cases import CAMPAIGN_ID, CASE_IDS
+from mfa_collector import is_sensitive_key
 from mfa_provenance import repository_root, verify_binding
 
 CLASSIFICATIONS = (
@@ -26,23 +27,13 @@ CLASSIFICATIONS = (
     "PREPARATION_ONLY",
     "INDETERMINATE",
 )
-_SENSITIVE = (
-    "secret",
-    "otp",
-    "code",
-    "password",
-    "token",
-    "session",
-    "credential",
-    "verifier",
-)
 # Values that legitimately differ between two correct runs.
 _NONDETERMINISTIC = ("localid", "uid", "email", "enrollmentid", "enrolledat", "elapsed", "age")
 
 
 def _project(value: Any, key: str = "") -> Any:
     lowered = key.lower()
-    if any(part in lowered for part in _SENSITIVE):
+    if key and is_sensitive_key(key):
         return "[REDACTED]"
     if any(part in lowered for part in _NONDETERMINISTIC):
         return f"[DYNAMIC:{type(value).__name__}]"

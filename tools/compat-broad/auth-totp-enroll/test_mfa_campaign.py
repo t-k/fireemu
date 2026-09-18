@@ -221,3 +221,15 @@ def test_identical_executed_receipts_reach_agreement() -> None:
     result = compare(local, production)
     assert result["classification"] == "MATCH"
     assert result["rowDifferences"] == [] and result["nondeterministicRows"] == []
+
+
+def test_a_differing_error_code_alone_is_a_real_difference() -> None:
+    local = receipt("local")
+    production = receipt("production")
+    production["productionExecuted"] = True
+    production["rows"][3].update(status=400, errorCode="SESSION_EXPIRED")
+    local["rows"][3].update(status=400, errorCode="INVALID_SESSION_INFO")
+    result = compare(local, production)
+    assert result["classification"] == "DIFF"
+    assert result["rowDifferences"][0]["local"]["errorCode"] == "INVALID_SESSION_INFO"
+    assert result["rowDifferences"][0]["production"]["errorCode"] == "SESSION_EXPIRED"

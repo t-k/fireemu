@@ -37,7 +37,7 @@ class TotpParameters:
 def decode_shared_secret(shared_secret_key: str) -> bytes:
     """Decode a base32 `sharedSecretKey`, tolerating case, spaces, and missing padding."""
     if not isinstance(shared_secret_key, str):
-        raise ValueError("sharedSecretKey must be a string")
+        raise TypeError("sharedSecretKey must be a string")
     compact = "".join(shared_secret_key.split()).upper()
     if not compact:
         raise ValueError("sharedSecretKey must not be empty")

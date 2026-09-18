@@ -52,10 +52,17 @@ CONTENTION = "Too much contention on these documents. Please try again."
 INVALID_RETRY = "Invalid retry transaction."
 INVALID_TRANSACTION = "Invalid transaction."
 READ_ONLY_RETRY = "read-only transaction cannot be retried as read-write"
-#: What the local emulator actually says today. Production said
-#: "Base64 decoding failed for ..." on the commit path, so this wording is a
-#: known open repair, recorded in the preparation document.
-MALFORMED_BASE64 = "invalid base64"
+#: What the local emulator actually says today. It follows production's recorded
+#: grammar, `Invalid value at '<proto field>' (TYPE_BYTES), Base64 decoding
+#: failed for "<value>"`, naming the proto path of the field this request
+#: actually carries the bad value in. Production's recorded observation of that
+#: grammar is on the commit path's `transaction` field, which is a different
+#: request; whether production names this field the same way is what the
+#: campaign's malformed control is here to settle.
+MALFORMED_BASE64 = (
+    "Invalid value at 'options.read_write.retry_transaction' (TYPE_BYTES), "
+    'Base64 decoding failed for "not base64!"'
+)
 
 #: A control that genuinely has no recorded production observation says so
 #: explicitly rather than leaving the citation empty.

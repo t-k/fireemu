@@ -2,7 +2,7 @@
   "kind": "txn-expiry-owner-proposal-v1",
   "manifest": {
     "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
-    "casesDigest": "f1b3320febc65af2ea8cba068adf51dc53495f159506043436e1d5ff219e289d",
+    "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
     "kind": "txn-expiry-prepared-manifest-v1",
     "notPrepared": [
       {
@@ -48,7 +48,7 @@
         "wallSeconds": 1200
       },
       "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
-      "casesDigest": "f1b3320febc65af2ea8cba068adf51dc53495f159506043436e1d5ff219e289d",
+      "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
       "contract": "txn-expiry-retry-plan-v1",
       "database": "(default)",
       "documentPrefix": "compat/o3-txn-expiry/o3expiry-reference-000000001",
@@ -1160,9 +1160,9 @@
         "mode": "READ"
       }
     ],
-    "sourceDigest": "6607f982a36df5acef209d5d01889c71e2de94372b48ac437566d6914f6b7f6f"
+    "sourceDigest": "60305305da9cf424fb3761b9e94fdba171160f932811bce5a1e946626db2dfed"
   },
-  "manifestDigest": "059c0bcbbbdc43818369bb28cb472947091f2449799b5fc337415a015ad6a2f5",
+  "manifestDigest": "50c51e26427b114bd61dd5e9e698f8a54fcbd5973dc91a0494c152a184f264fa",
   "note": "Preparation only. No credential, endpoint or production request is bound here. Execution needs a separate owner permission, a fresh nonce and admission review.",
   "ownerFieldsRequired": [
     "issuedAt",
@@ -1183,13 +1183,13 @@
     "accountUpperBound": 0,
     "allowedReobservations": 0,
     "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
-    "casesDigest": "f1b3320febc65af2ea8cba068adf51dc53495f159506043436e1d5ff219e289d",
-    "collectorSourceDigest": "6607f982a36df5acef209d5d01889c71e2de94372b48ac437566d6914f6b7f6f",
+    "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
+    "collectorSourceDigest": "60305305da9cf424fb3761b9e94fdba171160f932811bce5a1e946626db2dfed",
     "concurrencyUpperBound": 1,
     "costUpperMicrousd": 16688,
     "database": "(default)",
     "kind": "txn-expiry-required-permission-v1",
-    "manifestSha256": "059c0bcbbbdc43818369bb28cb472947091f2449799b5fc337415a015ad6a2f5",
+    "manifestSha256": "50c51e26427b114bd61dd5e9e698f8a54fcbd5973dc91a0494c152a184f264fa",
     "nonce": "o3expiry-reference-000000001",
     "ownerId": "00000000000000000000000000000000",
     "project": "fireemu-35fe6",

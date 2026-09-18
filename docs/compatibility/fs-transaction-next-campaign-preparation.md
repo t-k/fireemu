@@ -75,7 +75,7 @@ been observed rolling one back.
 | `retry-token/retry-with-committed-previous` | observation | `INVALID_ARGUMENT`, invalid retry transaction |
 | `retry-token/retry-with-read-only-previous` | observation | `INVALID_ARGUMENT`, a read-only transaction cannot be retried as read-write |
 | `retry-token/retry-with-unissued-previous` | observation | `INVALID_ARGUMENT`, invalid transaction |
-| `retry-token/retry-with-malformed-previous` | control | `INVALID_ARGUMENT`, invalid base64 |
+| `retry-token/retry-with-malformed-previous` | control | `INVALID_ARGUMENT`, `Base64 decoding failed for "not base64!"` at `options.read_write.retry_transaction` |
 
 The malformed control separates a request-decoding refusal from a semantic one,
 so a single `INVALID_ARGUMENT` on the unissued case cannot be mistaken for a
@@ -348,9 +348,11 @@ genuinely separate rehearsals before this evidence was committed, including one
 produced by a different binary built from the same source.
 
 The first rehearsal disagreed on one case and the frozen expectation was wrong,
-not the runtime: the emulator says `invalid base64` where the table claimed
-`Base64 decoding failed`. The table now records what the runtime actually does,
-and the wording gap is carried below as an open repair rather than hidden.
+not the runtime: the emulator then said `invalid base64` where the table claimed
+`Base64 decoding failed`. The table recorded what the runtime actually did, and
+the wording gap was carried as an open repair rather than hidden. That repair
+has since landed in the runtime, and the table records the new wording; see
+below.
 
 ## Cleanup and failure rehearsal
 
@@ -393,16 +395,29 @@ complete:
    on `ABORTED` needs a pinned SDK version and an SDK-driven collector. This
    campaign observes the backend contract the SDK reacts to, not the SDK.
 
-## Open repair
+## Closed repair, and what it leaves open
 
-**Malformed transaction token diagnostic.** The emulator refuses a
-non-base64 `readWrite.retryTransaction` with `INVALID_ARGUMENT` and the message
-`invalid base64`. Production was observed refusing a non-base64 `transaction` on
-the commit path with `Invalid value at 'transaction' (TYPE_BYTES), Base64
-decoding failed for "not base64!"`. The two are different request fields, so this
-is a strong indication of a wording gap rather than a proven one, and the
-campaign's malformed control is what would settle it. It is recorded here rather
-than fixed, because it is a runtime change outside this lane.
+**Malformed transaction token diagnostic.** The emulator used to refuse a
+non-base64 `readWrite.retryTransaction` with the bare message `invalid base64`.
+It now answers
+
+```
+Invalid value at 'options.read_write.retry_transaction' (TYPE_BYTES), Base64 decoding failed for "not base64!"
+```
+
+which is production's recorded grammar, `Invalid value at '<proto field>'
+(TYPE_BYTES), Base64 decoding failed for "<value>"`, applied to the proto path
+of the field this request actually carries the bad value in. The frozen table
+records the new wording, and the rehearsal observes it.
+
+The repair landed in the runtime outside this lane; this lane only follows it.
+It does not close the question the malformed control exists to answer. The
+recorded production observations of that grammar are on other requests,
+`transaction` on the commit path and
+`writes[0].update.fields[0].value.bytes_value` on a write, so what production
+names this field remains unobserved. A production run that answers with a
+different field path is still a finding, and it is now a narrow one about the
+path rather than a broad one about the whole diagnostic.
 
 ## Verification
 

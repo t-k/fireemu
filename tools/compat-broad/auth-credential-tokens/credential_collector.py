@@ -89,19 +89,30 @@ def is_secret_key(key: str) -> bool:
     """Whether a record member holds credential material, judged by its name."""
     if key in NON_SECRET_KEY_NAMES:
         return False
-    if key.endswith(".py"):
-        # A source file name keyed to its digest, as in a collector binding. A file name
-        # is not a credential holder, however much of one its name reads like.
-        return False
     lowered = key.replace("-", "").replace("_", "").lower()
     return any(
         fragment.replace("_", "") in lowered for fragment in SECRET_KEY_FRAGMENTS
     )
 
 
+def is_module_digest(key: str, value: Any) -> bool:
+    """Whether this member is a source file keyed to its own sha256.
+
+    The collector binding maps file names to digests, and a name such as
+    `credential_cases.py` contains a secret fragment. Exempting the `.py` suffix alone
+    would let a token ride under a key like `refresh_token.py`, so the value must also
+    be exactly a 64-character lowercase hex digest.
+    """
+    return (
+        key.endswith(".py")
+        and isinstance(value, str)
+        and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+    )
+
+
 def publishable(value: Any, key: str = "") -> Any:
     """Return the projection that may be committed: no secret value, no secret digest."""
-    if key and is_secret_key(key):
+    if key and is_secret_key(key) and not is_module_digest(key, value):
         if value is None:
             return {"present": False, "type": "null"}
         # Only a string or a container can carry credential material. Masking a boolean

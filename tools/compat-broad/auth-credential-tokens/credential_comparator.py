@@ -22,7 +22,7 @@ import copy
 from typing import Any
 
 from credential_cases import CAMPAIGN_ID, case_by_id, observation_cases
-from credential_collector import is_secret_key
+from credential_collector import is_module_digest, is_secret_key
 
 CONTRACT = "auth-credential-tokens-v1"
 
@@ -39,7 +39,7 @@ DIAGNOSTIC_MEMBERS = ("diagnostics", "boundarySeconds")
 
 def _carries_credential_material(node: Any, key: str = "") -> bool:
     if key and is_secret_key(key) and isinstance(node, str):
-        return True
+        return not is_module_digest(key, node)
     if isinstance(node, dict):
         return any(_carries_credential_material(v, k) for k, v in node.items())
     if isinstance(node, list):

@@ -389,3 +389,35 @@ def test_an_addressless_account_still_needs_its_uid_to_read_back_absent() -> Non
     collector.track_account(tracker, "uid-custom", None)
     collector.mark_deleted(tracker, "uid-custom", uid_absent=False, email_absent=True)
     assert collector.cleanup_report(tracker)["cleanupComplete"] is False
+
+
+def test_a_py_named_key_holding_anything_but_a_digest_is_still_screened() -> None:
+    # The exemption exists for a module digest map, not for the `.py` suffix itself.
+    jwt = "eyJhbGciOiJub25lIn0.RAW_TOKEN_MATERIAL.sig"
+    for value in (
+        jwt,
+        "a" * 63,
+        "a" * 65,
+        "A" * 64,
+        "g" * 64,
+        ["a" * 64],
+        {"digest": "a" * 64},
+    ):
+        published = collector.publishable({"refresh_token.py": value})
+        assert published["refresh_token.py"] == {
+            "present": True,
+            "type": collector._json_type(value),
+        }, value
+    assert "RAW_TOKEN_MATERIAL" not in json.dumps(
+        collector.publishable({"refresh_token.py": jwt})
+    )
+
+
+def test_only_a_lowercase_hex_digest_survives_under_a_module_named_key() -> None:
+    assert collector.is_module_digest("credential_cases.py", "a" * 64) is True
+    assert collector.is_module_digest("credential_cases.py", "ABSENT") is False
+    assert (
+        collector.is_module_digest("refresh_token.py", "0123456789abcdef" * 4) is True
+    )
+    assert collector.is_module_digest("idToken", "a" * 64) is False
+    assert collector.is_module_digest("credential_cases.py", 64) is False

@@ -253,3 +253,13 @@ def test_a_receipt_from_a_different_collector_build_is_refused() -> None:
     local, production = _receipt("local"), _receipt("production")
     production["collectorBinding"]["modules"]["credential_cases.py"] = "0" * 64
     assert compare(local, production)["reason"] == "collector-binding-mismatch"
+
+
+def test_a_jwt_hidden_under_a_module_named_key_is_refused() -> None:
+    production = _receipt("production")
+    production["collectorBinding"]["modules"]["refresh_token.py"] = (
+        "eyJhbGciOiJub25lIn0.RAW_TOKEN_MATERIAL.sig"
+    )
+    report = compare(_receipt("local"), production)
+    assert report["reason"] == "credential-material-present"
+    assert "RAW_TOKEN_MATERIAL" not in json.dumps(report)

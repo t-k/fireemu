@@ -1933,7 +1933,9 @@ def abandoned_cleanup_plan():
     )
 
 
-def _abandoned_cleanup(tmp_path, *, absent=True, abandon=True, cleanup=True):
+def _abandoned_cleanup(
+    tmp_path, *, absent=True, abandon=True, cleanup=True, lost=False, steps=3
+):
     owned, fields, frozen = abandoned_cleanup_plan()
     ledger = Ledger.create(tmp_path / "ledger")
     first = claim(tmp_path, "a")
@@ -1952,20 +1954,26 @@ def _abandoned_cleanup(tmp_path, *, absent=True, abandon=True, cleanup=True):
     gate = Gate(first["gatePath"], "probe")
     gate.claim()
     probe = frozen["jobs"]["probe"]
-    gate.dispatch(
-        probe["observation"][0],
-        False,
-        lambda: (
+
+    def commit():
+        if lost:
+            raise TimeoutError("transport deadline")
+        return (
             200,
             {
                 "writeResults": [{"updateTime": CREATED_VERSION}],
                 "commitTime": CREATED_VERSION,
             },
-        ),
-    )
+        )
+
+    if lost:
+        with pytest.raises(TimeoutError):
+            gate.dispatch(probe["observation"][0], False, commit)
+    else:
+        gate.dispatch(probe["observation"][0], False, commit)
     if abandon:
         gate.abandon_observation("transport-deadline")
-    if cleanup:
+    if cleanup and steps >= 1:
         gate.dispatch(
             probe["recovery"][0],
             True,
@@ -1974,12 +1982,14 @@ def _abandoned_cleanup(tmp_path, *, absent=True, abandon=True, cleanup=True):
                 {"name": owned, "fields": fields, "updateTime": CREATED_VERSION},
             ),
         )
+    if cleanup and steps >= 2:
         deleted = dict(probe["recovery"][1])
         del deleted["versionFrom"]
         deleted["path"] += "?currentDocument.updateTime=" + quote(
             CREATED_VERSION, safe=""
         )
         gate.dispatch(deleted, True, lambda: (200, {}))
+    if cleanup and steps >= 3:
         gate.dispatch(
             probe["recovery"][2],
             True,
@@ -2077,3 +2087,33 @@ def test_an_incomplete_or_unabandoned_cleanup_is_refused(tmp_path):
     assert (
         other.snapshot()["reservations"][other_ticket["reservation"]]["state"] == "held"
     )
+
+
+def test_a_dispatched_commit_with_no_answer_is_never_closed_as_abandoned(tmp_path):
+    """Uncreated means no write was sent, not that no proof came back."""
+    ledger, gate, ticket, record = _abandoned_cleanup(
+        tmp_path, lost=True, cleanup=False
+    )
+    assert gate.snapshot()["jobs"]["probe"]["unconfirmedCreates"] == 1
+    with pytest.raises(ValueError, match="abandoned cleanup"):
+        ledger.close_after_abandon(ticket, record)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+    escalation = _escalation_record(
+        ledger, ticket, {**record, "kind": "shared-no-data-abort-v1"}
+    )
+    ledger.close_after_escalation(ticket, escalation)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        == "closed-after-escalation"
+    )
+
+
+def test_a_partial_recovery_is_never_closed_as_abandoned(tmp_path):
+    """Deleted is not the same as proven absent, and only the proof retires it."""
+    ledger, gate, ticket, record = _abandoned_cleanup(tmp_path, steps=2)
+    job = gate.snapshot()["jobs"]["probe"]
+    assert job["recovery"] == 2
+    assert job["absent"] == []
+    with pytest.raises(ValueError, match="abandoned cleanup"):
+        ledger.close_after_abandon(ticket, record)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"

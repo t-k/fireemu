@@ -303,6 +303,10 @@ def abandoned_cleanup_complete(state):
     """
     created = []
     for name, job in state["jobs"].items():
+        if job.get("unconfirmedCreates", 0):
+            # A request that could have written and never confirmed an outcome
+            # leaves documents that may exist and cannot be proven absent here.
+            return None
         proofs = job.get("creationProofs") or {}
         if not proofs:
             if job["observation"] or job["recovery"]:
@@ -481,6 +485,8 @@ def create(path, plan):
 
 MARKER_BINDINGS = ("resource-name", "nonce")
 STOP_SKIP_REASON = "no-creation-proof-after-stop"
+ZERO_WIRE_REASON = "no-creation-proof"
+GATE_SKIP_REASONS = (STOP_SKIP_REASON, ZERO_WIRE_REASON)
 MAX_STOP_REASON = 128
 
 
@@ -789,6 +795,80 @@ class Gate:
             job["pid"] = os.getpid()
             _save(self.path, state)
 
+    def skip_scheduled_slot(self, operation, recovery, reason):
+        """Consume the next scheduled slot without a wire send.
+
+        A campaign whose creating request was refused has nothing to delete, and
+        its collector sends nothing for those slots by design. The Gate keeps its
+        own cursor, so without this the schedule stalls behind the slot that will
+        never be sent and every later request is refused as out of order.
+
+        Admitted only when the slot itself cannot have written, when the resource
+        it names has no creation proof, and when no earlier request that could
+        have written is still unconfirmed. Those are facts the Gate holds, so the
+        skip is checkable rather than taken on the caller's word.
+        """
+        if not isinstance(reason, str) or not 0 < len(reason) <= MAX_STOP_REASON:
+            raise ValueError("bounded skip reason required")
+        with self.locked() as state:
+            job, plan = state["jobs"][self.job], state["plan"]
+            phase = "recovery" if recovery else "observation"
+            schedule = job_schedule(plan["jobs"][self.job])
+            if (
+                job["pid"] != os.getpid()
+                or job["complete"]
+                or job["inflight"]
+                or state.get("noDataAbort") is not None
+            ):
+                raise ValueError("job or environment stopped/uncertain")
+            if schedule is None:
+                raise ValueError("a declared schedule is required to skip a slot")
+            if job.get("unconfirmedCreates", 0):
+                # Checked before the cursor moves, so a refused skip changes
+                # nothing.
+                raise ValueError("an unconfirmed write is outstanding")
+            index = job[phase]
+            cursor = job["scheduleDone"]
+            if job.get("stopReason") is not None:
+                while (
+                    cursor < len(schedule)
+                    and schedule[cursor]["phase"] == "observation"
+                ):
+                    cursor += 1
+                    job["skippedByStop"] += 1
+                job["scheduleDone"] = cursor
+            slot = schedule[cursor] if cursor < len(schedule) else None
+            if (
+                slot is None
+                or slot["phase"] != phase
+                or slot["index"] != index
+                or index >= len(plan["jobs"][self.job][phase])
+            ):
+                raise ValueError("dispatch outside the frozen execution schedule")
+            if slot.get("creates", True) is not False:
+                raise ValueError("a slot that could have written cannot be skipped")
+            expected = dict(plan["jobs"][self.job][phase][index])
+            expected.pop("versionFrom", None)
+            if digest(operation) != digest(expected):
+                raise ValueError("request outside closed scenario")
+            resource = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+            if resource in job.get("creationProofs", {}):
+                raise ValueError("a created resource must be cleaned, not skipped")
+            job["scheduleDone"] += 1
+            job[phase] += 1
+            if recovery:
+                state["reservedRecovery"] -= 1
+            state.setdefault("skips", []).append(
+                {
+                    "job": self.job,
+                    "index": index,
+                    "reason": ZERO_WIRE_REASON,
+                    "note": reason,
+                }
+            )
+            _save(self.path, state)
+            return (None, {"skipped": ZERO_WIRE_REASON})
+
     def abandon_observation(self, reason):
         """End this job's observation early and open its scheduled cleanup.
 
@@ -935,13 +1015,17 @@ class Gate:
                 recovery
                 and schedule is not None
                 and job.get("stopReason") is not None
+                and not job.get("unconfirmedCreates", 0)
                 and resource not in job.get("creationProofs", {})
             ):
                 # Nothing was created here, so there is nothing to clean and no
                 # request to spend; the slot is consumed so the next one is
                 # reachable.
+                # `skippedByStop` counts only the observation slots the stop
+                # passed over; a skipped recovery slot is already counted in
+                # `job["recovery"]`, so counting it twice would break the
+                # cursor invariant the no-data contract checks.
                 job["scheduleDone"] += 1
-                job["skippedByStop"] += 1
                 job[phase] += 1
                 state["reservedRecovery"] -= 1
                 state.setdefault("skips", []).append(
@@ -1002,6 +1086,10 @@ class Gate:
             job[phase] += 1
             if schedule is not None:
                 job["scheduleDone"] += 1
+                if slot.get("creates", True) is not False:
+                    # Counted before the send, because a request whose outcome is
+                    # lost is exactly the one that may have written.
+                    job["unconfirmedCreates"] = job.get("unconfirmedCreates", 0) + 1
             if recovery and resource in job["absent"]:
                 job["absent"].remove(resource)
             if recovery:
@@ -1036,6 +1124,10 @@ class Gate:
                 if type(status) is not int:
                     job["stopped"] = True
                     raise ValueError("typed HTTP status required")
+                if schedule is not None and slot.get("creates", True) is not False:
+                    # A typed answer settles the outcome, whether it created or
+                    # refused; only a lost one leaves the question open.
+                    job["unconfirmedCreates"] -= 1
                 if not recovery:
                     try:
                         proofs = _creation_proofs(operation, status, body, job, plan)
@@ -1117,7 +1209,7 @@ class Gate:
                 or dispatched is None
                 or len(state["events"]) != dispatched
                 or any(
-                    skip.get("reason") != STOP_SKIP_REASON
+                    skip.get("reason") not in GATE_SKIP_REASONS
                     for skip in state.get("skips", [])
                 )
                 or state.get("managementUsed")

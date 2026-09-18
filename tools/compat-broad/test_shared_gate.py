@@ -1217,8 +1217,8 @@ def test_an_abandoned_observation_still_reaches_its_scheduled_cleanup(tmp_path):
     assert job["scheduleDone"] == 5
 
 
-def test_an_abandoned_observation_skips_cleanup_it_never_created(tmp_path):
-    """A probe whose Commit left no proof cleans nothing, and spends no request."""
+def test_a_commit_whose_answer_was_lost_is_never_treated_as_uncreated(tmp_path):
+    """A dispatched write with no answer may have written, so nothing is skipped."""
     value, _resources = scheduled_commit_plan()
     create(tmp_path / "gate", value)
     gate = Gate(tmp_path / "gate", "probe")
@@ -1229,7 +1229,33 @@ def test_an_abandoned_observation_skips_cleanup_it_never_created(tmp_path):
 
     with pytest.raises(TimeoutError):
         gate.dispatch(value["jobs"]["probe"]["observation"][0], False, deadline)
+    assert gate.snapshot()["jobs"]["probe"]["unconfirmedCreates"] == 1
     gate.abandon_observation("transport-deadline")
+    sent = []
+
+    def readback():
+        sent.append(1)
+        return _absent()
+
+    gate.dispatch(value["jobs"]["probe"]["recovery"][0], True, readback)
+    # The cleanup read goes to the wire: only a readback can settle it.
+    assert sent == [1]
+    assert gate.snapshot().get("skips", []) == []
+
+
+def test_a_refused_commit_leaves_nothing_to_clean_and_spends_no_request(tmp_path):
+    """A typed refusal settles the outcome, so its slots are zero-wire skips."""
+    value, _resources = scheduled_commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    gate.dispatch(
+        value["jobs"]["probe"]["observation"][0],
+        False,
+        lambda: (400, {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}),
+    )
+    assert gate.snapshot()["jobs"]["probe"]["unconfirmedCreates"] == 0
+    gate.abandon_observation("over-boundary-refusal")
     before = gate.snapshot()
     result = gate.dispatch(
         value["jobs"]["probe"]["recovery"][0], True, lambda: pytest.fail("no wire call")
@@ -1237,7 +1263,6 @@ def test_an_abandoned_observation_skips_cleanup_it_never_created(tmp_path):
     assert result == (None, {"skipped": "no-creation-proof-after-stop"})
     after = gate.snapshot()
     assert after["events"] == before["events"]
-    assert after["jobs"]["probe"]["creationProofs"] == {}
     assert [skip["reason"] for skip in after["skips"]] == [
         "no-creation-proof-after-stop"
     ]
@@ -1272,3 +1297,67 @@ def test_an_abandoned_job_cannot_be_abandoned_twice_or_observe_again(tmp_path):
         gate.abandon_observation("transport-deadline")
     with pytest.raises(ValueError, match="stopped"):
         gate.dispatch(value["jobs"]["probe"]["observation"][1], False, _absent)
+
+
+def test_a_slot_that_will_never_be_sent_can_be_consumed_without_a_wire_call(tmp_path):
+    """A refused Commit leaves slots its collector never sends; the cursor must move."""
+    value, resources = scheduled_commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    gate.dispatch(
+        value["jobs"]["probe"]["observation"][0],
+        False,
+        lambda: (400, {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}),
+    )
+    probe = value["jobs"]["probe"]
+    gate.dispatch(probe["observation"][1], False, _absent)
+    gate.dispatch(probe["recovery"][0], True, _absent)
+    skipped = dict(probe["recovery"][1])
+    del skipped["versionFrom"]
+    result = gate.skip_scheduled_slot(skipped, True, "refused-commit-created-nothing")
+    assert result == (None, {"skipped": "no-creation-proof"})
+    # The slot behind it is now reachable, which was the whole problem.
+    gate.dispatch(probe["recovery"][2], True, _absent)
+    state = gate.snapshot()
+    assert state["jobs"]["probe"]["recovery"] == 3
+    assert state["jobs"]["probe"]["absent"] == [resources[0]]
+    assert state["skips"][0]["note"] == "refused-commit-created-nothing"
+
+
+def test_a_slot_that_could_have_written_is_never_skipped(tmp_path):
+    value, resources = scheduled_commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    with pytest.raises(ValueError, match="could have written"):
+        gate.skip_scheduled_slot(value["jobs"]["probe"]["observation"][0], False, "no")
+    probe = value["jobs"]["probe"]
+    gate.dispatch(
+        probe["observation"][0], False, lambda: _commit_response(len(resources))
+    )
+    gate.dispatch(probe["observation"][1], False, _absent)
+    gate.dispatch(probe["recovery"][0], True, _absent)
+    skipped = dict(probe["recovery"][1])
+    del skipped["versionFrom"]
+    with pytest.raises(ValueError, match="must be cleaned"):
+        gate.skip_scheduled_slot(skipped, True, "nothing here")
+    assert gate.snapshot().get("skips", []) == []
+
+
+def test_a_skip_is_refused_while_a_write_is_unconfirmed(tmp_path):
+    value, _resources = scheduled_commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+
+    def deadline():
+        raise TimeoutError("transport deadline")
+
+    with pytest.raises(TimeoutError):
+        gate.dispatch(value["jobs"]["probe"]["observation"][0], False, deadline)
+    probe = value["jobs"]["probe"]
+    gate.abandon_observation("transport-deadline")
+    skipped = dict(probe["recovery"][0])
+    with pytest.raises(ValueError, match="unconfirmed write"):
+        gate.skip_scheduled_slot(skipped, True, "nothing here")

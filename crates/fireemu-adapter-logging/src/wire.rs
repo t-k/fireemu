@@ -2,7 +2,7 @@
 //! so every rule is unit-testable.
 
 use base64::Engine as _;
-use fireemu_core_session::loopback::authority_is_loopback;
+use fireemu_core_session::loopback::{authority_is_loopback, origin_is_local};
 use serde_json::{json, Map, Value};
 use sha1::{Digest, Sha1};
 
@@ -216,6 +216,8 @@ pub enum HandshakeError {
     NoKey,
     /// The `Host` header is not loopback (DNS-rebinding guard).
     ForeignHost,
+    /// The browser `Origin` header is not a loopback origin (cross-site hijacking guard).
+    ForeignOrigin,
     /// The request line/headers were malformed or too large.
     Malformed,
 }
@@ -234,6 +236,10 @@ impl HandshakeError {
             Self::ForeignHost => (
                 "403 Forbidden",
                 "the Logging emulator answers loopback Hosts only",
+            ),
+            Self::ForeignOrigin => (
+                "403 Forbidden",
+                "the Logging emulator answers loopback Origins only",
             ),
             Self::Malformed => ("400 Bad Request", "malformed handshake"),
         };
@@ -256,9 +262,15 @@ pub struct Handshake {
 
 /// Validates the raw HTTP request head of a WebSocket handshake.
 ///
-/// Enforces `GET`, `Upgrade: websocket`, a `Sec-WebSocket-Key`, and the loopback-`Host` guard.
-/// The header names are matched case-insensitively (RFC 7230); `Upgrade`/`Connection` values are
-/// matched case-insensitively too.
+/// Enforces `GET`, `Upgrade: websocket`, a `Sec-WebSocket-Key`, the loopback-`Host` guard and
+/// the loopback-`Origin` guard. The header names are matched case-insensitively (RFC 7230);
+/// `Upgrade`/`Connection` values are matched case-insensitively too.
+///
+/// WebSocket handshakes are exempt from the same-origin policy, so a browser `Origin` that is
+/// not loopback is the one signal that a cross-site page is opening the stream; it is refused
+/// with 403 before any frame is written. A request with no `Origin` is a non-browser client
+/// (firebase-tools' `ws` client) and is accepted, which is the same policy the Auth/control
+/// listener and the Hub apply.
 pub fn parse_handshake(head: &str) -> Result<Handshake, HandshakeError> {
     let mut lines = head.split("\r\n");
     let request_line = lines.next().ok_or(HandshakeError::Malformed)?;
@@ -272,6 +284,8 @@ pub fn parse_handshake(head: &str) -> Result<Handshake, HandshakeError> {
         return Err(HandshakeError::NotGet);
     }
     let mut host: Option<&str> = None;
+    let mut origin: Option<&str> = None;
+    let mut origins = 0usize;
     let mut upgrade = false;
     let mut key: Option<&str> = None;
     for line in lines {
@@ -282,6 +296,9 @@ pub fn parse_handshake(head: &str) -> Result<Handshake, HandshakeError> {
         let value = value.trim();
         if name.eq_ignore_ascii_case("host") {
             host = Some(value);
+        } else if name.eq_ignore_ascii_case("origin") {
+            origin = Some(value);
+            origins += 1;
         } else if name.eq_ignore_ascii_case("upgrade") {
             if value.eq_ignore_ascii_case("websocket") {
                 upgrade = true;
@@ -292,6 +309,10 @@ pub fn parse_handshake(head: &str) -> Result<Handshake, HandshakeError> {
     }
     if !host_is_loopback(host) {
         return Err(HandshakeError::ForeignHost);
+    }
+    // A repeated Origin is never sent by a browser: refuse rather than pick one of the values.
+    if origins > 1 || !origin_is_loopback(origin) {
+        return Err(HandshakeError::ForeignOrigin);
     }
     if !upgrade {
         return Err(HandshakeError::NotUpgrade);
@@ -307,6 +328,15 @@ pub fn parse_handshake(head: &str) -> Result<Handshake, HandshakeError> {
 #[must_use]
 pub fn host_is_loopback(host: Option<&str>) -> bool {
     host.is_none_or(authority_is_loopback)
+}
+
+/// Whether an `Origin` header may open the stream. An absent `Origin` is a non-browser client
+/// and passes; any present value must be an HTTP(S) loopback origin, the same
+/// [`origin_is_local`] policy the Auth/control listener and the Hub apply. `null` and every
+/// malformed value fail, so an opaque (sandboxed, `file:`, redirected) origin cannot connect.
+#[must_use]
+pub fn origin_is_loopback(origin: Option<&str>) -> bool {
+    origin.is_none_or(origin_is_local)
 }
 
 /// A decoded client WebSocket frame that the server acts on.
@@ -490,6 +520,79 @@ mod tests {
 
         let no_upgrade = "GET / HTTP/1.1\r\nHost: localhost\r\nSec-WebSocket-Key: k\r\n\r\n";
         assert_eq!(parse_handshake(no_upgrade), Err(HandshakeError::NotUpgrade));
+    }
+
+    #[test]
+    fn handshake_refuses_a_browser_origin_that_is_not_loopback() {
+        let with_origin = |origin: &str| {
+            format!(
+                "GET / HTTP/1.1\r\nHost: 127.0.0.1:4500\r\nOrigin: {origin}\r\n\
+                 Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: abc==\r\n\r\n"
+            )
+        };
+
+        // Allowed: the Emulator UI and any other loopback page, on any port and either scheme.
+        for origin in [
+            "http://localhost:4000",
+            "http://127.0.0.1:4000",
+            "https://localhost",
+            "http://[::1]:4000",
+            "HTTP://LocalHost:4000",
+        ] {
+            assert_eq!(
+                parse_handshake(&with_origin(origin)).unwrap().key,
+                "abc==",
+                "expected {origin} to be accepted"
+            );
+        }
+
+        // Refused: remote pages, opaque origins, rebinding names and malformed values.
+        for origin in [
+            "https://attacker.example",
+            "http://localhost.attacker.example",
+            "http://127.attacker.example",
+            "http://localhost./",
+            "null",
+            "",
+            "file://",
+            "ws://127.0.0.1:4500",
+            "http://user@127.0.0.1:4000",
+            "http://127.0.0.1:4000/evil",
+            "not an origin",
+        ] {
+            assert_eq!(
+                parse_handshake(&with_origin(origin)),
+                Err(HandshakeError::ForeignOrigin),
+                "expected {origin} to be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn handshake_without_an_origin_is_accepted() {
+        // Non-browser clients (firebase-tools' ws client, the UI's Node proxy) send no Origin.
+        let head = "GET / HTTP/1.1\r\nHost: 127.0.0.1:4500\r\nUpgrade: websocket\r\n\
+                    Connection: Upgrade\r\nSec-WebSocket-Key: abc==\r\n\r\n";
+        assert_eq!(parse_handshake(head).unwrap().key, "abc==");
+    }
+
+    #[test]
+    fn handshake_refuses_more_than_one_origin_header() {
+        // A second Origin header is never sent by a browser; refuse rather than pick one.
+        let head = "GET / HTTP/1.1\r\nHost: 127.0.0.1:4500\r\nOrigin: http://localhost:4000\r\n\
+                    Origin: https://attacker.example\r\nUpgrade: websocket\r\n\
+                    Connection: Upgrade\r\nSec-WebSocket-Key: abc==\r\n\r\n";
+        assert_eq!(parse_handshake(head), Err(HandshakeError::ForeignOrigin));
+    }
+
+    #[test]
+    fn a_foreign_origin_is_answered_with_403_and_no_frame_data() {
+        let response = HandshakeError::ForeignOrigin.response();
+        assert!(response.starts_with("HTTP/1.1 403 Forbidden\r\n"));
+        assert!(!response.contains("101"));
+        assert!(!response
+            .to_ascii_lowercase()
+            .contains("sec-websocket-accept"));
     }
 
     #[test]

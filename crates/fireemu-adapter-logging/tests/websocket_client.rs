@@ -180,3 +180,64 @@ async fn a_foreign_host_is_refused() {
         );
     }
 }
+
+/// Sends a raw handshake with the given Origin and returns the socket plus the response head.
+async fn handshake_with_origin(addr: std::net::SocketAddr, origin: &str) -> (TcpStream, String) {
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let request = format!(
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: {origin}\r\nUpgrade: websocket\r\n\
+         Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Sec-WebSocket-Version: 13\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let head = read_http_head(&mut stream).await;
+    (stream, head)
+}
+
+#[tokio::test]
+async fn a_cross_site_page_is_refused_and_receives_no_log_frame() {
+    let (bus, addr) = start().await;
+    // A line a cross-site page must never see: the shape of an Auth out-of-band link.
+    bus.publish(&LogInput::plain(
+        "info",
+        "To verify the email address, follow this link: http://127.0.0.1:9099/oobCode=SECRET",
+        1,
+    ));
+
+    for origin in [
+        "https://attacker.example",
+        "http://localhost.attacker.example",
+        "null",
+        "not an origin",
+    ] {
+        let (mut stream, head) = handshake_with_origin(addr, origin).await;
+        assert!(
+            head.starts_with("HTTP/1.1 403"),
+            "expected 403 for {origin}, got: {head}"
+        );
+        // Nothing but the refusal body follows: no history replay, no live frame.
+        let mut rest = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut rest))
+            .await
+            .expect("the refused connection stayed open")
+            .unwrap();
+        let body = String::from_utf8_lossy(&rest);
+        assert!(!body.contains("SECRET"), "leaked log data for {origin}");
+    }
+}
+
+#[tokio::test]
+async fn a_loopback_page_still_receives_the_stream() {
+    let (bus, addr) = start().await;
+    bus.publish(&LogInput::plain("info", "from history", 1).for_emulator("functions"));
+
+    let (mut stream, head) = handshake_with_origin(addr, "http://localhost:4000").await;
+    assert!(
+        head.starts_with("HTTP/1.1 101"),
+        "expected 101, got: {head}"
+    );
+    let frame = tokio::time::timeout(Duration::from_secs(5), read_text_frame(&mut stream))
+        .await
+        .expect("no frame arrived");
+    assert!(frame.contains("from history"));
+}

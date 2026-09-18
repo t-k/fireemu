@@ -2102,7 +2102,7 @@
       "officialDefaultPort": 4500,
       "officialTraits": [],
       "state": "claimed",
-      "decision": "Active supported surface: an RFC 6455 WebSocket on the logging port serves the EmulatorLog wire format the official UI's Logs page reads, fed by the functions runner's output and the emulators' lifecycle lines; loopback-only and with a bounded history, both documented divergences.",
+      "decision": "Active supported surface: an RFC 6455 WebSocket on the logging port serves the EmulatorLog wire format the official UI's Logs page reads, fed by the functions runner's output and the emulators' lifecycle lines; loopback-only for both the Host header and any browser Origin, and with a bounded history, all documented divergences.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/install_and_configure",
         "https://firebase.google.com/docs/functions/writing-and-viewing-logs",
@@ -2144,6 +2144,10 @@
           "fireemuOnly": [
             {
               "behaviour": "the WebSocket handshake is refused unless the Host header names loopback (the same DNS-rebinding guard the other fireemu listeners apply); the official server has none",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "a WebSocket handshake carrying a browser Origin header that is not an HTTP(S) loopback origin is refused with 403 before any frame is written, the same browser-origin policy the Auth/control listener and the Hub apply; a handshake with no Origin (a non-browser client such as firebase-tools) still connects. WebSocket handshakes are exempt from the same-origin policy, so without this guard any web page could read the stream, which carries the Auth out-of-band links and SMS codes the official emulator also streams. The official UI Logs page connects from a loopback origin, and the streamed content itself stays at parity",
               "precision": "exact-for-local-semantics"
             },
             {

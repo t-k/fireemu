@@ -55,7 +55,9 @@ COMPARISON_ORDERED = "ordered-events"
 COMPARISON_AGGREGATE = "aggregate-changes"
 
 
-def _change(kind: str, doc: str, old_index: int, new_index: int) -> dict[str, Any]:
+def _change(
+    kind: str, doc: str, old_index: int | None, new_index: int | None
+) -> dict[str, Any]:
     return {"type": kind, "doc": doc, "oldIndex": old_index, "newIndex": new_index}
 
 
@@ -342,10 +344,10 @@ _CASE_104 = _case(
             "primary",
             "aggregate",
             changes=[
-                _change("added", "gamma", -1, 0),
-                _change("modified", "alpha", 0, 0),
+                _change("modified", "alpha", None, None),
+                _change("added", "gamma", None, None),
             ],
-            docs=["alpha", "gamma", "beta"],
+            docs=["beta", "alpha", "gamma"],
         ),
     ],
     comparison=COMPARISON_AGGREGATE,
@@ -383,10 +385,10 @@ _CASE_104C = _case(
             "primary",
             "aggregate",
             changes=[
-                _change("added", "gamma", -1, 0),
-                _change("modified", "alpha", 0, 0),
+                _change("modified", "alpha", None, None),
+                _change("added", "gamma", None, None),
             ],
-            docs=["alpha", "gamma", "beta"],
+            docs=["beta", "alpha", "gamma"],
         ),
     ],
     comparison=COMPARISON_AGGREGATE,

@@ -31,6 +31,7 @@ fn state() -> RestState {
         local,
         gateway: Arc::new(gateway),
         rules: None,
+        control_token: None,
         app_check: None,
     }
 }
@@ -42,6 +43,8 @@ fn call(state: &RestState, method: &str, path: &str, body: Value) -> (u16, Value
         path: path.to_owned(),
         query: query.to_owned(),
         authorization: Some("Bearer owner".to_owned()),
+        origin: None,
+        browser_metadata: false,
         app_check: Vec::new(),
         body,
     });

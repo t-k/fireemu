@@ -860,6 +860,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         gateway: Arc::new(gateway),
         rules: enforcer,
         app_check: firestore_policy,
+        control_token: Some(control_token.clone()),
     });
     Ok(ReadySuite {
         log_bus,

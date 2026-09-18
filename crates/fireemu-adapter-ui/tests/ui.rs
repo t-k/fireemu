@@ -129,6 +129,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
             local: backend.clone(),
             gateway: Arc::new(gateway),
             rules: None,
+            control_token: None,
             app_check: None,
         }),
         backend,

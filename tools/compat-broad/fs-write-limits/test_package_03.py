@@ -215,9 +215,18 @@ def test_budgets_match_the_compiled_plans_and_stay_inside_the_cap() -> None:
         assert budgets["envelopeCostMicrousd"] < budgets["costCapUsd"] * 1_000_000
         assert budgets["tariffsConfirmed"] is False
         # Each part must fit the shared Gate's own ceiling, which is why the
-        # campaign is partitioned at all.
-        assert gate["recoverySeconds"] >= accounting["recoveryRequests"] * 13.25
-        assert gate["wallSeconds"] <= 1200
+        # campaign is partitioned at all. The reserve is measured against the
+        # schedule the plan declares, not a flat per-request figure.
+        import compiler_03
+
+        schedule = gate["jobs"]["limits"]["schedule"]
+        assert gate["recoverySeconds"] >= compiler_03._phase_seconds(
+            schedule, "recovery"
+        )
+        assert gate["recoverySeconds"] < gate["wallSeconds"] <= 1200
+        assert {entry["seconds"] for entry in schedule} != {
+            schedule[0]["seconds"]
+        } or len(schedule) == 1
 
 
 def test_binding_and_source_digests_resolve_at_the_declared_commit() -> None:

@@ -4,12 +4,12 @@
     "spec/limits/firestore-standard-2026-08-25.json": "f12ab3686e197be53b14880beec8c6bc72970ca55a72e780fa9d4e99c7abd625",
     "tools/compat-broad/fs-write-limits/collector_03.py": "185f13258c5b14d7b4d462ea065f7f3782e10503a793fc35d2ae411cf1bc6288",
     "tools/compat-broad/fs-write-limits/comparator_03.py": "1528fd6bb73c9c7228a155d4228893cda0653d2547b41042cd7a2668b091d843",
-    "tools/compat-broad/fs-write-limits/compiler_03.py": "525583e60eea14c38e4c36408137b92834c55d07bbbfecefe21783932eb12a46",
+    "tools/compat-broad/fs-write-limits/compiler_03.py": "f619cdee7d28e3d256413dbb32543728ec8d70b0d8cefdd836e24999dc8fd65e",
     "tools/compat-broad/fs-write-limits/expectations_03.py": "99510c025eb2527b43a20bfefe2d7ca88f889b8f1e1cba1d2a473ea6730c740b",
     "tools/compat-broad/fs-write-limits/shadow.py": "a340d768ad298390ea64d027cc9b798111e157e5207790c398baaefe012db712",
     "tools/compat-broad/fs-write-limits/shadow_03.py": "0df98687a90fee8f4a9068ead2a7ffff8eb20cc0da989afb677c5d94ba5b9649",
     "tools/compat-broad/fs-write-limits/shadow_03b.py": "87924f501a6c5a6173eb887bf12e44c75a61e89084f2be8b2e37c10b43684899",
-    "tools/compat-broad/shared_gate.py": "15f7006c43b3d1969d9a00c9c8f8f4a077645f8e8ae81aa6d38b372cef3b39e3"
+    "tools/compat-broad/shared_gate.py": "d53be29f8ea320bc879df0edc8d02d5fc967c054eaab4fbdf869283835e9ce7c"
   },
   "formalCompatibilityClaim": false,
   "kind": "fs-write-limits-03-local-shadow-v2",
@@ -26,21 +26,21 @@
           "--message-format=json"
         ],
         "runtimeInputCount": 410,
-        "runtimeInputsDigest": "873f5d4e562db2fab3b4d7c9c7d82401300a21a30978f47e1aa5f286e866adcc",
+        "runtimeInputsDigest": "ce40631924a08e492b5d95ab78d4dbb002a4f0386114fea0caf6069cebd705af",
         "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-        "sha256": "d9c09fc65f099fb9da42a0fa737b3f687b7e9f5312d2520a24fbd014bc4a5f16"
+        "sha256": "8f171cae31f3752477154ec4846dacf0c7a590736e6e9466e386f83229ef1b1f"
       },
       "campaignId": "FS-WRITE-LIMITS-03A",
       "digests": {
-        "parentManifestSha256": "cb77502779a2829082ad8e148a5fb92e12d854ef47afde2453d473921d4ea5fb",
+        "parentManifestSha256": "f8f4b6cc721a14a2e0f7281addda68cae3f35849dee71c9184cf7f40b243c8de",
         "sourceInputsBound": true,
-        "supervisorManifestSha256": "2ab5ec15bf9027a235ffdad540225d69f861afa1e10a1f2d35d8eed6cee499c7"
+        "supervisorManifestSha256": "b99bc210ba5a2c410cdb34f5d5c1cb62ba624c3b5b79946921cd2b2bf2fdd400"
       },
       "execution": {
         "allOwnedResourcesAbsentAfterRecovery": true,
         "cleanupComplete": true,
         "cleanupValidated": true,
-        "configurationDigest": "18f54c5a908f6dd258777d3b2c4c3e305bf7badbd73e7f0a296129b19b87d8f0",
+        "configurationDigest": "7d54b57f8d314cd55d0d8cdef64e2b3110385bd50c2bb228d2aacdb1f65624e5",
         "database": "(default)",
         "indexConfiguration": {
           "sha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
@@ -51,7 +51,7 @@
         "ownedDocuments": 18,
         "ownedProcess": {
           "listenersClosed": true,
-          "pid": 3308,
+          "pid": 26948,
           "stopped": true
         },
         "pendingDifferences": [
@@ -94,21 +94,21 @@
           "--message-format=json"
         ],
         "runtimeInputCount": 410,
-        "runtimeInputsDigest": "873f5d4e562db2fab3b4d7c9c7d82401300a21a30978f47e1aa5f286e866adcc",
+        "runtimeInputsDigest": "ce40631924a08e492b5d95ab78d4dbb002a4f0386114fea0caf6069cebd705af",
         "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-        "sha256": "854840a0fa26bb282012aa8637270534d2a0ddfed9ec563e92a778a078a5a880"
+        "sha256": "c9ba0783aaf866bec0e470a78e5db45524d4dbdcc30807c980c35906cfff2d31"
       },
       "campaignId": "FS-WRITE-LIMITS-03B",
       "digests": {
-        "parentManifestSha256": "47f00fc49bd71a1de23a73c9ad83b96ba89dd32a37c234310ec7a8335bdc993d",
+        "parentManifestSha256": "bc8e99a88cc7ffdc3e3f5ec6e4a5c0e176cd454eca37c7b8d26d9f1b3c056f57",
         "sourceInputsBound": true,
-        "supervisorManifestSha256": "6668e1b6a9614e8d3f33de7c39e210f3657c2204f795b03902fac6d28ac0677c"
+        "supervisorManifestSha256": "674ed1b8f05adfcb5539a1deb66d1b679ba3335f222504d13ec29a28976bddb9"
       },
       "execution": {
         "allOwnedResourcesAbsentAfterRecovery": true,
         "cleanupComplete": true,
         "cleanupValidated": true,
-        "configurationDigest": "2b44a688f1e01759b290695ce9ab094d6c3d055b30385c48854abe525059a539",
+        "configurationDigest": "007c99d931f190160e892caf9c0ad2ee1c2980e13590b958d61cbea85cfd93c8",
         "database": "(default)",
         "indexConfiguration": {
           "sha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
@@ -119,7 +119,7 @@
         "ownedDocuments": 11,
         "ownedProcess": {
           "listenersClosed": true,
-          "pid": 5221,
+          "pid": 29255,
           "stopped": true
         },
         "pendingDifferences": [],
@@ -135,6 +135,6 @@
     }
   },
   "productionExecuted": false,
-  "sourceCommit": "02ddda51e0abd716c7b084db09e2a685e48d1e8c",
+  "sourceCommit": "01a1b9cbbdde50b129bc4d5426dfe5d39cb69efc",
   "status": "completed-local-only"
 }

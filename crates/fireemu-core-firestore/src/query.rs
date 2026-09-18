@@ -415,7 +415,7 @@ impl fmt::Display for QueryError {
             Self::CursorReferenceScope { position } => {
                 write!(
                     f,
-                    "cursor value at position {position} must name a document the query selects"
+                    "cursor value at position {position} orders by __key__ and must be a Key the query selects"
                 )
             }
             Self::MultipleNegations => f.write_str(

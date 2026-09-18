@@ -2366,3 +2366,147 @@ fn document_only_import_peak_rss_is_within_one_point_two_times_the_artifact() {
         "baseline={baseline}, loaded={loaded_rss}, incremental={incremental}, artifact={artifact_bytes}"
     );
 }
+
+/// EXPREL-1: a bare relative directory name is resolved against the working directory.
+///
+/// `--export-on-exit out` used to reach the publication stage as the one-element relative path
+/// `out`, whose parent is the empty path. Restricting the permissions of "" fails with
+/// ENOENT, so the export was never written and the command still exited with the child's
+/// status, which made a seed-refresh job look successful while refreshing nothing.
+#[test]
+fn export_on_exit_accepts_a_bare_relative_directory_name() {
+    let dir = scratch("bare-relative");
+    let output = exec()
+        .current_dir(&dir)
+        .args(["--export-on-exit", "out", "--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{log}");
+    assert!(
+        !log.contains("cannot restrict export parent permissions"),
+        "{log}"
+    );
+    let metadata = dir.join("out").join("firebase-export-metadata.json");
+    assert!(
+        metadata.is_file(),
+        "the export was not written to {}: {log}",
+        metadata.display()
+    );
+}
+
+/// LOC-2: `emulators:export` reads the Hub locator from a directory every user on the host can
+/// write, and reaching the origin it names means presenting this run's control token. So the
+/// document is believed only when it is this user's own regular file, and the origin is
+/// contacted only when it is loopback.
+#[test]
+fn emulators_export_refuses_a_locator_it_must_not_believe() {
+    let dir = scratch("locator-trust");
+    let out = dir.join("out");
+
+    let run = |project: &str| {
+        Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args(["emulators:export"])
+            .arg(&out)
+            .args(["--project", project])
+            .output()
+            .unwrap()
+    };
+    // The locator path is derived from the project name, so each case gets its own name and
+    // cleans up after itself rather than colliding with a concurrently running suite.
+    let locator_for = |suffix: &str| {
+        let project = format!("demo-locator-{suffix}-{}", std::process::id());
+        let path = std::env::temp_dir().join(format!("hub-{project}.json"));
+        let _ = std::fs::remove_file(&path);
+        (project, path)
+    };
+    let genuine = br#"{"pid": 1, "origins": ["http://127.0.0.1:4400"], "fireemuControlToken": "secret-control-token"}"#;
+
+    // An origin that is not loopback is refused before any connection is attempted, so the
+    // control token never leaves the host.
+    let (project, path) = locator_for("routable");
+    std::fs::write(
+        &path,
+        br#"{"pid": 1, "origins": ["http://attacker.example:80"], "fireemuControlToken": "secret-control-token"}"#,
+    )
+    .unwrap();
+    let output = run(&project);
+    let log = text(&output);
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(output.status.code(), Some(1), "{log}");
+    assert!(log.contains("loopback"), "{log}");
+    assert!(!log.contains("secret-control-token"), "{log}");
+    assert!(
+        !log.contains("the export request"),
+        "the routable origin was contacted: {log}"
+    );
+
+    // A symlink, even one pointing at a locator this user owns, is not the locator.
+    #[cfg(unix)]
+    {
+        let (target_project, target) = locator_for("symlink-target");
+        std::fs::write(&target, genuine).unwrap();
+        let (project, path) = locator_for("symlink");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        let output = run(&project);
+        let log = text(&output);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&target);
+        let _ = target_project;
+        assert_eq!(output.status.code(), Some(1), "{log}");
+        assert!(log.contains("is not a regular file"), "{log}");
+    }
+
+    // A locator another user can write is not this run's locator.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (project, path) = locator_for("world-writable");
+        std::fs::write(&path, genuine).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let output = run(&project);
+        let log = text(&output);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(output.status.code(), Some(1), "{log}");
+        assert!(log.contains("writable"), "{log}");
+    }
+}
+
+/// EXPEXIT-1: a refused `--export-on-exit` warns and leaves the command's exit code alone.
+///
+/// The export runs after the command, so its refusal is only ever a warning: the official
+/// CLI's `exportOnExit` catches the failure, logs "Automatic export to ... failed, going to
+/// exit now" and lets the script's own status stand, and the compatibility contract claims
+/// that behaviour for this flag. Reporting the refusal in the exit code was considered and
+/// rejected for parity, so this scenario pins the parity rule rather than leaving it implied
+/// by the scenarios that exercise a refused export for other reasons.
+#[cfg(unix)]
+#[test]
+fn a_failed_export_on_exit_warns_and_preserves_the_command_exit_code() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = scratch("export-on-exit-failure");
+    // The export target's parent has to be created at exit, inside a directory this user
+    // cannot write to, so the export fails after the command has already succeeded.
+    let sealed = dir.join("sealed");
+    std::fs::create_dir_all(&sealed).unwrap();
+    let target = sealed.join("inner").join("out");
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+    let output = exec()
+        .arg("--export-on-exit")
+        .arg(&target)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    assert!(
+        output.status.success(),
+        "the command's exit code is preserved: {log}"
+    );
+    assert!(log.contains("going to exit now"), "{log}");
+    assert!(log.contains(&target.display().to_string()), "{log}");
+    assert!(!target.exists(), "{log}");
+}

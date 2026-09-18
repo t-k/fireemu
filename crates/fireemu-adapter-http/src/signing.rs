@@ -263,11 +263,9 @@ pub(crate) fn jwk_value(jwk: &PublicJwk) -> serde_json::Value {
 /// 32 bytes from the operating system's entropy source. The daemon refuses to start without
 /// one rather than falling back to a predictable key.
 fn os_entropy() -> Result<[u8; 32], String> {
-    use std::io::Read as _;
     let mut bytes = [0u8; 32];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
-        .map_err(|e| format!("cannot read /dev/urandom for the App Check key: {e}"))?;
+    fireemu_adapter_support::entropy::fill(&mut bytes)
+        .map_err(|e| format!("cannot draw the App Check key: {e}"))?;
     Ok(bytes)
 }
 

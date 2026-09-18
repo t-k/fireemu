@@ -129,6 +129,7 @@ struct Daemon {
 struct DaemonNamespace {
     #[cfg(unix)]
     trusted: TrustedTempDir,
+    working_directory: Option<PathBuf>,
 }
 
 impl DaemonNamespace {
@@ -136,7 +137,16 @@ impl DaemonNamespace {
         Self {
             #[cfg(unix)]
             trusted: TrustedTempDir::new(label),
+            working_directory: None,
         }
+    }
+
+    /// Starts the daemon in `directory` instead of inheriting the test binary's own working
+    /// directory, so a scenario can observe how the daemon resolves a relative path.
+    #[cfg(unix)]
+    fn in_working_directory(mut self, directory: PathBuf) -> Self {
+        self.working_directory = Some(directory);
+        self
     }
 
     fn path(&self) -> PathBuf {
@@ -239,6 +249,9 @@ impl Daemon {
             .stderr(Stdio::piped());
         #[cfg(unix)]
         command.env("TMPDIR", namespace.path());
+        if let Some(directory) = &namespace.working_directory {
+            command.current_dir(directory);
+        }
         let mut child = command.spawn().unwrap();
         // The banner's control-API line is printed once every listener is bound and served.
         // The pipe keeps being drained on its own thread afterwards: a closed stdout would
@@ -1001,4 +1014,55 @@ fn the_export_route_requires_the_control_capability_and_refuses_browser_origins(
     drop(daemon);
     #[cfg(not(unix))]
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// HUBREL-1: the export route takes a path from a client that need not know the daemon's
+/// working directory, and a one-element relative name such as `out` has the empty path as its
+/// parent. Every operation on "" fails with ENOENT, so such a request used to run the whole
+/// export and then lose it while restricting the parent's permissions.
+#[cfg(unix)]
+#[test]
+fn the_export_route_writes_a_bare_relative_path_under_the_daemon_working_directory() {
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let namespace = DaemonNamespace::new("hub-export-relative");
+    let work = namespace.path().join("work");
+    std::fs::create_dir_all(&work).expect("the daemon working directory is created");
+    let daemon = Daemon::start_in_namespace(
+        "demo-hub-export-relative",
+        &[],
+        namespace.in_working_directory(work.clone()),
+    );
+    let port = daemon.hub_port();
+    let body = r#"{"path": "out", "initiatedBy": "test"}"#;
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("the Hub accepts");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+    write!(
+        stream,
+        "POST /_admin/export HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        daemon.control_token(),
+        body.len()
+    )
+    .unwrap();
+    let mut raw = String::new();
+    let _ = stream.read_to_string(&mut raw);
+    let status = raw
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|c| c.parse::<u16>().ok())
+        .unwrap_or(0);
+
+    assert_eq!(status, 200, "{raw}");
+    assert!(
+        work.join("out")
+            .join("firebase-export-metadata.json")
+            .is_file(),
+        "the export was not written under the daemon working directory: {raw}"
+    );
+    drop(daemon);
 }

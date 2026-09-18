@@ -28,6 +28,7 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         storage_rules: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::default()),
         reset_hooks: vec![Arc::new(move || {
             counter.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         })],
         functions: None,
         control_token: "test-token".to_owned(),
@@ -2103,4 +2104,38 @@ fn the_resources_guard_holds_with_query_strings_and_the_report_is_never_cached()
         );
         assert_eq!(r.status, 400, "{bad:?} => {}", r.body);
     }
+}
+
+/// RSTPS-2: the default session's shared parts are reset behind the locks the services they
+/// belong to are held by, so a hook that cannot finish reports the refusal. It used to panic
+/// through `expect`, which poisoned those locks and turned every later request against the
+/// service into a panic of its own.
+#[test]
+fn a_reset_hook_that_cannot_finish_refuses_the_reset_instead_of_panicking() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let mut s = state(counter.clone());
+    let ran = Arc::new(AtomicUsize::new(0));
+    let ran_in_hook = Arc::clone(&ran);
+    s.reset_hooks = vec![
+        Arc::new(move || {
+            ran_in_hook.fetch_add(1, Ordering::SeqCst);
+            Err("could not provision topic projects/demo-app/topics/jobs: the maximum of 10000 topics has been reached".to_owned())
+        }),
+        Arc::new(|| Ok(())),
+    ];
+
+    let r = handle(&s, "POST", "/v1/sessions/default/reset", &json!({}));
+
+    assert_eq!(r.status, 500, "{}", r.body);
+    let message = r.body.to_string();
+    assert!(message.contains("10000 topics"), "{message}");
+    assert!(message.contains("default"), "{message}");
+    assert_eq!(ran.load(Ordering::SeqCst), 1);
+    // A later reset still works once the refusal's cause is gone: nothing was poisoned.
+    s.reset_hooks = vec![Arc::new(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    })];
+    let r = handle(&s, "POST", "/v1/sessions/default/reset", &json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
 }

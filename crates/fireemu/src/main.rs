@@ -368,20 +368,23 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
             .unwrap_or_else(|| config::RuntimeConfig::default().auth_project)
     };
     let locator = hub::Locator::path_for(&project);
-    let text = std::fs::read_to_string(&locator).map_err(|_| {
-        CliError::refused(format!(
+    // "Not there at all" is the ordinary case and says how to start a suite. Anything else the
+    // locator might be -- a symlink, another user's file, a file anyone can write, a document
+    // too large to be a locator -- is a refusal from the shared reader, because reaching the
+    // origin this file names means presenting the run's control capability.
+    if std::fs::symlink_metadata(&locator).is_err() {
+        return Err(CliError::refused(format!(
             "no running fireemu suite for {project} was found: {} does not exist. Start one with `fireemu up --project {project}`, or name the project with --project.",
             locator.display()
-        ))
-    })?;
-    let document: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| CliError::refused(format!("{} does not parse: {e}", locator.display())))?;
+        )));
+    }
+    let document = hub::read_locator(&locator).map_err(CliError::refused)?;
     let origin = document
         .get("origins")
         .and_then(|o| o.get(0))
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| CliError::refused(format!("{} names no Hub origin", locator.display())))?;
-    let address = origin.trim_start_matches("http://");
+    let address = hub::loopback_authority(origin).map_err(CliError::refused)?;
     let token = document
         .get("fireemuControlToken")
         .and_then(serde_json::Value::as_str)
@@ -396,7 +399,7 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
         "initiatedBy": "emulators:export",
     })
     .to_string();
-    let (status, response) = post_json(address, "/_admin/export", &body, token)
+    let (status, response) = post_json(&address, "/_admin/export", &body, token)
         .map_err(|e| CliError::refused(format!("the export request to {origin} failed: {e}")))?;
     if status != 200 {
         let message = serde_json::from_str::<serde_json::Value>(&response)
@@ -1016,17 +1019,25 @@ fn resolve_export_on_exit(
             })?
             .to_path_buf(),
     };
-    let absolute = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+    // The directory is made absolute here, where the working directory is still the one the
+    // user typed the flag in. A one-element relative name like `out` otherwise reaches the
+    // publication stage with the empty path as its parent, and restricting the permissions of
+    // "" fails with ENOENT at exit, after the command has already run: the export is lost and
+    // the command's own exit status hides it. `emulators:export` absolutizes for this reason
+    // too, and the official CLI resolves `--export-on-exit=out` against the working directory.
+    let absolute = std::path::absolute(&dir)
+        .map_err(|e| CliError::refused(format!("--export-on-exit {}: {e}", dir.display())))?;
+    let resolved = std::fs::canonicalize(&absolute).unwrap_or_else(|_| absolute.clone());
     if let Ok(cwd) = std::env::current_dir() {
-        if cwd.starts_with(&absolute) {
+        if cwd.starts_with(&resolved) {
             return Err(CliError::refused(format!(
                 "--export-on-exit {}: that is the working directory or one of its parents, and an export replaces what the directory holds; choose a dedicated directory",
                 dir.display()
             )));
         }
     }
-    import_export::may_overwrite(&dir).map_err(CliError::refused)?;
-    Ok(Some(dir))
+    import_export::may_overwrite(&absolute).map_err(CliError::refused)?;
+    Ok(Some(absolute))
 }
 
 /// `--inspect-functions [port]`: the bundled runner is a Node script, so the inspector is
@@ -1424,6 +1435,45 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
         }
     }
     1
+}
+
+/// Wipes the default session's Pub/Sub project and recreates the resources the Functions
+/// manifest owns.
+///
+/// Reprovisioning is not guaranteed to succeed. Topics are a daemon-wide budget that a
+/// loopback gRPC client fills from any project, so the recreate can be refused with
+/// `RESOURCE_EXHAUSTED` by state this session does not own. That refusal used to be an
+/// `expect`, which panicked while both the publication gate and the Pub/Sub state lock were
+/// held: both were poisoned and every later Pub/Sub request panicked on the poisoned lock, so
+/// one reset took the service down for the life of the daemon. The reset is refused instead.
+fn reset_function_pubsub_resources(
+    pubsub: &Mutex<fireemu_core_pubsub::PubSubState>,
+    project: &str,
+    resources: &[functions::FunctionPubSubResource],
+) -> Result<(), String> {
+    let Ok(mut state) = pubsub.lock() else {
+        return Err("the Pub/Sub state lock is poisoned".to_owned());
+    };
+    state.clear_project(project);
+    functions::provision_function_pubsub_resources(&mut state, resources).map_err(|e| {
+        format!("Functions Pub/Sub resources could not be reprovisioned after the reset: {e}")
+    })
+}
+
+/// The process exit status fireemu reports for a child exit code.
+///
+/// A process exit status is one byte, but a child's reported code is not. Windows reports the
+/// full 32-bit value that `ExitProcess` or a fatal NTSTATUS produced, and `std` hands it over
+/// as a signed `i32`: `cmd /c exit -1` arrives as `-1`, an access violation as `-1073741819`
+/// (0xC0000005), a Ctrl-C termination as `-1073741510` (0xC000013A). Truncating any of those
+/// to a byte, or clamping them into `0..=255`, turns a crashed child into a success and lets a
+/// CI job that trusts fireemu's exit code pass.
+///
+/// So only the codes that survive the byte intact are passed through. Every code outside
+/// `0..=255` -- negative, or 256 and above -- becomes 1, the generic failure. Signal-terminated
+/// children already arrive here as `128 + signal` from [`exit_code`] and pass through.
+fn reportable_exit_code(code: i32) -> u8 {
+    u8::try_from(code).unwrap_or(1)
 }
 
 fn load_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
@@ -2186,22 +2236,14 @@ async fn terminate_signal() {
 /// A 128-bit secret from the operating system's entropy source; the daemon refuses to start
 /// without one (these values authorize control and runner access).
 fn random_secret() -> Result<String, String> {
-    use std::fmt::Write as _;
-    use std::io::Read as _;
-    let mut bytes = [0u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
-        .map_err(|e| format!("cannot read /dev/urandom for the control token: {e}"))?;
-    Ok(bytes.iter().fold(String::with_capacity(32), |mut acc, b| {
-        let _ = write!(acc, "{b:02x}");
-        acc
-    }))
+    fireemu_adapter_support::entropy::hex_128()
+        .map_err(|e| format!("cannot draw the control token: {e}"))
 }
 
 /// An unpredictable 128-bit daemon-local incarnation from the operating system CSPRNG.
 fn random_u128() -> Result<u128, String> {
-    let hex = random_secret()?;
-    u128::from_str_radix(&hex, 16).map_err(|e| format!("cannot build a daemon incarnation: {e}"))
+    fireemu_adapter_support::entropy::u128_value()
+        .map_err(|e| format!("cannot build a daemon incarnation: {e}"))
 }
 
 /// An unpredictable 128-bit project session epoch from the operating system CSPRNG (spec 7.2).
@@ -2334,7 +2376,7 @@ fn control_state(
     }
     // The default session's scope is wiped by the project hooks; the shared functions
     // runtime is reset afterwards.
-    let mut reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>> = Vec::new();
+    let mut reset_hooks: Vec<Arc<dyn Fn() -> Result<(), String> + Send + Sync>> = Vec::new();
     let pubsub_for_reset = pubsub.clone();
     let pubsub_handle_for_reset = pubsub_handle.clone();
     let functions_for_reset = functions.cloned();
@@ -2345,11 +2387,7 @@ fn control_state(
         if let Some(runtime) = &functions_for_reset {
             runtime.reset();
         }
-        if let Ok(mut state) = pubsub_for_reset.lock() {
-            state.clear_project(&pubsub_project);
-            functions::provision_function_pubsub_resources(&mut state, &pubsub_resources)
-                .expect("validated Functions Pub/Sub resources reprovision after reset");
-        }
+        reset_function_pubsub_resources(&pubsub_for_reset, &pubsub_project, &pubsub_resources)
     }));
     // Resource diagnostics, one hook per service (spec 15); collected one after another.
     let mut resource_hooks: Vec<Arc<dyn fireemu_adapter_http::control::ResourceHook>> = vec![
@@ -3288,5 +3326,108 @@ mod config_reload_tests {
         );
         drop(backend);
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod exit_code_tests {
+    use super::reportable_exit_code;
+
+    #[test]
+    fn codes_that_fit_a_byte_are_reported_unchanged() {
+        assert_eq!(reportable_exit_code(0), 0);
+        assert_eq!(reportable_exit_code(1), 1);
+        assert_eq!(reportable_exit_code(23), 23);
+        assert_eq!(reportable_exit_code(255), 255);
+    }
+
+    #[test]
+    fn signal_terminations_keep_their_unix_spelling() {
+        // `exit_code` maps a signal to 128 + signal; SIGKILL is 137, SIGTERM 143, SIGSEGV 139.
+        for code in [128 + 9, 128 + 15, 128 + 11] {
+            assert_eq!(reportable_exit_code(code), u8::try_from(code).unwrap());
+        }
+    }
+
+    #[test]
+    fn windows_negative_status_codes_never_report_success() {
+        // `cmd /c exit -1`, STATUS_ACCESS_VIOLATION, STATUS_CONTROL_C_EXIT, and the extreme.
+        for code in [-1, -1_073_741_819, -1_073_741_510, i32::MIN] {
+            assert_eq!(
+                reportable_exit_code(code),
+                1,
+                "a negative child status must not be reported as success"
+            );
+        }
+    }
+
+    #[test]
+    fn codes_above_a_byte_never_report_success_or_a_truncated_value() {
+        // 256 and 512 truncate to 0 under a cast; 300 truncates to 44.
+        for code in [256, 300, 512, 0x0100_0000, i32::MAX] {
+            assert_eq!(reportable_exit_code(code), 1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod reset_pubsub_tests {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    use fireemu_core_pubsub::{PubSubState, TopicName};
+
+    use super::{functions, reset_function_pubsub_resources};
+
+    fn manifest_resources(project: &str) -> Vec<functions::FunctionPubSubResource> {
+        let manifest = fireemu_adapter_functions::manifest_json::parse_manifest(
+            &serde_json::json!({"functions": [
+                {"name": "worker", "trigger": {"type": "pubsub", "topic": "shared-jobs"}}
+            ]}),
+        )
+        .expect("the manifest parses");
+        functions::function_pubsub_resources(project, &manifest).expect("the resources resolve")
+    }
+
+    /// RSTPS-2: topics are a daemon-wide budget that any project can fill, so recreating the
+    /// Functions resources after a reset can be refused by state this session does not own.
+    /// The refusal is reported; it must not panic while the Pub/Sub state lock is held,
+    /// because that poisons the lock and every later Pub/Sub request panics on it in turn.
+    #[test]
+    fn a_refused_reprovision_is_reported_and_leaves_the_lock_usable() {
+        let resources = manifest_resources("demo-app");
+        let pubsub = Mutex::new(PubSubState::new(11));
+        {
+            let mut state = pubsub.lock().expect("the fresh lock is usable");
+            // Another project fills the daemon-wide topic budget. Wiping `demo-app` frees
+            // nothing, so the recreate below has nowhere to go.
+            for index in 0..fireemu_core_pubsub::state::MAX_TOPICS {
+                let name = TopicName::new("demo-other", format!("filler-{index}"))
+                    .expect("the topic name is valid");
+                state
+                    .create_topic(name, BTreeMap::new())
+                    .expect("the budget admits this topic");
+            }
+        }
+
+        let error = reset_function_pubsub_resources(&pubsub, "demo-app", &resources)
+            .expect_err("a reprovision with no room must be refused");
+
+        assert!(error.contains("reprovisioned"), "{error}");
+        assert!(error.contains("shared-jobs"), "{error}");
+        // The lock is still usable, which a panic through the guard would have prevented.
+        let mut state = pubsub
+            .lock()
+            .expect("the refusal must not poison the Pub/Sub state lock");
+        assert!(state.list_topics("demo-app").is_empty());
+        state.clear_project("demo-other");
+        drop(state);
+
+        // With the budget free, the same reset succeeds and the manifest's resources are back.
+        reset_function_pubsub_resources(&pubsub, "demo-app", &resources)
+            .expect("the reset succeeds once there is room");
+        let state = pubsub.lock().expect("the lock is still usable");
+        assert_eq!(state.list_topics("demo-app").len(), 1);
+        assert_eq!(state.list_subscriptions("demo-app").len(), 1);
     }
 }

@@ -39,15 +39,15 @@
     "database": "(default)",
     "estimatedCostUsd": 0.000165,
     "owner": {
-      "namespace": "o6/FS-LISTEN-SDK/7de6ab6288dc32379549eb64440f0ecd",
-      "nonceDigest": "1b852c2f29ae9308de681d5746aae604b11a1cb3806ae807f59a0de7cf0eaae5",
+      "namespace": "o6/FS-LISTEN-SDK/ed5c51a2cacf186b133093bf0a100965",
+      "nonceDigest": "12c6430f3f2b42d0f2fecbeee5c4a6a2947d023923c274c1b7b3d0496a3e0f5a",
       "paths": {
-        "absent": "o6_listen/{uid}/runs/7de6ab6288dc32379549eb64440f0ecd/docs/absent",
-        "alpha": "o6_listen/{uid}/runs/7de6ab6288dc32379549eb64440f0ecd/docs/alpha",
-        "beta": "o6_listen/{uid}/runs/7de6ab6288dc32379549eb64440f0ecd/docs/beta",
-        "gamma": "o6_listen/{uid}/runs/7de6ab6288dc32379549eb64440f0ecd/docs/gamma",
+        "absent": "o6_listen/{uid}/runs/ed5c51a2cacf186b133093bf0a100965/docs/absent",
+        "alpha": "o6_listen/{uid}/runs/ed5c51a2cacf186b133093bf0a100965/docs/alpha",
+        "beta": "o6_listen/{uid}/runs/ed5c51a2cacf186b133093bf0a100965/docs/beta",
+        "gamma": "o6_listen/{uid}/runs/ed5c51a2cacf186b133093bf0a100965/docs/gamma",
         "private": "o6_listen_private/{uid}",
-        "run": "o6_listen/{uid}/runs/7de6ab6288dc32379549eb64440f0ecd"
+        "run": "o6_listen/{uid}/runs/ed5c51a2cacf186b133093bf0a100965"
       }
     },
     "ownerPreconditions": [
@@ -116,7 +116,7 @@
       "firebase": "sha512-XaL6tlE5Xd20ZDhckqOMIw+JJTET+wTdeZPxQ7ihc42oxRb7kWUyn/j1LO5V9dH1xq8Rv5R71Pv1fBCdIkt9Rw=="
     },
     "sourceBinding": {
-      "catalogDigest": "8125ca2c220145e9344e8342da7840bb8aa4ab039a8ba01243cd5bdf0df84388",
+      "catalogDigest": "7326915491f0d03e5b6e58ee3bdacce966a1f4829e714677ee491b0e779508f6",
       "evidence": "declaration-only",
       "kind": "resolved-lockfile-pin",
       "lockfile": "tools/sdk-smoke/package-lock.json",
@@ -146,13 +146,18 @@
         "reason": "No iOS or macOS SDK harness exists in this repository."
       },
       {
+        "path": "cross-identity-isolation",
+        "plan": "A second throwaway account and a case in which A opens a listener on B's o6_listen_private document and on B's run prefix, expecting permission-denied in both, with a control proving B's own listener succeeds. It needs maxAccounts raised to two and a second sign-in in the adapter.",
+        "reason": "The campaign budget allows one account, and both auth cases sign the same principal out and back in. No case has user A listen to user B's document, so tenant and principal isolation under Rules is not observed and a MATCH must not be read as covering it."
+      },
+      {
         "path": "raw-resume-token",
         "plan": "A direct gRPC Listen probe that supplies a chosen resume token and records the TargetChange response, kept as a separate case from SDK-level resume.",
         "reason": "The Node client SDK owns the resume token; it is not exposed to application code, so RESET and stale-token behavior cannot be driven here."
       }
     ]
   },
-  "campaignDigest": "15bffb3bc6f40ff773605a07400b7236394505c78c029804591e10436a1338e7",
-  "nonce": "7de6ab6288dc32379549eb64440f0ecd",
+  "campaignDigest": "31a531edaa473531785d091aa03cbf51274e9419f1770f62071532ad1acde869",
+  "nonce": "ed5c51a2cacf186b133093bf0a100965",
   "schema": "o6-listen-sdk-shadow-campaign-v1"
 }

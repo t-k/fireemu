@@ -83,6 +83,12 @@ Bounds and ownership:
 - Cleanup rows name the resource and bind its path by SHA-256 rather than
   publishing the path, so a production receipt exposes neither the run nonce nor
   the account identifier.
+- The receipt keeps every cleanup pass, not only the final one. Most documents
+  are deleted by the pass that follows the case which created them, so the final
+  pass alone understates the run; it reports `already-deleted-earlier` rather
+  than `not-created` for those. The session is restored before each pass, because
+  a case can end signed out and cleanup has to read under Rules that require a
+  principal.
 
 Secrets:
 
@@ -259,12 +265,13 @@ covering them.
 
 | Path | Why it is unobserved | Plan |
 | --- | --- | --- |
+| Cross-identity isolation | The budget allows one account and both auth cases sign the same principal out and back in, so no case has one principal refused another principal's document. A `MATCH` must not be read as covering tenant or principal isolation. | A second throwaway account and a case where A opens a listener on B's private document and on B's run prefix, expecting `permission-denied` in both, with a control proving B's own listener succeeds. It needs the account budget raised to two. |
 | Browser WebChannel | The Node SDK build selects the gRPC transport. WebChannel framing, long-poll fallback and tab lifecycle are never exercised. | A separate browser campaign driving the same catalog through a headless Chromium page against the same oracle project, capturing the WebChannel request log from the page rather than from Node. |
 | Android SDK | No Android runtime, Gradle toolchain or device is available here. | An instrumented Android test module replaying the same catalog and emitting the same normalized event rows. |
 | Apple SDK | No iOS or macOS SDK harness exists in this repository. | An XCTest target replaying the same catalog and emitting the same normalized event rows. |
 | Raw resume token | The Node client SDK owns the resume token and does not expose it, so `RESET`, stale tokens and compacted tokens cannot be driven from application code. | A direct gRPC Listen probe that supplies a chosen resume token and records the `TargetChange` response, kept as a separate case from SDK-level resume. |
 
-Because all four remain open, `FS-LISTEN-SDK` keeps its blocking condition and
+Because all five remain open, `FS-LISTEN-SDK` keeps its blocking condition and
 its `WAITING_ORACLE` status. Running this campaign would reduce that condition
-to the browser, Android and Apple paths plus raw token behaviour; it would not
-clear it.
+to the browser, Android and Apple paths, cross-identity isolation and raw token
+behaviour; it would not clear it.

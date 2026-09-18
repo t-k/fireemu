@@ -1,21 +1,21 @@
 {
   "schema": "o6-listen-observation-v1",
   "caseId": "FS-LISTEN-SDK",
-  "campaignDigest": "15bffb3bc6f40ff773605a07400b7236394505c78c029804591e10436a1338e7",
-  "catalogDigest": "8125ca2c220145e9344e8342da7840bb8aa4ab039a8ba01243cd5bdf0df84388",
+  "campaignDigest": "31a531edaa473531785d091aa03cbf51274e9419f1770f62071532ad1acde869",
+  "catalogDigest": "7326915491f0d03e5b6e58ee3bdacce966a1f4829e714677ee491b0e779508f6",
   "productionExecuted": false,
   "environment": {
     "kind": "local-fireemu",
     "node": "24.14.0",
-    "sourceCommit": "a356e337e46164db58d7d86fd44706b7801c3ecc",
+    "sourceCommit": "f48987802f1dad8f79dbbbfad52c6a806df60669",
     "firebaseSdk": "12.18.0",
     "fireemuBinary": "target/debug/fireemu",
-    "fireemuBinaryDigest": "268bc261e76166b72600c33dcbfc960eb2a38aee357e470df129889869b7b1fb",
-    "fireemuSourceCommit": "a356e337e46164db58d7d86fd44706b7801c3ecc",
+    "fireemuBinaryDigest": "2eb1c02abe9e39b3a78b730de861997948289bd30df7babc0cb584e84ecffeed",
+    "fireemuSourceCommit": "f48987802f1dad8f79dbbbfad52c6a806df60669",
     "rulesPath": "tools/compat-broad/fs-listen-resume/fs-listen-sdk.rules",
     "rulesDigest": "f60a988c929ea7e26feb4645e1d8134979b91adea56d3ccb9a747cbeb1e41f34",
     "projectId": "demo-o6",
-    "nonceDigest": "b736da24077d372bdff596dd93ee6625679e1369751ed06b049b6bbdbe1a02b2"
+    "nonceDigest": "09e9dabadf69470ac3352b99d8e75470470ab144eee043187810085f04919ec8"
   },
   "budget": {
     "used": {
@@ -60,37 +60,596 @@
     "rows": [
       {
         "name": "alpha",
-        "pathDigest": "1bd919bd34d8ff55dece94e54c55a35e1a7b9002dd5e77e3b9adf1b7675b5711",
-        "outcome": "not-created",
+        "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+        "outcome": "already-deleted-earlier",
         "detail": null
       },
       {
         "name": "beta",
-        "pathDigest": "5225f467dac9d0268447e95894c93619f2b7c81bad8dbb9b7836c7ea7a0d14f2",
-        "outcome": "not-created",
+        "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+        "outcome": "already-deleted-earlier",
         "detail": null
       },
       {
         "name": "gamma",
-        "pathDigest": "e490459cd97a909a5b4779651193ce1abc722cce6a01c1b5e29447475d9073c5",
-        "outcome": "not-created",
+        "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+        "outcome": "already-deleted-earlier",
         "detail": null
       },
       {
         "name": "absent",
-        "pathDigest": "3a964c5278bb9f55e1bdc6fce5419136b163e3a225fb412612b8f20450f3d687",
+        "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
         "outcome": "not-created",
         "detail": null
       },
       {
         "name": "private",
-        "pathDigest": "552ec21ea64689943e02184f8629c5e1601a57ae763313e344abb2af978bac4d",
-        "outcome": "not-created",
+        "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+        "outcome": "already-deleted-earlier",
         "detail": null
       }
     ],
-    "unproven": []
+    "unproven": [],
+    "deleted": 0
   },
+  "cleanupPasses": [
+    {
+      "pass": "FS-LISTEN-SDK-101",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-101C",
+      "complete": true,
+      "deleted": 0,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-102",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-102C",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-103",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-103C",
+      "complete": true,
+      "deleted": 2,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-104",
+      "complete": true,
+      "deleted": 3,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-104C",
+      "complete": true,
+      "deleted": 3,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-105",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-105C",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-106",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-106N",
+      "complete": true,
+      "deleted": 0,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-107",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-107C",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "final",
+      "complete": true,
+      "deleted": 0,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "53b2e965c6de85a5edd772aadc77fb86570509e166bbfcfdb67ae4b90a231f8b",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "735f3aba0759c6132411f8e7ceff5475c4c941d1ad829f0a60c9201f96c32018",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "25ffc955c7506dd63e7a98ff49ddc3887177c00dd1cf666ba21c97fca0a02e28",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "17223fe2498658ad2561b8badeabcec1dcffd025742f9333880df2616bb0e66e",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "20384fe98a234a9d08ab1d83a8422c42e52f9654e6e9b85183e4dd8e0f91e42a",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        }
+      ]
+    }
+  ],
+  "totalDeleted": 17,
   "thrown": null,
   "cases": [
     {
@@ -152,7 +711,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 1789696875561,
+          "atMs": 1789698466347,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -212,7 +771,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 1789696875602,
+          "atMs": 1789698466389,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -312,7 +871,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 1789696875638,
+          "atMs": 1789698466430,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -388,7 +947,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 1789696875711,
+          "atMs": 1789698466502,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -569,7 +1128,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 1789696875795,
+          "atMs": 1789698466581,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -631,7 +1190,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 1789696875918,
+          "atMs": 1789698466701,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -771,27 +1330,27 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 1789696878966,
+          "atMs": 1789698469752,
           "derivedFrom": "first server-backed snapshot"
         },
         {
           "kind": "break-requested",
-          "atMs": 1789696878990,
+          "atMs": 1789698469774,
           "derivedFrom": "collector called disableNetwork"
         },
         {
           "kind": "disconnect",
-          "atMs": 1789696878992,
+          "atMs": 1789698469775,
           "derivedFrom": "listener fell back to the local cache"
         },
         {
           "kind": "resume-requested",
-          "atMs": 1789696878992,
+          "atMs": 1789698469775,
           "derivedFrom": "collector called enableNetwork"
         },
         {
           "kind": "reconnect",
-          "atMs": 1789696878996,
+          "atMs": 1789698469779,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -932,7 +1491,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 1789696884023,
+          "atMs": 1789698474806,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1034,7 +1593,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 1789696889074,
+          "atMs": 1789698479860,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1160,7 +1719,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 1789696892144,
+          "atMs": 1789698482933,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1270,17 +1829,17 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 1789696892212,
+          "atMs": 1789698483007,
           "derivedFrom": "first server-backed snapshot"
         },
         {
           "kind": "disconnect",
-          "atMs": 1789696892267,
+          "atMs": 1789698483062,
           "derivedFrom": "listener fell back to the local cache"
         },
         {
           "kind": "connect",
-          "atMs": 1789696892268,
+          "atMs": 1789698483063,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1362,7 +1921,7 @@
         },
         {
           "listener": "primary",
-          "snapshotKind": "initial",
+          "snapshotKind": "delta",
           "changes": [],
           "docs": [
             "alpha"
@@ -1388,7 +1947,7 @@
         },
         {
           "listener": "primary",
-          "snapshotKind": "initial",
+          "snapshotKind": "delta",
           "changes": [],
           "docs": [
             "alpha"
@@ -1403,6 +1962,7 @@
       "baselineAt": 0,
       "comparedFields": [
         "listener",
+        "snapshotKind",
         "changes",
         "docs",
         "exists",
@@ -1411,7 +1971,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 1789696895351,
+          "atMs": 1789698486146,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1456,6 +2016,7 @@
       "baselineAt": 0,
       "comparedFields": [
         "listener",
+        "snapshotKind",
         "changes",
         "docs",
         "exists",
@@ -1477,117 +2038,117 @@
   "transportTimeline": [
     {
       "kind": "connect",
-      "atMs": 1789696875561,
+      "atMs": 1789698466347,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-101"
     },
     {
       "kind": "connect",
-      "atMs": 1789696875602,
+      "atMs": 1789698466389,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-101C"
     },
     {
       "kind": "connect",
-      "atMs": 1789696875638,
+      "atMs": 1789698466430,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-102"
     },
     {
       "kind": "connect",
-      "atMs": 1789696875711,
+      "atMs": 1789698466502,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-102C"
     },
     {
       "kind": "connect",
-      "atMs": 1789696875795,
+      "atMs": 1789698466581,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-103"
     },
     {
       "kind": "connect",
-      "atMs": 1789696875918,
+      "atMs": 1789698466701,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-103C"
     },
     {
       "kind": "connect",
-      "atMs": 1789696878966,
+      "atMs": 1789698469752,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-104"
     },
     {
       "kind": "break-requested",
-      "atMs": 1789696878990,
+      "atMs": 1789698469774,
       "derivedFrom": "collector called disableNetwork",
       "caseId": "FS-LISTEN-SDK-104"
     },
     {
       "kind": "disconnect",
-      "atMs": 1789696878992,
+      "atMs": 1789698469775,
       "derivedFrom": "listener fell back to the local cache",
       "caseId": "FS-LISTEN-SDK-104"
     },
     {
       "kind": "resume-requested",
-      "atMs": 1789696878992,
+      "atMs": 1789698469775,
       "derivedFrom": "collector called enableNetwork",
       "caseId": "FS-LISTEN-SDK-104"
     },
     {
       "kind": "reconnect",
-      "atMs": 1789696878996,
+      "atMs": 1789698469779,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-104"
     },
     {
       "kind": "connect",
-      "atMs": 1789696884023,
+      "atMs": 1789698474806,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-104C"
     },
     {
       "kind": "connect",
-      "atMs": 1789696889074,
+      "atMs": 1789698479860,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-105"
     },
     {
       "kind": "connect",
-      "atMs": 1789696892144,
+      "atMs": 1789698482933,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-105C"
     },
     {
       "kind": "connect",
-      "atMs": 1789696892212,
+      "atMs": 1789698483007,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-106"
     },
     {
       "kind": "disconnect",
-      "atMs": 1789696892267,
+      "atMs": 1789698483062,
       "derivedFrom": "listener fell back to the local cache",
       "caseId": "FS-LISTEN-SDK-106"
     },
     {
       "kind": "connect",
-      "atMs": 1789696892268,
+      "atMs": 1789698483063,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-106"
     },
     {
       "kind": "connect",
-      "atMs": 1789696895351,
+      "atMs": 1789698486146,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-107"
     }
   ],
   "sourceDigests": {
-    "tools/compat-broad/fs-listen-resume/listen_collector.mjs": "adb77f91071a99de42163b923c8f39696db3991cdb66f7856b00dcc54dfc4d02",
-    "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs": "eab4fff109d97bf356b4b700830eaf524b918cb919e30b9cd186cad4b6b36f00",
-    "tools/compat-broad/fs-listen-resume/cases.py": "565f47291b13acee03de5e3b4ebdfa247a44375e56fc0a30d6b02b7c1de4df6f",
+    "tools/compat-broad/fs-listen-resume/listen_collector.mjs": "cd3b77814645f8b8272a60da32fbc68891858c555a8098bbfcfb0b957f57ac05",
+    "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs": "7d67aaff8408f90edc388054ddbb090a91bd264a941c4f256dff5632d42e8efd",
+    "tools/compat-broad/fs-listen-resume/cases.py": "c6813fd9018d71bb51133b36af1c1dd97eed1e7a8c3197d8f31c53ecea909155",
     "tools/compat-broad/fs-listen-resume/campaign.py": "51face9cc60fb67641b5bafd5a89b82e9282d8e323b98fcd88d960cc9a6af783",
     "tools/compat-broad/fs-listen-resume/observation.py": "ba61cf2161516e79b9678bc8db6dafdda4c6c891763be5496aeb5327a99fb8f2"
   }

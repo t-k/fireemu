@@ -759,13 +759,39 @@ def _ps_field(pid: int, field: str) -> str | None:
     return state.stdout.strip()
 
 
+def _proc_identity(pid: int) -> tuple[str, str] | None:
+    """Read one process's identity from `/proc`, which is exact on Linux.
+
+    `/proc/<pid>/cmdline` holds the argument vector the kernel recorded at `exec`,
+    NUL-separated and never shortened to a terminal width, so it is preferred over `ps`
+    where it exists. An empty read means the process has no argument vector any more,
+    which is what a zombie looks like, and is reported as gone.
+    """
+    entry = Path("/proc") / str(pid)
+    try:
+        command = (entry / "comm").read_text(encoding="utf-8", errors="replace")
+        raw = (entry / "cmdline").read_bytes()
+    except OSError:
+        return None
+    if not raw.strip(b"\x00"):
+        return None
+    arguments = " ".join(
+        part.decode("utf-8", errors="replace")
+        for part in raw.rstrip(b"\x00").split(b"\x00")
+    )
+    return (command.strip(), arguments)
+
+
 def process_identity(pid: int) -> tuple[str, str] | None:
     """Return one live process's command name and arguments, or None if it is gone.
 
-    The two fields are read separately because macOS truncates `comm` to a fixed width,
-    so asking for both at once and splitting on whitespace mixes a cut-off path into the
-    argument vector.
+    The value is whatever this operating system reports, not a rendering of an argument
+    vector: Linux shortens `comm` to 15 characters and reports only the executable's base
+    name, while macOS reports its whole path. Nothing here reconciles those two, because
+    an identity is only ever compared with another identity read the same way.
     """
+    if Path("/proc/self/cmdline").exists():
+        return _proc_identity(pid)
     command = _ps_field(pid, "comm")
     arguments = _ps_field(pid, "args")
     if command is None or arguments is None:
@@ -773,24 +799,60 @@ def process_identity(pid: int) -> tuple[str, str] | None:
     return (command, arguments)
 
 
-def reap_owned_child(process: subprocess.Popen, expected_argv: list[str]) -> str:
+def capture_child_identity(
+    process: subprocess.Popen, settle_seconds: float = 2.0
+) -> tuple[str, str] | None:
+    """Read back what this operating system reports for a child that was just started.
+
+    This is the identity the reaper will later require, so it must be taken from the OS
+    rather than from the argument vector that was requested. `Popen` returns as soon as
+    the child exists, which can be before its `exec` has replaced the image, and in that
+    window the child still carries this process's own argument vector; the capture
+    therefore waits for an identity that differs from this process's own. None means the
+    child was already gone, and the reaper then refuses to signal that PID at all.
+    """
+    own = process_identity(os.getpid())
+    deadline = time.monotonic() + settle_seconds
+    while True:
+        identity = process_identity(process.pid)
+        if identity is None or identity != own:
+            return identity
+        if time.monotonic() >= deadline:
+            return identity
+        time.sleep(0.01)
+
+
+def _has_exited(process: subprocess.Popen) -> bool:
+    """Report whether the child has terminated, reaping it when it has.
+
+    Reaping matters before any identity is read: an exited child that nothing has waited
+    for is a zombie, and a zombie holds its PID while reporting no argument vector.
+    """
+    try:
+        process.wait(timeout=0)
+    except subprocess.TimeoutExpired:
+        return False
+    return True
+
+
+def reap_owned_child(
+    process: subprocess.Popen, spawn_identity: tuple[str, str] | None
+) -> str:
     """Stop the owned instance, verifying identity before each signal and after the last.
 
-    A PID can be reused between the check and the signal, so the command name and the
-    whole argument vector are confirmed against what this process started before anything
-    is sent, and the process is confirmed gone afterwards rather than assumed.
+    A PID can be reused between the check and the signal, so the identity the OS reports
+    now is compared with `spawn_identity`, the identity the same OS reported for this
+    child when it was started. Only that comparison is meaningful: comparing against the
+    requested argument vector made the check platform-dependent and it refused to signal
+    its own child on Linux. The process is confirmed gone afterwards rather than assumed.
     """
-    expected = " ".join(expected_argv)
     for signal_number in (signal.SIGTERM, signal.SIGKILL):
+        if _has_exited(process):
+            break
         identity = process_identity(process.pid)
         if identity is None:
             break
-        command, arguments = identity
-        # The whole argument vector is the real identity check. `comm` is only a sanity
-        # check and is compared as a prefix, because the platform truncates it.
-        if arguments != expected or not (
-            expected_argv[0].startswith(command) or command.startswith(expected_argv[0])
-        ):
+        if identity != spawn_identity:
             return "pid-reused-refusing-to-signal"
         try:
             os.kill(process.pid, signal_number)
@@ -801,6 +863,8 @@ def reap_owned_child(process: subprocess.Popen, expected_argv: list[str]) -> str
             break
         except subprocess.TimeoutExpired:
             continue
+    if _has_exited(process):
+        return "stopped"
     if process_identity(process.pid) is not None:
         return "survived"
     return "stopped"
@@ -842,6 +906,9 @@ def parent(output: Path) -> int:
         str(output),
     ]
     process = subprocess.Popen(argv, cwd=root, env=environment)
+    # Taken now, while the PID is certainly this child's, so a later reap compares two
+    # readings of the same kind instead of guessing how this OS renders an argv.
+    identity = capture_child_identity(process)
     cleanup = "stopped"
     try:
         returncode = process.wait(timeout=CHILD_TIMEOUT_SECONDS)
@@ -849,10 +916,10 @@ def parent(output: Path) -> int:
         # The campaign's own aging can outlast this deadline, so a timeout is a reachable
         # path and must not leave an owned instance running.
         returncode = None
-        cleanup = reap_owned_child(process, argv)
+        cleanup = reap_owned_child(process, identity)
     finally:
         if process.poll() is None:
-            cleanup = reap_owned_child(process, argv)
+            cleanup = reap_owned_child(process, identity)
     if cleanup != "stopped":
         print(f"owned instance cleanup: {cleanup}", file=sys.stderr)
         return 1

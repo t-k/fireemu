@@ -146,26 +146,57 @@ def test_batchwrite_and_grpc_are_excluded_with_a_reason(campaign: dict) -> None:
     assert campaign["operations"] == ["Commit"]
 
 
-def test_local_expectation_records_the_observed_transport_cap(campaign: dict) -> None:
+def test_local_expectation_records_the_implemented_limit(campaign: dict) -> None:
     local = campaign["localExpectation"]
     assert local == LOCAL_EXPECTATION
-    assert local["localEnforcement"] == "transport body cap"
-    assert "MAX_REST_BODY_BYTES" in local["enforcementSource"]
-    assert local["catalogState"] == "unsupported"
+    assert "strict profile" in local["localEnforcement"]
+    assert "API_REQUEST_BYTES" in local["enforcementSource"]
+    assert local["catalogState"] == "implemented"
     assert local["observedProbeOutcomes"]["over"] == "refused"
-    assert local["observedRefusal"]["httpStatus"] == 413
-    assert local["observedRefusal"]["classification"] == "semantic-discrepancy"
+    assert local["observedRefusal"]["httpStatus"] == 400
+    assert local["observedRefusal"]["errorStatus"] == "INVALID_ARGUMENT"
+    assert (
+        local["observedRefusal"]["message"]
+        == "Request payload size exceeds the limit: 10485760 bytes."
+    )
+    assert local["observedRefusal"]["classification"] == "expected"
     assert local["expectedCollectorFailures"] == []
     assert local["expectedCompleted"] is True
     assert local["expectedResourceAbsence"] is True
 
 
-def test_local_expectation_states_the_difference_and_the_pending_lane(
-    campaign: dict,
-) -> None:
+def test_local_agreement_is_not_treated_as_confirmation(campaign: dict) -> None:
+    """The expected production shape is documented, not observed."""
     local = campaign["localExpectation"]
-    assert "400" in local["differenceFromProductionExpectation"]
-    assert local["pendingLimitsImplementation"]
+    assert "does not confirm" in local["differenceFromProductionExpectation"]
+    assert local["classification"] == "local-shape-matches-production-expectation"
+
+
+def test_the_superseded_413_baseline_stays_on_the_record(campaign: dict) -> None:
+    local = campaign["localExpectation"]
+    assert "413" in local["supersededBaseline"]
+    assert local["emulatorProfileRefusal"]["rest"]["httpStatus"] == 413
+    assert (
+        local["emulatorProfileRefusal"]["rest"]["message"] == "request body too large"
+    )
+    assert local["emulatorProfileRefusal"]["grpc"]["errorStatus"] == "OUT_OF_RANGE"
+
+
+def test_the_refusal_is_recorded_per_transport(campaign: dict) -> None:
+    """A reader comparing a production receipt needs status, code and message."""
+    rows = campaign["localExpectation"]["observedRefusalByTransport"]
+    assert set(rows) == {"rest", "grpc"}
+    rest, grpc = rows["rest"], rows["grpc"]
+    assert rest["httpStatus"] == 400
+    assert rest["errorCode"] == 400
+    assert rest["errorStatus"] == "INVALID_ARGUMENT"
+    assert rest["message"] == grpc["message"]
+    # gRPC carries a google.rpc.Code, not an HTTP status.
+    assert grpc["httpStatus"] is None
+    assert grpc["errorCode"] == 3
+    assert grpc["errorStatus"] == "INVALID_ARGUMENT"
+    # This campaign compiles REST bodies only, and the record says so.
+    assert "not this campaign" in grpc["observedBy"]
 
 
 def test_campaign_does_not_authorize_production(campaign: dict) -> None:
@@ -220,10 +251,50 @@ def test_campaign_does_not_authorize_production(campaign: dict) -> None:
             id="partial-readback",
         ),
         pytest.param(
+            lambda c: c["localExpectation"].update(localEnforcement=""),
+            id="local-enforcement-unnamed",
+        ),
+        pytest.param(
+            lambda c: c["localExpectation"].update(catalogState="unsupported"),
+            id="catalog-state-stale",
+        ),
+        pytest.param(
+            lambda c: c["localExpectation"].update(supersededBaseline=""),
+            id="superseded-baseline-dropped",
+        ),
+        pytest.param(
+            lambda c: c["localExpectation"]["observedRefusalByTransport"][
+                "grpc"
+            ].update(httpStatus=400),
+            id="grpc-given-an-http-status",
+        ),
+        pytest.param(
+            lambda c: c["localExpectation"]["observedRefusalByTransport"][
+                "grpc"
+            ].update(errorCode=400),
+            id="grpc-code-not-from-google-rpc",
+        ),
+        pytest.param(
+            lambda c: c["localExpectation"]["observedRefusalByTransport"][
+                "grpc"
+            ].update(observedBy="this campaign"),
+            id="grpc-claimed-as-observed",
+        ),
+        pytest.param(
+            lambda c: c["localExpectation"]["observedRefusalByTransport"][
+                "rest"
+            ].update(message="something else"),
+            id="rest-row-disagrees-with-observation",
+        ),
+        pytest.param(
+            lambda c: c["localExpectation"].pop("observedRefusalByTransport"),
+            id="transports-not-separated",
+        ),
+        pytest.param(
             lambda c: c["localExpectation"].update(
-                localEnforcement="implementation pending"
+                differenceFromProductionExpectation="They match, so production is confirmed."
             ),
-            id="local-enforcement-misreported",
+            id="agreement-read-as-confirmation",
         ),
         pytest.param(
             lambda c: c["localExpectation"].update(expectedCompleted=False),
@@ -235,7 +306,13 @@ def test_campaign_does_not_authorize_production(campaign: dict) -> None:
         ),
         pytest.param(
             lambda c: c["localExpectation"].update(
-                observedRefusal={"httpStatus": 400, "errorCode": 400}
+                observedRefusal={
+                    "httpStatus": 413,
+                    "errorCode": 413,
+                    "errorStatus": "INVALID_ARGUMENT",
+                    "message": "request body too large",
+                    "classification": "expected",
+                }
             ),
             id="local-refusal-code-drift",
         ),
@@ -248,10 +325,6 @@ def test_campaign_does_not_authorize_production(campaign: dict) -> None:
         pytest.param(
             lambda c: c["localExpectation"].update(enforcementSource=""),
             id="enforcement-source-unnamed",
-        ),
-        pytest.param(
-            lambda c: c["localExpectation"].update(pendingLimitsImplementation=""),
-            id="pending-lane-not-recorded",
         ),
         pytest.param(
             lambda c: c["owner"].update(nonce="not-a-nonce"), id="nonce-malformed"

@@ -1,6 +1,6 @@
 {
-  "artifactSha256": "e34e778bc3fe0419b7e6437a7623805fbea49af68baa40b90de928ee6211aea9",
-  "campaignDigest": "5c82758de731977c9ba7a9438ae01e3473237630e6fc3c3a4fa093a5390f2eda",
+  "artifactSha256": "e95e323ec078e48d0e738c14e77c83ee06b569e65dd93466c77bdba024f0c341",
+  "campaignDigest": "89b5b008014abf9ca48b99df056913e3d2573fdcb4b6487ea4a0c0cda1319a16",
   "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
   "cases": [
     {
@@ -35,7 +35,7 @@
   "database": "(default)",
   "formalCompatibilityClaim": false,
   "kind": "fs-request-bytes-local-shadow-v1",
-  "nonce": "8cae96494c06452293d52ef556d73ce5",
+  "nonce": "14a76ead49f448b8834bbb2fa311b739",
   "note": "Owned local artifact shadow. No production request was sent, no credential was used and no parent group is promoted. The raw REST body byte count remains an observation hypothesis about production's enforcement metric.",
   "observation": {
     "canonicalRequestBytesMeasuredLocally": true,
@@ -50,7 +50,7 @@
       "errorStatus": "INVALID_ARGUMENT",
       "httpStatus": 400
     },
-    "planDigest": "91b390d82ec47cb46724431101ac56799aadc961166650e731e089e6a90b8e57",
+    "planDigest": "02503e17146a48bd41eeac12f080052f56bbe4bcd3e4d8f0028520b2d51436f3",
     "productionExecuted": false,
     "rawHttpMetricStatus": "observation hypothesis",
     "recoveryRowCount": 153,
@@ -58,7 +58,7 @@
     "resourceAbsence": true,
     "rowCount": 105
   },
-  "planDigest": "91b390d82ec47cb46724431101ac56799aadc961166650e731e089e6a90b8e57",
+  "planDigest": "02503e17146a48bd41eeac12f080052f56bbe4bcd3e4d8f0028520b2d51436f3",
   "probeOutcomes": [
     {
       "complete": true,
@@ -70,7 +70,7 @@
       "requestBytes": 10485759,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "ccd2ab3cf83bb3d8cc2bdc05bb0ed29be5fcc237809cf1c6794876831583ce4c"
+      "responseSha256": "90b7862e377f236190bb46044ba15eee97b0da68ea88707dfd3329e200650598"
     },
     {
       "complete": true,
@@ -82,7 +82,7 @@
       "requestBytes": 10485760,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "615200a4bd052065bc77f896f39ae3d8dae4ef03a362bdb11f08d80d15716f6f"
+      "responseSha256": "e3a88e2307efc0bdb1b44b9aa64413ade8a646a0029255321c4cf8b78bb6782a"
     },
     {
       "complete": true,
@@ -102,28 +102,28 @@
   "rawHttpMetricStatus": "observation hypothesis",
   "recordingComplete": true,
   "runtime": {
-    "artifactSha256": "e34e778bc3fe0419b7e6437a7623805fbea49af68baa40b90de928ee6211aea9",
+    "artifactSha256": "e95e323ec078e48d0e738c14e77c83ee06b569e65dd93466c77bdba024f0c341",
     "runtimeInputCount": 410,
     "runtimeInputsClean": true,
-    "runtimeInputsDigest": "fdb8370e3bf8f77cc43494ee18a7112869a056aabb2678d4675c2c67b21455d4",
-    "sourceCommit": "d4751d7d370fbe119605ccaabb3acefe29f401dd",
+    "runtimeInputsDigest": "a0fccda62045c50889dc6f5bf3b64656954576e4ddda66d13fcf0d7760f4b689",
+    "sourceCommit": "02e1a51c31580de493ee2d103d03c1d06231612d",
     "sourceRoot": "repository-root"
   },
   "shadow": {
     "classification": "local-shape-matches-production-expectation",
     "differenceMasked": false,
-    "enforcementSource": "crates/fireemu-adapter-grpc/src/serve.rs, MAX_REST_BODY_BYTES = 10 * 1024 * 1024",
-    "expectedClassification": "local-boundary-enforced-shape-differs",
+    "enforcementSource": "crates/fireemu-adapter-grpc/src/serve.rs, API_REQUEST_BYTES = 10 * 1024 * 1024, refused by api_request_too_large()",
+    "expectedClassification": "local-shape-matches-production-expectation",
     "expectedRefusal": {
-      "classification": "semantic-discrepancy",
-      "errorCode": 413,
+      "classification": "expected",
+      "errorCode": 400,
       "errorStatus": "INVALID_ARGUMENT",
-      "httpStatus": 413,
-      "message": "request body too large"
+      "httpStatus": 400,
+      "message": "Request payload size exceeds the limit: 10485760 bytes."
     },
     "formalCompatibilityClaim": false,
-    "localEnforcement": "transport body cap",
-    "matchesBaseline": false,
+    "localEnforcement": "each transport's decode boundary, strict profile",
+    "matchesBaseline": true,
     "observedFailures": [],
     "overRefusal": {
       "classification": "expected",
@@ -134,11 +134,11 @@
     "productionExecuted": false,
     "productionRefusalExpectation": "400 INVALID_ARGUMENT",
     "resourceAbsence": true,
-    "summary": "The local runtime refused the over-boundary Commit with a typed 400. The limits-layer implementation has landed and this baseline is stale.",
+    "summary": "The limits layer refused the over-boundary Commit at exactly the 10 MiB boundary with the status, code and message this campaign expects of production. That expectation is documented rather than observed, so this is agreement with it, not confirmation of it.",
     "untypedOverRefusal": null
   },
-  "sourceDigestAfter": "9a39c82b75a146ef4cbe9901924d3a16abeb2b16f1043cff65b032f8716a6364",
-  "sourceDigestBefore": "9a39c82b75a146ef4cbe9901924d3a16abeb2b16f1043cff65b032f8716a6364",
+  "sourceDigestAfter": "0e8999e9b59429eb17739628c7e1e467c22c9543ecc55699b643ef21884c3cc4",
+  "sourceDigestBefore": "0e8999e9b59429eb17739628c7e1e467c22c9543ecc55699b643ef21884c3cc4",
   "stateValidation": true,
   "target": "owned-local-artifact"
 }

@@ -69,16 +69,24 @@ an uncertain Commit whose residue cleanup detects but cannot remove.
 fireemu artifact built from this checkout, through the existing `broad.run`
 artifact builder and process supervisor.
 
-The observed local baseline is that the boundary **is** enforced, by the REST
-transport body cap `MAX_REST_BODY_BYTES` in
-`crates/fireemu-adapter-grpc/src/serve.rs`, not by the limits layer. The over
-probe is refused with HTTP 413 and `{"error":{"code":413,"message":"request body
-too large","status":"INVALID_ARGUMENT"}}`. `classify_local_result` reports that
-as `local-boundary-enforced-shape-differs`, because the boundary agrees with
-production while the refusal code does not. A typed 400 is
-`local-shape-matches-production-expectation` and means the limits-layer
-implementation landed; an accepted over probe is `local-boundary-not-enforced`
-and means the cap was removed or raised. Any other outcome is a shadow failure.
+The observed local baseline is that the boundary **is** enforced and the strict
+profile's refusal carries the same status, code and message this campaign
+expects of production: HTTP 400 with
+`{"error":{"code":400,"message":"Request payload size exceeds the limit: 10485760 bytes.","status":"INVALID_ARGUMENT"}}`.
+The bound is applied at each transport's decode boundary from
+`API_REQUEST_BYTES` in `crates/fireemu-adapter-grpc/src/serve.rs`, before the
+request is parsed. The `emulator` profile keeps the legacy HTTP 413
+`request body too large`; the boundary is identical under both and only the
+shape differs.
+
+That agreement is not confirmation. The expected production shape is documented
+rather than observed, which is what this campaign exists to settle, so
+`classify_local_result` reports
+`local-shape-matches-production-expectation` and says so in its summary. A
+legacy 413 from a strict-profile build is `local-boundary-enforced-shape-differs`
+and now means the implemented shape was lost. An accepted over probe is
+`local-boundary-not-enforced`. A refusal without a typed envelope is
+`local-untyped-transport-refusal`. Anything else is a shadow failure.
 Neither module authorizes production execution.
 
 Run the offline tests with:

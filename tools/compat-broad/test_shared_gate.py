@@ -690,3 +690,91 @@ def test_a_malformed_per_request_reservation_is_refused(tmp_path, seconds):
     value["requestSeconds"] = seconds
     with pytest.raises(ValueError, match="invalid shared allocation"):
         create(tmp_path / "gate", value)
+
+
+def split_plan(upload=60.0, small=2.0):
+    """One job whose requests are two populations: big uploads and small reads.
+
+    No single per-request reservation is honest here. Sixty seconds cannot fit
+    the cleanup slots inside any admissible recovery window, and the small value
+    would under-reserve the upload by more than an order of magnitude.
+    """
+    op = lambda key: {
+        "service": "firestore",
+        "path": "/v1/" + key,
+        "body": None,
+        "method": "GET",
+        "privileged": True,
+        "form": False,
+    }
+    schedule = [
+        {"phase": "observation", "index": 0, "seconds": small},
+        {"phase": "observation", "index": 1, "seconds": upload},
+        {"phase": "recovery", "index": 0, "seconds": small},
+        {"phase": "recovery", "index": 1, "seconds": small},
+        {"phase": "recovery", "index": 2, "seconds": small},
+    ]
+    return {
+        "contract": "shared-local-v1",
+        "wallSeconds": 600,
+        "recoverySeconds": 20,
+        "observationRequests": 2,
+        "costMicrousd": 10000,
+        "requestCostMicrousd": 1,
+        "intervalSeconds": 0.25,
+        "requestSeconds": upload,
+        "jobSlots": 1,
+        "jobs": {
+            "probe": {
+                "resources": ["probe"],
+                "observation": [op("probe"), op("probe")],
+                "recovery": [op("probe")] * 3,
+                "schedule": schedule,
+            }
+        },
+    }
+
+
+def test_a_slot_may_reserve_its_own_seconds(tmp_path):
+    """Three cleanup reads at two seconds fit a window the upload bound cannot."""
+    create(tmp_path / "split", split_plan())
+    bare = split_plan()
+    for entry in bare["jobs"]["probe"]["schedule"]:
+        del entry["seconds"]
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "plan-wide", bare)
+
+
+@pytest.mark.parametrize("seconds", [0, -1, "2", None, float("inf"), True])
+def test_a_malformed_slot_reservation_is_refused(tmp_path, seconds):
+    value = split_plan()
+    value["jobs"]["probe"]["schedule"][0]["seconds"] = seconds
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "gate", value)
+
+
+def test_a_dispatch_reserves_the_seconds_its_own_slot_declared(tmp_path):
+    """The deadline check uses the slot's bound, not one number for the campaign."""
+    value = split_plan()
+    value["wallSeconds"] = 120
+    value["recoverySeconds"] = 20
+    create(tmp_path / "fits", value)
+    gate = Gate(tmp_path / "fits", "probe")
+    gate.claim()
+    operations = value["jobs"]["probe"]["observation"]
+    gate.dispatch(operations[0], False, _absent)
+    assert gate.snapshot()["jobs"]["probe"]["scheduleDone"] == 1
+
+    oversized = split_plan(upload=200.0)
+    oversized["wallSeconds"] = 120
+    oversized["recoverySeconds"] = 20
+    # The plan-wide bound stays admissible; only this one slot reserves more
+    # than the observation window can give it.
+    oversized["requestSeconds"] = 60.0
+    create(tmp_path / "oversized", oversized)
+    other = Gate(tmp_path / "oversized", "probe")
+    other.claim()
+    other.dispatch(oversized["jobs"]["probe"]["observation"][0], False, _absent)
+    with pytest.raises(ValueError, match="capacity"):
+        other.dispatch(oversized["jobs"]["probe"]["observation"][1], False, _absent)
+    assert other.snapshot()["jobs"]["probe"]["scheduleDone"] == 1

@@ -52,6 +52,19 @@ def _valid_request_seconds(plan, policy):
     )
 
 
+def slot_seconds(entry, default):
+    """The reservation for one scheduled slot.
+
+    A campaign whose requests are not one population declares the bound per
+    slot: a ten-mebibyte upload and a small cleanup read cannot share one
+    honest upper bound, and a single plan-wide value would either under-reserve
+    the upload or refuse the plan outright.
+    """
+    # A present-but-malformed value, None included, is refused by `create`, so
+    # by the time a slot is dispatched the default only stands in for absence.
+    return entry.get("seconds", default)
+
+
 def job_schedule(job):
     """The campaign-declared dispatch order for one job, or None.
 
@@ -62,16 +75,29 @@ def job_schedule(job):
     return job.get("schedule")
 
 
+def _valid_slot_seconds(entry):
+    if "seconds" not in entry:
+        return True
+    declared = entry["seconds"]
+    return (
+        type(declared) in (int, float)
+        and not isinstance(declared, bool)
+        and math.isfinite(declared)
+        and declared > 0
+    )
+
+
 def _valid_schedule(job):
     schedule = job_schedule(job)
     if schedule is None:
         return True
     if not isinstance(schedule, list) or any(
         not isinstance(entry, dict)
-        or set(entry) != {"phase", "index"}
+        or not {"phase", "index"} <= set(entry) <= {"phase", "index", "seconds"}
         or entry["phase"] not in PHASES
         or type(entry["index"]) is not int
         or isinstance(entry["index"], bool)
+        or not _valid_slot_seconds(entry)
         for entry in schedule
     ):
         return False
@@ -168,6 +194,23 @@ def _save(path, state):
         os.close(fd)
 
 
+def _recovery_time(plan, seconds):
+    """Time reserved for cleanup, taken per slot wherever the campaign declared one."""
+    interval = plan["intervalSeconds"]
+    total = 0
+    for job in plan["jobs"].values():
+        schedule = job_schedule(job)
+        if schedule is None:
+            total += len(job["recovery"]) * (seconds + interval)
+            continue
+        total += sum(
+            slot_seconds(entry, seconds) + interval
+            for entry in schedule
+            if entry["phase"] == "recovery"
+        )
+    return total
+
+
 def create(path, plan):
     path = Path(path)
     policy = _stream_policy(plan)
@@ -182,7 +225,7 @@ def create(path, plan):
     resources = [r for job in jobs.values() for r in job["resources"]]
     recovery = sum(len(job["recovery"]) for job in jobs.values())
     management_recovery = plan.get("management", {}).get("recovery", [])
-    recovery_time = recovery * (seconds + plan["intervalSeconds"]) + sum(
+    recovery_time = _recovery_time(plan, seconds) + sum(
         item["timeout"] + plan["intervalSeconds"] for item in management_recovery
     )
     recovery += len(management_recovery)
@@ -488,6 +531,8 @@ class Gate:
                     raise ValueError("dispatch outside the frozen execution schedule")
             policy = _stream_policy(plan)
             seconds = request_seconds(plan, policy)
+            if schedule is not None:
+                seconds = slot_seconds(slot, seconds)
             if policy:
                 expected, resource, skip = policy.resolve(state, self.job, recovery)
                 source = "stream-guard" if skip else None

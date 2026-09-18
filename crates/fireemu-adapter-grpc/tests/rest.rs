@@ -2156,6 +2156,274 @@ fn transaction_option_accepts_concurrency_mode_enum() {
     }
 }
 
+/// The same refusal for a `bytesValue` inside a written document. Production names the
+/// write, the document, the map entry and the proto value field:
+/// `Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64
+/// decoding failed for "!!!"` (conformance/firestore-production-matrix.json,
+/// errors/rest-shapes, `write-bad-base64`, recorded against production 2026-09-07; the
+/// probe writes a single field `a`).
+#[test]
+fn malformed_bytes_value_is_refused_in_productions_wording() {
+    let s = state(None);
+    let (status, response) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{
+            "update": {
+                "name": format!("{DOCS}/err/x"),
+                "fields": {"a": {"bytesValue": "!!!"}}
+            }
+        }]}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["status"], "INVALID_ARGUMENT",
+        "{response}"
+    );
+    assert_eq!(
+        response["error"]["message"],
+        concat!(
+            "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), ",
+            "Base64 decoding failed for \"!!!\""
+        ),
+        "{response}"
+    );
+}
+
+/// The write index is the position in the request, not a constant.
+#[test]
+fn a_malformed_bytes_value_names_the_write_it_came_from() {
+    let s = state(None);
+    let good = json!({
+        "update": {"name": format!("{DOCS}/err/first"), "fields": {"a": {"integerValue": "1"}}}
+    });
+    let bad = json!({
+        "update": {"name": format!("{DOCS}/err/second"), "fields": {"a": {"bytesValue": "!!!"}}}
+    });
+    let (status, response) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [good, bad]}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        concat!(
+            "Invalid value at 'writes[1].update.fields[0].value.bytes_value' (TYPE_BYTES), ",
+            "Base64 decoding failed for \"!!!\""
+        ),
+        "{response}"
+    );
+}
+
+/// Production has not been recorded on a nested value, so these paths continue the recorded
+/// form with the proto spelling of the nested messages. They are an inference, and this test
+/// is where a production observation would land.
+#[test]
+fn a_nested_malformed_bytes_value_continues_the_recorded_path_form() {
+    let s = state(None);
+    for (field, expected) in [
+        (
+            json!({"arrayValue": {"values": [{"integerValue": "1"}, {"bytesValue": "!!!"}]}}),
+            "writes[0].update.fields[0].value.array_value.values[1].bytes_value",
+        ),
+        (
+            json!({"mapValue": {"fields": {"inner": {"bytesValue": "!!!"}}}}),
+            "writes[0].update.fields[0].value.map_value.fields[0].value.bytes_value",
+        ),
+    ] {
+        let (status, response) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:commit"),
+            json!({"writes": [{
+                "update": {"name": format!("{DOCS}/err/x"), "fields": {"a": field}}
+            }]}),
+        );
+        assert_eq!(status, 400, "{response}");
+        assert_eq!(
+            response["error"]["message"],
+            format!(
+                "Invalid value at '{expected}' (TYPE_BYTES), Base64 decoding failed for \"!!!\""
+            ),
+            "{response}"
+        );
+    }
+}
+
+/// A document written through the REST document routes rather than a commit. The request
+/// message names the document `document`, which production has not been recorded on.
+#[test]
+fn a_malformed_bytes_value_in_a_patched_document_names_the_document_field() {
+    let s = state(None);
+    let (status, response) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/err/x"),
+        json!({"fields": {"a": {"bytesValue": "!!!"}}}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        concat!(
+            "Invalid value at 'document.fields[0].value.bytes_value' (TYPE_BYTES), ",
+            "Base64 decoding failed for \"!!!\""
+        ),
+        "{response}"
+    );
+}
+
+/// A transform carries values too. Unrecorded, so the path continues the same proto form.
+#[test]
+fn a_malformed_bytes_value_in_a_transform_names_the_transform() {
+    let s = state(None);
+    let (status, response) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{
+            "transform": {
+                "document": format!("{DOCS}/err/x"),
+                "fieldTransforms": [{
+                    "fieldPath": "a",
+                    "appendMissingElements": {"values": [{"bytesValue": "!!!"}]}
+                }]
+            }
+        }]}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        concat!(
+            "Invalid value at 'writes[0].transform.field_transforms[0]",
+            ".append_missing_elements.values[0].bytes_value' (TYPE_BYTES), ",
+            "Base64 decoding failed for \"!!!\""
+        ),
+        "{response}"
+    );
+}
+
+/// A known difference from production, pinned so it is not mistaken for correct. The map
+/// entry index is the position among the parsed `fields`, and this parser holds them sorted
+/// by key, while production indexes the entries in the order the request spelled them. The
+/// two agree for the single-field document production was recorded on, and disagree here:
+/// production would name `fields[1]` for `a`, which is written second.
+#[test]
+fn the_map_entry_index_follows_this_parsers_field_order() {
+    let s = state(None);
+    let (status, response) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{
+            "update": {
+                "name": format!("{DOCS}/err/x"),
+                "fields": {"z": {"integerValue": "1"}, "a": {"bytesValue": "!!!"}}
+            }
+        }]}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        concat!(
+            "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), ",
+            "Base64 decoding failed for \"!!!\""
+        ),
+        "{response}"
+    );
+}
+
+/// Production refuses an undecodable `bytes` field by naming the request field, its proto
+/// type and the offending value, rather than with a bare decoder message:
+/// `Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for "not base64!"`
+/// (conformance/firestore-production-matrix.json, transactions/lifecycle,
+/// `commit-with-malformed-transaction`, recorded against production 2026-09-07).
+#[test]
+fn malformed_transaction_token_is_refused_in_productions_wording() {
+    let s = state(None);
+    let expected = concat!(
+        "Invalid value at 'transaction' (TYPE_BYTES), ",
+        "Base64 decoding failed for \"not base64!\""
+    );
+    for (path, body) in [
+        (
+            format!("{DOCS}:commit"),
+            json!({"writes": [], "transaction": "not base64!"}),
+        ),
+        (
+            format!("{DOCS}:rollback"),
+            json!({"transaction": "not base64!"}),
+        ),
+        (
+            format!("{DOCS}:runQuery"),
+            json!({"structuredQuery": {"from": [{"collectionId": "tx"}]}, "transaction": "not base64!"}),
+        ),
+        (
+            format!("{DOCS}:batchGet"),
+            json!({"documents": [format!("{DOCS}/tx/third")], "transaction": "not base64!"}),
+        ),
+    ] {
+        let (status, response) = call(&s, "POST", &path, body);
+        assert_eq!(status, 400, "{path}: {response}");
+        assert_eq!(response["error"]["status"], "INVALID_ARGUMENT", "{path}");
+        assert_eq!(response["error"]["message"], expected, "{path}");
+    }
+}
+
+/// The same field carried as a query parameter on the two read routes that accept one.
+#[test]
+fn malformed_transaction_query_parameter_is_refused_in_productions_wording() {
+    let s = state(None);
+    let expected = concat!(
+        "Invalid value at 'transaction' (TYPE_BYTES), ",
+        "Base64 decoding failed for \"not base64!\""
+    );
+    for path in [
+        format!("{DOCS}/tx/third?transaction=not%20base64!"),
+        format!("{DOCS}/tx?transaction=not%20base64!"),
+    ] {
+        let (status, response) = call(&s, "GET", &path, Value::Null);
+        assert_eq!(status, 400, "{path}: {response}");
+        assert_eq!(response["error"]["status"], "INVALID_ARGUMENT", "{path}");
+        assert_eq!(response["error"]["message"], expected, "{path}");
+    }
+}
+
+/// `retryTransaction` is the sibling `bytes` field of the same request family. Production has
+/// not been observed on it, so the wording is the observed `transaction` shape with the proto
+/// field path this parser is given; the path segment naming follows production's own observed
+/// use of proto field names (`writes[0].update.fields[0].value.bytes_value` in the same
+/// recorded matrix, errors/rest-shapes).
+#[test]
+fn malformed_retry_transaction_token_is_refused_in_productions_wording() {
+    let s = state(None);
+    for (path, body, field) in [
+        (
+            format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readWrite": {"retryTransaction": "not base64!"}}}),
+            "options.read_write.retry_transaction",
+        ),
+        (
+            format!("{DOCS}:batchGet"),
+            json!({
+                "documents": [format!("{DOCS}/tx/third")],
+                "newTransaction": {"readWrite": {"retryTransaction": "not base64!"}}
+            }),
+            "new_transaction.read_write.retry_transaction",
+        ),
+    ] {
+        let expected = format!(
+            "Invalid value at '{field}' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+        );
+        let (status, response) = call(&s, "POST", &path, body);
+        assert_eq!(status, 400, "{path}: {response}");
+        assert_eq!(response["error"]["status"], "INVALID_ARGUMENT", "{path}");
+        assert_eq!(response["error"]["message"], expected, "{path}");
+    }
+}
+
 #[test]
 fn begin_transaction_accepts_request_options_with_request_tags() {
     let s = state(None);
@@ -2827,7 +3095,8 @@ fn rest_validation_codes_follow_production() {
     assert_eq!(status, 404, "{body}");
     assert_eq!(body["error"]["status"], "NOT_FOUND", "{body}");
     assert_eq!(
-        body["error"]["message"], "The database Upper does not exist for project demo-app",
+        body["error"]["message"],
+        missing_database_message("Upper"),
         "{body}"
     );
 
@@ -3630,4 +3899,90 @@ fn explain_rest_name_scans_report_production_plan_billing_and_protojson_defaults
             );
         }
     }
+}
+
+/// The message production answers on the data plane for a database that was never created.
+/// Recorded from the oracle project in `conformance/firestore-production-matrix.json`
+/// (`emulator/routes#named-database-document`), trailing space included.
+fn missing_database_message(database: &str) -> String {
+    format!(
+        "The database {database} does not exist for project demo-app Please visit \
+         https://console.cloud.google.com/datastore/setup?project=demo-app to add a Cloud \
+         Datastore or Cloud Firestore database. "
+    )
+}
+
+#[test]
+fn every_data_plane_surface_refuses_a_database_that_was_never_created() {
+    // Production refuses a request against a database `databases.create` was never called
+    // for before it considers the document; fireemu materialized it on first touch.
+    let s = state(None);
+    let docs = "/v1/projects/demo-app/databases/never-created/documents";
+    let document = "projects/demo-app/databases/never-created/documents/c/d";
+    let expected = missing_database_message("never-created");
+    let write = json!({"writes": [{"update": {"name": document, "fields": {}}}]});
+    for (method, path, body) in [
+        ("GET", format!("{docs}/c/d"), Value::Null),
+        ("GET", format!("{docs}/c"), Value::Null),
+        (
+            "POST",
+            format!("{docs}/c?documentId=x"),
+            json!({"fields": {}}),
+        ),
+        ("PATCH", format!("{docs}/c/d"), json!({"fields": {}})),
+        ("DELETE", format!("{docs}/c/d"), Value::Null),
+        ("POST", format!("{docs}:commit"), write.clone()),
+        ("POST", format!("{docs}:batchWrite"), write),
+        (
+            "POST",
+            format!("{docs}:batchGet"),
+            json!({"documents": [document]}),
+        ),
+        (
+            "POST",
+            format!("{docs}:runQuery"),
+            json!({"structuredQuery": {"from": [{"collectionId": "c"}]}}),
+        ),
+        (
+            "POST",
+            format!("{docs}:runAggregationQuery"),
+            json!({"structuredAggregationQuery": {
+                "structuredQuery": {"from": [{"collectionId": "c"}]},
+                "aggregations": [{"alias": "n", "count": {}}]
+            }}),
+        ),
+        ("POST", format!("{docs}:beginTransaction"), json!({})),
+        ("POST", format!("{docs}:listCollectionIds"), json!({})),
+    ] {
+        let (status, body) = call(&s, method, &path, body);
+        assert_eq!(status, 404, "{method} {path}: {body}");
+        assert_eq!(
+            body["error"]["status"], "NOT_FOUND",
+            "{method} {path}: {body}"
+        );
+        assert_eq!(
+            body["error"]["message"], expected,
+            "{method} {path}: {body}"
+        );
+    }
+}
+
+#[test]
+fn the_default_database_is_reachable_without_having_been_created() {
+    // Every project has `(default)`: the refusal is for named databases only.
+    let s = state(None);
+    let (status, body) = call(&s, "GET", &format!("{DOCS}/c/d"), Value::Null);
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "Document \"projects/demo-app/databases/(default)/documents/c/d\" not found.",
+        "{body}"
+    );
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}/c?documentId=d"),
+        json!({"fields": {}}),
+    );
+    assert_eq!(status, 200, "{body}");
 }

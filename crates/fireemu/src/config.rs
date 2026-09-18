@@ -18,9 +18,10 @@ use serde_json::{Map, Value};
 ///
 /// The two profiles are declared in `spec/compatibility/contract.json`; this enum is the
 /// half the daemon executes. The keys a profile only *declares* stay declared: what the
-/// runtime derives from it is [`Self::index_policy`], [`Self::enforce_limits`] and
-/// [`Self::token_acceptance`]. The index policy has no configuration key of its own and
-/// follows the profile; `firestore.enforceLimits` may still override its default.
+/// runtime derives from it is [`Self::index_policy`], [`Self::enforce_limits`],
+/// [`Self::token_acceptance`] and [`Self::implicit_database_creation`]. The index policy has
+/// no configuration key of its own and follows the profile; `firestore.enforceLimits` may
+/// still override its default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CompatibilityProfile {
     /// Reproduce the behaviour the pinned Local Emulator Suite ships, including its
@@ -266,6 +267,16 @@ impl CompatibilityProfile {
             Self::Emulator => TokenAcceptance::EmulatorMock,
             Self::Strict => TokenAcceptance::Verified,
         }
+    }
+
+    /// Whether a Firestore data-plane request against a database nothing created materializes
+    /// it. The official emulator serves any syntactically valid database id without a
+    /// `databases.create`, so the profile that reproduces it does too; production answers
+    /// `NOT_FOUND` until the database is created, which is what `strict` answers. The default
+    /// database and the databases the configuration declares exist under both.
+    #[must_use]
+    pub const fn implicit_database_creation(self) -> bool {
+        matches!(self, Self::Emulator)
     }
 }
 
@@ -902,7 +913,8 @@ fn parse_auth_quota_simulation(
 #[allow(clippy::struct_excessive_bools)] // independent switches, each read on its own
 pub struct RuntimeConfig {
     /// Compatibility profile (`profile`). It sets the defaults of [`Self::index_policy`],
-    /// [`Self::enforce_limits`] and [`Self::token_acceptance`]; an explicit key wins.
+    /// [`Self::enforce_limits`], [`Self::token_acceptance`] and
+    /// [`Self::implicit_database_creation`]; an explicit key wins.
     pub profile: CompatibilityProfile,
     /// Firestore gRPC bind address.
     pub firestore_addr: String,
@@ -923,6 +935,10 @@ pub struct RuntimeConfig {
     /// How a caller's ID token is verified on the Firestore and Storage Rules surfaces
     /// (profile-derived; there is no key of its own).
     pub token_acceptance: TokenAcceptance,
+    /// Whether a Firestore data-plane request materializes a database nothing created, the
+    /// way the official emulator does, or is refused with production's `NOT_FOUND`
+    /// (profile-derived; there is no key of its own).
+    pub implicit_database_creation: bool,
     /// Only `demo-` project IDs are accepted.
     pub require_demo_prefix: bool,
     /// Initial virtual clock instant.
@@ -1227,6 +1243,7 @@ impl Default for RuntimeConfig {
             index_policy: profile.index_policy(),
             enforce_limits: profile.enforce_limits(),
             token_acceptance: profile.token_acceptance(),
+            implicit_database_creation: profile.implicit_database_creation(),
             require_demo_prefix: true,
             clock_start: LogicalInstant::from_unix_seconds(1_788_004_860),
             clock_start_pinned: false,
@@ -2569,6 +2586,7 @@ impl RuntimeConfig {
         self.index_policy = profile.index_policy();
         self.enforce_limits = profile.enforce_limits();
         self.token_acceptance = profile.token_acceptance();
+        self.implicit_database_creation = profile.implicit_database_creation();
     }
 
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
@@ -3414,19 +3432,22 @@ mod tests {
         assert_eq!(RuntimeConfig::default().profile, default.profile);
 
         // emulator: the pinned official Firestore emulator checks no composite index, does
-        // not refuse a query over a Standard limit, and admits the mock tokens
-        // @firebase/rules-unit-testing mints.
+        // not refuse a query over a Standard limit, admits the mock tokens
+        // @firebase/rules-unit-testing mints, and serves any syntactically valid database id
+        // without a create.
         let emulator = with_profile(json!({"profile": "emulator"})).unwrap();
         assert_eq!(emulator.profile, CompatibilityProfile::Emulator);
         assert_eq!(emulator.index_policy, IndexValidationPolicy::Emulator);
         assert!(!emulator.enforce_limits);
         assert_eq!(emulator.token_acceptance, TokenAcceptance::EmulatorMock);
+        assert!(emulator.implicit_database_creation);
 
         // strict: every one of those becomes production's refusal.
         let strict = with_profile(json!({"profile": "strict"})).unwrap();
         assert_eq!(strict.index_policy, IndexValidationPolicy::Production);
         assert!(strict.enforce_limits);
         assert_eq!(strict.token_acceptance, TokenAcceptance::Verified);
+        assert!(!strict.implicit_database_creation);
     }
 
     #[test]

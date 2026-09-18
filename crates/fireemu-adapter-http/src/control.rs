@@ -304,42 +304,55 @@ pub const RESOURCES_SUFFIX: &str = "/resources";
 /// The quiescence assertion on the same report.
 pub const RESOURCES_ASSERT_SUFFIX: &str = "/resources:assertQuiescent";
 
+/// Where the Security Rules request trace is served. Privileged for every method like the
+/// resource report: the trace carries what every expression evaluated to, including the
+/// subject of `request.auth` and the document fields a rule read, for every request the
+/// daemon decided.
+pub const RULES_REQUESTS_SUFFIX: &str = "/rules/requests";
+
 /// Whether a response to `path` must carry `Cache-Control: no-store`.
 #[must_use]
 pub fn is_no_store_path(path: &str) -> bool {
     let path = path.split('?').next().unwrap_or(path);
     path.starts_with("/v1/sessions/")
-        && (path.ends_with(APP_CHECK_OBSERVATIONS_SUFFIX) || is_resources_path(path))
+        && (path.ends_with(APP_CHECK_OBSERVATIONS_SUFFIX)
+            || is_resources_path(path)
+            || is_rules_requests_path(path))
 }
 
-/// The resource report is privileged for pages on every method (see [`RESOURCES_SUFFIX`]);
-/// this check is repeated after the query string is stripped so it cannot depend on the
-/// browser guard's spelling alone.
-fn resources_guard(
+/// The diagnostics routes are privileged for pages on every method, read included (see
+/// [`RESOURCES_SUFFIX`] and [`RULES_REQUESTS_SUFFIX`]); this check is repeated after the
+/// query string is stripped so it cannot depend on the browser guard's spelling alone.
+fn diagnostics_guard(
     state: &ControlState,
     path: &str,
     headers: &RequestHeaders,
 ) -> Option<JsonResponse> {
-    if !is_resources_path(path) || headers.origin.is_none() {
+    let refusal = if is_resources_path(path) {
+        "CONTROL_TOKEN_REQUIRED : resource diagnostics need Authorization: Bearer <control token> on every method"
+    } else if is_rules_requests_path(path) {
+        "CONTROL_TOKEN_REQUIRED : the Security Rules request trace needs Authorization: Bearer <control token> on every method"
+    } else {
         return None;
-    }
+    };
+    headers.origin.as_ref()?;
     let presented = headers
         .authorization
         .as_deref()
         .and_then(|a| a.strip_prefix("Bearer "))
         .map(str::trim);
-    (!token_matches(presented, &state.control_token)).then(|| {
-        error(
-            403,
-            "CONTROL_TOKEN_REQUIRED : resource diagnostics need Authorization: Bearer <control token> on every method",
-        )
-    })
+    (!token_matches(presented, &state.control_token)).then(|| error(403, refusal))
 }
 
 /// Whether a query-stripped path is one of the resource diagnostics routes.
 fn is_resources_path(path: &str) -> bool {
     path.starts_with("/v1/sessions/")
         && (path.ends_with(RESOURCES_SUFFIX) || path.ends_with(RESOURCES_ASSERT_SUFFIX))
+}
+
+/// Whether a query-stripped path is the Security Rules request trace route.
+fn is_rules_requests_path(path: &str) -> bool {
+    path.starts_with("/v1/sessions/") && path.ends_with(RULES_REQUESTS_SUFFIX)
 }
 
 fn error(status: u16, message: &str) -> JsonResponse {
@@ -460,7 +473,7 @@ pub fn handle_with(
         return refusal;
     }
     let path = path.split('?').next().unwrap_or(path);
-    if let Some(refusal) = resources_guard(state, path, headers) {
+    if let Some(refusal) = diagnostics_guard(state, path, headers) {
         return refusal;
     }
     match (method, path) {
@@ -561,18 +574,27 @@ pub fn handle_with(
 /// (`RULES-PARITY-04`).
 ///
 /// This is fireemu's own route rather than an official one, and it carries the guard every
-/// privileged control route carries. What it publishes is the same class of information the
+/// privileged control route carries: a page needs the control token for it on every method,
+/// like the resource report. The ruleset and its diagnostics are shared by the whole daemon,
+/// so only the default session that owns them serves the trace; another session is refused
+/// rather than shown the decisions of every project. What it publishes is the same class of information the
 /// official emulator prints in a denial message and serves from `:ruleCoverage`: positions,
 /// counts and evaluated values. It never carries a token, a signature or a claim other than
 /// the subject the rule saw as `request.auth.uid`.
 ///
 /// `limit` caps the number of requests returned (default and maximum
 /// [`fireemu_core_rules::coverage::REQUEST_TRACE_CAPACITY`]).
-fn rules_requests_route(state: &ControlState, method: &str) -> JsonResponse {
+fn rules_requests_route(state: &ControlState, method: &str, is_default: bool) -> JsonResponse {
     use fireemu_core_rules::coverage::{ExprValue, REQUEST_TRACE_CAPACITY};
 
     if method != "GET" {
         return error(400, "INVALID_ARGUMENT : the request trace is read with GET");
+    }
+    if !is_default {
+        return error(
+            400,
+            "FAILED_PRECONDITION : the ruleset and its request trace belong to the default session; use /v1/sessions/default/rules/requests",
+        );
     }
     let Ok(rules) = state.rules.snapshot() else {
         return error(500, "INTERNAL");
@@ -947,7 +969,7 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         return fault_plan_route(state, session, &project, method, body);
     }
     if action == "rules/requests" {
-        return rules_requests_route(state, method);
+        return rules_requests_route(state, method, is_default);
     }
     if let Some(rest) = action.strip_prefix("firestore/text-indexes") {
         return text_index_route(state, session, &project, method, rest, body);
@@ -1528,7 +1550,16 @@ fn fault_plan_route(
                 .iter()
                 .map(|r| json!({"operation": r.operation, "occurrence": r.occurrence, "functionOccurrence": r.function_occurrence, "function": r.function, "action": r.action.to_string()}))
                 .collect();
-            ok(json!({"session": session, "plan": plan, "fired": fired, "counters": f.counters()}))
+            // `fired` is a bounded ring (`fireemu_core_session::fault::MAX_FIRED_RECORDS`), so
+            // the reader is told how many records fell out of it rather than being served a
+            // silently shortened history.
+            ok(json!({
+                "session": session,
+                "plan": plan,
+                "fired": fired,
+                "droppedFired": f.dropped_fired(),
+                "counters": f.counters(),
+            }))
         }
         "PUT" => {
             let seed = body.get("seed").and_then(Value::as_u64).unwrap_or(0);
@@ -2337,7 +2368,9 @@ pub fn browser_guard(
     // Decide on the same path the router matches: a query string must not change which
     // routes are privileged.
     let path = path.split('?').next().unwrap_or(path);
-    let privileged = (method != "GET" && !path.starts_with("/health/")) || is_resources_path(path);
+    let privileged = (method != "GET" && !path.starts_with("/health/"))
+        || is_resources_path(path)
+        || is_rules_requests_path(path);
     let presented = headers
         .authorization
         .as_deref()

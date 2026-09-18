@@ -42,18 +42,18 @@ The prepared input package is rejected as execution permission. A separate owner
 
 ## Commands actually executed
 
-Commands below ran in the compatibility worktree at the stated frozen source; output directories were private and outside the checkout. The two final local commands each build, copy, start, execute and stop their owned artifact.
+Commands below ran in the compatibility worktree at the stated frozen source; output directories were private and outside the checkout. `<private>` below abbreviates the private log directory `docs.local/logs/2026-09-12` in the main checkout. The two final local commands each build, copy, start, execute and stop their owned artifact.
 
 ```sh
 uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-broad tools/auth-pending-lifetime tools/auth-pending-lifetime-boundary tools/auth-pending-lifetime-window -q
 uvx ruff check tools/compat-broad
 uvx ty check tools/compat-broad --python tools/compat-inventory/.venv --extra-search-path tools/compat-inventory --output-format concise
-uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_local.py --output /Users/tk/work/firebase-emulator/docs.local/logs/2026-09-12/batch-pair-a32fa8a7-local
-uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_local.py --output /Users/tk/work/firebase-emulator/docs.local/logs/2026-09-12/batch-pair-a32fa8a7-local-second
-uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_comparison.py --batch /Users/tk/work/firebase-emulator/docs.local/logs/2026-09-12/batch-pair-a32fa8a7-local/batch/result.json --baseline spec/compatibility/broad-runs/bf12f631-expanded.json --output /Users/tk/work/firebase-emulator/docs.local/logs/2026-09-12/batch-a32fa8a7-mapping.json --check
-uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_adapter.py --manifest spec/compatibility/broad-batch-candidate.json --prepare-inputs /Users/tk/work/firebase-emulator/docs.local/logs/2026-09-12/batch-a32fa8a7-inputs.json
-uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_pair.py --production /Users/tk/work/firebase-emulator/docs.local/logs/2026-09-12/batch-a32fa8a7-production-input-fixture.json --local /Users/tk/work/firebase-emulator/docs.local/logs/2026-09-12/batch-pair-a32fa8a7-local-second/batch/result.json --output /Users/tk/work/firebase-emulator/docs.local/logs/2026-09-12/batch-a32fa8a7-two-local-input-fixture.json --check
-uv run --project tools/compat-inventory --locked --python 3.12 /Users/tk/work/firebase-emulator/docs.local/logs/2026-09-12/batch-pair-mutations.py
+uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_local.py --output <private>/batch-pair-a32fa8a7-local
+uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_local.py --output <private>/batch-pair-a32fa8a7-local-second
+uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_comparison.py --batch <private>/batch-pair-a32fa8a7-local/batch/result.json --baseline spec/compatibility/broad-runs/bf12f631-expanded.json --output <private>/batch-a32fa8a7-mapping.json --check
+uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_adapter.py --manifest spec/compatibility/broad-batch-candidate.json --prepare-inputs <private>/batch-a32fa8a7-inputs.json
+uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_pair.py --production <private>/batch-a32fa8a7-production-input-fixture.json --local <private>/batch-pair-a32fa8a7-local-second/batch/result.json --output <private>/batch-a32fa8a7-two-local-input-fixture.json --check
+uv run --project tools/compat-inventory --locked --python 3.12 <private>/batch-pair-mutations.py
 ```
 
 The production-named input above is explicitly `fixtureOnly=true`: it copies local run1 rows and adds synthetic Database metadata solely to exercise the pair CLI. The original local reports remain unchanged and record `productionExecuted=false`. The original broad catalog and candidate checks were also run, as were `--check` on `publish-auth-pending-lifetime.py`, `publish-auth-pending-lifetime-comparison.py`, `publish-auth-pending-lifetime-boundary.py` and `publish-auth-pending-lifetime-boundary-comparison.py`. The separate Rules command and exact selected programs are recorded in its result manifest. Full Rust workspace tests were not rerun; runtime source was unchanged, and the owned artifact builds succeeded.

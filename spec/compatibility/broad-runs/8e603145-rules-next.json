@@ -4,10 +4,10 @@
   "reference": "historical official emulator, not production",
   "artifactSha256": "918381fb5f2358ee6fea4763170464885426f63f9215eea8a23ccfb9e3ad2c07",
   "command": [
-    "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-12/broad-batch-local-final/fireemu",
+    "docs.local/logs/2026-09-12/broad-batch-local-final/fireemu",
     "exec",
     "--config",
-    "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-12/broad-rules-next/config.json",
+    "docs.local/logs/2026-09-12/broad-rules-next/config.json",
     "--project",
     "demo-rules-matrix",
     "--only",
@@ -25,8 +25,8 @@
     "--log-verbosity",
     "silent",
     "--",
-    "/Users/tk/work/firebase-emulator/.worktree/compatibility-inventory/tools/compat-inventory/.venv/bin/python3",
-    "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-12/broad-rules-next/run.py",
+    ".worktree/compatibility-inventory/tools/compat-inventory/.venv/bin/python3",
+    "docs.local/logs/2026-09-12/broad-rules-next/run.py",
     "--child",
     "1e75af5766874cc3a554be4f6382e27a"
   ],

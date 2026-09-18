@@ -44,7 +44,13 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_788_004_860),
     )));
-    let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
+    // `other` is the second database the commit-stream filter tests are written against, so
+    // it is declared the way a configuration declares it: a database nothing created is
+    // refused, as production refuses one `databases.create` was never called for.
+    let backend = Arc::new(
+        LocalBackend::new(gateway.clone(), clock.clone(), 7)
+            .with_declared_databases(["other".to_owned()]),
+    );
     let auth_store = Arc::new(Mutex::new(AuthStore::new(
         "demo-app",
         SplitMix64::new(5),

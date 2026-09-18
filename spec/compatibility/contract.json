@@ -432,7 +432,7 @@
       }
     }
   },
-  "profileStatus": "The profile is a runtime switch, and its sets list exactly what the daemon derives from it: firestore.enforceLimits (a Standard query limit violation is reported as an FS_LIMIT_OBSERVED warning / refuses the query). Three further derived settings have no configuration key: how composite indexes are validated (every index a query needs is assumed, as the official emulator does / production's rules, verified against a real project, including the index merges production performs), how a caller's ID token is verified on the Firestore and Storage Security Rules surfaces (the official emulators' unsigned mock tokens are admitted / the full verification against the Auth store stands), and whether Auth refresh tokens remain stateless like the official emulator or are revoked after privileged account mutations. An explicit configuration key always wins over the profile's default for it. A unit test in crates/fireemu/src/config.rs reads this file and fails when a profile's sets and what set_profile derives disagree. Every other key a profile names is under declared, with a status: hand-written means the loader reads the key but does not derive it from the profile, not-implemented means the loader refuses the value or reads nothing of the section, so the value is a statement of intent and not a switch. fireemu capabilities and GET /v1/capabilities publish the active profile and the start banner prints it. tools/compat-check CC-08 checks every key and value under sets and declared against spec/config/fireemu.schema.json, requires a status and a note on each declared key, refuses a key that is both set and declared, and checks that the profile names declared here are exactly the values that schema's profile key accepts.",
+  "profileStatus": "The profile is a runtime switch, and its sets list exactly what the daemon derives from it: firestore.enforceLimits (a Standard query limit violation is reported as an FS_LIMIT_OBSERVED warning / refuses the query). Four further derived settings have no configuration key: how composite indexes are validated (every index a query needs is assumed, as the official emulator does / production's rules, verified against a real project, including the index merges production performs), how a caller's ID token is verified on the Firestore and Storage Security Rules surfaces (the official emulators' unsigned mock tokens are admitted / the full verification against the Auth store stands), whether Auth refresh tokens remain stateless like the official emulator or are revoked after privileged account mutations, and whether a Firestore data-plane request materializes a database nothing created (any syntactically valid database id is served, as the official emulator does / the default database and the databases a firebase.json firestore entry names are served and every other one answers the NOT_FOUND production answers until an import or a snapshot restore materializes it). An explicit configuration key always wins over the profile's default for it. A unit test in crates/fireemu/src/config.rs reads this file and fails when a profile's sets and what set_profile derives disagree. Every other key a profile names is under declared, with a status: hand-written means the loader reads the key but does not derive it from the profile, not-implemented means the loader refuses the value or reads nothing of the section, so the value is a statement of intent and not a switch. fireemu capabilities and GET /v1/capabilities publish the active profile and the start banner prints it. tools/compat-check CC-08 checks every key and value under sets and declared against spec/config/fireemu.schema.json, requires a status and a note on each declared key, refuses a key that is both set and declared, and checks that the profile names declared here are exactly the values that schema's profile key accepts.",
   "vocabulary": {
     "scopes": {
       "active": "In the supported-surface milestone. Either parity is claimed with evidence, the surface is a fireemu addition, or it is an open gap that blocks the complete-suite claim.",
@@ -1226,7 +1226,7 @@
               "precision": "boundary-conformance"
             },
             {
-              "behaviour": "TOTP enrollment does not require a verified email: the official emulator has no TOTP route to measure it against and production behaviour is not inferred from the SMS result",
+              "behaviour": "TOTP enrollment requires a verified email, as phone enrollment does: mfaEnrollment:start and mfaEnrollment:finalize both refuse an unverified email with UNVERIFIED_EMAIL. The official emulator has no TOTP route to measure this against, and production has not been observed for this condition; the AUTH-MFA-AGE-TOTP-01 campaign will settle it",
               "precision": "boundary-conformance"
             },
             {
@@ -2102,7 +2102,7 @@
       "officialDefaultPort": 4500,
       "officialTraits": [],
       "state": "claimed",
-      "decision": "Active supported surface: an RFC 6455 WebSocket on the logging port serves the EmulatorLog wire format the official UI's Logs page reads, fed by the functions runner's output and the emulators' lifecycle lines; loopback-only and with a bounded history, both documented divergences.",
+      "decision": "Active supported surface: an RFC 6455 WebSocket on the logging port serves the EmulatorLog wire format the official UI's Logs page reads, fed by the functions runner's output and the emulators' lifecycle lines; loopback-only for both the Host header and any browser Origin, with a bounded history, and with a handshake bounded in time and size, all documented divergences.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/install_and_configure",
         "https://firebase.google.com/docs/functions/writing-and-viewing-logs",
@@ -2145,6 +2145,14 @@
             {
               "behaviour": "the WebSocket handshake is refused unless the Host header names loopback (the same DNS-rebinding guard the other fireemu listeners apply); the official server has none",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "a WebSocket handshake carrying a browser Origin header that is not an HTTP(S) loopback origin is refused with 403 before any frame is written, the same browser-origin policy the Auth/control listener and the Hub apply; a handshake with no Origin (a non-browser client such as firebase-tools) still connects. A repeated Host or Origin header is refused rather than resolved to one of its values, as RFC 7230 requires, and a header name that is not an RFC 7230 token is refused instead of skipped. WebSocket handshakes are exempt from the same-origin policy, so without this guard any web page could read the stream, which carries the Auth out-of-band links and SMS codes the official emulator also streams. The official UI Logs page connects from a loopback origin, and the streamed content itself stays at parity",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "the handshake request head must arrive whole inside a ten-second deadline and within 8 KiB, otherwise the connection is answered 408 or 431 and closed before any frame is written; the official server bounds the handshake in neither time nor size, so one stalled peer holds a connection open indefinitely. A well-formed handshake is a few hundred bytes sent in one write, so no real client approaches either bound",
+              "precision": "conservative"
             },
             {
               "behaviour": "the retained history is bounded to the most recent 1000 frames rather than unbounded, so an unbounded producer cannot exhaust memory",

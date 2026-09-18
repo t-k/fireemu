@@ -186,7 +186,7 @@ fn admin_inventory_does_not_claim_non_get_database_routes() {
 fn create_database(state: &RestState, project: &str, database: &str) {
     state
         .local
-        .database_handle(
+        .ensure_database(
             &parse_parent(&format!(
                 "projects/{project}/databases/{database}/documents"
             ))
@@ -254,7 +254,43 @@ fn admin_get_is_read_only_and_unknown_database_is_not_found() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["type"], "FIRESTORE_NATIVE");
     assert_eq!(body["databaseEdition"], "STANDARD");
-    assert!(body.get("uid").is_none());
+    // Every field the saved production response for `(default)` carries
+    // (`conformance/firestore-production-matrix.json`, `emulator/routes#get-database`).
+    let mut keys: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "appEngineIntegrationMode",
+            "concurrencyMode",
+            "createTime",
+            "databaseEdition",
+            "deleteProtectionState",
+            "earliestVersionTime",
+            "enhancedTextSearchQueryMode",
+            "etag",
+            "freeTier",
+            "locationId",
+            "name",
+            "pointInTimeRecoveryEnablement",
+            "realtimeUpdatesMode",
+            "type",
+            "uid",
+            "updateTime",
+            "versionRetentionPeriod",
+        ],
+        "{body}"
+    );
+    assert_eq!(body["freeTier"], true, "{body}");
+    // A uid is a UUID and an etag is opaque; both are stable for one database.
+    let uid = body["uid"].as_str().unwrap().to_owned();
+    assert_eq!(uid.len(), 36, "{uid}");
+    assert!(body["etag"].as_str().unwrap().len() >= 16, "{body}");
     assert_eq!(state.local.database_catalog().unwrap(), before);
     let (status, body) = call(
         &state,
@@ -453,4 +489,104 @@ fn admin_refuses_enterprise_and_mongodb_configurations() {
         );
         assert_eq!(status, 501, "{body}");
     }
+}
+
+#[test]
+fn the_inventory_answers_what_the_data_plane_answers_about_existence() {
+    // Production lists `(default)` in a project nothing has written to, and a database the
+    // configuration declares is reachable before any request touches it. Everything else is
+    // NOT_FOUND on both surfaces, with each surface's own production message.
+    let state = state();
+    state
+        .local
+        .replace_declared_databases(["analytics".to_owned()]);
+
+    let (status, body) = call(&state, Some("Bearer owner"), "/v1/projects/demo/databases");
+    assert_eq!(status, 200, "{body}");
+    let listed: Vec<&str> = body["databases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|database| database["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            "projects/demo/databases/(default)",
+            "projects/demo/databases/analytics",
+        ],
+        "{body}"
+    );
+    // Listing creates nothing: the databases are declared, not materialized.
+    assert!(state.local.database_catalog().unwrap().is_empty());
+
+    for database in ["(default)", "analytics"] {
+        let (status, body) = call(
+            &state,
+            Some("Bearer owner"),
+            &format!("/v1/projects/demo/databases/{database}"),
+        );
+        assert_eq!(status, 200, "{database}: {body}");
+        assert_eq!(
+            body["name"],
+            format!("projects/demo/databases/{database}"),
+            "{body}"
+        );
+        let (status, body) = call_request(
+            &state,
+            Some("Bearer owner"),
+            "POST",
+            &format!("/v1/projects/demo/databases/{database}/documents/c?documentId=d"),
+            json!({"fields": {}}),
+        );
+        assert_eq!(status, 200, "{database}: {body}");
+    }
+
+    let (status, body) = call(
+        &state,
+        Some("Bearer owner"),
+        "/v1/projects/demo/databases/reporting",
+    );
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(
+        body["error"]["message"], "Project 'demo' or database 'reporting' does not exist.",
+        "{body}"
+    );
+    let (status, body) = call_request(
+        &state,
+        Some("Bearer owner"),
+        "GET",
+        "/v1/projects/demo/databases/reporting/documents/c/d",
+        Value::Null,
+    );
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "The database reporting does not exist for project demo Please visit \
+         https://console.cloud.google.com/datastore/setup?project=demo to add a Cloud \
+         Datastore or Cloud Firestore database. ",
+        "{body}"
+    );
+}
+
+#[test]
+fn the_projection_reports_the_configured_edition() {
+    // The route already refuses non-Standard Native traffic a few lines earlier, so the only
+    // edition it can report is the configured one, not a constant.
+    let enterprise = state_with(FirestoreEdition::Enterprise, FirestoreApiMode::Native);
+    let (status, body) = call(
+        &enterprise,
+        Some("Bearer owner"),
+        "/v1/projects/demo/databases/(default)",
+    );
+    assert_eq!(status, 501, "{body}");
+
+    let standard = state();
+    let (status, body) = call(
+        &standard,
+        Some("Bearer owner"),
+        "/v1/projects/demo/databases/(default)",
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["databaseEdition"], "STANDARD", "{body}");
 }

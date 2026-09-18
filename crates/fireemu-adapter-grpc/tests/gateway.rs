@@ -616,3 +616,127 @@ fn the_limit_switch_turns_a_refusal_into_an_observation() {
         "A maximum of 1 'ARRAY_CONTAINS' filter is allowed per disjunction."
     );
 }
+
+// Production's cursor refusals belong to the strict profile. The compatibility contract
+// forbids the `emulator` profile from adding a rejection the pinned Local Emulator Suite
+// does not make, so the gateway applies these checks only under the production index
+// validation policy, which is what the strict profile selects.
+mod cursor_validation {
+    use super::{Gateway, IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_firestore::field_path::FieldPath;
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_firestore::query::{Cursor, Direction, OrderClause, Query, QueryScope};
+    use fireemu_core_firestore::value::Value;
+    use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+    use fireemu_core_types::ids::{CollectionId, DatabaseId, ProjectId};
+
+    fn gateway(policy: IndexValidationPolicy) -> Gateway {
+        Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy,
+            },
+            indexes: IndexSet::default(),
+        }
+    }
+
+    fn document(relative: &str) -> DocumentPath {
+        DocumentPath::parse(
+            &ProjectId::try_new("demo-app").unwrap(),
+            &DatabaseId::default_database(),
+            relative,
+        )
+        .unwrap()
+    }
+
+    fn query(values: Vec<Value>) -> Query {
+        Query {
+            start_at: Some(Cursor {
+                values,
+                before: true,
+            }),
+            ..Query::new(QueryScope::collection(
+                Some(document("root/r1")),
+                CollectionId::try_new("cur").unwrap(),
+            ))
+            .with_order(OrderClause {
+                field: FieldPath::document_name(),
+                direction: Direction::Ascending,
+            })
+        }
+    }
+
+    fn mistyped() -> Query {
+        query(vec![Value::String("c3".to_owned())])
+    }
+
+    fn foreign() -> Query {
+        query(vec![Value::Reference(
+            document("root/r1/other/absent").resource_name(),
+        )])
+    }
+
+    fn member() -> Query {
+        query(vec![Value::Reference(
+            document("root/r1/cur/c3").resource_name(),
+        )])
+    }
+
+    #[test]
+    fn the_strict_profile_refuses_a_mistyped_document_name_cursor() {
+        let rejection = gateway(IndexValidationPolicy::Production)
+            .validate_query(&mistyped())
+            .unwrap_err();
+        assert_eq!(rejection.to_status().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn the_strict_profile_refuses_a_cursor_reference_outside_the_collection() {
+        let rejection = gateway(IndexValidationPolicy::Production)
+            .validate_query(&foreign())
+            .unwrap_err();
+        assert_eq!(rejection.to_status().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn the_emulator_profile_keeps_the_lenient_cursor_behaviour() {
+        let gateway = gateway(IndexValidationPolicy::Emulator);
+        gateway
+            .validate_query(&mistyped())
+            .expect("the emulator profile may not add a rejection");
+        gateway
+            .validate_query(&foreign())
+            .expect("the emulator profile may not add a rejection");
+    }
+
+    #[test]
+    fn a_well_formed_document_cursor_is_accepted_under_both_profiles() {
+        for policy in [
+            IndexValidationPolicy::Production,
+            IndexValidationPolicy::Emulator,
+        ] {
+            gateway(policy)
+                .validate_query(&member())
+                .expect("a member document positions the cursor");
+        }
+    }
+
+    #[test]
+    fn the_strict_profile_refuses_a_cursor_longer_than_the_order_by() {
+        // The arity rule lives in canonicalization and is refused under either profile.
+        for policy in [
+            IndexValidationPolicy::Production,
+            IndexValidationPolicy::Emulator,
+        ] {
+            let rejection = gateway(policy)
+                .validate_query(&query(vec![
+                    Value::Reference(document("root/r1/cur/c3").resource_name()),
+                    Value::Integer(9),
+                ]))
+                .unwrap_err();
+            assert_eq!(rejection.to_status().code(), tonic::Code::InvalidArgument);
+        }
+    }
+}

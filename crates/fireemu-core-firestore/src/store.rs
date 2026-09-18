@@ -1117,33 +1117,10 @@ fn document_in_scope(document: &Document, scope: &QueryScope) -> bool {
     path_in_scope(&document.path, scope)
 }
 
-/// Whether a document at `path` belongs to the range `scope` selects.
+/// Whether a document at `path` belongs to the range `scope` selects. One state holds one
+/// database, so the scope's project and database need no comparison here.
 fn path_in_scope(path: &DocumentPath, scope: &QueryScope) -> bool {
-    let parent_len = scope.parent().map_or(0, |parent| parent.pairs().len());
-    match scope {
-        QueryScope::Collection {
-            parent,
-            collection_id,
-        } => {
-            path.pairs().len() == parent_len + 1
-                && path.collection_id() == collection_id
-                && parent
-                    .as_ref()
-                    .is_none_or(|prefix| path.pairs()[..parent_len] == *prefix.pairs())
-        }
-        QueryScope::CollectionGroup {
-            parent,
-            collection_id,
-        } => {
-            path.collection_id() == collection_id
-                && parent.as_ref().is_none_or(|prefix| {
-                    path.pairs().len() > parent_len && path.pairs()[..parent_len] == *prefix.pairs()
-                })
-        }
-        QueryScope::KindlessAllDescendants { parent } => parent.as_ref().is_none_or(|prefix| {
-            path.pairs().len() > parent_len && path.pairs()[..parent_len] == *prefix.pairs()
-        }),
-    }
+    scope.contains(path)
 }
 
 /// Exclusive bounds `(parent, successor)` enclosing exactly the strict descendants of

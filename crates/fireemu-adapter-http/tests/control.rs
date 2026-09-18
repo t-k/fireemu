@@ -1678,6 +1678,121 @@ fn the_rules_request_trace_lists_decided_requests_newest_first_with_their_expres
     assert_eq!(after.body["requests"], json!([]));
 }
 
+/// FAULTH-1 on the route: the fired history is a bounded ring, so `GET faultPlan` says how
+/// many records fell out of it rather than silently serving a shorter history.
+#[test]
+fn the_fault_plan_route_reports_the_records_the_ring_dropped() {
+    use fireemu_core_session::fault::MAX_FIRED_RECORDS;
+
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let plan = json!({"rules": [{"match": {"operation": "firestore.commit"}, "action": {"type": "transactionConflict"}}]});
+    assert_eq!(
+        handle(&s, "PUT", "/v1/sessions/default/faultPlan", &plan).status,
+        200
+    );
+    let r = handle(&s, "GET", "/v1/sessions/default/faultPlan", &json!({}));
+    assert_eq!(r.body["droppedFired"], json!(0), "{}", r.body);
+
+    let registry = s.faults.as_ref().unwrap();
+    let faults = registry.for_project("demo-app");
+    let overflow = 5;
+    for _ in 0..MAX_FIRED_RECORDS + overflow {
+        assert_eq!(
+            faults
+                .lock()
+                .unwrap()
+                .decide("firestore.commit", None, None)
+                .len(),
+            1
+        );
+    }
+
+    let r = handle(&s, "GET", "/v1/sessions/default/faultPlan", &json!({}));
+    assert_eq!(
+        r.body["fired"].as_array().map(Vec::len),
+        Some(MAX_FIRED_RECORDS),
+        "{}",
+        r.body["droppedFired"]
+    );
+    assert_eq!(r.body["droppedFired"], json!(overflow), "{}", r.body);
+    assert_eq!(
+        r.body["counters"]["firestore.commit"],
+        json!(MAX_FIRED_RECORDS + overflow),
+        "every occurrence is still counted"
+    );
+
+    // Reinstalling the plan starts the history and the dropped count over.
+    assert_eq!(
+        handle(&s, "PUT", "/v1/sessions/default/faultPlan", &plan).status,
+        200
+    );
+    let r = handle(&s, "GET", "/v1/sessions/default/faultPlan", &json!({}));
+    assert_eq!(r.body["fired"], json!([]));
+    assert_eq!(r.body["droppedFired"], json!(0));
+}
+
+/// RRT-1 / RRT-2: the request trace publishes evaluated expression values for every session
+/// the daemon serves, so it is privileged exactly like the resource report, is never cached,
+/// and is only served on the default session that owns the shared ruleset.
+#[test]
+fn the_rules_request_trace_is_privileged_for_pages_and_belongs_to_the_default_session() {
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let page = RequestHeaders {
+        origin: Some("http://localhost:5173".to_owned()),
+        ..RequestHeaders::default()
+    };
+    let authorized = RequestHeaders {
+        origin: Some("http://localhost:5173".to_owned()),
+        authorization: Some("Bearer test-token".to_owned()),
+        ..RequestHeaders::default()
+    };
+
+    // A loopback page reads nothing without the control token, whatever the query string.
+    for path in [
+        "/v1/sessions/default/rules/requests",
+        "/v1/sessions/default/rules/requests?",
+        "/v1/sessions/default/rules/requests?limit=1",
+    ] {
+        let r = handle_with(&s, "GET", path, &page, &json!({}));
+        assert_eq!(r.status, 403, "{path}: {}", r.body);
+        assert!(
+            r.body["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("CONTROL_TOKEN_REQUIRED"),
+            "{path}: {}",
+            r.body
+        );
+        let r = handle_with(&s, "GET", path, &authorized, &json!({}));
+        assert_eq!(r.status, 200, "{path}: {}", r.body);
+    }
+
+    // The trace is a diagnostic snapshot of live state and is never cached.
+    assert!(fireemu_adapter_http::control::is_no_store_path(
+        "/v1/sessions/default/rules/requests"
+    ));
+    assert!(fireemu_adapter_http::control::is_no_store_path(
+        "/v1/sessions/default/rules/requests?limit=1"
+    ));
+
+    // The ruleset and its diagnostics belong to the default session: another session is
+    // refused rather than shown the decisions of every project on the daemon.
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions", &json!({"project": "demo-b"})).status,
+        200
+    );
+    let r = handle(&s, "GET", "/v1/sessions/demo-b/rules/requests", &json!({}));
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert!(
+        r.body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("FAILED_PRECONDITION"),
+        "{}",
+        r.body
+    );
+}
+
 /// A resource hook that reports one outstanding root per scope and records the scopes it
 /// was asked about, so the tests can see that a session is only ever asked about itself.
 struct FakeResources {

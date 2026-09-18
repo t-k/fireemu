@@ -20,11 +20,14 @@ use fireemu_proto_firestore::google::firestore::v1::structured_query as sq;
 pub enum DecodeError {
     /// Malformed resource name.
     InvalidParent(String),
-    /// A database id the project cannot have (production answers `NOT_FOUND` for it).
+    /// A database the project does not have: an id the project could never have carried, or
+    /// one `databases.create` was never called for. Production answers `NOT_FOUND` for both,
+    /// with the same message (`conformance/firestore-production-matrix.json`,
+    /// `emulator/routes#database-with-uppercase-name` and `#named-database-document`).
     UnknownDatabase {
         /// The project the request named.
         project: String,
-        /// The database id the project cannot have.
+        /// The database id the project does not have.
         database: String,
     },
     /// Malformed field path.
@@ -55,7 +58,9 @@ impl fmt::Display for DecodeError {
             Self::InvalidParent(m) => write!(f, "invalid parent: {m}"),
             Self::UnknownDatabase { project, database } => write!(
                 f,
-                "The database {database} does not exist for project {project}"
+                "The database {database} does not exist for project {project} Please visit \
+                 https://console.cloud.google.com/datastore/setup?project={project} to add a \
+                 Cloud Datastore or Cloud Firestore database. "
             ),
             Self::InvalidFieldPath(m) => write!(f, "invalid field path: {m}"),
             Self::InvalidValue(m) => write!(f, "invalid value: {m}"),
@@ -319,22 +324,94 @@ fn decode_filter(filter: &sq::Filter) -> Result<FilterExpr, DecodeError> {
 }
 
 /// A `__name__` filter may only name documents of the database the query runs in.
-fn check_name_references(filter: &FilterExpr, parent: &Parent) -> Result<(), DecodeError> {
-    let database = format!(
+/// `projects/{p}/databases/{d}` as the request named it.
+fn database_resource(parent: &Parent) -> String {
+    format!(
         "projects/{}/databases/{}",
         parent.project.as_str(),
         parent.database.as_str()
-    );
-    let check = |name: &str| -> Result<(), DecodeError> {
-        let prefix = format!("{database}/documents/");
-        if name.starts_with(&prefix) {
-            return Ok(());
+    )
+}
+
+/// Longest `projects/{p}/databases/{d}` that may be quoted back to the caller. A project ID
+/// and a database ID are each at most 63 bytes, so a well-formed prefix is at most
+/// `projects/` + 63 + `/databases/` + 63 = 146 bytes. The cap leaves headroom above every
+/// prefix that could be real and still stops a caller from choosing the length of a log line.
+const MAX_ECHOED_DATABASE_BYTES: usize = 160;
+
+/// What is quoted in place of a reference prefix that may not be echoed. Project and
+/// database IDs are lowercase and hyphenated, so this can never collide with a real one.
+const UNPRINTABLE_DATABASE: &str = "[unprintable reference]";
+
+/// The `projects/{p}/databases/{d}` prefix of `name`, when it is safe to quote back.
+///
+/// Production's message names the database the caller reached for, and that stays exact for
+/// every well-formed reference. A `referenceValue` is an arbitrary caller string that never
+/// passes through [`DocumentPath`], though, so nothing else rejects a NUL, a newline or
+/// megabytes of padding before this text reaches a log line. A prefix that is over the cap or
+/// carries a control character is therefore replaced wholesale rather than escaped: the
+/// caller learns the request was refused without choosing what a log line contains.
+fn echoable_database(name: &str) -> &str {
+    // The prefix is everything before the fourth `/`, which is the whole string when there
+    // are fewer. Taken as a slice, so an oversized reference is never copied.
+    let end = name
+        .char_indices()
+        .filter(|&(_, character)| character == '/')
+        .nth(3)
+        .map_or(name.len(), |(index, _)| index);
+    let prefix = &name[..end];
+    if prefix.len() > MAX_ECHOED_DATABASE_BYTES || prefix.chars().any(char::is_control) {
+        return UNPRINTABLE_DATABASE;
+    }
+    prefix
+}
+
+/// The guard production applies to every document reference a query uses as a document
+/// name: a reference outside the request's database is refused rather than followed.
+///
+/// `database` is built from the request's own [`Parent`], whose project and database have
+/// already passed their identifier validation, so only the caller's reference needs bounding.
+fn check_reference_database(name: &str, database: &str) -> Result<(), DecodeError> {
+    let prefix = format!("{database}/documents/");
+    if name.starts_with(&prefix) {
+        return Ok(());
+    }
+    let other = echoable_database(name);
+    Err(DecodeError::InvalidQuery(format!(
+        "The request was for database '{database}' but was attempting to access database '{other}'"
+    )))
+}
+
+/// A cursor value standing in a `__name__` position is a document reference, so it gets the
+/// same database guard as a `__name__` filter value. This runs on the request rather than on
+/// the query scope because a root collection and a database-wide collection group carry no
+/// parent document, and the request is then the only place the project and database are
+/// known. A reference in any other position is a value compared against stored content, not
+/// a document position, so it is left alone.
+fn check_cursor_name_references(query: &Query, parent: &Parent) -> Result<(), DecodeError> {
+    let order = query.effective_order_by();
+    let database = database_resource(parent);
+    for cursor in [&query.start_at, &query.end_at].into_iter().flatten() {
+        for (position, value) in cursor.values.iter().enumerate() {
+            let Some(clause) = order.get(position) else {
+                // A cursor longer than the order-by is refused by canonicalization.
+                break;
+            };
+            if !clause.field.is_document_name() {
+                continue;
+            }
+            if let Value::Reference(name) = value {
+                check_reference_database(name, &database)?;
+            }
         }
-        let other = name.splitn(5, '/').take(4).collect::<Vec<_>>().join("/");
-        Err(DecodeError::InvalidQuery(format!(
-            "The request was for database '{database}' but was attempting to access database '{other}'"
-        )))
-    };
+    }
+    Ok(())
+}
+
+fn check_name_references(filter: &FilterExpr, parent: &Parent) -> Result<(), DecodeError> {
+    let database = database_resource(parent);
+    let check =
+        |name: &str| -> Result<(), DecodeError> { check_reference_database(name, &database) };
     match filter {
         FilterExpr::Field { field, value, .. } if field.is_document_name() => match value {
             Value::Reference(name) => check(name),
@@ -498,6 +575,7 @@ pub fn decode_structured_query(
     if let Some(find_nearest) = &query.find_nearest {
         q.find_nearest = Some(decode_find_nearest(find_nearest)?);
     }
+    check_cursor_name_references(&q, parent)?;
     Ok(q)
 }
 
@@ -523,6 +601,251 @@ mod tests {
                 Some("items/alice".to_owned())
             );
         }
+    }
+
+    // A cursor value standing in a `__name__` position is a document reference, so it gets
+    // the same database guard the `__name__` filters get. The scope of a root collection or
+    // a database-wide collection group carries no parent document, so this request-level
+    // check is the only place such a cursor's project and database can be compared.
+    fn request_parent() -> Parent {
+        parse_parent("projects/demo-app/databases/(default)/documents")
+            .expect("the database root parses")
+    }
+
+    fn pb_reference(name: &str) -> pb::Value {
+        pb::Value {
+            value_type: Some(pb::value::ValueType::ReferenceValue(name.to_owned())),
+        }
+    }
+
+    fn name_ordered(
+        all_descendants: bool,
+        start_at: Option<pb::Cursor>,
+        end_at: Option<pb::Cursor>,
+    ) -> pb::StructuredQuery {
+        pb::StructuredQuery {
+            from: vec![pb::structured_query::CollectionSelector {
+                collection_id: "cur".to_owned(),
+                all_descendants,
+            }],
+            order_by: vec![pb::structured_query::Order {
+                field: Some(pb::structured_query::FieldReference {
+                    field_path: "__name__".to_owned(),
+                }),
+                direction: sq::Direction::Ascending as i32,
+            }],
+            start_at,
+            end_at,
+            ..Default::default()
+        }
+    }
+
+    fn cursor(name: &str) -> pb::Cursor {
+        pb::Cursor {
+            values: vec![pb_reference(name)],
+            before: true,
+        }
+    }
+
+    fn foreign_cursor_error(query: &pb::StructuredQuery) -> String {
+        let error = decode_structured_query(&request_parent(), query)
+            .expect_err("a cursor outside the request database is refused");
+        assert_eq!(error.grpc_code(), tonic::Code::InvalidArgument);
+        error.to_string()
+    }
+
+    #[test]
+    fn a_root_collection_cursor_reference_outside_the_request_database_is_refused() {
+        // The scope of a root collection carries no parent document, so the request's own
+        // `projects/{p}/databases/{d}` is the only identity available to compare against.
+        for name in [
+            "projects/other-app/databases/(default)/documents/cur/c3",
+            "projects/demo-app/databases/other/documents/cur/c3",
+        ] {
+            let message = foreign_cursor_error(&name_ordered(false, Some(cursor(name)), None));
+            assert!(
+                message.contains(
+                    "The request was for database 'projects/demo-app/databases/(default)'"
+                ),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_database_wide_collection_group_cursor_reference_outside_the_request_database_is_refused() {
+        for name in [
+            "projects/other-app/databases/(default)/documents/scope/s1/cur/c3",
+            "projects/demo-app/databases/other/documents/scope/s1/cur/c3",
+        ] {
+            let message = foreign_cursor_error(&name_ordered(true, Some(cursor(name)), None));
+            assert!(
+                message.contains("but was attempting to access database"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_end_cursor_reference_outside_the_request_database_is_refused() {
+        let query = name_ordered(
+            false,
+            None,
+            Some(cursor(
+                "projects/other-app/databases/(default)/documents/cur/c3",
+            )),
+        );
+        foreign_cursor_error(&query);
+    }
+
+    #[test]
+    fn an_implicit_document_name_cursor_reference_is_checked_against_the_request_database() {
+        // No explicit order: the effective order is `__name__` alone, so the single cursor
+        // value stands in the `__name__` position.
+        let query = pb::StructuredQuery {
+            from: vec![pb::structured_query::CollectionSelector {
+                collection_id: "cur".to_owned(),
+                all_descendants: false,
+            }],
+            start_at: Some(cursor(
+                "projects/other-app/databases/(default)/documents/cur/c3",
+            )),
+            ..Default::default()
+        };
+        foreign_cursor_error(&query);
+    }
+
+    #[test]
+    fn a_cursor_reference_inside_the_request_database_decodes() {
+        for all_descendants in [false, true] {
+            let query = name_ordered(
+                all_descendants,
+                Some(cursor(
+                    "projects/demo-app/databases/(default)/documents/cur/c3",
+                )),
+                None,
+            );
+            decode_structured_query(&request_parent(), &query)
+                .expect("a reference in the request database is a position, not an error");
+        }
+    }
+
+    fn name_filtered(reference: &str) -> pb::StructuredQuery {
+        pb::StructuredQuery {
+            from: vec![pb::structured_query::CollectionSelector {
+                collection_id: "cur".to_owned(),
+                all_descendants: false,
+            }],
+            r#where: Some(sq::Filter {
+                filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+                    field: Some(pb::structured_query::FieldReference {
+                        field_path: "__name__".to_owned(),
+                    }),
+                    op: sq::field_filter::Operator::Equal as i32,
+                    value: Some(pb_reference(reference)),
+                })),
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// The same hostile reference on both paths that echo it: a `__name__` filter value and
+    /// a cursor value in a `__name__` position.
+    fn both_paths(reference: &str) -> [pb::StructuredQuery; 2] {
+        [
+            name_filtered(reference),
+            name_ordered(false, Some(cursor(reference)), None),
+        ]
+    }
+
+    #[test]
+    fn a_reference_carrying_control_characters_is_not_echoed_into_the_message() {
+        // `referenceValue` never passes through `DocumentPath`, so nothing else rejects a
+        // NUL or a newline before the message that quotes it reaches a log line.
+        for reference in [
+            "projects/other\u{0}app/databases/(default)/documents/cur/c3",
+            "projects/other\r\napp/databases/(default)/documents/cur/c3",
+            "projects/other\u{7f}app/databases/(default)/documents/cur/c3",
+            "projects/other\u{85}app/databases/(default)/documents/cur/c3",
+        ] {
+            for query in both_paths(reference) {
+                let message = foreign_cursor_error(&query);
+                assert!(
+                    message.contains("[unprintable reference]"),
+                    "the caller text must be replaced, got {message:?}"
+                );
+                assert!(
+                    !message.chars().any(char::is_control),
+                    "no control character may survive into the message, got {message:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_oversized_reference_prefix_is_not_echoed_into_the_message() {
+        // A project ID is at most 63 bytes, so this prefix could never be well formed; the
+        // cap is what stops a caller from choosing the length of a log line.
+        let reference = format!(
+            "projects/{}/databases/(default)/documents/cur/c3",
+            "a".repeat(4096)
+        );
+        for query in both_paths(&reference) {
+            let message = foreign_cursor_error(&query);
+            assert!(message.contains("[unprintable reference]"), "{message}");
+            assert!(message.len() < 512, "message length {}", message.len());
+        }
+    }
+
+    #[test]
+    fn a_well_formed_foreign_database_is_still_echoed_verbatim() {
+        // Production quotes the database the caller reached for, and that stays exact.
+        for query in both_paths("projects/other-app/databases/other/documents/cur/c3") {
+            let message = foreign_cursor_error(&query);
+            assert!(
+                message.contains(
+                    "but was attempting to access database 'projects/other-app/databases/other'"
+                ),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_short_malformed_reference_is_still_echoed_verbatim() {
+        // Printable and bounded: nothing to sanitize, so the answer stays what it was.
+        for query in both_paths("not-a-resource-name") {
+            let message = foreign_cursor_error(&query);
+            assert!(
+                message.contains("access database 'not-a-resource-name'"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reference_outside_the_document_name_slot_is_left_to_value_comparison() {
+        // Position 0 is `owner`, an ordinary field: a reference there is a value compared
+        // against stored content, not a document position, so the database guard does not
+        // apply to it.
+        let query = pb::StructuredQuery {
+            from: vec![pb::structured_query::CollectionSelector {
+                collection_id: "cur".to_owned(),
+                all_descendants: false,
+            }],
+            order_by: vec![pb::structured_query::Order {
+                field: Some(pb::structured_query::FieldReference {
+                    field_path: "owner".to_owned(),
+                }),
+                direction: sq::Direction::Ascending as i32,
+            }],
+            start_at: Some(cursor(
+                "projects/other-app/databases/(default)/documents/people/p1",
+            )),
+            ..Default::default()
+        };
+        decode_structured_query(&request_parent(), &query)
+            .expect("an ordinary field cursor value is not a document position");
     }
 
     #[test]

@@ -76,19 +76,75 @@ def test_the_package_never_publishes_a_nonce_or_an_absolute_path() -> None:
 def test_cases_are_the_two_declared_residues_and_nothing_else() -> None:
     manifest = load(MANIFEST)
     cases = manifest["cases"]
-    assert len(cases) == 6
-    assert [case["residue"] for case in cases] == ["R3"] * 3 + ["R4"] * 3
+    assert len(cases) == 12
+    assert [case["residue"] for case in cases] == ["R3"] * 3 + ["R4"] * 9
     limits = {case["limitId"] for case in cases if "limitId" in case}
     assert limits == {
         "FS-LIMIT-COLLECTION-ID",
         "FS-LIMIT-SUBCOLLECTION-DEPTH",
         "FS-LIMIT-DOCUMENT-NAME-BYTES",
+        "FS-LIMIT-INDEX-ENTRY-BYTES",
+        "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
+        "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
+        "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
+        "FS-LIMIT-FIELD-PATH-BYTES",
+        "FS-LIMIT-FIELD-VALUE-BYTES",
     }
     excluded = set(manifest["excludedSurfaces"])
-    assert "FS-LIMIT-INDEX-ENTRY-BYTES" in excluded
+    # The request-byte limit is the only write-path surface this campaign
+    # leaves out, and it is assigned elsewhere rather than dropped.
+    assert excluded == {"FS-LIMIT-API-REQUEST-BYTES"}
     assert not limits & excluded
     for identifier in excluded:
         assert manifest["excludedSurfaces"][identifier]
+    assert limits == set(manifest["requirementSurfaces"][1:])
+
+
+def test_no_index_configuration_change_is_required() -> None:
+    manifest = load(MANIFEST)
+    configuration = manifest["indexConfiguration"]
+    assert configuration["additionsRequired"] == []
+    assert configuration["compositeIndexes"] == 0
+    assert configuration["singleFieldExemptions"] == 0
+    assert configuration["preflightDigestUnchanged"] is True
+    assert (
+        configuration["conformanceIndexesSha256"]
+        == hashlib.sha256(
+            (ROOT / "conformance/firestore.indexes.json").read_bytes()
+        ).hexdigest()
+    )
+    assert manifest["configuration"]["writes"] == 0
+
+
+def test_a_truncating_maximum_is_not_recorded_as_a_refusal() -> None:
+    manifest = load(MANIFEST)
+    case = next(
+        c
+        for c in manifest["cases"]
+        if c.get("limitId") == "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES"
+    )
+    assert case["kind"] == "truncating-maximum"
+    assert "refus" not in " ".join(case["expected"][:1]).lower()
+    assert case["chargedInFullWouldBe"] > 7680
+
+
+def test_pending_rows_are_recorded_with_their_local_differences() -> None:
+    manifest, shadow = load(MANIFEST), load(SHADOW)
+    pending = manifest["pendingLocalImplementation"]
+    assert pending["rows"]
+    assert pending["meaning"]
+    unsupported = {
+        case["limitId"]
+        for case in manifest["cases"]
+        if case.get("catalogImplemented") == "unsupported"
+    }
+    assert unsupported == {
+        "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
+        "FS-LIMIT-FIELD-PATH-BYTES",
+        "FS-LIMIT-FIELD-VALUE-BYTES",
+    }
+    # A pending difference is evidence, so it must survive into the record.
+    assert shadow["execution"]["pendingDifferences"] == pending["differences"]
     assert manifest["locks"] == [
         {
             "key": "firestore/(default)/documents/oracle/{freshNonce}/limits-03/*",

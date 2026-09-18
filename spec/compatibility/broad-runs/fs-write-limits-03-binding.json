@@ -8,7 +8,7 @@
   "campaignId": "FS-WRITE-LIMITS-03",
   "collector": {
     "differenceFromLimits02": "Every mutating method is gated by the write-safety predicate, not PATCH alone, because this campaign sends its first writes over :batchWrite. The preflight prefix length is read from the plan. collector.py is byte-for-byte unchanged, so the frozen limits-02 collector source digest still resolves.",
-    "digest": "11692dc603ad6eac01a7b8596ed2fd104680cb254b3ddbf32b35ad619d531084",
+    "digest": "5c69fa9d316392dfc9d7a09e5db5e2cd2e5faa42ba4c0e9bfc763615d326f4de",
     "path": "tools/compat-broad/fs-write-limits/collector_03.py",
     "productionCollector": null,
     "scope": "REST BatchWrite per-position outcome, create-only document writes, typed readbacks and request-stage name refusals, with ownership and version bound cleanup. No configuration, index, Rules or account operation.",
@@ -50,19 +50,19 @@
   "localShadow": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03-local-shadow.json",
     "productionExecuted": false,
-    "sha256": "c0359bf376cc9a66d0287b5204c43a20892c0d88aadc37fd07be8fc5b0dd2637",
+    "sha256": "dcda7f42ee489b16175771b12c52fa4195869c27aa190d239b80808106f2d232",
     "status": "completed"
   },
   "manifest": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03.json",
-    "sha256": "89eb168e88e01078b0f1f140debea4eee0bbc032757e8bc4156a13f17bcd25f7"
+    "sha256": "5b7f987cfeac11970d7b9f0a3747f765c62631b6dbe00493809906a595b8b06d"
   },
   "productionExecuted": false,
   "source": {
-    "codeSourceHead": "278100cdf09029c2dcb71e111b5731c2fd23bda2",
-    "commit": "278100cdf09029c2dcb71e111b5731c2fd23bda2",
+    "codeSourceHead": "4e301e8691fe7e65d424777c08d7d332b3b6828d",
+    "commit": "4e301e8691fe7e65d424777c08d7d332b3b6828d",
     "productionArtifactSha256": null,
-    "shadowArtifactSha256": "188f62f63ba1d303b9730046793f62eebbbb5c75a247a4d7d170ec30de99d9e6"
+    "shadowArtifactSha256": "c35e1d5c2ddc13f44df59fea5c5ce257ecabd3130bd6c3acf3a8827754e1d5c9"
   },
   "status": "BLOCKED_OWNER",
   "technicalStatus": "BLOCKED_TECHNICAL"

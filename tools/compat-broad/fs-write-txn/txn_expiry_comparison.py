@@ -168,6 +168,31 @@ def _reasons(receipt, side, *, expect_target):
                 "detail": list(receipt["unrecovered"]),
             }
         )
+    unconfirmed = [
+        entry
+        for entry in receipt.get("responsibility") or []
+        if not entry.get("resolved")
+    ]
+    if unconfirmed:
+        # The run sent a create and never learned whether it took effect. The
+        # workspace it claims to describe is not known to be its own.
+        reasons.append(
+            {
+                "code": "unconfirmed-resource-ownership",
+                "side": side,
+                "detail": unconfirmed,
+            }
+        )
+    if receipt.get("authorityRefusal"):
+        # The run was told it may not act, so it stopped sending. Whatever it
+        # did record before that is not a complete observation.
+        reasons.append(
+            {
+                "code": "authority-refused",
+                "side": side,
+                "detail": receipt["authorityRefusal"],
+            }
+        )
     if expect_target == "production" and receipt.get("timing") != collector.WALL_CLOCK:
         reasons.append({"code": "production-timing-simulated", "side": side})
     rendered = repr(receipt)
@@ -364,6 +389,19 @@ def _post_state_reasons(receipt, side):
                     "code": "post-state-not-read",
                     "side": side,
                     "detail": {"case": case["id"]},
+                }
+            )
+        elif (entry.get("document") or {}).get("incomplete"):
+            # The readback did not describe the requested document, so it is a
+            # missing observation rather than a state anyone disagrees about.
+            reasons.append(
+                {
+                    "code": "post-state-readback-incomplete",
+                    "side": side,
+                    "detail": {
+                        "case": case["id"],
+                        "incomplete": entry["document"]["incomplete"],
+                    },
                 }
             )
         elif entry["role"] not in declared:

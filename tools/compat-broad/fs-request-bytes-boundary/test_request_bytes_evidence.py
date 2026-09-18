@@ -59,8 +59,8 @@ def test_the_published_record_is_assembled_the_way_the_generator_assembles_it():
     validate the contents of `shadow`, `observation`, `runtime`, `probeOutcomes`
     or `cases`, because those are the inputs. The two checks below recompute
     `shadow` and the gates from `observation`, which is what closes that gap;
-    `runtime` and `probeOutcomes` are pinned by the binding and boundary checks
-    further down.
+    `runtime`, `probeOutcomes` and `slotTimings` are pinned by the binding,
+    boundary and timing checks further down.
     """
     value = record()
     generated = shadow_module.build_shadow_document(
@@ -71,6 +71,7 @@ def test_the_published_record_is_assembled_the_way_the_generator_assembles_it():
         plan_digest=value["planDigest"],
         campaign_digest_value=value["campaignDigest"],
         probes=value["probeOutcomes"],
+        timings=value["slotTimings"],
         collector=value["observation"],
         shadow=value["shadow"],
         gates={

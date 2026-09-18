@@ -1,6 +1,6 @@
 {
-  "artifactSha256": "40903013f8f02d67a73b4021b30b54826fe54b403d5d2270f739aa49e5ff3864",
-  "campaignDigest": "67ace1e56c9e582bcde181ee3543c5f4a4d1e337327b0ee7d8da11767836b50f",
+  "artifactSha256": "ff74fadf4018c094840b6fff67aa84a58efae5f1eba7f960421ff5dbdfe713a8",
+  "campaignDigest": "967fb3a8149e3345080eccb14976f7b976ec18e237ded931376c93f2fb976864",
   "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
   "cases": [
     {
@@ -35,7 +35,7 @@
   "database": "(default)",
   "formalCompatibilityClaim": false,
   "kind": "fs-request-bytes-local-shadow-v1",
-  "nonce": "ab85083000b34a24b2b44dbd46a28c8d",
+  "nonce": "75ef10ada014455b84260a14523b1bbd",
   "note": "Owned local artifact shadow. No production request was sent, no credential was used and no parent group is promoted. The raw REST body byte count remains an observation hypothesis about production's enforcement metric.",
   "observation": {
     "canonicalRequestBytesMeasuredLocally": true,
@@ -53,7 +53,7 @@
       "responseBytes": 118,
       "responseSha256": "293bf2902042c662ca5f65c932f4fafcd9596dac70ace5460ccc5e5f015b68b9"
     },
-    "planDigest": "821fc77c6e7a2c09676ca9ace49c8d98eaacce8a82f33476ea74550157ba96ad",
+    "planDigest": "258ba5ac9a7eb9f002f0773bc894675b232ee8dc3269f5383a829e253ac118b6",
     "productionExecuted": false,
     "rawHttpMetricStatus": "observation hypothesis",
     "recoveryRowCount": 153,
@@ -61,7 +61,7 @@
     "resourceAbsence": true,
     "rowCount": 105
   },
-  "planDigest": "821fc77c6e7a2c09676ca9ace49c8d98eaacce8a82f33476ea74550157ba96ad",
+  "planDigest": "258ba5ac9a7eb9f002f0773bc894675b232ee8dc3269f5383a829e253ac118b6",
   "probeOutcomes": [
     {
       "complete": true,
@@ -73,7 +73,7 @@
       "requestBytes": 10485759,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "0d78ec56809e8aa1d416dc278b0c8bb2cb80aecdf735304c5598c3ab1b3cb406"
+      "responseSha256": "aac1a6e159fe0a7688c7b4abe34084f4aede2b5451268c8860dd6c7dcfb88ef4"
     },
     {
       "complete": true,
@@ -85,7 +85,7 @@
       "requestBytes": 10485760,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "cfa7565ff362ed4176d1b55f0f212056137b0a0e05620d65f35bd7c01af11e60"
+      "responseSha256": "7c3425e1ace45bc97fc865315533a1d2544d69fc404579c8598263455db2b912"
     },
     {
       "complete": true,
@@ -105,11 +105,11 @@
   "rawHttpMetricStatus": "observation hypothesis",
   "recordingComplete": true,
   "runtime": {
-    "artifactSha256": "40903013f8f02d67a73b4021b30b54826fe54b403d5d2270f739aa49e5ff3864",
+    "artifactSha256": "ff74fadf4018c094840b6fff67aa84a58efae5f1eba7f960421ff5dbdfe713a8",
     "runtimeInputCount": 410,
     "runtimeInputsClean": true,
     "runtimeInputsDigest": "07877b1210828d13e1977d4a979cdef3e8041f847b93ef15bcf25a7344b983a1",
-    "sourceCommit": "c0e6cf3072535f50501d38d5a3ca90d094ba28bd",
+    "sourceCommit": "e36cc0f947fc56350482bd6597dfe3f741cbf1cd",
     "sourceRoot": "repository-root"
   },
   "shadow": {
@@ -150,8 +150,32 @@
     "summary": "The limits layer refused the over-boundary Commit at exactly the 10 MiB boundary with the status, code and message this campaign expects of production. That expectation is documented rather than observed, so this is agreement with it, not confirmation of it.",
     "untypedOverRefusal": null
   },
-  "sourceDigestAfter": "b48ff8c4a2f763058825c18e8206a2ecb8f7d7f9d4213fc06236adff41768754",
-  "sourceDigestBefore": "b48ff8c4a2f763058825c18e8206a2ecb8f7d7f9d4213fc06236adff41768754",
+  "slotTimings": {
+    "classes": {
+      "boundaryCommit": {
+        "count": 3,
+        "maxSeconds": 0.028657,
+        "medianSeconds": 0.026448,
+        "p95Seconds": 0.028657,
+        "p99Seconds": 0.028657,
+        "totalSeconds": 0.057454
+      },
+      "smallRequest": {
+        "count": 238,
+        "maxSeconds": 0.013075,
+        "medianSeconds": 0.001127,
+        "p95Seconds": 0.012072,
+        "p99Seconds": 0.012733,
+        "totalSeconds": 0.93839
+      }
+    },
+    "disclaimer": "Loopback service time against an owned local emulator on the same machine. It excludes the network round trip, TLS and production server time, so it is a floor for a production per-slot figure and never an estimate of one. A production reservation needs a production measurement; the production transport now records elapsed time per request so one can be taken.",
+    "dispatchedCount": 241,
+    "isProductionEstimate": false,
+    "measurement": "loopback-floor"
+  },
+  "sourceDigestAfter": "bb7f11bef612bb6eb8ece341614b5ae1d5560364c95d0fdc195b441bb8826048",
+  "sourceDigestBefore": "bb7f11bef612bb6eb8ece341614b5ae1d5560364c95d0fdc195b441bb8826048",
   "stateValidation": true,
   "target": "owned-local-artifact"
 }

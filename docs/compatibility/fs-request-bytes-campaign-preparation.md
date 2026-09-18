@@ -215,8 +215,8 @@ has lost the implemented shape.
 
 The recorded run is published as
 `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, at source
-`1f34e786349b4a9ce1c0cf7aa03ebd819fae2bd0`, artifact SHA-256
-`ada6236ed317e21f928cd92388a3a2f2e489a128938cb66512e5510482129e52`, nonce `af62e3add5a7480484efec59db88ad3e`, with supervisor status
+`e36cc0f947fc56350482bd6597dfe3f741cbf1cd`, artifact SHA-256
+`ff74fadf4018c094840b6fff67aa84a58efae5f1eba7f960421ff5dbdfe713a8`, nonce `75ef10ada014455b84260a14523b1bbd`, with supervisor status
 `completed`, `recordingComplete` and `stateValidation` true, the owned process
 stopped and all listeners closed. It completed 105 observation rows and 153
 recovery rows, sent 241 of the 258 bounded requests, and proved all 51 owned
@@ -270,8 +270,9 @@ zero-wire skips are excluded, since they send nothing.
 
 **The published figures are a floor and not an estimate, and the record says so
 beside them.** A local shadow runs over loopback against an emulator on the same
-machine. Its small-request median is around a millisecond, which is service time
-with no network in it at all; a production small read is an HTTPS round trip and
+machine. In the published run the small-request median is 0.0011 s with a p99 of 0.0127 s, and the
+three boundary Commits ran 0.0264 s at the median. That is service time with no
+network in it at all; a production small read is an HTTPS round trip and
 will be one to two orders of magnitude higher. Citing the local p99 as a
 production per-slot figure would be wrong by that margin. It bounds the
 reservation from below and nothing more. A real figure needs a production run,

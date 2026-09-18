@@ -125,7 +125,10 @@ def compile_plan(
 
 
 def validate_plan(plan: Any) -> bool:
-    if not isinstance(plan, dict) or plan.get("schema") != "o6-listen-resume-preparation-v2":
+    if (
+        not isinstance(plan, dict)
+        or plan.get("schema") != "o6-listen-resume-preparation-v2"
+    ):
         return False
     try:
         nonce_digest = plan["owner"]["nonceDigest"]
@@ -139,15 +142,17 @@ def validate_plan(plan: Any) -> bool:
             return False
         if (
             plan.get("status") != "PREPARATION_ONLY"
-            or plan.get("unsupportedObligations") != [
-                "stale-token", "compacted-token", "session-reset", "typed-cleanup-absence"
+            or plan.get("unsupportedObligations")
+            != [
+                "stale-token",
+                "compacted-token",
+                "session-reset",
+                "typed-cleanup-absence",
             ]
             or plan.get("productionExecuted") is not False
         ):
             return False
-        if (
-            len(plan["operations"]) > LIMITS["maxOperations"]
-        ):
+        if len(plan["operations"]) > LIMITS["maxOperations"]:
             return False
         collection = plan["owner"]["collection"]
         nonce = collection.removeprefix("o6_resume_")

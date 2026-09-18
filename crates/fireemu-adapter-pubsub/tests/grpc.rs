@@ -470,9 +470,11 @@ type BarrierPushSink = (
 );
 
 /// The interval a test opts into when it exercises the push redelivery protection. It is not the
-/// default: without a retry policy the default is immediate redelivery, as production does.
+/// default: without a retry policy the default is immediate redelivery, as production does. It is
+/// deliberately longer than the push backoff of the first few failures, so a test that asserts
+/// "exactly this interval" is asserting the larger of the two waits.
 fn configured_push_redelivery_interval() -> LogicalDuration {
-    LogicalDuration::from_millis(100)
+    LogicalDuration::from_seconds(5)
 }
 
 /// Opts the subscription registry into a minimum push redelivery interval, exactly as the daemon
@@ -482,6 +484,58 @@ fn configure_push_redelivery_interval(h: &Harness, interval: LogicalDuration) {
         .lock()
         .unwrap()
         .set_push_minimum_redelivery_interval(interval);
+}
+
+/// The subscription-level push backoff owed after `consecutive_failures` failed push attempts in
+/// a row, spelled out here rather than read from the implementation so a test pins the curve.
+/// Production documents the 100 ms and 60 s bounds but not the curve between them.
+fn push_backoff_after(consecutive_failures: u32) -> LogicalDuration {
+    let doublings = consecutive_failures.saturating_sub(1).min(20);
+    LogicalDuration::from_millis((100_i64 << doublings).min(60_000))
+}
+
+/// The longest push backoff, which releases a held subscription whatever its failure streak.
+fn maximum_push_backoff() -> LogicalDuration {
+    LogicalDuration::from_millis(60_000)
+}
+
+/// Advances the clock past the whole push backoff, which is what releases the next push attempt
+/// on a subscription whose endpoint keeps failing.
+fn release_push_backoff(h: &Harness) {
+    advance(h, maximum_push_backoff());
+}
+
+/// Waits until the subscription's push backoff is recorded for `expected`, which is the point at
+/// which the failed attempt is fully accounted for and nothing is in flight any more.
+async fn await_push_backoff(h: &Harness, subscription: &str, expected: LogicalInstant) {
+    let name = fireemu_core_pubsub::SubscriptionName::parse(subscription).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while h.handle.push_backoff_resume_at(&name) != Some(expected) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!("the push backoff of {subscription} must hold delivery until {expected}")
+    });
+}
+
+/// Waits for `count` recorded push requests, releasing the subscription's push backoff between
+/// attempts. A failing endpoint throttles its subscription, so a test that wants the next attempt
+/// has to let the virtual clock reach it.
+async fn await_push_count_releasing_backoff(
+    h: &Harness,
+    bodies: &Arc<Mutex<Vec<Vec<u8>>>>,
+    count: usize,
+) {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while bodies.lock().unwrap().len() < count {
+            release_push_backoff(h);
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("push request {count} must be sent"));
 }
 
 /// Advances the shared virtual clock and wakes the push dispatcher, exactly as the control API
@@ -1576,9 +1630,9 @@ async fn push_subscription_retries_after_failures_without_a_new_publish() {
     .await
     .unwrap();
 
-    // No retry policy and no configured protection: production redelivers as soon as possible, and
-    // so does the emulator, so the fourth request is sent without the virtual clock advancing.
-    await_push_count(&bodies, 4).await;
+    // The retry policy is immediate, but push delivery carries its own subscription-level backoff:
+    // each failed attempt holds the subscription until the virtual clock reaches its wait.
+    await_push_count_releasing_backoff(&h, &bodies, 4).await;
     assert_eq!(bodies.lock().unwrap().len(), 4);
     let pulled = subc
         .pull(pb::PullRequest {
@@ -1711,9 +1765,9 @@ async fn ordered_push_delivers_successor_after_dead_letter_forwarding() {
     .await
     .unwrap();
 
-    // The five failing attempts have no retry policy, so each redelivery is immediate; the
-    // dead-letter budget still counts one attempt per request.
-    await_push_count(&bodies, 6).await;
+    // The five failing attempts have no retry policy, but each one owes the subscription's push
+    // backoff; the dead-letter budget still counts one attempt per request.
+    await_push_count_releasing_backoff(&h, &bodies, 6).await;
     let pushed = bodies.lock().unwrap().clone();
     assert_eq!(pushed.len(), 6);
     let last = String::from_utf8(pushed.last().unwrap().clone()).unwrap();
@@ -1855,6 +1909,9 @@ async fn a_new_publication_wakes_a_subscription_deferred_for_push_backoff() {
     })
     .await
     .unwrap();
+    // The failed attempt holds the subscription for its push backoff, so the new message waits
+    // that out. It must not wait the 30 s retry policy, which belongs to the first message alone.
+    advance(&h, push_backoff_after(1));
     let second_delivered = tokio::time::timeout(std::time::Duration::from_secs(1), async {
         while bodies.lock().unwrap().len() < 2 {
             tokio::task::yield_now().await;
@@ -2683,7 +2740,8 @@ async fn push_exhaustion_forwards_to_the_destination_exactly_once() {
                 .unwrap()
                 .into_inner()
                 .received_messages;
-            // Without a retry policy each failed push is redelivered immediately.
+            // Each failed push holds the subscription for its push backoff.
+            release_push_backoff(&h);
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         }
     })
@@ -2906,7 +2964,8 @@ async fn a_failed_push_delivery_counts_one_delivery_attempt_against_the_dead_let
                 .unwrap()
                 .into_inner()
                 .received_messages;
-            // Without a retry policy each failed push is redelivered immediately.
+            // Each failed push holds the subscription for its push backoff.
+            release_push_backoff(&h);
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         }
     })
@@ -2928,6 +2987,490 @@ async fn a_failed_push_delivery_counts_one_delivery_attempt_against_the_dead_let
         let expected = format!("\"deliveryAttempt\":{}", index + 1);
         assert!(body.contains(&expected), "attempt {}: {body}", index + 1);
     }
+
+    h.shutdown().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}
+
+/// Push delivery carries a subscription-level backoff of its own, separate from the per-message
+/// retry policy and not disableable: an endpoint that keeps failing is re-requested less and less
+/// often. The documented bounds are 100 ms to 60 s; the progression between them doubles here.
+#[tokio::test]
+async fn continuous_push_failure_backs_the_subscription_off_exponentially() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (endpoint, bodies, stop, worker) = push_sink_sequence(vec![503; 8]);
+    let topic = "projects/demo-app/topics/push-backoff-growth";
+    let subscription = "projects/demo-app/subscriptions/push-backoff-growth";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"always-503")],
+    })
+    .await
+    .unwrap();
+
+    // The retry policy is immediate, so nothing but the push backoff holds the message back.
+    for attempt in 1..=4_u32 {
+        await_push_count(&bodies, attempt as usize).await;
+        let wait = push_backoff_after(attempt);
+        assert_eq!(
+            wait,
+            LogicalDuration::from_millis(100_i64 << (attempt - 1)),
+            "the wait must double with every consecutive failure"
+        );
+        let resume_at = h
+            .clock
+            .lock()
+            .unwrap()
+            .now_for_test()
+            .checked_add(wait)
+            .unwrap();
+        await_push_backoff(&h, subscription, resume_at).await;
+
+        // One nanosecond short of the backoff must not release the endpoint.
+        advance(&h, LogicalDuration::from_nanos(wait.as_nanos() - 1));
+        assert_push_count_stays(&bodies, attempt as usize).await;
+        advance(&h, LogicalDuration::from_nanos(1));
+    }
+    await_push_count(&bodies, 5).await;
+
+    h.shutdown().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}
+
+/// The backoff throttles the subscription, not one message: a message published while the
+/// endpoint is failing waits with it rather than being pushed straight away.
+#[tokio::test]
+async fn a_message_published_during_push_backoff_is_held_with_the_subscription() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (endpoint, bodies, stop, worker) = push_sink_sequence(vec![503, 204, 204]);
+    let topic = "projects/demo-app/topics/push-backoff-hold";
+    let subscription = "projects/demo-app/subscriptions/push-backoff-hold";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"first")],
+    })
+    .await
+    .unwrap();
+    await_push_count(&bodies, 1).await;
+    let wait = push_backoff_after(1);
+    let resume_at = h
+        .clock
+        .lock()
+        .unwrap()
+        .now_for_test()
+        .checked_add(wait)
+        .unwrap();
+    await_push_backoff(&h, subscription, resume_at).await;
+
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"second")],
+    })
+    .await
+    .unwrap();
+    assert_push_count_stays(&bodies, 1).await;
+
+    advance(&h, wait);
+    await_push_count(&bodies, 3).await;
+    let pushed = bodies.lock().unwrap().clone();
+    assert_eq!(pushed.len(), 3);
+
+    h.shutdown().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}
+
+/// The backoff is owned by one subscription: a healthy subscription keeps delivering at full
+/// speed while another one's endpoint is failing, without the virtual clock moving at all.
+#[tokio::test]
+async fn push_backoff_on_one_subscription_leaves_another_untouched() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (failing_endpoint, failing_bodies, stop_failing, failing_worker) =
+        push_sink_sequence(vec![503; 4]);
+    let (healthy_endpoint, healthy_bodies, stop_healthy, healthy_worker) = push_sink(204);
+    let topic = "projects/demo-app/topics/push-backoff-isolation";
+    let failing = "projects/demo-app/subscriptions/push-backoff-failing";
+    let healthy = "projects/demo-app/subscriptions/push-backoff-healthy";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for (name, endpoint) in [(failing, failing_endpoint), (healthy, healthy_endpoint)] {
+        subc.create_subscription(pb::Subscription {
+            name: name.to_owned(),
+            topic: topic.to_owned(),
+            push_config: Some(pb::PushConfig {
+                push_endpoint: endpoint,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"fan-out")],
+    })
+    .await
+    .unwrap();
+
+    await_push_count(&failing_bodies, 1).await;
+    let resume_at = h
+        .clock
+        .lock()
+        .unwrap()
+        .now_for_test()
+        .checked_add(push_backoff_after(1))
+        .unwrap();
+    await_push_backoff(&h, failing, resume_at).await;
+
+    // The healthy subscription never entered a backoff, so its delivery needs no clock advance.
+    await_push_count(&healthy_bodies, 1).await;
+    let healthy_name = fireemu_core_pubsub::SubscriptionName::parse(healthy).unwrap();
+    assert_eq!(h.handle.push_backoff_resume_at(&healthy_name), None);
+    assert_push_count_stays(&failing_bodies, 1).await;
+
+    h.shutdown().await;
+    stop_failing.store(true, Ordering::Release);
+    stop_healthy.store(true, Ordering::Release);
+    failing_worker.join().unwrap();
+    healthy_worker.join().unwrap();
+}
+
+/// A retry policy and the push backoff are separate waits and the later one decides: a 30 s retry
+/// policy outlasts the first 100 ms of push backoff, so the message is not re-pushed at 100 ms.
+#[tokio::test]
+async fn a_longer_retry_policy_outlasts_the_push_backoff() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (endpoint, bodies, stop, worker) = push_sink_sequence(vec![503, 503, 204]);
+    let topic = "projects/demo-app/topics/push-backoff-retry-wins";
+    let subscription = "projects/demo-app/subscriptions/push-backoff-retry-wins";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        retry_policy: Some(pb::RetryPolicy {
+            minimum_backoff: Some(prost_types::Duration {
+                seconds: 30,
+                nanos: 0,
+            }),
+            maximum_backoff: Some(prost_types::Duration {
+                seconds: 30,
+                nanos: 0,
+            }),
+        }),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"slow-retry")],
+    })
+    .await
+    .unwrap();
+
+    await_push_count(&bodies, 1).await;
+    let backoff = push_backoff_after(1);
+    let resume_at = h
+        .clock
+        .lock()
+        .unwrap()
+        .now_for_test()
+        .checked_add(backoff)
+        .unwrap();
+    await_push_backoff(&h, subscription, resume_at).await;
+
+    // The push backoff elapses first, and the retry policy still holds the message.
+    advance(&h, backoff);
+    assert_push_count_stays(&bodies, 1).await;
+
+    advance(&h, LogicalDuration::from_seconds(30));
+    await_push_count(&bodies, 2).await;
+
+    h.shutdown().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}
+
+/// The other direction: a retry policy shorter than the push backoff does not shorten it. After
+/// three consecutive failures the subscription owes 400 ms, so a 150 ms retry policy expiring
+/// does not release the endpoint.
+#[tokio::test]
+async fn a_shorter_retry_policy_does_not_shorten_the_push_backoff() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (endpoint, bodies, stop, worker) = push_sink_sequence(vec![503; 6]);
+    let topic = "projects/demo-app/topics/push-backoff-wins";
+    let subscription = "projects/demo-app/subscriptions/push-backoff-wins";
+    let retry = LogicalDuration::from_millis(150);
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        retry_policy: Some(pb::RetryPolicy {
+            minimum_backoff: Some(prost_types::Duration {
+                seconds: 0,
+                nanos: 150_000_000,
+            }),
+            maximum_backoff: Some(prost_types::Duration {
+                seconds: 0,
+                nanos: 150_000_000,
+            }),
+        }),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"fast-retry")],
+    })
+    .await
+    .unwrap();
+
+    // Walk to the third failure, where the push backoff (400 ms) outlasts the retry policy.
+    for attempt in 1..=3_u32 {
+        await_push_count(&bodies, attempt as usize).await;
+        let backoff = push_backoff_after(attempt);
+        let resume_at = h
+            .clock
+            .lock()
+            .unwrap()
+            .now_for_test()
+            .checked_add(backoff)
+            .unwrap();
+        await_push_backoff(&h, subscription, resume_at).await;
+        if attempt < 3 {
+            // Both waits start at the same instant, so the later one releases the attempt.
+            advance(&h, backoff.max(retry));
+        }
+    }
+    assert_eq!(push_backoff_after(3), LogicalDuration::from_millis(400));
+
+    // The retry policy expires long before the backoff does, and releases nothing.
+    advance(&h, retry);
+    assert_push_count_stays(&bodies, 3).await;
+
+    advance(&h, LogicalDuration::from_millis(250));
+    await_push_count(&bodies, 4).await;
+
+    h.shutdown().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}
+
+/// A delivery the endpoint accepts clears the streak, so the next failure starts again at the
+/// minimum wait rather than continuing to double.
+#[tokio::test]
+async fn a_successful_push_resets_the_backoff_streak() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (endpoint, bodies, stop, worker) = push_sink_sequence(vec![503, 503, 204, 503, 204]);
+    let topic = "projects/demo-app/topics/push-backoff-reset";
+    let subscription = "projects/demo-app/subscriptions/push-backoff-reset";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"recovering")],
+    })
+    .await
+    .unwrap();
+
+    // Two failures take the wait to 200 ms, then the third attempt succeeds and clears it.
+    for attempt in 1..=2_u32 {
+        await_push_count(&bodies, attempt as usize).await;
+        let backoff = push_backoff_after(attempt);
+        let resume_at = h
+            .clock
+            .lock()
+            .unwrap()
+            .now_for_test()
+            .checked_add(backoff)
+            .unwrap();
+        await_push_backoff(&h, subscription, resume_at).await;
+        advance(&h, backoff);
+    }
+    await_push_count(&bodies, 3).await;
+    let name = fireemu_core_pubsub::SubscriptionName::parse(subscription).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while h.handle.push_backoff_resume_at(&name).is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("an accepted delivery must clear the push backoff");
+
+    // The next message fails once, and owes the minimum wait again rather than 400 ms.
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"fails-once")],
+    })
+    .await
+    .unwrap();
+    await_push_count(&bodies, 4).await;
+    let resume_at = h
+        .clock
+        .lock()
+        .unwrap()
+        .now_for_test()
+        .checked_add(push_backoff_after(1))
+        .unwrap();
+    await_push_backoff(&h, subscription, resume_at).await;
+
+    h.shutdown().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}
+
+/// The interleaving that reopens the immediate loop: a message is published while a failing push
+/// attempt is still awaiting its endpoint. The publication is admitted before the failure is
+/// known, so nothing may turn it into a request before the backoff the failure records elapses.
+#[tokio::test]
+async fn a_publish_during_an_in_flight_failing_push_sends_nothing_before_the_backoff_elapses() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (endpoint, bodies, started, release, stop, worker) = barrier_push_sink_with_status(503);
+    let topic = "projects/demo-app/topics/push-backoff-inflight";
+    let subscription = "projects/demo-app/subscriptions/push-backoff-inflight";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"first")],
+    })
+    .await
+    .unwrap();
+
+    // The endpoint has the first request and is holding it: the attempt has not failed yet.
+    started.await.unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"published-mid-flight")],
+    })
+    .await
+    .unwrap();
+
+    let resume_at = h
+        .clock
+        .lock()
+        .unwrap()
+        .now_for_test()
+        .checked_add(push_backoff_after(1))
+        .unwrap();
+    release.store(true, Ordering::Release);
+    await_push_backoff(&h, subscription, resume_at).await;
+
+    // The publication admitted mid-flight must not have become a request of its own.
+    assert_push_count_stays(&bodies, 1).await;
+    advance(&h, push_backoff_after(1));
+    await_push_count(&bodies, 2).await;
 
     h.shutdown().await;
     stop.store(true, Ordering::Release);

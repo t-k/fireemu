@@ -46,7 +46,7 @@ def test_anonymous_recovery_requires_deletion_and_confirmed_absence(tmp_path, ou
             self.wfile.write(data)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         origin = f"http://127.0.0.1:{server.server_port}"

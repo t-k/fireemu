@@ -30,7 +30,9 @@ test("bounded real HTTP separates non-JSON, empty, overflow, timeout and interru
     res.end(req.url === "/large" ? "x".repeat(100) : "private-body");
   });
   await new Promise((resolve) =>
-    server.listen(Number(process.env.PORT ?? 0), "127.0.0.1", resolve),
+    // Always take an OS-assigned port: an ambient PORT collides with the
+    // other sessions running this suite on the same machine.
+    server.listen(0, "127.0.0.1", resolve),
   );
   const origin = `http://127.0.0.1:${server.address().port}`;
   const get = (path, maxBytes = 1000, timeoutMs = 2_000) =>

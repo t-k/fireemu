@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import time
@@ -78,16 +77,16 @@ class Handler(BaseHTTPRequestHandler):
 @pytest.fixture()
 def origin():
     Handler.received.clear()
-    server = ThreadingHTTPServer(
-        ("127.0.0.1", int(os.environ.get("PORT", "0"))), Handler
-    )
-    thread = Thread(target=server.serve_forever)
+    # Always take an OS-assigned port: a fixed one collides with the other
+    # sessions that run this suite concurrently on the same machine.
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         yield f"http://127.0.0.1:{server.server_port}"
     finally:
         server.shutdown()
-        thread.join()
+        thread.join(timeout=5)
         server.server_close()
 
 

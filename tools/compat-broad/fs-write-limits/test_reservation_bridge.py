@@ -147,7 +147,7 @@ def test_closing_lease_blocks_post_wait_data_and_metadata_attempts(tmp_path, kin
         except ValueError as error:
             finish_errors.append(error)
 
-    worker = threading.Thread(target=finish)
+    worker = threading.Thread(target=finish, daemon=True)
 
     def after_wait():
         worker.start()

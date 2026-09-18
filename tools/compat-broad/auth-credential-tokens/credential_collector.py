@@ -55,6 +55,10 @@ OWNED_EMAIL_DOMAIN = "fireemu-credential.invalid"
 #: A ceiling far below the lane's stated budget, so a typo cannot authorize real spend.
 COST_CEILING_USD = 0.5
 
+#: Members that contain a secret fragment as a substring but hold no credential. Without
+#: this, a case's own `assertions` results would be redacted away as an SAML `assertion`.
+NON_SECRET_KEY_NAMES = ("assertions",)
+
 RECEIPT_SIDES = ("local", "production")
 
 
@@ -71,6 +75,8 @@ class BudgetExceeded(Exception):
 
 def is_secret_key(key: str) -> bool:
     """Whether a record member holds credential material, judged by its name."""
+    if key in NON_SECRET_KEY_NAMES:
+        return False
     lowered = key.replace("-", "").replace("_", "").lower()
     return any(
         fragment.replace("_", "") in lowered for fragment in SECRET_KEY_FRAGMENTS

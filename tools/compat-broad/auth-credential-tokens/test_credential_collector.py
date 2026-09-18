@@ -74,6 +74,15 @@ def test_publishable_projection_drops_every_secret_value_and_digest() -> None:
     assert "sha256" not in serialized
 
 
+def test_a_member_that_merely_contains_a_secret_fragment_survives() -> None:
+    # "assertions" contains "assertion" but holds the case's own boolean results.
+    record = {"assertions": {"authTimePreserved": True}, "assertion": "RAW_SAML_BLOB"}
+    published = collector.publishable(record)
+    assert published["assertions"] == {"authTimePreserved": True}
+    assert published["assertion"] == {"present": True, "type": "string"}
+    assert "RAW_SAML_BLOB" not in json.dumps(published)
+
+
 def test_absent_and_null_secrets_are_distinguishable_from_present_ones() -> None:
     assert collector.publishable({"idToken": None})["idToken"] == {
         "present": False,

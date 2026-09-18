@@ -113,7 +113,7 @@ def test_complete_typed_response_difference_is_semantic_mismatch():
         if value.get("documents"):
             value = [{"document": value["documents"][0]}]
         else:
-            value = []
+            value = [{"readTime": "2026-09-18T00:01:00Z"}]
         body = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
         digest = hashlib.sha256(body).hexdigest()
         bundle["rows"][2]["rawSha256"] = digest
@@ -459,3 +459,50 @@ def test_read_time_only_empty_result_is_semantic_mismatch_after_reload(tmp_path)
     right["rows"][2]["body"] = {"documents": []}
     loaded = _persist_bundle(tmp_path, "right", right)
     assert compare_evidence(left, loaded)["classification"] == "SEMANTIC_MISMATCH"
+
+
+def test_terminal_read_time_before_created_version_is_mismatch(tmp_path):
+    left = _bundle()
+    right = _bundle()
+    for bundle, read_time in (
+        (left, "2026-09-18T00:01:00Z"),
+        (right, "2026-09-17T23:00:00Z"),
+    ):
+        document = bundle["rows"][2]["body"]["documents"][0]
+        body = json.dumps([{"document": document}, {"readTime": read_time, "done": True}]).encode()
+        bundle["raw"]["2"].update(rawBody=body, byteCount=len(body))
+    result = compare_evidence(
+        _persist_bundle(tmp_path, "left", left), _persist_bundle(tmp_path, "right", right)
+    )
+    assert result["classification"] == "SEMANTIC_MISMATCH"
+
+
+def test_invalid_calendar_timestamp_is_indeterminate():
+    bundle = _bundle()
+    timestamp = "2026-99-99T00:00:00Z"
+    for index in (1, 3, 5):
+        bundle["rows"][index]["body"]["updateTime"] = timestamp
+        body = json.dumps(bundle["rows"][index]["body"]).encode()
+        bundle["raw"][str(index)].update(
+            rawBody=body, byteCount=len(body), sourceRawSha256=hashlib.sha256(body).hexdigest()
+        )
+        bundle["rows"][index]["rawSha256"] = hashlib.sha256(body).hexdigest()
+    bundle["cleanup"][0]["body"]["updateTime"] = timestamp
+    body = json.dumps(bundle["cleanup"][0]["body"]).encode()
+    bundle["raw"]["6"].update(
+        rawBody=body, byteCount=len(body), sourceRawSha256=hashlib.sha256(body).hexdigest()
+    )
+    bundle["cleanup"][0]["rawSha256"] = hashlib.sha256(body).hexdigest()
+    bundle["cleanup"][1]["request"]["path"] = bundle["plan"]["recovery"][1]["path"] + "?currentDocument.updateTime=" + timestamp.replace(":", "%3A")
+    assert compare_evidence(bundle, copy.deepcopy(bundle))["classification"] == "INDETERMINATE"
+
+
+def test_empty_run_query_stream_is_indeterminate():
+    bundle = _bundle()
+    bundle["rows"][2]["body"] = {"documents": []}
+    bundle["raw"]["2"].update(
+        rawBody=b"[]", byteCount=2, documents=[],
+        sourceRawSha256=hashlib.sha256(b"[]").hexdigest(),
+    )
+    bundle["rows"][2]["rawSha256"] = hashlib.sha256(b"[]").hexdigest()
+    assert compare_evidence(bundle, copy.deepcopy(bundle))["classification"] == "INDETERMINATE"

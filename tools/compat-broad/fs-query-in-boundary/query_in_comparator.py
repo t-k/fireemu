@@ -183,7 +183,7 @@ def _timestamp_ranks(value: Any, *, key_name: str = "") -> dict[str, int]:
 
 
 def _typed_query_response(value: Any) -> bool:
-    return isinstance(value, list) and all(
+    return isinstance(value, list) and bool(value) and all(
         _typed_query_row(row) and (index == len(value) - 1 or row.get("done") is not True)
         for index, row in enumerate(value)
     )
@@ -454,20 +454,20 @@ def _validate_side(bundle: Any) -> tuple[dict[str, Any], list[dict[str, Any]], l
             raise ValueError("positive query projection is not row-bound")
         for item in parsed:
             document = item.get("document")
+            created = rows[1]["body"]
+            read_time = item.get("readTime")
+            if isinstance(read_time, str) and _TIMESTAMP.fullmatch(read_time):
+                for field in ("createTime", "updateTime"):
+                    version = document.get(field, created.get(field)) if isinstance(document, dict) else created.get(field)
+                    if isinstance(version, str) and _TIMESTAMP.fullmatch(version) and _timestamp_order(read_time) < _timestamp_order(version):
+                        query_time_consistent = False
             if not isinstance(document, dict) or document.get("name") != plan["document"]:
                 continue
-            created = rows[1]["body"]
             for field in ("createTime", "updateTime"):
                 if field in document and field in created and document[field] != created[field]:
                     query_time_consistent = False
             if "createTime" in document and "updateTime" in document and _timestamp_order(document["createTime"]) > _timestamp_order(document["updateTime"]):
                 query_time_consistent = False
-            read_time = item.get("readTime")
-            if isinstance(read_time, str) and _TIMESTAMP.fullmatch(read_time):
-                for field in ("createTime", "updateTime"):
-                    version = document.get(field, created.get(field))
-                    if isinstance(version, str) and _TIMESTAMP.fullmatch(version) and _timestamp_order(read_time) < _timestamp_order(version):
-                        query_time_consistent = False
     else:
         raise TypeError("typed raw receipt evidence is required")
     contract = [
@@ -518,8 +518,12 @@ def compare_evidence(production: dict[str, Any], local: dict[str, Any]) -> dict[
     except (ValueError, TypeError, KeyError, IndexError) as error:
         result["errors"].append(str(error))
         return result
-    left = _canonical_journal(production_plan, production_rows, production_cleanup)
-    right = _canonical_journal(local_plan, local_rows, local_cleanup)
+    try:
+        left = _canonical_journal(production_plan, production_rows, production_cleanup)
+        right = _canonical_journal(local_plan, local_rows, local_cleanup)
+    except ValueError as error:
+        result["errors"].append(str(error))
+        return result
     for index, (a, b) in enumerate(zip(left, right, strict=True)):
         raw_a = {key: production_rows[index][key] for key in ("status", "body")} if index < 6 else production_cleanup[index - 6]
         raw_b = {key: local_rows[index][key] for key in ("status", "body")} if index < 6 else local_cleanup[index - 6]
@@ -548,14 +552,19 @@ def compare_evidence(production: dict[str, Any], local: dict[str, Any]) -> dict[
         }
         if not _exact(raw_left, raw_right):
             result["classification"] = "SEMANTIC_MISMATCH"
-            if (
-                set(left_raw) == set(right_raw)
-                and all(
-                _raw_views_semantically_equal(left_raw[key], right_raw[key], production_plan, local_plan)
-                for key in set(left_raw) & set(right_raw)
+            try:
+                semantically_equal = (
+                    set(left_raw) == set(right_raw)
+                    and all(
+                        _raw_views_semantically_equal(left_raw[key], right_raw[key], production_plan, local_plan)
+                        for key in set(left_raw) & set(right_raw)
+                    )
                 )
-                and all(row["classification"] != "SEMANTIC_MISMATCH" for row in result["rows"])
-            ):
+            except ValueError as error:
+                result["classification"] = "INDETERMINATE"
+                result["errors"].append(str(error))
+                return result
+            if semantically_equal and all(row["classification"] != "SEMANTIC_MISMATCH" for row in result["rows"]):
                 result["classification"] = "EXPECTED_NONDETERMINISM"
         elif result["classification"] == "MATCH" and left_raw != right_raw:
             result["classification"] = "EXPECTED_NONDETERMINISM"

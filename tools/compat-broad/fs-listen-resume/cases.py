@@ -12,6 +12,7 @@ delivered anything.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from types import MappingProxyType
 from typing import Any
 
@@ -579,7 +580,7 @@ def case_ids() -> tuple[str, ...]:
 def get_case(case_id: str) -> dict[str, Any]:
     for case in CASES:
         if case["caseId"] == case_id:
-            return case
+            return deepcopy(case)
     raise KeyError(case_id)
 
 
@@ -592,7 +593,7 @@ def catalog() -> dict[str, Any]:
         "privateCollection": PRIVATE_COLLECTION,
         "requiredRulesFragment": REQUIRED_RULES_FRAGMENT,
         "requiredRulesDigest": digest(REQUIRED_RULES_FRAGMENT),
-        "cases": [dict(case) for case in CASES],
+        "cases": [deepcopy(case) for case in CASES],
         "unobservedPaths": [dict(entry) for entry in UNOBSERVED_PATHS],
     }
 

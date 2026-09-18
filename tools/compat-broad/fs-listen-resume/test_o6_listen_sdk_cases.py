@@ -165,3 +165,20 @@ def test_unobserved_paths_name_browser_and_both_declared_mobile_platforms():
 def test_unknown_case_identifier_is_rejected(case_id):
     with pytest.raises(KeyError):
         get_case(case_id)
+
+
+def test_catalog_nested_structures_cannot_be_mutated_through_a_snapshot():
+    snapshot = catalog()
+    snapshot["cases"][0]["steps"].append({"kind": "write", "doc": "rogue"})
+    snapshot["cases"][0]["expectedLocal"][0]["error"] = "drift"
+    assert catalog_digest() == catalog_digest()
+    assert all(
+        step["kind"] != "write" or step["doc"] != "rogue"
+        for step in catalog()["cases"][0]["steps"]
+    )
+
+
+def test_get_case_returns_a_copy():
+    case = get_case("FS-LISTEN-SDK-101")
+    case["steps"].clear()
+    assert get_case("FS-LISTEN-SDK-101")["steps"]

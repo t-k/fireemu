@@ -7,12 +7,15 @@
 //! surfaces, and it has come back once already after the codecs were first consolidated, so
 //! it is pinned by a test rather than by review.
 //!
-//! The rule: no adapter crate calls `u8::from_str_radix` or defines its own hex-nibble
-//! helper. `usize::from_str_radix` is untouched, because chunked-transfer sizes are a
-//! different thing parsed from hexadecimal.
+//! The rule: outside the codec itself, no crate parses a hexadecimal nibble to build a byte.
+//! `usize::from_str_radix` is untouched, because a chunked-transfer size is a different
+//! thing parsed from hexadecimal.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+
+/// The one implementation the rule exists to protect. Permanent.
+const OWNER: &str = "fireemu-core-types/src/codec.rs";
 
 /// Files that still hold a hand-rolled decoder, with the issue that removes each one.
 ///
@@ -24,8 +27,14 @@ const ALLOWED: &[&str] = &[
     "fireemu-adapter-grpc/src/webchannel.rs",
 ];
 
-/// The markers a hand-rolled percent decoder leaves behind.
-const MARKERS: &[&str] = &["u8::from_str_radix", "fn hex_nibble", "fn from_hex_digit"];
+/// The markers a hand-rolled percent decoder leaves behind. `to_digit(16)` is the same
+/// nibble parse spelled through `char`, which is how the App Check surface wrote it.
+const MARKERS: &[&str] = &[
+    "u8::from_str_radix",
+    "to_digit(16)",
+    "fn hex_nibble",
+    "fn from_hex_digit",
+];
 
 fn crates_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -34,18 +43,13 @@ fn crates_dir() -> PathBuf {
         .to_path_buf()
 }
 
-fn adapter_sources(root: &Path) -> Vec<PathBuf> {
+/// Every `crates/*/src/**/*.rs`, not only the adapters: the rule is repository-wide.
+fn crate_sources(root: &Path) -> Vec<PathBuf> {
     let mut sources = Vec::new();
     let mut pending: Vec<PathBuf> = std::fs::read_dir(root)
         .expect("the crates directory is readable")
         .map(|entry| entry.expect("a readable directory entry").path())
-        .filter(|path| {
-            path.is_dir()
-                && path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with("fireemu-adapter-"))
-        })
+        .filter(|path| path.is_dir())
         .map(|path| path.join("src"))
         .filter(|path| path.is_dir())
         .collect();
@@ -71,11 +75,11 @@ fn relative(path: &Path, root: &Path) -> String {
 }
 
 #[test]
-fn no_adapter_crate_decodes_percent_escapes_by_hand() {
+fn only_the_shared_codec_parses_hexadecimal_nibbles() {
     let root = crates_dir();
-    let sources = adapter_sources(&root);
+    let sources = crate_sources(&root);
     assert!(
-        sources.len() > 20,
+        sources.len() > 100,
         "the scan found only {} files; the walk is broken, not the repository",
         sources.len()
     );
@@ -86,19 +90,24 @@ fn no_adapter_crate_decodes_percent_escapes_by_hand() {
             offenders.insert(relative(path, &root));
         }
     }
-    let allowed: BTreeSet<String> = ALLOWED.iter().map(|path| (*path).to_owned()).collect();
-    let unexpected: Vec<&String> = offenders.difference(&allowed).collect();
+    let exempt: BTreeSet<String> = ALLOWED
+        .iter()
+        .chain(std::iter::once(&OWNER))
+        .map(|path| (*path).to_owned())
+        .collect();
+    let unexpected: Vec<&String> = offenders.difference(&exempt).collect();
     assert!(
         unexpected.is_empty(),
-        "these adapter sources decode percent escapes by hand; use \
+        "these sources decode percent escapes by hand; use \
          fireemu_core_types::codec::percent_decode (or percent_decode_bytes with \
          percent_escapes_are_well_formed when a malformed escape must be refused): {unexpected:?}"
     );
-    // The allowlist is temporary, so it must not outlive the files it names.
-    let stale: Vec<&String> = allowed.difference(&offenders).collect();
+    // The exemptions are named files, not a blanket rule, so they must not outlive what they
+    // name. The allowlist entries in particular are temporary.
+    let stale: Vec<&String> = exempt.difference(&offenders).collect();
     assert!(
         stale.is_empty(),
-        "these allowlist entries no longer hold a hand-rolled decoder and should be removed \
-         from ALLOWED: {stale:?}"
+        "these exempt files no longer parse a hexadecimal nibble and should be removed from \
+         ALLOWED (or OWNER): {stale:?}"
     );
 }

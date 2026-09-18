@@ -15,15 +15,21 @@ digests of each comparator.
 
 The record only means something if the digests it publishes are the digests of
 the bytes that actually produced the classification, so nothing it names is read
-twice. The repaired comparator sources are copied into a private read-only
-snapshot before anything runs, the snapshot is what the subprocess executes and
-what the record hashes, and the snapshot holds the complete lane import closure
-so the child cannot reach back into a mutable directory. Every saved input is
-read once, and the parsed values and the published digests both come from that
-one read. `comparator_root` need not be a frozen checkout, so every path this
-run depended on is compared against its original bytes at the end; anything that
-changed underneath refuses the whole recompare rather than returning a record
-whose result and digests describe different bytes.
+twice. Every saved input is read once and the parsed values, the published
+digests and the executed sources all come from that one read. The repaired
+comparator sources are written into a private read-only snapshot from those same
+bytes, the snapshot is what the subprocess imports and what the record hashes,
+and it holds the complete lane import closure so the child cannot reach back
+into a mutable directory.
+
+`compare_saved` runs before that read and opens the saved records and the
+reference for itself, and its refusal for an invalid saved directory has to
+reach the caller unchanged, so the pre-image taken ahead of it is only a probe
+that never raises. Comparing the probe with the real read closes the window
+around the validator. `comparator_root` need not be a frozen checkout, so every
+path this run depended on is compared against its bytes again at the end.
+Anything that changed underneath refuses the whole recompare rather than
+returning a record whose result and digests describe different bytes.
 
 No production request is made, no credential is read, and no current permission,
 checkout or artifact is consulted. The saved output directory is only read.
@@ -72,6 +78,20 @@ def _read_bytes(path) -> bytes:
     return path.read_bytes()
 
 
+def _probe(path) -> bytes | None:
+    """Read a path without committing to it, for the pre-image only.
+
+    This runs before the saved-acquisition validator, which owns the refusal
+    for a saved directory that is missing or invalid. A probe therefore never
+    raises: an unreadable path yields no pre-image and the validator, or the
+    real read afterwards, reports it.
+    """
+    try:
+        return _read_bytes(path)
+    except (OSError, ValueError):
+        return None
+
+
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -96,30 +116,26 @@ def _summary(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _snapshot(
-    source_root: Path, snapshot: Path
-) -> tuple[dict[str, str], dict[Path, bytes]]:
-    """Copy the executable closure into a read-only directory and hash it there.
+def _snapshot(sources: dict[str, bytes], snapshot: Path) -> dict[str, str]:
+    """Write the executable closure into a read-only directory and hash it there.
 
-    The bytes are written through an exclusive create and then read back out of
+    The caller has already read each source exactly once and passes those bytes
+    in. They are written through an exclusive create and then read back out of
     the snapshot, so the digests describe the file the subprocess will import
-    and not the source it was copied from. The single read of each source is
-    returned alongside, so the caller never opens those paths a second time.
+    rather than a source that may since have been replaced.
     """
-    digests, sources = {}, {}
+    digests = {}
     for name in _SOURCES:
-        data = _read_bytes(source_root / name)
         handle = os.open(snapshot / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
         with os.fdopen(handle, "wb") as stream:
-            stream.write(data)
+            stream.write(sources[name])
             stream.flush()
             os.fsync(stream.fileno())
         written = _read_bytes(snapshot / name)
-        if written != data:
+        if written != sources[name]:
             raise ValueError("comparator snapshot differs from its source")
         digests[name] = _sha256(written)
-        sources[source_root / name] = data
-    return digests, sources
+    return digests
 
 
 def recompare_saved(
@@ -140,21 +156,38 @@ def recompare_saved(
     output = Path(output)
     comparator_root = Path(comparator_root)
     reference_path = Path(reference_path)
+    depends_on = (
+        output / "inputs.json",
+        output / "receipt.json",
+        output / "collection/collection.json",
+        output / "transform_comparator.py",
+        output / "transform_compiler.py",
+        reference_path,
+        *(comparator_root / name for name in _SOURCES),
+    )
 
-    # Everything this run depends on is read here, once. `witness` keeps the
-    # exact bytes so the closing check can tell a stable input from one that was
-    # replaced underneath us.
-    witness = {
-        path: _read_bytes(path)
-        for path in (
-            output / "inputs.json",
-            output / "receipt.json",
-            output / "collection/collection.json",
-            output / "transform_comparator.py",
-            output / "transform_compiler.py",
-            reference_path,
-        )
-    }
+    # The pre-image is taken first, but only as a probe, because
+    # `compare_saved` owns the refusal for an invalid saved directory and that
+    # refusal has to reach the caller unchanged rather than being masked by a
+    # read of our own. `compare_saved` opens these same paths for itself, so
+    # comparing the probe with the real read below is what closes the window
+    # around it.
+    probe = {path: _probe(path) for path in depends_on}
+    frozen = compare_saved(
+        output,
+        reference_path,
+        expected_inputs_digest=expected_inputs_digest,
+        expected_execution_kind=expected_execution_kind,
+    )
+
+    # Everything this run depends on is now read for real, once. `witness`
+    # keeps the exact bytes: the parsed values, the published digests and the
+    # snapshot all come from here and nothing is opened again until the closing
+    # check.
+    witness = {path: _read_bytes(path) for path in depends_on}
+    for path, before in probe.items():
+        if before is not None and before != witness[path]:
+            raise ValueError(f"{path.name} changed while the recompare ran")
     inputs = json.loads(witness[output / "inputs.json"])
     receipt = json.loads(witness[output / "receipt.json"])
     collection = json.loads(witness[output / "collection/collection.json"])
@@ -171,14 +204,8 @@ def recompare_saved(
     snapshot = Path(tempfile.mkdtemp(prefix="commit-saved-recompare-"))
     try:
         os.chmod(snapshot, 0o700)
-        repaired_sources, snapshotted = _snapshot(comparator_root, snapshot)
-        witness.update(snapshotted)
-
-        frozen = compare_saved(
-            output,
-            reference_path,
-            expected_inputs_digest=expected_inputs_digest,
-            expected_execution_kind=expected_execution_kind,
+        repaired_sources = _snapshot(
+            {name: witness[comparator_root / name] for name in _SOURCES}, snapshot
         )
         completed = subprocess.run(
             [sys.executable, "-I", "-B", "-c", _KERNEL, str(snapshot)],

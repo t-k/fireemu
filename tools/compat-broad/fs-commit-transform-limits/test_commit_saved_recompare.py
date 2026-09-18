@@ -236,3 +236,52 @@ def test_a_reference_swapped_mid_run_cannot_be_recorded_as_the_one_that_ran(
         _recompare(inputs, output, reference, root)["repaired"]["classification"]
         == "SEMANTIC_MISMATCH"
     )
+
+
+def test_a_refused_saved_acquisition_is_not_masked_by_our_own_reads(
+    tmp_path, monkeypatch
+):
+    """The validator owns the refusal for an invalid saved directory.
+
+    Reading the saved records before it runs would replace its diagnosis with
+    a complaint about a missing file, so the pre-image is only ever a probe.
+    """
+    calls = []
+
+    def refuse(output, reference_path, **kwargs):
+        calls.append(str(output))
+        raise ValueError("saved acquisition invalid")
+
+    monkeypatch.setattr(recompare, "compare_saved", refuse)
+    empty = tmp_path / "nothing-here"
+    empty.mkdir()
+    with pytest.raises(ValueError, match="^saved acquisition invalid$"):
+        recompare.recompare_saved(
+            empty,
+            empty / "missing-reference.json",
+            expected_inputs_digest="unused",
+            comparator_root=empty / "missing-root",
+            expected_execution_kind="injected-transport",
+        )
+    assert calls == [str(empty)]
+
+
+def test_an_input_swapped_while_the_validator_runs_is_still_caught(
+    tmp_path, monkeypatch
+):
+    """Close the window around the validator, which opens these paths itself."""
+    inputs, output, reference = _saved(tmp_path, monkeypatch)
+    root = _comparator_root(tmp_path / "comparator-a", slow=False)
+    original = recompare.compare_saved
+    replacement = json.dumps({"plan": {}, "rows": [], "cleanup": []}).encode()
+
+    def swap_then_validate(*args, **kwargs):
+        value = original(*args, **kwargs)
+        staging = reference.with_name("incoming.json")
+        staging.write_bytes(replacement)
+        os.replace(staging, reference)
+        return value
+
+    monkeypatch.setattr(recompare, "compare_saved", swap_then_validate)
+    with pytest.raises(ValueError, match="changed while the recompare ran"):
+        _recompare(inputs, output, reference, root)

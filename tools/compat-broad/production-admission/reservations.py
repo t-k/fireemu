@@ -45,9 +45,65 @@ LEGACY_COMMIT_GENERATION = {
     "collectorSourceDigest": COMMIT_COLLECTOR_SOURCE_DIGEST,
     "sourceDigests": COMMIT_SOURCE_DIGESTS,
 }
+# The production preflight an acquisition actually issues: the Coordinator takes
+# two credential slots before any observation, then the adapter makes four
+# privileged metadata GETs in this order. A no-data stop can happen at any one
+# of them, so the evidence contract admits a prefix rather than one fixed point.
+CREDENTIAL_MANAGEMENT = (
+    "observation:oauth-refresh",
+    "observation:oauth-tokeninfo",
+)
+PREFLIGHT_OBSERVATIONS = (
+    "observation:project",
+    "observation:database",
+    "observation:auth",
+    "observation:key",
+)
 MODES = {"READ": 0, "WRITE": 1, "EXCLUSIVE": 2}
 MAX_BYTES = 16 * 1024 * 1024
 MAX_RESERVATIONS = 10000
+
+
+def _preflight_stop(receipt):
+    """How many preflight slots a no-data attempt consumed, or None if it is not one.
+
+    A slot is charged before its evidence is appended, so a stop at slot `n`
+    leaves `n` observations when the request was sent and its baseline
+    comparison failed, and `n - 1` when the transport itself failed.
+    """
+    gate = receipt.get("gate")
+    if not isinstance(gate, dict):
+        return None
+    used = gate.get("managementUsed")
+    observed = [item.get("id") for item in receipt.get("metadata", [])]
+    for count in range(1, len(PREFLIGHT_OBSERVATIONS) + 1):
+        expected = list(PREFLIGHT_OBSERVATIONS[:count])
+        if used == [*CREDENTIAL_MANAGEMENT, *expected] and observed in (
+            expected,
+            expected[:-1],
+        ):
+            return count
+    return None
+
+
+def _no_data_gate(gate):
+    """Whether a receipt's Gate snapshot proves that no data request was sent."""
+    jobs = gate.get("jobs")
+    if not isinstance(jobs, dict) or not jobs:
+        return False
+    return (
+        gate.get("total") == len(gate.get("managementUsed", []))
+        and gate.get("observation") == gate.get("total")
+        and gate.get("recovery") == 0
+        and all(
+            job.get("observation") == 0
+            and job.get("recovery") == 0
+            and job.get("owned") == []
+            and job.get("creationProofs") == {}
+            and job.get("absent") == []
+            for job in jobs.values()
+        )
+    )
 
 
 def _hash(value):
@@ -549,8 +605,19 @@ class Ledger:
             # identical to the one it was acquired under. Rows written before
             # the generation binding existed carry none and remain bound to the
             # legacy closure.
-            if claimed_generation != row.get("generation", LEGACY_COMMIT_GENERATION):
+            recorded = row.get("generation")
+            if claimed_generation != (
+                LEGACY_COMMIT_GENERATION if recorded is None else recorded
+            ):
                 raise ValueError("acquisition source closure required")
+            # The closure that retires a row is the one the ROW recorded, not
+            # the one the aborting code is built from. Sources move on, and a
+            # fix to this very file changes the current closure while the held
+            # row keeps naming the closure its acquisition ran under. What the
+            # caller must therefore present is that run's own receipt, which
+            # recorded the generation at acquisition time.
+            if recorded is not None and receipt.get("generation") != recorded:
+                raise ValueError("receipt does not bind the recorded generation")
             if row["state"] == "aborted-no-data":
                 if row.get("abortRecordDigest") != digest(record):
                     raise ValueError("different terminal abort record")
@@ -584,16 +651,9 @@ class Ledger:
                     or item.get("status") != 200
                     for item in receipt["credentialEvidence"]
                 )
-                or [item.get("id") for item in receipt.get("metadata", [])]
-                != ["observation:project", "observation:database"]
+                or _preflight_stop(receipt) is None
                 or any(item.get("status") != 200 for item in receipt["metadata"])
-                or receipt["gate"].get("managementUsed")
-                != [
-                    "observation:oauth-refresh",
-                    "observation:oauth-tokeninfo",
-                    "observation:project",
-                    "observation:database",
-                ]
+                or not _no_data_gate(receipt["gate"])
                 or digest(receipt.get("gate")) != record["gateDigest"]
                 or receipt["gate"]["total"] > claim["budget"]["requests"]
                 or receipt["gate"]["costMicrousd"] > claim["budget"]["costMicrousd"]

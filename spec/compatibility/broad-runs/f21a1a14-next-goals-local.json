@@ -33,7 +33,7 @@
         "sourceCommit": "f21a1a1408368195b2d6cc2f6315e91c5ce35058",
         "artifactSha256": "76f0e964bccff7ef77473663115feb3b04fe172e7525b0b9ca25641234778250",
         "command": [
-          "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-13/next-goals/f21a1a14-first46/fireemu",
+          "docs.local/logs/2026-09-13/next-goals/f21a1a14-first46/fireemu",
           "exec",
           "--only",
           "auth,firestore",
@@ -217,9 +217,9 @@
         ],
         "admission": "tools/compat-inventory/mutation_cargo.py",
         "outputDirectories": {
-          "CARGO_TARGET_DIR": "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-13/next-goals/mutation-output/target",
-          "CARGO_BUILD_TARGET_DIR": "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-13/next-goals/mutation-output/target",
-          "CARGO_BUILD_BUILD_DIR": "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-13/next-goals/mutation-output/build"
+          "CARGO_TARGET_DIR": "docs.local/logs/2026-09-13/next-goals/mutation-output/target",
+          "CARGO_BUILD_TARGET_DIR": "docs.local/logs/2026-09-13/next-goals/mutation-output/target",
+          "CARGO_BUILD_BUILD_DIR": "docs.local/logs/2026-09-13/next-goals/mutation-output/build"
         },
         "start": "2026-09-13T08:20:39.592456+00:00",
         "exitCode": 100,
@@ -253,7 +253,7 @@
     ],
     "lastMutantArtifact": [
       {
-        "path": "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-13/next-goals/mutation-output/build/debug/deps/fireemu_adapter_grpc-2f51abb9cacc69f4",
+        "path": "docs.local/logs/2026-09-13/next-goals/mutation-output/build/debug/deps/fireemu_adapter_grpc-2f51abb9cacc69f4",
         "sha256": "5383b31f3dca730dcbf2ec52d9bbb0a4cc03526cea27eae751f352e0992cdf88",
         "capturedAfterRun": true,
         "role": "last limit mutant only; not a normal artifact"
@@ -275,7 +275,7 @@
           "3.12",
           "tools/compat-broad/batch_local.py",
           "--output",
-          "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-13/next-goals/f21a1a14-first46"
+          "docs.local/logs/2026-09-13/next-goals/f21a1a14-first46"
         ],
         "commit": "f21a1a1408368195b2d6cc2f6315e91c5ce35058",
         "start": "2026-09-13T08:14:21.925582+00:00",
@@ -295,9 +295,9 @@
           "tools/compat-broad/batch_pair.py",
           "--saved-ab7bd698",
           "--local",
-          "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-13/next-goals/f21a1a14-first46/batch/result.json",
+          "docs.local/logs/2026-09-13/next-goals/f21a1a14-first46/batch/result.json",
           "--output",
-          "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-13/next-goals/f21a1a14-first46-comparison.json",
+          "docs.local/logs/2026-09-13/next-goals/f21a1a14-first46-comparison.json",
           "--check"
         ],
         "commit": "f21a1a1408368195b2d6cc2f6315e91c5ce35058",
@@ -317,7 +317,7 @@
           "3.12",
           "tools/compat-broad/second_mapped.py",
           "--output",
-          "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-13/next-goals/f21a1a14-second45"
+          "docs.local/logs/2026-09-13/next-goals/f21a1a14-second45"
         ],
         "commit": "f21a1a1408368195b2d6cc2f6315e91c5ce35058",
         "start": "2026-09-13T08:15:12.668271+00:00",

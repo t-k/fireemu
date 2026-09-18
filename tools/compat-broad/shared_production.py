@@ -193,9 +193,10 @@ class ProductionGate(Gate):
 
 
 class Coordinator(Adapter):
-    def __init__(self, permission, nonce, output, gate, api_key):
+    def __init__(self, permission, nonce, output, gate, api_key, *, routes=None):
         self.permission, self.nonce, self.gate = permission, nonce, gate
         self.local, self.ready, self.api_key = None, False, api_key
+        self._routes = None if routes is None else dict(routes)
         self.key_digest = digest(api_key)
         self.initialize_state(output, nonce)
         self.management_context = None
@@ -290,16 +291,26 @@ class Coordinator(Adapter):
         _save(self.gate.path, state)
         Adapter.reserve(self, service, duration)
 
-    def request(
-        self, service, path, body=None, *, method="POST", privileged=False, form=False
-    ):
-        routes = {
+    def metadata_routes(self):
+        """The closed management route table this campaign may call.
+
+        A campaign that observes other configuration supplies its own table; the
+        default is the four metadata routes the Commit and Limits lanes charge.
+        """
+        if self._routes is not None:
+            return dict(self._routes)
+        return {
             f"cloudresourcemanager.googleapis.com/v1/projects/{PROJECT}": "project",
             f"firestore.googleapis.com/v1/projects/{PROJECT}/databases/(default)": "database",
             f"identitytoolkit.googleapis.com/admin/v2/projects/{PROJECT}/config": "auth",
             "apikeys.googleapis.com/v2/keys:lookupKey?"
             + urlencode({"keyString": self.api_key}): "key",
         }
+
+    def request(
+        self, service, path, body=None, *, method="POST", privileged=False, form=False
+    ):
+        routes = self.metadata_routes()
         if (
             service != "metadata"
             or path not in routes

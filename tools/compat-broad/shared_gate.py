@@ -21,6 +21,102 @@ from urllib.parse import quote
 from broad_contract import digest
 
 REQUEST_SECONDS = 13  # 12-second wire deadline plus adapter spacing allowance.
+MAX_JOB_SLOTS = 8
+PHASES = ("observation", "recovery")
+
+
+def request_seconds(plan, policy=None):
+    """The per-request reservation, declared by the campaign or the lane default.
+
+    Thirteen seconds is the Commit lane's wire deadline plus its spacing, not a
+    property of every campaign. A plan may declare its own, and a stream plan may
+    not, because its policy fixes the number.
+    """
+    if policy is not None:
+        return policy.REQUEST_SECONDS
+    if "requestSeconds" not in plan:
+        return REQUEST_SECONDS
+    return plan["requestSeconds"]
+
+
+def _valid_request_seconds(plan, policy):
+    if "requestSeconds" not in plan:
+        return True
+    declared = plan["requestSeconds"]
+    return (
+        policy is None
+        and type(declared) in (int, float)
+        and not isinstance(declared, bool)
+        and math.isfinite(declared)
+        and 0 < declared <= plan["wallSeconds"]
+    )
+
+
+def slot_seconds(entry, default):
+    """The reservation for one scheduled slot.
+
+    A campaign whose requests are not one population declares the bound per
+    slot: a ten-mebibyte upload and a small cleanup read cannot share one
+    honest upper bound, and a single plan-wide value would either under-reserve
+    the upload or refuse the plan outright.
+    """
+    # A present-but-malformed value, None included, is refused by `create`, so
+    # by the time a slot is dispatched the default only stands in for absence.
+    return entry.get("seconds", default)
+
+
+def job_schedule(job):
+    """The campaign-declared dispatch order for one job, or None.
+
+    A job without one keeps the historical order: every observation, then every
+    recovery, with recovery a one-way transition. A job with one may interleave
+    the two phases, and the Gate then admits only the next unconsumed slot.
+    """
+    return job.get("schedule")
+
+
+def _valid_positive(value):
+    return (
+        type(value) in (int, float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
+
+
+def _valid_ceiling(plan):
+    if "transportCeilingSeconds" not in plan:
+        return True
+    return _valid_positive(plan["transportCeilingSeconds"])
+
+
+def _valid_slot_seconds(entry):
+    if "seconds" not in entry:
+        return True
+    return _valid_positive(entry["seconds"])
+
+
+def _valid_schedule(job):
+    schedule = job_schedule(job)
+    if schedule is None:
+        return True
+    if not isinstance(schedule, list) or any(
+        not isinstance(entry, dict)
+        or not {"phase", "index"}
+        <= set(entry)
+        <= {"phase", "index", "seconds", "creates"}
+        or entry["phase"] not in PHASES
+        or type(entry["index"]) is not int
+        or isinstance(entry["index"], bool)
+        or not _valid_slot_seconds(entry)
+        or ("creates" in entry and type(entry["creates"]) is not bool)
+        for entry in schedule
+    ):
+        return False
+    covered = sorted((entry["phase"], entry["index"]) for entry in schedule)
+    return covered == sorted(
+        (phase, index) for phase in PHASES for index in range(len(job[phase]))
+    )
 
 
 def _stream_policy(plan):
@@ -110,17 +206,112 @@ def _save(path, state):
         os.close(fd)
 
 
+def _ceiling_honoured(plan, seconds):
+    """A slot whose request carries a body must reserve the declared wire ceiling.
+
+    Without this the per-slot reservation is a convention: an edit could shrink
+    the allowance for a ten-mebibyte upload to whatever made the totals fit, and
+    the Gate would admit the plan. The ceiling is the campaign's own transport
+    deadline, so a slot that can spend it must reserve it.
+    """
+    if "transportCeilingSeconds" not in plan:
+        return True
+    ceiling = plan["transportCeilingSeconds"]
+    for name, job in plan["jobs"].items():
+        schedule = job_schedule(job)
+        if schedule is None:
+            continue
+        for entry in schedule:
+            operation = plan["jobs"][name][entry["phase"]][entry["index"]]
+            if (
+                isinstance(operation, dict)
+                and operation.get("body") is not None
+                and slot_seconds(entry, seconds) < ceiling
+            ):
+                return False
+    return True
+
+
+def _observation_time(plan, seconds):
+    """Time the scheduled observation slots reserve, for jobs that declared one."""
+    interval = plan["intervalSeconds"]
+    total = 0
+    for job in plan["jobs"].values():
+        schedule = job_schedule(job)
+        if schedule is None:
+            continue
+        total += sum(
+            slot_seconds(entry, seconds) + interval
+            for entry in schedule
+            if entry["phase"] == "observation"
+        )
+    return total
+
+
+def non_creating_dispatches(state):
+    """How many data slots ran, when every one of them could not create a document.
+
+    `None` when the state cannot support that claim: any recovery dispatch, a
+    job that dispatched without a declared schedule, or a consumed slot the plan
+    did not declare non-creating. A slot is treated as creating unless it says
+    otherwise, so a campaign that declares nothing keeps the older and stricter
+    rule, which is that no data request may have been sent at all.
+
+    The declaration is load-bearing and belongs to the reviewed plan. Empty
+    creation proofs are a second line under it, but they only catch a
+    mis-declared slot whose creation was conditional.
+    """
+    plan = state["plan"]
+    total = 0
+    for name, job in state["jobs"].items():
+        if job["recovery"]:
+            return None
+        if not job["observation"]:
+            continue
+        schedule = job_schedule(plan["jobs"][name])
+        if schedule is None:
+            return None
+        consumed = schedule[: job.get("scheduleDone", 0)]
+        if len(consumed) != job["observation"] or any(
+            entry.get("creates", True) is not False for entry in consumed
+        ):
+            return None
+        total += job["observation"]
+    return total
+
+
+def _recovery_time(plan, seconds):
+    """Time reserved for cleanup, taken per slot wherever the campaign declared one."""
+    interval = plan["intervalSeconds"]
+    total = 0
+    for job in plan["jobs"].values():
+        schedule = job_schedule(job)
+        if schedule is None:
+            total += len(job["recovery"]) * (seconds + interval)
+            continue
+        total += sum(
+            slot_seconds(entry, seconds) + interval
+            for entry in schedule
+            if entry["phase"] == "recovery"
+        )
+    return total
+
+
 def create(path, plan):
     path = Path(path)
     policy = _stream_policy(plan)
     if policy:
         policy.validate_plan(plan)
-    request_seconds = policy.REQUEST_SECONDS if policy else REQUEST_SECONDS
+    if not _valid_request_seconds(plan, policy) or not _valid_ceiling(plan):
+        # Checked before they are used, so a malformed value cannot reach arithmetic.
+        raise ValueError("invalid shared allocation")
+    seconds = request_seconds(plan, policy)
     jobs = plan["jobs"]
+    slots = plan.get("jobSlots", 2)
     resources = [r for job in jobs.values() for r in job["resources"]]
     recovery = sum(len(job["recovery"]) for job in jobs.values())
     management_recovery = plan.get("management", {}).get("recovery", [])
-    recovery_time = recovery * (request_seconds + plan["intervalSeconds"]) + sum(
+    recovery_time = _recovery_time(plan, seconds) + sum(
         item["timeout"] + plan["intervalSeconds"] for item in management_recovery
     )
     recovery += len(management_recovery)
@@ -129,7 +320,15 @@ def create(path, plan):
     if (
         plan["contract"]
         not in {"shared-local-v1", "shared-local-v2", "shared-stream-v1"}
-        or not 1 <= len(jobs) <= 2
+        or type(slots) is not int
+        or isinstance(slots, bool)
+        or not 1 <= slots <= MAX_JOB_SLOTS
+        or not 1 <= len(jobs) <= slots
+        or not _valid_request_seconds(plan, policy)
+        or any(not _valid_schedule(job) for job in jobs.values())
+        or not _ceiling_honoured(plan, seconds)
+        or _observation_time(plan, seconds)
+        > plan["wallSeconds"] - plan["recoverySeconds"]
         or len(resources) != len(set(resources))
         or not resources
         or not 0 < plan["recoverySeconds"] < plan["wallSeconds"] <= 1200
@@ -184,6 +383,10 @@ def create(path, plan):
             "captures": {},
             "complete": False,
         }
+        if job_schedule(job) is not None:
+            # Only a scheduled job carries a cursor, so every existing campaign's
+            # job row keeps the exact shape its archived receipts record.
+            state["jobs"][key]["scheduleDone"] = 0
     _save(path, state)
 
 
@@ -409,8 +612,16 @@ class Gate:
             index = job[phase]
             if index >= len(operations):
                 raise ValueError("scenario request capacity")
+            schedule = job_schedule(plan["jobs"][self.job])
+            if schedule is not None:
+                cursor = job["scheduleDone"]
+                slot = schedule[cursor] if cursor < len(schedule) else None
+                if slot is None or slot["phase"] != phase or slot["index"] != index:
+                    raise ValueError("dispatch outside the frozen execution schedule")
             policy = _stream_policy(plan)
-            request_seconds = policy.REQUEST_SECONDS if policy else REQUEST_SECONDS
+            seconds = request_seconds(plan, policy)
+            if schedule is not None:
+                seconds = slot_seconds(slot, seconds)
             if policy:
                 expected, resource, skip = policy.resolve(state, self.job, recovery)
                 source = "stream-guard" if skip else None
@@ -446,10 +657,15 @@ class Gate:
                     self._validate_cleanup_ownership(
                         operation, recovery, resource, source, job
                     )
-            if recovery:
-                job["stopped"] = True  # Recovery is a one-way transition.
+            if recovery and schedule is None:
+                # Without a declared schedule, recovery is a one-way transition.
+                # A scheduled campaign returns to observation by its own order,
+                # which the cursor above is what admits.
+                job["stopped"] = True
             if source is not None and not valid_version:
                 job[phase] += 1
+                if schedule is not None:
+                    job["scheduleDone"] += 1
                 state["reservedRecovery"] -= 1
                 state.setdefault("skips", []).append(
                     {
@@ -474,7 +690,7 @@ class Gate:
             cost = plan["requestCostMicrousd"]
             remaining = state["reservedRecovery"] - (1 if recovery else 0)
             if (
-                now + delay + request_seconds > deadline
+                now + delay + seconds > deadline
                 or (
                     not recovery and state["observation"] >= plan["observationRequests"]
                 )
@@ -482,7 +698,7 @@ class Gate:
             ):
                 raise ValueError("global phase/time/cost capacity")
             time.sleep(delay)
-            if time.monotonic() + request_seconds > deadline:
+            if time.monotonic() + seconds > deadline:
                 raise ValueError("deadline after rate wait")
             if policy:
                 policy.debit(state, job, operation)
@@ -492,6 +708,8 @@ class Gate:
             state["reservedRecovery"] = remaining
             state["costMicrousd"] += cost
             job[phase] += 1
+            if schedule is not None:
+                job["scheduleDone"] += 1
             if recovery and resource in job["absent"]:
                 job["absent"].remove(resource)
             if recovery:
@@ -601,9 +819,11 @@ class Gate:
                 return state
             if digest(state) != pre_gate_digest or state["planDigest"] != plan_digest:
                 raise ValueError("Gate abort snapshot changed")
+            dispatched = non_creating_dispatches(state)
             if (
                 state["coordinatorInflight"] is not False
-                or state["events"] != []
+                or dispatched is None
+                or len(state["events"]) != dispatched
                 or state.get("skips", []) != []
                 or state.get("managementUsed")
                 != [
@@ -614,7 +834,7 @@ class Gate:
                 ][: len(state.get("managementUsed", []))]
                 or [event.get("id") for event in state.get("managementEvents", [])]
                 != state.get("managementUsed", [])
-                or state["total"] != len(state.get("managementUsed", []))
+                or state["total"] != len(state.get("managementUsed", [])) + dispatched
                 or state["observation"] != state["total"]
                 or state["observation"] > state["plan"]["observationRequests"]
                 or state["costMicrousd"]
@@ -623,9 +843,13 @@ class Gate:
                 or state["recovery"] != 0
                 or state["coordinatorDone"] != 0
                 or any(
-                    type(job[key]) is not int or job[key] != 0
+                    type(job[key]) is not int
                     for job in state["jobs"].values()
                     for key in ("observation", "recovery")
+                )
+                or any(
+                    job.get("scheduleDone", 0) != job["observation"]
+                    for job in state["jobs"].values()
                 )
                 or any(
                     job["inflight"] is not False

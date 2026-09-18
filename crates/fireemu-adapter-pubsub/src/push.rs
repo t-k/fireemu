@@ -9,11 +9,42 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use fireemu_core_pubsub::{ReceivedMessage, SubscriptionName};
+use fireemu_core_types::time::LogicalDuration;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::lookup_host;
 
 const PUSH_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
+
+/// Shortest wait the push backoff imposes on a subscription after one failed push attempt.
+///
+/// Push delivery carries a subscription-level backoff of its own, separate from the per-message
+/// retry policy: the service slows a subscription down while its endpoint keeps failing, and it
+/// cannot be turned off. The documented bounds are 100 ms to 60 s
+/// (<https://docs.cloud.google.com/pubsub/docs/push>).
+pub(crate) const PUSH_BACKOFF_MINIMUM_MILLIS: i64 = 100;
+/// Longest wait the push backoff imposes, the documented ceiling of the production backoff.
+pub(crate) const PUSH_BACKOFF_MAXIMUM_MILLIS: i64 = 60_000;
+/// Doubling steps beyond which the wait is already clamped to the maximum. It only keeps the
+/// shift below the width of the type; the `min` decides the result.
+const MAX_BACKOFF_DOUBLINGS: u32 = 20;
+
+/// The wait a subscription owes after `consecutive_failures` failed push attempts in a row.
+///
+/// The progression doubles from [`PUSH_BACKOFF_MINIMUM_MILLIS`] and clamps at
+/// [`PUSH_BACKOFF_MAXIMUM_MILLIS`]. The documentation states those two bounds but not the curve
+/// between them, so exponential growth is this emulator's choice and is recorded as unobserved
+/// in the capability notes. A subscription with no failure owes nothing.
+pub(crate) fn push_backoff_after(consecutive_failures: u32) -> LogicalDuration {
+    if consecutive_failures == 0 {
+        return LogicalDuration::ZERO;
+    }
+    let doublings = (consecutive_failures - 1).min(MAX_BACKOFF_DOUBLINGS);
+    let millis = PUSH_BACKOFF_MINIMUM_MILLIS
+        .saturating_mul(1_i64 << doublings)
+        .min(PUSH_BACKOFF_MAXIMUM_MILLIS);
+    LogicalDuration::from_millis(millis)
+}
 
 #[derive(Debug, Clone)]
 struct Endpoint {

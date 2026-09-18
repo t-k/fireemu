@@ -10,6 +10,7 @@ from action_codes_collector import (
     build_parser,
     character_class,
     collect,
+    http_opener,
     redact,
 )
 from action_codes_plan import SECRET_FIELDS, STAGE_IDS
@@ -403,3 +404,11 @@ def test_a_refused_delete_is_tolerated_when_absence_is_proven() -> None:
     assert receipt["deleteFailures"] == 1
     assert receipt["remainingAccounts"] == 0
     assert receipt["cleanupComplete"] is True
+
+
+def test_a_credential_bearing_request_is_never_redirected() -> None:
+    handler = next(
+        h for h in http_opener().handlers if type(h).__name__ == "_NoRedirect"
+    )
+    with pytest.raises(CollectorError, match="redirected"):
+        handler.redirect_request(None, None, 302, "Found", {}, "http://elsewhere.test/")

@@ -18,7 +18,9 @@ import re
 import secrets
 import sys
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -412,15 +414,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _http_send(method: str, url: str, headers: dict[str, str], body: dict[str, Any]):
-    import urllib.error
-    import urllib.request
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A credential-bearing request must never be replayed to a new location."""
 
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise CollectorError("a collected request may not be redirected")
+
+
+def http_opener() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(_NoRedirect)
+
+
+def _http_send(method: str, url: str, headers: dict[str, str], body: dict[str, Any]):
     request = urllib.request.Request(
         url, data=json.dumps(body).encode(), method=method, headers=headers
     )
     try:
-        with urllib.request.urlopen(request, timeout=20) as answer:
+        with http_opener().open(request, timeout=20) as answer:
             return answer.status, json.loads(answer.read() or b"{}")
     except urllib.error.HTTPError as error:
         return error.code, json.loads(error.read() or b"{}")

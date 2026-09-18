@@ -395,15 +395,15 @@
   ],
   "productionExecuted": false,
   "provenance": {
-    "digest": "04ed5373f061039d9e6a1b2e8c68400c3749845156e3e9b1867597b1ae36f744",
+    "digest": "ad43abc6974e42060d855941b8e93486b8900b71b0a281bda7675c7fd5e82464",
     "evidence": "recomputed-from-worktree",
     "paths": {
-      "tools/compat-broad/auth-totp-enroll/mfa_cases.py": "ca6b7410b845bc66b3880fd9f062d23e7ca11777e026151463f41431ee260aa0",
-      "tools/compat-broad/auth-totp-enroll/mfa_collector.py": "52d8368915ffea792fe7c6524998ee520b30fa5ba72aa751acd0b9431968fcf5",
-      "tools/compat-broad/auth-totp-enroll/mfa_comparator.py": "172fa161250e8d41c5968d246c27cef80c5d873441a1139055d0adecc4c0e06f",
-      "tools/compat-broad/auth-totp-enroll/mfa_manifest.py": "1800a76b23aa40f5a0a93657c6ac4620f2cdfd432bf2338ca1c94234b49f4197",
+      "tools/compat-broad/auth-totp-enroll/mfa_cases.py": "9d0b75a2ffbf0dc76408690c0aa7b0bb4fddded96b1f6b3cc5a63e66d85c2cf8",
+      "tools/compat-broad/auth-totp-enroll/mfa_collector.py": "8529871bbb686f2e8c641219143765438a4ce766f272ab1c474261dd657373a8",
+      "tools/compat-broad/auth-totp-enroll/mfa_comparator.py": "433598cf2374e80400be339ab9bbb2da4e74601573c09af12cc794c439e4bfc1",
+      "tools/compat-broad/auth-totp-enroll/mfa_manifest.py": "c1e8be8507e9cd5660f9f0c1ca6419a6c19257e9fb80dd8cdeb896f94c2a4aa7",
       "tools/compat-broad/auth-totp-enroll/mfa_provenance.py": "04292963b9230e20673219df63ce538310641e8f32f41d7733596261edcdd0d8",
-      "tools/compat-broad/auth-totp-enroll/mfa_totp.py": "5234a025828018fd0917a5ad3ea8ee7472a9d5f4a8d616d7156731469c401261",
+      "tools/compat-broad/auth-totp-enroll/mfa_totp.py": "8ad51d3366656acf7ac79bb5fa671028e7bbc023a1c777e8f88ad82b8adabf0f",
       "tools/compat-inventory/pyproject.toml": "2cd843edbfa0d2603121113cadd8c02a825c48dd11c95e54edb243507128d6a7",
       "tools/compat-inventory/uv.lock": "0a2374a0081466d557ee5d4fdc14f99f00b1b8aacf983705d80ade5246f8ed55"
     },
@@ -617,7 +617,7 @@
   "side": "local",
   "worktree": {
     "clean": true,
-    "commit": "9ddc20afb2fc9f1f8d2dea3f03b6af40c7d3f1da",
+    "commit": "dc5dd93ee5839c462244bb7b068e67abecee38a0",
     "resolved": true
   }
 }

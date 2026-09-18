@@ -18,7 +18,9 @@ def _errors(plan: dict[str, Any], receipt: Any) -> list[str]:
     errors: list[str] = []
     if receipt.get("schema") != "o6-listen-resume-preparation-v2":
         errors.append("receipt-shape")
-    if receipt.get("caseId") != plan.get("caseId") or receipt.get("planDigest") != digest(plan):
+    if receipt.get("caseId") != plan.get("caseId") or receipt.get(
+        "planDigest"
+    ) != digest(plan):
         errors.append("plan-binding")
     if receipt.get("status") != "PREPARATION_ONLY":
         errors.append("status")
@@ -26,7 +28,9 @@ def _errors(plan: dict[str, Any], receipt: Any) -> list[str]:
         errors.append("production-executed")
     if _OBSERVED_FIELDS & receipt.keys():
         errors.append("observed-fields")
-    if receipt.get("sdk") != plan.get("sdk") or receipt.get("shadow") != plan.get("shadow"):
+    if receipt.get("sdk") != plan.get("sdk") or receipt.get("shadow") != plan.get(
+        "shadow"
+    ):
         errors.append("sdk-binding")
     if receipt.get("sourceBinding") != plan.get("sourceBinding"):
         errors.append("source-binding")

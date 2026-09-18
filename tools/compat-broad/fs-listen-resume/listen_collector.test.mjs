@@ -438,7 +438,8 @@ test('a listener started while signed out fails with no snapshot first', async (
   const fake = createFake({ denyPrivate: true });
   const clock = nowFactory();
   const spec = caseFixture({
-    invariants: ['zero-snapshots-before-error'],
+    invariants: ['no-server-snapshot-before-error'],
+    ignoreCachedPrefix: true,
     listeners: [
       { name: 'primary', kind: 'document', target: 'private', includeMetadataChanges: false },
     ],
@@ -470,6 +471,7 @@ test('resume across a forced break reports only the documents that changed', asy
       { kind: 'seed', doc: 'beta', fields: { rank: 2 } },
       { kind: 'listen', listener: 'primary' },
       { kind: 'await', listener: 'primary', events: 1 },
+      { kind: 'baseline' },
       { kind: 'break', client: 'primary', mode: 'disable-network' },
       { kind: 'write', client: 'witness', doc: 'gamma', fields: { rank: 5 } },
       { kind: 'write', client: 'witness', doc: 'alpha', fields: { rank: 4 } },
@@ -652,4 +654,58 @@ test('the receipt is incomplete when cleanup or the budget is unproven', () => {
 test('a listener error code is normalized without its transport prefix', () => {
   assert.equal(normalizeListenerError('primary', { code: 'firestore/permission-denied' }).error, 'permission-denied');
   assert.equal(normalizeListenerError('primary', {}).error, 'unknown');
+});
+
+test('cleanup runs on its own reserve when the observation budget is exhausted', async () => {
+  const fake = createFake();
+  const clock = nowFactory();
+  const paths = ownedPaths(NONCE, UID);
+  const observation = createBudget({
+    now: clock.now,
+    deadlineMs: 1_000,
+    limits: { reads: 0, writes: 1, deletes: 0, snapshots: 0, listeners: 0 },
+  });
+  const reserve = createBudget({
+    now: clock.now,
+    deadlineMs: Number.MAX_SAFE_INTEGER,
+    limits: { reads: 100, writes: 0, deletes: 50, snapshots: 0, listeners: 0 },
+  });
+  await fake.firestore.setDoc('primary', paths.alpha, { owner: ownerMarker(NONCE), rank: 1 });
+  observation.charge('writes');
+  assert.equal(observation.charge('reads').ok, false);
+  const result = await runCleanup(
+    { firestore: fake.firestore },
+    { client: 'primary', paths, nonce: NONCE, budget: reserve },
+  );
+  assert.equal(result.complete, true);
+  assert.equal(fake.store.has(paths.alpha), false);
+  assert.equal(observation.snapshot().exhausted, true);
+  assert.equal(reserve.snapshot().exhausted, false);
+});
+
+test('an exhausted cleanup reserve makes the receipt incomplete', () => {
+  const clock = nowFactory();
+  const budget = createBudget({
+    now: clock.now,
+    deadlineMs: 10_000,
+    limits: { reads: 10, writes: 10, deletes: 10, snapshots: 10, listeners: 10 },
+  });
+  const cleanupBudget = createBudget({
+    now: clock.now,
+    deadlineMs: 10_000,
+    limits: { reads: 0, writes: 0, deletes: 0, snapshots: 0, listeners: 0 },
+  });
+  cleanupBudget.charge('reads');
+  const receipt = buildReceipt({
+    campaign: { caseId: 'FS-LISTEN-SDK' },
+    campaignDigest: 'a'.repeat(64),
+    catalogDigest: 'b'.repeat(64),
+    environment: { node: process.versions.node },
+    caseRecords: [{ caseId: 'FS-LISTEN-SDK-101', complete: true, listenersClosed: true }],
+    cleanup: { complete: true, rows: [] },
+    budget,
+    cleanupBudget,
+  });
+  assert.equal(receipt.complete, false);
+  assert.equal(receipt.cleanupBudget.exhausted, true);
 });

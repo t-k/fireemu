@@ -2,14 +2,20 @@
   "cases": [
     {
       "caseId": "FS-LISTEN-SDK-101",
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
       "comparison": "ordered-events",
       "controlFor": null,
       "dimension": "document-event-order",
       "discriminators": [
         "snapshotKind",
-        "exists",
-        "fromCache",
-        "hasPendingWrites"
+        "exists"
       ],
       "documents": [
         "alpha"
@@ -28,11 +34,13 @@
           "snapshotKind": "initial"
         }
       ],
+      "ignoreCachedPrefix": false,
       "invariants": [],
       "listeners": [
         {
-          "includeMetadataChanges": false,
+          "includeMetadataChanges": true,
           "kind": "document",
+          "metadataIsCompared": false,
           "name": "primary",
           "target": "alpha"
         }
@@ -54,8 +62,7 @@
           "listener": "primary"
         },
         {
-          "events": 1,
-          "kind": "await",
+          "kind": "awaitServer",
           "listener": "primary"
         }
       ],
@@ -63,6 +70,14 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-101C",
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
       "comparison": "ordered-events",
       "controlFor": "FS-LISTEN-SDK-101",
       "dimension": "document-event-order",
@@ -84,11 +99,13 @@
           "snapshotKind": "initial"
         }
       ],
+      "ignoreCachedPrefix": false,
       "invariants": [],
       "listeners": [
         {
-          "includeMetadataChanges": false,
+          "includeMetadataChanges": true,
           "kind": "document",
+          "metadataIsCompared": false,
           "name": "primary",
           "target": "absent"
         }
@@ -102,8 +119,7 @@
           "listener": "primary"
         },
         {
-          "events": 1,
-          "kind": "await",
+          "kind": "awaitServer",
           "listener": "primary"
         }
       ],
@@ -111,12 +127,21 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-102",
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
       "comparison": "ordered-events",
       "controlFor": null,
       "dimension": "pending-writes",
       "discriminators": [
-        "hasPendingWrites",
-        "fromCache"
+        "hasPendingWrites"
       ],
       "documents": [
         "beta"
@@ -124,22 +149,12 @@
       "expectedLocal": [
         {
           "changes": [],
-          "docs": [],
-          "error": null,
-          "exists": false,
-          "fromCache": false,
-          "hasPendingWrites": false,
-          "listener": "primary",
-          "snapshotKind": "initial"
-        },
-        {
-          "changes": [],
           "docs": [
             "beta"
           ],
           "error": null,
           "exists": true,
-          "fromCache": true,
+          "fromCache": false,
           "hasPendingWrites": true,
           "listener": "primary",
           "snapshotKind": "delta"
@@ -157,11 +172,13 @@
           "snapshotKind": "delta"
         }
       ],
+      "ignoreCachedPrefix": false,
       "invariants": [],
       "listeners": [
         {
           "includeMetadataChanges": true,
           "kind": "document",
+          "metadataIsCompared": true,
           "name": "primary",
           "target": "beta"
         }
@@ -175,86 +192,14 @@
           "listener": "primary"
         },
         {
-          "events": 1,
-          "kind": "await",
+          "kind": "awaitServer",
           "listener": "primary"
+        },
+        {
+          "kind": "baseline"
         },
         {
           "client": "primary",
-          "doc": "beta",
-          "fields": {
-            "rank": 2,
-            "value": "b0"
-          },
-          "kind": "write"
-        },
-        {
-          "events": 3,
-          "kind": "await",
-          "listener": "primary"
-        }
-      ],
-      "title": "Local write raises hasPendingWrites before the acknowledged snapshot"
-    },
-    {
-      "caseId": "FS-LISTEN-SDK-102C",
-      "comparison": "ordered-events",
-      "controlFor": "FS-LISTEN-SDK-102",
-      "dimension": "pending-writes",
-      "discriminators": [
-        "hasPendingWrites"
-      ],
-      "documents": [
-        "beta"
-      ],
-      "expectedLocal": [
-        {
-          "changes": [],
-          "docs": [],
-          "error": null,
-          "exists": false,
-          "fromCache": false,
-          "hasPendingWrites": false,
-          "listener": "primary",
-          "snapshotKind": "initial"
-        },
-        {
-          "changes": [],
-          "docs": [
-            "beta"
-          ],
-          "error": null,
-          "exists": true,
-          "fromCache": false,
-          "hasPendingWrites": false,
-          "listener": "primary",
-          "snapshotKind": "delta"
-        }
-      ],
-      "invariants": [],
-      "listeners": [
-        {
-          "includeMetadataChanges": true,
-          "kind": "document",
-          "name": "primary",
-          "target": "beta"
-        }
-      ],
-      "requiresAuth": true,
-      "requiresRules": false,
-      "role": "control",
-      "steps": [
-        {
-          "kind": "listen",
-          "listener": "primary"
-        },
-        {
-          "events": 1,
-          "kind": "await",
-          "listener": "primary"
-        },
-        {
-          "client": "witness",
           "doc": "beta",
           "fields": {
             "rank": 2,
@@ -268,10 +213,98 @@
           "listener": "primary"
         }
       ],
+      "title": "Local write raises hasPendingWrites before the acknowledged snapshot"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-102C",
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
+      "comparison": "ordered-events",
+      "controlFor": "FS-LISTEN-SDK-102",
+      "dimension": "pending-writes",
+      "discriminators": [
+        "hasPendingWrites"
+      ],
+      "documents": [
+        "beta"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "error": null,
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "delta"
+        }
+      ],
+      "ignoreCachedPrefix": false,
+      "invariants": [],
+      "listeners": [
+        {
+          "includeMetadataChanges": true,
+          "kind": "document",
+          "metadataIsCompared": true,
+          "name": "primary",
+          "target": "beta"
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": false,
+      "role": "control",
+      "steps": [
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "awaitServer",
+          "listener": "primary"
+        },
+        {
+          "kind": "baseline"
+        },
+        {
+          "client": "witness",
+          "doc": "beta",
+          "fields": {
+            "rank": 2,
+            "value": "b0"
+          },
+          "kind": "write"
+        },
+        {
+          "events": 1,
+          "kind": "await",
+          "listener": "primary"
+        }
+      ],
       "title": "A write from a second client never raises hasPendingWrites on this listener"
     },
     {
       "caseId": "FS-LISTEN-SDK-103",
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
       "comparison": "ordered-events",
       "controlFor": null,
       "dimension": "query-change-order",
@@ -284,25 +317,6 @@
         "beta"
       ],
       "expectedLocal": [
-        {
-          "changes": [
-            {
-              "doc": "alpha",
-              "newIndex": 0,
-              "oldIndex": -1,
-              "type": "added"
-            }
-          ],
-          "docs": [
-            "alpha"
-          ],
-          "error": null,
-          "exists": null,
-          "fromCache": false,
-          "hasPendingWrites": false,
-          "listener": "primary",
-          "snapshotKind": "initial"
-        },
         {
           "changes": [
             {
@@ -363,12 +377,14 @@
           "snapshotKind": "delta"
         }
       ],
+      "ignoreCachedPrefix": false,
       "invariants": [],
       "listeners": [
         {
-          "includeMetadataChanges": false,
+          "includeMetadataChanges": true,
           "kind": "query",
           "limit": 10,
+          "metadataIsCompared": false,
           "name": "primary",
           "orderBy": [
             "rank",
@@ -399,16 +415,32 @@
           "listener": "primary"
         },
         {
+          "kind": "awaitServer",
+          "listener": "primary"
+        },
+        {
+          "kind": "baseline"
+        },
+        {
+          "client": "witness",
+          "doc": "beta",
+          "fields": {
+            "rank": 0,
+            "value": "b0"
+          },
+          "kind": "write"
+        },
+        {
           "events": 1,
           "kind": "await",
           "listener": "primary"
         },
         {
-          "client": "primary",
+          "client": "witness",
           "doc": "beta",
           "fields": {
-            "rank": 0,
-            "value": "b0"
+            "rank": 3,
+            "value": "b1"
           },
           "kind": "write"
         },
@@ -418,26 +450,12 @@
           "listener": "primary"
         },
         {
-          "client": "primary",
-          "doc": "beta",
-          "fields": {
-            "rank": 3,
-            "value": "b1"
-          },
-          "kind": "write"
-        },
-        {
-          "events": 3,
-          "kind": "await",
-          "listener": "primary"
-        },
-        {
-          "client": "primary",
+          "client": "witness",
           "doc": "alpha",
           "kind": "delete"
         },
         {
-          "events": 4,
+          "events": 3,
           "kind": "await",
           "listener": "primary"
         }
@@ -446,6 +464,16 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-103C",
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
       "comparison": "ordered-events",
       "controlFor": "FS-LISTEN-SDK-103",
       "dimension": "query-change-order",
@@ -456,35 +484,17 @@
         "alpha",
         "gamma"
       ],
-      "expectedLocal": [
-        {
-          "changes": [
-            {
-              "doc": "alpha",
-              "newIndex": 0,
-              "oldIndex": -1,
-              "type": "added"
-            }
-          ],
-          "docs": [
-            "alpha"
-          ],
-          "error": null,
-          "exists": null,
-          "fromCache": false,
-          "hasPendingWrites": false,
-          "listener": "primary",
-          "snapshotKind": "initial"
-        }
-      ],
+      "expectedLocal": [],
+      "ignoreCachedPrefix": false,
       "invariants": [
         "no-event-after-quiet-window"
       ],
       "listeners": [
         {
-          "includeMetadataChanges": false,
+          "includeMetadataChanges": true,
           "kind": "query",
           "limit": 10,
+          "metadataIsCompared": false,
           "name": "primary",
           "orderBy": [
             "rank",
@@ -515,12 +525,14 @@
           "listener": "primary"
         },
         {
-          "events": 1,
-          "kind": "await",
+          "kind": "awaitServer",
           "listener": "primary"
         },
         {
-          "client": "primary",
+          "kind": "baseline"
+        },
+        {
+          "client": "witness",
           "doc": "gamma",
           "fields": {
             "rank": 99,
@@ -538,6 +550,14 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-104",
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
       "comparison": "aggregate-changes",
       "controlFor": null,
       "dimension": "resume-after-break",
@@ -580,6 +600,7 @@
           "snapshotKind": "aggregate"
         }
       ],
+      "ignoreCachedPrefix": false,
       "invariants": [
         "no-duplicate-added-for-unchanged-document",
         "from-cache-true-then-false-across-break",
@@ -590,6 +611,7 @@
           "includeMetadataChanges": true,
           "kind": "query",
           "limit": 10,
+          "metadataIsCompared": true,
           "name": "primary",
           "orderBy": [
             "rank",
@@ -628,9 +650,11 @@
           "listener": "primary"
         },
         {
-          "events": 1,
-          "kind": "await",
+          "kind": "awaitServer",
           "listener": "primary"
+        },
+        {
+          "kind": "baseline"
         },
         {
           "client": "primary",
@@ -670,6 +694,14 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-104C",
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
       "comparison": "aggregate-changes",
       "controlFor": "FS-LISTEN-SDK-104",
       "dimension": "resume-after-break",
@@ -711,6 +743,7 @@
           "snapshotKind": "aggregate"
         }
       ],
+      "ignoreCachedPrefix": false,
       "invariants": [
         "no-duplicate-added-for-unchanged-document",
         "no-from-cache-transition"
@@ -720,6 +753,7 @@
           "includeMetadataChanges": true,
           "kind": "query",
           "limit": 10,
+          "metadataIsCompared": true,
           "name": "primary",
           "orderBy": [
             "rank",
@@ -758,9 +792,11 @@
           "listener": "primary"
         },
         {
-          "events": 1,
-          "kind": "await",
+          "kind": "awaitServer",
           "listener": "primary"
+        },
+        {
+          "kind": "baseline"
         },
         {
           "client": "witness",
@@ -790,6 +826,14 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-105",
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
       "comparison": "ordered-events",
       "controlFor": null,
       "dimension": "unsubscribe",
@@ -810,48 +854,27 @@
           "exists": true,
           "fromCache": false,
           "hasPendingWrites": false,
-          "listener": "primary",
-          "snapshotKind": "initial"
-        },
-        {
-          "changes": [],
-          "docs": [
-            "alpha"
-          ],
-          "error": null,
-          "exists": true,
-          "fromCache": false,
-          "hasPendingWrites": false,
-          "listener": "witness",
-          "snapshotKind": "initial"
-        },
-        {
-          "changes": [],
-          "docs": [
-            "alpha"
-          ],
-          "error": null,
-          "exists": true,
-          "fromCache": false,
-          "hasPendingWrites": false,
           "listener": "witness",
           "snapshotKind": "delta"
         }
       ],
+      "ignoreCachedPrefix": false,
       "invariants": [
         "no-event-after-unsubscribe",
         "repeated-unsubscribe-is-a-no-op"
       ],
       "listeners": [
         {
-          "includeMetadataChanges": false,
+          "includeMetadataChanges": true,
           "kind": "document",
+          "metadataIsCompared": false,
           "name": "primary",
           "target": "alpha"
         },
         {
-          "includeMetadataChanges": false,
+          "includeMetadataChanges": true,
           "kind": "document",
+          "metadataIsCompared": false,
           "name": "witness",
           "target": "alpha"
         }
@@ -877,14 +900,15 @@
           "listener": "witness"
         },
         {
-          "events": 1,
-          "kind": "await",
+          "kind": "awaitServer",
           "listener": "primary"
         },
         {
-          "events": 1,
-          "kind": "await",
+          "kind": "awaitServer",
           "listener": "witness"
+        },
+        {
+          "kind": "baseline"
         },
         {
           "kind": "unsubscribe",
@@ -905,7 +929,7 @@
           "kind": "write"
         },
         {
-          "events": 2,
+          "events": 1,
           "kind": "await",
           "listener": "witness"
         },
@@ -919,6 +943,14 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-105C",
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
       "comparison": "ordered-events",
       "controlFor": "FS-LISTEN-SDK-105",
       "dimension": "unsubscribe",
@@ -939,30 +971,6 @@
           "fromCache": false,
           "hasPendingWrites": false,
           "listener": "primary",
-          "snapshotKind": "initial"
-        },
-        {
-          "changes": [],
-          "docs": [
-            "alpha"
-          ],
-          "error": null,
-          "exists": true,
-          "fromCache": false,
-          "hasPendingWrites": false,
-          "listener": "witness",
-          "snapshotKind": "initial"
-        },
-        {
-          "changes": [],
-          "docs": [
-            "alpha"
-          ],
-          "error": null,
-          "exists": true,
-          "fromCache": false,
-          "hasPendingWrites": false,
-          "listener": "primary",
           "snapshotKind": "delta"
         },
         {
@@ -978,17 +986,20 @@
           "snapshotKind": "delta"
         }
       ],
+      "ignoreCachedPrefix": false,
       "invariants": [],
       "listeners": [
         {
-          "includeMetadataChanges": false,
+          "includeMetadataChanges": true,
           "kind": "document",
+          "metadataIsCompared": false,
           "name": "primary",
           "target": "alpha"
         },
         {
-          "includeMetadataChanges": false,
+          "includeMetadataChanges": true,
           "kind": "document",
+          "metadataIsCompared": false,
           "name": "witness",
           "target": "alpha"
         }
@@ -1014,14 +1025,15 @@
           "listener": "witness"
         },
         {
-          "events": 1,
-          "kind": "await",
+          "kind": "awaitServer",
           "listener": "primary"
         },
         {
-          "events": 1,
-          "kind": "await",
+          "kind": "awaitServer",
           "listener": "witness"
+        },
+        {
+          "kind": "baseline"
         },
         {
           "client": "witness",
@@ -1033,12 +1045,12 @@
           "kind": "write"
         },
         {
-          "events": 2,
+          "events": 1,
           "kind": "await",
           "listener": "primary"
         },
         {
-          "events": 2,
+          "events": 1,
           "kind": "await",
           "listener": "witness"
         }
@@ -1047,6 +1059,14 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-106",
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
       "comparison": "ordered-events",
       "controlFor": null,
       "dimension": "auth-switch",
@@ -1058,18 +1078,6 @@
         "private"
       ],
       "expectedLocal": [
-        {
-          "changes": [],
-          "docs": [
-            "private"
-          ],
-          "error": null,
-          "exists": true,
-          "fromCache": false,
-          "hasPendingWrites": false,
-          "listener": "primary",
-          "snapshotKind": "initial"
-        },
         {
           "changes": [],
           "docs": [],
@@ -1093,13 +1101,15 @@
           "snapshotKind": "initial"
         }
       ],
+      "ignoreCachedPrefix": false,
       "invariants": [
         "no-event-after-listener-error"
       ],
       "listeners": [
         {
-          "includeMetadataChanges": false,
+          "includeMetadataChanges": true,
           "kind": "document",
+          "metadataIsCompared": false,
           "name": "primary",
           "target": "private"
         }
@@ -1125,9 +1135,11 @@
           "listener": "primary"
         },
         {
-          "events": 1,
-          "kind": "await",
+          "kind": "awaitServer",
           "listener": "primary"
+        },
+        {
+          "kind": "baseline"
         },
         {
           "client": "primary",
@@ -1147,8 +1159,7 @@
           "listener": "recovered"
         },
         {
-          "events": 1,
-          "kind": "await",
+          "kind": "awaitServer",
           "listener": "recovered"
         }
       ],
@@ -1156,6 +1167,14 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-106N",
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
       "comparison": "ordered-events",
       "controlFor": "FS-LISTEN-SDK-106",
       "dimension": "auth-switch",
@@ -1177,13 +1196,15 @@
           "snapshotKind": "error"
         }
       ],
+      "ignoreCachedPrefix": true,
       "invariants": [
-        "zero-snapshots-before-error"
+        "no-server-snapshot-before-error"
       ],
       "listeners": [
         {
-          "includeMetadataChanges": false,
+          "includeMetadataChanges": true,
           "kind": "document",
+          "metadataIsCompared": false,
           "name": "primary",
           "target": "private"
         }
@@ -1205,10 +1226,10 @@
           "listener": "primary"
         }
       ],
-      "title": "A listener started while signed out fails immediately with permission-denied"
+      "title": "A listener started while signed out fails without ever reading the server"
     }
   ],
-  "catalogDigest": "9711284a0ae653535c9ff3be1447c2be246f855a46babc6d51cd5af097822fd3",
+  "catalogDigest": "84d1546aef0addc873845230aab8852aad751b44e175be4e90413115c251f462",
   "docsSubcollection": "docs",
   "privateCollection": "o6_listen_private",
   "requiredRulesDigest": "292c8321e8edad30d81972f2ddfd8314e1654d738c6a5a6a359b6d93aaffef7d",

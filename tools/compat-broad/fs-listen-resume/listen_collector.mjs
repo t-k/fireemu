@@ -191,8 +191,10 @@ const INVARIANTS = {
     ctx.repeatedUnsubscribeThrew ? 'a repeated unsubscribe threw' : null,
   'no-event-after-listener-error': ctx =>
     ctx.eventsAfterError === 0 ? null : 'a listener delivered an event after its terminal error',
-  'zero-snapshots-before-error': ctx =>
-    ctx.snapshotsBeforeError === 0 ? null : 'a snapshot was delivered before the expected error',
+  'no-server-snapshot-before-error': ctx =>
+    ctx.serverSnapshotsBeforeError === 0
+      ? null
+      : 'a server snapshot was delivered before the expected error',
   'no-duplicate-added-for-unchanged-document': ctx =>
     ctx.duplicateAdded.length === 0
       ? null
@@ -207,6 +209,26 @@ const INVARIANTS = {
       : 'the listener reported a cache-served window with no break',
   'terminal-document-set-complete': ctx =>
     ctx.terminalDocsComplete ? null : 'the terminal document set is missing an owned document',
+};
+
+/**
+ * Drop events that differ from the event before them only in fields this case
+ * does not compare. This reproduces what `onSnapshot` does by default when
+ * `includeMetadataChanges` is false; the collector always subscribes with
+ * metadata so it can tell when a listener has reached the server.
+ */
+export const collapseMetadataOnlyEvents = (events, comparedFields) => {
+  if (!Array.isArray(comparedFields) || comparedFields.includes('fromCache')) return events;
+  const project = row => JSON.stringify(comparedFields.map(field => row[field] ?? null));
+  const kept = [];
+  let previous = null;
+  for (const row of events) {
+    const key = project(row);
+    if (key === previous) continue;
+    previous = key;
+    kept.push(row);
+  }
+  return kept;
 };
 
 export const checkInvariants = (names, ctx) => {
@@ -319,7 +341,7 @@ export const runCase = async (deps, caseSpec, ctx) => {
     eventsDuringQuiet: 0,
     eventsAfterUnsubscribe: 0,
     eventsAfterError: 0,
-    snapshotsBeforeError: 0,
+    serverSnapshotsBeforeError: 0,
     repeatedUnsubscribeThrew: false,
     duplicateAdded: [],
     fromCacheTransitions: [],
@@ -330,6 +352,7 @@ export const runCase = async (deps, caseSpec, ctx) => {
   let unsubscribed = false;
   let errored = false;
   let breakSeen = false;
+  let baselineAt = 0;
   let allListenersClosed = true;
   const docsBeforeBreak = new Set();
 
@@ -340,10 +363,11 @@ export const runCase = async (deps, caseSpec, ctx) => {
     }
     if (unsubscribed && row.listener === 'primary') counters.eventsAfterUnsubscribe += 1;
     if (errored && row.listener === 'primary') counters.eventsAfterError += 1;
-    if (!errored && row.snapshotKind !== 'error') counters.snapshotsBeforeError += 1;
+    if (!errored && row.snapshotKind !== 'error' && row.fromCache === false) {
+      counters.serverSnapshotsBeforeError += 1;
+    }
     if (row.snapshotKind === 'error') errored = true;
     if (row.snapshotKind !== 'error') {
-      counters.fromCacheTransitions.push(row.fromCache);
       for (const change of row.changes) {
         if (change.type === 'added') {
           if (breakSeen && docsBeforeBreak.has(change.doc)) counters.duplicateAdded.push(change.doc);
@@ -363,14 +387,17 @@ export const runCase = async (deps, caseSpec, ctx) => {
       failures.push(charge.error);
       return;
     }
-    let first = true;
+    // A listener's initial snapshot is its first server-backed snapshot. The
+    // same snapshot served from the local cache beforehand is still the
+    // initial one, so `seenServer`, not a plain first-callback flag, decides.
+    let seenServer = false;
     const options = { includeMetadataChanges: Boolean(spec.includeMetadataChanges) };
     const onNext = snapshot => {
       const row =
         spec.kind === 'document'
-          ? normalizeDocumentSnapshot(name, { ...snapshot, first }, nameOf)
-          : normalizeQuerySnapshot(name, { ...snapshot, first }, nameOf);
-      first = false;
+          ? normalizeDocumentSnapshot(name, { ...snapshot, first: !seenServer }, nameOf)
+          : normalizeQuerySnapshot(name, { ...snapshot, first: !seenServer }, nameOf);
+      if (snapshot.fromCache === false) seenServer = true;
       record(row);
     };
     const onError = error => record(normalizeListenerError(name, error));
@@ -430,9 +457,22 @@ export const runCase = async (deps, caseSpec, ctx) => {
           break;
         case 'await': {
           const target = step.events;
-          await waitFor(() => events.filter(row => row.listener === step.listener).length >= target);
+          await waitFor(
+            () =>
+              events.slice(baselineAt).filter(row => row.listener === step.listener).length >=
+              target,
+          );
           break;
         }
+        case 'baseline':
+          baselineAt = events.length;
+          break;
+        case 'awaitServer':
+          await waitFor(() => {
+            const seen = events.filter(row => row.listener === step.listener);
+            return seen.length > 0 && seen.at(-1).fromCache === false;
+          });
+          break;
         case 'awaitError':
           await waitFor(() =>
             events.some(row => row.listener === step.listener && row.snapshotKind === 'error'),
@@ -495,21 +535,32 @@ export const runCase = async (deps, caseSpec, ctx) => {
     registered.clear();
   }
 
+  let compared = events.slice(baselineAt);
+  if (caseSpec.ignoreCachedPrefix) {
+    const firstKept = compared.findIndex(
+      row => row.snapshotKind === 'error' || row.fromCache === false,
+    );
+    compared = firstKept < 0 ? [] : compared.slice(firstKept);
+  }
+  compared = collapseMetadataOnlyEvents(compared, caseSpec.comparedFields);
+
+  // Invariants describe the compared window, not the warm-up prefix.
+  counters.fromCacheTransitions = compared
+    .filter(row => row.snapshotKind !== 'error')
+    .map(row => row.fromCache)
+    .filter((value, index, all) => index === 0 || all[index - 1] !== value);
   const expectedDocs = new Set(
     caseSpec.expectedLocal.flatMap(event => event.docs).filter(Boolean),
   );
-  const terminalDocs = new Set(events.at(-1)?.docs ?? []);
+  const terminalDocs = new Set(compared.at(-1)?.docs ?? []);
   counters.terminalDocsComplete =
     caseSpec.comparison !== 'aggregate-changes' ||
     [...expectedDocs].every(doc => terminalDocs.has(doc));
-  counters.fromCacheTransitions = counters.fromCacheTransitions.filter(
-    (value, index, all) => index === 0 || all[index - 1] !== value,
-  );
 
   const observed =
     caseSpec.comparison === 'aggregate-changes'
-      ? [aggregateChanges(events.slice(1), events[0]?.docs ?? [])]
-      : events;
+      ? [aggregateChanges(compared, events[baselineAt - 1]?.docs ?? [])]
+      : compared;
 
   return {
     caseId: caseSpec.caseId,
@@ -518,7 +569,10 @@ export const runCase = async (deps, caseSpec, ctx) => {
     complete: failures.length === 0,
     failures,
     observed: redact(observed),
+    rawEvents: redact(events),
     rawEventCount: events.length,
+    baselineAt,
+    comparedFields: caseSpec.comparedFields ?? null,
     invariantViolations: checkInvariants(caseSpec.invariants, counters),
     listenersClosed: allListenersClosed && registered.size === 0,
   };
@@ -532,6 +586,7 @@ export const buildReceipt = ({
   caseRecords,
   cleanup,
   budget,
+  cleanupBudget,
   productionExecuted,
 }) => ({
   schema: RECEIPT_SCHEMA,
@@ -541,10 +596,12 @@ export const buildReceipt = ({
   productionExecuted: Boolean(productionExecuted),
   environment: redact(environment),
   budget: budget.snapshot(),
+  cleanupBudget: cleanupBudget ? cleanupBudget.snapshot() : null,
   cleanup,
   cases: caseRecords,
   complete:
     caseRecords.every(record => record.complete && record.listenersClosed) &&
     cleanup.complete &&
-    !budget.snapshot().exhausted,
+    !budget.snapshot().exhausted &&
+    !(cleanupBudget ? cleanupBudget.snapshot().exhausted : false),
 });

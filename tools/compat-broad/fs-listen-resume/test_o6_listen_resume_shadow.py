@@ -25,4 +25,6 @@ def test_negative_shadow_keeps_unimplemented_token_cases_as_obligations():
     plan = compile_plan("4" * 32)
     receipt = run_shadow(plan, scenario="negative")
     assert receipt["unsupportedObligations"] == plan["unsupportedObligations"]
-    assert all(event["snapshotType"] != "error" for event in receipt["expectedLogicalEvents"])
+    assert all(
+        event["snapshotType"] != "error" for event in receipt["expectedLogicalEvents"]
+    )

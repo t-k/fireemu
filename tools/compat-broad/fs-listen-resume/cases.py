@@ -54,6 +54,30 @@ LISTENER_KINDS = ("document", "query")
 COMPARISON_ORDERED = "ordered-events"
 COMPARISON_AGGREGATE = "aggregate-changes"
 
+# Fields compared position by position. `fromCache` and `hasPendingWrites` are
+# metadata: a listener that did not ask for metadata changes still reports them,
+# but their value there reflects delivery timing rather than a semantic
+# difference, so those cases drop them from the compared projection and keep
+# them in the raw receipt.
+DEFAULT_COMPARED_FIELDS = (
+    "listener",
+    "snapshotKind",
+    "changes",
+    "docs",
+    "exists",
+    "fromCache",
+    "hasPendingWrites",
+    "error",
+)
+SEMANTIC_ONLY_FIELDS = (
+    "listener",
+    "snapshotKind",
+    "changes",
+    "docs",
+    "exists",
+    "error",
+)
+
 
 def _change(
     kind: str, doc: str, old_index: int | None, new_index: int | None
@@ -97,6 +121,8 @@ def _case(
     discriminators: list[str],
     invariants: list[str] | None = None,
     control_for: str | None = None,
+    compared_fields: list[str] | None = None,
+    ignore_cached_prefix: bool = False,
     requires_auth: bool = True,
     requires_rules: bool = False,
     documents: list[str] | None = None,
@@ -118,6 +144,8 @@ def _case(
         "steps": steps,
         "expectedLocal": expected_local,
         "comparison": comparison,
+        "comparedFields": list(compared_fields or DEFAULT_COMPARED_FIELDS),
+        "ignoreCachedPrefix": ignore_cached_prefix,
         "discriminators": discriminators,
         "invariants": list(invariants or []),
         "requiresAuth": requires_auth,
@@ -127,11 +155,16 @@ def _case(
 
 
 def _doc_listener(name: str, doc: str, *, metadata: bool = False) -> dict[str, Any]:
+    # `metadata` records whether the case treats metadata as a compared signal.
+    # The listener always subscribes with includeMetadataChanges because the
+    # collector needs the cache-to-server transition to know the listener is
+    # ready; cases that do not compare metadata collapse those events back out.
     return {
         "name": name,
         "kind": "document",
         "target": doc,
-        "includeMetadataChanges": metadata,
+        "includeMetadataChanges": True,
+        "metadataIsCompared": metadata,
     }
 
 
@@ -143,7 +176,8 @@ def _query_listener(name: str, *, metadata: bool = False) -> dict[str, Any]:
         "where": ["rank", "<", 10],
         "orderBy": ["rank", "asc"],
         "limit": 10,
-        "includeMetadataChanges": metadata,
+        "includeMetadataChanges": True,
+        "metadataIsCompared": metadata,
     }
 
 
@@ -160,13 +194,14 @@ _CASE_101 = _case(
     steps=[
         _step("seed", doc="alpha", fields={"rank": 1, "value": "a0"}),
         _step("listen", listener="primary"),
-        _step("await", listener="primary", events=1),
+        _step("awaitServer", listener="primary"),
     ],
     expected_local=[
         _event("primary", "initial", docs=["alpha"], exists=True),
     ],
     comparison=COMPARISON_ORDERED,
-    discriminators=["snapshotKind", "exists", "fromCache", "hasPendingWrites"],
+    compared_fields=list(SEMANTIC_ONLY_FIELDS),
+    discriminators=["snapshotKind", "exists"],
     documents=["alpha"],
 )
 
@@ -179,12 +214,13 @@ _CASE_101C = _case(
     listeners=[_doc_listener("primary", "absent")],
     steps=[
         _step("listen", listener="primary"),
-        _step("await", listener="primary", events=1),
+        _step("awaitServer", listener="primary"),
     ],
     expected_local=[
         _event("primary", "initial", docs=[], exists=False),
     ],
     comparison=COMPARISON_ORDERED,
+    compared_fields=list(SEMANTIC_ONLY_FIELDS),
     discriminators=["exists"],
     documents=["absent"],
 )
@@ -197,24 +233,24 @@ _CASE_102 = _case(
     listeners=[_doc_listener("primary", "beta", metadata=True)],
     steps=[
         _step("listen", listener="primary"),
-        _step("await", listener="primary", events=1),
+        _step("awaitServer", listener="primary"),
+        _step("baseline"),
         _step("write", client="primary", doc="beta", fields={"rank": 2, "value": "b0"}),
-        _step("await", listener="primary", events=3),
+        _step("await", listener="primary", events=2),
     ],
     expected_local=[
-        _event("primary", "initial", docs=[], exists=False),
         _event(
             "primary",
             "delta",
             docs=["beta"],
             exists=True,
-            from_cache=True,
+            from_cache=False,
             pending=True,
         ),
         _event("primary", "delta", docs=["beta"], exists=True),
     ],
     comparison=COMPARISON_ORDERED,
-    discriminators=["hasPendingWrites", "fromCache"],
+    discriminators=["hasPendingWrites"],
     documents=["beta"],
 )
 
@@ -227,12 +263,12 @@ _CASE_102C = _case(
     listeners=[_doc_listener("primary", "beta", metadata=True)],
     steps=[
         _step("listen", listener="primary"),
-        _step("await", listener="primary", events=1),
+        _step("awaitServer", listener="primary"),
+        _step("baseline"),
         _step("write", client="witness", doc="beta", fields={"rank": 2, "value": "b0"}),
-        _step("await", listener="primary", events=2),
+        _step("await", listener="primary", events=1),
     ],
     expected_local=[
-        _event("primary", "initial", docs=[], exists=False),
         _event("primary", "delta", docs=["beta"], exists=True),
     ],
     comparison=COMPARISON_ORDERED,
@@ -249,21 +285,16 @@ _CASE_103 = _case(
     steps=[
         _step("seed", doc="alpha", fields={"rank": 1, "value": "a0"}),
         _step("listen", listener="primary"),
+        _step("awaitServer", listener="primary"),
+        _step("baseline"),
+        _step("write", client="witness", doc="beta", fields={"rank": 0, "value": "b0"}),
         _step("await", listener="primary", events=1),
-        _step("write", client="primary", doc="beta", fields={"rank": 0, "value": "b0"}),
+        _step("write", client="witness", doc="beta", fields={"rank": 3, "value": "b1"}),
         _step("await", listener="primary", events=2),
-        _step("write", client="primary", doc="beta", fields={"rank": 3, "value": "b1"}),
+        _step("delete", client="witness", doc="alpha"),
         _step("await", listener="primary", events=3),
-        _step("delete", client="primary", doc="alpha"),
-        _step("await", listener="primary", events=4),
     ],
     expected_local=[
-        _event(
-            "primary",
-            "initial",
-            changes=[_change("added", "alpha", -1, 0)],
-            docs=["alpha"],
-        ),
         _event(
             "primary",
             "delta",
@@ -298,20 +329,14 @@ _CASE_103C = _case(
     steps=[
         _step("seed", doc="alpha", fields={"rank": 1, "value": "a0"}),
         _step("listen", listener="primary"),
-        _step("await", listener="primary", events=1),
+        _step("awaitServer", listener="primary"),
+        _step("baseline"),
         _step(
-            "write", client="primary", doc="gamma", fields={"rank": 99, "value": "g0"}
+            "write", client="witness", doc="gamma", fields={"rank": 99, "value": "g0"}
         ),
         _step("quiet", listener="primary", seconds=3),
     ],
-    expected_local=[
-        _event(
-            "primary",
-            "initial",
-            changes=[_change("added", "alpha", -1, 0)],
-            docs=["alpha"],
-        ),
-    ],
+    expected_local=[],
     comparison=COMPARISON_ORDERED,
     discriminators=["docs"],
     invariants=["no-event-after-quiet-window"],
@@ -328,7 +353,8 @@ _CASE_104 = _case(
         _step("seed", doc="alpha", fields={"rank": 1, "value": "a0"}),
         _step("seed", doc="beta", fields={"rank": 2, "value": "b0"}),
         _step("listen", listener="primary"),
-        _step("await", listener="primary", events=1),
+        _step("awaitServer", listener="primary"),
+        _step("baseline"),
         _step("break", client="primary", mode="disable-network"),
         _step(
             "write", client="witness", doc="gamma", fields={"rank": 5, "value": "g0"}
@@ -351,6 +377,7 @@ _CASE_104 = _case(
         ),
     ],
     comparison=COMPARISON_AGGREGATE,
+    compared_fields=list(SEMANTIC_ONLY_FIELDS),
     discriminators=["changes", "docs", "fromCacheTransitions"],
     invariants=[
         "no-duplicate-added-for-unchanged-document",
@@ -371,7 +398,8 @@ _CASE_104C = _case(
         _step("seed", doc="alpha", fields={"rank": 1, "value": "a0"}),
         _step("seed", doc="beta", fields={"rank": 2, "value": "b0"}),
         _step("listen", listener="primary"),
-        _step("await", listener="primary", events=1),
+        _step("awaitServer", listener="primary"),
+        _step("baseline"),
         _step(
             "write", client="witness", doc="gamma", fields={"rank": 5, "value": "g0"}
         ),
@@ -392,6 +420,7 @@ _CASE_104C = _case(
         ),
     ],
     comparison=COMPARISON_AGGREGATE,
+    compared_fields=list(SEMANTIC_ONLY_FIELDS),
     discriminators=["changes", "docs"],
     invariants=[
         "no-duplicate-added-for-unchanged-document",
@@ -413,22 +442,22 @@ _CASE_105 = _case(
         _step("seed", doc="alpha", fields={"rank": 1, "value": "a0"}),
         _step("listen", listener="primary"),
         _step("listen", listener="witness"),
-        _step("await", listener="primary", events=1),
-        _step("await", listener="witness", events=1),
+        _step("awaitServer", listener="primary"),
+        _step("awaitServer", listener="witness"),
+        _step("baseline"),
         _step("unsubscribe", listener="primary"),
         _step("unsubscribe", listener="primary", repeat=True),
         _step(
             "write", client="witness", doc="alpha", fields={"rank": 1, "value": "a1"}
         ),
-        _step("await", listener="witness", events=2),
+        _step("await", listener="witness", events=1),
         _step("quiet", listener="primary", seconds=3),
     ],
     expected_local=[
-        _event("primary", "initial", docs=["alpha"], exists=True),
-        _event("witness", "initial", docs=["alpha"], exists=True),
         _event("witness", "delta", docs=["alpha"], exists=True),
     ],
     comparison=COMPARISON_ORDERED,
+    compared_fields=list(SEMANTIC_ONLY_FIELDS),
     discriminators=["listener", "snapshotKind"],
     invariants=["no-event-after-unsubscribe", "repeated-unsubscribe-is-a-no-op"],
     documents=["alpha"],
@@ -448,21 +477,21 @@ _CASE_105C = _case(
         _step("seed", doc="alpha", fields={"rank": 1, "value": "a0"}),
         _step("listen", listener="primary"),
         _step("listen", listener="witness"),
-        _step("await", listener="primary", events=1),
-        _step("await", listener="witness", events=1),
+        _step("awaitServer", listener="primary"),
+        _step("awaitServer", listener="witness"),
+        _step("baseline"),
         _step(
             "write", client="witness", doc="alpha", fields={"rank": 1, "value": "a1"}
         ),
-        _step("await", listener="primary", events=2),
-        _step("await", listener="witness", events=2),
+        _step("await", listener="primary", events=1),
+        _step("await", listener="witness", events=1),
     ],
     expected_local=[
-        _event("primary", "initial", docs=["alpha"], exists=True),
-        _event("witness", "initial", docs=["alpha"], exists=True),
         _event("primary", "delta", docs=["alpha"], exists=True),
         _event("witness", "delta", docs=["alpha"], exists=True),
     ],
     comparison=COMPARISON_ORDERED,
+    compared_fields=list(SEMANTIC_ONLY_FIELDS),
     discriminators=["listener"],
     documents=["alpha"],
 )
@@ -477,19 +506,20 @@ _CASE_106 = _case(
         _step("signIn", client="primary", account="throwaway"),
         _step("seed", doc="private", fields={"value": "p0"}),
         _step("listen", listener="primary"),
-        _step("await", listener="primary", events=1),
+        _step("awaitServer", listener="primary"),
+        _step("baseline"),
         _step("signOut", client="primary"),
         _step("awaitError", listener="primary"),
         _step("signIn", client="primary", account="throwaway"),
         _step("listen", listener="recovered"),
-        _step("await", listener="recovered", events=1),
+        _step("awaitServer", listener="recovered"),
     ],
     expected_local=[
-        _event("primary", "initial", docs=["private"], exists=True),
         _event("primary", "error", error="permission-denied"),
         _event("recovered", "initial", docs=["private"], exists=True),
     ],
     comparison=COMPARISON_ORDERED,
+    compared_fields=list(SEMANTIC_ONLY_FIELDS),
     discriminators=["error", "snapshotKind"],
     invariants=["no-event-after-listener-error"],
     requires_rules=True,
@@ -501,7 +531,7 @@ _CASE_106N = _case(
     role=ROLE_NEGATIVE,
     control_for="FS-LISTEN-SDK-106",
     dimension="auth-switch",
-    title="A listener started while signed out fails immediately with permission-denied",
+    title="A listener started while signed out fails without ever reading the server",
     listeners=[_doc_listener("primary", "private")],
     steps=[
         _step("signOut", client="primary"),
@@ -512,8 +542,10 @@ _CASE_106N = _case(
         _event("primary", "error", error="permission-denied"),
     ],
     comparison=COMPARISON_ORDERED,
+    compared_fields=list(SEMANTIC_ONLY_FIELDS),
+    ignore_cached_prefix=True,
     discriminators=["error"],
-    invariants=["zero-snapshots-before-error"],
+    invariants=["no-server-snapshot-before-error"],
     requires_auth=False,
     requires_rules=True,
     documents=["private"],

@@ -31,6 +31,7 @@ def _case_row(case):
         "rawEventCount": len(case["expectedLocal"]),
         "invariantViolations": [],
         "listenersClosed": True,
+        "comparedFields": list(case["comparedFields"]),
     }
 
 
@@ -134,7 +135,7 @@ def test_an_unprepared_campaign_cannot_admit_a_production_receipt():
 
 def test_a_differing_event_sequence_is_a_semantic_mismatch(prepared):
     production = _receipt(prepared, side="production")
-    production["cases"][0]["observed"][0]["hasPendingWrites"] = True
+    production["cases"][0]["observed"][0]["exists"] = False
     result = compare_observations(
         prepared, _receipt(prepared, side="local"), production, base_dir=REPO_ROOT
     )
@@ -262,3 +263,27 @@ def test_the_comparison_always_reports_the_paths_it_did_not_observe(prepared):
         "apple-sdk",
         "raw-resume-token",
     }
+
+
+def test_metadata_only_differences_are_ignored_where_a_case_declares_them_uncompared(
+    prepared,
+):
+    production = _receipt(prepared, side="production")
+    for row, case in zip(production["cases"], cases.CASES, strict=True):
+        if "fromCache" in case["comparedFields"]:
+            continue
+        for event in row["observed"]:
+            event["fromCache"] = True
+    result = compare_observations(
+        prepared, _receipt(prepared, side="local"), production, base_dir=REPO_ROOT
+    )
+    assert result["classification"] == MATCH
+
+
+def test_a_semantic_field_difference_is_never_ignored(prepared):
+    production = _receipt(prepared, side="production")
+    production["cases"][4]["observed"][0]["changes"] = []
+    result = compare_observations(
+        prepared, _receipt(prepared, side="local"), production, base_dir=REPO_ROOT
+    )
+    assert result["classification"] == SEMANTIC_MISMATCH

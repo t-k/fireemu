@@ -80,6 +80,12 @@ BUDGET = MappingProxyType(
         "maxWrites": 60,
         "maxDeletes": 80,
         "maxReads": 600,
+        # Cleanup runs on its own reserve so an exhausted observation budget or
+        # an expired observation deadline can never leave an owned document
+        # behind. The reserve is charged separately and reported separately.
+        "cleanupReserveSeconds": 180,
+        "cleanupReserveReads": 200,
+        "cleanupReserveDeletes": 100,
         "maxSnapshots": 120,
         "estimatedCostUsd": 0.01,
         "hardCostCeilingUsd": 0.5,
@@ -179,26 +185,28 @@ def count_operations() -> dict[str, int]:
             snapshots += 1
             reads += max(len(event["docs"]), 1)
     # Each case is isolated by a conditional cleanup pass over every owned path:
-    # one read to prove ownership, one delete, one read to prove absence.
+    # one read to prove ownership, one delete, one read to prove absence. Those
+    # operations are charged to the cleanup reserve, not to the observation
+    # budget, so they are counted separately.
     owned = len(owned_paths("0" * 32)) - 1  # the run document itself is not seeded
     passes = len(cases.CASES) + 1  # once per case, plus one final pass
-    reads += owned * passes * 2
-    deletes += owned * passes
     return {
         "writes": writes,
         "deletes": deletes,
         "reads": reads,
         "snapshots": snapshots,
         "listenerRegistrations": listeners,
+        "cleanupReads": owned * passes * 2,
+        "cleanupDeletes": owned * passes,
     }
 
 
 def estimate_cost_usd(counts: dict[str, int] | None = None) -> float:
     counts = counts or count_operations()
     total = (
-        counts["reads"] * _PRICE_PER_100K["read"]
+        (counts["reads"] + counts["cleanupReads"]) * _PRICE_PER_100K["read"]
         + counts["writes"] * _PRICE_PER_100K["write"]
-        + counts["deletes"] * _PRICE_PER_100K["delete"]
+        + (counts["deletes"] + counts["cleanupDeletes"]) * _PRICE_PER_100K["delete"]
     ) / 100_000
     return round(total, 6)
 
@@ -225,6 +233,8 @@ def compile_campaign(
         or counts["reads"] > BUDGET["maxReads"]
         or counts["snapshots"] > BUDGET["maxSnapshots"]
         or counts["listenerRegistrations"] > BUDGET["maxListenerRegistrations"]
+        or counts["cleanupReads"] > BUDGET["cleanupReserveReads"]
+        or counts["cleanupDeletes"] > BUDGET["cleanupReserveDeletes"]
     ):
         raise ValueError("declared catalog exceeds the frozen budget")
     return {

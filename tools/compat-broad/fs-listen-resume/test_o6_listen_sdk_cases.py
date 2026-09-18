@@ -45,7 +45,7 @@ def test_declared_dimensions_cover_the_blocking_condition_topics():
 
 def test_every_case_declares_expected_local_events_and_discriminators():
     for case in CASES:
-        assert case["expectedLocal"], case["caseId"]
+        assert case["expectedLocal"] or case["invariants"], case["caseId"]
         assert case["discriminators"], case["caseId"]
         assert case["comparison"] in {COMPARISON_ORDERED, COMPARISON_AGGREGATE}
 
@@ -125,7 +125,8 @@ def test_negative_auth_case_expects_no_snapshot_before_the_error():
     case = get_case("FS-LISTEN-SDK-106N")
     assert case["role"] == "negative"
     assert [event["snapshotKind"] for event in case["expectedLocal"]] == ["error"]
-    assert "zero-snapshots-before-error" in case["invariants"]
+    assert "no-server-snapshot-before-error" in case["invariants"]
+    assert case["ignoreCachedPrefix"] is True
 
 
 def test_required_rules_fragment_denies_unauthenticated_access():

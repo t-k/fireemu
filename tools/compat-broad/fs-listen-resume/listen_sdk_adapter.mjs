@@ -232,6 +232,20 @@ export const main = async ({ env = process.env, argv = process.argv } = {}) => {
     },
   });
 
+  // Cleanup has its own reserve. An exhausted observation budget or an expired
+  // observation deadline must never leave an owned document behind.
+  const cleanupBudget = createBudget({
+    now: () => Date.now(),
+    deadlineMs: Number.MAX_SAFE_INTEGER,
+    limits: {
+      reads: limitsSpec.cleanupReserveReads,
+      writes: 0,
+      deletes: limitsSpec.cleanupReserveDeletes,
+      snapshots: 0,
+      listeners: 0,
+    },
+  });
+
   const caseRecords = [];
   for (const caseSpec of catalog.cases) {
     const record = await runCase(deps, caseSpec, {
@@ -245,11 +259,16 @@ export const main = async ({ env = process.env, argv = process.argv } = {}) => {
       budget,
     });
     caseRecords.push(record);
-    await runCleanup(deps, { client: 'primary', paths, nonce, budget });
+    await runCleanup(deps, { client: 'primary', paths, nonce, budget: cleanupBudget });
     await sdk.signInWithEmailAndPassword(clients.primary.auth, account.email, password);
   }
 
-  const cleanup = await runCleanup(deps, { client: 'primary', paths, nonce, budget });
+  const cleanup = await runCleanup(deps, {
+    client: 'primary',
+    paths,
+    nonce,
+    budget: cleanupBudget,
+  });
   const receipt = buildReceipt({
     campaign: { caseId: 'FS-LISTEN-SDK' },
     campaignDigest: env.O6_LISTEN_CAMPAIGN_DIGEST ?? null,
@@ -263,6 +282,7 @@ export const main = async ({ env = process.env, argv = process.argv } = {}) => {
     caseRecords,
     cleanup,
     budget,
+    cleanupBudget,
     productionExecuted: false,
   });
   receipt.sourceDigests = sourceDigests(repoRoot, [

@@ -1,5 +1,8 @@
 {
   "budget": {
+    "cleanupReserveDeletes": 100,
+    "cleanupReserveReads": 200,
+    "cleanupReserveSeconds": 180,
     "estimatedCostUsd": 0.01,
     "hardCostCeilingUsd": 0.5,
     "maxAccounts": 1,

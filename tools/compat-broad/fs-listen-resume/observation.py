@@ -171,19 +171,16 @@ def receipt_errors(
     return sorted(set(errors))
 
 
-def _normalize_event(event: Any) -> dict[str, Any]:
+def _normalize_event(event: Any, compared_fields: tuple[str, ...]) -> dict[str, Any]:
+    """Project one event onto the fields this case compares.
+
+    A case whose listener did not request metadata changes drops `fromCache`
+    and `hasPendingWrites`: the values are recorded in the receipt but reflect
+    delivery timing rather than a semantic difference.
+    """
     if not isinstance(event, dict):
         return {"invalid": True}
-    return {
-        "listener": event.get("listener"),
-        "snapshotKind": event.get("snapshotKind"),
-        "changes": event.get("changes"),
-        "docs": event.get("docs"),
-        "exists": event.get("exists"),
-        "fromCache": event.get("fromCache"),
-        "hasPendingWrites": event.get("hasPendingWrites"),
-        "error": event.get("error"),
-    }
+    return {field: event.get(field) for field in compared_fields}
 
 
 def _row_by_id(receipt: dict[str, Any], case_id: str) -> dict[str, Any] | None:
@@ -212,13 +209,18 @@ def _compare_case(case: dict[str, Any], left: Any, right: Any) -> dict[str, Any]
             reasons.append(f"{side}-listener-leak")
         if record.get("invariantViolations"):
             reasons.append(f"{side}-invariant-violation")
-        if not record.get("observed"):
+        if not record.get("observed") and case["expectedLocal"]:
             reasons.append(f"{side}-no-events")
     if reasons:
         row["reasons"] = sorted(set(reasons))
         return row
-    left_events = [_normalize_event(event) for event in left["observed"]]
-    right_events = [_normalize_event(event) for event in right["observed"]]
+    compared_fields = tuple(case["comparedFields"])
+    left_events = [
+        _normalize_event(event, compared_fields) for event in left["observed"]
+    ]
+    right_events = [
+        _normalize_event(event, compared_fields) for event in right["observed"]
+    ]
     if left_events == right_events:
         row["classification"] = MATCH
         return row

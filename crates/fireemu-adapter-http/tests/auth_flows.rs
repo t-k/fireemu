@@ -887,6 +887,137 @@ fn rejected_email_change_preserves_code_for_an_inactive_duplicate_owner() {
         .is_some_and(Vec::is_empty));
 }
 
+/// ELPROV-1. Email-link sign-in is a `password` sign-in as far as the token is concerned:
+/// `firebase.sign_in_provider` is one of the values Rules documents
+/// (<https://firebase.google.com/docs/rules/rules-and-auth#identifying_users>), and
+/// `emailLink` is not among them. It stays the sign-in method reported to Blocking
+/// Functions and the `createAuthUri` sign-in method.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn email_link_sign_in_issues_password_provider_tokens_through_the_second_factor() {
+    let mut s = state();
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "link-provider@example.com"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let code = issued_code(&s, "EMAIL_SIGNIN");
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "link-provider@example.com", "oobCode": code}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["isNewUser"], true);
+    assert_eq!(
+        claims(signed["idToken"].as_str().unwrap())["firebase"]["sign_in_provider"],
+        "password"
+    );
+    // The refresh session carries the same provider.
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": signed["refreshToken"]}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    assert_eq!(
+        claims(refreshed["id_token"].as_str().unwrap())["firebase"]["sign_in_provider"],
+        "password"
+    );
+    // The account is still a passwordless one for fetchSignInMethodsForEmail.
+    let (_, methods) = post(
+        &s,
+        &format!("{V1}/accounts:createAuthUri"),
+        &json!({"identifier": "link-provider@example.com", "continueUri": "http://localhost"}),
+    );
+    assert_eq!(methods["signinMethods"], json!(["emailLink"]));
+
+    // An existing account with a second factor: the pending credential and the token minted
+    // after the second factor report the same provider.
+    let user = sign_up(&s, "link-mfa@example.com");
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    verify_email(&s, user["localId"].as_str().unwrap());
+    let (status, start) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": id_token, "phoneEnrollmentInfo": {"phoneNumber": "+15559876543", "recaptchaToken": "x"}}),
+    );
+    assert_eq!(status, 200, "{start}");
+    let session = start["phoneSessionInfo"]["sessionInfo"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let sms = codes["verificationCodes"][0]["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, enrolled) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": id_token, "displayName": "my phone", "phoneVerificationInfo": {"sessionInfo": session, "code": sms}}),
+    );
+    assert_eq!(status, 200, "{enrolled}");
+    let enrollment_id = claims(enrolled["idToken"].as_str().unwrap())["firebase"]
+        ["second_factor_identifier"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    s.blocking = Some(Arc::new(FilteringIdpBlockingHook {
+        contexts: Arc::clone(&contexts),
+    }));
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "link-mfa@example.com"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let code = issued_code(&s, "EMAIL_SIGNIN");
+    let (status, pending) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "link-mfa@example.com", "oobCode": code}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(pending.get("idToken").is_none(), "{pending}");
+    let credential = pending["mfaPendingCredential"].as_str().unwrap().to_owned();
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": credential, "mfaEnrollmentId": enrollment_id, "phoneSignInInfo": {"recaptchaToken": "x"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let session = started["phoneResponseInfo"]["sessionInfo"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let sms = codes["verificationCodes"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, done) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        &json!({"mfaPendingCredential": credential, "phoneVerificationInfo": {"sessionInfo": session, "code": sms}}),
+    );
+    assert_eq!(status, 200, "{done}");
+    let c = claims(done["idToken"].as_str().unwrap());
+    assert_eq!(c["firebase"]["sign_in_provider"], "password");
+    assert_eq!(c["firebase"]["sign_in_second_factor"], "phone");
+    // Blocking Functions still see the email-link sign-in method.
+    let recorded = contexts.lock().unwrap();
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0].1.sign_in_method.as_deref(), Some("emailLink"));
+}
+
 #[test]
 fn email_link_sign_in_creates_a_verified_passwordless_user() {
     let s = state();
@@ -915,7 +1046,7 @@ fn email_link_sign_in_creates_a_verified_passwordless_user() {
     assert_eq!(signed["isNewUser"], true);
     let c = claims(signed["idToken"].as_str().unwrap());
     assert_eq!(c["email_verified"], true);
-    assert_eq!(c["firebase"]["sign_in_provider"], "emailLink");
+    assert_eq!(c["firebase"]["sign_in_provider"], "password");
     // fetchSignInMethodsForEmail sees a passwordless user.
     let (_, methods) = post(
         &s,

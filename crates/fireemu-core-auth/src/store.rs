@@ -76,7 +76,8 @@ pub enum Provider {
 }
 
 impl Provider {
-    /// Provider ID as it appears in `firebase.sign_in_provider`.
+    /// Provider ID as it appears in `providerUserInfo`, the `createAuthUri` sign-in methods
+    /// and the sign-in method Blocking Functions see.
     #[must_use]
     pub fn id(&self) -> &str {
         match self {
@@ -86,6 +87,17 @@ impl Provider {
             Self::Phone => "phone",
             Self::EmailLink => "emailLink",
             Self::Federated(id) => id,
+        }
+    }
+
+    /// Provider ID as it appears in `firebase.sign_in_provider`. An email-link sign-in is a
+    /// `password` sign-in for the token: `emailLink` is not one of the values the Rules
+    /// reference lists, and it stays the sign-in method rather than the provider.
+    #[must_use]
+    pub fn sign_in_provider_claim(&self) -> &str {
+        match self {
+            Self::EmailLink => "password",
+            other => other.id(),
         }
     }
 }
@@ -3365,7 +3377,8 @@ impl AuthStore {
             session.issued_at,
         )?;
         if let Some(p) = &session.provider {
-            p.id().clone_into(&mut claims.firebase.sign_in_provider);
+            p.sign_in_provider_claim()
+                .clone_into(&mut claims.firebase.sign_in_provider);
         }
         for (k, v) in session.claims.entries() {
             claims
@@ -3798,7 +3811,7 @@ impl AuthStore {
             photo_url: user.photo_url.clone(),
             firebase: FirebaseClaims {
                 identities,
-                sign_in_provider: user.provider.id().to_owned(),
+                sign_in_provider: user.provider.sign_in_provider_claim().to_owned(),
                 sign_in_second_factor: second.map(|a| a.sign_in_second_factor.clone()),
                 second_factor_identifier: second.map(|a| a.second_factor_identifier.clone()),
                 tenant: self.tenant_id.clone(),

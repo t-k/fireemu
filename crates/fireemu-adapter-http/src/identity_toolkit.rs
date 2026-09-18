@@ -986,7 +986,8 @@ fn issue_tokens_replacing(
         .id_token_claims(uid, second, at)
         .map_err(|e| auth_error(&e))?;
     if let Some(p) = &issue.provider {
-        p.id().clone_into(&mut claims.firebase.sign_in_provider);
+        p.sign_in_provider_claim()
+            .clone_into(&mut claims.firebase.sign_in_provider);
     }
     claims.firebase.sign_in_attributes = issue.sign_in_attributes.cloned();
     if let Some(extra) = issue.extra {
@@ -9004,6 +9005,9 @@ fn sign_in_with_email_link(
         Ok(r) => r,
         Err(e) => return auth_error(&e),
     };
+    // The account and the pending credential keep `Provider::EmailLink`, which drives
+    // `providerUserInfo`, the `createAuthUri` sign-in methods and the `emailLink` sign-in
+    // method Blocking Functions see. The token claim itself is rendered as `password`.
     finish_sign_in(
         store,
         &uid,

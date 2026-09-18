@@ -1954,6 +1954,121 @@ fn second_factor_display_names_reject_control_characters_from_every_writer() {
     assert_eq!(status, 200, "{enrolled}");
 }
 
+/// M-2. A refused request changes nothing. Moving the control-character check into the store
+/// put it after the earlier writes of the same request: custom claims are set before the
+/// identity is linked, and the Admin enrollment list clears the existing factors before it
+/// enrolls the new ones. Both are now validated before the first write.
+#[test]
+fn a_refused_control_character_leaves_the_rest_of_the_request_unapplied() {
+    let s = state();
+    let user = sign_up(&s, "partial@example.com");
+    let local_id = user["localId"].as_str().unwrap().to_owned();
+
+    // A claim the request must not persist when its federated identity is refused.
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({
+            "localId": local_id,
+            "customAttributes": "{\"admin\":true}",
+            "linkProviderUserInfo": {
+                "providerId": "github.com",
+                "rawId": "gh-partial",
+                "displayName": "gh\u{0001}user"
+            }
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : displayName must not contain control characters"
+    );
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [local_id.clone()]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert!(
+        lookup["users"][0].get("customAttributes").is_none(),
+        "the refused request must not have persisted the claim: {lookup}"
+    );
+    assert!(
+        !lookup["users"][0]["providerUserInfo"]
+            .as_array()
+            .is_some_and(|providers| providers
+                .iter()
+                .any(|provider| provider["providerId"] == "github.com")),
+        "{lookup}"
+    );
+
+    // An enrolled factor the request must not drop when a later entry is refused.
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({
+            "email": "partial-factors@example.com",
+            "password": "hunter22",
+            "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+15550004444", "displayName": "original"}]
+        }),
+    );
+    assert_eq!(status, 200, "{created}");
+    let factor_owner = created["localId"].as_str().unwrap().to_owned();
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({
+            "localId": factor_owner,
+            "mfa": {"enrollments": [
+                {"phoneInfo": "+15550005555", "displayName": "kept"},
+                {"phoneInfo": "+15550006666", "displayName": "dro\u{0000}pped"}
+            ]}
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : displayName must not contain control characters"
+    );
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [factor_owner]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    let factors = lookup["users"][0]["mfaInfo"]
+        .as_array()
+        .expect("the original factor survives");
+    assert_eq!(factors.len(), 1, "{lookup}");
+    assert_eq!(factors[0]["displayName"], "original");
+    assert_eq!(factors[0]["phoneInfo"], "+15550004444");
+
+    // The same invariant for the other refusal the list can hit: a list over the per-user
+    // budget is refused before the existing factors are dropped.
+    let over_budget: Vec<Value> = (0..6)
+        .map(|n| json!({"phoneInfo": format!("+1555000{:04}", 7000 + n), "displayName": "extra"}))
+        .collect();
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": factor_owner, "mfa": {"enrollments": over_budget}}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "SECOND_FACTOR_LIMIT_EXCEEDED");
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [factor_owner]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    let factors = lookup["users"][0]["mfaInfo"]
+        .as_array()
+        .expect("the original factor survives");
+    assert_eq!(factors.len(), 1, "{lookup}");
+    assert_eq!(factors[0]["phoneInfo"], "+15550004444");
+}
+
 fn percent(s: &str) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();

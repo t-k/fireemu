@@ -2936,6 +2936,21 @@ impl AuthStore {
         factors: Vec<(String, Option<String>)>,
         now: LogicalInstant,
     ) -> Result<(), MfaError> {
+        // The whole list is checked before the existing factors are dropped: `enroll_phone_factor`
+        // refuses an entry on its own, but by then the clear has already happened.
+        for (phone, display_name) in &factors {
+            Self::validate_phone_number(phone).map_err(|_| MfaError::InvalidCode)?;
+            crate::mfa::validate_factor_display_name(display_name.as_deref())?;
+        }
+        // The list replaces the phone factors, so it competes for the budget with the TOTP
+        // factors it keeps. Refusing here leaves the existing factors in place.
+        let totp_factors = self
+            .users
+            .get(uid)
+            .map_or(0, |user| user.mfa.totp_factors().len());
+        if totp_factors + factors.len() > MAX_FACTORS_PER_USER {
+            return Err(MfaError::TooManyFactors);
+        }
         if let Some(user) = self.users.get_mut(uid).map(Arc::make_mut) {
             user.mfa.phone_factors_mut().clear();
         }

@@ -6753,15 +6753,19 @@ fn parse_identity(v: &Value) -> Result<FederatedIdentity, JsonResponse> {
             "INVALID_ARGUMENT : linkProviderUserInfo takes a federated providerId",
         ));
     }
-    // Control characters are refused by `FederatedIdentity::validate` in the store, which
-    // every writer of a federated identity goes through.
-    Ok(FederatedIdentity {
+    let identity = FederatedIdentity {
         provider_id: provider_id.to_owned(),
         raw_id: raw_id.to_owned(),
         email: opt_str(v, "email")?.map(str::to_owned),
         display_name: opt_str(v, "displayName")?.map(str::to_owned),
         photo_url: opt_str(v, "photoUrl")?.map(str::to_owned),
-    })
+    };
+    // The store's `FederatedIdentity::validate` is the single truth, but it runs when the
+    // identity is linked, which is after this request's other writes. Parsing is before all
+    // of them, so the same check runs here to keep a refused request from applying half of
+    // itself.
+    identity.validate().map_err(|e| auth_error(&e))?;
+    Ok(identity)
 }
 
 /// Phone factors of `mfaInfo` / `mfa.enrollments` entries (`{phoneInfo, displayName}`).

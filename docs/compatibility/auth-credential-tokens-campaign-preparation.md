@@ -26,7 +26,9 @@ Cases are grouped, and each group stays contiguous so a partial run is visibly p
 
 This is the condition the inventory row names first, and it is the one a careless run reports wrongly. The design pins the boundary from server-reported values rather than from the collector's own clock: sign in, read the issued token's own `auth_time` back, set `validSince` to exactly that whole second, and confirm the stored value with an admin readback. Only when all three agree is the row a boundary observation.
 
-When the boundary cannot be pinned, the comparison contract classifies the row `EXPECTED_NONDETERMINISM`. That is not a match and not a difference: the run observed something real, but not the boundary. The row is further reduced to `INDETERMINATE` whenever either neighbouring control failed, because a refusal below the boundary and an acceptance above it are what place it at all.
+When the boundary cannot be pinned, the comparison contract classifies the row `EXPECTED_NONDETERMINISM`. That is not a match and not a difference: the run observed something real, but not the boundary. Pinning is judged from the recorded seconds rather than from the collector's own claim, so a row reporting `auth_time` and `validSince` two seconds apart is unpinned however it labelled itself.
+
+Each control declares the outcome it must produce: the older session refused below, the newer session accepted above. The comparator checks both on each side independently before it reads the boundary row, and only then checks that the two sides agreed. Two sides that both accepted the older session agree with each other and have placed no boundary at all, so that row is `INDETERMINATE`.
 
 ## Trust roots
 
@@ -38,7 +40,11 @@ Absolute server-reported seconds are recorded for review and excluded from equal
 
 The run creates at most four throwaway accounts, all carrying the run nonce in their address, and performs at most sixty requests within ten minutes. The request and wall-clock bounds are enforced in code rather than declared, and the cost ceiling is checked when the budget is created.
 
+Each request is reserved against the bound before it is sent, so an exhausted budget costs nothing further; the wall time it took is charged afterwards and never discards a response already received, because a sign-up whose result is thrown away leaves a live account nothing knows about. Twelve of the sixty requests and sixty of the six hundred seconds are held back from the run as a recovery reserve, so cleanup can still delete and read back every account whatever stopped the run. The reserve is carved out of the declared total rather than added to it.
+
 Identity Platform bills monthly active users rather than requests, and these accounts are deleted inside the run, so the expected charge is zero. The US$0.05 ceiling is a guard against a runaway loop, not a forecast.
+
+Whether the recording is complete and whether the cleanup is complete are separate facts on the receipt. A run that stops part way still cleans up after itself, and a clean cleanup has never been evidence that every case was observed, so each row states for itself whether anything was observed and the comparator re-derives that rather than trusting the receipt's own boolean. Rows marked `NOT_RUN` are classified `INDETERMINATE`.
 
 Cleanup registers every account before it is used, then deletes each one and proves absence from a 200 lookup whose result is empty. A refusal carries no result member either, so a non-200 status is never read as absence; any non-200 delete or lookup leaves the account outstanding and the receipt incomplete. An account created by custom-token sign-in has no address, so no address readback is claimed for it. A cleanup failure fails the run rather than becoming a warning. The campaign changes no project or tenant configuration, so there is nothing to restore.
 

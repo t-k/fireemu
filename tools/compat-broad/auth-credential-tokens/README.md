@@ -9,7 +9,7 @@ This lane prepares a bounded production observation of the `AUTH-CREDENTIAL` con
 | File | What it holds |
 | --- | --- |
 | `credential_cases.py` | The 17 observation cases with their expected local results, boundary controls and prior-evidence references. Logical inputs only: no host, key or account identifier. |
-| `credential_collector.py` | Redaction, owned-resource tracking, cleanup accounting, enforced budget and receipt assembly. Imports no network client, so it cannot make a request. |
+| `credential_collector.py` | Redaction, subject comparison, owned-resource tracking, cleanup accounting, the reserved budget and receipt assembly. Imports no network client, so it cannot make a request. |
 | `credential_comparator.py` | The `auth-credential-tokens-v1` comparison contract. Fail-closed, and it never claims parity. |
 | `credential_plan.py` | The inert campaign manifest: frozen inputs, budget, permission envelope, owner preconditions, cleanup contract and failure rehearsal. |
 | `credential_shadow.py` | The local shadow. It owns a `fireemu` process, runs every case against it and records what the local runtime does. Local evidence only. |
@@ -18,11 +18,13 @@ This lane prepares a bounded production observation of the `AUTH-CREDENTIAL` con
 
 Eleven of the seventeen cases carry `requiresSigning`. Production custom tokens must be RS256-signed by a service account while local ones are unsigned, and the session-cookie group derives its cookie from the custom-token session, so it depends on signing too. A run without signing access can only cover the refresh and revocation groups.
 
-## Two rules that carry the weight
+## Three rules that carry the weight
 
 The local runtime issues unsigned emulator tokens; production issues signed ones. A trust-root difference is therefore expected and is never counted as a semantic difference, though both roots are recorded.
 
-The same-second boundary is classified `EXPECTED_NONDETERMINISM` unless both sides recorded that they pinned it from server-reported values: the token's own `auth_time` read back, `validSince` set to exactly that whole second, and that value confirmed by an admin readback. The boundary row is further reduced to `INDETERMINATE` whenever either neighbouring control failed, because a refusal below and an acceptance above are what place the boundary.
+The same-second boundary is classified `EXPECTED_NONDETERMINISM` unless both sides recorded that they pinned it from server-reported values: the token's own `auth_time` read back, `validSince` set to exactly that whole second, and that value confirmed by an admin readback. The comparator checks the recorded seconds rather than the pinning flag, so a row claiming a pinned boundary across a two-second gap is unpinned. Each control declares the outcome it must produce, and both are checked on each side independently before the boundary row is read: two sides that both accepted the older session agree with each other and have placed no boundary, so the row is `INDETERMINATE`.
+
+A receipt says separately whether its recording is complete and whether its cleanup is complete. Every row carries its own observed state, and the comparator derives that from the row rather than from the receipt's boolean, so a case nobody ran can never be classified `MATCH`.
 
 ## Running the contract checks
 

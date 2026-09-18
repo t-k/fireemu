@@ -24,14 +24,14 @@ use fireemu_core_types::hash::Sha256;
 use fireemu_core_types::ids::{CollectionId, DocumentId};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
-use crate::field_path::FieldPath;
+use crate::field_path::{FieldPath, MAX_FIELD_PATH_BYTES};
 use crate::limits;
 use crate::path::DocumentPath;
 use crate::query::{
     Cursor, Direction, DistanceMeasure, FieldOp, FilterExpr, OrderClause, Query, QueryScope,
     UnaryOp,
 };
-use crate::size::{document_size, document_size_bytes};
+use crate::size::{document_size, document_size_bytes, field_value_size};
 use crate::value::{normalize_fields_for_storage, stored_fields_eq, Timestamp, Value, ValueKind};
 
 /// How far back a snapshot selector may reach: the documented Firestore `read_time` window
@@ -1990,7 +1990,7 @@ impl FirestoreState {
                 update_time: imported.update_time.unwrap_or(commit_time),
                 version: next_version,
             };
-            validate_document(&document)?;
+            validate_document(&document, self.limit_scope)?;
             self.index_catalog
                 .document_index_usage(&document.path, &document.fields)?;
             staged.insert(imported.path, document);
@@ -3333,7 +3333,7 @@ impl FirestoreState {
             check_precondition(write.precondition.as_ref(), current, &path)?;
             let (next, mut result) = apply_write(write, current, commit_time, next_version)?;
             if let Some(Cow::Owned(doc)) = &next {
-                validate_document(doc)?;
+                validate_document(doc, self.limit_scope)?;
                 self.index_catalog
                     .document_index_usage(&doc.path, &doc.fields)?;
             }
@@ -4957,7 +4957,7 @@ fn validate_stored_field_name(name: &str) -> Result<(), FirestoreError> {
         .map_err(|e| FirestoreError::InvalidArgument(format!("field name {name:?}: {e}")))
 }
 
-fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
+fn validate_document(doc: &Document, scope: LimitScope) -> Result<(), FirestoreError> {
     for (name, value) in &doc.fields {
         validate_stored_field_name(name)?;
         check_limit(
@@ -4967,7 +4967,7 @@ fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
     }
     for (name, value) in &doc.fields {
         let property_path = PropertyPath::root(name);
-        validate_value(value, false, &property_path)?;
+        validate_value(value, false, &property_path, scope)?;
     }
     let size = document_size(&doc.path, &doc.fields)
         .map_err(|e| FirestoreError::InvalidArgument(e.to_string()))?;
@@ -4978,19 +4978,27 @@ fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
 #[derive(Debug, Clone)]
 struct PropertyPath {
     segments: Vec<String>,
+    /// Canonical path bytes: the raw segment bytes plus one `.` per separator, the same
+    /// quantity [`FieldPath::from_segments`] bounds (`FS-LIMIT-FIELD-PATH-BYTES`). Backtick
+    /// quoting is a client-side notation and does not count toward the limit.
+    bytes: usize,
 }
 
 impl PropertyPath {
     fn root(name: &str) -> Self {
         Self {
             segments: vec![name.to_owned()],
+            bytes: name.len(),
         }
     }
 
     fn child(&self, name: &str) -> Self {
         let mut segments = self.segments.clone();
         segments.push(name.to_owned());
-        Self { segments }
+        Self {
+            segments,
+            bytes: self.bytes.saturating_add(1).saturating_add(name.len()),
+        }
     }
 
     fn canonical(&self) -> String {
@@ -5015,18 +5023,19 @@ fn validate_value(
     value: &Value,
     inside_array: bool,
     property_path: &PropertyPath,
+    scope: LimitScope,
 ) -> Result<(), FirestoreError> {
-    // Production counts the payload, not storage accounting's trailing string byte.
+    // Production counts the payload, not storage accounting's trailing string byte. This
+    // boundary was observed against production on 2026-09-07 (`conformance/
+    // firestore-production-matrix.json`, `errors/rest-shapes` /
+    // `document-over-one-mebibyte`), so it is refused under either scope.
     let payload_bytes = match value {
         Value::String(value) => value.len(),
         Value::Bytes(value) => value.len(),
         _ => 0,
     };
     if payload_bytes > limits::MAX_FIELD_PAYLOAD_BYTES {
-        return Err(FirestoreError::InvalidArgument(format!(
-            "The value of property \"{}\" is longer than 1048487 bytes.",
-            property_path.canonical()
-        )));
+        return Err(field_value_too_long(property_path));
     }
     match value {
         Value::Array(items) => {
@@ -5037,17 +5046,64 @@ fn validate_value(
             }
             items
                 .iter()
-                .try_for_each(|v| validate_value(v, true, property_path))
+                .try_for_each(|v| validate_value(v, true, property_path, scope))?;
         }
         Value::Map(fields) => fields.iter().try_for_each(|(name, value)| {
             validate_stored_field_name(name)?;
             let nested_path = property_path.child(name);
-            validate_value(value, false, &nested_path)
-        }),
-        Value::Reference(name) => validate_reference(name),
-        Value::Vector(dimensions) => validate_vector(dimensions),
-        _ => Ok(()),
+            check_stored_field_path(&nested_path)?;
+            validate_value(value, false, &nested_path, scope)
+        })?,
+        Value::Reference(name) => validate_reference(name)?,
+        Value::Vector(dimensions) => validate_vector(dimensions)?,
+        _ => {}
     }
+    // `FS-LIMIT-FIELD-VALUE-BYTES` on an aggregate. The catalog's unit is logical bytes, so
+    // a map or an array is measured with the official storage-size formula; a string or a
+    // bytes payload keeps the raw-payload metric observed above. Production has not been
+    // observed on an aggregate value, so only the strict profile refuses one: the
+    // compatibility contract forbids adding a refusal to the `emulator` profile. The check
+    // runs after the recursion so that the innermost violation is the one reported.
+    if scope == LimitScope::Production && matches!(value, Value::Array(_) | Value::Map(_)) {
+        let bytes =
+            field_value_size(value).map_err(|e| FirestoreError::InvalidArgument(e.to_string()))?;
+        if bytes > limits::MAX_FIELD_PAYLOAD_BYTES as u64 {
+            return Err(field_value_too_long(property_path));
+        }
+    }
+    Ok(())
+}
+
+/// The production wording for a field value over `FS-LIMIT-FIELD-VALUE-BYTES`.
+fn field_value_too_long(property_path: &PropertyPath) -> FirestoreError {
+    FirestoreError::InvalidArgument(format!(
+        "The value of property \"{}\" is longer than {} bytes.",
+        property_path.canonical(),
+        limits::MAX_FIELD_PAYLOAD_BYTES
+    ))
+}
+
+/// `FS-LIMIT-FIELD-PATH-BYTES` on the path a nested field implies.
+///
+/// A path a client names -- an update mask, a field transform, an order or a filter -- is
+/// bounded by [`FieldPath::from_segments`] when it is parsed. A path that only exists
+/// because a document nests maps was bounded only as a side effect of automatic index
+/// accounting, which builds the same [`FieldPath`] for every nested field
+/// (`crate::index_usage::IndexSet::automatic_usage`). This is the same refusal at the same
+/// inclusive boundary with the same wording, made deliberate and reached before index
+/// accounting, so a document is refused for its shape rather than for what indexing it
+/// happens to attract. It is therefore not a new refusal and is not profile-gated.
+fn check_stored_field_path(property_path: &PropertyPath) -> Result<(), FirestoreError> {
+    if property_path.bytes > MAX_FIELD_PATH_BYTES {
+        return Err(FirestoreError::InvalidArgument(
+            crate::field_path::FieldPathError::PathTooLong {
+                bytes: property_path.bytes,
+                maximum: MAX_FIELD_PATH_BYTES,
+            }
+            .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Production checks the dimension count before the component values, so an oversized

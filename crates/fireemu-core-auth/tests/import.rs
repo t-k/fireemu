@@ -462,3 +462,61 @@ fn a_federated_identity_carrying_a_control_character_is_refused_by_every_writer(
     };
     assert!(store.sign_in_with_idp(clean, true, t(0)).is_ok());
 }
+
+/// A second factor's display name is stored text, so an import row is held to the same rule
+/// as an enrollment request and nothing is half-installed. Production's refusal shape for
+/// this input is unobserved.
+#[test]
+fn an_imported_second_factor_display_name_carrying_a_control_character_is_refused() {
+    for (label, row) in [
+        (
+            "phone",
+            ImportedUser {
+                phone_factors: vec![PhoneFactor {
+                    mfa_enrollment_id: "enrollment-phone".to_owned(),
+                    display_name: Some("per\u{0000}sonal".to_owned()),
+                    phone_number: "+15555550102".to_owned(),
+                    enrolled_at: t(-100),
+                }],
+                ..account("factor-ctrl")
+            },
+        ),
+        (
+            "totp",
+            ImportedUser {
+                totp_factors: vec![TotpFactor {
+                    mfa_enrollment_id: "enrollment-totp".to_owned(),
+                    display_name: Some("authent\u{001f}icator".to_owned()),
+                    secret: TotpSecret::new(vec![1, 2, 3, 4, 5]),
+                    enrolled_at: t(-200),
+                    last_accepted_step: None,
+                }],
+                ..account("factor-ctrl")
+            },
+        ),
+    ] {
+        let mut store = store();
+        assert_eq!(
+            store.import_user(row),
+            Err(ImportUserError::SecondFactor(
+                ImportedFactorError::ControlCharacterInDisplayName
+            )),
+            "{label}"
+        );
+        assert!(store.user_by_id("factor-ctrl").is_none(), "{label}");
+    }
+
+    // The same rows without the control character install.
+    let mut store = store();
+    assert!(store
+        .import_user(ImportedUser {
+            phone_factors: vec![PhoneFactor {
+                mfa_enrollment_id: "enrollment-phone".to_owned(),
+                display_name: Some("personal".to_owned()),
+                phone_number: "+15555550102".to_owned(),
+                enrolled_at: t(-100),
+            }],
+            ..account("factor-clean")
+        })
+        .is_ok());
+}

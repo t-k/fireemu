@@ -2900,6 +2900,9 @@ impl AuthStore {
         now: LogicalInstant,
     ) -> Result<EnrolledFactor, MfaError> {
         AuthStore::validate_phone_number(phone).map_err(|_| MfaError::InvalidCode)?;
+        // Before the enrollment id is drawn: a refused request must not advance the random
+        // stream or touch the account.
+        crate::mfa::validate_factor_display_name(display_name.as_deref())?;
         let enrollment_id = self.random_id28();
         let user = self
             .users

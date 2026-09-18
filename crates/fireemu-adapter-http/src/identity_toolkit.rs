@@ -885,6 +885,10 @@ fn mfa_error(e: &MfaError) -> JsonResponse {
         MfaError::LimitExceeded(_) => error(400, "SECOND_FACTOR_EXISTS"),
         MfaError::UserDisabled => error(400, "USER_DISABLED"),
         MfaError::UserNotFound => error(400, "USER_NOT_FOUND"),
+        MfaError::ControlCharacterInText(field) => error(
+            400,
+            &format!("INVALID_ARGUMENT : {field} must not contain control characters"),
+        ),
     }
 }
 

@@ -1824,6 +1824,136 @@ fn federated_identities_reject_control_characters_from_every_writer() {
     assert!(store.user_by_id("import-clean").is_some());
 }
 
+/// ITKM-2 follow-up. A second factor's display name is stored text like any other, so the
+/// same rule applies at every writer: phone enrollment, the Admin enrollment list and an
+/// import row. Documented behavior; production's refusal shape for this input is unobserved.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn second_factor_display_names_reject_control_characters_from_every_writer() {
+    let s = state();
+    let user = sign_up(&s, "factor-ctrl@example.com");
+    let local_id = user["localId"].as_str().unwrap().to_owned();
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    verify_email(&s, &local_id);
+
+    // 1. Phone enrollment through the end-user route.
+    let (status, start) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": id_token, "phoneEnrollmentInfo": {"phoneNumber": "+15559876543", "recaptchaToken": "x"}}),
+    );
+    assert_eq!(status, 200, "{start}");
+    let session = start["phoneSessionInfo"]["sessionInfo"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"][0]["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, refused) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": id_token, "displayName": "my\u{0000}phone", "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : displayName must not contain control characters"
+    );
+    // Nothing was enrolled.
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [local_id.clone()]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert!(lookup["users"][0].get("mfaInfo").is_none(), "{lookup}");
+
+    // 2. The Admin enrollment list on account creation.
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({
+            "email": "factor-admin@example.com",
+            "password": "hunter22",
+            "mfaInfo": [{"phoneInfo": "+15550001111", "displayName": "wo\u{0001}rk"}]
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : displayName must not contain control characters"
+    );
+    // The refused creation left no account behind.
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"email": ["factor-admin@example.com"]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert!(lookup.get("users").is_none(), "{lookup}");
+
+    // 3. An import row, refused by index while its neighbour lands.
+    let (status, imported) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:batchCreate"),
+        &json!({"users": [
+            {
+                "localId": "factor-import-ctrl",
+                "email": "factor-import-ctrl@example.com",
+                "emailVerified": true,
+                "mfaInfo": [{"phoneInfo": "+15550002222", "displayName": "ph\u{001f}one", "mfaEnrollmentId": "e-1"}]
+            },
+            {
+                "localId": "factor-import-clean",
+                "email": "factor-import-clean@example.com",
+                "emailVerified": true,
+                "mfaInfo": [{"phoneInfo": "+15550003333", "displayName": "phone", "mfaEnrollmentId": "e-2"}]
+            }
+        ]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    assert_eq!(
+        imported["error"].as_array().map(Vec::len),
+        Some(1),
+        "{imported}"
+    );
+    assert_eq!(imported["error"][0]["index"], 0);
+    let store = s.store.lock().unwrap();
+    assert!(store.user_by_id("factor-import-ctrl").is_none());
+    assert!(store.user_by_id("factor-import-clean").is_some());
+    drop(store);
+
+    // An ordinary display name still enrolls.
+    let (status, start) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": id_token, "phoneEnrollmentInfo": {"phoneNumber": "+15559876543", "recaptchaToken": "x"}}),
+    );
+    assert_eq!(status, 200, "{start}");
+    let session = start["phoneSessionInfo"]["sessionInfo"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, enrolled) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": id_token, "displayName": "my phone", "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
+    );
+    assert_eq!(status, 200, "{enrolled}");
+}
+
 fn percent(s: &str) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();

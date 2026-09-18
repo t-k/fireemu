@@ -199,10 +199,18 @@ The recorded run is
 | Child exit | 0, no signal needed |
 
 The runtime artifact is SHA-256
-`11e23690b79891e8830cac3593ca87f6d7129cb92b8009a77536792dc62a5095`
-(`fireemu 0.7.1`). It was built in the main checkout and is not source-bound to
-this branch, so the campaign source digest is bound but the runtime artifact is
-not. A production run must rebuild and bind the artifact to its own source.
+`8c6bae9e7e5f72a315e88c9afb6b9a5f0a479239d856c04a98a4503e02830994`
+(`fireemu 0.7.1`), built with `cargo build -p fireemu` inside this lane's own
+worktree. The rehearsal records the source commit, the hashed Rust input set
+(`32a872989f5e0d8fabf17a2a30cda85a2467574e23c4712a37711f0dbd196d18`, 400 files)
+and that those inputs were clean. That digest is byte-identical to the one at the
+lane base `3d0e56bdf`, so the artifact provably describes this branch.
+
+A binary taken from the shared checkout or a sibling worktree describes a
+different source and must not be used. An earlier rehearsal did exactly that and
+produced a different artifact digest; the evidence test now refuses a recorded
+artifact whose source root is not this worktree, or whose Rust input digest no
+longer matches the working tree.
 
 The first rehearsal disagreed on one case and the frozen expectation was wrong,
 not the runtime: the emulator says `invalid base64` where the table claimed

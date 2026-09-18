@@ -115,3 +115,35 @@ def test_a_local_shadow_receipt_cannot_stand_in_for_production():
     result = comparison.compare(value["receipt"], value["receipt"])
     assert result["classification"] == comparison.INDETERMINATE
     assert any(r["code"] == "wrong-target" for r in result["reasons"])
+
+
+def test_local_shadow_artifact_is_bound_to_this_branch_source():
+    value = shadow()
+    runtime = value["runtime"]
+    assert len(runtime["sourceCommit"]) == 40
+    assert len(runtime["runtimeInputsDigest"]) == 64
+    assert runtime["runtimeInputsClean"] is True
+    assert runtime["artifactSha256"] == value["artifactSha256"]
+    assert str(ROOT) == runtime["sourceRoot"], (
+        "the rehearsal artifact must be built in this worktree, "
+        "never taken from the shared checkout or a sibling worktree"
+    )
+
+
+def test_local_shadow_runtime_inputs_match_the_current_rust_source():
+    """The artifact must still describe the Rust source in this worktree.
+
+    The commit itself moves whenever tooling or documentation is committed, so
+    the binding that matters is the hashed Rust input set, not the SHA.
+    """
+    import sys as _sys
+
+    _sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
+    from broad_contract import digest
+    from evidence_common import runtime_inputs
+
+    value = shadow()
+    assert value["runtime"]["runtimeInputsDigest"] == digest(runtime_inputs(ROOT)), (
+        "regenerate the local shadow: the recorded artifact no longer describes "
+        "the Rust source in this worktree"
+    )

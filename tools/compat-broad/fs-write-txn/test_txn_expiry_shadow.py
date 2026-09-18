@@ -97,3 +97,19 @@ def test_saved_values_are_stable_json(tmp_path):
     shadow.save(target, {"b": 1, "a": 2})
     assert json.loads(target.read_text()) == {"a": 2, "b": 1}
     assert target.read_text().endswith("\n")
+
+
+def test_runtime_binding_names_the_commit_and_hashes_the_rust_inputs():
+    root = Path(__file__).resolve().parents[3]
+    binding = shadow.runtime_binding(Path(__file__), root)
+    assert len(binding["sourceCommit"]) == 40
+    assert len(binding["runtimeInputsDigest"]) == 64
+    assert binding["runtimeInputCount"] > 0
+    assert isinstance(binding["runtimeInputsClean"], bool)
+    assert len(binding["artifactSha256"]) == 64
+
+
+def test_runtime_binding_refuses_a_missing_artifact():
+    root = Path(__file__).resolve().parents[3]
+    with pytest.raises(FileNotFoundError):
+        shadow.runtime_binding(Path("/nonexistent/fireemu"), root)

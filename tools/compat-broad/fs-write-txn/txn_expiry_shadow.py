@@ -35,6 +35,8 @@ import txn_expiry_cases as cases
 import txn_expiry_collector as collector
 import txn_expiry_comparison as comparison
 import txn_expiry_plan as plan_module
+from broad_contract import digest
+from evidence_common import runtime_inputs
 from owned_runner import control_get, local_addresses
 
 CONTRACT = "txn-expiry-local-shadow-v1"
@@ -68,6 +70,43 @@ STATUS_TO_CODE = {
 
 REQUEST_TIMEOUT_SECONDS = 45
 CHILD_TIMEOUT_SECONDS = 420
+
+
+def runtime_binding(artifact, root):
+    """Bind the built artifact to the Rust source it was produced from.
+
+    A binary built somewhere else describes somewhere else. The shadow records
+    the commit, the hashed Rust inputs and whether those inputs were clean, so a
+    later reader can tell which source the local evidence actually describes.
+    """
+    artifact = Path(artifact)
+    commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    dirty = subprocess.check_output(
+        [
+            "git",
+            "status",
+            "--porcelain",
+            "--",
+            "Cargo.toml",
+            "Cargo.lock",
+            "rust-toolchain.toml",
+            ".cargo",
+            "crates",
+        ],
+        cwd=root,
+        text=True,
+    ).strip()
+    inputs = runtime_inputs(Path(root))
+    return {
+        "artifactSha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        "sourceCommit": commit,
+        "sourceRoot": str(root),
+        "runtimeInputsDigest": digest(inputs),
+        "runtimeInputCount": len(inputs),
+        "runtimeInputsClean": dirty == "",
+    }
 
 
 def save(path, value):
@@ -254,6 +293,8 @@ def stop_child(process, artifact):
 
 def run_shadow(artifact, output):
     artifact = Path(artifact).resolve(strict=True)
+    source_root = Path(__file__).resolve().parents[3]
+    binding = runtime_binding(artifact, source_root)
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     output.chmod(0o700)
@@ -318,6 +359,7 @@ def run_shadow(artifact, output):
         "sourceDigestBefore": before,
         "sourceDigestAfter": plan_module.source_digest(),
         "artifactSha256": artifact_sha,
+        "runtime": binding,
         "nonce": nonce,
         "ownerId": owner_id,
         "elapsedSeconds": round(time.time() - started, 3),
@@ -328,7 +370,9 @@ def run_shadow(artifact, output):
         "promotionReady": False,
     }
     result["complete"] = bool(
-        receipt
+        binding["artifactSha256"] == artifact_sha
+        and binding["runtimeInputsClean"]
+        and receipt
         and receipt.get("complete")
         and contract
         and contract.get("classification") == comparison.MATCH

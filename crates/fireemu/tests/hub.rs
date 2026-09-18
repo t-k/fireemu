@@ -377,12 +377,12 @@ impl Daemon {
     /// `a_sigterm_the_instant_the_daemon_is_ready_still_removes_the_locator` watches for.
     #[cfg(unix)]
     fn terminate_and_wait(&mut self) -> ExitStatus {
-        let pid = self.child.id();
-        let killed = Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status()
-            .expect("the signal is sent");
-        assert!(killed.success(), "kill -TERM {pid} failed");
+        // Signalled from this process rather than through `kill(1)`: the point of the
+        // scenario is how little time the daemon is given between reporting ready and being
+        // asked to stop, and a fork and exec would hand it milliseconds of head start.
+        let pid = rustix::process::Pid::from_raw(i32::try_from(self.child.id()).expect("a pid"))
+            .expect("a live pid");
+        rustix::process::kill_process(pid, rustix::process::Signal::TERM).expect("SIGTERM is sent");
         let status = self.child.wait().expect("the daemon is waited for");
         self.stopped = true;
         status

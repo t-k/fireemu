@@ -216,6 +216,7 @@ class Collection:
         self.update_times = {}
         self.preconditions = []
         self.failure_sites = []
+        self.authority_refusal = None
         self.failure = None
         self.started_at = None
         self.finished_at = None
@@ -455,8 +456,33 @@ class Collection:
             self.failure = stop.reason
         except Exception as error:  # noqa: BLE001 - retained, never reinterpreted
             self.failure = type(error).__name__
-        cleanup, releases = self._cleanup()
+        try:
+            cleanup, releases = self._cleanup()
+        except Exception as error:  # noqa: BLE001 - a receipt is owed regardless
+            self._note_failure("cleanup", type(error).__name__)
+            cleanup, releases = self._unattempted_cleanup(type(error).__name__), []
         return self._receipt(cleanup, releases)
+
+    def _unattempted_cleanup(self, reason):
+        """Entries for a recovery that could not run at all.
+
+        The receipt still has to say which documents this run is answerable
+        for, so a caller reading only the receipt sees the same residue a
+        successful pass would have cleared.
+        """
+        return [
+            {
+                "role": resource["role"],
+                "path": self._path(resource["role"]),
+                "skipped": True,
+                "complete": False,
+                "absent": False,
+                "createdByThisRun": resource["role"] in self.established,
+                "creationEvidence": self.established.get(resource["role"]),
+                "failure": reason,
+            }
+            for resource in self.plan["resources"]
+        ]
 
     def _guard(self, deadline, needed):
         if deadline.remaining() <= needed:
@@ -731,7 +757,25 @@ class Collection:
         results = []
         for resource in self.plan["resources"]:
             role = resource["role"]
-            results.append(self._recover_one(role, recovery))
+            try:
+                results.append(self._recover_one(role, recovery))
+            except Exception as error:  # noqa: BLE001 - one document, not the run
+                # One document failing to come back says nothing about the
+                # others, and the run still owes every one of them an attempt.
+                reason = type(error).__name__
+                self._note_failure(f"cleanup/{role}", reason)
+                results.append(
+                    {
+                        "role": role,
+                        "path": self._path(role),
+                        "skipped": False,
+                        "complete": False,
+                        "absent": False,
+                        "createdByThisRun": role in self.established,
+                        "creationEvidence": self.established.get(role),
+                        "failure": reason,
+                    }
+                )
         self.finished_at = _instant(self.wall())
         return results, releases
 
@@ -746,6 +790,11 @@ class Collection:
         releases = []
         for tag in sorted(self.open_tokens):
             entry = {"transaction": tag, "released": False, "skipped": False}
+            if self.authority_refusal is not None:
+                entry["skipped"] = True
+                entry["failure"] = "authority-refused-earlier"
+                releases.append(entry)
+                continue
             if recovery.expired():
                 entry["skipped"] = True
                 entry["failure"] = "recovery-deadline-reached"
@@ -755,9 +804,19 @@ class Collection:
                 response = self._rollback(self.open_tokens[tag])
             except Exception as error:  # noqa: BLE001 - retained, never reinterpreted
                 entry["failure"] = type(error).__name__
+                self._note_failure(f"release/{tag}", entry["failure"])
                 releases.append(entry)
                 continue
             code = response.get("code")
+            if code in AUTHORITY_REFUSALS:
+                self.authority_refusal = response.get("status") or code
+                self._note_failure(f"release/{tag}", "authority-refused")
+                entry["code"] = code
+                entry["status"] = response.get("status")
+                entry["message"] = response.get("message")
+                entry["failure"] = "rollback-refused-authority"
+                releases.append(entry)
+                continue
             entry["code"] = code
             entry["status"] = response.get("status")
             entry["message"] = response.get("message")
@@ -804,6 +863,12 @@ class Collection:
             # this run should never have made; a creation record cannot.
             entry.update(skipped=True, failure="not-created-by-this-run")
             return entry
+        if self.authority_refusal is not None:
+            # The caller has already been told it may not act here. Sending
+            # more requests cannot help, but this run still created the
+            # document, so it stays on the unrecovered list.
+            entry.update(skipped=True, failure="authority-refused-earlier")
+            return entry
         if recovery.expired():
             entry.update(skipped=True, failure="recovery-deadline-reached")
             return entry
@@ -814,6 +879,11 @@ class Collection:
         }
         if read.get("code") == NOT_FOUND:
             entry.update(skipped=True, complete=True, absent=True)
+            return entry
+        if read.get("code") in AUTHORITY_REFUSALS:
+            self.authority_refusal = read.get("status") or read.get("code")
+            self._note_failure(f"cleanup/{role}", "authority-refused")
+            entry.update(skipped=True, failure="owned-read-refused-authority")
             return entry
         if read.get("code") != OK:
             entry.update(skipped=True, failure="owned-read-incomplete")
@@ -831,6 +901,11 @@ class Collection:
             ]
         )
         entry["delete"] = {"code": delete.get("code"), "status": delete.get("status")}
+        if delete.get("code") in AUTHORITY_REFUSALS:
+            self.authority_refusal = delete.get("status") or delete.get("code")
+            self._note_failure(f"cleanup/{role}", "authority-refused")
+            entry["failure"] = "conditional-delete-refused-authority"
+            return entry
         if delete.get("code") != OK:
             entry["failure"] = "conditional-delete-refused"
             return entry
@@ -874,6 +949,7 @@ class Collection:
             "unrecovered": unrecovered,
             "missingCases": missing,
             "failureSites": self.failure_sites,
+            "authorityRefusal": self.authority_refusal,
             "failure": self.failure,
             "complete": (
                 not missing

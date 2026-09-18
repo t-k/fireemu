@@ -856,3 +856,103 @@ def test_a_begin_that_reports_success_with_an_unusable_token_is_incomplete():
     )
     assert receipt["failure"] == "incomplete-response"
     assert receipt["failureSites"][-1]["incomplete"] == "begin-without-usable-token"
+
+
+def in_cleanup(collection):
+    """True once the observation phase has produced all of its rows."""
+    observed = [
+        step for step in collection.plan["operations"] if step["phase"] != "cleanup"
+    ]
+    return len(collection.rows) >= len(observed)
+
+
+class FailingRecoveryEndpoint(StatefulEndpoint):
+    """An endpoint that breaks once recovery has started."""
+
+    def __init__(self, *, raises=None, refuses=None, every=False):
+        super().__init__()
+        self.raises = raises
+        self.refuses = refuses
+        self.every = every
+        self.collection = None
+        self.fired = False
+
+    def attach(self, collection):
+        super().attach(collection)
+        self.collection = collection
+
+    def __call__(self, request):
+        if in_cleanup(self.collection) and request["rpc"] == "GetDocument":
+            if self.raises and (self.every or not self.fired):
+                self.fired = True
+                self.calls.append(request)
+                raise self.raises("injected recoverable read failure")
+            if self.refuses:
+                self.calls.append(request)
+                return {
+                    "code": self.refuses,
+                    "status": "PERMISSION_DENIED",
+                    "message": "caller has no access",
+                    "complete": True,
+                }
+        return super().__call__(request)
+
+
+def test_one_failed_recovery_read_does_not_abandon_the_other_documents():
+    endpoint = FailingRecoveryEndpoint(raises=OSError)
+    receipt, _ = run_against(endpoint)
+    entries = {entry["role"]: entry for entry in receipt["cleanup"]}
+    failed = [entry for entry in entries.values() if entry["failure"] == "OSError"]
+    assert len(failed) == 1
+    recovered = [role for role, entry in entries.items() if entry["complete"]]
+    assert len(recovered) == len(cases.RESOURCE_ROLES) - 1
+    assert len(endpoint.deletes) == len(cases.RESOURCE_ROLES) - 1
+    assert receipt["unrecovered"] == [failed[0]["role"]]
+
+
+def test_a_receipt_is_produced_even_when_every_recovery_read_raises():
+    endpoint = FailingRecoveryEndpoint(raises=OSError, every=True)
+    receipt, _ = run_against(endpoint)
+    assert receipt["kind"] == collector.CONTRACT
+    assert sorted(receipt["unrecovered"]) == sorted(cases.RESOURCE_ROLES)
+    assert receipt["complete"] is False
+    assert receipt["failureSites"]
+    assert endpoint.deletes == []
+
+
+def test_an_authority_refusal_stops_sending_but_keeps_the_responsibility():
+    endpoint = FailingRecoveryEndpoint(refuses=collector.PERMISSION_DENIED)
+    receipt, _ = run_against(endpoint)
+    entries = {entry["role"]: entry for entry in receipt["cleanup"]}
+    refused = [
+        e for e in entries.values() if e["failure"] == "owned-read-refused-authority"
+    ]
+    assert len(refused) == 1
+    stopped = [
+        e for e in entries.values() if e["failure"] == "authority-refused-earlier"
+    ]
+    assert len(stopped) == len(cases.RESOURCE_ROLES) - 1
+    for entry in stopped:
+        assert entry["skipped"] is True
+        assert entry["createdByThisRun"] is True
+    assert sorted(receipt["unrecovered"]) == sorted(cases.RESOURCE_ROLES)
+    reads_during_cleanup = [
+        call
+        for call in endpoint.calls
+        if call["rpc"] == "GetDocument" and call["timeoutSeconds"]
+    ]
+    assert reads_during_cleanup
+    assert endpoint.deletes == []
+
+
+def test_a_failure_inside_cleanup_still_produces_a_receipt():
+    class Broken(StatefulEndpoint):
+        def __call__(self, request):
+            if request["rpc"] == "Rollback":
+                raise RuntimeError("transport is gone")
+            return super().__call__(request)
+
+    receipt, _ = run_against(Broken())
+    assert receipt["kind"] == collector.CONTRACT
+    assert receipt["openTransactions"]
+    assert receipt["complete"] is False

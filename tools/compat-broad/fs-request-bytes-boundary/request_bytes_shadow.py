@@ -13,6 +13,8 @@ No production request, credential or reservation is involved.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import json
 import math
@@ -357,17 +359,156 @@ def rewrite_citation(doc: str, record: dict[str, Any]) -> str:
     return head + citation_block(record) + tail
 
 
+#: Serializes publishers of the same target. Gitignored, following the
+#: convention already used by `verification/quint`: a lock file that appeared in
+#: `git status` would make the next `broad.run` refuse the checkout as dirty.
+PUBLICATION_LOCK = (
+    "spec/compatibility/broad-runs/.fireemu-request-bytes-publication.lock"
+)
+
+
+@contextlib.contextmanager
+def _publication_lock(root: Path):
+    """Hold an exclusive lock for the whole read-generate-commit sequence.
+
+    Two publishers racing used to leave one run's record beside the other run's
+    citation, each having succeeded. The lock covers the reads as well as the
+    writes, so the pair a publisher commits is the pair it built.
+    """
+    path = root / PUBLICATION_LOCK
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        _sweep_stale_temporaries(root)
+        yield
+    finally:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        finally:
+            os.close(handle)
+
+
+#: Suffix of the side file a publication writes before replacing its target.
+#: Gitignored: a survivor of a killed publisher would otherwise make the next
+#: `broad.run` refuse the checkout as dirty.
+TEMPORARY_SUFFIX = ".publish-tmp"
+
+#: Everything a publication replaces, and therefore everything it may leave a
+#: temporary beside.
+PUBLISHED_PATHS = (PUBLISHED_RECORD, PREPARATION_DOC)
+
+
+def _temporary_for(target: Path) -> Path:
+    return target.with_name(target.name + TEMPORARY_SUFFIX)
+
+
+def _write_temporary(target: Path, data: bytes) -> Path:
+    """Write the side file in binary.
+
+    Bytes rather than text throughout, because the restore path carries a
+    pre-image read from disk: decoding it to write it back could raise
+    `UnicodeDecodeError`, which is a `ValueError` and would escape the handler
+    doing the restoring, skipping the remaining restores and the cleanup.
+    """
+    temporary = _temporary_for(target)
+    with open(temporary, "wb") as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    return temporary
+
+
+def _sweep_stale_temporaries(root: Path) -> list[str]:
+    """Remove side files a killed publisher left behind.
+
+    Called while holding the lock, so nothing being swept can belong to a
+    publication still in progress. Without this a publisher killed between
+    writing a temporary and replacing its target leaves an untracked file that
+    makes the next artifact run refuse the checkout.
+    """
+    swept = []
+    for relative in PUBLISHED_PATHS:
+        temporary = _temporary_for(root / relative)
+        if temporary.exists():
+            temporary.unlink()
+            swept.append(str(temporary.relative_to(root)))
+    return swept
+
+
+def _commit_generation(writes: list[tuple[Path, bytes]]) -> None:
+    """Replace every file, or none of them.
+
+    Both outputs are already built, so nothing here can fail for a reason the
+    caller could have detected earlier. What remains is the filesystem, and a
+    failure part way through must not leave one run's record beside another
+    run's document: the replaced files are restored from their pre-images.
+    """
+    pre_images = {
+        path: (path.read_bytes() if path.exists() else None) for path, _ in writes
+    }
+    temporaries: list[tuple[Path, Path]] = []
+    try:
+        for path, data in writes:
+            temporaries.append((path, _write_temporary(path, data)))
+    except BaseException:
+        for _, temporary in temporaries:
+            temporary.unlink(missing_ok=True)
+        raise
+
+    replaced: list[Path] = []
+    try:
+        for path, temporary in temporaries:
+            os.replace(temporary, path)
+            replaced.append(path)
+    except BaseException:
+        unrestored = []
+        for path in replaced:
+            original = pre_images[path]
+            try:
+                if original is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    # The pre-image is replaced as the bytes it was read as;
+                    # decoding it here could raise out of this handler.
+                    os.replace(_write_temporary(path, original), path)
+            except OSError:
+                unrestored.append(str(path))
+        for _, temporary in temporaries:
+            temporary.unlink(missing_ok=True)
+        if unrestored:
+            # Nothing else can be done here, so say exactly which files are in
+            # doubt rather than leaving a silent half-generation.
+            raise RuntimeError(
+                "publication left an incomplete generation; these files could "
+                f"not be restored and must be checked out again: {unrestored}"
+            )
+        raise
+
+
 def publish_run(output: Path, root: Path | None = None) -> dict[str, Any]:
     """Publish a completed run: the record, and the document's citation.
 
-    One command, because the two drifted apart when they were two.
+    One command, because the two drifted apart when they were two. One
+    generation, because publishing them in sequence left the record replaced
+    and the document untouched whenever the second step could not proceed.
     """
     root = Path(root) if root is not None else ROOT
-    record = json.loads((Path(output) / "local-shadow.json").read_bytes())
-    target = root / PUBLISHED_RECORD
-    target.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
-    doc = root / PREPARATION_DOC
-    doc.write_text(rewrite_citation(doc.read_text(), record))
+    record_path = root / PUBLISHED_RECORD
+    document_path = root / PREPARATION_DOC
+    with _publication_lock(root):
+        # Every input read and validated, and both outputs built, before any
+        # existing file is touched. `rewrite_citation` refuses a document
+        # without markers, and it refuses it while the tree is still intact.
+        record = json.loads((Path(output) / "local-shadow.json").read_bytes())
+        record_text = json.dumps(record, indent=2, sort_keys=True) + "\n"
+        document_text = rewrite_citation(document_path.read_text(), record)
+        _commit_generation(
+            [
+                (record_path, record_text.encode("utf-8")),
+                (document_path, document_text.encode("utf-8")),
+            ]
+        )
     return record
 
 

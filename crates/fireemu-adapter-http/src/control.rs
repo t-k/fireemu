@@ -1550,7 +1550,16 @@ fn fault_plan_route(
                 .iter()
                 .map(|r| json!({"operation": r.operation, "occurrence": r.occurrence, "functionOccurrence": r.function_occurrence, "function": r.function, "action": r.action.to_string()}))
                 .collect();
-            ok(json!({"session": session, "plan": plan, "fired": fired, "counters": f.counters()}))
+            // `fired` is a bounded ring (`fireemu_core_session::fault::MAX_FIRED_RECORDS`), so
+            // the reader is told how many records fell out of it rather than being served a
+            // silently shortened history.
+            ok(json!({
+                "session": session,
+                "plan": plan,
+                "fired": fired,
+                "droppedFired": f.dropped_fired(),
+                "counters": f.counters(),
+            }))
         }
         "PUT" => {
             let seed = body.get("seed").and_then(Value::as_u64).unwrap_or(0);

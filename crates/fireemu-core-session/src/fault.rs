@@ -4,7 +4,7 @@
 //! optionally the nth occurrence and a function / event type, and the action to take. The
 //! adapters ask [`FaultState::decide`] at their enforcement points and apply the actions.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 
 /// What a matched rule does.
@@ -99,12 +99,18 @@ pub struct FaultRecord {
     pub action: FaultAction,
 }
 
-/// The installed plan plus its occurrence counters and history.
+/// How many fired records one session keeps. A rule with no `nth` fires on every matching
+/// operation, so the history of a plan left installed under load is a ring: the newest records
+/// are the ones a reader wants, and the rest are counted rather than retained.
+pub const MAX_FIRED_RECORDS: usize = 1_000;
+
+/// The installed plan plus its occurrence counters and bounded history.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct FaultState {
     plan: Option<FaultPlan>,
     counters: BTreeMap<String, u64>,
-    fired: Vec<FaultRecord>,
+    fired: VecDeque<FaultRecord>,
+    dropped: u64,
 }
 
 impl FaultState {
@@ -182,6 +188,7 @@ impl FaultState {
         self.plan = Some(plan);
         self.counters.clear();
         self.fired.clear();
+        self.dropped = 0;
     }
 
     /// Removes the plan.
@@ -189,6 +196,7 @@ impl FaultState {
         self.plan = None;
         self.counters.clear();
         self.fired.clear();
+        self.dropped = 0;
     }
 
     /// The installed plan.
@@ -197,10 +205,17 @@ impl FaultState {
         self.plan.as_ref()
     }
 
-    /// Faults that fired so far.
+    /// The faults that fired and are still retained, oldest first.
     #[must_use]
-    pub fn fired(&self) -> &[FaultRecord] {
+    pub const fn fired(&self) -> &VecDeque<FaultRecord> {
         &self.fired
+    }
+
+    /// How many fired records fell out of the ring since the plan was installed. The counters
+    /// still count every occurrence: what is bounded is the history, not the accounting.
+    #[must_use]
+    pub const fn dropped_fired(&self) -> u64 {
+        self.dropped
     }
 
     /// Occurrences counted per operation.
@@ -249,7 +264,14 @@ impl FaultState {
                 continue;
             }
             actions.push(rule.action.clone());
-            self.fired.push(FaultRecord {
+            // The history is a ring: a rule with no `nth` fires on every matching operation,
+            // and a plan left installed under load would otherwise retain one record per
+            // operation for the life of the session.
+            if self.fired.len() >= MAX_FIRED_RECORDS {
+                self.fired.pop_front();
+                self.dropped = self.dropped.saturating_add(1);
+            }
+            self.fired.push_back(FaultRecord {
                 operation: operation.to_owned(),
                 occurrence,
                 function_occurrence: per_function,

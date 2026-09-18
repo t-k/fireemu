@@ -3878,10 +3878,12 @@ fn form_upload(state: &StorageState, bucket: &str, req: &StorageRequest) -> Outc
         header_safe(&format!("metadata key {k:?}"), k).map_err(|e| html_text(400, &e))?;
         header_safe(&format!("metadata.{k}"), v).map_err(|e| html_text(400, &e))?;
     }
-    let bytes = req.body[data].to_vec();
+    // The digests are computed before the store lock is taken: hashing a near-limit body is
+    // the expensive part of this route and it holds nothing back for every other bucket.
+    let prepared = PreparedObject::new(req.body[data].to_vec());
     let mut store = state.store()?;
     store
-        .put(&b, &n, bytes, meta, Precondition::default(), now)
+        .put_prepared(&b, &n, prepared, meta, Precondition::default(), now)
         .map_err(gcs_core_err)?;
     Ok(StorageResponse::empty(204))
 }

@@ -3688,7 +3688,10 @@ fn every_data_plane_surface_refuses_a_database_that_was_never_created() {
     ] {
         let (status, body) = call(&s, method, &path, body);
         assert_eq!(status, 404, "{method} {path}: {body}");
-        assert_eq!(body["error"]["status"], "NOT_FOUND", "{method} {path}: {body}");
+        assert_eq!(
+            body["error"]["status"], "NOT_FOUND",
+            "{method} {path}: {body}"
+        );
         assert_eq!(
             body["error"]["message"], expected,
             "{method} {path}: {body}"

@@ -16,7 +16,7 @@
 // `tonic::Status` is the error type dictated by the generated service trait.
 #![allow(clippy::result_large_err)]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_core_firestore::field_path::FieldPath;
@@ -213,6 +213,17 @@ impl DatabaseHandle {
     }
 }
 
+/// Whether the caller of `LocalBackend::open_database` may bring a database into being.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Admission {
+    /// A data-plane request: it reaches a database that already exists, and materializes one
+    /// only where the profile lets it.
+    RequestOnly,
+    /// A path that creates databases of its own (import, restore, the emulator's clear
+    /// route): the database exists because this caller says so.
+    Creates,
+}
+
 /// Local backend state.
 pub struct LocalBackend {
     gateway: Gateway,
@@ -242,6 +253,14 @@ pub struct LocalBackend {
     /// The database catalog. Locked only to locate, create or retire an entry: an
     /// operation clones the entry's handle and releases this lock before it runs.
     databases: Mutex<BTreeMap<(String, String), Arc<DatabaseEntry>>>,
+    /// The databases that exist in every project without a request having created them: the
+    /// ones the configuration declares. `(default)` is always one of them and is not listed.
+    declared_databases: RwLock<BTreeSet<String>>,
+    /// Whether a data-plane request against a database nothing created materializes it (what
+    /// the official Firestore emulator does, the `emulator` profile) or is refused with the
+    /// `NOT_FOUND` production answers until `databases.create` has run (the `strict`
+    /// profile's default).
+    implicit_database_creation: bool,
     /// Allocates identities for database instances independently of delayed wipe notifications.
     database_incarnations: std::sync::atomic::AtomicU64,
     /// The sessions' fault plans (looked up by project), when shared.
@@ -1288,6 +1307,88 @@ fn format_decimal(value: u64) -> String {
 mod tests {
     use super::*;
 
+    fn admission_backend() -> LocalBackend {
+        LocalBackend::new(
+            Gateway {
+                enforce_limits: true,
+                ctx: fireemu_core_firestore::index::PlanningContext {
+                    edition: fireemu_core_types::edition::FirestoreEdition::Standard,
+                    api_mode: fireemu_core_types::edition::FirestoreApiMode::Native,
+                    policy: fireemu_core_firestore::index::IndexValidationPolicy::Production,
+                },
+                indexes: fireemu_core_firestore::index::IndexSet::default(),
+            },
+            Arc::new(Mutex::new(VirtualClock::new(
+                fireemu_core_types::time::LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            7,
+        )
+    }
+
+    fn parent(database: &str) -> Parent {
+        parse_parent(&format!("projects/demo-app/databases/{database}/documents")).unwrap()
+    }
+
+    #[test]
+    fn a_database_nothing_created_is_refused_and_is_not_materialized_by_the_refusal() {
+        let backend = admission_backend();
+        let error = backend
+            .database_handle(&parent("never-created"))
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::NotFound);
+        assert_eq!(
+            error.message(),
+            "The database never-created does not exist for project demo-app Please visit \
+             https://console.cloud.google.com/datastore/setup?project=demo-app to add a Cloud \
+             Datastore or Cloud Firestore database. "
+        );
+        // A refused request leaves no entry behind, so a second request is refused for the
+        // same reason rather than admitted by the first one's side effect.
+        assert!(backend.database_catalog().unwrap().is_empty());
+        assert_eq!(
+            backend
+                .database_handle(&parent("never-created"))
+                .unwrap_err()
+                .code(),
+            tonic::Code::NotFound
+        );
+    }
+
+    #[test]
+    fn the_default_and_declared_databases_exist_before_anything_creates_them() {
+        let backend = admission_backend().with_declared_databases(["analytics".to_owned()]);
+        assert!(backend.database_handle(&parent("(default)")).is_ok());
+        assert!(backend.database_handle(&parent("analytics")).is_ok());
+        assert_eq!(
+            backend
+                .database_handle(&parent("reporting"))
+                .unwrap_err()
+                .code(),
+            tonic::Code::NotFound
+        );
+        // A reload that adds a database makes it reachable; one that drops a database does
+        // not unmake the state it already holds.
+        backend.replace_declared_databases(["reporting".to_owned()]);
+        assert!(backend.database_handle(&parent("reporting")).is_ok());
+        assert!(backend.database_handle(&parent("analytics")).is_ok());
+    }
+
+    #[test]
+    fn a_create_path_makes_a_database_reachable_by_later_requests() {
+        let backend = admission_backend();
+        assert!(backend.ensure_database(&parent("imported")).is_ok());
+        assert!(backend.database_handle(&parent("imported")).is_ok());
+    }
+
+    #[test]
+    fn the_emulator_profile_materializes_any_database_on_first_touch() {
+        // The official Firestore emulator serves any syntactically valid database id without
+        // a create, and the `emulator` profile may not refuse more than it does.
+        let backend = admission_backend().with_implicit_database_creation(true);
+        assert!(backend.database_handle(&parent("never-created")).is_ok());
+        assert_eq!(backend.database_catalog().unwrap().len(), 1);
+    }
+
     #[test]
     fn replace_database_indexes_reports_a_poisoned_catalog_lock() {
         let clock = Arc::new(Mutex::new(VirtualClock::new(
@@ -1351,6 +1452,8 @@ impl LocalBackend {
             ))),
             tenancy: Mutex::new(None),
             databases: Mutex::new(BTreeMap::new()),
+            declared_databases: RwLock::new(BTreeSet::new()),
+            implicit_database_creation: false,
             database_incarnations: std::sync::atomic::AtomicU64::new(0),
             faults: Mutex::new(None),
             clock_observer: Mutex::new(None),
@@ -1424,6 +1527,38 @@ impl LocalBackend {
     #[must_use]
     pub fn with_history_budget_limits(mut self, limits: HistoryBudgetLimits) -> Self {
         self.history_budget = Arc::new(Mutex::new(HistoryBudgetLedger::new(limits)));
+        self
+    }
+
+    /// The databases the configuration declares, which therefore exist in every project
+    /// before any request touches them. `(default)` need not be listed.
+    #[must_use]
+    pub fn with_declared_databases(self, ids: impl IntoIterator<Item = String>) -> Self {
+        self.replace_declared_databases(ids);
+        self
+    }
+
+    /// Replaces the declared databases on a running backend (a configuration reload). A
+    /// database already materialized stays reachable: this decides which databases a request
+    /// may reach before anything created them, never which ones exist.
+    pub fn replace_declared_databases(&self, ids: impl IntoIterator<Item = String>) {
+        let mut declared = self
+            .declared_databases
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *declared = ids
+            .into_iter()
+            .filter(|id| id != DatabaseId::DEFAULT)
+            .collect();
+    }
+
+    /// Materializes an undeclared database on first touch the way the official Firestore
+    /// emulator does, instead of refusing it with the `NOT_FOUND` production answers until
+    /// `databases.create` has run. The `emulator` compatibility profile selects this; the
+    /// constructor's default is production's refusal.
+    #[must_use]
+    pub const fn with_implicit_database_creation(mut self, implicit: bool) -> Self {
+        self.implicit_database_creation = implicit;
         self
     }
 
@@ -1559,7 +1694,9 @@ impl LocalBackend {
                 "projects/{project}/databases/{database}/documents"
             ))
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
-            self.database_handle(&parent)?;
+            // The route's contract is that a database it cleared survives its own clearing,
+            // whatever the profile says about a database nothing created.
+            self.ensure_database(&parent)?;
         }
         Ok(())
     }
@@ -2620,14 +2757,55 @@ impl LocalBackend {
         handle.read(f)
     }
 
-    /// The handle of one database, creating its entry when the database does not exist
-    /// yet. The catalog lock is held only for this lookup.
+    /// The handle of one database for a request that did not create it. Its entry is created
+    /// on first touch only for a database that exists without one (`(default)`, or one the
+    /// configuration declares), or when the profile materializes any database on first touch;
+    /// otherwise this is the `NOT_FOUND` production answers for a database `databases.create`
+    /// was never called for. The catalog lock is held only for this lookup.
     ///
     /// Operations through the returned handle take no session admission and are not
     /// coordinated with a reset beyond the handle's own detachment; request surfaces
     /// should use [`LocalBackend`]'s operations, which admit first.
     pub fn database_handle(&self, parent: &Parent) -> Result<DatabaseHandle, Status> {
+        self.open_database(parent, Admission::RequestOnly)
+    }
+
+    /// The handle of one database, creating its entry whatever the profile says: the caller
+    /// is itself a path that brings a database into being (an import, a snapshot restore, the
+    /// emulator's clear route, a test fixture), not a data-plane request.
+    pub fn ensure_database(&self, parent: &Parent) -> Result<DatabaseHandle, Status> {
+        self.open_database(parent, Admission::Creates)
+    }
+
+    /// Whether a database exists in every project without anything having created it: the
+    /// default database, which a project cannot be without, and the ones the configuration
+    /// declares.
+    fn database_exists_unprompted(&self, database: &str) -> bool {
+        database == DatabaseId::DEFAULT
+            || self
+                .declared_databases
+                .read()
+                .is_ok_and(|declared| declared.contains(database))
+    }
+
+    fn open_database(
+        &self,
+        parent: &Parent,
+        admission: Admission,
+    ) -> Result<DatabaseHandle, Status> {
         let mut dbs = self.databases.lock().map_err(|_| lock_poisoned())?;
+        // Decided under the catalog lock that would create the entry, so no request is
+        // admitted by a database a concurrent request is being refused for.
+        if admission == Admission::RequestOnly
+            && !self.implicit_database_creation
+            && !dbs.contains_key(&database_key(parent))
+            && !self.database_exists_unprompted(parent.database.as_str())
+        {
+            return Err(status(DecodeError::UnknownDatabase {
+                project: parent.project.as_str().to_owned(),
+                database: parent.database.as_str().to_owned(),
+            }));
+        }
         // A new database refuses production's limits only when the gateway enforces limits
         // (the `strict` profile); under `emulator` it admits what the official emulator
         // admits.

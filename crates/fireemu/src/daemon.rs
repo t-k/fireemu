@@ -1281,7 +1281,12 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
                 .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
                 .with_wall_clock_write_time()
-        });
+        }
+        // A database the configuration names exists before anything writes to it. Under the
+        // strict profile every other named database is refused until a create path (an import
+        // or a snapshot restore) materializes it.
+        .with_declared_databases(cfg.firestore_databases.keys().cloned())
+        .with_implicit_database_creation(cfg.implicit_database_creation));
         for (database, files) in &cfg.firestore_databases {
             if database != fireemu_core_types::ids::DatabaseId::DEFAULT {
                 if let Some(path) = &files.indexes {

@@ -186,7 +186,7 @@ fn admin_inventory_does_not_claim_non_get_database_routes() {
 fn create_database(state: &RestState, project: &str, database: &str) {
     state
         .local
-        .database_handle(
+        .ensure_database(
             &parse_parent(&format!(
                 "projects/{project}/databases/{database}/documents"
             ))

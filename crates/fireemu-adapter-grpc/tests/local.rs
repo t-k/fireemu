@@ -156,6 +156,9 @@ fn history_budget_backend(session_versions: u64, global_versions: u64) -> LocalB
         global_bytes: u64::MAX,
         global_versions,
     })
+    // The budget is shared across databases, so these tests write to a named one. It is
+    // declared, the way a configuration declares it: a database nothing created is refused.
+    .with_declared_databases(["analytics".to_owned()])
 }
 
 #[test]
@@ -3014,7 +3017,11 @@ fn agg_count_and_sum(collection: &str, field: &str) -> pb::StructuredAggregation
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn malformed_wire_shapes_are_rejected_before_any_mutation() {
-    let (mut client, _clock, handle) = start().await;
+    let (mut client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Production).await;
+    // The second database is the one a foreign document name and a foreign transaction token
+    // point at, so it is declared: a database nothing created is refused before either check.
+    backend.replace_declared_databases(["other".to_owned()]);
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),

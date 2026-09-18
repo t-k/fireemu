@@ -2,7 +2,8 @@
 
 This version cannot classify anything as a production match. It accepts preparation
 receipts only, states the normalization rules a future measurement version must apply,
-and always returns PREPARATION_ONLY with no rows.
+and always returns PREPARATION_ONLY with no rows. The nonce is required, so every call
+recompiles the manifest and rejects drift unconditionally.
 """
 
 from __future__ import annotations
@@ -123,7 +124,7 @@ def _receipt_errors(manifest: dict[str, Any], receipt: Any) -> list[str]:
 
 
 def compare(
-    manifest: dict[str, Any], left: Any, right: Any, nonce: str | None = None
+    manifest: dict[str, Any], left: Any, right: Any, nonce: str
 ) -> dict[str, Any]:
     """Always returns PREPARATION_ONLY; no input can make this version report a match."""
     result: dict[str, Any] = {
@@ -140,16 +141,14 @@ def compare(
     if not isinstance(manifest, dict) or manifest.get("schema") != MANIFEST_SCHEMA:
         result["errors"] = ["manifest-invalid"]
         return result
-    if nonce is not None:
-        try:
-            if json.loads(json.dumps(manifest)) != json.loads(
-                json.dumps(compile_manifest(nonce))
-            ):
-                result["errors"] = ["manifest-drift"]
-                return result
-        except ValueError:
-            result["errors"] = ["manifest-invalid"]
-            return result
+    try:
+        expected = compile_manifest(nonce)
+    except ValueError:
+        result["errors"] = ["nonce-invalid"]
+        return result
+    if json.loads(json.dumps(manifest)) != json.loads(json.dumps(expected)):
+        result["errors"] = ["manifest-drift"]
+        return result
     errors = _receipt_errors(manifest, left) + _receipt_errors(manifest, right)
     if errors:
         result["errors"] = sorted(set(errors))

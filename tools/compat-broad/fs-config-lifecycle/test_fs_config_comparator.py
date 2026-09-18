@@ -64,7 +64,17 @@ def test_a_drifted_manifest_stops_the_comparison_before_the_receipts() -> None:
     drifted = json.loads(json.dumps(manifest))
     drifted["budget"]["maxRequests"] = 9999
     assert compare(drifted, left, right, NONCE)["errors"] == ["manifest-drift"]
-    assert compare({}, left, right)["errors"] == ["manifest-invalid"]
+    assert compare({}, left, right, NONCE)["errors"] == ["manifest-invalid"]
+
+
+def test_the_manifest_gate_cannot_be_skipped_by_omitting_the_nonce() -> None:
+    manifest, left, right = _pair()
+    with pytest.raises(TypeError):
+        compare(manifest, left, right)  # type: ignore[call-arg]
+    drifted = json.loads(json.dumps(manifest))
+    drifted["permissionEnvelope"]["required"].append("datastore.entities.get")
+    assert compare(drifted, left, right, NONCE)["errors"] == ["manifest-drift"]
+    assert compare(manifest, left, right, "z" * 32)["errors"] == ["nonce-invalid"]
 
 
 def test_the_comparison_contract_names_its_normalized_and_significant_fields() -> None:

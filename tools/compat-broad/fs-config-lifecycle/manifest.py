@@ -9,6 +9,7 @@ contain, and compiling a manifest performs no request and acquires no credential
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any
 
 from .cases import (
@@ -69,10 +70,9 @@ _OWNER_PRECONDITIONS = (
         "before the run; the collector never enables billing itself."
     ),
     (
-        "Only one database beyond the default is created, and the free-tier allowance "
-        "applies to the default database alone. The owner accepts that a second database "
-        "leaves the free tier while it exists, which is why it holds no data and is deleted "
-        "in the same run."
+        "Only one database beyond the default is created. The free-tier allowance covers "
+        "the default database alone, so the second database has no allowance of its own. "
+        "That is why it holds no data and is deleted in the same run."
     ),
     (
         "databases.list must return exactly the expected set before the run. Any unexpected "
@@ -90,6 +90,11 @@ _OWNER_PRECONDITIONS = (
         "The default database is never created, patched, deleted, restored or cloned; only "
         "its field configurations under the nonce-owned collection groups are changed, and "
         "each is reverted in the same run."
+    ),
+    (
+        "The run requires exclusive use of the oracle project for its duration. It "
+        "enumerates databases before and after, so another lane creating or deleting a "
+        "database while it runs would fail its reconciliation."
     ),
 )
 
@@ -129,14 +134,36 @@ _CLEANUP_ORDER = (
     "revert-field-configurations",
     "verify-field-configuration-baseline",
     "delete-created-database",
+    "delete-conditionally-created-databases",
     "verify-database-absence",
+    "reconcile-database-enumeration",
     "write-final-ledger",
 )
+
+_RECONCILIATION = {
+    "comparesAgainst": "OC-02",
+    "method": "firestore.projects.databases.list",
+    "failsClosed": True,
+    "rule": (
+        "After every revert and delete, enumerate the databases again and compare with "
+        "the enumeration OC-02 captured before the run. Any database present now that "
+        "was absent then fails the run, and any database whose id begins with the "
+        "fsconfig- prefix fails the run even if a ledger entry claims it was recovered."
+    ),
+    "coversCasesOutsideTheLedger": (
+        "A create this campaign never declared, or an identifier production normalized "
+        "into a different id, is caught here rather than escaping unnoticed."
+    ),
+}
 
 _CLEANUP_COMPLETION = (
     "Every ledger entry is marked recovered.",
     "Every reverted field configuration matches the baseline captured before its patch.",
     "The created database answers NOT_FOUND on a final get.",
+    (
+        "The post-run database enumeration matches the one captured before the run, with "
+        "no database carrying the owned prefix."
+    ),
     "A run with any unrecovered resource exits non-zero and is not a valid observation.",
 )
 
@@ -206,6 +233,7 @@ def compile_manifest(nonce: str) -> dict[str, Any]:
         "cleanup": {
             "ledger": ledger,
             "order": list(_CLEANUP_ORDER),
+            "reconciliation": deepcopy(_RECONCILIATION),
             "completionRequires": list(_CLEANUP_COMPLETION),
             "unrecoveredResourcesFailTheRun": True,
         },

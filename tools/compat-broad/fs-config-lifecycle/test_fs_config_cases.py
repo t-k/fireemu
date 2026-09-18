@@ -4,9 +4,11 @@ import json
 
 import pytest
 from fs_config_lifecycle.cases import (
+    BODY_KEYS,
     CASE_KINDS,
     OWNED_DATABASE_PREFIX,
     compile_cases,
+    declared_request_keys,
     owned_resources,
     validate_cases,
 )
@@ -35,19 +37,82 @@ def test_case_kinds_are_closed_and_controls_and_negatives_both_exist() -> None:
     assert "control" in kinds
     assert "negative" in kinds
     assert "observation" in kinds
+    assert "cleanup" in kinds
 
 
-def test_every_mutating_case_declares_a_revert_and_every_negative_mutates_nothing() -> (
+def test_every_conditional_cleanup_case_reverts_a_negative_create() -> None:
+    cases = {case["id"]: case for case in compile_cases(NONCE)}
+    cleanups = [case for case in cases.values() if case["kind"] == "cleanup"]
+    assert len(cleanups) == 3
+    for case in cleanups:
+        assert case["conditional"] is True
+        assert case["method"].endswith("databases.delete")
+        origin = cases[case["isRevertOf"]]
+        assert origin["kind"] == "negative"
+        assert origin["method"].endswith("databases.create")
+
+
+def test_a_negative_case_is_expected_to_be_refused_and_never_expected_to_mutate() -> (
     None
 ):
     for case in compile_cases(NONCE):
         if case["kind"] == "negative":
             assert case["mutates"] is False
             assert case["expectedProductionOutcome"] == "refusal"
-        if case["mutates"]:
+
+
+def test_a_case_that_could_allocate_or_mutate_always_names_its_revert() -> None:
+    for case in compile_cases(NONCE):
+        recoverable = case["mutates"] or case["possiblyAllocates"]
+        if recoverable:
             assert case["revertedBy"], case["id"]
         else:
-            assert case["revertedBy"] is None
+            assert case["revertedBy"] is None, case["id"]
+
+
+def test_every_create_call_counts_as_possibly_allocating_even_when_refused() -> None:
+    for case in compile_cases(NONCE):
+        if case["method"].endswith("databases.create"):
+            assert case["possiblyAllocates"] is True, case["id"]
+
+
+def test_every_request_key_is_a_parameter_or_body_the_pinned_discovery_declares() -> (
+    None
+):
+    for case in compile_cases(NONCE):
+        allowed = declared_request_keys(case["method"])
+        assert set(case["request"]) <= allowed, (
+            case["id"],
+            set(case["request"]) - allowed,
+        )
+
+
+def test_a_body_key_is_only_used_where_discovery_declares_a_request_body() -> None:
+    for method, key in BODY_KEYS.items():
+        assert key in declared_request_keys(method)
+    for case in compile_cases(NONCE):
+        key = BODY_KEYS.get(case["method"])
+        if key is None:
+            assert not any(
+                isinstance(value, dict) for value in case["request"].values()
+            )
+
+
+def test_the_negative_creates_vary_only_the_database_identifier() -> None:
+    cases = {case["id"]: case for case in compile_cases(NONCE)}
+    reference = cases["OC-03"]["request"]["database"]
+    for case_id in ("OC-08", "OC-09", "OC-10"):
+        request = cases[case_id]["request"]
+        assert request["database"] == reference, case_id
+        assert request["parent"] == cases["OC-03"]["request"]["parent"]
+        assert request["databaseId"] != cases["OC-03"]["request"]["databaseId"]
+
+
+def test_the_exemption_revert_never_sets_an_output_only_field() -> None:
+    cases = {case["id"]: case for case in compile_cases(NONCE)}
+    revert = cases["OC-20"]["request"]
+    assert revert["field"]["indexConfig"] == {}
+    assert "usesAncestorConfig" not in json.dumps(revert)
 
 
 def test_every_declared_revert_is_itself_a_case_in_the_same_plan() -> None:
@@ -66,20 +131,27 @@ def test_every_addressed_resource_lives_inside_the_owned_nonce_namespace() -> No
         for resource in case["resources"]:
             if NONCE[:12] in resource or resource == "(default)":
                 continue
-            assert case["kind"] == "negative", case["id"]
+            assert case["kind"] in {"negative", "cleanup"}, case["id"]
             assert case["namespaceExemptReason"], case["id"]
 
 
-def test_the_owned_ledger_lists_exactly_the_resources_a_run_must_recover() -> None:
+def test_the_owned_ledger_covers_every_case_that_could_leave_a_resource() -> None:
     cases = compile_cases(NONCE)
     ledger = owned_resources(cases)
-    assert ledger
+    recoverable = {
+        case["id"] for case in cases if case["mutates"] or case["possiblyAllocates"]
+    }
+    assert {entry["createdBy"] for entry in ledger} == recoverable
     for entry in ledger:
         assert entry["revertCase"]
         assert entry["kind"] in {"database", "fieldConfig"}
+        assert isinstance(entry["conditional"], bool)
     databases = [e for e in ledger if e["kind"] == "database"]
-    assert len(databases) == 1
-    assert databases[0]["name"].startswith(OWNED_DATABASE_PREFIX)
+    assert len(databases) == 4
+    expected = [e for e in databases if not e["conditional"]]
+    assert len(expected) == 1
+    assert expected[0]["name"].startswith(OWNED_DATABASE_PREFIX)
+    assert all(e["conditional"] for e in databases if e is not expected[0])
 
 
 def test_no_case_reads_or_writes_a_document_so_no_storage_is_billed() -> None:
@@ -113,7 +185,7 @@ def test_a_different_nonce_gives_a_disjoint_resource_namespace() -> None:
             resource
             for case in compile_cases(nonce)
             for resource in case["resources"]
-            if case["kind"] != "negative"
+            if case["kind"] not in {"negative", "cleanup"}
         }
 
     assert owned(NONCE) & owned("f" * 32) == {"(default)"}

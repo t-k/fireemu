@@ -879,6 +879,11 @@ def _pinned_definition() -> dict[str, Any]:
     raise ValueError(f"{DISCOVERY_ID} missing from the pinned discovery input")
 
 
+def pinned_definition() -> dict[str, Any]:
+    """The pinned firestore-v1 Discovery definition; no network access."""
+    return _pinned_definition()
+
+
 def discovery_methods() -> list[str]:
     definition = _pinned_definition()
     return sorted(

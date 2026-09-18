@@ -67,6 +67,8 @@ def test_the_permission_envelope_excludes_every_document_and_billing_permission(
 def test_owner_preconditions_and_abort_rules_are_explicit_and_non_empty() -> None:
     manifest = compile_manifest(NONCE)
     assert len(manifest["ownerPreconditions"]) >= 4
+    joined = " ".join(manifest["ownerPreconditions"]).lower()
+    assert "exclusive use" in joined
     assert len(manifest["abortRules"]) >= 4
     text = json.dumps(manifest["ownerPreconditions"] + manifest["abortRules"]).lower()
     for topic in ("billing", "free", "delete protection", "abort", "retry"):
@@ -78,14 +80,27 @@ def test_the_cleanup_contract_covers_every_mutating_case_and_forbids_a_partial_e
 ):
     manifest = compile_manifest(NONCE)
     cleanup = manifest["cleanup"]
-    mutating = [case["id"] for case in compile_cases(NONCE) if case["mutates"]]
-    assert {entry["createdBy"] for entry in cleanup["ledger"]} == set(mutating)
+    recoverable = [
+        case["id"]
+        for case in compile_cases(NONCE)
+        if case["mutates"] or case["possiblyAllocates"]
+    ]
+    assert {entry["createdBy"] for entry in cleanup["ledger"]} == set(recoverable)
+    assert any(entry["conditional"] for entry in cleanup["ledger"])
     for entry in cleanup["ledger"]:
         assert entry["recovered"] is False
         assert entry["revertCase"]
     assert cleanup["order"]
     assert cleanup["completionRequires"]
     assert cleanup["unrecoveredResourcesFailTheRun"] is True
+    assert "reconcile-database-enumeration" in cleanup["order"]
+    assert cleanup["order"].index("reconcile-database-enumeration") == (
+        len(cleanup["order"]) - 2
+    )
+    assert cleanup["reconciliation"]["comparesAgainst"] == "OC-02"
+    assert cleanup["reconciliation"]["failsClosed"] is True
+    reconciliation_text = json.dumps(cleanup["reconciliation"]).lower()
+    assert "fsconfig-" in reconciliation_text
 
 
 def test_the_operation_poll_is_bounded_and_resumable() -> None:
@@ -121,3 +136,16 @@ def test_validation_rejects_a_mutated_budget_ledger_or_nonce() -> None:
     executed = json.loads(json.dumps(manifest))
     executed["productionExecuted"] = True
     assert not validate_manifest(executed, NONCE)
+
+
+def test_every_allocating_case_is_in_the_ledger_or_covered_by_reconciliation() -> None:
+    manifest = compile_manifest(NONCE)
+    cleanup = manifest["cleanup"]
+    tracked = {entry["createdBy"] for entry in cleanup["ledger"]}
+    for case in compile_cases(NONCE):
+        if not case["method"].endswith("databases.create"):
+            continue
+        assert case["id"] in tracked, case["id"]
+        entry = next(e for e in cleanup["ledger"] if e["createdBy"] == case["id"])
+        assert entry["revertCase"]
+    assert cleanup["reconciliation"]["failsClosed"] is True

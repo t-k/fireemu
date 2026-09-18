@@ -60,6 +60,14 @@ _DENOMINATOR = _doc(
         ),
         "",
         (
+            "That file carries locators only: a method, parameter, schema or field name "
+            "with no type, description, required marker or output-only marker. It "
+            "therefore supports an enumeration of names, which is what this page relies "
+            "on, and it cannot supply a message shape. Any claim below about what a "
+            "response contains comes from reading this checkout, not from that input."
+        ),
+        "",
+        (
             "That definition declares {total} methods. {excluded} of them are the document "
             "methods under `{prefix}`; they are the Firestore data plane itself and belong "
             "to the `FS-DATA-WRITE`, `FS-QUERY-INDEX`, `FS-TRANSACTION` and "

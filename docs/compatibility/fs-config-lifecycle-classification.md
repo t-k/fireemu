@@ -8,6 +8,8 @@ This page answers the first half of the blocking condition on the `FS-CONFIG-LIF
 
 The enumeration is taken from the Discovery document already pinned in this repository at `spec/compatibility/upstream/2026-09-09-retry/discovery.json`, definition `firestore-v1`, revision `20260826`, SHA-256 `1efd1c81aba1cd530d39565a97b3e719cdf48b2518e8e9905d1fc4367bcca40b`. Nothing was fetched to produce this page.
 
+That file carries locators only: a method, parameter, schema or field name with no type, description, required marker or output-only marker. It therefore supports an enumeration of names, which is what this page relies on, and it cannot supply a message shape. Any claim below about what a response contains comes from reading this checkout, not from that input.
+
 That definition declares 60 methods. 18 of them are the document methods under `firestore.projects.databases.documents.`; they are the Firestore data plane itself and belong to the `FS-DATA-WRITE`, `FS-QUERY-INDEX`, `FS-TRANSACTION` and `FS-LISTEN-SDK` rows. They are listed in the machine-readable specification so the management denominator is provably the complement of a published set rather than an unstated selection. The remaining 42 methods are classified below.
 
 The machine-readable form is [`spec/compatibility/fs-config-lifecycle-surfaces.json`](../../spec/compatibility/fs-config-lifecycle-surfaces.json), compiled and checked by `tools/compat-broad/fs-config-lifecycle/surface_matrix.py`.

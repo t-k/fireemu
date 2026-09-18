@@ -93,3 +93,31 @@ def test_the_rehearsal_never_leaks_the_nonce_itself() -> None:
         result = rehearse(NONCE, failure)
         assert result["nonceLength"] == 32
         assert NONCE not in str(result["steps"])
+
+
+def test_an_unexpectedly_accepted_negative_create_is_recovered_not_ignored() -> None:
+    result = rehearse(NONCE, "negative-create-accepted")
+    assert result["outcome"] == ABORTED_RECOVERED
+    assert result["exitCode"] == 1
+    assert "delete-unexpectedly-created-database" in result["steps"]
+    assert "reconcile-database-enumeration" in result["steps"]
+    assert result["unrecovered"] == []
+    conditional = [entry for entry in result["ledger"] if entry["conditional"]]
+    assert len(conditional) == 1
+    assert conditional[0]["recovered"] is True
+
+
+def test_a_reconciliation_mismatch_is_reported_as_an_unrecovered_resource() -> None:
+    result = rehearse(NONCE, "reconciliation-mismatch")
+    assert result["outcome"] == ABORTED_UNRECOVERED
+    assert result["exitCode"] == 1
+    assert result["unrecovered"]
+    assert "reconcile-database-enumeration" in result["steps"]
+
+
+def test_every_clean_run_reconciles_the_enumeration_before_finishing() -> None:
+    result = rehearse(NONCE)
+    assert "reconcile-database-enumeration" in result["steps"]
+    assert result["steps"].index("reconcile-database-enumeration") == (
+        len(result["steps"]) - 2
+    )

@@ -19,6 +19,8 @@ FAILURES = (
     "operation-deadline",
     "interrupt-after-create",
     "revert-refused",
+    "negative-create-accepted",
+    "reconciliation-mismatch",
 )
 
 CLEAN = "clean"
@@ -41,9 +43,14 @@ def rehearse(nonce: str, failure: str = "none") -> dict[str, Any]:
     if failure not in FAILURES:
         raise ValueError(f"unknown failure injection: {failure}")
     planned = _ledger(nonce)
-    # The ledger only ever lists resources a run actually created.
+    # The ledger only ever lists resources a run actually created. Conditional entries
+    # join it only when a case that was expected to be refused was accepted instead.
     ledger: list[dict[str, Any]] = []
-    steps: list[str] = ["read-baseline", "verify-database-identity"]
+    steps: list[str] = [
+        "read-baseline",
+        "verify-database-identity",
+        "enumerate-databases",
+    ]
     resumed = False
 
     if failure == "precondition-unexpected-database":
@@ -55,13 +62,18 @@ def rehearse(nonce: str, failure: str = "none") -> dict[str, Any]:
         return _result(nonce, failure, steps, ledger, ABORTED_RECOVERED, resumed)
 
     steps.append("create-owned-database")
-    created = next(entry for entry in planned if entry["kind"] == "database")
+    created = next(
+        entry
+        for entry in planned
+        if entry["kind"] == "database" and not entry["conditional"]
+    )
     ledger.append(created)
 
     if failure == "operation-deadline":
         steps.extend(["poll-until-deadline", "abort-and-run-cleanup"])
         steps.extend(["delete-created-database", "verify-database-absence"])
         created["recovered"] = True
+        steps.append("reconcile-database-enumeration")
         return _result(nonce, failure, steps, ledger, ABORTED_RECOVERED, resumed)
 
     if failure == "interrupt-after-create":
@@ -75,6 +87,28 @@ def rehearse(nonce: str, failure: str = "none") -> dict[str, Any]:
             ]
         )
         created["recovered"] = True
+        steps.append("reconcile-database-enumeration")
+        return _result(nonce, failure, steps, ledger, ABORTED_RECOVERED, resumed)
+
+    if failure == "negative-create-accepted":
+        unexpected = next(
+            entry
+            for entry in planned
+            if entry["kind"] == "database" and entry["conditional"]
+        )
+        ledger.append(unexpected)
+        steps.extend(
+            [
+                "attempt-negative-create",
+                "record-unexpected-acceptance",
+                "delete-unexpectedly-created-database",
+                "delete-created-database",
+                "verify-database-absence",
+            ]
+        )
+        unexpected["recovered"] = True
+        created["recovered"] = True
+        steps.append("reconcile-database-enumeration")
         return _result(nonce, failure, steps, ledger, ABORTED_RECOVERED, resumed)
 
     steps.append("patch-field-configurations")
@@ -87,6 +121,7 @@ def rehearse(nonce: str, failure: str = "none") -> dict[str, Any]:
             entry["recovered"] = True
         created["recovered"] = True
         steps.extend(["delete-created-database", "report-unrecovered-resource"])
+        steps.append("reconcile-database-enumeration")
         return _result(nonce, failure, steps, ledger, ABORTED_UNRECOVERED, resumed)
 
     steps.extend(
@@ -95,11 +130,24 @@ def rehearse(nonce: str, failure: str = "none") -> dict[str, Any]:
             "verify-field-configuration-baseline",
             "delete-created-database",
             "verify-database-absence",
-            "write-final-ledger",
         ]
     )
     for entry in ledger:
         entry["recovered"] = True
+
+    if failure == "reconciliation-mismatch":
+        stray = next(
+            entry
+            for entry in planned
+            if entry["kind"] == "database" and entry["conditional"]
+        )
+        stray["recovered"] = False
+        stray["foundBy"] = "reconcile-database-enumeration"
+        ledger.append(stray)
+        steps.extend(["reconcile-database-enumeration", "report-unrecovered-resource"])
+        return _result(nonce, failure, steps, ledger, ABORTED_UNRECOVERED, resumed)
+
+    steps.extend(["reconcile-database-enumeration", "write-final-ledger"])
     return _result(nonce, failure, steps, ledger, CLEAN, resumed)
 
 

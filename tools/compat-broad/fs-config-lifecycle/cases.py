@@ -11,10 +11,10 @@ import json
 import re
 from typing import Any
 
-from .surface_matrix import CASE_ID, build_matrix, digest
+from .surface_matrix import CASE_ID, build_matrix, digest, pinned_definition
 
 NONCE_PATTERN = re.compile(r"^[0-9a-f]{32}$")
-CASE_KINDS = ("control", "observation", "negative")
+CASE_KINDS = ("control", "observation", "negative", "cleanup")
 OWNED_DATABASE_PREFIX = "fsconfig-"
 PROJECT = "fireemu-35fe6"
 DEFAULT_DATABASE = "(default)"
@@ -24,6 +24,37 @@ _SERVED = "served"
 _NOT_SERVED = "not-served"
 _SUCCESS = "success"
 _REFUSAL = "refusal"
+
+# The request-body alias each case uses, for methods whose Discovery entry declares a
+# request body. A method absent from this map may carry query parameters only.
+BODY_KEYS = {
+    f"{_M}databases.create": "database",
+    f"{_M}databases.collectionGroups.fields.patch": "field",
+}
+
+
+def declared_request_keys(method: str) -> set[str]:
+    """Query parameters the pinned Discovery declares for a method, plus its body alias."""
+    prefix = f"{method}/parameters/"
+    keys = {
+        surface["locator"][len(prefix) :]
+        for surface in pinned_definition()["surfaces"]
+        if surface["locator"].startswith(prefix)
+        and "/" not in surface["locator"][len(prefix) :]
+    }
+    body = BODY_KEYS.get(method)
+    if body is not None:
+        locators = {surface["locator"] for surface in pinned_definition()["surfaces"]}
+        if f"{method}/request" not in locators:
+            raise ValueError(f"{method} declares no request body in the pinned input")
+        keys.add(body)
+    return keys
+
+
+_CONDITIONAL_EXEMPT = (
+    "This cleanup addresses the identifier a refused create used. It runs only if that "
+    "create was unexpectedly accepted, so the identifier is the invalid one under test."
+)
 
 
 def _case(
@@ -38,6 +69,8 @@ def _case(
     reverted_by: str | None = None,
     is_revert_of: str | None = None,
     namespace_exempt_reason: str | None = None,
+    possibly_allocates: bool = False,
+    conditional: bool = False,
 ) -> dict[str, Any]:
     return {
         "id": case_id,
@@ -49,6 +82,8 @@ def _case(
         "expectedProductionOutcome": expected_production,
         "productionObserved": False,
         "mutates": mutates,
+        "possiblyAllocates": possibly_allocates,
+        "conditional": conditional,
         "revertedBy": reverted_by,
         "isRevertOf": is_revert_of,
         "namespaceExemptReason": namespace_exempt_reason,
@@ -119,6 +154,7 @@ def compile_cases(nonce: str) -> list[dict[str, Any]]:
             },
             _SUCCESS,
             mutates=True,
+            possibly_allocates=True,
             reverted_by="OC-06",
         ),
         _case(
@@ -145,7 +181,7 @@ def compile_cases(nonce: str) -> list[dict[str, Any]]:
             "databases.delete",
             "Delete the throwaway database; this is the revert for OC-03.",
             (owned_db,),
-            {"name": f"projects/{PROJECT}/databases/{owned_db}", "allowMissing": False},
+            {"name": f"projects/{PROJECT}/databases/{owned_db}"},
             _SUCCESS,
             is_revert_of="OC-03",
         ),
@@ -164,8 +200,20 @@ def compile_cases(nonce: str) -> list[dict[str, Any]]:
             "databases.create",
             "An uppercase and underscored database id must be refused before creation.",
             (f"Invalid_Id_{short}",),
-            {"parent": f"projects/{PROJECT}", "databaseId": f"Invalid_Id_{short}"},
+            {
+                "parent": f"projects/{PROJECT}",
+                "databaseId": f"Invalid_Id_{short}",
+                "database": {
+                    "locationId": "us-central1",
+                    "type": "FIRESTORE_NATIVE",
+                    "databaseEdition": "STANDARD",
+                    "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+                    "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+                },
+            },
             _REFUSAL,
+            possibly_allocates=True,
+            reverted_by="OC-23",
         ),
         _case(
             "OC-09",
@@ -173,8 +221,20 @@ def compile_cases(nonce: str) -> list[dict[str, Any]]:
             "databases.create",
             "A database id shorter than the documented minimum must be refused.",
             (f"a{short[:1]}",),
-            {"parent": f"projects/{PROJECT}", "databaseId": f"a{short[:1]}"},
+            {
+                "parent": f"projects/{PROJECT}",
+                "databaseId": f"a{short[:1]}",
+                "database": {
+                    "locationId": "us-central1",
+                    "type": "FIRESTORE_NATIVE",
+                    "databaseEdition": "STANDARD",
+                    "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+                    "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+                },
+            },
             _REFUSAL,
+            possibly_allocates=True,
+            reverted_by="OC-24",
             namespace_exempt_reason="An id short enough to be refused cannot also carry "
             "the nonce prefix; the request is refused before any resource exists.",
         ),
@@ -187,8 +247,17 @@ def compile_cases(nonce: str) -> list[dict[str, Any]]:
             {
                 "parent": f"projects/{PROJECT}",
                 "databaseId": f"{OWNED_DATABASE_PREFIX}{short}-{'x' * 50}",
+                "database": {
+                    "locationId": "us-central1",
+                    "type": "FIRESTORE_NATIVE",
+                    "databaseEdition": "STANDARD",
+                    "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+                    "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+                },
             },
             _REFUSAL,
+            possibly_allocates=True,
+            reverted_by="OC-25",
         ),
         _case(
             "OC-11",
@@ -293,15 +362,12 @@ def compile_cases(nonce: str) -> list[dict[str, Any]]:
             "OC-20",
             "observation",
             "databases.collectionGroups.fields.patch",
-            "Restore the inherited index configuration; this is the revert for OC-18.",
+            "Clear the exemption so the inherited configuration applies again; this is the revert for OC-18.",
             (exempt_field,),
             {
                 "name": exempt_field,
                 "updateMask": "indexConfig",
-                "field": {
-                    "name": exempt_field,
-                    "indexConfig": {"usesAncestorConfig": True},
-                },
+                "field": {"name": exempt_field, "indexConfig": {}},
             },
             _SUCCESS,
             is_revert_of="OC-18",
@@ -327,9 +393,50 @@ def compile_cases(nonce: str) -> list[dict[str, Any]]:
             "observation",
             "databases.operations.get",
             "Poll one long-running operation produced by an owned mutation.",
-            (f"operations/{short}",),
+            (ttl_field,),
             {"name": "<bound at run time to the operation an owned mutation returned>"},
             _SUCCESS,
+        ),
+        _case(
+            "OC-23",
+            "cleanup",
+            "databases.delete",
+            "Delete the database OC-08 would have created if production accepted it.",
+            (f"Invalid_Id_{short}",),
+            {"name": f"projects/{PROJECT}/databases/Invalid_Id_{short}"},
+            _REFUSAL,
+            is_revert_of="OC-08",
+            conditional=True,
+            namespace_exempt_reason=_CONDITIONAL_EXEMPT,
+        ),
+        _case(
+            "OC-24",
+            "cleanup",
+            "databases.delete",
+            "Delete the database OC-09 would have created if production accepted it.",
+            (f"a{short[:1]}",),
+            {"name": f"projects/{PROJECT}/databases/a{short[:1]}"},
+            _REFUSAL,
+            is_revert_of="OC-09",
+            conditional=True,
+            namespace_exempt_reason=_CONDITIONAL_EXEMPT,
+        ),
+        _case(
+            "OC-25",
+            "cleanup",
+            "databases.delete",
+            "Delete the database OC-10 would have created if production accepted it.",
+            (f"{OWNED_DATABASE_PREFIX}{short}-{'x' * 50}",),
+            {
+                "name": (
+                    f"projects/{PROJECT}/databases/"
+                    f"{OWNED_DATABASE_PREFIX}{short}-{'x' * 50}"
+                )
+            },
+            _REFUSAL,
+            is_revert_of="OC-10",
+            conditional=True,
+            namespace_exempt_reason=_CONDITIONAL_EXEMPT,
         ),
     ]
     matrix_rows = {row["locator"]: row for row in build_matrix()["methods"]}
@@ -340,21 +447,19 @@ def compile_cases(nonce: str) -> list[dict[str, Any]]:
 
 
 def owned_resources(cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The ledger a run must recover, derived only from mutating cases."""
+    """The ledger a run must recover: everything it mutates or could allocate."""
     ledger: list[dict[str, Any]] = []
     for case in cases:
-        if not case["mutates"]:
+        if not (case["mutates"] or case["possiblyAllocates"]):
             continue
-        kind = (
-            "database" if case["method"].endswith("databases.create") else "fieldConfig"
-        )
-        name = case["resources"][0]
+        creates = case["method"].endswith("databases.create")
         ledger.append(
             {
-                "kind": kind,
-                "name": name,
+                "kind": "database" if creates else "fieldConfig",
+                "name": case["resources"][0],
                 "createdBy": case["id"],
                 "revertCase": case["revertedBy"],
+                "conditional": not case["mutates"],
                 "recovered": False,
             }
         )

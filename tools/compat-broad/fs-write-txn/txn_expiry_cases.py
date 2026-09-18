@@ -52,6 +52,10 @@ CONTENTION = "Too much contention on these documents. Please try again."
 INVALID_RETRY = "Invalid retry transaction."
 INVALID_TRANSACTION = "Invalid transaction."
 READ_ONLY_RETRY = "read-only transaction cannot be retried as read-write"
+#: What the local emulator actually says today. Production said
+#: "Base64 decoding failed for ..." on the commit path, so this wording is a
+#: known open repair, recorded in the preparation document.
+MALFORMED_BASE64 = "invalid base64"
 
 
 def _case(
@@ -272,7 +276,7 @@ CASES = (
         ),
         rpc="BeginTransaction",
         code=3,
-        message="Base64 decoding failed",
+        message=MALFORMED_BASE64,
         resources=(),
         previously_observed=(
             "conformance:transactions/lifecycle#commit-with-malformed-transaction"

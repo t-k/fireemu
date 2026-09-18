@@ -20,7 +20,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from broad_contract import digest
-from shared_gate import Gate, _save, validate_absence_proofs
+from shared_gate import (
+    Gate,
+    _save,
+    non_creating_dispatches,
+    validate_absence_proofs,
+)
 
 DIMENSIONS = {"requests", "accounts", "resources", "costMicrousd"}
 GENERATION_FIELDS = {"sourceCommit", "collectorSourceDigest", "sourceDigests"}
@@ -128,6 +133,10 @@ def _preflight_stop(receipt):
     head, preflight = _management(gate)
     used = gate.get("managementUsed")
     observed = [item.get("id") for item in receipt.get("metadata", [])]
+    if used == head and observed == []:
+        # A stop before the first preflight request, which for a campaign that
+        # declares no preflight at all is the only shape it can stop in.
+        return 0
     for count in range(1, len(preflight) + 1):
         expected = preflight[:count]
         if used == [*head, *expected] and observed in (expected, expected[:-1]):
@@ -135,18 +144,37 @@ def _preflight_stop(receipt):
     return None
 
 
+def _gate_plan_consistent(gate):
+    """Whether the receipt's embedded Gate plan matches its own recorded digest.
+
+    The retirement contract is read out of that plan, so `abort_no_data` pins it
+    to its digest before any value is taken from it. Order independent: `digest`
+    is canonical, so a re-serialized plan with the same content still matches.
+    The check lives at the boundary that receives the untrusted receipt, not in
+    `_no_data_gate`, which is a predicate over a snapshot's counters.
+    """
+    return isinstance(gate, dict) and digest(gate.get("plan")) == gate.get("planDigest")
+
+
 def _no_data_gate(gate):
-    """Whether a receipt's Gate snapshot proves that no data request was sent."""
+    """Whether a receipt's Gate snapshot proves that no document was written.
+
+    A campaign whose probes read before they write sends data requests that
+    create nothing, and a stop during them is a genuine no-data stop. Which
+    slots can create is declared by the reviewed plan; a campaign that declares
+    nothing is held to the stricter rule that no data request was sent at all.
+    """
     jobs = gate.get("jobs")
     if not isinstance(jobs, dict) or not jobs:
         return False
+    dispatched = non_creating_dispatches(gate)
     return (
-        gate.get("total") == len(gate.get("managementUsed", []))
+        dispatched is not None
+        and gate.get("total") == len(gate.get("managementUsed", [])) + dispatched
         and gate.get("observation") == gate.get("total")
         and gate.get("recovery") == 0
         and all(
-            job.get("observation") == 0
-            and job.get("recovery") == 0
+            job.get("recovery") == 0
             and job.get("owned") == []
             and job.get("creationProofs") == {}
             and job.get("absent") == []
@@ -693,8 +721,16 @@ class Ledger:
             ):
                 raise ValueError("reservation unavailable for no-data abort")
             claim = row["claim"]
+            gate_snapshot = receipt.get("gate")
+            if "gateJob" in claim and claim["gateJob"] not in (
+                gate_snapshot.get("jobs", {}) if isinstance(gate_snapshot, dict) else {}
+            ):
+                # The same check `finish` makes: a claim naming a job the Gate
+                # never hosted is a binding error, not a retirement.
+                raise ValueError("registered Gate job is absent")
             if (
                 record["planDigest"] != claim["gatePlanDigest"]
+                or not _gate_plan_consistent(receipt.get("gate"))
                 or receipt["gate"].get("planDigest") != claim["gatePlanDigest"]
                 or receipt.get("kind") != _receipt_kind(receipt.get("gate"))
                 or receipt.get("ticket") != ticket

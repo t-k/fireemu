@@ -754,27 +754,83 @@ def test_a_malformed_slot_reservation_is_refused(tmp_path, seconds):
 
 
 def test_a_dispatch_reserves_the_seconds_its_own_slot_declared(tmp_path):
-    """The deadline check uses the slot's bound, not one number for the campaign."""
+    """The deadline check uses the slot's bound, not one number for the campaign.
+
+    The window is rewound so that five seconds remain. The small slot reserves
+    two and is admitted; the upload slot reserves sixty and is refused. Were the
+    plan-wide sixty used for both, the small slot would have been refused too.
+    """
+    import time as _time
+
+    from shared_gate import _save
+
     value = split_plan()
-    value["wallSeconds"] = 120
-    value["recoverySeconds"] = 20
-    create(tmp_path / "fits", value)
-    gate = Gate(tmp_path / "fits", "probe")
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
     gate.claim()
+    with gate.locked() as state:
+        window = value["wallSeconds"] - value["recoverySeconds"]
+        state["started"] = _time.monotonic() - (window - 5)
+        _save(gate.path, state)
     operations = value["jobs"]["probe"]["observation"]
     gate.dispatch(operations[0], False, _absent)
     assert gate.snapshot()["jobs"]["probe"]["scheduleDone"] == 1
-
-    oversized = split_plan(upload=200.0)
-    oversized["wallSeconds"] = 120
-    oversized["recoverySeconds"] = 20
-    # The plan-wide bound stays admissible; only this one slot reserves more
-    # than the observation window can give it.
-    oversized["requestSeconds"] = 60.0
-    create(tmp_path / "oversized", oversized)
-    other = Gate(tmp_path / "oversized", "probe")
-    other.claim()
-    other.dispatch(oversized["jobs"]["probe"]["observation"][0], False, _absent)
     with pytest.raises(ValueError, match="capacity"):
-        other.dispatch(oversized["jobs"]["probe"]["observation"][1], False, _absent)
-    assert other.snapshot()["jobs"]["probe"]["scheduleDone"] == 1
+        gate.dispatch(operations[1], False, _absent)
+    assert gate.snapshot()["jobs"]["probe"]["scheduleDone"] == 1
+
+
+def ceiling_plan(upload=60.0, ceiling=60.0):
+    """A campaign that declares the wire ceiling its body-carrying slots must reserve."""
+    value = split_plan(upload=upload)
+    value["transportCeilingSeconds"] = ceiling
+    value["jobs"]["probe"]["observation"][1] = {
+        **value["jobs"]["probe"]["observation"][1],
+        "method": "POST",
+        "body": {"writes": []},
+    }
+    return value
+
+
+def test_a_body_carrying_slot_must_reserve_the_declared_transport_ceiling(tmp_path):
+    """The upload reservation is checkable, not conventional."""
+    create(tmp_path / "at-ceiling", ceiling_plan())
+    create(tmp_path / "above", ceiling_plan(upload=61.0))
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "below", ceiling_plan(upload=59.0))
+    shrunk = ceiling_plan()
+    shrunk["jobs"]["probe"]["schedule"][1]["seconds"] = 2.0
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "shrunk", shrunk)
+
+
+def test_a_slot_without_a_body_is_not_held_to_the_transport_ceiling(tmp_path):
+    value = ceiling_plan()
+    assert value["jobs"]["probe"]["observation"][0]["body"] is None
+    assert value["jobs"]["probe"]["schedule"][0]["seconds"] == 2.0
+    create(tmp_path / "gate", value)
+
+
+@pytest.mark.parametrize("ceiling", [0, -1, "60", None, float("inf"), True])
+def test_a_malformed_transport_ceiling_is_refused(tmp_path, ceiling):
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "gate", ceiling_plan(ceiling=ceiling))
+
+
+def test_scheduled_observation_must_fit_the_window_it_is_left(tmp_path):
+    """The whole arithmetic is proven before the run, not at the last dispatch."""
+    value = split_plan()
+    value["wallSeconds"] = 80
+    value["recoverySeconds"] = 20
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "tight", value)
+    value["wallSeconds"] = 120
+    create(tmp_path / "fits", value)
+
+
+@pytest.mark.parametrize("creates", ["false", 0, None, 1])
+def test_a_malformed_creating_declaration_is_refused(tmp_path, creates):
+    value = split_plan()
+    value["jobs"]["probe"]["schedule"][0]["creates"] = creates
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "gate", value)

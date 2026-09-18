@@ -1391,3 +1391,186 @@ def test_management_outside_the_declared_campaign_prefix_is_refused(tmp_path):
             },
         )
     assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+# A third campaign shape: no credential acquisition, no metadata preflight, and
+# probe slots that read before they write. Its stop points are real no-data
+# stops even though data requests were sent.
+READONLY_RECEIPT_KIND = "request-bytes-acquisition-receipt-v1"
+
+
+def readonly_plan(creates=False):
+    owned = "projects/p/databases/(default)/documents/owned/a/probe/u01"
+    op = {
+        "service": "firestore",
+        "path": "/v1/" + owned,
+        "body": None,
+        "method": "GET",
+        "privileged": True,
+        "form": False,
+    }
+    return {
+        "contract": "shared-local-v1",
+        "nonce": plan("a")["nonce"],
+        "wallSeconds": 600,
+        "recoverySeconds": 300,
+        "observationRequests": 3,
+        "costMicrousd": 5000,
+        "requestCostMicrousd": 1,
+        "intervalSeconds": 0.25,
+        "requestSeconds": 2,
+        "jobSlots": 1,
+        "receiptKind": READONLY_RECEIPT_KIND,
+        "collectorSourceDigest": COMMIT_COLLECTOR_SOURCE_DIGEST,
+        "management": {
+            "observation": [],
+            "recovery": [],
+            "credentialIds": [],
+            "credentialSlots": [],
+        },
+        "jobs": {
+            "probe": {
+                "resources": [owned],
+                "observation": [dict(op), dict(op), dict(op)],
+                "recovery": [dict(op)],
+                "schedule": [
+                    {"phase": "observation", "index": 0, "creates": creates},
+                    {"phase": "observation", "index": 1, "creates": creates},
+                    {"phase": "observation", "index": 2, "creates": creates},
+                    {"phase": "recovery", "index": 0},
+                ],
+            }
+        },
+    }
+
+
+def _readonly_attempt(tmp_path, *, dispatched=0, creates=False):
+    ledger = Ledger.create(tmp_path / "ledger")
+    first = claim(tmp_path, "a")
+    first["gatePath"] = str((tmp_path / "a" / "gate").resolve())
+    first["gateJob"] = "probe"
+    frozen = readonly_plan(creates)
+    first["gatePlanDigest"] = digest(frozen)
+    first["budget"] = {
+        "requests": 60,
+        "accounts": 1,
+        "resources": 1,
+        "costMicrousd": 9000,
+    }
+    first["durationSeconds"] = 600
+    ticket = ledger.reserve(envelope(), first, frozen, now=1100)
+    create(Path(first["gatePath"]), frozen)
+    gate = Gate(first["gatePath"], "probe")
+    gate.claim()
+    for index in range(dispatched):
+        gate.dispatch(
+            frozen["jobs"]["probe"]["observation"][index],
+            False,
+            lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+        )
+    with gate.locked() as state:
+        state["coordinatorPid"] = _stopped_pid()
+        state["jobs"]["probe"]["pid"] = state["coordinatorPid"]
+        _save(gate.path, state)
+    snapshot = gate.snapshot()
+    receipt = {
+        "kind": READONLY_RECEIPT_KIND,
+        "ticket": ticket,
+        "planDigest": first["gatePlanDigest"],
+        "claimDigest": ticket["claimDigest"],
+        "gate": snapshot,
+        "chargedCalls": snapshot["total"],
+        "collection": None,
+        "productionExecuted": False,
+        "failure": "ValueError",
+        "releaseEligible": False,
+        "reservationStateAtPublication": "held",
+        "executionKind": "fixed-production-wire",
+        "metadata": [],
+        "credentialEvidence": [],
+    }
+    path = tmp_path / "a" / "receipt.json"
+    path.write_text(json.dumps(receipt))
+    record = {
+        "kind": "shared-no-data-abort-v1",
+        "ticket": ticket,
+        "planDigest": first["gatePlanDigest"],
+        "gateDigest": digest(snapshot),
+        "receiptPath": str(path.resolve()),
+        "receiptDigest": digest(receipt),
+        "collectorSourceDigest": frozen["collectorSourceDigest"],
+        "sourceCommit": COMMIT_SOURCE_COMMIT,
+        "sourceDigests": COMMIT_SOURCE_DIGESTS,
+    }
+    return ledger, gate, ticket, record
+
+
+def test_a_stop_before_the_schedule_starts_is_retirable(tmp_path):
+    """A campaign with no preflight slots still has a stop point at zero."""
+    ledger, gate, ticket, record = _readonly_attempt(tmp_path)
+    ledger.abort_no_data(ticket, record)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        == "aborted-no-data"
+    )
+    assert gate.snapshot()["stopped"] is True
+
+
+@pytest.mark.parametrize("dispatched", [1, 2, 3])
+def test_a_stop_after_only_non_creating_slots_is_retirable(tmp_path, dispatched):
+    """Ownership reads create nothing, so a stop during them leaves no residue."""
+    ledger, gate, ticket, record = _readonly_attempt(tmp_path, dispatched=dispatched)
+    assert gate.snapshot()["jobs"]["probe"]["observation"] == dispatched
+    ledger.abort_no_data(ticket, record)
+    row = ledger.snapshot()["reservations"][ticket["reservation"]]
+    assert row["state"] == "aborted-no-data"
+    assert gate.snapshot()["stopped"] is True
+
+
+@pytest.mark.parametrize("dispatched", [1, 2])
+def test_a_stop_after_a_slot_that_may_create_is_never_retirable(tmp_path, dispatched):
+    """A slot the plan did not declare non-creating may have written a document."""
+    ledger, gate, ticket, record = _readonly_attempt(
+        tmp_path, dispatched=dispatched, creates=True
+    )
+    with pytest.raises(ValueError, match="no-data attempt"):
+        ledger.abort_no_data(ticket, record)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+    assert gate.snapshot()["stopped"] is False
+
+
+def test_an_abort_refuses_a_gate_job_the_claim_did_not_reserve(tmp_path):
+    """abort_no_data checks the named job exists, exactly as finish does."""
+    ledger, _gate, ticket, record = _readonly_attempt(tmp_path)
+    with ledger._locked() as state:
+        ledger._row(state, ticket)["claim"]["gateJob"] = "probe-absent"
+        row = ledger._row(state, ticket)
+        row["claimDigest"] = digest(row["claim"])
+        ledger._save(state)
+    ticket = {
+        **ticket,
+        "claimDigest": digest(
+            ledger.snapshot()["reservations"][ticket["reservation"]]["claim"]
+        ),
+    }
+    with pytest.raises(ValueError, match="registered Gate job"):
+        ledger.abort_no_data(ticket, {**record, "ticket": ticket})
+
+
+def test_a_receipt_gate_plan_must_match_its_own_digest(tmp_path):
+    """The embedded plan is read for the contract, so it is pinned before it is read."""
+    ledger, _gate, ticket, record = _readonly_attempt(tmp_path)
+    receipt_path = Path(record["receiptPath"])
+    receipt = json.loads(receipt_path.read_text())
+    receipt["gate"]["plan"]["receiptKind"] = "commit-acquisition-receipt-v2"
+    receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match="no-data attempt"):
+        ledger.abort_no_data(
+            ticket,
+            {
+                **record,
+                "gateDigest": digest(receipt["gate"]),
+                "receiptDigest": digest(receipt),
+            },
+        )
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"

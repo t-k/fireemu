@@ -3,7 +3,7 @@
     "artifactSha256": "7091cbad1a7e1220479e3d59b4382888c4a6ac5baa3a5c091d3d995fed43613f",
     "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
     "sourceCommit": "d0c51bc732e6c90bf9d21ac7839eb65236222453",
-    "worktree": "/Users/tk/work/firebase-emulator/.worktree/o5-rules-user-token-prep"
+    "worktree": "o5-rules-user-token-prep"
   },
   "authOrigin": "http://127.0.0.1:52880",
   "bundle": {

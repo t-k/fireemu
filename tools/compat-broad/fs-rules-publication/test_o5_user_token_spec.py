@@ -69,7 +69,7 @@ def test_the_shadow_record_binds_its_artifact_and_source() -> None:
     assert len(artifact["artifactSha256"]) == 64
     assert len(artifact["sourceCommit"]) == 40
     assert artifact["rustc"].startswith("rustc ")
-    assert artifact["worktree"].endswith("o5-rules-user-token-prep")
+    assert "/" not in artifact["worktree"]
 
 
 def test_the_shadow_record_is_a_complete_local_run() -> None:

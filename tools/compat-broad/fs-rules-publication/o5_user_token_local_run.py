@@ -501,7 +501,8 @@ def build() -> tuple[Path, dict[str, Any]]:
         "sourceCommit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
-        "worktree": str(ROOT),
+        # Record only the checkout name: an absolute path would publish a personal directory.
+        "worktree": ROOT.name,
     }
 
 

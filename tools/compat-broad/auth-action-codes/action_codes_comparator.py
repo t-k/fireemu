@@ -43,6 +43,8 @@ SEMANTIC_FIELDS = (
     "emailMatchesRequest",
 )
 
+SEMANTIC_FIELDS = SEMANTIC_FIELDS + ("deliveredMessages",)
+
 # Visible, never decisive: diagnostic grammar and the opaque code length.
 INFORMATIONAL_FIELDS = ("errorMessage", "oobCodeLength")
 
@@ -68,6 +70,7 @@ def _carries_secret(value: Any) -> bool:
 
 
 def _binding_complete(binding: Any) -> bool:
+    """A complete binding names a commit and the artifact digest it produced."""
     return (
         isinstance(binding, dict)
         and isinstance(binding.get("commit"), str)
@@ -75,6 +78,18 @@ def _binding_complete(binding: Any) -> bool:
         and bool(_COMMIT.fullmatch(binding["commit"]))
         and bool(_SHA256.fullmatch(binding["artifactSha256"]))
     )
+
+
+def _built_from_source(binding: dict[str, Any]) -> bool:
+    """The artifact must be the one this commit produces, not one kept nearby.
+
+    A retained binary's digest says which bytes ran, not which source they came
+    from. Only a receipt that records both, and agrees with itself, can carry a
+    compatibility verdict.
+    """
+    return binding.get("binding") == "built-from-source" and binding.get(
+        "builtFromSourceCommit"
+    ) == binding.get("commit")
 
 
 def _shaped(receipt: Any, side: str) -> str | None:
@@ -96,10 +111,23 @@ def _shaped(receipt: Any, side: str) -> str | None:
         return side + " left an owned account behind"
     if not _binding_complete(receipt.get("sourceBinding")):
         return side + " source binding is incomplete"
+    if not _built_from_source(receipt["sourceBinding"]):
+        return side + " artifact was not built from the bound source"
+    if receipt.get("deliveredMessages") != 0 or isinstance(
+        receipt.get("deliveredMessages"), bool
+    ):
+        return side + " receipt records delivered messages"
+    if receipt.get("absenceProven") is not True:
+        return side + " did not prove the absence of its owned addresses"
     stages = receipt.get("stages")
-    if not isinstance(stages, list) or [
-        stage.get("id") for stage in stages if isinstance(stage, dict)
-    ] != list(STAGE_IDS):
+    # Every element must be a typed row: a foreign receipt is classified, never
+    # allowed to raise out of the comparison.
+    if (
+        not isinstance(stages, list)
+        or len(stages) != len(STAGE_IDS)
+        or not all(isinstance(stage, dict) for stage in stages)
+        or [stage.get("id") for stage in stages] != list(STAGE_IDS)
+    ):
         return side + " stages are missing, reordered or untyped"
     if side == "production":
         if receipt.get("productionExecuted") is not True:

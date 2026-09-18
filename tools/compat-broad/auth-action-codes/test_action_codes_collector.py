@@ -12,6 +12,7 @@ from action_codes_collector import (
     collect,
     http_opener,
     redact,
+    run_cli,
 )
 from action_codes_plan import SECRET_FIELDS, STAGE_IDS
 
@@ -541,3 +542,68 @@ def test_a_slow_transport_is_never_delayed_further() -> None:
     ticks = iter([index * 5.0 for index in range(400)])
     run(clock=lambda: next(ticks), sleep=waits.append, wall_seconds=100000)
     assert waits == []
+
+
+def test_the_receipt_carries_the_artifact_binding_kind_not_only_a_digest() -> None:
+    _, receipt = run()
+    assert receipt["sourceBinding"] == {
+        "commit": None,
+        "artifactSha256": None,
+        "binding": "unbound",
+        "builtFromSourceCommit": None,
+    }
+    _, bound = run(
+        source_binding={
+            "commit": "a" * 40,
+            "artifactSha256": "b" * 64,
+            "binding": "retained-external",
+            "builtFromSourceCommit": None,
+        }
+    )
+    assert bound["sourceBinding"]["binding"] == "retained-external"
+
+
+def test_an_unknown_binding_kind_is_refused() -> None:
+    for binding in (
+        {"commit": "a" * 40, "artifactSha256": "b" * 64, "binding": "trust-me"},
+        {"commit": "nope", "artifactSha256": "b" * 64, "binding": "built-from-source"},
+        {"binding": "built-from-source"},
+    ):
+        with pytest.raises(CollectorError, match="source binding"):
+            run(source_binding=binding)
+
+
+def test_the_command_line_writes_a_receipt_even_when_a_bound_is_violated(
+    tmp_path, monkeypatch
+) -> None:
+    import action_codes_collector as module
+
+    service = FakeService()
+    monkeypatch.setattr(module, "_http_send", service.send)
+    output = tmp_path / "receipt.json"
+    arguments = module.build_parser().parse_args(
+        [
+            "--origin",
+            ORIGIN,
+            "--project",
+            PROJECT,
+            "--nonce",
+            NONCE,
+            "--output",
+            str(output),
+        ]
+    )
+    original = module.collect
+
+    def bounded(**kwargs):
+        return original(**{**kwargs, "request_budget": 5, "sleep": lambda _: None})
+
+    monkeypatch.setattr(module, "collect", bounded)
+    result = run_cli(arguments)
+    written = json.loads(output.read_text())
+    assert "request budget" in written["boundViolation"]
+    assert written["recordingComplete"] is False
+    assert written["cleanupComplete"] is True
+    assert written["recovery"][0]["id"] == "recover-discover"
+    assert result["boundViolation"] == written["boundViolation"]
+    assert service.accounts == {}

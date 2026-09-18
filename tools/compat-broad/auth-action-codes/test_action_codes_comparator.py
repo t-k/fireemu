@@ -25,7 +25,14 @@ def receipt(side: str) -> dict:
         "side": side,
         "nonce": NONCE,
         "manifestDigest": DIGEST,
-        "sourceBinding": {"commit": "a" * 40, "artifactSha256": "b" * 64},
+        "sourceBinding": {
+            "commit": "a" * 40,
+            "artifactSha256": "b" * 64,
+            "binding": "built-from-source",
+            "builtFromSourceCommit": "a" * 40,
+        },
+        "deliveredMessages": 0,
+        "absenceProven": True,
         "permissionReference": None
         if side == "local"
         else "owner-permission-2026-09-18",
@@ -174,3 +181,52 @@ def test_a_receipt_carrying_a_secret_key_is_refused_outright() -> None:
     assert result["classification"] == "INDETERMINATE"
     assert result["reason"] == "receipt carries a secret field"
     assert "leaked-code" not in str(result)
+
+
+def test_a_retained_artifact_can_never_yield_a_verdict() -> None:
+    local = receipt("local")
+    local["sourceBinding"]["binding"] = "retained-external"
+    local["sourceBinding"]["builtFromSourceCommit"] = None
+    result = compare(local, receipt("production"))
+    assert result["classification"] == "INDETERMINATE"
+    assert result["reason"] == "local artifact was not built from the bound source"
+
+
+def test_a_binding_naming_another_commit_is_refused() -> None:
+    production = receipt("production")
+    production["sourceBinding"]["builtFromSourceCommit"] = "f" * 40
+    result = compare(receipt("local"), production)
+    assert result["classification"] == "INDETERMINATE"
+    assert "built from" in result["reason"]
+
+
+def test_a_delivered_message_can_never_be_a_match() -> None:
+    result = pair(deliveredMessages=1)
+    assert result["classification"] == "INDETERMINATE"
+    assert "delivered" in result["reason"]
+    # A per-stage claim is compared too, rather than silently ignored.
+    production = receipt("production")
+    production["stages"][2]["deliveredMessages"] = 1
+    local = receipt("local")
+    local["stages"][2]["deliveredMessages"] = 0
+    outcome = compare(local, production)
+    assert outcome["classification"] == "SEMANTIC_MISMATCH"
+    assert "deliveredMessages" in outcome["stages"][2]["differences"]
+
+
+def test_an_unproven_absence_can_never_be_a_match() -> None:
+    assert pair(absenceProven=False)["classification"] == "INDETERMINATE"
+
+
+def test_a_malformed_foreign_receipt_is_classified_not_raised() -> None:
+    production = receipt("production")
+    production["stages"].append("not a stage")
+    result = compare(receipt("local"), production)
+    assert result["classification"] == "INDETERMINATE"
+    assert result["productionCompared"] is False
+    production = receipt("production")
+    production["stages"][4] = ["also", "not", "a", "stage"]
+    assert compare(receipt("local"), production)["classification"] == "INDETERMINATE"
+    production = receipt("production")
+    production["stages"] = production["stages"][:-1]
+    assert compare(receipt("local"), production)["classification"] == "INDETERMINATE"

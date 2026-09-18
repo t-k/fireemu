@@ -39,6 +39,17 @@ REDACTED = "[REDACTED]"
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 _BASE64URL = re.compile(r"[A-Za-z0-9_-]+")
 _SECRET_KEY = re.compile("|".join(SECRET_FIELDS), re.IGNORECASE)
+_COMMIT = re.compile(r"[0-9a-f]{40}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+UNBOUND_SOURCE = {
+    "commit": None,
+    "artifactSha256": None,
+    "binding": "unbound",
+    "builtFromSourceCommit": None,
+}
+# How the executed artifact relates to the commit the receipt names. Only
+# `built-from-source` can ever carry a compatibility verdict.
+BINDING_KINDS = ("unbound", "retained-external", "built-from-source")
 
 
 class CollectorError(RuntimeError):
@@ -66,6 +77,30 @@ def character_class(value: str) -> str:
     if not value:
         return "empty"
     return "base64url" if _BASE64URL.fullmatch(value) else "other"
+
+
+def _source_binding(value: Any) -> dict[str, Any]:
+    """Accept only a fully typed binding; silence about provenance is unbound."""
+    if value is None:
+        return dict(UNBOUND_SOURCE)
+    if not isinstance(value, dict) or value.get("binding") not in BINDING_KINDS:
+        raise CollectorError("typed source binding required")
+    commit, digest = value.get("commit"), value.get("artifactSha256")
+    if not isinstance(commit, str) or not _COMMIT.fullmatch(commit):
+        raise CollectorError("source binding needs a commit")
+    if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
+        raise CollectorError("source binding needs an artifact digest")
+    built = value.get("builtFromSourceCommit")
+    if value["binding"] == "built-from-source" and built != commit:
+        raise CollectorError("source binding claims a build it cannot show")
+    if value["binding"] != "built-from-source" and built is not None:
+        raise CollectorError("source binding names a build it did not make")
+    return {
+        "commit": commit,
+        "artifactSha256": digest,
+        "binding": value["binding"],
+        "builtFromSourceCommit": built,
+    }
 
 
 def _loopback_origin(origin: str) -> str:
@@ -377,12 +412,14 @@ def collect(
     wall_seconds: int | None = None,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    source_binding: dict[str, Any] | None = None,
     tolerate_failure: bool = False,
 ) -> dict[str, Any]:
     """Run the frozen matrix against one loopback origin and return a receipt."""
     if approval is not None:
         raise CollectorError("production entry is closed in this preparation package")
     origin = _loopback_origin(origin)
+    binding = _source_binding(source_binding)
     manifest = campaign_manifest(nonce)
     budget = manifest["budget"]
     run = _Run(
@@ -428,7 +465,7 @@ def collect(
         "side": "local",
         "nonce": nonce,
         "manifestDigest": manifest_digest(manifest),
-        "sourceBinding": {"commit": None, "artifactSha256": None},
+        "sourceBinding": binding,
         "productionExecuted": False,
         "recordingComplete": stop_reason is None
         and len(stages) == len(manifest["stages"]),
@@ -514,25 +551,38 @@ def _http_send(method: str, url: str, headers: dict[str, str], body: dict[str, A
         return error.code, json.loads(error.read() or b"{}")
 
 
-if __name__ == "__main__":
-    arguments = build_parser().parse_args()
-    result = collect(
-        origin=arguments.origin,
-        project=arguments.project,
-        nonce=arguments.nonce,
-        send=_http_send,
-    )
+def run_cli(arguments: argparse.Namespace) -> dict[str, Any]:
+    """Always leave a receipt behind, including when a bound was violated."""
+    try:
+        result = collect(
+            origin=arguments.origin,
+            project=arguments.project,
+            nonce=arguments.nonce,
+            send=_http_send,
+        )
+    except CollectorError as error:
+        result = getattr(error, "receipt", None)
+        if result is None:
+            result = {"collectorError": str(error), "recordingComplete": False}
+        result = {**result, "boundViolation": str(error)}
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    return result
+
+
+if __name__ == "__main__":
+    arguments = build_parser().parse_args()
+    result = run_cli(arguments)
     print(
         json.dumps(
             {
-                "recordingComplete": result["recordingComplete"],
-                "cleanupComplete": result["cleanupComplete"],
-                "requests": result["requests"],
+                "recordingComplete": result.get("recordingComplete"),
+                "cleanupComplete": result.get("cleanupComplete"),
+                "requests": result.get("requests"),
+                "boundViolation": result.get("boundViolation"),
             }
         )
     )
     raise SystemExit(
-        0 if result["recordingComplete"] and result["cleanupComplete"] else 2
+        0 if result.get("recordingComplete") and result.get("cleanupComplete") else 2
     )

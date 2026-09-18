@@ -1,0 +1,212 @@
+{
+  "artifact": {
+    "binding": "retained-external",
+    "builtFromSourceCommit": null,
+    "sha256": "bad6b9280e895f90484b5a89056c62ce7c4f3f44e8571891f5175986e99f53a6",
+    "version": "0.7.0"
+  },
+  "boundary": {
+    "artifactBinding": "retained-external; not rebuilt from collectorSourceCommit",
+    "comparison": "local self-observation only; no production side exists",
+    "promotion": "AUTH-ACTION remains WAITING_ORACLE"
+  },
+  "campaignId": "AUTH-ACTION-OOB-DELIVERY-BOUNDARY-01",
+  "campaignManifestFile": {
+    "path": "spec/compatibility/broad-runs/auth-action-codes-oob-boundary-01.json",
+    "sha256": "98e80129235a85fcd355e213c6ef47ac090462ccd478131db5f652621ceb5b63"
+  },
+  "collectorSourceCommit": "74a84a8dde542ed6604f42d87a1916ffc7edb200",
+  "collectorSources": {
+    "action_codes_collector.py": "677cedb078c77d9b0528f01e16c394281c24b1fca7d460130df199d5fbe6594f",
+    "action_codes_comparator.py": "af35c60d2381a43131410eb0c2fada576d5d95f936d20a810c6b4606769ea11a",
+    "action_codes_plan.py": "eb31a80bf9f1b5f55c90956c64163276220116e1fe193fa98cfdae97385b5a7c",
+    "action_codes_shadow.py": "88e56dfd666a7c458352c18957c680425ae3384c09d3929e683b79873c087929",
+    "test_action_codes_collector.py": "5d263dc3edbc892e8cf52a1966edb44e43efa9ae5d3b4af90f1ba15af72a4c31",
+    "test_action_codes_comparator.py": "33ce3450fb6656b048451861134c2b6306e69ffc760bcb20daf5ff53f5100335",
+    "test_action_codes_plan.py": "47bdd2d842014c796620d3e66163e1f43a35fbc68f6c2032d58ddf6194320d0b",
+    "test_action_codes_shadow.py": "a13c631e923e0824e75d0c58b8b09b2988415ac237aaf912f0091e45e2d9533e"
+  },
+  "configuration": {
+    "profile": "strict",
+    "schemaVersion": 1
+  },
+  "contract": "auth-action-codes-v1",
+  "kind": "auth-action-codes-local-shadow-evidence",
+  "localStages": [
+    {
+      "basis": "setup",
+      "errorCode": null,
+      "id": "account-a-create",
+      "status": 200
+    },
+    {
+      "basis": "setup",
+      "errorCode": null,
+      "id": "account-b-create",
+      "status": 200
+    },
+    {
+      "basis": "setup",
+      "errorCode": null,
+      "id": "reset-link-generate",
+      "status": 200
+    },
+    {
+      "basis": "diagnostic",
+      "errorCode": null,
+      "id": "reset-code-lookup",
+      "status": 200
+    },
+    {
+      "basis": "diagnostic",
+      "errorCode": "WEAK_PASSWORD",
+      "id": "reset-weak-password",
+      "status": 400
+    },
+    {
+      "basis": "control",
+      "errorCode": null,
+      "id": "reset-weak-password-retry",
+      "status": 200
+    },
+    {
+      "basis": "diagnostic",
+      "errorCode": null,
+      "id": "reset-consume",
+      "status": 200
+    },
+    {
+      "basis": "diagnostic",
+      "errorCode": "INVALID_OOB_CODE",
+      "id": "reset-reuse",
+      "status": 400
+    },
+    {
+      "basis": "control",
+      "errorCode": "INVALID_OOB_CODE",
+      "id": "reset-wrong-code",
+      "status": 400
+    },
+    {
+      "basis": "setup",
+      "errorCode": null,
+      "id": "reset-link-generate-second",
+      "status": 200
+    },
+    {
+      "basis": "setup",
+      "errorCode": null,
+      "id": "admin-password-update",
+      "status": 200
+    },
+    {
+      "basis": "diagnostic",
+      "errorCode": null,
+      "id": "reset-after-password-change",
+      "status": 200
+    },
+    {
+      "basis": "control",
+      "errorCode": null,
+      "id": "account-a-readback",
+      "status": 200
+    },
+    {
+      "basis": "setup",
+      "errorCode": null,
+      "id": "verify-link-generate",
+      "status": 200
+    },
+    {
+      "basis": "diagnostic",
+      "errorCode": null,
+      "id": "verify-apply",
+      "status": 200
+    },
+    {
+      "basis": "diagnostic",
+      "errorCode": "INVALID_OOB_CODE",
+      "id": "verify-reuse",
+      "status": 400
+    },
+    {
+      "basis": "control",
+      "errorCode": "INVALID_OOB_CODE",
+      "id": "verify-wrong-code",
+      "status": 400
+    },
+    {
+      "basis": "setup",
+      "errorCode": null,
+      "id": "email-link-generate",
+      "status": 200
+    },
+    {
+      "basis": "diagnostic",
+      "errorCode": null,
+      "id": "email-link-signin",
+      "status": 200
+    },
+    {
+      "basis": "diagnostic",
+      "errorCode": "INVALID_OOB_CODE",
+      "id": "email-link-reuse",
+      "status": 400
+    },
+    {
+      "basis": "setup",
+      "errorCode": null,
+      "id": "email-link-generate-second",
+      "status": 200
+    },
+    {
+      "basis": "control",
+      "errorCode": "INVALID_OOB_CODE",
+      "id": "email-link-mismatched-email",
+      "status": 400
+    },
+    {
+      "basis": "setup",
+      "errorCode": null,
+      "id": "deleted-user-link-generate",
+      "status": 200
+    },
+    {
+      "basis": "setup",
+      "errorCode": null,
+      "id": "account-b-delete",
+      "status": 200
+    },
+    {
+      "basis": "diagnostic",
+      "errorCode": "USER_DISABLED",
+      "id": "reset-after-delete",
+      "status": 400
+    },
+    {
+      "basis": "diagnostic",
+      "errorCode": null,
+      "id": "link-generate-unknown-email",
+      "status": 200
+    }
+  ],
+  "manifestDigest": "397203c013a9fa3592b445c4eecde4ceb805be650361d881b8f9c7e802b81d7b",
+  "observation": {
+    "cleanupComplete": true,
+    "deliveredMessages": 0,
+    "observationRequests": 26,
+    "recordingComplete": true,
+    "recoveryRequests": 4,
+    "remainingAccounts": 0,
+    "stagesRecorded": 26
+  },
+  "ownedProcess": {
+    "exitCode": 0,
+    "listenersClosed": true,
+    "stopped": true
+  },
+  "productionExecuted": false,
+  "productionObserved": "none",
+  "receiptSha256": "dfd4105536733fedf503a4c4d9ee2bad4fdeffadb6975a9433a6cfe55744e26a",
+  "status": "PREPARED_LOCAL_SHADOW"
+}

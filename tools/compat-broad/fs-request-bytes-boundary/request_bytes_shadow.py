@@ -27,6 +27,7 @@ for entry in (str(HERE), str(HERE.parent), str(ROOT / "tools/compat-inventory"))
         sys.path.insert(0, entry)
 
 from request_bytes_campaign import (
+    BASELINE_COMPARISON_FIELDS,
     LOCAL_EXPECTATION,
     campaign_digest,
     compile_request_bytes_campaign,
@@ -243,13 +244,16 @@ def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
     expectation:
 
     - `local-shape-matches-production-expectation` is the observed baseline. The
-      limits layer refuses the over-boundary Commit at exactly 10 MiB with the
-      same status, code and message this campaign expects of production. That
-      expectation is documented rather than observed, so this is agreement with
-      an expectation, not confirmation of it.
-    - `local-boundary-enforced-shape-differs` is now a regression. It means a
-      strict-profile build answered the emulator profile's legacy 413, so the
-      implemented shape was lost.
+      limits layer refuses the over-boundary Commit at exactly 10 MiB, and every
+      field in `BASELINE_COMPARISON_FIELDS` equals what this campaign expects of
+      production. That expectation is documented rather than observed, so this
+      is agreement with an expectation, not confirmation of it.
+    - `local-boundary-enforced-shape-differs` means the boundary held but the
+      refusal shape did not match. That covers the emulator profile's legacy
+      413, which from a strict-profile build is a regression, and any refusal
+      whose code, status or message differs from the expected one. The differing
+      fields are listed in `refusalFieldMismatches`. The run's recording and
+      recovery facts stand; only `matchesBaseline` goes false.
     - `local-boundary-not-enforced` means the over-boundary Commit was accepted,
       so the bound was removed or raised.
     - `local-untyped-transport-refusal` means something refused the Commit
@@ -269,7 +273,8 @@ def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
     observed = LOCAL_EXPECTATION["observedRefusal"]
     legacy = LOCAL_EXPECTATION["emulatorProfileRefusal"]["rest"]
     clean_refusal = not failures and completed and absence and isinstance(refusal, dict)
-    if clean_refusal and refusal.get("httpStatus") == observed["httpStatus"]:
+    mismatches = refusal_field_mismatches(refusal) if clean_refusal else []
+    if clean_refusal and not mismatches:
         classification = "local-shape-matches-production-expectation"
         summary = (
             "The limits layer refused the over-boundary Commit at exactly the "
@@ -283,6 +288,18 @@ def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
             "The over-boundary Commit was refused with the emulator profile's "
             "legacy 413. From a strict-profile build that is a regression: the "
             "implemented refusal shape was lost. The boundary itself still holds."
+        )
+    elif clean_refusal and refusal.get("httpStatus") == observed["httpStatus"]:
+        classification = "local-boundary-enforced-shape-differs"
+        summary = (
+            "The over-boundary Commit was refused at the right boundary, but the "
+            "refusal shape is not the expected one: "
+            + ", ".join(
+                f"{item['field']} was {item['observed']!r}, expected "
+                f"{item['expected']!r}"
+                for item in mismatches
+            )
+            + "."
         )
     elif (
         _is_untyped_refusal_failure_set(failures)
@@ -312,6 +329,8 @@ def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
         "localEnforcement": LOCAL_EXPECTATION["localEnforcement"],
         "enforcementSource": LOCAL_EXPECTATION["enforcementSource"],
         "expectedRefusal": observed,
+        "comparedFields": list(BASELINE_COMPARISON_FIELDS),
+        "refusalFieldMismatches": mismatches,
         "observedFailures": failures,
         "resourceAbsence": absence,
         "overRefusal": refusal,
@@ -340,6 +359,33 @@ def _is_untyped_refusal_failure_set(failures: list[Any]) -> bool:
         and entry.endswith(":creation-and-current-version-not-proven")
         for entry in rest
     )
+
+
+def refusal_field_mismatches(refusal: Any) -> list[dict[str, Any]]:
+    """Compare every declared field of the refusal shape, not just the status.
+
+    A classification that says the status, the code and the message matched has
+    to have compared all three. Comparing only the status and reporting a match
+    is how a differently worded or message-less refusal was previously read as
+    the baseline.
+    """
+    expected = LOCAL_EXPECTATION["observedRefusal"]
+    if not isinstance(refusal, dict):
+        return [
+            {"field": field, "observed": None, "expected": expected[field]}
+            for field in BASELINE_COMPARISON_FIELDS
+        ]
+    return [
+        {
+            "field": field,
+            # An absent field is a mismatch, never a pass. `sentinel` keeps a
+            # recorded null distinguishable from a field that is not there.
+            "observed": refusal.get(field, "<absent>"),
+            "expected": expected[field],
+        }
+        for field in BASELINE_COMPARISON_FIELDS
+        if refusal.get(field, "<absent>") != expected[field]
+    ]
 
 
 def shadow_gates(

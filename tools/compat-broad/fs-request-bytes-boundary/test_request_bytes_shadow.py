@@ -15,9 +15,12 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from request_bytes_campaign import LOCAL_EXPECTATION
+from request_bytes_campaign import BASELINE_COMPARISON_FIELDS, LOCAL_EXPECTATION
 from request_bytes_run_fixture import (
+    EXPECTED_MESSAGE,
     TYPED_400,
+    TYPED_400_NO_MESSAGE,
+    TYPED_400_OTHER_MESSAGE,
     TYPED_413,
     UNTYPED_413,
     run_collector,
@@ -28,6 +31,7 @@ REFUSAL_400 = {
     "httpStatus": 400,
     "errorCode": 400,
     "errorStatus": "INVALID_ARGUMENT",
+    "message": "Request payload size exceeds the limit: 10485760 bytes.",
     "classification": "expected",
 }
 
@@ -254,3 +258,86 @@ def test_the_collector_records_the_untyped_body_verbatim(tmp_path) -> None:
     assert untyped["bodySha256"] == hashlib.sha256(raw).hexdigest()
     assert base64.b64decode(untyped["bodyBase64"]) == raw
     assert untyped["bodyTruncated"] is False
+
+
+# --- The refusal shape is compared field by field -----------------------------
+#
+# Each of these drives the real collector from a raw response body, so the
+# message travels the same path a production run would use: wire bytes, receipt,
+# collector `overRefusal`, classification.
+
+
+def test_round_trip_matching_message_is_the_baseline(tmp_path) -> None:
+    result = run_collector(tmp_path / "match", over=TYPED_400)
+    assert result["overRefusal"]["message"] == EXPECTED_MESSAGE
+    verdict = classify_local_result(result)
+    assert verdict["classification"] == "local-shape-matches-production-expectation"
+    assert verdict["matchesBaseline"] is True
+    assert verdict["refusalFieldMismatches"] == []
+
+
+def test_round_trip_different_wording_is_not_a_match(tmp_path) -> None:
+    """The reviewer's case: right status and code, someone else's message."""
+    result = run_collector(tmp_path / "other", over=TYPED_400_OTHER_MESSAGE)
+    assert result["overRefusal"]["httpStatus"] == 400
+    assert result["overRefusal"]["errorCode"] == 400
+    assert result["overRefusal"]["message"] == "The request is too large."
+    verdict = classify_local_result(result)
+    assert verdict["matchesBaseline"] is False
+    assert verdict["classification"] == "local-boundary-enforced-shape-differs"
+    assert [item["field"] for item in verdict["refusalFieldMismatches"]] == ["message"]
+    assert "message" in verdict["summary"]
+
+
+def test_round_trip_missing_message_is_not_a_match(tmp_path) -> None:
+    """The reviewer's other case: no message at all must not pass."""
+    result = run_collector(tmp_path / "none", over=TYPED_400_NO_MESSAGE)
+    assert result["overRefusal"]["message"] is None
+    verdict = classify_local_result(result)
+    assert verdict["matchesBaseline"] is False
+    assert verdict["classification"] == "local-boundary-enforced-shape-differs"
+    assert [item["field"] for item in verdict["refusalFieldMismatches"]] == ["message"]
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        pytest.param(TYPED_400_OTHER_MESSAGE, id="different-wording"),
+        pytest.param(TYPED_400_NO_MESSAGE, id="missing-message"),
+        pytest.param(TYPED_413, id="legacy-413"),
+    ],
+)
+def test_a_shape_difference_keeps_the_recording_and_recovery_facts(
+    tmp_path, over
+) -> None:
+    """Only matchesBaseline goes false; the run is still sound and recorded."""
+    result = run_collector(tmp_path / "differs", over=over)
+    verdict = classify_local_result(result)
+    gates = shadow_gates(result, verdict, source_bound=True)
+    assert verdict["matchesBaseline"] is False
+    assert result["resourceAbsence"] is True
+    assert result["cleanupComplete"] is True
+    assert gates == {"recordingComplete": True, "stateValidation": True}
+
+
+def test_the_recorded_message_is_bound_to_the_response_digest(tmp_path) -> None:
+    import hashlib
+    import json
+
+    result = run_collector(tmp_path / "bound", over=TYPED_400)
+    refusal = result["overRefusal"]
+    raw = json.dumps(TYPED_400["body"], separators=(",", ":")).encode()
+    assert refusal["responseSha256"] == hashlib.sha256(raw).hexdigest()
+    assert refusal["responseBytes"] == len(raw)
+    assert json.loads(raw)["error"]["message"] == refusal["message"]
+
+
+def test_every_declared_comparison_field_is_actually_compared() -> None:
+    """A field named in the contract but never compared is the original defect."""
+    from request_bytes_shadow import refusal_field_mismatches
+
+    expected = LOCAL_EXPECTATION["observedRefusal"]
+    for field in BASELINE_COMPARISON_FIELDS:
+        altered = {key: expected[key] for key in BASELINE_COMPARISON_FIELDS}
+        altered[field] = "definitely-not-the-expected-value"
+        assert [item["field"] for item in refusal_field_mismatches(altered)] == [field]

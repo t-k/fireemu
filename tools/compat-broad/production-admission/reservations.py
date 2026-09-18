@@ -158,14 +158,13 @@ def _receipt_kind(gate):
     return declared if isinstance(declared, str) and declared else DEFAULT_RECEIPT_KIND
 
 
-def _preflight_stop(receipt):
+def _preflight_stop(receipt, gate):
     """How many preflight slots a no-data attempt consumed, or None if it is not one.
 
     A slot is charged before its evidence is appended, so a stop at slot `n`
     leaves `n` observations when the request was sent and its baseline
     comparison failed, and `n - 1` when the transport itself failed.
     """
-    gate = receipt.get("gate")
     if not isinstance(gate, dict):
         return None
     head, preflight = _management(gate)
@@ -781,20 +780,37 @@ class Ledger:
         receipt = json.loads(raw)
         if digest(receipt) != record["receiptDigest"]:
             raise ValueError("receipt digest changed")
-        gate = receipt.get("gate")
-        if not _gate_plan_consistent(gate) or digest(gate) != record["gateDigest"]:
-            raise ValueError("receipt does not bind its own Gate")
-        if _no_data_gate(gate):
-            # The exits are disjoint by evidence, not merely by record shape.
-            raise ValueError("no-data evidence must use the no-data abort")
-        return receipt, gate
+        return receipt
 
-    def _terminal_row(self, state, ticket, gate, record, *, digest_key, final):
+    def _bound_gate(self, claim, record, receipt, *, terminal=None):
+        """The Gate this record binds, read from the reservation's registered path.
+
+        The Ledger reads the Gate itself rather than trusting the caller's copy.
+        That is strictly stronger, and it is also the only workable shape: a
+        campaign whose plan embeds its request bodies has a Gate far larger than
+        a bounded receipt can carry, so requiring the receipt to contain one
+        would make every terminal exit unreachable for it. A receipt that does
+        carry a copy must still agree with the record.
+        """
+        if str(Path(claim["gatePath"]).resolve()) != claim["gatePath"]:
+            raise ValueError("registered Gate path changed")
+        gate = Gate(claim["gatePath"], _gate_job(claim)).snapshot()
+        if not _gate_plan_consistent(gate) or (
+            digest(gate) != record["gateDigest"]
+            # A no-data abort stops the Gate, so a run resumed after a crash
+            # between the stop and this row's update finds it already terminal
+            # under this very record. Nothing else may differ.
+            and gate.get("noDataAbort") != terminal
+        ):
+            raise ValueError("registered Gate differs from the record")
+        embedded = receipt.get("gate")
+        if embedded is not None and digest(embedded) != record["gateDigest"]:
+            raise ValueError("receipt Gate differs from the record")
+        return gate
+
+    def _terminal_row(self, state, ticket, record, *, digest_key, final):
         """Shared checks for a terminal close: job, state, receipt and workers."""
         row = self._row(state, ticket)
-        claim = row["claim"]
-        if "gateJob" in claim and claim["gateJob"] not in gate.get("jobs", {}):
-            raise ValueError("registered Gate job is absent")
         if row["state"] == final:
             if row.get(digest_key) != digest(record):
                 raise ValueError(f"different terminal {final} record")
@@ -802,6 +818,18 @@ class Ledger:
         if row["state"] not in {"held", "closing"}:
             raise ValueError("reservation unavailable for a terminal close")
         return row
+
+    def _terminal_gate(self, row, ticket, receipt, record):
+        """Resolve and bind the Gate for a terminal close, inside the ledger lock."""
+        claim = row["claim"]
+        gate = self._bound_gate(claim, record, receipt)
+        if "gateJob" in claim and claim["gateJob"] not in gate.get("jobs", {}):
+            raise ValueError("registered Gate job is absent")
+        if _no_data_gate(gate):
+            # The exits are disjoint by evidence, not merely by record shape.
+            raise ValueError("no-data evidence must use the no-data abort")
+        self._terminal_binding(row, ticket, receipt, gate, claim)
+        return gate
 
     def _terminal_binding(self, row, ticket, receipt, gate, claim):
         if (
@@ -823,10 +851,6 @@ class Ledger:
             except ProcessLookupError:
                 continue
             raise ValueError("worker exit not proven")
-        if str(Path(claim["gatePath"]).resolve()) != claim["gatePath"]:
-            raise ValueError("registered Gate path changed")
-        if digest(Gate(claim["gatePath"], _gate_job(claim)).snapshot()) != digest(gate):
-            raise ValueError("registered Gate moved since the receipt")
 
     def close_after_abandon(self, ticket, record):
         """Retire a run that stopped early and then deleted everything it created.
@@ -840,23 +864,22 @@ class Ledger:
         owner-attested escalation exit, and a run that proved no creation belongs
         to the no-data abort, so the three are disjoint by evidence.
         """
-        receipt, gate = self._terminal_receipt(
+        receipt = self._terminal_receipt(
             ticket, record, ABANDON_FIELDS, ABANDON_KIND, "abandoned cleanup close"
         )
-        if abandoned_cleanup_complete(gate) is None:
-            raise ValueError("a complete abandoned cleanup is required")
         with self._locked() as state:
             row = self._terminal_row(
                 state,
                 ticket,
-                gate,
                 record,
                 digest_key="abandonRecordDigest",
                 final="closed-after-abandon",
             )
             if row is None:
                 return
-            self._terminal_binding(row, ticket, receipt, gate, row["claim"])
+            gate = self._terminal_gate(row, ticket, receipt, record)
+            if abandoned_cleanup_complete(gate) is None:
+                raise ValueError("a complete abandoned cleanup is required")
             row["state"] = "closed-after-abandon"
             row["abandonRecordDigest"] = digest(record)
             row["finalGateDigest"] = record["gateDigest"]
@@ -877,37 +900,40 @@ class Ledger:
         can be mistaken for the other, and this transition never asserts that
         nothing was written, only that nothing remains.
         """
-        receipt, gate = self._terminal_receipt(
+        receipt = self._terminal_receipt(
             ticket, record, ESCALATION_FIELDS, ESCALATION_KIND, "escalation close"
         )
-        if abandoned_cleanup_complete(gate) is not None:
-            raise ValueError("a recoverable stop must use the abandoned cleanup close")
-        owned = _owned_resources(gate)
-        absence = record["absence"]
-        if (
-            owned is None
-            or not isinstance(absence, dict)
-            or sorted(absence) != owned
-            or any(
-                not isinstance(proof, dict)
-                or set(proof) != {"status", "body"}
-                or not typed_absence(proof["status"], proof["body"])
-                for proof in absence.values()
-            )
-        ):
-            raise ValueError("every owned resource must be proven absent")
         decision_now = time.time()
         with self._locked() as state:
-            row = self._row(state, ticket)
-            claim = row["claim"]
-            if "gateJob" in claim and claim["gateJob"] not in gate.get("jobs", {}):
-                raise ValueError("registered Gate job is absent")
-            if row["state"] == "closed-after-escalation":
-                if row.get("escalationRecordDigest") != digest(record):
-                    raise ValueError("different terminal escalation record")
+            row = self._terminal_row(
+                state,
+                ticket,
+                record,
+                digest_key="escalationRecordDigest",
+                final="closed-after-escalation",
+            )
+            if row is None:
                 return
-            if row["state"] not in {"held", "closing"}:
-                raise ValueError("reservation unavailable for escalation close")
+            claim = row["claim"]
+            gate = self._terminal_gate(row, ticket, receipt, record)
+            if abandoned_cleanup_complete(gate) is not None:
+                raise ValueError(
+                    "a recoverable stop must use the abandoned cleanup close"
+                )
+            owned = _owned_resources(gate)
+            absence = record["absence"]
+            if (
+                owned is None
+                or not isinstance(absence, dict)
+                or sorted(absence) != owned
+                or any(
+                    not isinstance(proof, dict)
+                    or set(proof) != {"status", "body"}
+                    or not typed_absence(proof["status"], proof["body"])
+                    for proof in absence.values()
+                )
+            ):
+                raise ValueError("every owned resource must be proven absent")
             self._attestation(
                 record["attestation"],
                 ticket=ticket,
@@ -916,32 +942,6 @@ class Ledger:
                 owned=owned,
                 now=decision_now,
             )
-            if (
-                receipt.get("ticket") != ticket
-                or receipt.get("claimDigest") != row["claimDigest"]
-                or receipt.get("planDigest") != claim["gatePlanDigest"]
-                or gate.get("planDigest") != claim["gatePlanDigest"]
-                or receipt.get("reservationStateAtPublication") != "held"
-                or receipt.get("releaseEligible") is not False
-            ):
-                raise ValueError("receipt does not bind this held reservation")
-            for pid in [gate.get("coordinatorPid")] + [
-                job.get("pid") for job in gate["jobs"].values()
-            ]:
-                if type(pid) is not int or pid <= 0:
-                    raise ValueError("recorded worker identity required")
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
-                    continue
-                raise ValueError("worker exit not proven")
-            if str(Path(claim["gatePath"]).resolve()) != claim["gatePath"]:
-                raise ValueError("registered Gate path changed")
-            if (
-                digest(Gate(claim["gatePath"], _gate_job(claim)).snapshot())
-                != record["gateDigest"]
-            ):
-                raise ValueError("registered Gate moved since the receipt")
             row["state"] = "closed-after-escalation"
             row["escalationRecordDigest"] = digest(record)
             row["finalGateDigest"] = record["gateDigest"]
@@ -1020,18 +1020,28 @@ class Ledger:
             ):
                 raise ValueError("reservation unavailable for no-data abort")
             claim = row["claim"]
-            gate_snapshot = receipt.get("gate")
-            if "gateJob" in claim and claim["gateJob"] not in (
-                gate_snapshot.get("jobs", {}) if isinstance(gate_snapshot, dict) else {}
+            # Read the Gate from the reservation's own registered path rather
+            # than from the receipt's copy: stronger, and the only shape that
+            # works for a campaign whose Gate is larger than a bounded receipt.
+            gate_snapshot = self._bound_gate(
+                claim,
+                record,
+                receipt,
+                terminal={
+                    "preGateDigest": record["gateDigest"],
+                    "recordDigest": digest(record),
+                },
+            )
+            if "gateJob" in claim and claim["gateJob"] not in gate_snapshot.get(
+                "jobs", {}
             ):
                 # The same check `finish` makes: a claim naming a job the Gate
                 # never hosted is a binding error, not a retirement.
                 raise ValueError("registered Gate job is absent")
             if (
                 record["planDigest"] != claim["gatePlanDigest"]
-                or not _gate_plan_consistent(receipt.get("gate"))
-                or receipt["gate"].get("planDigest") != claim["gatePlanDigest"]
-                or receipt.get("kind") != _receipt_kind(receipt.get("gate"))
+                or gate_snapshot.get("planDigest") != claim["gatePlanDigest"]
+                or receipt.get("kind") != _receipt_kind(gate_snapshot)
                 or receipt.get("ticket") != ticket
                 or receipt.get("claimDigest") != row["claimDigest"]
                 or receipt.get("planDigest") != record["planDigest"]
@@ -1042,9 +1052,9 @@ class Ledger:
                 or receipt.get("releaseEligible") is not False
                 or not isinstance(receipt.get("failure"), str)
                 or not receipt["failure"]
-                or receipt.get("chargedCalls") != receipt.get("gate", {}).get("total")
+                or receipt.get("chargedCalls") != gate_snapshot.get("total")
                 or [item.get("slot") for item in receipt.get("credentialEvidence", [])]
-                != _credential_slots(receipt.get("gate"))
+                != _credential_slots(gate_snapshot)
                 or any(
                     item.get("workerReaped") is not True
                     or item.get("complete") is not True
@@ -1052,13 +1062,12 @@ class Ledger:
                     or item.get("status") != 200
                     for item in receipt["credentialEvidence"]
                 )
-                or _preflight_stop(receipt) is None
+                or _preflight_stop(receipt, gate_snapshot) is None
                 or any(item.get("status") != 200 for item in receipt["metadata"])
-                or not _no_data_gate(receipt["gate"])
-                or digest(receipt.get("gate")) != record["gateDigest"]
-                or receipt["gate"]["total"] > claim["budget"]["requests"]
-                or receipt["gate"]["costMicrousd"] > claim["budget"]["costMicrousd"]
-                or receipt["gate"]["plan"].get("collectorSourceDigest")
+                or not _no_data_gate(gate_snapshot)
+                or gate_snapshot["total"] > claim["budget"]["requests"]
+                or gate_snapshot["costMicrousd"] > claim["budget"]["costMicrousd"]
+                or gate_snapshot["plan"].get("collectorSourceDigest")
                 != record["collectorSourceDigest"]
                 or (
                     receipt.get("generation") is not None
@@ -1075,7 +1084,7 @@ class Ledger:
         stopped = gate.abort_no_data(
             record["planDigest"], record["gateDigest"], digest(record)
         )
-        expected = copy.deepcopy(receipt["gate"])
+        expected = copy.deepcopy(gate_snapshot)
         expected["stopped"] = True
         for job in expected["jobs"].values():
             job["stopped"] = True

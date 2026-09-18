@@ -291,6 +291,49 @@ def _observation_time(plan, seconds):
     return total
 
 
+def creating_slots(plan, job_name):
+    """The observation slots of a job that its plan says could write."""
+    schedule = job_schedule(plan["jobs"][job_name])
+    if schedule is None:
+        return None
+    return {
+        entry["index"]
+        for entry in schedule
+        if entry["phase"] == "observation" and entry.get("creates", True) is not False
+    }
+
+
+def creating_outcome(state, job_name):
+    """How this job's creating requests ended, read from the journal.
+
+    `"none"` when none was dispatched, `"refused"` when every one that was
+    dispatched answered with a typed refusal, and `"unsettled"` otherwise, which
+    covers a successful create and, importantly, a request whose answer was
+    lost. The classification is by `completed` and status, never by whether a
+    creation proof came back: no proof is also what a lost answer looks like.
+    """
+    indices = creating_slots(state["plan"], job_name)
+    if not indices:
+        return "unsettled" if indices is None else "none"
+    seen = 0
+    for event in state["events"]:
+        if (
+            event.get("job") != job_name
+            or event.get("phase") != "observation"
+            or event.get("index") not in indices
+        ):
+            continue
+        seen += 1
+        status = event.get("status")
+        if (
+            event.get("completed") is not True
+            or type(status) is not int
+            or 200 <= status < 300
+        ):
+            return "unsettled"
+    return "refused" if seen else "none"
+
+
 def abandoned_cleanup_complete(state):
     """The documents an abandoned run created, when every one is proven absent.
 
@@ -417,6 +460,7 @@ def create(path, plan):
         or any(not _valid_schedule(job) for job in jobs.values())
         or not _ceiling_honoured(plan, seconds)
         or not _within_published(plan)
+        or not _nonce_scoped(plan)
         or _observation_time(plan, seconds)
         > plan["wallSeconds"] - plan["recoverySeconds"]
         or len(resources) != len(set(resources))
@@ -484,9 +528,17 @@ def create(path, plan):
 
 
 MARKER_BINDINGS = ("resource-name", "nonce")
-STOP_SKIP_REASON = "no-creation-proof-after-stop"
+# Why a slot was consumed without a wire call. Each names a fact from the
+# journal, never the absence of a creation proof: "no proof" is also what a lost
+# answer looks like, and that one must never be skippable.
+NEVER_DISPATCHED_REASON = "creating-slot-never-dispatched"
+REFUSED_CREATE_REASON = "skipped-refused-create"
 ZERO_WIRE_REASON = "no-creation-proof"
-GATE_SKIP_REASONS = (STOP_SKIP_REASON, ZERO_WIRE_REASON)
+GATE_SKIP_REASONS = (
+    NEVER_DISPATCHED_REASON,
+    REFUSED_CREATE_REASON,
+    ZERO_WIRE_REASON,
+)
 MAX_STOP_REASON = 128
 
 
@@ -546,6 +598,25 @@ def ownership_marker(plan):
             return "_sharedOwner", "resource-name"
         return None
     return declared["field"], declared["binding"]
+
+
+def _nonce_scoped(plan):
+    """Every assigned resource must carry the nonce that the marker binds to.
+
+    The nonce binding proves a document came from this campaign, not that it is
+    the document the request named. It is adequate only because the resource is
+    also under the nonce-scoped path, so that part is checked rather than
+    assumed.
+    """
+    marker = ownership_marker(plan)
+    if marker is None or marker[1] != "nonce":
+        return True
+    segment = "/" + plan["nonce"] + "/"
+    return all(
+        isinstance(name, str) and segment in "/" + name + "/"
+        for job in plan["jobs"].values()
+        for name in job["resources"]
+    )
 
 
 def _valid_marker(plan):
@@ -1011,13 +1082,28 @@ class Gate:
                     self._validate_cleanup_ownership(
                         operation, recovery, resource, source, job
                     )
+            skip_reason = None
             if (
                 recovery
                 and schedule is not None
-                and job.get("stopReason") is not None
                 and not job.get("unconfirmedCreates", 0)
                 and resource not in job.get("creationProofs", {})
             ):
+                outcome = creating_outcome(state, self.job)
+                if job.get("stopReason") is not None and outcome != "unsettled":
+                    # The run is over, so no slot of an uncreated resource is
+                    # worth a request.
+                    skip_reason = (
+                        NEVER_DISPATCHED_REASON
+                        if outcome == "none"
+                        else REFUSED_CREATE_REASON
+                    )
+                elif outcome == "refused" and source is not None:
+                    # The normal path: the create was refused, so this delete has
+                    # no version to bind and nothing to remove. The readbacks
+                    # around it still run, because absence is what they prove.
+                    skip_reason = REFUSED_CREATE_REASON
+            if skip_reason is not None:
                 # Nothing was created here, so there is nothing to clean and no
                 # request to spend; the slot is consumed so the next one is
                 # reachable.
@@ -1029,10 +1115,10 @@ class Gate:
                 job[phase] += 1
                 state["reservedRecovery"] -= 1
                 state.setdefault("skips", []).append(
-                    {"job": self.job, "index": index, "reason": STOP_SKIP_REASON}
+                    {"job": self.job, "index": index, "reason": skip_reason}
                 )
                 _save(self.path, state)
-                return (None, {"skipped": STOP_SKIP_REASON})
+                return (None, {"skipped": skip_reason})
             if recovery and schedule is None:
                 # Without a declared schedule, recovery is a one-way transition.
                 # A scheduled campaign returns to observation by its own order,

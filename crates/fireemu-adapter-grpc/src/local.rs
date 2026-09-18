@@ -2836,6 +2836,23 @@ impl LocalBackend {
         ))
     }
 
+    /// When this backend's databases came into being: the `createTime` and `updateTime` the
+    /// Admin inventory reports, and the floor of its `earliestVersionTime`.
+    #[must_use]
+    pub const fn created_at(&self) -> fireemu_core_types::time::LogicalInstant {
+        self.created_at
+    }
+
+    /// The databases the configuration declared, which exist in every project whether or not
+    /// a request has touched them. `(default)` is not among them and always exists.
+    #[must_use]
+    pub fn declared_databases(&self) -> BTreeSet<String> {
+        self.declared_databases
+            .read()
+            .map(|declared| declared.clone())
+            .unwrap_or_default()
+    }
+
     /// Returns the attached database catalog without creating entries or touching database
     /// state. The adapter uses this for the read-only Admin inventory surface.
     pub fn database_catalog(&self) -> Result<Vec<DatabaseCatalogEntry>, Status> {

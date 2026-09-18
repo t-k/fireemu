@@ -89,7 +89,7 @@ pub fn base64_decode(text: &str) -> Result<Vec<u8>, JsonError> {
 
 /// RFC 3339 with the protobuf JSON fraction: none, three, six or nine digits, whichever
 /// is the shortest exact rendering.
-fn timestamp_to_json(t: &prost_types::Timestamp) -> Value {
+pub(crate) fn timestamp_to_json(t: &prost_types::Timestamp) -> Value {
     let full = decode_instant(t)
         .to_rfc3339()
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned());

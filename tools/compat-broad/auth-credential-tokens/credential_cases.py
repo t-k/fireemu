@@ -41,7 +41,17 @@ ASSERTION_NAMES = (
     "developerClaimPresent",
     "sessionClaimWinsOverAccountClaim",
     "accountOnlyClaimPresent",
+    "boundaryPinnedFromServerValues",
 )
+
+#: Groups whose ID token comes from a custom-token sign-in. In production a custom token
+#: must be RS256-signed by a service account, so every case in these groups is blocked
+#: until an owner supplies signing access. The session-cookie group is included because
+#: it derives its cookie from the custom-token session.
+SIGNING_DEPENDENT_GROUPS = ("session-cookie", "custom-token", "claim-precedence")
+
+#: Stated here so the doc and the owner preconditions cannot drift from the list.
+SIGNING_DEPENDENT_CASE_COUNT = 11
 
 _SESSION_V2 = "docs/compatibility/auth-session-v2.md"
 _SESSION_TOKEN = "docs/compatibility/auth-session-token.md"
@@ -79,6 +89,7 @@ def _case(
         "production": "UNOBSERVED",
         "nondeterminism": nondeterminism,
         "coveredElsewhere": list(covered_elsewhere),
+        "requiresSigning": group in SIGNING_DEPENDENT_GROUPS,
     }
     if boundary_controls is not None:
         case["boundaryControls"] = dict(boundary_controls)
@@ -146,7 +157,7 @@ def observation_cases() -> list[dict[str, Any]]:
             "observation",
             "identity.accounts-lookup",
             "An ID token whose auth_time equals the recorded validSince whole second.",
-            _accepted("acceptedResponse", "authTimePreserved"),
+            _accepted("acceptedResponse", "boundaryPinnedFromServerValues"),
             inputs={"authTimeMinusValidSinceSeconds": 0},
             nondeterminism="SAME_SECOND_BOUNDARY",
             boundary_controls={

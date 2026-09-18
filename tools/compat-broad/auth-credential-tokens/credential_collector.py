@@ -18,6 +18,7 @@ import binascii
 import hashlib
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from credential_cases import observation_cases
@@ -61,6 +62,17 @@ NON_SECRET_KEY_NAMES = ("assertions",)
 
 RECEIPT_SIDES = ("local", "production")
 
+#: Modules whose bytes every receipt binds. The comparison contract requires both sides
+#: to have been recorded by the same collector, so this binding is what makes a pair
+#: comparable at all.
+BOUND_MODULES = (
+    "credential_cases.py",
+    "credential_collector.py",
+    "credential_comparator.py",
+    "credential_plan.py",
+    "credential_shadow.py",
+)
+
 
 class SecretLeak(Exception):
     """Credential material reached a place that is logged or published."""
@@ -76,6 +88,10 @@ class BudgetExceeded(Exception):
 def is_secret_key(key: str) -> bool:
     """Whether a record member holds credential material, judged by its name."""
     if key in NON_SECRET_KEY_NAMES:
+        return False
+    if key.endswith(".py"):
+        # A source file name keyed to its digest, as in a collector binding. A file name
+        # is not a credential holder, however much of one its name reads like.
         return False
     lowered = key.replace("-", "").replace("_", "").lower()
     return any(
@@ -216,14 +232,19 @@ def owned_email(tracker: dict[str, Any], index: int) -> str:
     return f"fireemu-cred-{tracker['nonce'][:8]}-{index}@{OWNED_EMAIL_DOMAIN}"
 
 
-def track_account(tracker: dict[str, Any], uid: str, email: str) -> None:
-    """Record an account this run created, before it can be used."""
-    if tracker["nonce"][:8] not in email:
+def track_account(tracker: dict[str, Any], uid: str, email: str | None) -> None:
+    """Record an account this run created, before it can be used.
+
+    A custom-token sign-in creates an account with no address. Passing `None` records
+    that honestly, so cleanup never claims an address readback that could not happen.
+    """
+    if email is not None and tracker["nonce"][:8] not in email:
         raise ValueError("an owned account must carry the run nonce prefix")
     tracker["accounts"][uid] = {
         "email": email,
         "uidAbsent": False,
         "emailAbsent": False,
+        "addressReadback": email is not None,
     }
 
 
@@ -241,11 +262,19 @@ def cleanup_report(tracker: dict[str, Any]) -> dict[str, Any]:
 
     Deletion alone is not cleanup: both the UID and the address must read back absent.
     """
-    accounts = tracker["accounts"].values()
-    remaining = [a for a in accounts if not (a["uidAbsent"] and a["emailAbsent"])]
+    accounts = list(tracker["accounts"].values())
+    remaining = [
+        a
+        for a in accounts
+        if not (a["uidAbsent"] and (a["emailAbsent"] or not a["addressReadback"]))
+    ]
     return {
-        "ownedAccounts": len(tracker["accounts"]),
+        "ownedAccounts": len(accounts),
         "remainingAccounts": len(remaining),
+        # Only accounts that actually had an address can contribute a readback.
+        "addressReadbacks": sum(
+            1 for a in accounts if a["addressReadback"] and a["emailAbsent"]
+        ),
         "cleanupComplete": not remaining,
     }
 
@@ -281,6 +310,33 @@ def charge_request(budget: dict[str, Any], elapsed_seconds: float) -> None:
         raise BudgetExceeded("wall-clock budget exhausted")
 
 
+# --- collector binding ---------------------------------------------------------------
+
+
+def module_digests() -> dict[str, str]:
+    """Digest each bound module, so a later edit cannot be read back onto a receipt."""
+    here = Path(__file__).parent
+    return {
+        name: hashlib.sha256((here / name).read_bytes()).hexdigest()
+        if (here / name).is_file()
+        else "ABSENT"
+        for name in BOUND_MODULES
+    }
+
+
+def collector_binding(commit: str | None = None) -> dict[str, Any]:
+    """Bind the collector that recorded a receipt.
+
+    The commit is what the operator says the checkout was; nothing here verifies it.
+    The module digests are computed from the bytes actually running.
+    """
+    return {
+        "commit": commit,
+        "commitStatus": "operator-asserted; not verified by this run",
+        "modules": module_digests(),
+    }
+
+
 # --- receipt -----------------------------------------------------------------------
 
 
@@ -309,6 +365,8 @@ def build_receipt(
         "sourceBinding": dict(
             source_binding or {"commit": None, "artifactSha256": None}
         ),
+        # The comparison contract requires both sides to name the same collector.
+        "collectorBinding": collector_binding((source_binding or {}).get("commit")),
         "budget": dict(budget),
         "cleanup": cleanup,
         "rows": publishable(rows),

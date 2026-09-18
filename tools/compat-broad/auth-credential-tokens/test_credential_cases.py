@@ -15,6 +15,7 @@ from credential_cases import (
     CASE_GROUPS,
     CASE_KINDS,
     SAME_SECOND_CASE_ID,
+    SIGNING_DEPENDENT_CASE_COUNT,
     case_by_id,
     observation_cases,
 )
@@ -146,3 +147,32 @@ def test_unknown_case_identifier_fails_closed() -> None:
     except KeyError:
         return
     raise AssertionError("unknown case id must raise")
+
+
+def test_every_case_declares_whether_it_depends_on_production_token_signing() -> None:
+    for case in observation_cases():
+        assert type(case["requiresSigning"]) is bool, case["id"]
+
+
+def test_the_signing_dependent_set_is_exactly_the_groups_built_on_a_custom_token() -> (
+    None
+):
+    dependent = {case["id"] for case in observation_cases() if case["requiresSigning"]}
+    # The session-cookie group derives its ID token from the custom-token session, so it
+    # cannot run without production RS256 signing either.
+    expected_groups = {"session-cookie", "custom-token", "claim-precedence"}
+    assert dependent == {
+        case["id"] for case in observation_cases() if case["group"] in expected_groups
+    }
+    assert len(dependent) == SIGNING_DEPENDENT_CASE_COUNT == 11
+    assert len(observation_cases()) - len(dependent) == 6
+
+
+def test_the_boundary_row_asserts_pinning_rather_than_a_timestamp_comparison() -> None:
+    boundary = case_by_id(SAME_SECOND_CASE_ID)
+    assert boundary["expectedLocal"]["assertions"] == [
+        "acceptedResponse",
+        "boundaryPinnedFromServerValues",
+    ]
+    assert "authTimePreserved" not in boundary["expectedLocal"]["assertions"]
+    assert "boundaryPinnedFromServerValues" in ASSERTION_NAMES

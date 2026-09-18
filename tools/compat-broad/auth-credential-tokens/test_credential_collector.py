@@ -101,6 +101,19 @@ def test_a_member_that_merely_contains_a_secret_fragment_survives() -> None:
     assert "RAW_SAML_BLOB" not in json.dumps(published)
 
 
+def test_a_source_file_name_keyed_to_its_digest_is_not_treated_as_a_secret() -> None:
+    published = collector.publishable(
+        {
+            "modules": {
+                "credential_collector.py": "a" * 64,
+                "credential_cases.py": "b" * 64,
+            }
+        }
+    )
+    assert published["modules"]["credential_collector.py"] == "a" * 64
+    assert published["modules"]["credential_cases.py"] == "b" * 64
+
+
 def test_absent_and_null_secrets_are_distinguishable_from_present_ones() -> None:
     assert collector.publishable({"idToken": None})["idToken"] == {
         "present": False,
@@ -319,3 +332,60 @@ def test_receipt_side_must_be_declared() -> None:
             tracker=tracker,
             budget=collector.new_budget(60, 600, 0.05),
         )
+
+
+def test_receipt_binds_the_collector_bytes_so_a_pair_can_be_compared() -> None:
+    tracker = collector.new_tracker("a" * 32)
+    collector.track_account(tracker, "uid-1", collector.owned_email(tracker, 0))
+    collector.mark_deleted(tracker, "uid-1", uid_absent=True, email_absent=True)
+    rows = [
+        {"caseId": case["id"], "status": 200, "errorCode": None, "assertions": {}}
+        for case in observation_cases()
+    ]
+    receipt = collector.build_receipt(
+        side="local",
+        rows=rows,
+        tracker=tracker,
+        budget=collector.new_budget(60, 600, 0.05),
+    )
+    binding = receipt["collectorBinding"]
+    assert set(binding["modules"]) == set(collector.BOUND_MODULES)
+    assert "ABSENT" not in binding["modules"].values()
+    assert all(len(digest) == 64 for digest in binding["modules"].values())
+    assert binding["commit"] is None
+    assert binding["commitStatus"] == "operator-asserted; not verified by this run"
+
+
+def test_collector_binding_changes_when_a_bound_module_changes() -> None:
+    first = collector.collector_binding()
+    assert first == collector.collector_binding()
+    assert collector.collector_binding(commit="b" * 40)["commit"] == "b" * 40
+    assert first["modules"] != {name: "0" * 64 for name in collector.BOUND_MODULES}
+
+
+def test_an_account_without_an_address_is_not_credited_with_an_address_readback() -> (
+    None
+):
+    tracker = collector.new_tracker("c" * 32)
+    collector.track_account(tracker, "uid-custom", None)
+    assert collector.cleanup_report(tracker)["addressReadbacks"] == 0
+    collector.mark_deleted(tracker, "uid-custom", uid_absent=True, email_absent=True)
+    report = collector.cleanup_report(tracker)
+    # The account never had an address, so no address readback is claimed for it.
+    assert report["addressReadbacks"] == 0
+    assert report["ownedAccounts"] == 1
+    assert report["cleanupComplete"] is True
+
+    with_address = collector.new_tracker("d" * 32)
+    collector.track_account(
+        with_address, "uid-1", collector.owned_email(with_address, 0)
+    )
+    collector.mark_deleted(with_address, "uid-1", uid_absent=True, email_absent=True)
+    assert collector.cleanup_report(with_address)["addressReadbacks"] == 1
+
+
+def test_an_addressless_account_still_needs_its_uid_to_read_back_absent() -> None:
+    tracker = collector.new_tracker("e" * 32)
+    collector.track_account(tracker, "uid-custom", None)
+    collector.mark_deleted(tracker, "uid-custom", uid_absent=False, email_absent=True)
+    assert collector.cleanup_report(tracker)["cleanupComplete"] is False

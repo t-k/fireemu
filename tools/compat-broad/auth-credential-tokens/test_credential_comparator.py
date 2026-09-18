@@ -13,9 +13,17 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 from credential_cases import SAME_SECOND_CASE_ID, case_by_id, observation_cases
+from credential_collector import (
+    build_receipt,
+    mark_deleted,
+    new_budget,
+    new_tracker,
+    owned_email,
+    track_account,
+)
 from credential_comparator import CONTRACT, DIAGNOSTIC_MEMBERS, compare
 
-COLLECTOR_BINDING = {"commit": "a" * 40, "collectorSha256": "b" * 64}
+SOURCE_BINDING = {"commit": "a" * 40, "artifactSha256": "b" * 64}
 
 
 def _row(case: dict) -> dict:
@@ -32,25 +40,36 @@ def _row(case: dict) -> dict:
     return row
 
 
+def _cleaned_tracker(seed: str) -> dict:
+    tracker = new_tracker(seed * 32)
+    for index, uid in enumerate(("uid-1", "uid-2")):
+        track_account(tracker, uid, owned_email(tracker, index))
+        mark_deleted(tracker, uid, uid_absent=True, email_absent=True)
+    return tracker
+
+
 def _receipt(side: str, *, production_executed: bool | None = None) -> dict:
+    """Build a receipt the way a real run does, through the collector itself.
+
+    Hand-built receipt literals hid a defect once: the comparator required a member the
+    collector never wrote, so no real pair could be compared. Going through
+    `build_receipt` keeps the two sides of that seam honest.
+    """
     rows = [_row(case) for case in observation_cases()]
     if side == "production":
         for row in rows:
             row["trustRoot"] = "signed"
-    return {
-        "side": side,
-        "productionExecuted": side == "production"
-        if production_executed is None
-        else production_executed,
-        "recordingComplete": True,
-        "collectorBinding": dict(COLLECTOR_BINDING),
-        "cleanup": {
-            "ownedAccounts": 2,
-            "remainingAccounts": 0,
-            "cleanupComplete": True,
-        },
-        "rows": rows,
-    }
+    executed = (
+        side == "production" if production_executed is None else production_executed
+    )
+    return build_receipt(
+        side=side,
+        rows=rows,
+        tracker=_cleaned_tracker("a"),
+        budget=new_budget(60, 600, 0.05),
+        source_binding=dict(SOURCE_BINDING),
+        production_executed=executed,
+    )
 
 
 def _classifications(report: dict) -> dict[str, str]:
@@ -219,3 +238,18 @@ def test_absolute_server_times_are_retained_but_never_compared() -> None:
     report = compare(local, production)
     assert report["summary"]["different"] == 0
     assert set(DIAGNOSTIC_MEMBERS) == {"diagnostics", "boundarySeconds"}
+
+
+def test_a_collector_built_pair_is_comparable_end_to_end() -> None:
+    local, production = _receipt("local"), _receipt("production")
+    assert "collectorBinding" in local and "collectorBinding" in production
+    report = compare(local, production)
+    assert report["reason"] == "classified"
+    assert report["productionCompared"] is True
+    assert report["summary"]["indeterminate"] == 0
+
+
+def test_a_receipt_from_a_different_collector_build_is_refused() -> None:
+    local, production = _receipt("local"), _receipt("production")
+    production["collectorBinding"]["modules"]["credential_cases.py"] = "0" * 64
+    assert compare(local, production)["reason"] == "collector-binding-mismatch"

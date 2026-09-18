@@ -1,0 +1,623 @@
+{
+  "campaignId": "AUTH-MFA-AGE-TOTP-01",
+  "disagreements": [],
+  "expectations": [
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "baseline-fresh-finalize",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-300s-start",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-300s-finalize",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-300s-same-account-fresh-control",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-450s-start",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-450s-finalize",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-450s-same-account-fresh-control",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-600s-start",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-600s-finalize",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-600s-same-account-fresh-control",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "final-fresh-finalize",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "totp-enroll-start",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "INVALID_CODE",
+        "status": 400
+      },
+      "id": "totp-enroll-wrong-code",
+      "observed": {
+        "errorCode": "INVALID_CODE",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "totp-enroll-retry-same-session",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "INVALID_SESSION_INFO",
+        "status": 400
+      },
+      "id": "totp-enroll-replay-finalized-session",
+      "observed": {
+        "errorCode": "INVALID_SESSION_INFO",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "totp-enroll-factor-readback",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "INVALID_ARGUMENT",
+        "status": 400
+      },
+      "id": "totp-signin-start",
+      "observed": {
+        "errorCode": "INVALID_ARGUMENT",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "totp-signin-finalize",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "INVALID_CODE",
+        "status": 400
+      },
+      "id": "totp-signin-replay-same-code",
+      "observed": {
+        "errorCode": "INVALID_CODE",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "totp-withdraw",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "totp-withdraw-readback",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "MFA_ENROLLMENT_NOT_FOUND",
+        "status": 400
+      },
+      "id": "totp-withdraw-unknown",
+      "observed": {
+        "errorCode": "MFA_ENROLLMENT_NOT_FOUND",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "SESSION_EXPIRED",
+        "status": 400
+      },
+      "id": "totp-enroll-session-age-300s",
+      "observed": {
+        "errorCode": "SESSION_EXPIRED",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "SESSION_EXPIRED",
+        "status": 400
+      },
+      "id": "totp-enroll-session-age-450s",
+      "observed": {
+        "errorCode": "SESSION_EXPIRED",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "INVALID_SESSION_INFO",
+        "status": 400
+      },
+      "id": "totp-enroll-session-age-600s",
+      "observed": {
+        "errorCode": "INVALID_SESSION_INFO",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "UNVERIFIED_EMAIL",
+        "status": 400
+      },
+      "id": "unverified-email-enroll-refusal",
+      "observed": {
+        "errorCode": "UNVERIFIED_EMAIL",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "UNSUPPORTED_FIRST_FACTOR",
+        "status": 400
+      },
+      "id": "ineligible-first-factor-refusal",
+      "observed": {
+        "errorCode": "UNSUPPORTED_FIRST_FACTOR",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "INVALID_ID_TOKEN",
+        "status": 400
+      },
+      "id": "missing-id-token-refusal",
+      "observed": {
+        "errorCode": "INVALID_ID_TOKEN",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "SECOND_FACTOR_EXISTS",
+        "status": 400
+      },
+      "id": "second-factor-limit",
+      "observed": {
+        "errorCode": "SECOND_FACTOR_EXISTS",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "project-mfa-config-readback",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    }
+  ],
+  "productionExecuted": false,
+  "provenance": {
+    "digest": "04ed5373f061039d9e6a1b2e8c68400c3749845156e3e9b1867597b1ae36f744",
+    "evidence": "recomputed-from-worktree",
+    "paths": {
+      "tools/compat-broad/auth-totp-enroll/mfa_cases.py": "ca6b7410b845bc66b3880fd9f062d23e7ca11777e026151463f41431ee260aa0",
+      "tools/compat-broad/auth-totp-enroll/mfa_collector.py": "52d8368915ffea792fe7c6524998ee520b30fa5ba72aa751acd0b9431968fcf5",
+      "tools/compat-broad/auth-totp-enroll/mfa_comparator.py": "172fa161250e8d41c5968d246c27cef80c5d873441a1139055d0adecc4c0e06f",
+      "tools/compat-broad/auth-totp-enroll/mfa_manifest.py": "1800a76b23aa40f5a0a93657c6ac4620f2cdfd432bf2338ca1c94234b49f4197",
+      "tools/compat-broad/auth-totp-enroll/mfa_provenance.py": "04292963b9230e20673219df63ce538310641e8f32f41d7733596261edcdd0d8",
+      "tools/compat-broad/auth-totp-enroll/mfa_totp.py": "5234a025828018fd0917a5ad3ea8ee7472a9d5f4a8d616d7156731469c401261",
+      "tools/compat-inventory/pyproject.toml": "2cd843edbfa0d2603121113cadd8c02a825c48dd11c95e54edb243507128d6a7",
+      "tools/compat-inventory/uv.lock": "0a2374a0081466d557ee5d4fdc14f99f00b1b8aacf983705d80ade5246f8ed55"
+    },
+    "schema": "o2-mfa-provenance-v1"
+  },
+  "recordingComplete": true,
+  "recovery": {
+    "cleanupVerified": true,
+    "configurationRestored": true,
+    "ownedAccounts": 10,
+    "remainingOwnedResources": 0
+  },
+  "rows": [
+    {
+      "errorCode": null,
+      "id": "baseline-fresh-finalize",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-300s-start",
+      "outcome": "observed",
+      "pendingAgeSeconds": 300.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-300s-finalize",
+      "outcome": "observed",
+      "pendingAgeSeconds": 300.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-300s-same-account-fresh-control",
+      "outcome": "observed",
+      "pendingAgeSeconds": 0.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-450s-start",
+      "outcome": "observed",
+      "pendingAgeSeconds": 450.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-450s-finalize",
+      "outcome": "observed",
+      "pendingAgeSeconds": 450.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-450s-same-account-fresh-control",
+      "outcome": "observed",
+      "pendingAgeSeconds": 0.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-600s-start",
+      "outcome": "observed",
+      "pendingAgeSeconds": 600.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-600s-finalize",
+      "outcome": "observed",
+      "pendingAgeSeconds": 600.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-600s-same-account-fresh-control",
+      "outcome": "observed",
+      "pendingAgeSeconds": 0.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "final-fresh-finalize",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "totp-enroll-start",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": "INVALID_CODE",
+      "id": "totp-enroll-wrong-code",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": null,
+      "id": "totp-enroll-retry-same-session",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": "INVALID_SESSION_INFO",
+      "id": "totp-enroll-replay-finalized-session",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": null,
+      "factorCount": 1,
+      "id": "totp-enroll-factor-readback",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": "INVALID_ARGUMENT",
+      "id": "totp-signin-start",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": null,
+      "id": "totp-signin-finalize",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": "INVALID_CODE",
+      "id": "totp-signin-replay-same-code",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": null,
+      "id": "totp-withdraw",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "factorCount": 0,
+      "id": "totp-withdraw-readback",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": "MFA_ENROLLMENT_NOT_FOUND",
+      "id": "totp-withdraw-unknown",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": "SESSION_EXPIRED",
+      "id": "totp-enroll-session-age-300s",
+      "outcome": "observed",
+      "sessionAgeSeconds": 300.0,
+      "status": 400
+    },
+    {
+      "errorCode": "SESSION_EXPIRED",
+      "id": "totp-enroll-session-age-450s",
+      "outcome": "observed",
+      "sessionAgeSeconds": 450.0,
+      "status": 400
+    },
+    {
+      "errorCode": "INVALID_SESSION_INFO",
+      "id": "totp-enroll-session-age-600s",
+      "outcome": "observed",
+      "sessionAgeSeconds": 600.0,
+      "status": 400
+    },
+    {
+      "errorCode": "UNVERIFIED_EMAIL",
+      "id": "unverified-email-enroll-refusal",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": "UNSUPPORTED_FIRST_FACTOR",
+      "id": "ineligible-first-factor-refusal",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": "INVALID_ID_TOKEN",
+      "id": "missing-id-token-refusal",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": "SECOND_FACTOR_EXISTS",
+      "id": "second-factor-limit",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": null,
+      "id": "project-mfa-config-readback",
+      "mfaConfigPresent": false,
+      "outcome": "observed",
+      "status": 200
+    }
+  ],
+  "schema": "o2-mfa-local-shadow-v1",
+  "side": "local",
+  "worktree": {
+    "clean": true,
+    "commit": "9ddc20afb2fc9f1f8d2dea3f03b6af40c7d3f1da",
+    "resolved": true
+  }
+}

@@ -84,6 +84,10 @@ The local answers that matter for the production comparison:
 
 An exact production lifetime, an error-precedence rule, tenant-scoped behaviour, blocking-function interaction, SDK and Rules paths, and the expired-pending-with-independently-valid-code residual that `AUTH-U03` tracks. A refusal's error name is not a TTL, and three ages on one account in one run are not a universal guarantee.
 
+## Artifacts
+
+The frozen manifest is `spec/compatibility/broad-runs/o2-mfa-next-campaign-manifest.json`, compiled with a fixed documentation nonce; a run requires a fresh one. The local ledger is `spec/compatibility/broad-runs/o2-mfa-local-shadow.json`, recorded at the commit and clean worktree its own receipt names. Neither file is a production receipt.
+
 ## Reproduction
 
 ```sh

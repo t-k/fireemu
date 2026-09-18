@@ -1119,3 +1119,156 @@ def test_a_numeric_version_source_stays_canonical(tmp_path):
         ][1]["versionFrom"]
         == 0
     )
+
+
+def scheduled_commit_plan():
+    """One probe: a conditional Commit, a readback, then its scheduled cleanup."""
+    value, resources = commit_plan(writes=1)
+    probe = value["jobs"]["probe"]
+    name = resources[0]
+    readback = {
+        "kind": "probe-readback",
+        "resource": name,
+        "service": "firestore",
+        "method": "GET",
+        "path": "/v1/" + name,
+        "body": None,
+        "privileged": True,
+        "form": False,
+    }
+    verify = {**readback, "kind": "cleanup-verify-absence"}
+    probe["observation"] = [probe["observation"][0], readback]
+    probe["recovery"] = [probe["recovery"][0], probe["recovery"][1], verify]
+    probe["schedule"] = [
+        {"phase": "observation", "index": 0},
+        {"phase": "observation", "index": 1, "creates": False},
+        {"phase": "recovery", "index": 0, "creates": False},
+        {"phase": "recovery", "index": 1, "creates": False},
+        {"phase": "recovery", "index": 2, "creates": False},
+    ]
+    value["observationRequests"] = 2
+    return value, resources
+
+
+@pytest.mark.parametrize("slot", [0, 1])
+def test_a_slot_that_can_create_may_not_declare_that_it_cannot(tmp_path, slot):
+    """The Ledger relaxes retirement on this declaration, so the Gate checks it."""
+    value, _resources = scheduled_commit_plan()
+    if slot == 0:
+        value["jobs"]["probe"]["schedule"][0]["creates"] = False
+    else:
+        value["jobs"]["probe"]["observation"][1]["body"] = {"writes": []}
+        value["jobs"]["probe"]["schedule"][1]["creates"] = False
+    with pytest.raises(ValueError, match="cannot declare"):
+        create(tmp_path / "gate", value)
+
+
+def test_a_conditional_patch_slot_may_not_declare_that_it_cannot_create(tmp_path):
+    value, resources = scheduled_commit_plan()
+    probe = value["jobs"]["probe"]
+    probe["observation"][1] = {
+        **probe["observation"][1],
+        "method": "PATCH",
+        "path": "/v1/" + resources[0] + "?currentDocument.exists=false",
+        "body": None,
+    }
+    with pytest.raises(ValueError, match="cannot declare"):
+        create(tmp_path / "gate", value)
+
+
+def _created(gate, value, resources):
+    gate.claim()
+    gate.dispatch(
+        value["jobs"]["probe"]["observation"][0],
+        False,
+        lambda: _commit_response(len(resources)),
+    )
+
+
+def test_an_abandoned_observation_still_reaches_its_scheduled_cleanup(tmp_path):
+    """An early stop must not cost the campaign its only way to delete."""
+    value, resources = scheduled_commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    _created(gate, value, resources)
+    name = resources[0]
+    fields = value["jobs"]["probe"]["observation"][0]["body"]["writes"][0]["update"][
+        "fields"
+    ]
+    gate.abandon_observation("transport-deadline")
+    assert gate.snapshot()["jobs"]["probe"]["stopReason"] == "transport-deadline"
+    recovery = value["jobs"]["probe"]["recovery"]
+    gate.dispatch(
+        recovery[0],
+        True,
+        lambda: (200, {"name": name, "fields": fields, "updateTime": VERSION}),
+    )
+    deleted = dict(recovery[1])
+    del deleted["versionFrom"]
+    deleted["path"] += "?currentDocument.updateTime=" + quote(VERSION, safe="")
+    gate.dispatch(deleted, True, lambda: (200, {}))
+    gate.dispatch(recovery[2], True, _absent)
+    job = gate.snapshot()["jobs"]["probe"]
+    assert job["recovery"] == 3
+    assert job["absent"] == [name]
+    # The one observation slot the stop skipped is counted, not dispatched.
+    assert job["skippedByStop"] == 1
+    assert job["observation"] == 1
+    assert job["scheduleDone"] == 5
+
+
+def test_an_abandoned_observation_skips_cleanup_it_never_created(tmp_path):
+    """A probe whose Commit left no proof cleans nothing, and spends no request."""
+    value, _resources = scheduled_commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+
+    def deadline():
+        raise TimeoutError("transport deadline")
+
+    with pytest.raises(TimeoutError):
+        gate.dispatch(value["jobs"]["probe"]["observation"][0], False, deadline)
+    gate.abandon_observation("transport-deadline")
+    before = gate.snapshot()
+    result = gate.dispatch(
+        value["jobs"]["probe"]["recovery"][0], True, lambda: pytest.fail("no wire call")
+    )
+    assert result == (None, {"skipped": "no-creation-proof-after-stop"})
+    after = gate.snapshot()
+    assert after["events"] == before["events"]
+    assert after["jobs"]["probe"]["creationProofs"] == {}
+    assert [skip["reason"] for skip in after["skips"]] == [
+        "no-creation-proof-after-stop"
+    ]
+
+
+def test_abandoning_observation_is_refused_outside_a_scheduled_job(tmp_path):
+    create(tmp_path / "gate", plan())
+    gate = Gate(tmp_path / "gate", "a")
+    gate.claim()
+    with pytest.raises(ValueError, match="declared schedule"):
+        gate.abandon_observation("transport-deadline")
+
+
+@pytest.mark.parametrize("reason", ["", None, 7, "x" * 129])
+def test_an_abandon_reason_must_be_a_bounded_string(tmp_path, reason):
+    value, resources = scheduled_commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    _created(gate, value, resources)
+    with pytest.raises(ValueError, match="stop reason"):
+        gate.abandon_observation(reason)
+    assert gate.snapshot()["jobs"]["probe"].get("stopReason") is None
+
+
+def test_an_abandoned_job_cannot_be_abandoned_twice_or_observe_again(tmp_path):
+    value, resources = scheduled_commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    _created(gate, value, resources)
+    gate.abandon_observation("transport-deadline")
+    with pytest.raises(ValueError, match="already abandoned"):
+        gate.abandon_observation("transport-deadline")
+    with pytest.raises(ValueError, match="stopped"):
+        gate.dispatch(value["jobs"]["probe"]["observation"][1], False, _absent)

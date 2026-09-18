@@ -1745,3 +1745,112 @@ def test_the_escalation_exit_and_the_no_data_abort_are_mutually_exclusive(tmp_pa
     assert (
         other.snapshot()["reservations"][other_ticket["reservation"]]["state"] == "held"
     )
+
+
+def abandoned_plan():
+    """A scheduled probe whose observation can stop before it creates anything."""
+    owned = "projects/p/databases/(default)/documents/owned/a/probe/u01"
+    read = {
+        "kind": "ownership-read",
+        "resource": owned,
+        "service": "firestore",
+        "method": "GET",
+        "path": "/v1/" + owned,
+        "body": None,
+        "privileged": True,
+        "form": False,
+    }
+    return {
+        "contract": "shared-local-v1",
+        "nonce": plan("a")["nonce"],
+        "wallSeconds": 600,
+        "recoverySeconds": 300,
+        "observationRequests": 2,
+        "costMicrousd": 5000,
+        "requestCostMicrousd": 1,
+        "intervalSeconds": 0.25,
+        "requestSeconds": 2,
+        "jobSlots": 1,
+        "receiptKind": READONLY_RECEIPT_KIND,
+        "collectorSourceDigest": COMMIT_COLLECTOR_SOURCE_DIGEST,
+        "management": {
+            "observation": [],
+            "recovery": [],
+            "credentialIds": [],
+            "credentialSlots": [],
+        },
+        "jobs": {
+            "probe": {
+                "resources": [owned],
+                "observation": [dict(read), dict(read)],
+                "recovery": [dict(read)],
+                "schedule": [
+                    {"phase": "observation", "index": 0, "creates": False},
+                    {"phase": "observation", "index": 1, "creates": False},
+                    {"phase": "recovery", "index": 0, "creates": False},
+                ],
+            }
+        },
+    }
+
+
+def test_a_stop_before_any_create_retires_as_no_data(tmp_path):
+    """An abandoned observation that wrote nothing is still a no-data stop."""
+    ledger = Ledger.create(tmp_path / "ledger")
+    first = claim(tmp_path, "a")
+    first["gatePath"] = str((tmp_path / "a" / "gate").resolve())
+    first["gateJob"] = "probe"
+    frozen = abandoned_plan()
+    first["gatePlanDigest"] = digest(frozen)
+    first["budget"] = {
+        "requests": 60,
+        "accounts": 1,
+        "resources": 1,
+        "costMicrousd": 9000,
+    }
+    first["durationSeconds"] = 600
+    ticket = ledger.reserve(envelope(), first, frozen, now=1100)
+    create(Path(first["gatePath"]), frozen)
+    gate = Gate(first["gatePath"], "probe")
+    gate.claim()
+    gate.abandon_observation("transport-deadline")
+    with gate.locked() as state:
+        state["coordinatorPid"] = _stopped_pid()
+        state["jobs"]["probe"]["pid"] = state["coordinatorPid"]
+        _save(gate.path, state)
+    snapshot = gate.snapshot()
+    assert snapshot["jobs"]["probe"]["stopReason"] == "transport-deadline"
+    receipt = {
+        "kind": READONLY_RECEIPT_KIND,
+        "ticket": ticket,
+        "planDigest": first["gatePlanDigest"],
+        "claimDigest": ticket["claimDigest"],
+        "gate": snapshot,
+        "chargedCalls": snapshot["total"],
+        "collection": None,
+        "productionExecuted": False,
+        "failure": "TimeoutError",
+        "releaseEligible": False,
+        "reservationStateAtPublication": "held",
+        "executionKind": "fixed-production-wire",
+        "metadata": [],
+        "credentialEvidence": [],
+    }
+    path = tmp_path / "a" / "receipt.json"
+    path.write_text(json.dumps(receipt))
+    record = {
+        "kind": "shared-no-data-abort-v1",
+        "ticket": ticket,
+        "planDigest": first["gatePlanDigest"],
+        "gateDigest": digest(snapshot),
+        "receiptPath": str(path.resolve()),
+        "receiptDigest": digest(receipt),
+        "collectorSourceDigest": frozen["collectorSourceDigest"],
+        "sourceCommit": COMMIT_SOURCE_COMMIT,
+        "sourceDigests": COMMIT_SOURCE_DIGESTS,
+    }
+    ledger.abort_no_data(ticket, record)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        == "aborted-no-data"
+    )

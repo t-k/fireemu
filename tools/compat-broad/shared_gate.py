@@ -398,6 +398,7 @@ def create(path, plan):
     ):
         raise ValueError("invalid shared allocation")
     _resolve_all_aliases(plan)
+    _check_creates_declarations(plan)
     path.mkdir(mode=0o700, parents=True, exist_ok=False)
     (path / "lock").touch(mode=0o600, exist_ok=False)
     state = {
@@ -434,6 +435,7 @@ def create(path, plan):
             "complete": False,
         }
         if job_schedule(job) is not None:
+            state["jobs"][key]["skippedByStop"] = 0
             # Only a scheduled job carries a cursor, so every existing campaign's
             # job row keeps the exact shape its archived receipts record.
             state["jobs"][key]["scheduleDone"] = 0
@@ -441,6 +443,43 @@ def create(path, plan):
 
 
 MARKER_BINDINGS = ("resource-name", "nonce")
+STOP_SKIP_REASON = "no-creation-proof-after-stop"
+MAX_STOP_REASON = 128
+
+
+def can_create(operation):
+    """Whether a request could bring a document into existence.
+
+    The Ledger relaxes its retirement contract on a slot declared `creates`
+    false, so the declaration is not the campaign's word alone: a plan whose
+    slot could write is refused here. A request that carries a body is treated
+    as able to create even when its shape is not one this module recognises,
+    because the conservative direction is to refuse the declaration.
+    """
+    if not isinstance(operation, dict):
+        return True
+    path = operation.get("path")
+    path = path if isinstance(path, str) else ""
+    method = operation.get("method")
+    return (
+        operation.get("body") is not None
+        or (method == "PATCH" and path.endswith("?currentDocument.exists=false"))
+        or (method == "POST" and path.endswith((":batchWrite", ":commit")))
+    )
+
+
+def _check_creates_declarations(plan):
+    for job in plan["jobs"].values():
+        schedule = job_schedule(job)
+        if schedule is None:
+            continue
+        for entry in schedule:
+            if entry.get("creates", True) is False and can_create(
+                job[entry["phase"]][entry["index"]]
+            ):
+                raise ValueError(
+                    "a slot whose request can create cannot declare creates false"
+                )
 
 
 def ownership_marker(plan):
@@ -713,6 +752,36 @@ class Gate:
             job["pid"] = os.getpid()
             _save(self.path, state)
 
+    def abandon_observation(self, reason):
+        """End this job's observation early and open its scheduled cleanup.
+
+        With a declared schedule a dispatch is admitted only in its frozen order,
+        so a job that stops part way through observation could not reach its own
+        recovery slots at all: every cleanup request was refused as outside the
+        schedule, and a probe that had created documents had no admissible way to
+        delete them. This is the transition that says the observation is over.
+
+        It does not weaken the cleanup rules. Recovery still runs in its declared
+        order, and a resource with no creation proof is still never deleted: its
+        slots become zero-wire skips rather than refusals, so the ones that can
+        be cleaned are still reachable behind them.
+        """
+        if not isinstance(reason, str) or not 0 < len(reason) <= MAX_STOP_REASON:
+            raise ValueError("bounded stop reason required")
+        with self.locked() as state:
+            job = state["jobs"][self.job]
+            if state.get("noDataAbort") is not None or job["complete"]:
+                raise ValueError("terminal Gate abort")
+            if job_schedule(state["plan"]["jobs"][self.job]) is None:
+                raise ValueError("a declared schedule is required to abandon")
+            if job.get("stopReason") is not None:
+                raise ValueError("observation already abandoned")
+            if job["inflight"]:
+                raise ValueError("in-flight request; ownership retained")
+            job["stopReason"] = reason
+            job["stopped"] = True
+            _save(self.path, state)
+
     def stop(self, *, environment=False):
         with self.locked() as state:
             if state.get("noDataAbort") is not None:
@@ -771,6 +840,16 @@ class Gate:
             schedule = job_schedule(plan["jobs"][self.job])
             if schedule is not None:
                 cursor = job["scheduleDone"]
+                if job.get("stopReason") is not None:
+                    # The abandoned observation slots are consumed without a wire
+                    # call, so the cleanup behind them becomes reachable.
+                    while (
+                        cursor < len(schedule)
+                        and schedule[cursor]["phase"] == "observation"
+                    ):
+                        cursor += 1
+                        job["skippedByStop"] += 1
+                    job["scheduleDone"] = cursor
                 slot = schedule[cursor] if cursor < len(schedule) else None
                 if slot is None or slot["phase"] != phase or slot["index"] != index:
                     raise ValueError("dispatch outside the frozen execution schedule")
@@ -815,6 +894,24 @@ class Gate:
                     self._validate_cleanup_ownership(
                         operation, recovery, resource, source, job
                     )
+            if (
+                recovery
+                and schedule is not None
+                and job.get("stopReason") is not None
+                and resource not in job.get("creationProofs", {})
+            ):
+                # Nothing was created here, so there is nothing to clean and no
+                # request to spend; the slot is consumed so the next one is
+                # reachable.
+                job["scheduleDone"] += 1
+                job["skippedByStop"] += 1
+                job[phase] += 1
+                state["reservedRecovery"] -= 1
+                state.setdefault("skips", []).append(
+                    {"job": self.job, "index": index, "reason": STOP_SKIP_REASON}
+                )
+                _save(self.path, state)
+                return (None, {"skipped": STOP_SKIP_REASON})
             if recovery and schedule is None:
                 # Without a declared schedule, recovery is a one-way transition.
                 # A scheduled campaign returns to observation by its own order,
@@ -982,7 +1079,10 @@ class Gate:
                 state["coordinatorInflight"] is not False
                 or dispatched is None
                 or len(state["events"]) != dispatched
-                or state.get("skips", []) != []
+                or any(
+                    skip.get("reason") != STOP_SKIP_REASON
+                    for skip in state.get("skips", [])
+                )
                 or state.get("managementUsed")
                 != [
                     "observation:" + operation["id"]
@@ -1006,7 +1106,10 @@ class Gate:
                     for key in ("observation", "recovery")
                 )
                 or any(
-                    job.get("scheduleDone", 0) != job["observation"]
+                    job.get("scheduleDone", 0)
+                    != job["observation"]
+                    + job["recovery"]
+                    + job.get("skippedByStop", 0)
                     for job in state["jobs"].values()
                 )
                 or any(

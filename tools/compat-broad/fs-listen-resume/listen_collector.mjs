@@ -664,11 +664,14 @@ export const runCatalog = async (
   try {
     for (const caseSpec of catalog.cases) {
       caseRecords.push(await runCase(deps, caseSpec, contextFor(caseSpec)));
+      // The session hook runs before the cleanup pass, not after it. A case may
+      // end signed out, and cleanup has to read and delete under Rules that
+      // require a principal; running it first would deny every read.
+      if (betweenCases) await betweenCases(caseSpec);
       recordPass(
         caseSpec.caseId,
         await runCleanup(deps, { client, paths, nonce, budget: cleanupBudget }),
       );
-      if (betweenCases) await betweenCases(caseSpec);
     }
   } catch (error) {
     thrown = String(error?.stack ?? error?.message ?? error);

@@ -984,3 +984,45 @@ test('a metadata listener still treats a cache-served prefix as the initial snap
   const record = await runCase({ ...clock, firestore: fake.firestore, auth: fake.auth }, spec, ctx);
   assert.ok(record.observed.every(row => row.snapshotKind === 'initial'));
 });
+
+test('the session hook runs before the cleanup pass, not after it', async () => {
+  const fake = createFake();
+  const clock = nowFactory();
+  const paths = ownedPaths(NONCE, UID);
+  const budget = createBudget({
+    now: clock.now,
+    deadlineMs: 60_000,
+    limits: { reads: 400, writes: 60, deletes: 20, snapshots: 120, listeners: 40 },
+  });
+  const cleanupBudget = createBudget({
+    now: clock.now,
+    deadlineMs: 180_000,
+    limits: { reads: 200, writes: 0, deletes: 100, snapshots: 0, listeners: 0 },
+  });
+  const order = [];
+  const deps = {
+    ...clock,
+    firestore: {
+      ...fake.firestore,
+      async getDoc(client, docPath) {
+        order.push('cleanup-read');
+        return fake.firestore.getDoc(client, docPath);
+      },
+    },
+    auth: fake.auth,
+  };
+  await runCatalog(deps, {
+    catalog: { cases: [caseFixture({ caseId: 'ONE', steps: [] })] },
+    budget,
+    cleanupBudget,
+    paths,
+    nonce: NONCE,
+    client: 'primary',
+    contextFor: caseSpec => contextFor(fake, clock, caseSpec, { budget }),
+    betweenCases: async () => {
+      order.push('session-restored');
+    },
+  });
+  assert.equal(order[0], 'session-restored');
+  assert.equal(order.indexOf('session-restored') < order.indexOf('cleanup-read'), true);
+});

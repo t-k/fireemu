@@ -34,7 +34,11 @@ def test_the_local_shadow_ran_to_completion_with_proven_cleanup():
 def test_every_cleanup_row_proves_absence_or_never_created_the_document():
     outcomes = {row["name"]: row["outcome"] for row in _receipt()["cleanup"]["rows"]}
     assert set(outcomes) == {"alpha", "beta", "gamma", "absent", "private"}
-    assert set(outcomes.values()) <= {"deleted-and-absent", "not-created"}
+    assert set(outcomes.values()) <= {
+        "deleted-and-absent",
+        "not-created",
+        "already-deleted-earlier",
+    }
 
 
 def test_the_evidence_names_the_sources_that_produced_it():
@@ -148,7 +152,11 @@ def test_the_receipt_keeps_every_cleanup_pass_not_only_the_final_one():
     receipt = _receipt()
     passes = receipt["cleanupPasses"]
     assert [item["pass"] for item in passes] == [*cases.case_ids(), "final"]
-    assert all(item["complete"] is True for item in passes)
+    # Every pass, including the one after the case that ends signed out, must
+    # have been able to read and delete under the campaign Rules.
+    assert all(item["complete"] is True for item in passes), [
+        item["pass"] for item in passes if item["complete"] is not True
+    ]
     # The final pass alone understates the run, so the receipt carries the total.
     assert receipt["totalDeleted"] == sum(item["deleted"] for item in passes)
     assert receipt["totalDeleted"] > receipt["cleanup"]["deleted"]

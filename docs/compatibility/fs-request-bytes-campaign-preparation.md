@@ -232,6 +232,26 @@ profiles. That superseded baseline stays on the record, and the shadow keeps its
 classification as a **regression** outcome: a strict-profile build answering 413
 has lost the implemented shape.
 
+The recorded run is published as
+`spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, at source
+`02e1a51c31580de493ee2d103d03c1d06231612d`, artifact SHA-256
+`e95e323ec078e48d0e738c14e77c83ee06b569e65dd93466c77bdba024f0c341`, nonce `14a76ead49f448b8834bbb2fa311b739`, with supervisor status
+`completed`, `recordingComplete` and `stateValidation` true, the owned process
+stopped and all listeners closed. It completed 105 observation rows and 153
+recovery rows, sent 241 of the 258 bounded requests, and proved all 51 owned
+resources absent afterwards. The 17 unsent requests are the over probe's delete
+slots, consumed as zero-wire skips because a refused Commit grants no cleanup
+ownership. That is also the post-state evidence: the refused request wrote
+nothing.
+
+The record carries the three probe outcomes, the refusal bytes verbatim, the
+collector summary, the runtime binding and the run's own nonce, so a reader can
+recompute the plan and campaign digests rather than trust them. The recorded
+classification and the two state gates are recomputed from the recorded
+observation, so a hand-edited verdict fails the suite. The shadow uses its own
+per-run nonce against `demo-firestore-probe`; it is not the campaign nonce and it
+writes nothing to the oracle project.
+
 The shadow recognises four local outcomes and masks none of them.
 `local-shape-matches-production-expectation` is the baseline.
 `local-boundary-enforced-shape-differs` is the lost-shape regression above.

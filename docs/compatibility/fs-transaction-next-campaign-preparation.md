@@ -291,12 +291,21 @@ The recorded run is
 | Local self-contract | `MATCH` |
 | Resources recovered with typed absence | 5 of 5 |
 | Transactions left open | 0 |
-| Data requests used | 60 of 76 |
-| Elapsed | 15.1 seconds |
+| Post states read back and matching their declaration | 3 of 3 |
+| Requests used | 68 of 85 data slots |
+| Elapsed | 15.3 seconds |
 | Child exit | 0, no signal needed |
 
+The three declared post states were read back from the emulator and all three
+held: the commit inside the idle limit moved `locked-d` to a new version
+carrying `committed-before-idle`, the commit refused after the idle limit left
+`locked-a` on its creation version carrying `created`, and the out-of-band
+commit after expiry moved `locked-a` to a new version carrying
+`written-after-expiry`. Before the readbacks existed, none of that was
+observed; only the three response codes were.
+
 The runtime artifact is SHA-256
-`caf3b254ceabd5f0b3280b6e39884326aeea28ffa4536249f93b5c52c1ab1f81`
+`c83194a08e6ef139f0f495886a029c574126a08519c159ca37615564e0d53e11`
 (`fireemu 0.7.1`), built with `cargo build -p fireemu` inside this lane's own
 worktree. The rehearsal records the source commit, the hashed Rust input set
 (`32a872989f5e0d8fabf17a2a30cda85a2467574e23c4712a37711f0dbd196d18`, 400 files)
@@ -317,7 +326,9 @@ from byte-identical inputs. The cross-run comparison therefore scrubs the
 artifact digest and asserts instead that both runs report the same Rust input
 digest, and that within each run the parent's digest, the runtime block and the
 child's own independently computed digest all agree. That combination was
-verified against a deliberately rebuilt, different binary.
+verified against a deliberately rebuilt, different binary, and again here by
+comparing the published record against a second independent rehearsal, which
+differed in nothing outside the declared volatile keys.
 
 A binary taken from the shared checkout or a sibling worktree describes a
 different source and must not be used. An earlier rehearsal did exactly that and

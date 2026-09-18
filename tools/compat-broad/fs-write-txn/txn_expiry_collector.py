@@ -567,7 +567,7 @@ class Collection:
                 results = body.get("writeResults") or [{}]
                 self.established[role] = {
                     "role": role,
-                    "createdAt": _instant(self.wall()),
+                    "slot": slot,
                     "updateTime": (results[0] or {}).get("updateTime"),
                 }
                 self.created[role] = True

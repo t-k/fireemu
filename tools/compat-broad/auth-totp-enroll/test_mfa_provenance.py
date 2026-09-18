@@ -23,6 +23,19 @@ def fake_tree(root: Path) -> None:
         path.write_text(f"contents of {relative}\n", encoding="utf-8")
 
 
+def test_no_package_module_shapes_an_observation_without_being_bound() -> None:
+    from mfa_provenance import unbound_package_modules
+
+    # A new recorder or comparator cannot be added without binding it. The earlier
+    # AUTH-MFA-TOTP-ENROLL-RETRY-01 modules keep the `totp_` prefix and are excluded by
+    # name, because they are a separate non-executable package.
+    assert unbound_package_modules(repository_root()) == []
+
+
+def test_the_recorder_that_issues_the_requests_is_bound() -> None:
+    assert "tools/compat-broad/auth-totp-enroll/mfa_local_shadow.py" in BOUND_PATHS
+
+
 def test_every_bound_path_exists_in_this_repository() -> None:
     root = repository_root()
     missing = [relative for relative in BOUND_PATHS if not (root / relative).is_file()]

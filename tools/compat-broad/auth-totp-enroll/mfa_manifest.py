@@ -13,11 +13,16 @@ from types import MappingProxyType
 from typing import Any
 
 from mfa_cases import (
+    AGED_PENDING_SAMPLES,
     CAMPAIGN_ID,
+    REFUSAL_DIRECTION_CONTROL_AGE_SECONDS,
     SAMPLED_AGES_SECONDS,
     SOURCES,
+    TOTP_STEP_ROLLOVER_SECONDS,
+    critical_path_seconds,
     observation_cases,
     owned_accounts,
+    serial_aging_seconds,
 )
 from mfa_provenance import compute_provenance, repository_root
 
@@ -25,14 +30,27 @@ SCHEMA = "o2-mfa-campaign-v1"
 PROJECT = "fireemu-35fe6"
 _NONCE = re.compile(r"^[0-9a-f]{32}$")
 
+# Time the run spends on work that is not waiting: account creation and verification, the
+# phone and TOTP enrollments, the eleven TOTP lifecycle rows, the five interaction rows,
+# deletion and absence checks.
+PROVISIONING_SECONDS = 420
+
 _LIMITS = {
-    # 30 cases, at most three requests each, plus preflight, configuration readback,
-    # account creation and deletion for seven accounts.
-    "maxRequests": 180,
-    # 600 seconds of real ageing plus setup, readback and a 300-second recovery reserve.
-    "maxWallSeconds": 1800,
+    # Counted from the transport rather than per case: the collector charges the real
+    # number of calls each step made, so this bound is the whole run's HTTP traffic,
+    # including acquisition before the first row and deletion after the last. The local
+    # shadow charges about 135; the headroom covers production's preflight, configuration
+    # read and restore, and credential refreshes.
+    "maxRequests": 400,
+    # The aging is concurrent, so the critical path is the largest due offset plus one TOTP
+    # step rollover, not the sum of the offsets. The serial cost is recorded beside it so
+    # the difference the acquisition schedule buys is visible rather than implied.
+    "maxWallSeconds": 2700,
+    "criticalPathSeconds": critical_path_seconds(),
+    "serialAgingSeconds": serial_aging_seconds(),
+    "provisioningSeconds": PROVISIONING_SECONDS,
     "recoveryReserveSeconds": 300,
-    "maxOwnedAccounts": 12,
+    "maxOwnedAccounts": 14,
     "maxConcurrency": 1,
     "estimatedCostUsd": 0.1,
     "hardCostCeilingUsd": 0.5,
@@ -139,6 +157,28 @@ def compile_campaign(nonce: str, project: str = PROJECT) -> dict[str, Any]:
             "accounts": accounts,
         },
         "sampledAgesSeconds": list(SAMPLED_AGES_SECONDS),
+        "refusalDirectionControlAgeSeconds": REFUSAL_DIRECTION_CONTROL_AGE_SECONDS,
+        "agingSchedule": {
+            "mode": "concurrent-acquisition",
+            "contract": (
+                "Every aged pending credential and every aged enrollment session is "
+                "acquired at one common origin before any wait begins, and each aged row "
+                "is scheduled at that origin plus its own age. The ages therefore elapse "
+                "concurrently and the run's critical path is the largest age rather than "
+                "their sum. Acquiring a resource immediately before its own wait, which is "
+                "the obvious reading, costs the serial total instead and does not fit the "
+                "wall budget."
+            ),
+            "acquireAtOriginSeconds": 0,
+            "agedPendingSamplesSeconds": list(AGED_PENDING_SAMPLES),
+            "agedSessionSamplesSeconds": list(SAMPLED_AGES_SECONDS),
+            "totpStepRolloverSeconds": TOTP_STEP_ROLLOVER_SECONDS,
+            "dueOffsetsSeconds": [
+                {"case": case["id"], "dueOffsetSeconds": case["dueOffsetSeconds"]}
+                for case in observation_cases()
+                if case["dueOffsetSeconds"]
+            ],
+        },
         "sources": dict(SOURCES),
         "limits": deepcopy(_LIMITS),
         "permissionEnvelope": deepcopy(_PERMISSION_ENVELOPE),

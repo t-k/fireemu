@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mfa_cases import CAMPAIGN_ID, CASE_IDS, observation_cases
-from mfa_manifest import compile_campaign, validate_campaign
+from mfa_cases import CAMPAIGN_ID, CASE_IDS, observation_cases, owned_accounts
+from mfa_comparator import compare
+from mfa_manifest import LIMITS, compile_campaign, validate_campaign
 from mfa_provenance import repository_root
 
 DOCUMENTATION_NONCE = "0" * 32
@@ -36,7 +37,7 @@ def test_the_checked_in_ledger_covers_every_case_without_secret_material() -> No
     assert ledger["disagreements"] == []
     assert ledger["recovery"]["remainingOwnedResources"] == 0
     assert ledger["recovery"]["configurationMutated"] is False
-    assert ledger["recovery"]["ownedAccounts"] == 10
+    assert ledger["recovery"]["ownedAccounts"] == len(owned_accounts())
     serialized = json.dumps(ledger).lower()
     for material in (
         "sharedsecretkey",
@@ -45,6 +46,22 @@ def test_the_checked_in_ledger_covers_every_case_without_secret_material() -> No
         "mfapendingcredential",
     ):
         assert material not in serialized
+
+
+def test_the_ledger_stays_inside_the_declared_request_budget() -> None:
+    ledger = load(LEDGER)
+    assert ledger["maxRequests"] == LIMITS["maxRequests"]
+    assert 0 < ledger["requestsCharged"] <= LIMITS["maxRequests"]
+    # One notional request per case would understate the real traffic several times over.
+    assert ledger["requestsCharged"] > len(CASE_IDS)
+
+
+def test_the_ledger_carries_a_manifest_the_comparator_accepts() -> None:
+    ledger = load(LEDGER)
+    other = json.loads(json.dumps(ledger)) | {"side": "production"}
+    result = compare(ledger, other)
+    assert result["classification"] == "PREPARATION_ONLY"
+    assert result["localProblems"] == [] and result["productionProblems"] == []
 
 
 def test_the_ledger_agrees_with_the_expected_local_results() -> None:

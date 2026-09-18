@@ -20,19 +20,38 @@ from typing import Any
 SCHEMA = "o2-mfa-provenance-v1"
 _HEX = "0123456789abcdef"
 
-# The inputs whose bytes decide what a run means: the campaign definition, the collector
-# that drives it, the local code computation, the comparator that judges it, and the
-# dependency pins of the environment it runs in.
+_PACKAGE = "tools/compat-broad/auth-totp-enroll"
+
+# The inputs whose bytes decide what a run means. This is every non-test module in the
+# package, not a hand-picked subset: the case list decides what is intended, the recorder
+# decides which requests are actually sent and what lands in a row, the collector sequences
+# them, the comparator judges the result, and the lockfiles pin the environment. Binding
+# the case list without the recorder would prove which observations were planned while
+# leaving the program that made them free to differ.
 BOUND_PATHS: tuple[str, ...] = (
-    "tools/compat-broad/auth-totp-enroll/mfa_cases.py",
-    "tools/compat-broad/auth-totp-enroll/mfa_collector.py",
-    "tools/compat-broad/auth-totp-enroll/mfa_comparator.py",
-    "tools/compat-broad/auth-totp-enroll/mfa_manifest.py",
-    "tools/compat-broad/auth-totp-enroll/mfa_provenance.py",
-    "tools/compat-broad/auth-totp-enroll/mfa_totp.py",
+    f"{_PACKAGE}/mfa_cases.py",
+    f"{_PACKAGE}/mfa_collector.py",
+    f"{_PACKAGE}/mfa_comparator.py",
+    f"{_PACKAGE}/mfa_local_shadow.py",
+    f"{_PACKAGE}/mfa_manifest.py",
+    f"{_PACKAGE}/mfa_provenance.py",
+    f"{_PACKAGE}/mfa_totp.py",
     "tools/compat-inventory/pyproject.toml",
     "tools/compat-inventory/uv.lock",
 )
+
+
+def unbound_package_modules(root: Path) -> list[str]:
+    """Return package modules that issue or shape observations but are not bound."""
+    package = Path(root) / _PACKAGE
+    if not package.is_dir():
+        return []
+    return sorted(
+        f"{_PACKAGE}/{path.name}"
+        for path in package.glob("*.py")
+        if not path.name.startswith(("test_", "conftest", "totp_"))
+        and f"{_PACKAGE}/{path.name}" not in BOUND_PATHS
+    )
 
 
 class ProvenanceError(RuntimeError):

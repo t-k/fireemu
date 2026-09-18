@@ -13,7 +13,20 @@ from types import MappingProxyType
 from typing import Any
 
 CAMPAIGN_ID = "AUTH-MFA-AGE-TOTP-01"
+# No Identity Platform lifetime is published for `mfaPendingCredential` or for the TOTP
+# enrollment `sessionInfo`, so these ages bracket an empirical boundary rather than test a
+# documented one. Under the monotonicity assumption they can localise it to (300, 450] or
+# (450, 600], or report "greater than 600".
 SAMPLED_AGES_SECONDS = (300, 450, 600)
+# An age production has already been observed to refuse, carried as an in-run positive
+# control for the refusal direction. Without it, a run in which every sampled age is
+# accepted cannot distinguish a longer-than-believed lifetime from a sampler that never
+# aged anything.
+REFUSAL_DIRECTION_CONTROL_AGE_SECONDS = 1800
+AGED_PENDING_SAMPLES = (*SAMPLED_AGES_SECONDS, REFUSAL_DIRECTION_CONTROL_AGE_SECONDS)
+# One TOTP step has to roll over before the sign-in finalize, so the code that enrolled the
+# factor is not the code that signs in with it.
+TOTP_STEP_ROLLOVER_SECONDS = 30
 
 SOURCES = MappingProxyType(
     {
@@ -55,6 +68,7 @@ def _case(
     status: int,
     error_code: str | None,
     age_seconds: int | None = None,
+    due_offset_seconds: int | None = None,
 ) -> dict[str, Any]:
     if family not in FAMILIES or basis not in BASES or source not in SOURCES:
         raise ValueError(f"malformed case definition: {identifier}")
@@ -66,6 +80,10 @@ def _case(
         "source": source,
         "account": account,
         "ageSeconds": age_seconds,
+        # Seconds after the common acquisition origin at which this row becomes due. Every
+        # aged resource is acquired at the origin, so the ages elapse concurrently and the
+        # run's critical path is the largest offset rather than their sum.
+        "dueOffsetSeconds": due_offset_seconds,
         "obligation": obligation,
         "expectedLocal": {
             "status": status,
@@ -76,85 +94,107 @@ def _case(
     }
 
 
-def _pending_age_cases() -> list[dict[str, Any]]:
-    cases = [
-        _case(
-            "baseline-fresh-finalize",
-            "pending-age-causality",
-            "control",
-            "accounts/mfaSignIn:finalize",
-            "mfa-signin-finalize",
-            "pending-control",
-            "A pending credential used immediately completes MFA and returns a verified identity.",
-            200,
-            None,
-            0,
-        )
-    ]
-    for age in SAMPLED_AGES_SECONDS:
-        account = f"pending-age-{age}"
-        accepted = age <= _LOCAL_PENDING_TTL_SECONDS
-        cases.append(
-            _case(
-                f"age-{age}s-start",
-                "pending-age-causality",
-                "diagnostic",
-                "accounts/mfaSignIn:start",
-                "mfa-signin-start",
-                account,
-                f"A pending credential untouched for at least {age} seconds is offered to start; "
-                "acceptance and classified refusal are both observations and neither proves expiry.",
-                200 if accepted else 400,
-                None if accepted else "INVALID_MFA_PENDING_CREDENTIAL",
-                age,
-            )
-        )
-        cases.append(
-            _case(
-                f"age-{age}s-finalize",
-                "pending-age-causality",
-                "diagnostic",
-                "accounts/mfaSignIn:finalize",
-                "mfa-signin-finalize",
-                account,
-                f"A session opened from the {age}-second pending is finalized with a fresh code; "
-                "it is skipped when its start was refused.",
-                200 if accepted else 400,
-                None if accepted else "INVALID_MFA_PENDING_CREDENTIAL",
-                age,
-            )
-        )
-        cases.append(
-            _case(
-                f"age-{age}s-same-account-fresh-control",
-                "pending-age-causality",
-                "control",
-                "accounts/mfaSignIn:finalize",
-                "mfa-signin-finalize",
-                account,
-                f"Immediately after the {age}-second attempt, the same account signs in again and "
-                "completes MFA with a newly acquired pending credential. A refusal above paired "
-                "with success here isolates pending age from account, enrollment and project "
-                "configuration state; it still assumes the aged pending was untouched.",
-                200,
-                None,
-                0,
-            )
-        )
-    cases.append(
-        _case(
-            "final-fresh-finalize",
-            "pending-age-causality",
-            "control",
-            "accounts/mfaSignIn:finalize",
-            "mfa-signin-finalize",
-            "pending-control",
-            "A closing fresh completion shows the configuration still worked at the end of the run.",
-            200,
-            None,
-            0,
-        )
+def _pending_age_case_group(age: int) -> list[dict[str, Any]]:
+    """The three rows one aged pending credential produces, all due at the same offset."""
+    account = f"pending-age-{age}"
+    accepted = age <= _LOCAL_PENDING_TTL_SECONDS
+    control = age == REFUSAL_DIRECTION_CONTROL_AGE_SECONDS
+    purpose = (
+        "This age has already been refused in production, so it is the run's positive "
+        "control for the refusal direction: if it is accepted too, the run aged nothing "
+        "and no boundary may be read from the other samples. "
+        if control
+        else ""
     )
+    return [
+        _case(
+            f"age-{age}s-start",
+            "pending-age-causality",
+            "control" if control else "diagnostic",
+            "accounts/mfaSignIn:start",
+            "mfa-signin-start",
+            account,
+            purpose
+            + f"A pending credential untouched for at least {age} seconds is offered to "
+            "start; acceptance and classified refusal are both observations and neither "
+            "proves expiry.",
+            200 if accepted else 400,
+            None if accepted else "INVALID_MFA_PENDING_CREDENTIAL",
+            age,
+            age,
+        ),
+        _case(
+            f"age-{age}s-finalize",
+            "pending-age-causality",
+            "control" if control else "diagnostic",
+            "accounts/mfaSignIn:finalize",
+            "mfa-signin-finalize",
+            account,
+            f"A session opened from the {age}-second pending is finalized with a fresh "
+            "code; it is skipped when its start was refused.",
+            200 if accepted else 400,
+            None if accepted else "INVALID_MFA_PENDING_CREDENTIAL",
+            age,
+            age,
+        ),
+        _case(
+            f"age-{age}s-same-account-fresh-control",
+            "pending-age-causality",
+            "control",
+            "accounts/mfaSignIn:finalize",
+            "mfa-signin-finalize",
+            account,
+            f"Immediately after the {age}-second attempt, the same account signs in again "
+            "and completes MFA with a newly acquired pending credential. A refusal above "
+            "paired with success here isolates pending age from account, enrollment and "
+            "project configuration state; it still assumes the aged pending was untouched.",
+            200,
+            None,
+            0,
+            age,
+        ),
+    ]
+
+
+def _enrollment_session_age_case(age: int) -> dict[str, Any]:
+    """One aged TOTP enrollment session, due at the same offset as its pending sibling."""
+    # Each sample is taken just past its target age, as the production recorder does.
+    # fireemu keeps an expired session for one further lifetime so a late finalize answers
+    # SESSION_EXPIRED, then reaps it and answers INVALID_SESSION_INFO. Both are declared
+    # local policies, not production claims.
+    within_ttl = age < _LOCAL_ENROLLMENT_TTL_SECONDS
+    reaped = age >= 2 * _LOCAL_ENROLLMENT_TTL_SECONDS
+    expired_code = "INVALID_SESSION_INFO" if reaped else "SESSION_EXPIRED"
+    return _case(
+        f"totp-enroll-session-age-{age}s",
+        "enrollment-session-age",
+        "diagnostic",
+        "accounts/mfaEnrollment:finalize",
+        "mfa-enrollment-finalize",
+        f"enrollment-age-{age}",
+        f"A TOTP enrollment session untouched for at least {age} seconds is finalized with "
+        "a code that is correct for the moment of submission, so only the session age can "
+        "explain a refusal.",
+        200 if within_ttl else 400,
+        None if within_ttl else expired_code,
+        age,
+        age,
+    )
+
+
+def _aged_cases() -> list[dict[str, Any]]:
+    """The aged rows, interleaved by due offset so the walk never arrives late.
+
+    Every aged resource is acquired at a common origin. The collector walks the case list
+    in order and waits for the first step that is not yet due, so the offsets have to be
+    non-decreasing: if a later-listed row were due earlier, the walk would reach it after
+    its target age had already passed and the sample would be wrong.
+    """
+    cases: list[dict[str, Any]] = []
+    for age in AGED_PENDING_SAMPLES:
+        cases.extend(_pending_age_case_group(age))
+        if age in SAMPLED_AGES_SECONDS:
+            cases.append(_enrollment_session_age_case(age))
     return cases
 
 
@@ -291,35 +331,6 @@ def _totp_cases() -> list[dict[str, Any]]:
     ]
 
 
-def _enrollment_session_age_cases() -> list[dict[str, Any]]:
-    cases = []
-    for age in SAMPLED_AGES_SECONDS:
-        # Each sample is taken just past its target age, as the production recorder does.
-        # fireemu keeps an expired session for one further lifetime so a late finalize
-        # answers SESSION_EXPIRED, then reaps it and answers INVALID_SESSION_INFO. Both are
-        # declared local policies, not production claims.
-        within_ttl = age < _LOCAL_ENROLLMENT_TTL_SECONDS
-        reaped = age >= 2 * _LOCAL_ENROLLMENT_TTL_SECONDS
-        expired_code = "INVALID_SESSION_INFO" if reaped else "SESSION_EXPIRED"
-        cases.append(
-            _case(
-                f"totp-enroll-session-age-{age}s",
-                "enrollment-session-age",
-                "diagnostic",
-                "accounts/mfaEnrollment:finalize",
-                "mfa-enrollment-finalize",
-                f"enrollment-age-{age}",
-                f"A TOTP enrollment session untouched for at least {age} seconds is finalized with "
-                "a code that is correct for the moment of submission, so only the session age can "
-                "explain a refusal.",
-                200 if within_ttl else 400,
-                None if within_ttl else expired_code,
-                age,
-            )
-        )
-    return cases
-
-
 def _interaction_cases() -> list[dict[str, Any]]:
     return [
         _case(
@@ -385,17 +396,62 @@ def _interaction_cases() -> list[dict[str, Any]]:
 
 
 def observation_cases() -> list[dict[str, Any]]:
-    """Return the ordered observation cases for one campaign run."""
+    """Return the observation cases in execution order."""
     cases = (
-        _pending_age_cases()
+        [
+            _case(
+                "baseline-fresh-finalize",
+                "pending-age-causality",
+                "control",
+                "accounts/mfaSignIn:finalize",
+                "mfa-signin-finalize",
+                "pending-control",
+                "A pending credential used immediately completes MFA and returns a "
+                "verified identity.",
+                200,
+                None,
+                0,
+            )
+        ]
+        + _aged_cases()
+        + [
+            _case(
+                "final-fresh-finalize",
+                "pending-age-causality",
+                "control",
+                "accounts/mfaSignIn:finalize",
+                "mfa-signin-finalize",
+                "pending-control",
+                "A closing fresh completion shows the configuration still worked at the "
+                "end of the run.",
+                200,
+                None,
+                0,
+            )
+        ]
         + _totp_cases()
-        + _enrollment_session_age_cases()
         + _interaction_cases()
     )
     identifiers = [case["id"] for case in cases]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("observation case identifiers must be unique")
+    offsets = [case["dueOffsetSeconds"] for case in cases if case["dueOffsetSeconds"]]
+    if offsets != sorted(offsets):
+        raise ValueError("aged cases must be listed in non-decreasing due order")
     return cases
+
+
+def critical_path_seconds() -> int:
+    """Return the wall-clock aging one run needs when every aged resource is acquired first."""
+    offsets = [case["dueOffsetSeconds"] or 0 for case in observation_cases()]
+    return max(offsets) + TOTP_STEP_ROLLOVER_SECONDS
+
+
+def serial_aging_seconds() -> int:
+    """Return what the same run would cost if each aged resource were acquired in turn."""
+    return sum(case["dueOffsetSeconds"] or 0 for case in observation_cases()) + (
+        TOTP_STEP_ROLLOVER_SECONDS
+    )
 
 
 CASE_IDS: tuple[str, ...] = tuple(case["id"] for case in observation_cases())

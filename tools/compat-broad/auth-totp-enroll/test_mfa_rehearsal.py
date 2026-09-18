@@ -140,10 +140,68 @@ def test_a_ledger_missing_a_case_is_refused_rather_than_published() -> None:
         }
         for case in observation_cases()
     }
-    report = build_report(rows, state)
+    report = build_report(rows, state, compile_campaign(NONCE))
     assert report["side"] == "local" and report["productionExecuted"] is False
+    assert report["campaign"]["owner"]["namespace"].endswith(NONCE)
     assert [row["id"] for row in report["rows"]] == list(CASE_IDS)
     assert report["recordingComplete"] is False
     rows.pop(CASE_IDS[5])
     with pytest.raises(RuntimeError, match=CASE_IDS[5]):
-        build_report(rows, state)
+        build_report(rows, state, compile_campaign(NONCE))
+
+
+def test_a_published_row_carrying_secret_material_is_refused() -> None:
+    from mfa_collector import SensitiveMaterialError
+    from mfa_local_shadow import _row
+
+    assert (
+        _row("baseline-fresh-finalize", 200, None, pendingAgeSeconds=1.0)["status"]
+        == 200
+    )
+    for extra in (
+        {"sharedSecretKey": "ABC"},
+        {"verificationCode": "123456"},
+        {"idToken": "x"},
+        {"mfaPendingCredential": "x"},
+        {"sessionInfo": "x"},
+        {"detail": {"nested": [{"refreshToken": "x"}]}},
+    ):
+        with pytest.raises(SensitiveMaterialError, match="published row"):
+            _row("baseline-fresh-finalize", 200, None, **extra)
+
+
+def test_a_child_that_outlives_its_deadline_is_reaped_and_confirmed_gone() -> None:
+    import subprocess
+    import sys
+
+    from mfa_local_shadow import process_identity, reap_owned_child
+
+    argv = [sys.executable, "-c", "import time; time.sleep(120)"]
+    process = subprocess.Popen(argv)
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.wait(timeout=0.2)
+        assert process_identity(process.pid) is not None
+        # The reaper refuses to signal a process whose identity is not the one it started.
+        assert reap_owned_child(process, ["some", "other", "command"]) == (
+            "pid-reused-refusing-to-signal"
+        )
+        assert process_identity(process.pid) is not None
+        assert reap_owned_child(process, argv) == "stopped"
+        assert process_identity(process.pid) is None
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
+
+
+def test_reaping_an_already_finished_child_is_a_no_op() -> None:
+    import subprocess
+    import sys
+
+    from mfa_local_shadow import reap_owned_child
+
+    argv = [sys.executable, "-c", "pass"]
+    process = subprocess.Popen(argv)
+    process.wait(timeout=30)
+    assert reap_owned_child(process, argv) == "stopped"

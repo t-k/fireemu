@@ -1,11 +1,91 @@
 {
+  "agingSchedule": {
+    "acquireAtOriginSeconds": 0,
+    "agedPendingSamplesSeconds": [
+      300,
+      450,
+      600,
+      1800
+    ],
+    "agedSessionSamplesSeconds": [
+      300,
+      450,
+      600
+    ],
+    "contract": "Every aged pending credential and every aged enrollment session is acquired at one common origin before any wait begins, and each aged row is scheduled at that origin plus its own age. The ages therefore elapse concurrently and the run's critical path is the largest age rather than their sum. Acquiring a resource immediately before its own wait, which is the obvious reading, costs the serial total instead and does not fit the wall budget.",
+    "dueOffsetsSeconds": [
+      {
+        "case": "age-300s-start",
+        "dueOffsetSeconds": 300
+      },
+      {
+        "case": "age-300s-finalize",
+        "dueOffsetSeconds": 300
+      },
+      {
+        "case": "age-300s-same-account-fresh-control",
+        "dueOffsetSeconds": 300
+      },
+      {
+        "case": "totp-enroll-session-age-300s",
+        "dueOffsetSeconds": 300
+      },
+      {
+        "case": "age-450s-start",
+        "dueOffsetSeconds": 450
+      },
+      {
+        "case": "age-450s-finalize",
+        "dueOffsetSeconds": 450
+      },
+      {
+        "case": "age-450s-same-account-fresh-control",
+        "dueOffsetSeconds": 450
+      },
+      {
+        "case": "totp-enroll-session-age-450s",
+        "dueOffsetSeconds": 450
+      },
+      {
+        "case": "age-600s-start",
+        "dueOffsetSeconds": 600
+      },
+      {
+        "case": "age-600s-finalize",
+        "dueOffsetSeconds": 600
+      },
+      {
+        "case": "age-600s-same-account-fresh-control",
+        "dueOffsetSeconds": 600
+      },
+      {
+        "case": "totp-enroll-session-age-600s",
+        "dueOffsetSeconds": 600
+      },
+      {
+        "case": "age-1800s-start",
+        "dueOffsetSeconds": 1800
+      },
+      {
+        "case": "age-1800s-finalize",
+        "dueOffsetSeconds": 1800
+      },
+      {
+        "case": "age-1800s-same-account-fresh-control",
+        "dueOffsetSeconds": 1800
+      }
+    ],
+    "mode": "concurrent-acquisition",
+    "totpStepRolloverSeconds": 30
+  },
   "campaignId": "AUTH-MFA-AGE-TOTP-01",
-  "caseCount": 30,
+  "caseCount": 33,
   "cases": [
     {
       "account": "pending-control",
       "ageSeconds": 0,
       "basis": "control",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaSignIn:finalize",
       "expectedLocal": {
         "basis": "source-read",
@@ -22,6 +102,7 @@
       "account": "pending-age-300",
       "ageSeconds": 300,
       "basis": "diagnostic",
+      "dueOffsetSeconds": 300,
       "endpoint": "accounts/mfaSignIn:start",
       "expectedLocal": {
         "basis": "source-read",
@@ -38,6 +119,7 @@
       "account": "pending-age-300",
       "ageSeconds": 300,
       "basis": "diagnostic",
+      "dueOffsetSeconds": 300,
       "endpoint": "accounts/mfaSignIn:finalize",
       "expectedLocal": {
         "basis": "source-read",
@@ -54,6 +136,7 @@
       "account": "pending-age-300",
       "ageSeconds": 0,
       "basis": "control",
+      "dueOffsetSeconds": 300,
       "endpoint": "accounts/mfaSignIn:finalize",
       "expectedLocal": {
         "basis": "source-read",
@@ -67,9 +150,27 @@
       "source": "mfa-signin-finalize"
     },
     {
+      "account": "enrollment-age-300",
+      "ageSeconds": 300,
+      "basis": "diagnostic",
+      "dueOffsetSeconds": 300,
+      "endpoint": "accounts/mfaEnrollment:finalize",
+      "expectedLocal": {
+        "basis": "source-read",
+        "errorCode": "SESSION_EXPIRED",
+        "status": 400
+      },
+      "family": "enrollment-session-age",
+      "id": "totp-enroll-session-age-300s",
+      "obligation": "A TOTP enrollment session untouched for at least 300 seconds is finalized with a code that is correct for the moment of submission, so only the session age can explain a refusal.",
+      "productionExpectation": "unobserved",
+      "source": "mfa-enrollment-finalize"
+    },
+    {
       "account": "pending-age-450",
       "ageSeconds": 450,
       "basis": "diagnostic",
+      "dueOffsetSeconds": 450,
       "endpoint": "accounts/mfaSignIn:start",
       "expectedLocal": {
         "basis": "source-read",
@@ -86,6 +187,7 @@
       "account": "pending-age-450",
       "ageSeconds": 450,
       "basis": "diagnostic",
+      "dueOffsetSeconds": 450,
       "endpoint": "accounts/mfaSignIn:finalize",
       "expectedLocal": {
         "basis": "source-read",
@@ -102,6 +204,7 @@
       "account": "pending-age-450",
       "ageSeconds": 0,
       "basis": "control",
+      "dueOffsetSeconds": 450,
       "endpoint": "accounts/mfaSignIn:finalize",
       "expectedLocal": {
         "basis": "source-read",
@@ -115,9 +218,27 @@
       "source": "mfa-signin-finalize"
     },
     {
+      "account": "enrollment-age-450",
+      "ageSeconds": 450,
+      "basis": "diagnostic",
+      "dueOffsetSeconds": 450,
+      "endpoint": "accounts/mfaEnrollment:finalize",
+      "expectedLocal": {
+        "basis": "source-read",
+        "errorCode": "SESSION_EXPIRED",
+        "status": 400
+      },
+      "family": "enrollment-session-age",
+      "id": "totp-enroll-session-age-450s",
+      "obligation": "A TOTP enrollment session untouched for at least 450 seconds is finalized with a code that is correct for the moment of submission, so only the session age can explain a refusal.",
+      "productionExpectation": "unobserved",
+      "source": "mfa-enrollment-finalize"
+    },
+    {
       "account": "pending-age-600",
       "ageSeconds": 600,
       "basis": "diagnostic",
+      "dueOffsetSeconds": 600,
       "endpoint": "accounts/mfaSignIn:start",
       "expectedLocal": {
         "basis": "source-read",
@@ -134,6 +255,7 @@
       "account": "pending-age-600",
       "ageSeconds": 600,
       "basis": "diagnostic",
+      "dueOffsetSeconds": 600,
       "endpoint": "accounts/mfaSignIn:finalize",
       "expectedLocal": {
         "basis": "source-read",
@@ -150,6 +272,7 @@
       "account": "pending-age-600",
       "ageSeconds": 0,
       "basis": "control",
+      "dueOffsetSeconds": 600,
       "endpoint": "accounts/mfaSignIn:finalize",
       "expectedLocal": {
         "basis": "source-read",
@@ -163,9 +286,78 @@
       "source": "mfa-signin-finalize"
     },
     {
+      "account": "enrollment-age-600",
+      "ageSeconds": 600,
+      "basis": "diagnostic",
+      "dueOffsetSeconds": 600,
+      "endpoint": "accounts/mfaEnrollment:finalize",
+      "expectedLocal": {
+        "basis": "source-read",
+        "errorCode": "INVALID_SESSION_INFO",
+        "status": 400
+      },
+      "family": "enrollment-session-age",
+      "id": "totp-enroll-session-age-600s",
+      "obligation": "A TOTP enrollment session untouched for at least 600 seconds is finalized with a code that is correct for the moment of submission, so only the session age can explain a refusal.",
+      "productionExpectation": "unobserved",
+      "source": "mfa-enrollment-finalize"
+    },
+    {
+      "account": "pending-age-1800",
+      "ageSeconds": 1800,
+      "basis": "control",
+      "dueOffsetSeconds": 1800,
+      "endpoint": "accounts/mfaSignIn:start",
+      "expectedLocal": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "family": "pending-age-causality",
+      "id": "age-1800s-start",
+      "obligation": "This age has already been refused in production, so it is the run's positive control for the refusal direction: if it is accepted too, the run aged nothing and no boundary may be read from the other samples. A pending credential untouched for at least 1800 seconds is offered to start; acceptance and classified refusal are both observations and neither proves expiry.",
+      "productionExpectation": "unobserved",
+      "source": "mfa-signin-start"
+    },
+    {
+      "account": "pending-age-1800",
+      "ageSeconds": 1800,
+      "basis": "control",
+      "dueOffsetSeconds": 1800,
+      "endpoint": "accounts/mfaSignIn:finalize",
+      "expectedLocal": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "family": "pending-age-causality",
+      "id": "age-1800s-finalize",
+      "obligation": "A session opened from the 1800-second pending is finalized with a fresh code; it is skipped when its start was refused.",
+      "productionExpectation": "unobserved",
+      "source": "mfa-signin-finalize"
+    },
+    {
+      "account": "pending-age-1800",
+      "ageSeconds": 0,
+      "basis": "control",
+      "dueOffsetSeconds": 1800,
+      "endpoint": "accounts/mfaSignIn:finalize",
+      "expectedLocal": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "family": "pending-age-causality",
+      "id": "age-1800s-same-account-fresh-control",
+      "obligation": "Immediately after the 1800-second attempt, the same account signs in again and completes MFA with a newly acquired pending credential. A refusal above paired with success here isolates pending age from account, enrollment and project configuration state; it still assumes the aged pending was untouched.",
+      "productionExpectation": "unobserved",
+      "source": "mfa-signin-finalize"
+    },
+    {
       "account": "pending-control",
       "ageSeconds": 0,
       "basis": "control",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaSignIn:finalize",
       "expectedLocal": {
         "basis": "source-read",
@@ -182,6 +374,7 @@
       "account": "totp-lifecycle",
       "ageSeconds": null,
       "basis": "diagnostic",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaEnrollment:start",
       "expectedLocal": {
         "basis": "source-read",
@@ -198,6 +391,7 @@
       "account": "totp-lifecycle",
       "ageSeconds": null,
       "basis": "negative",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaEnrollment:finalize",
       "expectedLocal": {
         "basis": "source-read",
@@ -214,6 +408,7 @@
       "account": "totp-lifecycle",
       "ageSeconds": null,
       "basis": "diagnostic",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaEnrollment:finalize",
       "expectedLocal": {
         "basis": "source-read",
@@ -230,6 +425,7 @@
       "account": "totp-lifecycle",
       "ageSeconds": null,
       "basis": "negative",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaEnrollment:finalize",
       "expectedLocal": {
         "basis": "source-read",
@@ -246,6 +442,7 @@
       "account": "totp-lifecycle",
       "ageSeconds": null,
       "basis": "diagnostic",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts:lookup",
       "expectedLocal": {
         "basis": "source-read",
@@ -262,6 +459,7 @@
       "account": "totp-lifecycle",
       "ageSeconds": null,
       "basis": "negative",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaSignIn:start",
       "expectedLocal": {
         "basis": "source-read",
@@ -278,6 +476,7 @@
       "account": "totp-lifecycle",
       "ageSeconds": null,
       "basis": "diagnostic",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaSignIn:finalize",
       "expectedLocal": {
         "basis": "source-read",
@@ -294,6 +493,7 @@
       "account": "totp-lifecycle",
       "ageSeconds": null,
       "basis": "negative",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaSignIn:finalize",
       "expectedLocal": {
         "basis": "source-read",
@@ -310,6 +510,7 @@
       "account": "totp-lifecycle",
       "ageSeconds": null,
       "basis": "diagnostic",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaEnrollment:withdraw",
       "expectedLocal": {
         "basis": "source-read",
@@ -326,6 +527,7 @@
       "account": "totp-lifecycle",
       "ageSeconds": null,
       "basis": "diagnostic",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts:lookup",
       "expectedLocal": {
         "basis": "source-read",
@@ -342,6 +544,7 @@
       "account": "totp-lifecycle",
       "ageSeconds": null,
       "basis": "negative",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaEnrollment:withdraw",
       "expectedLocal": {
         "basis": "source-read",
@@ -355,57 +558,10 @@
       "source": "mfa-enrollment-withdraw"
     },
     {
-      "account": "enrollment-age-300",
-      "ageSeconds": 300,
-      "basis": "diagnostic",
-      "endpoint": "accounts/mfaEnrollment:finalize",
-      "expectedLocal": {
-        "basis": "source-read",
-        "errorCode": "SESSION_EXPIRED",
-        "status": 400
-      },
-      "family": "enrollment-session-age",
-      "id": "totp-enroll-session-age-300s",
-      "obligation": "A TOTP enrollment session untouched for at least 300 seconds is finalized with a code that is correct for the moment of submission, so only the session age can explain a refusal.",
-      "productionExpectation": "unobserved",
-      "source": "mfa-enrollment-finalize"
-    },
-    {
-      "account": "enrollment-age-450",
-      "ageSeconds": 450,
-      "basis": "diagnostic",
-      "endpoint": "accounts/mfaEnrollment:finalize",
-      "expectedLocal": {
-        "basis": "source-read",
-        "errorCode": "SESSION_EXPIRED",
-        "status": 400
-      },
-      "family": "enrollment-session-age",
-      "id": "totp-enroll-session-age-450s",
-      "obligation": "A TOTP enrollment session untouched for at least 450 seconds is finalized with a code that is correct for the moment of submission, so only the session age can explain a refusal.",
-      "productionExpectation": "unobserved",
-      "source": "mfa-enrollment-finalize"
-    },
-    {
-      "account": "enrollment-age-600",
-      "ageSeconds": 600,
-      "basis": "diagnostic",
-      "endpoint": "accounts/mfaEnrollment:finalize",
-      "expectedLocal": {
-        "basis": "source-read",
-        "errorCode": "INVALID_SESSION_INFO",
-        "status": 400
-      },
-      "family": "enrollment-session-age",
-      "id": "totp-enroll-session-age-600s",
-      "obligation": "A TOTP enrollment session untouched for at least 600 seconds is finalized with a code that is correct for the moment of submission, so only the session age can explain a refusal.",
-      "productionExpectation": "unobserved",
-      "source": "mfa-enrollment-finalize"
-    },
-    {
       "account": "interaction-unverified",
       "ageSeconds": null,
       "basis": "negative",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaEnrollment:start",
       "expectedLocal": {
         "basis": "source-read",
@@ -422,6 +578,7 @@
       "account": "interaction-anonymous",
       "ageSeconds": null,
       "basis": "negative",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaEnrollment:start",
       "expectedLocal": {
         "basis": "source-read",
@@ -438,6 +595,7 @@
       "account": "interaction-unverified",
       "ageSeconds": null,
       "basis": "negative",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaEnrollment:start",
       "expectedLocal": {
         "basis": "source-read",
@@ -454,6 +612,7 @@
       "account": "totp-lifecycle",
       "ageSeconds": null,
       "basis": "negative",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaEnrollment:start",
       "expectedLocal": {
         "basis": "source-read",
@@ -470,6 +629,7 @@
       "account": "project",
       "ageSeconds": null,
       "basis": "control",
+      "dueOffsetSeconds": null,
       "endpoint": "projects:getConfig",
       "expectedLocal": {
         "basis": "source-read",
@@ -496,14 +656,17 @@
   },
   "documentationNonce": "fixed for this checked-in copy; a run requires a fresh nonce",
   "limits": {
+    "criticalPathSeconds": 1830,
     "enforced": true,
     "estimatedCostUsd": 0.1,
     "hardCostCeilingUsd": 0.5,
     "maxConcurrency": 1,
-    "maxOwnedAccounts": 12,
-    "maxRequests": 180,
-    "maxWallSeconds": 1800,
-    "recoveryReserveSeconds": 300
+    "maxOwnedAccounts": 14,
+    "maxRequests": 400,
+    "maxWallSeconds": 2700,
+    "provisioningSeconds": 420,
+    "recoveryReserveSeconds": 300,
+    "serialAgingSeconds": 10830
   },
   "owner": {
     "accounts": [
@@ -531,6 +694,11 @@
         "email": "o2-mfa-interaction-unverified-00000000000000000000000000000000@example.com",
         "ownership": "created-by-this-run",
         "role": "interaction-unverified"
+      },
+      {
+        "email": "o2-mfa-pending-age-1800-00000000000000000000000000000000@example.com",
+        "ownership": "created-by-this-run",
+        "role": "pending-age-1800"
       },
       {
         "email": "o2-mfa-pending-age-300-00000000000000000000000000000000@example.com",
@@ -607,6 +775,7 @@
   "productionAllowed": false,
   "productionExecuted": false,
   "project": "fireemu-35fe6",
+  "refusalDirectionControlAgeSeconds": 1800,
   "sampledAgesSeconds": [
     300,
     450,

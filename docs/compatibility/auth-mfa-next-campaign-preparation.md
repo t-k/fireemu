@@ -16,11 +16,17 @@ The earlier TOTP package, `AUTH-MFA-TOTP-ENROLL-RETRY-01`, was reduced to a non-
 
 **Sampled ages.** 300, 450 and 600 seconds. Production is known to have survived 300 seconds once and to have refused at 600 seconds once, in separate runs; 450 seconds bisects that interval and has never been sampled. Each sample is taken just past its target, so a refusal is attributed to the measured interval's upper endpoint rather than to the target.
 
+Google publishes no lifetime for `mfaPendingCredential` and none for the TOTP enrollment `sessionInfo` that `mfaEnrollment:start` returns. None of the eight reference sources the campaign cites states one. These ages therefore bracket an empirical boundary rather than test a documented one, and under the monotonicity assumption they can localise it to (300, 450] or (450, 600], or report that it is greater than 600.
+
+**A control for the refusal direction.** A fourth age, 1800 seconds, is carried as a control rather than as a sample, because production has already refused it. Without it, a run in which all three sampled ages are accepted cannot distinguish a lifetime longer than believed from a sampler that never aged anything. It costs no extra wall time, because every aged resource is acquired at the same origin and the ages elapse together.
+
 **TOTP.** Enrollment start returns the shared secret; the campaign computes RFC 6238 codes locally, so no device and no third-party application is involved. The lifecycle walks start, a deterministically wrong code, a correct code in the same session, a replay of the finalized session, factor readback, sign-in start, sign-in finalize, a replay of the consumed code, withdrawal, readback after withdrawal, and withdrawal of an identifier that no longer exists. A separate family ages the enrollment session itself at the same three points.
 
 **Interaction.** Unverified email, an ineligible first factor, a missing ID token, a second factor on an account that already has one, and a project-configuration readback before and after the run.
 
-Thirty cases in all: eleven for pending age, eleven for the TOTP lifecycle, three for enrollment-session age, and five interaction cases.
+Thirty-three cases in all: fourteen for pending age including the refusal-direction control, eleven for the TOTP lifecycle, three for enrollment-session age, and five interaction cases.
+
+**The acquisition schedule is contractual.** Every aged pending credential and every aged enrollment session is acquired at one common origin before any wait begins, and each aged row is scheduled at that origin plus its own age. The ages therefore elapse concurrently and the run's critical path is the largest age, 1800 seconds, plus one TOTP step rollover. The obvious alternative, acquiring each resource immediately before its own wait, costs the sum of the ages instead: 10830 seconds, which does not fit any sensible budget. The manifest declares the schedule and the per-case due offsets, the case list is ordered so those offsets never decrease, and a test walks the collector through both readings to show that one fits the budget and the other exhausts it.
 
 ## Bounded, resumable collection
 
@@ -32,11 +38,17 @@ Budgets are enforced rather than described. Exceeding the request budget or the 
 
 | Bound | Value |
 | --- | --- |
-| Requests | 180 |
-| Wall clock | 1800 s, including a 300 s recovery reserve |
-| Owned accounts | 12 |
+| Requests | 400 |
+| Wall clock | 2700 s |
+| Critical path | 1830 s |
+| Serial cost of the same aging | 10830 s |
+| Provisioning allowance | 420 s |
+| Recovery reserve | 300 s |
+| Owned accounts | 14 |
 | Estimated cost | US$0.10 |
 | Hard cost ceiling | US$0.50 |
+
+The request bound counts calls at the transport, not one notional call per case, so it covers the acquisition before the first row and the deletions after the last. The local shadow charges 132 against it; the headroom covers production's preflight, configuration read and restore, and credential refreshes.
 
 The estimate is low because nothing in the campaign is metered per message. TOTP verification sends nothing, and the pending-age family uses a test phone number with a fixed code, so no SMS is delivered. The ceiling exists to stop a run that somehow starts billing, not because the expected cost approaches it.
 
@@ -54,13 +66,15 @@ The envelope allows only Identity Platform account and project-configuration end
 
 ## Provenance
 
-The earlier review found that the comparator accepted any forty-character commit and any sixty-four-character digest a caller supplied, so the binding proved nothing. The binding is now recomputed rather than trusted: the comparator hashes the campaign definition, the collector, the code computation, the comparator itself and the environment lockfiles from the worktree it is running in, and accepts a receipt only when the receipt's binding equals what it just computed. A forged or stale binding fails verification instead of unlocking a comparison. The receipt also records the commit the run was taken at and whether that worktree was clean; an unresolved or dirty worktree is treated as unbound.
+The earlier review found that the comparator accepted any forty-character commit and any sixty-four-character digest a caller supplied, so the binding proved nothing. The binding is now recomputed rather than trusted: the comparator hashes every non-test module in the package, the recorder that issues the requests included, together with the environment lockfiles, from the worktree it is running in, and accepts a receipt only when the receipt's binding equals what it just computed. Binding the case list without the recorder would have proved which observations were planned while leaving the program that made them free to differ, so the bound set is derived from the package rather than hand-picked, and a test fails if a new module is added without binding it. A forged or stale binding fails verification instead of unlocking a comparison. The receipt also records the commit the run was taken at and whether that worktree was clean; an unresolved or dirty worktree is treated as unbound.
 
-Agreement additionally requires a production side that says it was executed. Preparation receipts say `productionExecuted=false`, so no preparation input can reach agreement no matter how well it is bound. A pair that is fully bound but has no production observation classifies as `PREPARATION_ONLY`.
+Each receipt also carries the manifest it ran, and the comparator recompiles that manifest from the code before it will compare anything. A receipt whose manifest does not recompile, whose rows do not match its manifest's cases in order, or whose manifest differs from the other side's outside the per-run owner block, is indeterminate. The two sides may hold different nonces, because each owns its own accounts.
+
+Agreement additionally requires a production side that says it was executed and carries owner approval bound to that receipt's own manifest digest and nonce digest, naming an approver and granting exactly one run. Preparation receipts say `productionExecuted=false` and carry no approval, so no preparation input can reach agreement no matter how well it is bound; a bound pair with no production observation classifies as `PREPARATION_ONLY`. The honest limit of this check is worth stating: it raises forgery from editing one boolean to reproducing a validated manifest and an approval bound to its digests. It is not a signature, and a JSON receipt cannot be one.
 
 ## Local shadow against fireemu
 
-All thirty cases were run against an owned local `fireemu` instance: one strict Auth artifact with TOTP configured, on OS-assigned ports, aged by advancing that instance's own virtual clock, with every account deleted and its absence confirmed afterwards. Every row's observed status and error code matched the expectation read from the sources, and the ledger contains no secret material.
+All thirty-three cases were run against an owned local `fireemu` instance: one strict Auth artifact with TOTP configured, on OS-assigned ports, aged by advancing that instance's own virtual clock, with every account deleted and its absence confirmed afterwards. Every row's observed status and error code matched the expectation read from the sources, and the ledger contains no secret material.
 
 Three predictions were corrected by that run and the corrections are in the case definitions:
 
@@ -75,6 +89,7 @@ The local answers that matter for the production comparison:
 | Pending credential at 300 s | accepted, MFA completes | survived once, revision 1 |
 | Pending credential at 450 s | accepted, MFA completes | never sampled |
 | Pending credential at 600 s | accepted, MFA completes | refused once, revision 2 |
+| Pending credential at 1800 s | accepted, MFA completes | refused once, revision 2 |
 | TOTP `mfaSignIn:start` | `INVALID_ARGUMENT`, no start step | unobserved |
 | Project multi-factor configuration | not modelled | unobserved |
 

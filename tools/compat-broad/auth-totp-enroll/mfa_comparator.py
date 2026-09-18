@@ -16,8 +16,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from mfa_cases import CAMPAIGN_ID, CASE_IDS
-from mfa_collector import is_sensitive_key
+from mfa_cases import CAMPAIGN_ID
+from mfa_collector import digest, is_sensitive_key
+from mfa_manifest import validate_campaign
 from mfa_provenance import repository_root, verify_binding
 
 CLASSIFICATIONS = (
@@ -27,23 +28,39 @@ CLASSIFICATIONS = (
     "PREPARATION_ONLY",
     "INDETERMINATE",
 )
-# Values that legitimately differ between two correct runs.
-_NONDETERMINISTIC = (
-    "localid",
-    "uid",
-    "email",
-    "enrollmentid",
-    "enrolledat",
-    "elapsed",
-    "age",
+# Values that legitimately differ between two correct runs. These are exact field names,
+# not substrings: a substring rule for "age" also swallows `message`, `stage`, `usage`,
+# `language` and `storage`, which would erase a real difference in the service's error
+# prose instead of reporting it.
+_NONDETERMINISTIC = frozenset(
+    {
+        "localid",
+        "uid",
+        "email",
+        "mfaenrollmentid",
+        "enrollmentid",
+        "enrolledat",
+        "createdat",
+        "recordedat",
+        "startedat",
+        "elapsedms",
+        "elapsedseconds",
+        "pendingageseconds",
+        "sessionageseconds",
+        "requestedat",
+    }
 )
 
 
+def is_dynamic_key(key: str) -> bool:
+    """Return True for fields that legitimately differ between two correct runs."""
+    return key.lower() in _NONDETERMINISTIC
+
+
 def _project(value: Any, key: str = "") -> Any:
-    lowered = key.lower()
     if key and is_sensitive_key(key):
         return "[REDACTED]"
-    if any(part in lowered for part in _NONDETERMINISTIC):
+    if key and is_dynamic_key(key):
         return f"[DYNAMIC:{type(value).__name__}]"
     if isinstance(value, dict):
         return {name: _project(item, name) for name, item in sorted(value.items())}
@@ -59,12 +76,58 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _approval_problems(record: dict, campaign: Any) -> list[str]:
+    """An executed production side has to carry approval bound to its own manifest."""
+    if record.get("productionExecuted") is not True:
+        return []
+    approval = record.get("ownerApproval")
+    if not isinstance(approval, dict):
+        return ["production execution is asserted without owner approval evidence"]
+    problems = []
+    if (
+        not isinstance(approval.get("approvedBy"), str)
+        or not approval["approvedBy"].strip()
+    ):
+        problems.append("owner approval names no approver")
+    if not isinstance(campaign, dict):
+        problems.append("owner approval cannot be bound without a valid manifest")
+        return problems
+    if approval.get("manifestDigest") != digest(campaign):
+        problems.append("owner approval is not bound to this manifest")
+    if approval.get("nonceDigest") != campaign.get("owner", {}).get("nonceDigest"):
+        problems.append("owner approval is not bound to this run's nonce")
+    if approval.get("grant") != "one-run":
+        problems.append("owner approval does not grant exactly one run")
+    return problems
+
+
+def _case_ids(campaign: Any) -> list[str]:
+    if not isinstance(campaign, dict) or not isinstance(campaign.get("cases"), list):
+        return []
+    return [case.get("id") for case in campaign["cases"] if isinstance(case, dict)]
+
+
+def _without_owner(campaign: dict) -> dict:
+    """The manifest minus the per-run owner block, which each side holds separately."""
+    return {name: value for name, value in campaign.items() if name != "owner"}
+
+
 def _receipt_problems(record: Any, side: str, root: Path) -> list[str]:
     problems: list[str] = []
     if not isinstance(record, dict):
         return ["receipt is not an object"]
     if record.get("campaignId") != CAMPAIGN_ID:
         problems.append("campaignId does not match")
+    campaign = record.get("campaign")
+    if not validate_campaign(campaign):
+        problems.append(
+            "the receipt carries no manifest that recompiles from this code"
+        )
+        campaign = None
+    elif campaign["campaignId"] != CAMPAIGN_ID:
+        problems.append("the receipt's manifest belongs to another campaign")
+        campaign = None
+    problems.extend(_approval_problems(record, campaign))
     if record.get("side") != side:
         problems.append(f"side is not {side}")
     if record.get("recordingComplete") is not True:
@@ -77,10 +140,14 @@ def _receipt_problems(record: Any, side: str, root: Path) -> list[str]:
     elif worktree.get("clean") is not True:
         problems.append("worktree was not clean when the run was recorded")
     rows = record.get("rows")
-    if not isinstance(rows, list) or [
-        row.get("id") for row in rows if isinstance(row, dict)
-    ] != list(CASE_IDS):
-        problems.append("rows are missing, reordered, or duplicated")
+    expected_ids = _case_ids(campaign)
+    if not expected_ids:
+        problems.append("the receipt's manifest lists no cases to compare against")
+    elif (
+        not isinstance(rows, list)
+        or [row.get("id") for row in rows if isinstance(row, dict)] != expected_ids
+    ):
+        problems.append("rows do not match the manifest's cases in order")
     else:
         for row in rows:
             status = row.get("status")
@@ -134,6 +201,11 @@ def compare(local: Any, production: Any, root: Path | None = None) -> dict[str, 
         result["reason"] = "the two sides were recorded from different bound inputs"
         result["normalizedDigest"] = _digest([_project(local), _project(production)])
         return result
+    if _without_owner(local["campaign"]) != _without_owner(production["campaign"]):
+        result["classification"] = "INDETERMINATE"
+        result["reason"] = "the two sides ran different manifests"
+        result["normalizedDigest"] = _digest([_project(local), _project(production)])
+        return result
     differences = []
     nondeterministic = []
     for left, right in zip(local["rows"], production["rows"], strict=True):
@@ -165,7 +237,7 @@ def compare(local: Any, production: Any, root: Path | None = None) -> dict[str, 
         return result
     if differences:
         result["classification"] = "DIFF"
-        result["reason"] = f"{len(differences)} of {len(CASE_IDS)} rows differ"
+        result["reason"] = f"{len(differences)} of {len(local['rows'])} rows differ"
         return result
     if nondeterministic:
         result["classification"] = "EXPECTED_NONDETERMINISM"

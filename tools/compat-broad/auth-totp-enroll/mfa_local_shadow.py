@@ -27,8 +27,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from mfa_cases import CAMPAIGN_ID, SAMPLED_AGES_SECONDS, observation_cases
+from mfa_cases import (
+    AGED_PENDING_SAMPLES,
+    CAMPAIGN_ID,
+    SAMPLED_AGES_SECONDS,
+    observation_cases,
+)
 from mfa_collector import (
+    assert_no_sensitive_material,
     checkpoint_bytes,
     initial_state,
     load_checkpoint,
@@ -47,6 +53,8 @@ API_KEY = "fireemu-local-shadow-key"
 TEST_PHONE = "+15555550100"
 # The local instance sends no SMS; the token is a placeholder the request shape requires.
 PHONE_SIGN_IN_INFO = {"recaptchaToken": "fireemu-local-shadow"}
+# The owned instance is reaped rather than abandoned when this deadline passes.
+CHILD_TIMEOUT_SECONDS = 900
 CONFIG = {"schemaVersion": 1, "profile": "strict", "auth": {"totp": {}}}
 SCHEMA = "o2-mfa-local-shadow-v1"
 
@@ -102,6 +110,9 @@ class Instance:
     """One owned local Auth instance addressed by its loopback origins."""
 
     def __init__(self, origin: str, control: str, token: str) -> None:
+        # Every call through this instance is charged, so the budget reflects the run's
+        # real HTTP traffic rather than one notional request per case.
+        self.requests = 0
         self.origin = origin
         self.identity = origin + "/identitytoolkit.googleapis.com"
         # The control URL is handed over with its version prefix already attached.
@@ -109,11 +120,17 @@ class Instance:
         self.control = base.removesuffix("/v1")
         self.token = token
 
+    def send(
+        self, url: str, body: Any = None, token: str | None = None
+    ) -> tuple[int, dict]:
+        self.requests += 1
+        return _call(url, body, token)
+
     def public(self, path: str, body: Any) -> tuple[int, dict]:
-        return _call(f"{self.identity}{path}?key={API_KEY}", body)
+        return self.send(f"{self.identity}{path}?key={API_KEY}", body)
 
     def admin(self, path: str, body: Any) -> tuple[int, dict]:
-        return _call(f"{self.identity}{path}", body, token="owner")
+        return self.send(f"{self.identity}{path}", body, token="owner")
 
     def emulator(self, path: str) -> tuple[int, dict]:
         # The inspection routes are served at the instance root, not under the API host prefix.
@@ -122,7 +139,7 @@ class Instance:
         )
 
     def advance(self, seconds: float) -> None:
-        status, _ = _call(
+        status, _ = self.send(
             f"{self.control}/v1/sessions/default/clock:advance",
             {"millis": max(1, int(seconds * 1000) + 1)},
             token=self.token,
@@ -132,7 +149,9 @@ class Instance:
 
     def now(self) -> int:
         """Return the owned instance's logical time, which the codes must be computed at."""
-        status, payload = _call(f"{self.control}/v1/sessions/default", token=self.token)
+        status, payload = self.send(
+            f"{self.control}/v1/sessions/default", token=self.token
+        )
         if status != 200:
             raise RuntimeError(f"clock read refused with {status}")
         value = payload["clock"]
@@ -150,13 +169,20 @@ class Instance:
 
 
 def _row(case_id: str, status: int, code: str | None, **extra: Any) -> dict[str, Any]:
-    return {
+    """Build one published row, refusing any extra that names secret material.
+
+    The row, not the collector observation, is what leaves the machine, so it gets the
+    same screen rather than relying on the redaction that happens later.
+    """
+    row = {
         "id": case_id,
         "status": status,
         "errorCode": code,
         "outcome": "observed",
         **extra,
     }
+    assert_no_sensitive_material(row, "published row")
+    return row
 
 
 def _observe(instance: Instance, path: str, body: Any) -> tuple[int, dict, str | None]:
@@ -265,6 +291,57 @@ def latest_code(instance: Instance) -> str:
     return payload["verificationCodes"][-1]["code"]
 
 
+def _acquire_aged_resources(
+    instance: Instance, account_for: Any
+) -> tuple[dict[int, dict], dict[int, tuple[str, TotpParameters, str]]]:
+    """Acquire every aged resource at one common origin.
+
+    The manifest's aging schedule is `concurrent-acquisition`: all aged pending
+    credentials and all aged enrollment sessions exist before any wait begins, so their
+    ages elapse together and the run's critical path is the largest age rather than the
+    sum. Acquiring each resource immediately before its own wait is the obvious reading
+    and costs the serial total, which does not fit the wall budget.
+    """
+    pendings = {
+        age: phone_pending(instance, account_for(f"pending-age-{age}"))
+        for age in AGED_PENDING_SAMPLES
+    }
+    sessions = {
+        age: enroll_totp(instance, account_for(f"enrollment-age-{age}"))
+        for age in SAMPLED_AGES_SECONDS
+    }
+    return pendings, sessions
+
+
+def _complete_phone_mfa(
+    instance: Instance, pending: dict
+) -> tuple[int, dict, str | None]:
+    """Offer a pending credential to start and, if accepted, finalize with a fresh code."""
+    status, payload, code = _observe(
+        instance,
+        "/v2/accounts/mfaSignIn:start",
+        {
+            "mfaPendingCredential": pending["pending"],
+            "mfaEnrollmentId": pending["enrollmentId"],
+            "phoneSignInInfo": PHONE_SIGN_IN_INFO,
+        },
+    )
+    if status != 200:
+        return status, payload, code
+    session = payload["phoneResponseInfo"]["sessionInfo"]
+    return _observe(
+        instance,
+        "/v2/accounts/mfaSignIn:finalize",
+        {
+            "mfaPendingCredential": pending["pending"],
+            "phoneVerificationInfo": {
+                "sessionInfo": session,
+                "code": latest_code(instance),
+            },
+        },
+    )
+
+
 def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
     """Walk the ordered cases, checkpointing before each aged wait."""
     plan = compile_campaign(uuid.uuid4().hex)
@@ -272,7 +349,39 @@ def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
     checkpoint = output / "checkpoint.json"
     rows: dict[str, dict] = {}
     accounts: dict[str, dict] = {}
+    try:
+        _walk(instance, state, checkpoint, rows, accounts)
+    finally:
+        # Cleanup runs whether the walk finished, refused, or raised.
+        _delete_owned(instance, state, accounts)
+        # The budget bounds the whole run's traffic, including the calls made before the
+        # first row was charged and the deletions made after the last one.
+        state["requests"] = max(state["requests"], instance.requests)
+        checkpoint.write_bytes(checkpoint_bytes(state))
+    return build_report(rows, load_checkpoint(checkpoint.read_bytes()), plan)
+
+
+def _delete_owned(instance: Instance, state: dict[str, Any], accounts: dict) -> None:
+    for record in accounts.values():
+        instance.admin(
+            f"/v1/projects/{PROJECT}/accounts:delete", {"localId": record["localId"]}
+        )
+        status, payload = instance.admin(
+            f"/v1/projects/{PROJECT}/accounts:lookup", {"localId": [record["localId"]]}
+        )
+        absent = status == 200 and not payload.get("users")
+        mark_deleted(state, record["localId"], absence_verified=absent)
+
+
+def _walk(
+    instance: Instance,
+    state: dict[str, Any],
+    checkpoint: Path,
+    rows: dict[str, dict],
+    accounts: dict[str, dict],
+) -> None:
     suffix = uuid.uuid4().hex[:12]
+    charged = {"requests": instance.requests}
 
     def account_for(role: str, verified: bool = True) -> dict:
         if role not in accounts:
@@ -285,43 +394,32 @@ def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
 
     def finish(case_id: str, status: int, code: str | None, **extra: Any) -> None:
         rows[case_id] = _row(case_id, status, code, **extra)
-        record_step(state, case_id, {"status": status, "errorCode": code}, time.time())
+        spent = instance.requests - charged["requests"]
+        charged["requests"] = instance.requests
+        record_step(
+            state,
+            case_id,
+            {"status": status, "errorCode": code},
+            time.time(),
+            requests=max(1, spent),
+        )
         checkpoint.write_bytes(checkpoint_bytes(state))
 
-    # --- pending-age causality, using a test phone number so no SMS is ever sent -------
     control = account_for("pending-control")
-    held = phone_pending(instance, control)
-    status, payload, code = _observe(
-        instance,
-        "/v2/accounts/mfaSignIn:start",
-        {
-            "mfaPendingCredential": held["pending"],
-            "mfaEnrollmentId": held["enrollmentId"],
-            "phoneSignInInfo": PHONE_SIGN_IN_INFO,
-        },
-    )
-    if status == 200:
-        session = payload["phoneResponseInfo"]["sessionInfo"]
-        status, payload, code = _observe(
-            instance,
-            "/v2/accounts/mfaSignIn:finalize",
-            {
-                "mfaPendingCredential": held["pending"],
-                "phoneVerificationInfo": {
-                    "sessionInfo": session,
-                    "code": latest_code(instance),
-                },
-            },
-        )
+    pendings, sessions = _acquire_aged_resources(instance, account_for)
+    origin = instance.now()
+
+    status, _, code = _complete_phone_mfa(instance, phone_pending(instance, control))
     finish("baseline-fresh-finalize", status, code)
 
-    for age in SAMPLED_AGES_SECONDS:
-        role = f"pending-age-{age}"
-        aged_account = account_for(role)
-        aged = phone_pending(instance, aged_account)
-        # A real production run waits here; the owned local instance ages by its own clock,
-        # and the checkpoint written above is what a resumed production run would reload.
-        instance.advance(age + 1)
+    for age in AGED_PENDING_SAMPLES:
+        # A production run waits here; the owned local instance advances its own clock.
+        # Either way the checkpoint written by the previous `finish` is what a resumed
+        # process reloads, and every aged resource already exists.
+        elapsed = instance.now() - origin
+        if age > elapsed:
+            instance.advance(age - elapsed)
+        aged = pendings[age]
         status, payload, code = _observe(
             instance,
             "/v2/accounts/mfaSignIn:start",
@@ -361,59 +459,41 @@ def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
                 "errorCode": code,
                 "outcome": "skipped",
             }
-        fresh = phone_pending(instance, aged_account)
-        status, payload, code = _observe(
-            instance,
-            "/v2/accounts/mfaSignIn:start",
-            {
-                "mfaPendingCredential": fresh["pending"],
-                "mfaEnrollmentId": fresh["enrollmentId"],
-                "phoneSignInInfo": PHONE_SIGN_IN_INFO,
-            },
+        aged_account = accounts[f"pending-age-{age}"]
+        status, _, code = _complete_phone_mfa(
+            instance, fresh_pending(instance, aged_account)
         )
-        if status == 200:
-            session = payload["phoneResponseInfo"]["sessionInfo"]
-            status, payload, code = _observe(
-                instance,
-                "/v2/accounts/mfaSignIn:finalize",
-                {
-                    "mfaPendingCredential": fresh["pending"],
-                    "phoneVerificationInfo": {
-                        "sessionInfo": session,
-                        "code": latest_code(instance),
-                    },
-                },
-            )
         finish(
             f"age-{age}s-same-account-fresh-control",
             status,
             code,
             pendingAgeSeconds=0.0,
         )
-
-    held = phone_pending(instance, control)
-    status, payload, code = _observe(
-        instance,
-        "/v2/accounts/mfaSignIn:start",
-        {
-            "mfaPendingCredential": held["pending"],
-            "mfaEnrollmentId": held["enrollmentId"],
-            "phoneSignInInfo": PHONE_SIGN_IN_INFO,
-        },
-    )
-    if status == 200:
-        session = payload["phoneResponseInfo"]["sessionInfo"]
-        status, payload, code = _observe(
-            instance,
-            "/v2/accounts/mfaSignIn:finalize",
-            {
-                "mfaPendingCredential": held["pending"],
-                "phoneVerificationInfo": {
-                    "sessionInfo": session,
-                    "code": latest_code(instance),
+        if age in SAMPLED_AGES_SECONDS:
+            secret, parameters, session_info = sessions[age]
+            aged_subject = accounts[f"enrollment-age-{age}"]
+            status, _, code = _observe(
+                instance,
+                "/v2/accounts/mfaEnrollment:finalize",
+                {
+                    "idToken": aged_subject["idToken"],
+                    "totpVerificationInfo": {
+                        "sessionInfo": session_info,
+                        "verificationCode": totp_code(
+                            secret, instance.now(), parameters
+                        ),
+                    },
+                    "displayName": "aged totp",
                 },
-            },
-        )
+            )
+            finish(
+                f"totp-enroll-session-age-{age}s",
+                status,
+                code,
+                sessionAgeSeconds=float(age),
+            )
+
+    status, _, code = _complete_phone_mfa(instance, phone_pending(instance, control))
     finish("final-fresh-finalize", status, code)
 
     # --- TOTP lifecycle ---------------------------------------------------------------
@@ -554,30 +634,6 @@ def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
     )
     finish("totp-withdraw-unknown", status, code)
 
-    # --- enrollment session age -------------------------------------------------------
-    for age in SAMPLED_AGES_SECONDS:
-        aged = account_for(f"enrollment-age-{age}")
-        secret, parameters, session_info = enroll_totp(instance, aged)
-        instance.advance(age)
-        status, payload, code = _observe(
-            instance,
-            "/v2/accounts/mfaEnrollment:finalize",
-            {
-                "idToken": aged["idToken"],
-                "totpVerificationInfo": {
-                    "sessionInfo": session_info,
-                    "verificationCode": totp_code(secret, instance.now(), parameters),
-                },
-                "displayName": "aged totp",
-            },
-        )
-        finish(
-            f"totp-enroll-session-age-{age}s",
-            status,
-            code,
-            sessionAgeSeconds=float(age),
-        )
-
     # --- interaction ------------------------------------------------------------------
     unverified = account_for("interaction-unverified", verified=False)
     status, payload, code = _observe(
@@ -613,21 +669,10 @@ def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
         mfaConfigPresent="mfaConfig" in payload,
     )
 
-    # --- cleanup ----------------------------------------------------------------------
-    for record in accounts.values():
-        instance.admin(
-            f"/v1/projects/{PROJECT}/accounts:delete", {"localId": record["localId"]}
-        )
-        status, payload = instance.admin(
-            f"/v1/projects/{PROJECT}/accounts:lookup", {"localId": [record["localId"]]}
-        )
-        absent = status == 200 and not payload.get("users")
-        mark_deleted(state, record["localId"], absence_verified=absent)
-    checkpoint.write_bytes(checkpoint_bytes(state))
-    return build_report(rows, load_checkpoint(checkpoint.read_bytes()))
 
-
-def build_report(rows: dict[str, dict], state: dict[str, Any]) -> dict[str, Any]:
+def build_report(
+    rows: dict[str, dict], state: dict[str, Any], plan: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Assemble the shadow ledger, refusing to publish a run with an unrecorded case."""
     missing = [case["id"] for case in observation_cases() if case["id"] not in rows]
     if missing:
@@ -652,9 +697,15 @@ def build_report(rows: dict[str, dict], state: dict[str, Any]) -> dict[str, Any]
     return {
         "schema": SCHEMA,
         "campaignId": CAMPAIGN_ID,
+        # The comparator recompiles this manifest and refuses a receipt that carries none,
+        # so a row list cannot be judged against a plan nobody can reproduce.
+        "campaign": plan if plan is not None else compile_campaign(uuid.uuid4().hex),
         "side": "local",
         "productionExecuted": False,
         "recordingComplete": run_complete(state),
+        # The real number of calls the transport made, not one per case.
+        "requestsCharged": state["requests"],
+        "maxRequests": state["maxRequests"],
         "provenance": compute_provenance(repository_root()),
         "worktree": describe_worktree(repository_root()),
         "rows": ordered,
@@ -696,6 +747,65 @@ def child(output: Path) -> int:
     return 0
 
 
+def _ps_field(pid: int, field: str) -> str | None:
+    state = subprocess.run(
+        ["ps", "-p", str(pid), "-o", f"{field}="],
+        text=True,
+        stdout=subprocess.PIPE,
+        check=False,
+    )
+    if state.returncode != 0 or not state.stdout.strip():
+        return None
+    return state.stdout.strip()
+
+
+def process_identity(pid: int) -> tuple[str, str] | None:
+    """Return one live process's command name and arguments, or None if it is gone.
+
+    The two fields are read separately because macOS truncates `comm` to a fixed width,
+    so asking for both at once and splitting on whitespace mixes a cut-off path into the
+    argument vector.
+    """
+    command = _ps_field(pid, "comm")
+    arguments = _ps_field(pid, "args")
+    if command is None or arguments is None:
+        return None
+    return (command, arguments)
+
+
+def reap_owned_child(process: subprocess.Popen, expected_argv: list[str]) -> str:
+    """Stop the owned instance, verifying identity before each signal and after the last.
+
+    A PID can be reused between the check and the signal, so the command name and the
+    whole argument vector are confirmed against what this process started before anything
+    is sent, and the process is confirmed gone afterwards rather than assumed.
+    """
+    expected = " ".join(expected_argv)
+    for signal_number in (signal.SIGTERM, signal.SIGKILL):
+        identity = process_identity(process.pid)
+        if identity is None:
+            break
+        command, arguments = identity
+        # The whole argument vector is the real identity check. `comm` is only a sanity
+        # check and is compared as a prefix, because the platform truncates it.
+        if arguments != expected or not (
+            expected_argv[0].startswith(command) or command.startswith(expected_argv[0])
+        ):
+            return "pid-reused-refusing-to-signal"
+        try:
+            os.kill(process.pid, signal_number)
+        except ProcessLookupError:
+            break
+        try:
+            process.wait(timeout=10)
+            break
+        except subprocess.TimeoutExpired:
+            continue
+    if process_identity(process.pid) is not None:
+        return "survived"
+    return "stopped"
+
+
 def parent(output: Path) -> int:
     root = repository_root()
     binary = root / "target" / "debug" / "fireemu"
@@ -712,49 +822,50 @@ def parent(output: Path) -> int:
         if not key.startswith(("GOOGLE_", "FIREBASE_", "GCLOUD_", "CLOUDSDK_"))
     }
     environment["GOOGLE_CLOUD_PROJECT"] = PROJECT
-    completed = subprocess.run(
-        [
-            str(binary),
-            "exec",
-            "--config",
-            str(config),
-            "--project",
-            PROJECT,
-            "--only",
-            "auth",
-            "--http-port",
-            "0",
-            "--log-verbosity",
-            "quiet",
-            "--",
-            sys.executable,
-            str(Path(__file__).resolve()),
-            "--child",
-            str(output),
-        ],
-        cwd=root,
-        env=environment,
-        check=False,
-        timeout=600,
-    )
-    remaining = subprocess.run(
-        ["pgrep", "-f", f"fireemu exec --config {config}"],
-        text=True,
-        stdout=subprocess.PIPE,
-        check=False,
-    )
-    for pid in [line for line in remaining.stdout.split() if line.isdigit()]:
-        os.kill(int(pid), signal.SIGTERM)
+    argv = [
+        str(binary),
+        "exec",
+        "--config",
+        str(config),
+        "--project",
+        PROJECT,
+        "--only",
+        "auth",
+        "--http-port",
+        "0",
+        "--log-verbosity",
+        "quiet",
+        "--",
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--child",
+        str(output),
+    ]
+    process = subprocess.Popen(argv, cwd=root, env=environment)
+    cleanup = "stopped"
+    try:
+        returncode = process.wait(timeout=CHILD_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        # The campaign's own aging can outlast this deadline, so a timeout is a reachable
+        # path and must not leave an owned instance running.
+        returncode = None
+        cleanup = reap_owned_child(process, argv)
+    finally:
+        if process.poll() is None:
+            cleanup = reap_owned_child(process, argv)
+    if cleanup != "stopped":
+        print(f"owned instance cleanup: {cleanup}", file=sys.stderr)
+        return 1
     if not (output / "shadow.json").is_file():
-        print(
-            f"no shadow ledger was written (exit {completed.returncode})",
-            file=sys.stderr,
-        )
+        print(f"no shadow ledger was written (exit {returncode})", file=sys.stderr)
         return 1
     report = json.loads((output / "shadow.json").read_text(encoding="utf-8"))
     print(
         json.dumps(
-            {key: report[key] for key in ("recordingComplete", "disagreements")},
+            {
+                key: report[key]
+                for key in ("recordingComplete", "disagreements", "requestsCharged")
+            },
             indent=2,
         )
     )

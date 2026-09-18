@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from mfa_cases import CASE_IDS
+from mfa_cases import CASE_IDS, observation_cases
 from mfa_collector import (
     BudgetError,
     CheckpointError,
@@ -169,3 +169,58 @@ def test_a_run_is_incomplete_until_every_step_and_the_cleanup_resolve() -> None:
     assert run_complete(state) is True
     register_owned(state, "account", "uid-late", ORIGIN + 2)
     assert run_complete(state) is False
+
+
+def test_the_overlapped_schedule_completes_inside_the_wall_budget() -> None:
+    """Acquiring every aged resource at one origin makes the ages elapse concurrently."""
+    plan = compile_campaign(NONCE)
+    state = initial_state(plan, ORIGIN)
+    schedule = {
+        row["case"]: ORIGIN + row["dueOffsetSeconds"]
+        for row in plan["agingSchedule"]["dueOffsetsSeconds"]
+    }
+    # One early step acquires everything and schedules every aged row together.
+    record_step(state, CASE_IDS[0], {"status": 200}, ORIGIN, schedule=schedule)
+    now = ORIGIN
+    for _ in range(len(CASE_IDS) * 2):
+        action = next_action(state, now)
+        if action["action"] == "DONE":
+            break
+        if action["action"] == "WAIT":
+            now = action["dueAt"]
+            continue
+        if action["action"] == "CLEANUP":
+            break
+        record_step(state, action["stepId"], {"status": 200}, now)
+    assert all(step["status"] == "done" for step in state["steps"])
+    assert state["aborted"] is False
+    elapsed = now - ORIGIN
+    assert elapsed == plan["limits"]["criticalPathSeconds"] - 30
+    assert elapsed < plan["limits"]["maxWallSeconds"]
+
+
+def test_the_serial_schedule_would_exhaust_the_wall_budget() -> None:
+    plan = compile_campaign(NONCE)
+    state = initial_state(plan, ORIGIN)
+    now = ORIGIN
+    by_id = {case["id"]: case for case in observation_cases()}
+    for identifier in CASE_IDS:
+        offset = by_id[identifier]["dueOffsetSeconds"]
+        if offset:
+            # Acquiring the resource here means its whole age elapses from this moment.
+            now += offset
+        if next_action(state, now)["action"] != "RUN":
+            break
+        record_step(state, identifier, {"status": 200}, now)
+    assert state["aborted"] is True
+    assert state["abortReason"] == "wall-budget-exhausted"
+
+
+def test_a_skipped_step_cannot_be_recorded_after_an_abort() -> None:
+    state = fresh()
+    record_step(
+        state, CASE_IDS[0], {"status": 200}, ORIGIN, requests=state["maxRequests"] + 1
+    )
+    assert state["aborted"] is True
+    with pytest.raises(BudgetError):
+        skip_step(state, CASE_IDS[1], "its start was refused", ORIGIN + 1)

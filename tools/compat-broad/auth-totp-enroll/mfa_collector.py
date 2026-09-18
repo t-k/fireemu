@@ -67,6 +67,14 @@ def digest(value: Any) -> str:
     return hashlib.sha256(_canonical(value)).hexdigest()
 
 
+def assert_no_sensitive_material(value: Any, what: str = "observation") -> None:
+    """Refuse a structure that names secret or credential material, before it is stored."""
+    if _contains_sensitive(value):
+        raise SensitiveMaterialError(
+            f"{what} must not carry secret or credential material"
+        )
+
+
 def _contains_sensitive(value: Any, key: str = "") -> bool:
     if key and is_sensitive_key(key):
         return True
@@ -129,7 +137,13 @@ def cleanup_complete(state: dict[str, Any]) -> bool:
 
 
 def next_action(state: dict[str, Any], now: float) -> dict[str, Any]:
-    """Decide the next action without blocking, sleeping, or mutating `state`."""
+    """Decide the next action without blocking or sleeping.
+
+    This is not a pure inspection: a request or wall-clock budget that has already been
+    exceeded is latched here, so asking a run that outlived its deadline what to do next
+    aborts it. That is deliberate, because an expired run must not be resumable, but it
+    means a caller cannot use this to peek at a stale checkpoint without consequence.
+    """
     now = float(now)
     if not state["aborted"]:
         if state["requests"] > state["maxRequests"]:
@@ -237,6 +251,8 @@ def skip_step(
     state: dict[str, Any], step_id: str, reason: str, now: float
 ) -> dict[str, Any]:
     """Resolve a step that a refused precondition makes unobservable."""
+    if state["aborted"]:
+        raise BudgetError(f"run aborted: {state['abortReason']}")
     step = _step(state, step_id)
     if step["status"] != "pending":
         raise BudgetError(f"step already resolved: {step_id}")

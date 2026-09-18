@@ -8,12 +8,17 @@ from pathlib import Path
 
 import pytest
 from mfa_cases import (
+    AGED_PENDING_SAMPLES,
     CAMPAIGN_ID,
     CASE_IDS,
+    REFUSAL_DIRECTION_CONTROL_AGE_SECONDS,
     SAMPLED_AGES_SECONDS,
+    critical_path_seconds,
     observation_cases,
     owned_accounts,
+    serial_aging_seconds,
 )
+from mfa_collector import digest
 from mfa_comparator import compare
 from mfa_manifest import compile_campaign, validate_campaign
 from mfa_provenance import compute_provenance, repository_root
@@ -108,16 +113,58 @@ def test_an_altered_manifest_fails_validation() -> None:
         assert validate_campaign(plan) is False
 
 
-def test_the_budget_stays_well_under_one_dollar_and_reserves_recovery() -> None:
+def test_the_budget_covers_the_real_critical_path_and_the_reserve() -> None:
     limits = compile_campaign(NONCE)["limits"]
     assert limits["enforced"] is True
     assert limits["estimatedCostUsd"] < 1.0
     assert limits["hardCostCeilingUsd"] < 1.0
-    assert (
-        limits["maxWallSeconds"]
-        > max(SAMPLED_AGES_SECONDS) + limits["recoveryReserveSeconds"]
-    )
     assert limits["maxOwnedAccounts"] >= len(owned_accounts())
+    assert limits["criticalPathSeconds"] == critical_path_seconds()
+    assert limits["serialAgingSeconds"] == serial_aging_seconds()
+    needed = (
+        limits["criticalPathSeconds"]
+        + limits["provisioningSeconds"]
+        + limits["recoveryReserveSeconds"]
+    )
+    assert limits["maxWallSeconds"] >= needed
+
+
+def test_the_serial_reading_of_the_schedule_would_not_fit_the_budget() -> None:
+    # This is why the concurrent acquisition schedule is contractual rather than advisory:
+    # acquiring each aged resource immediately before its own wait costs the serial total.
+    limits = compile_campaign(NONCE)["limits"]
+    assert limits["serialAgingSeconds"] > limits["maxWallSeconds"]
+    assert limits["serialAgingSeconds"] > limits["criticalPathSeconds"]
+
+
+def test_the_aged_cases_are_listed_in_non_decreasing_due_order() -> None:
+    offsets = [
+        case["dueOffsetSeconds"]
+        for case in observation_cases()
+        if case["dueOffsetSeconds"]
+    ]
+    assert offsets == sorted(offsets)
+    assert max(offsets) == REFUSAL_DIRECTION_CONTROL_AGE_SECONDS
+
+
+def test_the_manifest_declares_the_concurrent_acquisition_schedule() -> None:
+    schedule = compile_campaign(NONCE)["agingSchedule"]
+    assert schedule["mode"] == "concurrent-acquisition"
+    assert schedule["acquireAtOriginSeconds"] == 0
+    assert schedule["agedPendingSamplesSeconds"] == list(AGED_PENDING_SAMPLES)
+    assert schedule["agedSessionSamplesSeconds"] == list(SAMPLED_AGES_SECONDS)
+    scheduled = {row["case"] for row in schedule["dueOffsetsSeconds"]}
+    assert scheduled == {
+        case["id"] for case in observation_cases() if case["dueOffsetSeconds"]
+    }
+
+
+def test_an_already_refused_age_is_carried_as_a_refusal_direction_control() -> None:
+    by_id = {case["id"]: case for case in observation_cases()}
+    control = by_id[f"age-{REFUSAL_DIRECTION_CONTROL_AGE_SECONDS}s-start"]
+    assert control["basis"] == "control"
+    assert "refusal direction" in control["obligation"]
+    assert REFUSAL_DIRECTION_CONTROL_AGE_SECONDS not in SAMPLED_AGES_SECONDS
 
 
 def test_the_permission_envelope_names_only_identity_endpoints() -> None:
@@ -134,6 +181,7 @@ def test_the_permission_envelope_names_only_identity_endpoints() -> None:
 def receipt(side: str, root: Path | None = None) -> dict:
     return {
         "campaignId": CAMPAIGN_ID,
+        "campaign": compile_campaign(NONCE),
         "side": side,
         "recordingComplete": True,
         "productionExecuted": False,
@@ -198,7 +246,7 @@ def test_a_real_row_difference_is_reported_only_for_an_executed_production_side(
     production = receipt("production")
     production["rows"][2].update(status=400, errorCode="INVALID_MFA_PENDING_CREDENTIAL")
     assert compare(local, production)["classification"] == "PREPARATION_ONLY"
-    production["productionExecuted"] = True
+    approved(production)
     result = compare(local, production)
     assert result["classification"] == "DIFF"
     assert [row["id"] for row in result["rowDifferences"]] == [CASE_IDS[2]]
@@ -206,8 +254,7 @@ def test_a_real_row_difference_is_reported_only_for_an_executed_production_side(
 
 def test_dynamic_and_secret_values_never_create_a_difference() -> None:
     local = receipt("local")
-    production = receipt("production")
-    production["productionExecuted"] = True
+    production = approved(receipt("production"))
     for index, record in enumerate((local, production)):
         record["rows"][1]["localId"] = f"uid-{index}"
         record["rows"][1]["mfaEnrollmentId"] = f"enrollment-{index}"
@@ -224,22 +271,103 @@ def test_dynamic_and_secret_values_never_create_a_difference() -> None:
         assert material not in serialized
 
 
-def test_identical_executed_receipts_reach_agreement() -> None:
-    local = receipt("local")
-    production = receipt("production")
-    production["productionExecuted"] = True
-    result = compare(local, production)
+def approved(record: dict) -> dict:
+    """Attach owner approval bound to this receipt's own manifest and nonce."""
+    campaign = record["campaign"]
+    record["productionExecuted"] = True
+    record["ownerApproval"] = {
+        "approvedBy": "project owner",
+        "manifestDigest": digest(campaign),
+        "nonceDigest": campaign["owner"]["nonceDigest"],
+        "grant": "one-run",
+    }
+    return record
+
+
+def test_identical_executed_and_approved_receipts_reach_agreement() -> None:
+    result = compare(receipt("local"), approved(receipt("production")))
     assert result["classification"] == "MATCH"
     assert result["rowDifferences"] == [] and result["nondeterministicRows"] == []
 
 
-def test_a_differing_error_code_alone_is_a_real_difference() -> None:
-    local = receipt("local")
+def test_asserting_production_execution_without_approval_is_indeterminate() -> None:
     production = receipt("production")
     production["productionExecuted"] = True
+    result = compare(receipt("local"), production)
+    assert result["classification"] == "INDETERMINATE"
+    assert (
+        "production execution is asserted without owner approval evidence"
+        in result["productionProblems"]
+    )
+
+
+def test_an_approval_bound_to_another_manifest_or_nonce_cannot_reach_agreement() -> (
+    None
+):
+    for mutation in (
+        lambda approval, campaign: approval.update(manifestDigest="0" * 64),
+        lambda approval, campaign: approval.update(nonceDigest="0" * 64),
+        lambda approval, campaign: approval.update(grant="unlimited"),
+        lambda approval, campaign: approval.update(approvedBy="  "),
+    ):
+        production = approved(receipt("production"))
+        mutation(production["ownerApproval"], production["campaign"])
+        assert (
+            compare(receipt("local"), production)["classification"] == "INDETERMINATE"
+        )
+
+
+def test_a_receipt_without_a_recompilable_manifest_is_indeterminate() -> None:
+    for mutation in (
+        lambda record: record.pop("campaign"),
+        lambda record: record.update(campaign={}),
+        lambda record: record["campaign"]["limits"].update(maxRequests=10_000),
+        lambda record: record["campaign"].update(productionAllowed=True),
+    ):
+        production = approved(receipt("production"))
+        mutation(production)
+        result = compare(receipt("local"), production)
+        assert result["classification"] == "INDETERMINATE"
+
+
+def test_two_sides_that_ran_different_manifests_cannot_be_compared() -> None:
+    production = approved(receipt("production"))
+    production["campaign"] = compile_campaign("1" * 32)
+    production["campaign"]["cases"][0]["obligation"] = "changed"
+    result = compare(receipt("local"), production)
+    assert result["classification"] == "INDETERMINATE"
+
+
+def test_a_different_nonce_alone_does_not_block_a_comparison() -> None:
+    # Each side owns its own accounts, so the per-run owner block legitimately differs.
+    production = receipt("production")
+    production["campaign"] = compile_campaign("1" * 32)
+    production["rows"] = [
+        {"id": case["id"], "status": 200, "errorCode": None, "outcome": "observed"}
+        for case in production["campaign"]["cases"]
+    ]
+    approved(production)
+    assert compare(receipt("local"), production)["classification"] == "MATCH"
+
+
+def test_a_differing_error_code_alone_is_a_real_difference() -> None:
+    local = receipt("local")
+    production = approved(receipt("production"))
     production["rows"][3].update(status=400, errorCode="SESSION_EXPIRED")
     local["rows"][3].update(status=400, errorCode="INVALID_SESSION_INFO")
     result = compare(local, production)
     assert result["classification"] == "DIFF"
     assert result["rowDifferences"][0]["local"]["errorCode"] == "INVALID_SESSION_INFO"
     assert result["rowDifferences"][0]["production"]["errorCode"] == "SESSION_EXPIRED"
+
+
+def test_a_differing_error_message_is_a_difference_not_nondeterminism() -> None:
+    local = receipt("local")
+    production = approved(receipt("production"))
+    for index, record in enumerate((local, production)):
+        record["rows"][4]["message"] = f"prose variant {index}"
+        record["rows"][4]["stage"] = f"stage-{index}"
+        record["rows"][4]["usage"] = f"usage-{index}"
+    result = compare(local, production)
+    assert result["classification"] == "DIFF"
+    assert [row["id"] for row in result["rowDifferences"]] == [CASE_IDS[4]]

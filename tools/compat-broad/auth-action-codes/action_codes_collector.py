@@ -86,6 +86,12 @@ def _source_binding(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("binding") not in BINDING_KINDS:
         raise CollectorError("typed source binding required")
     commit, digest = value.get("commit"), value.get("artifactSha256")
+    if value["binding"] == "unbound":
+        # Saying nothing about provenance is allowed; claiming half of it is not.
+        named = ("commit", "artifactSha256", "builtFromSourceCommit")
+        if any(value.get(key) is not None for key in named):
+            raise CollectorError("unbound source binding may not name a commit")
+        return dict(UNBOUND_SOURCE)
     if not isinstance(commit, str) or not _COMMIT.fullmatch(commit):
         raise CollectorError("source binding needs a commit")
     if not isinstance(digest, str) or not _SHA256.fullmatch(digest):

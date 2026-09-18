@@ -11,6 +11,7 @@ import pytest
 from action_codes_shadow import (
     ShadowError,
     artifact_command,
+    artifact_source_binding,
     build_parser,
     child_complete,
     loopback_origin,
@@ -49,6 +50,8 @@ def test_the_artifact_argv_asks_for_auth_only_on_assigned_ports_and_no_secret() 
         "demo-auth-action",
         Path("/private/out"),
         NONCE,
+        None,
+        "c" * 64,
         None,
     )
     assert command[1] == "exec"
@@ -98,3 +101,39 @@ def test_the_real_local_shadow_records_and_recovers(tmp_path: Path) -> None:
     # A secret name may be listed as an observed response key, never as a key.
     assert '"oobCode":' not in json.dumps(receipt)
     assert report["artifact"]["binding"] == "retained-external"
+
+
+def test_a_retained_artifact_is_never_recorded_as_built_from_source() -> None:
+    retained = artifact_source_binding("a" * 64, None)
+    assert retained["binding"] == "unbound"
+    assert retained["builtFromSourceCommit"] is None
+    built = artifact_source_binding("a" * 64, "b" * 40)
+    assert built == {
+        "commit": "b" * 40,
+        "artifactSha256": "a" * 64,
+        "binding": "built-from-source",
+        "builtFromSourceCommit": "b" * 40,
+    }
+
+
+@pytest.mark.skipif(
+    not ARTIFACT,
+    reason="set FIREEMU_ACTION_CODES_ARTIFACT to run the real local shadow",
+)
+def test_the_rehearsed_transport_failure_still_recovers(tmp_path: Path) -> None:
+    report = run(
+        tmp_path / "rehearsal",
+        Path(ARTIFACT),
+        "demo-auth-action",
+        NONCE,
+        fail_after="accounts:signInWithEmailLink",
+    )
+    assert report["status"] == "shadow-complete"
+    assert report["rehearsal"] == "accounts:signInWithEmailLink"
+    receipt = report["receipt"]
+    assert receipt["stopReason"] == "stage-failed:email-link-signin"
+    assert receipt["recordingComplete"] is False
+    assert len(receipt["stages"]) == 18
+    assert receipt["cleanupComplete"] is True
+    assert receipt["remainingAccounts"] == 0
+    assert receipt["absenceProven"] is True

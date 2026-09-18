@@ -73,6 +73,8 @@ def artifact_command(
     output: Path,
     nonce: str,
     fail_after: str | None,
+    digest: str,
+    built_from_source_commit: str | None,
 ) -> list[str]:
     """The exact argv of the owned instance; it carries no secret."""
     command = [
@@ -103,9 +105,13 @@ def artifact_command(
         nonce,
         "--project",
         project,
+        "--artifact-sha256",
+        digest,
     ]
     if fail_after is not None:
         command.extend(["--fail-after", fail_after])
+    if built_from_source_commit is not None:
+        command.extend(["--built-from-source-commit", built_from_source_commit])
     return command
 
 
@@ -123,7 +129,37 @@ def child_complete(receipt: dict[str, Any], rehearsal: bool) -> bool:
     return rehearsal or receipt.get("recordingComplete") is True
 
 
-def _child(output: Path, nonce: str, project: str, fail_after: str | None) -> int:
+def artifact_source_binding(
+    digest: str, built_from_source_commit: str | None
+) -> dict[str, Any]:
+    """Say honestly how the executed bytes relate to a commit.
+
+    A binary this package did not build is `retained-external`: its digest says
+    which bytes ran, not which source produced them, and the comparator refuses
+    a verdict on it.
+    """
+    if built_from_source_commit is None:
+        return {
+            "commit": None,
+            "artifactSha256": None,
+            "binding": "unbound",
+            "builtFromSourceCommit": None,
+        }
+    return {
+        "commit": built_from_source_commit,
+        "artifactSha256": digest,
+        "binding": "built-from-source",
+        "builtFromSourceCommit": built_from_source_commit,
+    }
+
+
+def _child(
+    output: Path,
+    nonce: str,
+    project: str,
+    fail_after: str | None,
+    source_binding: dict[str, Any] | None = None,
+) -> int:
     origin = loopback_origin(os.environ["FIREBASE_AUTH_EMULATOR_HOST"])
     output.mkdir(parents=True, exist_ok=True)
     send = _http_send
@@ -157,6 +193,7 @@ def _child(output: Path, nonce: str, project: str, fail_after: str | None) -> in
             nonce=nonce,
             send=send,
             tolerate_failure=fail_after is not None,
+            source_binding=source_binding,
         )
     except CollectorError as error:
         receipt = getattr(error, "receipt", {"collectorError": str(error)})
@@ -174,6 +211,7 @@ def run(
     *,
     timeout: int = 240,
     fail_after: str | None = None,
+    built_from_source_commit: str | None = None,
 ) -> dict[str, Any]:
     """Own one artifact for the length of one collection and prove it stopped."""
     output = output.resolve()
@@ -193,7 +231,16 @@ def run(
         config.write_text(json.dumps(CONFIG, sort_keys=True))
         config.chmod(0o400)
         environment = parent_environment(dict(os.environ))
-        command = artifact_command(copied, config, project, output, nonce, fail_after)
+        command = artifact_command(
+            copied,
+            config,
+            project,
+            output,
+            nonce,
+            fail_after,
+            digest,
+            built_from_source_commit,
+        )
         try:
             version = (
                 subprocess.check_output(
@@ -231,8 +278,12 @@ def run(
                 "artifact": {
                     "sha256": digest,
                     "version": version,
-                    "binding": "retained-external",
-                    "builtFromSourceCommit": None,
+                    "binding": (
+                        "built-from-source"
+                        if built_from_source_commit
+                        else "retained-external"
+                    ),
+                    "builtFromSourceCommit": built_from_source_commit,
                 },
                 "configuration": CONFIG,
                 "instance": instance,
@@ -244,6 +295,9 @@ def run(
                 },
                 "receipt": receipt,
             }
+        except Exception as error:  # noqa: BLE001 -- the report must survive.
+            report["status"] = "shadow-failed"
+            report["failure"] = type(error).__name__
         finally:
             if process is not None and process.poll() is None:
                 process.terminate()
@@ -253,9 +307,11 @@ def run(
                     process.kill()
                     process.wait(timeout=10)
                     report["cleanupFailure"] = "SupervisorTimeout"
-        (output / "shadow.json").write_text(
-            json.dumps(report, indent=2, sort_keys=True) + "\n"
-        )
+            # Written inside the finally, so a timed-out wait still leaves
+            # evidence of what this run owned and how it ended.
+            (output / "shadow.json").write_text(
+                json.dumps(report, indent=2, sort_keys=True) + "\n"
+            )
     return report
 
 
@@ -266,7 +322,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project", default="demo-auth-action")
     parser.add_argument("--nonce", required=True)
     parser.add_argument("--child", type=Path)
+    parser.add_argument("--artifact-sha256", default="")
     parser.add_argument("--fail-after")
+    parser.add_argument(
+        "--built-from-source-commit",
+        help="the commit this artifact was built from, when it was built here",
+    )
     return parser
 
 
@@ -279,6 +340,9 @@ if __name__ == "__main__":
                 arguments.nonce,
                 arguments.project,
                 arguments.fail_after,
+                artifact_source_binding(
+                    arguments.artifact_sha256, arguments.built_from_source_commit
+                ),
             )
         )
     result = run(
@@ -287,6 +351,7 @@ if __name__ == "__main__":
         arguments.project,
         arguments.nonce,
         fail_after=arguments.fail_after,
+        built_from_source_commit=arguments.built_from_source_commit,
     )
     print(json.dumps({"status": result["status"]}))
     raise SystemExit(0 if result["status"] == "shadow-complete" else 2)

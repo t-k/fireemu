@@ -227,6 +227,86 @@ def loopback_transport(origin: Any) -> Callable[[dict[str, Any]], dict[str, Any]
     return transmit
 
 
+def failing_transport(
+    transmit: Callable[[dict[str, Any]], dict[str, Any]], fail_at: int
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Wrap a transport so one dispatch fails, rehearsing recovery and cleanup."""
+    sent = [0]
+
+    def rehearsed(request: dict[str, Any]) -> dict[str, Any]:
+        sent[0] += 1
+        if sent[0] - 1 == fail_at:
+            raise ConnectionError("rehearsed transport failure")
+        return transmit(request)
+
+    return rehearsed
+
+
+def residual_documents(
+    transmit: Callable[[dict[str, Any]], dict[str, Any]], plan: dict[str, Any]
+) -> int | None:
+    """Count owned documents left behind, independently of the collector rows."""
+    receipt = transmit(
+        {
+            "phase": "verification",
+            "index": 0,
+            "kind": "residual-scan",
+            "method": "POST",
+            "path": "/v1/" + plan["databaseRoot"] + ":runQuery",
+            "body": {
+                "structuredQuery": {
+                    "from": [
+                        {
+                            "collectionId": plan["groupCollection"],
+                            "allDescendants": True,
+                        }
+                    ]
+                }
+            },
+        }
+    )
+    body = receipt.get("body")
+    if receipt.get("status") != 200 or not isinstance(body, list):
+        return None
+    group = sum(1 for entry in body if isinstance(entry, dict) and "document" in entry)
+    root = transmit(
+        {
+            "phase": "verification",
+            "index": 1,
+            "kind": "residual-root",
+            "method": "GET",
+            "path": "/v1/" + plan["ownedScope"],
+            "body": None,
+        }
+    )
+    cursor = transmit(
+        {
+            "phase": "verification",
+            "index": 2,
+            "kind": "residual-cursor",
+            "method": "POST",
+            "path": "/v1/" + plan["ownedScope"] + ":runQuery",
+            "body": {
+                "structuredQuery": {
+                    "from": [{"collectionId": plan["cursorCollection"]}]
+                }
+            },
+        }
+    )
+    cursor_body = cursor.get("body")
+    if cursor.get("status") != 200 or not isinstance(cursor_body, list):
+        return None
+    return (
+        group
+        + int(root.get("status") == 200)
+        + sum(
+            1
+            for entry in cursor_body
+            if isinstance(entry, dict) and "document" in entry
+        )
+    )
+
+
 def _socket_closed(origin: str) -> bool:
     parsed = urlsplit(origin)
     with socket.socket() as probe:
@@ -238,7 +318,7 @@ def _socket_closed(origin: str) -> bool:
     return False
 
 
-def _child(output: Path, nonce: str) -> int:
+def _child(output: Path, nonce: str, fail_at: int | None = None) -> int:
     host = os.environ["FIRESTORE_EMULATOR_HOST"]
     origin = "http://" + host if "://" not in host else host
     plan = compile_plan(PROJECT, "(default)", nonce)
@@ -246,25 +326,39 @@ def _child(output: Path, nonce: str) -> int:
         json.dumps({"pid": os.getpid(), "parentPid": os.getppid(), "origin": origin})
     )
     (output / "plan.json").write_text(json.dumps(plan, indent=1, sort_keys=True))
-    result = collect_local(
-        plan, loopback_transport(origin), output / "bundle", origin=origin
-    )
+    transmit = loopback_transport(origin)
+    collector = transmit if fail_at is None else failing_transport(transmit, fail_at)
+    result = collect_local(plan, collector, output / "bundle", origin=origin)
     validation = validate_shadow(result, plan)
-    (output / "shadow.json").write_text(
+    residual = residual_documents(transmit, plan)
+    summary = {
+        "result": result["status"],
+        "validation": validation,
+        "cleanupComplete": result["cleanup"]["complete"],
+        "residualDocuments": residual,
+        "failAt": fail_at,
+    }
+    (output / "shadow.json").write_text(json.dumps(summary, indent=1, sort_keys=True))
+    print(
         json.dumps(
-            {"result": result["status"], "validation": validation},
-            indent=1,
-            sort_keys=True,
+            {
+                "status": result["status"],
+                "validation": validation["status"],
+                "residualDocuments": residual,
+            }
         )
     )
-    print(json.dumps({"status": result["status"], "validation": validation["status"]}))
+    if fail_at is not None:
+        # A rehearsal succeeds when nothing owned is left behind, whatever the
+        # collector managed to record before the injected failure.
+        return 0 if residual == 0 else 1
     accepted = {"MATCHED", "DIFFERENT_KNOWN"}
     return (
         0 if validation["status"] in accepted and result["cleanup"]["complete"] else 1
     )
 
 
-def run_against_artifact(binary: Path, output: Path) -> int:
+def run_against_artifact(binary: Path, output: Path, fail_at: int | None = None) -> int:
     """Supervise one owned local artifact and always report its final teardown."""
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     nonce = uuid.uuid4().hex
@@ -281,8 +375,14 @@ def run_against_artifact(binary: Path, output: Path) -> int:
         "--ui-port", "0", "--logging-port", "0", "--log-verbosity", "silent",
         "--", sys.executable, str(Path(__file__).resolve()),
         "--child", str(output), "--nonce", nonce,
+        *([] if fail_at is None else ["--fail-at", str(fail_at)]),
     ]  # fmt: skip
-    report: dict[str, Any] = {"status": "incomplete", "productionExecuted": False}
+    report: dict[str, Any] = {
+        "status": "incomplete",
+        "productionExecuted": False,
+        "command": command,
+        "failAt": fail_at,
+    }
     process = None
     try:
         with (output / "stderr.log").open("w") as errors:
@@ -334,11 +434,14 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path)
     parser.add_argument("--child", type=Path)
     parser.add_argument("--nonce")
+    parser.add_argument("--fail-at", type=int)
     arguments = parser.parse_args()
     if arguments.child:
-        sys.exit(_child(arguments.child.resolve(), arguments.nonce))
+        sys.exit(_child(arguments.child.resolve(), arguments.nonce, arguments.fail_at))
     if not arguments.binary or not arguments.output:
         parser.error("--binary and --output are required")
     sys.exit(
-        run_against_artifact(arguments.binary.resolve(), arguments.output.resolve())
+        run_against_artifact(
+            arguments.binary.resolve(), arguments.output.resolve(), arguments.fail_at
+        )
     )

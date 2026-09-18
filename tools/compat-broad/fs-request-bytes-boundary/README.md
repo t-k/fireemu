@@ -184,3 +184,21 @@ outside those markers is hand-written and is left alone.
 The tree must be committed first: `broad.run` refuses a dirty checkout so the
 record binds to a reachable commit. That is why a rebind lands one commit after
 the change it describes.
+
+The two files are replaced as one generation, or not at all. Every input is read
+and validated and both outputs are built in memory before any existing file is
+touched, so a document missing its markers is refused while the tree is still
+intact. A failure part way through the replacement restores what it had already
+replaced, and if a restore itself fails the error names the files to check out
+again rather than leaving a silent half-generation. Publishers of the same target
+serialize on `spec/compatibility/broad-runs/.fireemu-request-bytes-publication.lock`,
+which is gitignored for the same reason the Quint lane's is: a lock file showing
+up in `git status` would make the next run refuse the checkout as dirty.
+
+A publisher killed between writing a side file and replacing its target leaves
+that `.publish-tmp` behind, which would dirty the checkout the same way, so the
+suffix is gitignored too and each publisher sweeps stale side files while holding
+the lock, where nothing being swept can belong to a publication still running.
+Pre-images are restored as the bytes they were read as, never decoded: decoding
+one could raise out of the handler doing the restoring and skip the restores
+still to come.

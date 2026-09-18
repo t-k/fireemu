@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -136,3 +137,10 @@ def test_the_manifest_has_no_production_transport_entry_point() -> None:
     source = Path(module.__file__).read_text()
     for forbidden in ("http://", "https://", "urlopen", "socket", "subprocess"):
         assert forbidden not in source
+
+
+def test_the_checked_in_preparation_record_matches_the_current_lane() -> None:
+    from partition_cursor_manifest import EVIDENCE
+
+    assert EVIDENCE.is_file(), "run partition_cursor_manifest.write_evidence()"
+    assert json.loads(EVIDENCE.read_bytes()) == json.loads(json.dumps(manifest()))

@@ -8,6 +8,7 @@ contains no transport, no credential handling and no way to open admission.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from pathlib import Path
 from typing import Any
@@ -154,3 +155,14 @@ def validate_permission(permission: Any) -> None:
         "O4 partition/cursor owner, window, namespace, cost and recovery "
         "bindings are unavailable"
     )
+
+
+EVIDENCE = (
+    ROOT / "spec/compatibility/broad-runs/fs-query-partition-cursor-preparation.json"
+)
+
+
+def write_evidence() -> Path:
+    """Publish the frozen preparation record; regenerate it after any lane edit."""
+    EVIDENCE.write_text(json.dumps(manifest(), indent=1, sort_keys=True) + "\n")
+    return EVIDENCE

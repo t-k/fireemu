@@ -1,0 +1,85 @@
+# O4 PartitionQuery and cursor preparation
+
+This directory contains credential-free preparation for a bounded production
+observation of Firestore `PartitionQuery` and query cursors. Nothing here opens a
+production connection, reads a credential, mutates an index or Rules, or claims
+production compatibility. Production admission is closed and cannot be opened.
+
+## Modules
+
+`partition_cursor_case.py` compiles a fixed plan of 31 observation and 6 recovery
+operations for one project, database and 32-character nonce. It owns 21
+documents: one root marker, twelve documents in a nonce-unique collection group
+below `part/p0..p2`, and eight documents in a `cur` collection. `validate_plan`
+rejects a changed request, scope, fixture, budget or digest.
+
+Two structural facts shape the plan. Production requires a database parent for
+`PartitionQuery`, so every accepted partition operation is database-wide and
+isolation comes from the nonce-unique collection group rather than from a
+document parent. `partitionCount` bounds the number of split points, so a request
+for `n` may return `n` cursors and `n + 1` ranges.
+
+`partition_cursor_collector.py` drives the plan against a loopback origin. It
+refuses any other origin before creating its output directory or sending a single
+request, which is what keeps it from being usable as a production entry point.
+Two operations are bound at run time: the continuation request takes its
+`pageToken` from the recorded paging response, and two reconstruction slots take
+their range cursors from the recorded single-split-point response. A response
+that would need more than two ranges sends nothing and records
+`reconstruction-slots-exceeded`. Cleanup deletions carry the `updateTime` values
+recorded in the same run; a missing creation receipt or an unbound write version
+skips the delete instead of issuing it.
+
+Each dispatched row publishes an immutable JSON file with an exclusive link and
+`fsync`, and, when the transport supplies complete response bytes, one immutable
+`.raw` sidecar below `raw/` with its SHA-256 digest in `raw/manifest.json`.
+Absent, partial or oversized transport bytes stay compact evidence and set
+`raw.complete` false; the collector never reconstructs raw bytes from the decoded
+body.
+
+`partition_cursor_shadow.py` states the expected local answer for every slot,
+validates a collected bundle against that table, and can drive one owned local
+artifact end to end. `KNOWN_LOCAL_DIFFERENCES` names the open repair tickets, so
+a run whose only differences are ticketed is `DIFFERENT_KNOWN` and a repair moves
+it to `MATCHED`.
+
+`partition_cursor_comparator.py` compares two retained bundles. Each side is
+validated against a plan recompiled from its own recorded identity, so runs with
+different nonces can be compared. Owned identities, opaque pagination tokens,
+server-assigned timestamps, response byte counts and content-type parameters are
+canonicalized; Firestore Value types, query shapes, document order and typed
+error objects stay exact. The result is semantic only and always keeps
+`acquisitionValidated` and `promotionReady` false.
+
+`partition_cursor_manifest.py` freezes the lane source digests, the wire and
+resource budget, the owner preconditions and the reasons admission stays closed.
+It contains no transport and no credential handling.
+
+`partition_cursor_offline_fixture.py` is test support: an offline transport that
+answers the compiled plan without any socket.
+
+Run the focused checks with:
+
+```text
+uv run --python 3.12 --with pytest pytest -q tools/compat-broad/fs-query-partition-cursor
+```
+
+## Reviewed local shadow
+
+Source commit `db95d80f0` was exercised against a locally built `fireemu` with
+SHA-256 `a2839d0a4d07434a2efc91f6d11d332ef5eb078d1bc73e2807dfcf98d801a94a`, plan
+digest `50a0c6c418969a5ddbe5c3a42f4ea85aee0c32a1413faf0934a1de7e78b1fb92`. All 31
+observation and 6 recovery slots were dispatched, 37 raw sidecars were published
+and verified, cleanup completed and an independent residual scan found zero owned
+documents. The owned process stopped and its listener closed.
+
+Three cursor-validation differences remain, each an open repair ticket:
+`cursor-too-many-values`, `cursor-reference-type-mismatch` and
+`cursor-foreign-reference`. Four interrupted-run rehearsals, failing at the
+creation, at the first baseline query, at a partition query and at a cursor
+query, each ended with zero residual owned documents; the run that lost its
+creation receipt skipped its deletions rather than issuing them.
+
+This verifies the local observation tooling and the local runtime answers. It is
+not a production observation, a saved-production comparison or a parent
+compatibility promotion.

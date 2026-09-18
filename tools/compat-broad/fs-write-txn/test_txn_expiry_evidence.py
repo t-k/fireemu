@@ -22,7 +22,7 @@ MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest.json"
 SHADOW = RUNS / "fs-transaction-expiry-retry-04-local-shadow.json"
 
 REGENERATE = (
-    "regenerate with: uv run --python 3.12 python -c \"import sys; "
+    'regenerate with: uv run --python 3.12 python -c "import sys; '
     "sys.path[:0]=['tools/compat-broad/fs-write-txn','tools/compat-broad']; "
     "import json,txn_expiry_plan as p; "
     "print(json.dumps(p.proposal('o3expiry-reference-000000001','0'*32)))\""

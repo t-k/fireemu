@@ -19,7 +19,7 @@ from reservations import (
     conflicts,
 )
 from broad_contract import digest
-from shared_gate import Gate, _save, create
+from shared_gate import Gate, _save, create, unconfirmed_creates
 from shared_production import ProductionGate
 import shared_production
 
@@ -447,19 +447,23 @@ def test_no_data_abort_refuses_metadata_that_is_not_a_preflight_prefix(tmp_path,
 )
 def test_no_data_abort_refuses_a_receipt_that_shows_dispatched_data(tmp_path, damage):
     """The contract must say "no data left this run", not merely "it stopped early"."""
-    ledger, _gate, ticket, record = _no_data_attempt(tmp_path, stop=3)
+    ledger, gate, ticket, record = _no_data_attempt(tmp_path, stop=3)
+    with gate.locked() as state:
+        state.update(damage.get("gate", {}))
+        for job in state["jobs"].values():
+            job.update(damage.get("job", {}))
+        _save(gate.path, state)
+    snapshot = gate.snapshot()
     path = Path(record["receiptPath"])
     receipt = json.loads(path.read_text())
-    receipt["gate"].update(damage.get("gate", {}))
-    for job in receipt["gate"]["jobs"].values():
-        job.update(damage.get("job", {}))
+    receipt["gate"] = snapshot
     if "total" in damage.get("gate", {}):
-        receipt["chargedCalls"] = receipt["gate"]["total"]
+        receipt["chargedCalls"] = snapshot["total"]
     path.write_text(json.dumps(receipt))
     record = {
         **record,
         "receiptDigest": digest(receipt),
-        "gateDigest": digest(receipt["gate"]),
+        "gateDigest": digest(snapshot),
     }
     with pytest.raises(ValueError, match="no-data attempt"):
         ledger.abort_no_data(ticket, record)
@@ -674,7 +678,8 @@ def test_no_data_abort_rejects_tampered_gate_after_stop(tmp_path):
     with gate.locked() as state:
         state["jobs"]["limits"]["owned"].append(state["jobs"]["limits"]["resources"][0])
         _save(gate.path, state)
-    with pytest.raises(ValueError, match="terminal Gate"):
+    # Caught on the evidence read from the Gate itself, before any Gate call.
+    with pytest.raises(ValueError, match="no-data attempt"):
         ledger.abort_no_data(ticket, record)
     assert (
         ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "closing"
@@ -1558,14 +1563,15 @@ def test_an_abort_refuses_a_gate_job_the_claim_did_not_reserve(tmp_path):
         ledger.abort_no_data(ticket, {**record, "ticket": ticket})
 
 
-def test_a_receipt_gate_plan_must_match_its_own_digest(tmp_path):
-    """The embedded plan is read for the contract, so it is pinned before it is read."""
+def test_a_rewritten_gate_copy_cannot_speak_for_the_registered_gate(tmp_path):
+    """The retirement contract is read from the Gate itself, not from a copy."""
     ledger, _gate, ticket, record = _readonly_attempt(tmp_path)
     receipt_path = Path(record["receiptPath"])
     receipt = json.loads(receipt_path.read_text())
     receipt["gate"]["plan"]["receiptKind"] = "commit-acquisition-receipt-v2"
     receipt_path.write_text(json.dumps(receipt))
-    with pytest.raises(ValueError, match="no-data attempt"):
+    # The Ledger reads the Gate itself, so a rewritten copy cannot speak for it.
+    with pytest.raises(ValueError, match="registered Gate differs"):
         ledger.abort_no_data(
             ticket,
             {
@@ -2094,7 +2100,7 @@ def test_a_dispatched_commit_with_no_answer_is_never_closed_as_abandoned(tmp_pat
     ledger, gate, ticket, record = _abandoned_cleanup(
         tmp_path, lost=True, cleanup=False
     )
-    assert gate.snapshot()["jobs"]["probe"]["unconfirmedCreates"] == 1
+    assert unconfirmed_creates(gate.snapshot(), "probe") == 1
     with pytest.raises(ValueError, match="abandoned cleanup"):
         ledger.close_after_abandon(ticket, record)
     assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
@@ -2117,3 +2123,25 @@ def test_a_partial_recovery_is_never_closed_as_abandoned(tmp_path):
     with pytest.raises(ValueError, match="abandoned cleanup"):
         ledger.close_after_abandon(ticket, record)
     assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+def test_a_receipt_need_not_carry_the_gate_it_binds(tmp_path):
+    """A campaign whose Gate exceeds the receipt bound must still be able to retire.
+
+    The request-byte Gate embeds its three ten-mebibyte request bodies, so its
+    state is about twice the Ledger's bounded-receipt limit. A receipt that had
+    to carry a copy could not be read at all, and every terminal exit would be
+    unreachable for that campaign.
+    """
+    ledger, gate, ticket, record = _abandoned_cleanup(tmp_path)
+    receipt_path = Path(record["receiptPath"])
+    receipt = json.loads(receipt_path.read_text())
+    del receipt["gate"]
+    receipt_path.write_text(json.dumps(receipt))
+    record = {**record, "receiptDigest": digest(receipt)}
+    assert digest(gate.snapshot()) == record["gateDigest"]
+    ledger.close_after_abandon(ticket, record)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        == "closed-after-abandon"
+    )

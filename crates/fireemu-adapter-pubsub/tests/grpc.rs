@@ -24,6 +24,7 @@ use tokio_stream::StreamExt as _;
 struct Harness {
     endpoint: String,
     clock: Arc<Mutex<VirtualClock>>,
+    state: Arc<Mutex<PubSubState>>,
     handle: PubSubHandle,
     server: Option<tokio::task::JoinHandle<()>>,
 }
@@ -79,7 +80,7 @@ async fn start_with_bridge(bridge: Option<Arc<dyn TopicDelivery>>) -> Harness {
         LogicalInstant::from_unix_seconds(1_700_000_000),
     )));
     let state = Arc::new(Mutex::new(PubSubState::new(42)));
-    let handle = PubSubHandle::new(state, clock.clone(), bridge);
+    let handle = PubSubHandle::new(state.clone(), clock.clone(), bridge);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server_handle = handle.clone();
@@ -91,6 +92,7 @@ async fn start_with_bridge(bridge: Option<Arc<dyn TopicDelivery>>) -> Harness {
     Harness {
         endpoint: format!("http://{addr}"),
         clock,
+        state,
         handle,
         server: Some(server),
     }
@@ -466,6 +468,75 @@ type BarrierPushSink = (
     Arc<AtomicBool>,
     thread::JoinHandle<()>,
 );
+
+/// The minimum interval the emulator keeps between two push deliveries of the same message while
+/// the subscription has no retry policy.
+fn minimum_push_redelivery_interval() -> LogicalDuration {
+    LogicalDuration::from_millis(
+        fireemu_core_pubsub::subscription::DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
+    )
+}
+
+/// Advances the shared virtual clock and wakes the push dispatcher, exactly as the control API
+/// does.
+fn advance(h: &Harness, duration: LogicalDuration) {
+    h.clock.lock().unwrap().advance(duration).unwrap();
+    h.handle.on_clock_changed();
+}
+
+/// Waits until the subscription's next redelivery is scheduled for `expected`, which is also the
+/// point at which the failed attempt has been nacked and nothing is in flight any more.
+async fn await_scheduled_redelivery(h: &Harness, subscription: &str, expected: LogicalInstant) {
+    let name = fireemu_core_pubsub::SubscriptionName::parse(subscription).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let scheduled = h.state.lock().unwrap().next_delivery_at(&name).unwrap();
+            if scheduled == Some(expected) {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!("the redelivery of {subscription} must be scheduled for {expected}")
+    });
+}
+
+/// Waits for `count` recorded requests while advancing the virtual clock by the minimum push
+/// redelivery interval, which is what releases every attempt after the first.
+async fn await_push_count_advancing(h: &Harness, bodies: &Arc<Mutex<Vec<Vec<u8>>>>, count: usize) {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while bodies.lock().unwrap().len() < count {
+            advance(h, minimum_push_redelivery_interval());
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("push request {count} must be sent"));
+}
+
+/// Waits until the sink has recorded `count` requests.
+async fn await_push_count(bodies: &Arc<Mutex<Vec<Vec<u8>>>>, count: usize) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while bodies.lock().unwrap().len() < count {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("push request {count} must be sent"));
+}
+
+/// Asserts the sink stays at `count` requests: a redelivery that is still waiting for the virtual
+/// clock must not be sent by wall-clock time passing.
+async fn assert_push_count_stays(bodies: &Arc<Mutex<Vec<Vec<u8>>>>, count: usize) {
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(
+        bodies.lock().unwrap().len(),
+        count,
+        "no push request may be sent before the virtual clock reaches the redelivery instant"
+    );
+}
 
 fn push_sink(status: u16) -> PushSink {
     push_sink_sequence(vec![status])
@@ -1511,11 +1582,22 @@ async fn push_subscription_retries_after_failures_without_a_new_publish() {
     .await
     .unwrap();
 
-    for _ in 0..200 {
-        if bodies.lock().unwrap().len() >= 4 {
-            break;
+    // No retry policy: every attempt after the first waits the minimum push redelivery interval,
+    // so the fourth request is only sent after three clock advances.
+    let interval = minimum_push_redelivery_interval();
+    for attempt in 1..=4 {
+        await_push_count(&bodies, attempt).await;
+        if attempt < 4 {
+            let eligible_at = h
+                .clock
+                .lock()
+                .unwrap()
+                .now_for_test()
+                .checked_add(interval)
+                .unwrap();
+            await_scheduled_redelivery(&h, subscription, eligible_at).await;
+            advance(&h, interval);
         }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     assert_eq!(bodies.lock().unwrap().len(), 4);
     let pulled = subc
@@ -1529,6 +1611,70 @@ async fn push_subscription_retries_after_failures_without_a_new_publish() {
         .into_inner()
         .received_messages;
     assert!(pulled.is_empty());
+    h.shutdown().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}
+
+/// Without a retry policy the emulator keeps a minimum interval between two push attempts of the
+/// same message: the endpoint is re-requested only once the virtual clock reaches it, and never
+/// before it.
+#[tokio::test]
+async fn push_without_a_retry_policy_waits_exactly_the_minimum_redelivery_interval() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (endpoint, bodies, stop, worker) = push_sink_sequence(vec![500, 500, 500, 500]);
+    let topic = "projects/demo-app/topics/push-minimum-interval";
+    let subscription = "projects/demo-app/subscriptions/push-minimum-interval";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"throttle-me")],
+    })
+    .await
+    .unwrap();
+
+    let interval = minimum_push_redelivery_interval();
+    let just_short = LogicalDuration::from_nanos(interval.as_nanos() - 1);
+    for attempt in 1..=4 {
+        await_push_count(&bodies, attempt).await;
+        if attempt < 4 {
+            let eligible_at = h
+                .clock
+                .lock()
+                .unwrap()
+                .now_for_test()
+                .checked_add(interval)
+                .unwrap();
+            await_scheduled_redelivery(&h, subscription, eligible_at).await;
+            // One nanosecond short of the interval must not release the redelivery.
+            advance(&h, just_short);
+            assert_push_count_stays(&bodies, attempt).await;
+            advance(&h, LogicalDuration::from_nanos(1));
+        }
+    }
+    assert_push_count_stays(&bodies, 4).await;
+    assert_eq!(bodies.lock().unwrap().len(), 4);
+
+    h.shutdown().await;
     stop.store(true, Ordering::Release);
     worker.join().unwrap();
 }
@@ -1583,13 +1729,9 @@ async fn ordered_push_delivers_successor_after_dead_letter_forwarding() {
     .await
     .unwrap();
 
-    tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        while bodies.lock().unwrap().len() < 6 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("the ordered successor must be delivered after its predecessor reaches the DLQ");
+    // The five failing attempts have no retry policy, so each redelivery waits the minimum push
+    // redelivery interval; the dead-letter budget still counts one attempt per request.
+    await_push_count_advancing(&h, &bodies, 6).await;
     let pushed = bodies.lock().unwrap().clone();
     assert_eq!(pushed.len(), 6);
     let last = String::from_utf8(pushed.last().unwrap().clone()).unwrap();
@@ -2547,7 +2689,7 @@ async fn push_exhaustion_forwards_to_the_destination_exactly_once() {
     .unwrap();
 
     let mut destination = Vec::new();
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while destination.is_empty() {
             destination = subc
                 .pull(pb::PullRequest {
@@ -2559,7 +2701,9 @@ async fn push_exhaustion_forwards_to_the_destination_exactly_once() {
                 .unwrap()
                 .into_inner()
                 .received_messages;
-            tokio::task::yield_now().await;
+            // Without a retry policy each failed push waits the minimum redelivery interval.
+            advance(&h, minimum_push_redelivery_interval());
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         }
     })
     .await
@@ -2768,7 +2912,7 @@ async fn a_failed_push_delivery_counts_one_delivery_attempt_against_the_dead_let
     .unwrap();
 
     let mut destination = Vec::new();
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while destination.is_empty() {
             destination = subc
                 .pull(pb::PullRequest {
@@ -2781,7 +2925,9 @@ async fn a_failed_push_delivery_counts_one_delivery_attempt_against_the_dead_let
                 .unwrap()
                 .into_inner()
                 .received_messages;
-            tokio::task::yield_now().await;
+            // Without a retry policy each failed push waits the minimum redelivery interval.
+            advance(&h, minimum_push_redelivery_interval());
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         }
     })
     .await

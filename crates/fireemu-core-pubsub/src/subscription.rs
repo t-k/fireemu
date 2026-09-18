@@ -1365,7 +1365,7 @@ mod tests {
         assert_eq!(s.pull(1, now, &mut ids).received.len(), 1);
     }
 
-    /// A subscription that becomes a push subscription through ModifyPushConfig is protected too.
+    /// A subscription that becomes a push subscription through `ModifyPushConfig` is protected too.
     #[test]
     fn a_subscription_promoted_to_push_uses_the_minimum_redelivery_interval() {
         let mut s = SubscriptionState::new(cfg());

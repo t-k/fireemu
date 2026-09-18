@@ -22,6 +22,12 @@ from broad_contract import digest
 
 REQUEST_SECONDS = 13  # 12-second wire deadline plus adapter spacing allowance.
 MAX_JOB_SLOTS = 8
+# The floor on request spacing and the ceiling on a campaign wall. Named so a
+# campaign can import them instead of keeping its own copy: a copied constant is
+# how a lane once re-derived this module's charging formula and agreed with a
+# Gate that no longer existed.
+INTERVAL_FLOOR_SECONDS = 0.25
+WALL_CAP_SECONDS = 1200
 PHASES = ("observation", "recovery")
 
 
@@ -81,6 +87,43 @@ def _valid_positive(value):
         and not isinstance(value, bool)
         and math.isfinite(value)
         and value > 0
+    )
+
+
+def published_allocation(plan):
+    """The wall and recovery reserve the campaign's budget artifact publishes.
+
+    `create` can prove a plan internally consistent but has no access to the
+    artifact the campaign was approved against, so the two could drift: a Gate
+    plan reserving 345 seconds of cleanup against a published 300 was admitted
+    with nothing to compare them. A campaign that names its published allocation
+    here makes that comparison part of admission.
+
+    The binding is the two numbers, not the file. The Gate never reads the
+    artifact, so this closes the drift only for a campaign that declares it; the
+    place to require the declaration is the O7 admission of the Gate plan.
+    """
+    return plan.get("publishedAllocation")
+
+
+def _valid_allocation(plan):
+    if "publishedAllocation" not in plan:
+        return True
+    declared = plan["publishedAllocation"]
+    return (
+        isinstance(declared, dict)
+        and set(declared) == {"wallSeconds", "recoverySeconds"}
+        and all(_valid_positive(value) for value in declared.values())
+    )
+
+
+def _within_published(plan):
+    declared = published_allocation(plan)
+    if declared is None:
+        return True
+    return (
+        plan["wallSeconds"] <= declared["wallSeconds"]
+        and plan["recoverySeconds"] <= declared["recoverySeconds"]
     )
 
 
@@ -248,6 +291,43 @@ def _observation_time(plan, seconds):
     return total
 
 
+def abandoned_cleanup_complete(state):
+    """The documents an abandoned run created, when every one is proven absent.
+
+    `None` when the state cannot support that claim: a job that dispatched but
+    proved no creation, a job with creation proofs that never abandoned or whose
+    scheduled cleanup did not run to the end, or one whose typed absence journal
+    does not cover exactly its assigned resources. A created document still
+    present therefore stays with the owner-attested exit, which is the whole
+    point of separating the two.
+    """
+    created = []
+    for name, job in state["jobs"].items():
+        proofs = job.get("creationProofs") or {}
+        if not proofs:
+            if job["observation"] or job["recovery"]:
+                # It ran and proved no creation: that is a no-data stop or an
+                # uncertain one, and neither is this.
+                return None
+            continue
+        schedule = job_schedule(state["plan"]["jobs"][name])
+        if (
+            schedule is None
+            or job.get("stopReason") is None
+            or job.get("scheduleDone", 0) != len(schedule)
+            or job["inflight"]
+            or set(proofs) != set(job["resources"])
+            or set(job.get("absent") or []) != set(job["resources"])
+        ):
+            return None
+        try:
+            validate_absence_proofs(state, name)
+        except Exception:  # noqa: BLE001 -- any failure to validate means the claim is unsupported
+            return None
+        created.extend(proofs)
+    return sorted(created) or None
+
+
 def non_creating_dispatches(state):
     """How many data slots ran, when every one of them could not create a document.
 
@@ -302,7 +382,12 @@ def create(path, plan):
     policy = _stream_policy(plan)
     if policy:
         policy.validate_plan(plan)
-    if not _valid_request_seconds(plan, policy) or not _valid_ceiling(plan):
+    if (
+        not _valid_request_seconds(plan, policy)
+        or not _valid_ceiling(plan)
+        or not _valid_allocation(plan)
+        or not _valid_marker(plan)
+    ):
         # Checked before they are used, so a malformed value cannot reach arithmetic.
         raise ValueError("invalid shared allocation")
     seconds = request_seconds(plan, policy)
@@ -327,14 +412,15 @@ def create(path, plan):
         or not _valid_request_seconds(plan, policy)
         or any(not _valid_schedule(job) for job in jobs.values())
         or not _ceiling_honoured(plan, seconds)
+        or not _within_published(plan)
         or _observation_time(plan, seconds)
         > plan["wallSeconds"] - plan["recoverySeconds"]
         or len(resources) != len(set(resources))
         or not resources
-        or not 0 < plan["recoverySeconds"] < plan["wallSeconds"] <= 1200
+        or not 0 < plan["recoverySeconds"] < plan["wallSeconds"] <= WALL_CAP_SECONDS
         or plan["recoverySeconds"] < recovery_time
         or not math.isfinite(plan["intervalSeconds"])
-        or plan["intervalSeconds"] < 0.25
+        or plan["intervalSeconds"] < INTERVAL_FLOOR_SECONDS
         or type(plan["costMicrousd"]) is not int
         or type(plan["observationRequests"]) is not int
         or plan["observationRequests"] < 0
@@ -348,6 +434,8 @@ def create(path, plan):
         < fixed_cost + (recovery + overhead) * plan["requestCostMicrousd"]
     ):
         raise ValueError("invalid shared allocation")
+    _resolve_all_aliases(plan)
+    _check_creates_declarations(plan)
     path.mkdir(mode=0o700, parents=True, exist_ok=False)
     (path / "lock").touch(mode=0o600, exist_ok=False)
     state = {
@@ -384,10 +472,120 @@ def create(path, plan):
             "complete": False,
         }
         if job_schedule(job) is not None:
+            state["jobs"][key]["skippedByStop"] = 0
             # Only a scheduled job carries a cursor, so every existing campaign's
             # job row keeps the exact shape its archived receipts record.
             state["jobs"][key]["scheduleDone"] = 0
     _save(path, state)
+
+
+MARKER_BINDINGS = ("resource-name", "nonce")
+STOP_SKIP_REASON = "no-creation-proof-after-stop"
+MAX_STOP_REASON = 128
+
+
+def can_create(operation):
+    """Whether a request could bring a document into existence.
+
+    The Ledger relaxes its retirement contract on a slot declared `creates`
+    false, so the declaration is not the campaign's word alone: a plan whose
+    slot could write is refused here. A request that carries a body is treated
+    as able to create even when its shape is not one this module recognises,
+    because the conservative direction is to refuse the declaration.
+    """
+    if not isinstance(operation, dict):
+        return True
+    path = operation.get("path")
+    path = path if isinstance(path, str) else ""
+    method = operation.get("method")
+    return (
+        operation.get("body") is not None
+        or (method == "PATCH" and path.endswith("?currentDocument.exists=false"))
+        or (method == "POST" and path.endswith((":batchWrite", ":commit")))
+    )
+
+
+def _check_creates_declarations(plan):
+    for job in plan["jobs"].values():
+        schedule = job_schedule(job)
+        if schedule is None:
+            continue
+        for entry in schedule:
+            if entry.get("creates", True) is False and can_create(
+                job[entry["phase"]][entry["index"]]
+            ):
+                raise ValueError(
+                    "a slot whose request can create cannot declare creates false"
+                )
+
+
+def ownership_marker(plan):
+    """How a created document proves it belongs to this campaign's owned namespace.
+
+    The `shared-local-v2` convention is that a document names itself in
+    `_sharedOwner`. A campaign whose documents are sized to the byte cannot add a
+    field to carry that shape, so it may declare its own marker instead: a field
+    and whether the value binds the resource name or the campaign nonce. A plan
+    that declares nothing keeps the convention its contract implies.
+
+    A nonce binding is weaker than a self-naming one: it proves the document came
+    from this campaign, not that it is the document the request named. It is
+    adequate only because the resource must also be in the job's assigned
+    resources and under the nonce-scoped path, and that is worth a reviewer's
+    attention rather than an assumption.
+    """
+    declared = plan.get("ownershipMarker")
+    if declared is None:
+        if plan["contract"] == "shared-local-v2":
+            return "_sharedOwner", "resource-name"
+        return None
+    return declared["field"], declared["binding"]
+
+
+def _valid_marker(plan):
+    if "ownershipMarker" not in plan:
+        return True
+    declared = plan["ownershipMarker"]
+    return (
+        isinstance(declared, dict)
+        and set(declared) == {"field", "binding"}
+        and isinstance(declared["field"], str)
+        and bool(declared["field"])
+        and declared["binding"] in MARKER_BINDINGS
+        and (declared["binding"] != "nonce" or isinstance(plan.get("nonce"), str))
+    )
+
+
+def resolve_version_source(operations, index, source):
+    """The capture index a recovery slot reads its version from.
+
+    A numeric `versionFrom` is canonical and names the slot directly. A named one
+    is an alias for the kind of the earlier slot that captured the version,
+    resolved within the same resource, so a campaign with one ownership read per
+    document does not hard-code an index per document. It must resolve to exactly
+    one earlier slot of that kind for that resource, or the plan is refused.
+    """
+    if source is None or type(source) is int:
+        return source
+    resource = operations[index].get("resource")
+    if not isinstance(source, str) or not source or not isinstance(resource, str):
+        raise ValueError("version source alias must name a kind and a resource")
+    matches = [
+        position
+        for position, candidate in enumerate(operations[:index])
+        if candidate.get("kind") == source and candidate.get("resource") == resource
+    ]
+    if len(matches) != 1:
+        raise ValueError("version source alias must resolve to exactly one slot")
+    return matches[0]
+
+
+def _resolve_all_aliases(plan):
+    for job in plan["jobs"].values():
+        operations = job["recovery"]
+        for index, operation in enumerate(operations):
+            if isinstance(operation, dict):
+                resolve_version_source(operations, index, operation.get("versionFrom"))
 
 
 def _creation_proofs(operation, status, body, job, plan):
@@ -406,6 +604,34 @@ def _creation_proofs(operation, status, body, job, plan):
         if digest(body.get("fields")) != digest(fields):
             raise ValueError("conditional creation fields mismatch")
         candidates.append((name, fields, body.get("updateTime")))
+    elif operation["method"] == "POST" and operation["path"].endswith(":commit"):
+        # A Commit is atomic: a 200 means every write in it applied, so there is
+        # no per-write status to read, only one update version per write.
+        writes = request.get("writes", []) if isinstance(request, dict) else []
+        conditional = [
+            write
+            for write in writes
+            if isinstance(write, dict)
+            and write.get("currentDocument") == {"exists": False}
+        ]
+        if not conditional:
+            return []
+        results = body.get("writeResults") if isinstance(body, dict) else None
+        if not isinstance(results, list) or len(results) != len(writes):
+            raise ValueError("conditional commit acknowledgement incomplete")
+        for write, result in zip(writes, results, strict=True):
+            if (
+                not isinstance(write, dict)
+                or write.get("currentDocument", {}).get("exists") is not False
+                or digest(write.get("currentDocument")) != digest({"exists": False})
+            ):
+                continue
+            update = write.get("update", {})
+            if not isinstance(update, dict) or not isinstance(result, dict):
+                raise ValueError("conditional commit creation body mismatch")  # noqa: TRY004 -- Gate admission uses ValueError.
+            candidates.append(
+                (update.get("name"), update.get("fields"), result.get("updateTime"))
+            )
     elif operation["method"] == "POST" and operation["path"].endswith(":batchWrite"):
         writes = request.get("writes", []) if isinstance(request, dict) else []
         conditional = [
@@ -455,10 +681,16 @@ def _creation_proofs(operation, status, body, job, plan):
         ):
             raise ValueError("typed conditional creation resource/version required")
         datetime.fromisoformat(version)
-        if plan["contract"] == "shared-local-v2" and fields.get("_sharedOwner") != {
-            "referenceValue": name
-        }:
-            raise ValueError("conditional creation namespace marker required")
+        marker = ownership_marker(plan)
+        if marker is not None:
+            field, binding = marker
+            expected = (
+                {"referenceValue": name}
+                if binding == "resource-name"
+                else {"stringValue": plan["nonce"]}
+            )
+            if fields.get(field) != expected:
+                raise ValueError("conditional creation namespace marker required")
         proofs.append(
             {
                 "name": name,
@@ -557,6 +789,36 @@ class Gate:
             job["pid"] = os.getpid()
             _save(self.path, state)
 
+    def abandon_observation(self, reason):
+        """End this job's observation early and open its scheduled cleanup.
+
+        With a declared schedule a dispatch is admitted only in its frozen order,
+        so a job that stops part way through observation could not reach its own
+        recovery slots at all: every cleanup request was refused as outside the
+        schedule, and a probe that had created documents had no admissible way to
+        delete them. This is the transition that says the observation is over.
+
+        It does not weaken the cleanup rules. Recovery still runs in its declared
+        order, and a resource with no creation proof is still never deleted: its
+        slots become zero-wire skips rather than refusals, so the ones that can
+        be cleaned are still reachable behind them.
+        """
+        if not isinstance(reason, str) or not 0 < len(reason) <= MAX_STOP_REASON:
+            raise ValueError("bounded stop reason required")
+        with self.locked() as state:
+            job = state["jobs"][self.job]
+            if state.get("noDataAbort") is not None or job["complete"]:
+                raise ValueError("terminal Gate abort")
+            if job_schedule(state["plan"]["jobs"][self.job]) is None:
+                raise ValueError("a declared schedule is required to abandon")
+            if job.get("stopReason") is not None:
+                raise ValueError("observation already abandoned")
+            if job["inflight"]:
+                raise ValueError("in-flight request; ownership retained")
+            job["stopReason"] = reason
+            job["stopped"] = True
+            _save(self.path, state)
+
     def stop(self, *, environment=False):
         with self.locked() as state:
             if state.get("noDataAbort") is not None:
@@ -615,6 +877,16 @@ class Gate:
             schedule = job_schedule(plan["jobs"][self.job])
             if schedule is not None:
                 cursor = job["scheduleDone"]
+                if job.get("stopReason") is not None:
+                    # The abandoned observation slots are consumed without a wire
+                    # call, so the cleanup behind them becomes reachable.
+                    while (
+                        cursor < len(schedule)
+                        and schedule[cursor]["phase"] == "observation"
+                    ):
+                        cursor += 1
+                        job["skippedByStop"] += 1
+                    job["scheduleDone"] = cursor
                 slot = schedule[cursor] if cursor < len(schedule) else None
                 if slot is None or slot["phase"] != phase or slot["index"] != index:
                     raise ValueError("dispatch outside the frozen execution schedule")
@@ -630,7 +902,9 @@ class Gate:
                     raise ValueError("request outside closed stream scenario")
             else:
                 expected = dict(operations[index])
-                source = expected.pop("versionFrom", None)
+                source = resolve_version_source(
+                    operations, index, expected.pop("versionFrom", None)
+                )
                 valid_version = False
                 if source is not None:
                     capture = job["captures"].get(str(source))
@@ -657,6 +931,24 @@ class Gate:
                     self._validate_cleanup_ownership(
                         operation, recovery, resource, source, job
                     )
+            if (
+                recovery
+                and schedule is not None
+                and job.get("stopReason") is not None
+                and resource not in job.get("creationProofs", {})
+            ):
+                # Nothing was created here, so there is nothing to clean and no
+                # request to spend; the slot is consumed so the next one is
+                # reachable.
+                job["scheduleDone"] += 1
+                job["skippedByStop"] += 1
+                job[phase] += 1
+                state["reservedRecovery"] -= 1
+                state.setdefault("skips", []).append(
+                    {"job": self.job, "index": index, "reason": STOP_SKIP_REASON}
+                )
+                _save(self.path, state)
+                return (None, {"skipped": STOP_SKIP_REASON})
             if recovery and schedule is None:
                 # Without a declared schedule, recovery is a one-way transition.
                 # A scheduled campaign returns to observation by its own order,
@@ -824,7 +1116,10 @@ class Gate:
                 state["coordinatorInflight"] is not False
                 or dispatched is None
                 or len(state["events"]) != dispatched
-                or state.get("skips", []) != []
+                or any(
+                    skip.get("reason") != STOP_SKIP_REASON
+                    for skip in state.get("skips", [])
+                )
                 or state.get("managementUsed")
                 != [
                     "observation:" + operation["id"]
@@ -848,7 +1143,10 @@ class Gate:
                     for key in ("observation", "recovery")
                 )
                 or any(
-                    job.get("scheduleDone", 0) != job["observation"]
+                    job.get("scheduleDone", 0)
+                    != job["observation"]
+                    + job["recovery"]
+                    + job.get("skippedByStop", 0)
                     for job in state["jobs"].values()
                 )
                 or any(

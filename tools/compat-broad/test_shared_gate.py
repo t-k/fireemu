@@ -2,6 +2,7 @@
 
 import multiprocessing as mp
 import os
+from urllib.parse import quote
 
 import pytest
 from shared_gate import Gate, create
@@ -834,3 +835,440 @@ def test_a_malformed_creating_declaration_is_refused(tmp_path, creates):
     value["jobs"]["probe"]["schedule"][0]["creates"] = creates
     with pytest.raises(ValueError, match="invalid shared allocation"):
         create(tmp_path / "gate", value)
+
+
+def published_plan(wall=600, recovery=300, published_wall=900, published_recovery=300):
+    """A campaign that names the allocation its own budget artifact publishes."""
+    value = scheduled_plan()
+    value["wallSeconds"] = wall
+    value["recoverySeconds"] = recovery
+    value["publishedAllocation"] = {
+        "wallSeconds": published_wall,
+        "recoverySeconds": published_recovery,
+    }
+    return value
+
+
+def test_a_plan_may_not_reserve_more_than_its_artifact_publishes(tmp_path):
+    """The drift the request-byte campaign hit: a 345 second reserve against 300.
+
+    `create` proved the plan internally consistent and had no way to see the
+    published allocation, so the Gate and the budget artifact could disagree
+    without anything failing.
+    """
+    create(tmp_path / "equal", published_plan(recovery=300, published_recovery=300))
+    create(tmp_path / "under", published_plan(recovery=200, published_recovery=300))
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "over", published_plan(recovery=345, published_recovery=300))
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "wall", published_plan(wall=1000, published_wall=900))
+
+
+def test_a_plan_without_a_published_allocation_is_unchanged(tmp_path):
+    """Every campaign that never named an artifact keeps today's admission."""
+    value = scheduled_plan()
+    assert "publishedAllocation" not in value
+    create(tmp_path / "gate", value)
+    assert "publishedAllocation" not in Gate(tmp_path / "gate", "p1").snapshot()["plan"]
+
+
+@pytest.mark.parametrize(
+    "allocation",
+    [
+        {},
+        {"wallSeconds": 900},
+        {"recoverySeconds": 300},
+        {"wallSeconds": 900, "recoverySeconds": 300, "extra": 1},
+        {"wallSeconds": "900", "recoverySeconds": 300},
+        {"wallSeconds": 900, "recoverySeconds": 0},
+        {"wallSeconds": 900, "recoverySeconds": -1},
+        {"wallSeconds": float("inf"), "recoverySeconds": 300},
+        {"wallSeconds": True, "recoverySeconds": 300},
+        None,
+        [900, 300],
+    ],
+)
+def test_a_malformed_published_allocation_is_refused(tmp_path, allocation):
+    value = published_plan()
+    value["publishedAllocation"] = allocation
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "gate", value)
+
+
+NONCE = "n" * 32
+VERSION = "2026-09-18T00:00:00.000000Z"
+
+
+def commit_plan(marker="shared", writes=2, alias=True):
+    """A campaign that creates its documents with one conditional POST :commit."""
+    scope = "projects/p/databases/(default)/documents/owned/" + NONCE
+    resources = [f"{scope}/items/doc-{index:02d}" for index in range(writes)]
+
+    def fields(name):
+        if marker == "shared":
+            return {
+                "_sharedOwner": {"referenceValue": name},
+                "blob": {"stringValue": "x"},
+            }
+        return {"_owner": {"stringValue": NONCE}, "blob": {"stringValue": "x"}}
+
+    commit = {
+        "service": "firestore",
+        "method": "POST",
+        "path": "/v1/projects/p/databases/(default)/documents:commit",
+        "body": {
+            "writes": [
+                {
+                    "update": {"name": name, "fields": fields(name)},
+                    "currentDocument": {"exists": False},
+                }
+                for name in resources
+            ]
+        },
+        "privileged": True,
+        "form": False,
+    }
+    read = lambda name: {
+        "kind": "ownership-read",
+        "resource": name,
+        "service": "firestore",
+        "method": "GET",
+        "path": "/v1/" + name,
+        "body": None,
+        "privileged": True,
+        "form": False,
+    }
+    delete = lambda name: {
+        "kind": "version-bound-delete",
+        "resource": name,
+        "service": "firestore",
+        "method": "DELETE",
+        "path": "/v1/" + name,
+        "body": None,
+        "privileged": True,
+        "form": False,
+        "versionFrom": "ownership-read" if alias else 0,
+    }
+    recovery = []
+    for name in resources:
+        recovery.extend([read(name), delete(name)])
+    value = {
+        "contract": "shared-local-v2",
+        "nonce": NONCE,
+        "wallSeconds": 600,
+        "recoverySeconds": 300,
+        "observationRequests": 1,
+        "costMicrousd": 10000,
+        "requestCostMicrousd": 1,
+        "intervalSeconds": 0.25,
+        "requestSeconds": 2,
+        "jobs": {
+            "probe": {
+                "resources": resources,
+                "observation": [commit],
+                "recovery": recovery,
+            }
+        },
+    }
+    if marker != "shared":
+        value["ownershipMarker"] = {"field": "_owner", "binding": "nonce"}
+    return value, resources
+
+
+def _commit_response(count):
+    return 200, {
+        "writeResults": [{"updateTime": VERSION} for _ in range(count)],
+        "commitTime": VERSION,
+    }
+
+
+def test_a_conditional_commit_yields_one_creation_proof_per_write(tmp_path):
+    """Seventeen conditional creates in one Commit are seventeen ownership proofs."""
+    value, resources = commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    gate.dispatch(
+        value["jobs"]["probe"]["observation"][0],
+        False,
+        lambda: _commit_response(len(resources)),
+    )
+    job = gate.snapshot()["jobs"]["probe"]
+    assert sorted(job["creationProofs"]) == sorted(resources)
+    assert sorted(job["owned"]) == sorted(resources)
+    assert all(
+        proof["updateTime"] == VERSION for proof in job["creationProofs"].values()
+    )
+
+
+def test_a_commit_acknowledgement_must_answer_every_write(tmp_path):
+    value, resources = commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    with pytest.raises(ValueError, match="acknowledgement incomplete"):
+        gate.dispatch(
+            value["jobs"]["probe"]["observation"][0],
+            False,
+            lambda: _commit_response(len(resources) - 1),
+        )
+    assert gate.snapshot()["jobs"]["probe"]["creationProofs"] == {}
+    assert gate.snapshot()["jobs"]["probe"]["stopped"] is True
+
+
+def test_a_campaign_may_declare_how_its_documents_mark_ownership(tmp_path):
+    """The v2 marker is one convention, not the only one a campaign can carry."""
+    value, resources = commit_plan(marker="nonce")
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    gate.dispatch(
+        value["jobs"]["probe"]["observation"][0],
+        False,
+        lambda: _commit_response(len(resources)),
+    )
+    assert sorted(gate.snapshot()["jobs"]["probe"]["creationProofs"]) == sorted(
+        resources
+    )
+
+
+def test_a_document_without_its_declared_marker_is_refused(tmp_path):
+    value, resources = commit_plan(marker="nonce")
+    # Declared as the nonce binding, but the documents carry the v2 shape.
+    for write in value["jobs"]["probe"]["observation"][0]["body"]["writes"]:
+        write["update"]["fields"] = {
+            "_sharedOwner": {"referenceValue": write["update"]["name"]}
+        }
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    with pytest.raises(ValueError, match="namespace marker"):
+        gate.dispatch(
+            value["jobs"]["probe"]["observation"][0],
+            False,
+            lambda: _commit_response(len(resources)),
+        )
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        {},
+        {"field": "_owner"},
+        {"binding": "nonce"},
+        {"field": "_owner", "binding": "other"},
+        {"field": "", "binding": "nonce"},
+        {"field": "_owner", "binding": "nonce", "extra": 1},
+        None,
+        "_owner",
+    ],
+)
+def test_a_malformed_ownership_marker_is_refused(tmp_path, marker):
+    value, _resources = commit_plan(marker="nonce")
+    value["ownershipMarker"] = marker
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "gate", value)
+
+
+def test_a_delete_may_name_its_ownership_read_instead_of_its_index(tmp_path):
+    """Seventeen deletes per probe should not have to hard-code seventeen indices."""
+    value, resources = commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    operations = value["jobs"]["probe"]
+    gate.dispatch(
+        operations["observation"][0], False, lambda: _commit_response(len(resources))
+    )
+    name = resources[0]
+    body = {
+        "name": name,
+        "fields": operations["observation"][0]["body"]["writes"][0]["update"]["fields"],
+        "updateTime": VERSION,
+    }
+    gate.dispatch(operations["recovery"][0], True, lambda: (200, body))
+    deleted = dict(operations["recovery"][1])
+    del deleted["versionFrom"]
+    deleted["path"] += "?currentDocument.updateTime=" + quote(VERSION, safe="")
+    result = gate.dispatch(deleted, True, lambda: (200, {}))
+    assert result == (200, {})
+    assert gate.snapshot()["skips"] == [] if "skips" in gate.snapshot() else True
+    assert gate.snapshot()["jobs"]["probe"]["recovery"] == 2
+
+
+def test_a_version_alias_must_resolve_to_exactly_one_slot(tmp_path):
+    value, _resources = commit_plan()
+    probe = value["jobs"]["probe"]
+    probe["recovery"][1]["versionFrom"] = "no-such-kind"
+    with pytest.raises(ValueError, match="exactly one"):
+        create(tmp_path / "missing", value)
+    value, _resources = commit_plan()
+    probe = value["jobs"]["probe"]
+    # Two reads of the same resource make the alias ambiguous.
+    probe["recovery"].insert(1, dict(probe["recovery"][0]))
+    with pytest.raises(ValueError, match="exactly one"):
+        create(tmp_path / "ambiguous", value)
+
+
+def test_a_numeric_version_source_stays_canonical(tmp_path):
+    value, _resources = commit_plan(writes=1, alias=False)
+    create(tmp_path / "gate", value)
+    assert (
+        Gate(tmp_path / "gate", "probe").snapshot()["plan"]["jobs"]["probe"][
+            "recovery"
+        ][1]["versionFrom"]
+        == 0
+    )
+
+
+def scheduled_commit_plan():
+    """One probe: a conditional Commit, a readback, then its scheduled cleanup."""
+    value, resources = commit_plan(writes=1)
+    probe = value["jobs"]["probe"]
+    name = resources[0]
+    readback = {
+        "kind": "probe-readback",
+        "resource": name,
+        "service": "firestore",
+        "method": "GET",
+        "path": "/v1/" + name,
+        "body": None,
+        "privileged": True,
+        "form": False,
+    }
+    verify = {**readback, "kind": "cleanup-verify-absence"}
+    probe["observation"] = [probe["observation"][0], readback]
+    probe["recovery"] = [probe["recovery"][0], probe["recovery"][1], verify]
+    probe["schedule"] = [
+        {"phase": "observation", "index": 0},
+        {"phase": "observation", "index": 1, "creates": False},
+        {"phase": "recovery", "index": 0, "creates": False},
+        {"phase": "recovery", "index": 1, "creates": False},
+        {"phase": "recovery", "index": 2, "creates": False},
+    ]
+    value["observationRequests"] = 2
+    return value, resources
+
+
+@pytest.mark.parametrize("slot", [0, 1])
+def test_a_slot_that_can_create_may_not_declare_that_it_cannot(tmp_path, slot):
+    """The Ledger relaxes retirement on this declaration, so the Gate checks it."""
+    value, _resources = scheduled_commit_plan()
+    if slot == 0:
+        value["jobs"]["probe"]["schedule"][0]["creates"] = False
+    else:
+        value["jobs"]["probe"]["observation"][1]["body"] = {"writes": []}
+        value["jobs"]["probe"]["schedule"][1]["creates"] = False
+    with pytest.raises(ValueError, match="cannot declare"):
+        create(tmp_path / "gate", value)
+
+
+def test_a_conditional_patch_slot_may_not_declare_that_it_cannot_create(tmp_path):
+    value, resources = scheduled_commit_plan()
+    probe = value["jobs"]["probe"]
+    probe["observation"][1] = {
+        **probe["observation"][1],
+        "method": "PATCH",
+        "path": "/v1/" + resources[0] + "?currentDocument.exists=false",
+        "body": None,
+    }
+    with pytest.raises(ValueError, match="cannot declare"):
+        create(tmp_path / "gate", value)
+
+
+def _created(gate, value, resources):
+    gate.claim()
+    gate.dispatch(
+        value["jobs"]["probe"]["observation"][0],
+        False,
+        lambda: _commit_response(len(resources)),
+    )
+
+
+def test_an_abandoned_observation_still_reaches_its_scheduled_cleanup(tmp_path):
+    """An early stop must not cost the campaign its only way to delete."""
+    value, resources = scheduled_commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    _created(gate, value, resources)
+    name = resources[0]
+    fields = value["jobs"]["probe"]["observation"][0]["body"]["writes"][0]["update"][
+        "fields"
+    ]
+    gate.abandon_observation("transport-deadline")
+    assert gate.snapshot()["jobs"]["probe"]["stopReason"] == "transport-deadline"
+    recovery = value["jobs"]["probe"]["recovery"]
+    gate.dispatch(
+        recovery[0],
+        True,
+        lambda: (200, {"name": name, "fields": fields, "updateTime": VERSION}),
+    )
+    deleted = dict(recovery[1])
+    del deleted["versionFrom"]
+    deleted["path"] += "?currentDocument.updateTime=" + quote(VERSION, safe="")
+    gate.dispatch(deleted, True, lambda: (200, {}))
+    gate.dispatch(recovery[2], True, _absent)
+    job = gate.snapshot()["jobs"]["probe"]
+    assert job["recovery"] == 3
+    assert job["absent"] == [name]
+    # The one observation slot the stop skipped is counted, not dispatched.
+    assert job["skippedByStop"] == 1
+    assert job["observation"] == 1
+    assert job["scheduleDone"] == 5
+
+
+def test_an_abandoned_observation_skips_cleanup_it_never_created(tmp_path):
+    """A probe whose Commit left no proof cleans nothing, and spends no request."""
+    value, _resources = scheduled_commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+
+    def deadline():
+        raise TimeoutError("transport deadline")
+
+    with pytest.raises(TimeoutError):
+        gate.dispatch(value["jobs"]["probe"]["observation"][0], False, deadline)
+    gate.abandon_observation("transport-deadline")
+    before = gate.snapshot()
+    result = gate.dispatch(
+        value["jobs"]["probe"]["recovery"][0], True, lambda: pytest.fail("no wire call")
+    )
+    assert result == (None, {"skipped": "no-creation-proof-after-stop"})
+    after = gate.snapshot()
+    assert after["events"] == before["events"]
+    assert after["jobs"]["probe"]["creationProofs"] == {}
+    assert [skip["reason"] for skip in after["skips"]] == [
+        "no-creation-proof-after-stop"
+    ]
+
+
+def test_abandoning_observation_is_refused_outside_a_scheduled_job(tmp_path):
+    create(tmp_path / "gate", plan())
+    gate = Gate(tmp_path / "gate", "a")
+    gate.claim()
+    with pytest.raises(ValueError, match="declared schedule"):
+        gate.abandon_observation("transport-deadline")
+
+
+@pytest.mark.parametrize("reason", ["", None, 7, "x" * 129])
+def test_an_abandon_reason_must_be_a_bounded_string(tmp_path, reason):
+    value, resources = scheduled_commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    _created(gate, value, resources)
+    with pytest.raises(ValueError, match="stop reason"):
+        gate.abandon_observation(reason)
+    assert gate.snapshot()["jobs"]["probe"].get("stopReason") is None
+
+
+def test_an_abandoned_job_cannot_be_abandoned_twice_or_observe_again(tmp_path):
+    value, resources = scheduled_commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    _created(gate, value, resources)
+    gate.abandon_observation("transport-deadline")
+    with pytest.raises(ValueError, match="already abandoned"):
+        gate.abandon_observation("transport-deadline")
+    with pytest.raises(ValueError, match="stopped"):
+        gate.dispatch(value["jobs"]["probe"]["observation"][1], False, _absent)

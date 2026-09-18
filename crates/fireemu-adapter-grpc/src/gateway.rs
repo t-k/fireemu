@@ -4,7 +4,7 @@ use core::fmt;
 
 use fireemu_core_firestore::index::{
     decide, validate_aggregation_query as validate_aggregation_index_query, IndexDecision,
-    IndexSet, PlanningContext,
+    IndexSet, IndexValidationPolicy, PlanningContext,
 };
 use fireemu_core_firestore::query::{Query, QueryLimitViolation};
 use fireemu_core_firestore::store::{normalize_aggregation_query, Aggregation};
@@ -176,6 +176,15 @@ impl Gateway {
             return Err(Rejection::Unsupported(
                 "findNearest is unsupported for aggregation queries".to_owned(),
             ));
+        }
+        // Production refuses a cursor whose `__name__` value is not a document reference,
+        // or whose reference names a document the query does not select. The compatibility
+        // contract keeps production-only refusals out of the `emulator` profile, and the
+        // production index policy is exactly what the strict profile selects.
+        if self.ctx.policy == IndexValidationPolicy::Production {
+            canonical
+                .check_production_cursor_constraints()
+                .map_err(|error| Rejection::InvalidQuery(error.to_string()))?;
         }
         let disjunctions = canonical.dnf_disjunction_count();
         if disjunctions > fireemu_core_firestore::query::MAX_MATERIALIZED_DISJUNCTIONS {

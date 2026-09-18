@@ -125,3 +125,27 @@ it, so editing one of those means rerunning the shadow and republishing.
 `request_bytes_run_fixture.py` drives the real collector through its full
 258-slot schedule with an injected executor, so tests assert on results the
 collector actually produced rather than on hand-written literals.
+
+
+## Per-slot timings
+
+Both transports record `elapsedSeconds` on every receipt, and the collector
+copies it into each row, so a run measures what each schedule slot cost. On the
+production transport the figure spans the whole slot: request preparation, the
+worker process, the connection, the upload and the bounded response read, which
+is the boundary a per-slot reservation has to pay for. The wrapper is additive
+and never inspects the receipt, so it cannot change a refusal classification or
+the deadline.
+
+`slot_timings` summarises a run's rows into the published record, separately for
+the three 10 MiB Commits and the small reads and deletes, with the median, p95,
+p99 and maximum. Zero-wire skips are excluded: they send nothing, and counting
+them would drag every percentile toward zero.
+
+**These are a floor, not an estimate.** A local shadow runs over loopback
+against an emulator on the same machine, so its figures exclude the network
+round trip, TLS and production server time. A production per-slot reservation
+needs a production measurement, which the production transport can now supply.
+The record carries that disclaimer beside the numbers and
+`validate_slot_timings` refuses a block that drops it or claims to be a
+production estimate.

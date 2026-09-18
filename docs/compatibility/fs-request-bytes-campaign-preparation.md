@@ -215,8 +215,8 @@ has lost the implemented shape.
 
 The recorded run is published as
 `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, at source
-`1f34e786349b4a9ce1c0cf7aa03ebd819fae2bd0`, artifact SHA-256
-`ada6236ed317e21f928cd92388a3a2f2e489a128938cb66512e5510482129e52`, nonce `af62e3add5a7480484efec59db88ad3e`, with supervisor status
+`f3dfc71b26210f855724f8085f9c12853a4ac506`, artifact SHA-256
+`2ac9a48c0795e75eda342734a79e669fb4e5603b3cb9cc2b1f80cad58d79c779`, nonce `a662d4181ae4427e929fb297f930478f`, with supervisor status
 `completed`, `recordingComplete` and `stateValidation` true, the owned process
 stopped and all listeners closed. It completed 105 observation rows and 153
 recovery rows, sent 241 of the 258 bounded requests, and proved all 51 owned
@@ -254,12 +254,36 @@ true: nothing was written, and the boundary question is unanswered.
 by a result the collector could not have produced, and it drives
 `stateValidation` false so the supervisor run stays incomplete.
 
+## Per-slot timings, as a floor
+
+The O8 runner reserves a number of seconds for each of the 258 schedule slots.
+The three boundary Commits are covered by the 60-second transport deadline
+above. The other 255 are small reads and deletes, and nothing measured them.
+
+Both transports now record `elapsedSeconds` on every receipt and the collector
+copies it into each row, so every run measures its own slots. On the production
+transport the figure spans the whole slot, including the worker process and the
+connection, because that is what a reservation pays for. The published record
+carries a summary under `slotTimings`, separately for the boundary Commits and
+the small requests, with the median, p95, p99 and maximum. Slots consumed as
+zero-wire skips are excluded, since they send nothing.
+
+**The published figures are a floor and not an estimate, and the record says so
+beside them.** A local shadow runs over loopback against an emulator on the same
+machine. In the published run the small-request median is 0.0010 s with a p99 of 0.0111 s, and the
+three boundary Commits ran 0.0246 s at the median. That is service time with no
+network in it at all; a production small read is an HTTPS round trip and
+will be one to two orders of magnitude higher. Citing the local p99 as a
+production per-slot figure would be wrong by that margin. It bounds the
+reservation from below and nothing more. A real figure needs a production run,
+which the production transport can now record.
+
 ## Artifacts
 
 - `spec/compatibility/fs-request-bytes-campaign.json`, the campaign artifact.
 - `spec/compatibility/fs-request-bytes-cases.json`, the case and expectation view.
 - `spec/compatibility/fs-request-bytes-budget.json`, the budget, accounting and cost view.
-- `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, the local shadow receipt.
+- `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, the local shadow receipt, including the loopback timing floor.
 - `tools/compat-broad/fs-request-bytes-boundary/`, the compiler, collector,
   transports, campaign composer and local shadow.
 

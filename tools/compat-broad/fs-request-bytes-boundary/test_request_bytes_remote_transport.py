@@ -22,6 +22,7 @@ from request_bytes_remote_transport import (
     ORIGIN,
     RESPONSE_BYTES,
     TIMEOUT,
+    _dispatch,
     _request_impl,
 )
 from request_bytes_remote_transport import (
@@ -726,3 +727,114 @@ def test_the_real_worker_refuses_a_deadline_above_the_published_ceiling(
     )
     assert status is None
     assert failure == "worker-failure"
+
+
+# --- Per-request elapsed time -------------------------------------------------
+#
+# The O8 runner reserves a number of seconds per schedule slot. The production
+# transport recorded no duration at all, so nothing in the tree measured what a
+# slot actually costs. These cover the recording, not a production figure.
+
+
+def test_the_receipt_carries_the_elapsed_time_of_the_whole_slot():
+    plan, operation = plan_and_commit()
+    clock = FakeClock()
+
+    def exchange(url, method, body, headers, timeout, response_cap):
+        clock.advance(3.5)
+        return response(200, {"Content-Type": "application/json"}, b"{}")
+
+    receipt = _request_impl(
+        plan,
+        "observation",
+        17,
+        operation,
+        "token",
+        exchange=exchange,
+        timeout=TIMEOUT,
+        clock=clock,
+    )
+    assert receipt["complete"] is True
+    assert receipt["elapsedSeconds"] == pytest.approx(3.5)
+
+
+def test_a_transport_failure_is_timed_too():
+    """A timeout's duration is exactly the figure a reservation needs."""
+    plan, operation = plan_and_commit()
+    clock = FakeClock()
+
+    def exchange(url, method, body, headers, timeout, response_cap):
+        clock.advance(TIMEOUT)
+        raise TimeoutError
+
+    receipt = _request_impl(
+        plan,
+        "observation",
+        17,
+        operation,
+        "token",
+        exchange=exchange,
+        timeout=TIMEOUT,
+        clock=clock,
+    )
+    assert receipt["complete"] is False
+    assert receipt["failure"] == "timeout"
+    assert receipt["elapsedSeconds"] == pytest.approx(TIMEOUT)
+
+
+def test_timing_does_not_change_a_refusal_or_the_deadline(monkeypatch):
+    """The wrapper must be additive.
+
+    Compared against the untimed dispatch path through the same exchange, not
+    against a stripped copy of itself: the timed receipt minus its one new key
+    has to equal what the transport produced before the wrapper existed.
+    """
+    plan, operation = plan_and_commit()
+    body = json.dumps(
+        {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}, separators=(",", ":")
+    ).encode()
+
+    def process(**kwargs):
+        return 400, "application/json", body, None
+
+    monkeypatch.setattr("request_bytes_remote_transport._run_process_exchange", process)
+    timed = request(plan, "observation", 17, operation, "secret-test-credential")
+    untimed = _dispatch(
+        plan, "observation", 17, operation, "secret-test-credential", exchange=None
+    )
+    assert timed["status"] == 400
+    assert timed["complete"] is True
+    assert json.loads(base64.b64decode(timed["rawBodyBase64"])) == json.loads(body)
+    assert timed["elapsedSeconds"] >= 0
+    assert "elapsedSeconds" not in untimed
+    assert {k: v for k, v in timed.items() if k != "elapsedSeconds"} == untimed
+
+
+def test_a_real_loopback_request_is_timed_end_to_end(loopback_server, monkeypatch):
+    """A real socket, a real worker process, through the production path."""
+    from request_bytes_process_exchange import _run_process_exchange
+
+    host, _received = loopback_server
+    source = _loopback_worker_source(host)
+    plan, operation = plan_and_commit()
+
+    def process(**kwargs):
+        assert kwargs["deadline"] > time.monotonic()
+        return _run_process_exchange(
+            worker_source=source,
+            request_payload=kwargs["request_payload"],
+            deadline=kwargs["deadline"],
+            response_cap=kwargs["response_cap"],
+            worker_sha256=hashlib.sha256(source).hexdigest(),
+        )
+
+    monkeypatch.setattr("request_bytes_remote_transport._run_process_exchange", process)
+    started = time.monotonic()
+    receipt = request(plan, "observation", 17, operation, "loopback-test-token")
+    wall = time.monotonic() - started
+    assert receipt["status"] == 200
+    assert receipt["complete"] is True
+    # A real measurement: positive, no larger than the wall clock around it, and
+    # inside the deadline the transport enforces.
+    assert 0 < receipt["elapsedSeconds"] <= wall
+    assert receipt["elapsedSeconds"] < TIMEOUT

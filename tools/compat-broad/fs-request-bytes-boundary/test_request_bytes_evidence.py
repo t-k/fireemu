@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -59,8 +61,8 @@ def test_the_published_record_is_assembled_the_way_the_generator_assembles_it():
     validate the contents of `shadow`, `observation`, `runtime`, `probeOutcomes`
     or `cases`, because those are the inputs. The two checks below recompute
     `shadow` and the gates from `observation`, which is what closes that gap;
-    `runtime` and `probeOutcomes` are pinned by the binding and boundary checks
-    further down.
+    `runtime`, `probeOutcomes` and `slotTimings` are pinned by the binding,
+    boundary and timing checks further down.
     """
     value = record()
     generated = shadow_module.build_shadow_document(
@@ -71,6 +73,7 @@ def test_the_published_record_is_assembled_the_way_the_generator_assembles_it():
         plan_digest=value["planDigest"],
         campaign_digest_value=value["campaignDigest"],
         probes=value["probeOutcomes"],
+        timings=value["slotTimings"],
         collector=value["observation"],
         shadow=value["shadow"],
         gates={
@@ -163,8 +166,50 @@ def test_the_published_record_describes_this_worktree_rust_source():
     )
     assert value["runtime"]["runtimeInputsClean"] is True
     assert value["runtime"]["artifactSha256"] == value["artifactSha256"]
-    assert len(value["runtime"]["sourceCommit"]) == 40
     assert value["runtime"]["sourceRoot"] == shadow_module.REPOSITORY_ROOT_MARKER
+
+
+def test_the_recorded_source_commit_is_a_real_commit_in_this_repository():
+    """A length check accepted any 40 characters, including invented ones.
+
+    The recorded commit has to exist here and be an ancestor of, or equal to,
+    what the evidence test is running against. A fabricated value fails the
+    existence check; a commit borrowed from an unrelated branch fails ancestry.
+    A shallow clone cannot answer either question, so it is skipped explicitly
+    rather than passed silently.
+    """
+    commit = record()["runtime"]["sourceCommit"]
+    assert re.fullmatch(r"[0-9a-f]{40}", commit), "source commit is not a SHA-1"
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=ROOT, capture_output=True, text=True, check=False
+        )
+
+    if git("rev-parse", "--git-dir").returncode != 0:
+        pytest.skip("not a git checkout, so the commit cannot be resolved")
+    if git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
+        pytest.skip("shallow clone: earlier commits are absent by construction")
+    kind = git("cat-file", "-t", commit)
+    assert kind.returncode == 0 and kind.stdout.strip() == "commit", (
+        f"the recorded source commit {commit} is not a commit in this repository"
+    )
+    assert git("merge-base", "--is-ancestor", commit, "HEAD").returncode == 0, (
+        f"the recorded source commit {commit} is not an ancestor of HEAD"
+    )
+
+
+def test_an_invented_source_commit_would_not_resolve():
+    """The control for the check above: a well-formed SHA that is not here."""
+    invented = "0" * 40
+    result = subprocess.run(
+        ["git", "cat-file", "-t", invented],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0 or result.stdout.strip() != "commit"
 
 
 def test_the_published_record_holds_the_three_boundary_probes():
@@ -258,3 +303,82 @@ def test_published_evidence_contains_no_credential_material():
 
 def test_the_published_record_is_small_enough_to_review():
     assert RECORD.stat().st_size < 64 * 1024
+
+
+# --- The published timings are a floor, and say so ---------------------------
+
+
+def test_the_published_timings_are_internally_consistent():
+    value = record()
+    shadow_module.validate_slot_timings(
+        value["slotTimings"], value["observation"]["requestCount"]
+    )
+
+
+def test_the_published_timings_are_labelled_a_floor_not_an_estimate():
+    """Anyone citing these must be told what they exclude."""
+    timings = record()["slotTimings"]
+    assert timings["measurement"] == "loopback-floor"
+    assert timings["isProductionEstimate"] is False
+    for phrase in ("round trip", "TLS", "floor", "never an estimate"):
+        assert phrase in timings["disclaimer"]
+
+
+def test_the_published_timings_separate_the_two_slot_classes():
+    timings = record()["slotTimings"]["classes"]
+    assert set(timings) == {"boundaryCommit", "smallRequest"}
+    assert timings["boundaryCommit"]["count"] == len(REQUEST_TARGETS)
+    # The 255 non-Commit slots minus the over probe's zero-wire delete skips.
+    assert timings["smallRequest"]["count"] > 200
+    assert (
+        timings["boundaryCommit"]["count"] + timings["smallRequest"]["count"]
+        == record()["observation"]["requestCount"]
+    )
+
+
+def test_the_published_timings_cover_only_slots_that_sent_something():
+    """A zero-wire skip costs no time and must not enter a percentile."""
+    value = record()
+    assert (
+        value["slotTimings"]["dispatchedCount"] == value["observation"]["requestCount"]
+    )
+    assert value["slotTimings"]["dispatchedCount"] < 258
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(
+            lambda t: t["classes"]["smallRequest"].update(medianSeconds=9.0),
+            id="median-above-p99",
+        ),
+        pytest.param(
+            lambda t: t["classes"]["smallRequest"].update(p99Seconds=0.0),
+            id="p99-below-median",
+        ),
+        pytest.param(
+            lambda t: t["classes"]["smallRequest"].update(count=1),
+            id="count-does-not-sum",
+        ),
+        pytest.param(
+            lambda t: t.update(isProductionEstimate=True), id="claimed-as-an-estimate"
+        ),
+        pytest.param(lambda t: t.update(disclaimer=""), id="disclaimer-stripped"),
+        pytest.param(
+            lambda t: t.update(measurement="production"), id="mislabelled-measurement"
+        ),
+        pytest.param(lambda t: t["classes"].pop("boundaryCommit"), id="classes-merged"),
+        pytest.param(
+            lambda t: t["classes"]["boundaryCommit"].update(totalSeconds=0.0),
+            id="total-below-maximum",
+        ),
+    ],
+)
+def test_a_tampered_timing_block_is_rejected(mutate):
+    value = record()
+    timings = json.loads(json.dumps(value["slotTimings"]))
+    mutate(timings)
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        shadow_module.validate_slot_timings(
+            timings, value["observation"]["requestCount"]
+        )

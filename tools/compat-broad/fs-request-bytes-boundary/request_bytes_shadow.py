@@ -15,7 +15,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
+import statistics
 import sys
 from pathlib import Path
 from typing import Any
@@ -66,6 +68,21 @@ OBSERVATION_MODULES = (
 #: Response bodies at or below this size are republished verbatim in the record.
 #: A successful Commit response is larger and is represented by its digest.
 RESPONSE_EXCERPT_BYTES = 4096
+
+#: Why the published timings are a floor and not an estimate. This travels with
+#: the numbers so a reader cannot pick them up without it.
+LOOPBACK_TIMING_DISCLAIMER = (
+    "Loopback service time against an owned local emulator on the same machine. "
+    "It excludes the network round trip, TLS and production server time, so it "
+    "is a floor for a production per-slot figure and never an estimate of one. "
+    "A production reservation needs a production measurement; the production "
+    "transport now records elapsed time per request so one can be taken."
+)
+
+#: Slot classes. The boundary Commits carry a 10 MiB body; everything else is a
+#: small read or delete, and the two have nothing to do with each other.
+COMMIT_SLOT = "boundaryCommit"
+SMALL_SLOT = "smallRequest"
 
 PUBLICATION_NOTE = (
     "Owned local artifact shadow. No production request was sent, no credential "
@@ -179,6 +196,94 @@ def probe_outcomes(collection: Path, plan: dict[str, Any]) -> list[dict[str, Any
     ]
 
 
+def _percentile(values: list[float], percent: float) -> float:
+    """Nearest-rank percentile. Exact on the sample, no interpolation."""
+    ordered = sorted(values)
+    rank = max(1, math.ceil(percent / 100 * len(ordered)))
+    return ordered[min(rank, len(ordered)) - 1]
+
+
+def slot_timings(collection: Path) -> dict[str, Any]:
+    """Summarise the per-slot elapsed times the local transport already records.
+
+    The collector copies the whole receipt into each row, and the local
+    transport puts `elapsedSeconds` on it, so this reads a measurement that
+    already exists rather than adding one. Skipped slots send nothing and are
+    excluded: a zero-wire skip costs no time and would drag every percentile
+    toward zero.
+    """
+    samples: dict[str, list[float]] = {COMMIT_SLOT: [], SMALL_SLOT: []}
+    for path in sorted(collection.glob("row-*.json")):
+        row = json.loads(path.read_bytes())
+        elapsed = (row.get("receipt") or {}).get("elapsedSeconds")
+        if row.get("skipped") is not None or not isinstance(elapsed, (int, float)):
+            continue
+        key = (
+            COMMIT_SLOT
+            if row.get("kind") == "conditional-create-commit"
+            else SMALL_SLOT
+        )
+        samples[key].append(float(elapsed))
+    classes = {}
+    for name, values in samples.items():
+        if not values:
+            classes[name] = {"count": 0}
+            continue
+        classes[name] = {
+            "count": len(values),
+            "medianSeconds": round(statistics.median(values), 6),
+            "p95Seconds": round(_percentile(values, 95), 6),
+            "p99Seconds": round(_percentile(values, 99), 6),
+            "maxSeconds": round(max(values), 6),
+            "totalSeconds": round(sum(values), 6),
+        }
+    return {
+        "measurement": "loopback-floor",
+        "disclaimer": LOOPBACK_TIMING_DISCLAIMER,
+        "isProductionEstimate": False,
+        "dispatchedCount": sum(len(v) for v in samples.values()),
+        "classes": classes,
+    }
+
+
+def validate_slot_timings(timings: Any, dispatched: int) -> None:
+    """Reject a timing block that cannot have come from a run."""
+    if not isinstance(timings, dict):
+        raise TypeError("slot timings must be an object")
+    if timings.get("measurement") != "loopback-floor":
+        raise ValueError("the timings must be labelled a loopback floor")
+    if timings.get("isProductionEstimate") is not False:
+        raise ValueError("a loopback figure is never a production estimate")
+    if "floor" not in timings.get("disclaimer", ""):
+        raise ValueError("the timings must carry their disclaimer")
+    classes = timings.get("classes")
+    if not isinstance(classes, dict) or set(classes) != {COMMIT_SLOT, SMALL_SLOT}:
+        raise ValueError("the two slot classes must be reported separately")
+    total = 0
+    for name, entry in classes.items():
+        count = entry.get("count")
+        if type(count) is not int or count < 0:
+            raise ValueError(f"{name} count malformed")
+        total += count
+        if count == 0:
+            continue
+        median, p95 = entry.get("medianSeconds"), entry.get("p95Seconds")
+        p99, largest = entry.get("p99Seconds"), entry.get("maxSeconds")
+        if not all(
+            isinstance(value, (int, float)) and value >= 0
+            for value in (median, p95, p99, largest, entry.get("totalSeconds"))
+        ):
+            raise ValueError(f"{name} timings malformed")
+        if not median <= p95 <= p99 <= largest:
+            raise ValueError(f"{name} percentiles are not ordered")
+        if entry["totalSeconds"] < largest:
+            raise ValueError(f"{name} total is below its own maximum")
+    if total != timings.get("dispatchedCount"):
+        raise ValueError("the class counts do not sum to the dispatched count")
+    if total != dispatched:
+        raise ValueError("the timings do not cover every dispatched request")
+
+
 def build_shadow_document(
     *,
     before: str,
@@ -188,6 +293,7 @@ def build_shadow_document(
     plan_digest: str,
     campaign_digest_value: str,
     probes: list[dict[str, Any]],
+    timings: dict[str, Any],
     collector: dict[str, Any],
     shadow: dict[str, Any],
     gates: dict[str, bool],
@@ -216,6 +322,7 @@ def build_shadow_document(
         "planDigest": plan_digest,
         "campaignDigest": campaign_digest_value,
         "probeOutcomes": probes,
+        "slotTimings": timings,
         "observation": collector,
         "shadow": shadow,
         "recordingComplete": gates["recordingComplete"],
@@ -568,6 +675,12 @@ def _child(output: Path, nonce: str) -> None:
     artifact = output / "fireemu"
     if artifact.exists():
         cases = json.loads((output / "cases.json").read_bytes())["cases"]
+        probes = probe_outcomes(output / "collection", plan)
+        timings = slot_timings(output / "collection")
+        # Validated here, before the record is written, for the same reason the
+        # plan and the campaign are: a record that cannot be validated must not
+        # reach the tree in the first place.
+        validate_slot_timings(timings, result["requestCount"])
         document = build_shadow_document(
             before=observation_source_digest(),
             after=observation_source_digest(),
@@ -575,7 +688,8 @@ def _child(output: Path, nonce: str) -> None:
             nonce=nonce,
             plan_digest=result["planDigest"],
             campaign_digest_value=campaign_digest(campaign),
-            probes=probe_outcomes(output / "collection", plan),
+            probes=probes,
+            timings=timings,
             collector=result,
             shadow=shadow,
             gates=gates,

@@ -72,6 +72,7 @@ PROJECT = "fireemu-35fe6"
 DATABASE = "(default)"
 TIMEOUT = 12.0
 INPUT_CAP = 4 * 1024 * 1024
+ARCHIVE_CAP = 32 * 1024 * 1024
 _TOKEN = re.compile(r"[A-Za-z0-9._~+/-]{1,8192}=*")
 _VERSION = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z")
 
@@ -161,48 +162,159 @@ def prepare(value: dict, *, local_origin: str | None = None) -> dict:
     }
 
 
-def request(value: dict, *, local_origin: str | None = None, timeout: float = TIMEOUT) -> dict:
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or not 0 < timeout <= TIMEOUT:
+def _timeout(value: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 < value <= TIMEOUT:
         raise ValueError("timeout must be positive and at most 12 seconds")
-    prepare(value, local_origin=local_origin)
-    envelope = {"value": value, "localOrigin": local_origin, "timeout": timeout}
-    encoded = _json(envelope)
+    return float(value)
+
+
+def _envelope(value: dict, local_origin: str | None, timeout: float) -> str:
+    encoded = _json({"value": value, "localOrigin": local_origin, "timeout": timeout})
     if len(encoded.encode()) > INPUT_CAP:
         raise ValueError("wire input limit")
+    return encoded
+
+
+def _spawn(command: list[str], encoded: str, timeout: float, pass_fds: tuple[int, ...]) -> dict:
+    """Run one bounded worker; always terminate and reap it before returning."""
+    child = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={},
+        close_fds=True,
+        pass_fds=pass_fds,
+    )
     try:
-        child = subprocess.run(
-            [sys.executable, "-I", str(HERE / "commit_remote_transport.py"), "--worker"],
-            input=encoded,
-            text=True,
-            capture_output=True,
-            env={},
-            timeout=timeout,
-            check=False,
-        )
+        out, _ = child.communicate(encoded, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return {"kind": "deadline-exceeded", "complete": False}
-    if child.returncode != 0:
-        return {"kind": "worker-error", "complete": False}
+        child.kill()
+        child.communicate()
+        return {"kind": "deadline-exceeded", "complete": False, "workerReaped": True}
+    if child.returncode != 0 or len(out.encode()) > MAX_CAP:
+        return {"kind": "worker-error", "complete": False, "workerReaped": True}
     try:
-        return json.loads(child.stdout)
+        return json.loads(out)
     except (ValueError, UnicodeDecodeError):
-        return {"kind": "worker-error", "complete": False}
+        return {"kind": "worker-error", "complete": False, "workerReaped": True}
 
 
-def _worker(raw: bytes) -> None:
+def _verify_archive_fd(fd: int, expected_sha256: str) -> None:
+    """Require an unlinked, read-only, regular descriptor holding exactly those bytes."""
+    if type(fd) is not int or fd < 0:
+        raise ValueError("archive descriptor required")
+    if not isinstance(expected_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
+        raise ValueError("archive digest required")
+    try:
+        info = os.fstat(fd)
+        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    except OSError as error:
+        raise ValueError("archive descriptor is not open") from error
+    if flags & os.O_ACCMODE != os.O_RDONLY:
+        raise ValueError("archive descriptor is writable")
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 0:
+        raise ValueError("archive descriptor is not an unlinked regular file")
+    if info.st_size > ARCHIVE_CAP:
+        raise ValueError("archive descriptor too large")
+    data = os.pread(fd, info.st_size + 1, 0)
+    if len(data) != info.st_size or hashlib.sha256(data).hexdigest() != expected_sha256:
+        raise ValueError("archive descriptor digest differs")
+    later = os.fstat(fd)
+    if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink) != (
+        later.st_dev,
+        later.st_ino,
+        later.st_size,
+        later.st_mtime_ns,
+        later.st_ctime_ns,
+        later.st_nlink,
+    ):
+        raise ValueError("archive descriptor changed during verification")
+
+
+def request(value: dict, *, local_origin: str, timeout: float = TIMEOUT) -> dict:
+    """Run one local/preparation request through the pathname worker.
+
+    This entry point can never reach the fixed production origin: it requires an
+    explicit loopback origin. Production requires `request_bound`, whose worker
+    bytes are pinned to an O7-issued archive descriptor.
+    """
+    if local_origin is None:
+        raise ValueError("production wire requires an O7 archive descriptor binding")
+    timeout = _timeout(timeout)
+    prepare(value, local_origin=local_origin)
+    encoded = _envelope(value, local_origin, timeout)
+    return _spawn(
+        [sys.executable, "-I", "-S", "-B", str(HERE / "commit_remote_transport.py"), "--worker"],
+        encoded,
+        timeout,
+        (),
+    )
+
+
+def request_bound(
+    value: dict,
+    *,
+    archive_fd: int,
+    archive_sha256: str,
+    local_origin: str | None = None,
+    timeout: float = TIMEOUT,
+) -> dict:
+    """Run one bounded request in a worker loaded only from the bound archive.
+
+    The descriptor is re-verified immediately before every spawn, and the child
+    re-verifies it again before it reads the credential envelope or performs I/O.
+    """
+    timeout = _timeout(timeout)
+    prepare(value, local_origin=local_origin)
+    _verify_archive_fd(archive_fd, archive_sha256)
+    encoded = _envelope(value, local_origin, timeout)
+    _verify_archive_fd(archive_fd, archive_sha256)
+    return _spawn(
+        [sys.executable, "-I", "-S", "-B", f"/dev/fd/{archive_fd}", "--worker", archive_sha256],
+        encoded,
+        timeout,
+        (archive_fd,),
+    )
+
+
+def _worker(raw: bytes, *, allow_production: bool = False, verify=None) -> None:
     if len(raw) > INPUT_CAP:
         raise ValueError("wire input limit")
     envelope = json.loads(raw)
     value = envelope["value"]
-    args = prepare(value, local_origin=envelope.get("localOrigin"))
-    deadline = time.monotonic() + float(envelope["timeout"])
+    local_origin = envelope.get("localOrigin")
+    if local_origin is None and not allow_production:
+        raise ValueError("pathname worker is local only")
+    args = prepare(value, local_origin=local_origin)
+    deadline = time.monotonic() + _timeout(envelope["timeout"])
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("deadline exceeded before I/O")
+    if verify is not None:
+        verify()
     result = _exchange(
         args["url"], args["method"], args["data"], args["headers"], args["response_cap"], remaining
     )
     print(json.dumps(result, allow_nan=False), end="")
+
+
+def _worker_main(expected_sha256: str) -> int:
+    """Archive dispatcher entry: prove the loaded archive before any secret or I/O."""
+    try:
+        def verify():
+            observed = _archive_origin()
+            if observed is None or observed != _ARCHIVE or observed[1] != expected_sha256:
+                raise ImportError("archive origin or digest differs")
+
+        verify()
+        raw = sys.stdin.buffer.read(INPUT_CAP + 1)
+        verify()
+        _worker(raw, allow_production=True, verify=verify)
+    except Exception:  # noqa: BLE001 -- never echo worker input or diagnostics
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

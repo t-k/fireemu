@@ -50,7 +50,9 @@ class Handler(BaseHTTPRequestHandler):
         self.received.append((self.path, self.headers.get("Authorization")))
         if self.slow:
             time.sleep(3)
-        body = json.dumps({"error": {"code": 400, "status": "INVALID_ARGUMENT"}}).encode()
+        body = json.dumps(
+            {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}
+        ).encode()
         self.send_response(400)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -89,8 +91,10 @@ def closed_loopback_origin() -> str:
 
 def test_production_request_refuses_the_pathname_worker_entirely():
     """Only an archive-bound capability may reach the fixed production origin."""
-    with pytest.raises(ValueError, match="archive"):
+    with pytest.raises(TypeError):
         transport.request(payload(local=False, token=TOKEN))
+    with pytest.raises(ValueError, match="archive"):
+        transport.request(payload(local=False, token=TOKEN), local_origin=None)
 
 
 def test_bound_wire_completes_against_an_owned_loopback_server():
@@ -196,14 +200,16 @@ def test_bound_wire_refuses_archive_digest_drift_before_any_request():
     )
     server = Loopback()
     try:
-        with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
-            with pytest.raises(ValueError):
-                transport.request_bound(
-                    payload(token=TOKEN),
-                    archive_fd=fd,
-                    archive_sha256="0" * 64,
-                    local_origin=server.origin,
-                )
+        with (
+            o8_bundle.unlinked_archive_fd(archive, sha) as fd,
+            pytest.raises(ValueError),
+        ):
+            transport.request_bound(
+                payload(token=TOKEN),
+                archive_fd=fd,
+                archive_sha256="0" * 64,
+                local_origin=server.origin,
+            )
     finally:
         server.close()
     assert Handler.received == []

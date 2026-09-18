@@ -287,8 +287,8 @@ def test_a_base_schema_campaign_binds_its_identity_through_the_frozen_plan(tmp_p
         {"launcherSha256": "0" * 64},
         {"artifactProfile": "unreviewed"},
         {"ledgerRoot": "/nonexistent/private/ledger"},
-        {"windowStartsAt": time.time() + 600},
-        {"windowExpiresAt": time.time() + 10},
+        {"windowStartsAt": lambda now: now + 600},
+        {"windowExpiresAt": lambda now: now + 10},
         {"windowExpiresAt": "soon"},
         {"windowStartsAt": float("nan")},
         {"executionHost": {"platform": "other", "machine": "other"}},
@@ -296,6 +296,12 @@ def test_a_base_schema_campaign_binds_its_identity_through_the_frozen_plan(tmp_p
 )
 def test_an_incomplete_o7_binding_is_refused(tmp_path, override):
     admission = Admission(tmp_path)
+    # Window cases are resolved now, not at import: a long suite would otherwise
+    # leave a "future" window already in the past by the time the case runs.
+    now = time.time()
+    override = {
+        key: value(now) if callable(value) else value for key, value in override.items()
+    }
     with pytest.raises(ValueError):
         admission.validate(approval={**admission.approval, **override})
 

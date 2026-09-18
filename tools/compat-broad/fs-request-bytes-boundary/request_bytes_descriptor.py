@@ -409,21 +409,23 @@ def _probe_schedule(plan, probe_index, *, upload_seconds, slot_seconds):
     """
     bounds = {"observation": PROBE_OBSERVATIONS, "recovery": PROBE_RECOVERY}
     entries = []
+    reservations = []
     for entry in plan["executionSchedule"]:
         span = bounds[entry["phase"]]
         if entry["index"] // span != probe_index:
             continue
         local = entry["index"] % span
         operations = plan[entry["phase"]]
-        upload = operations[entry["index"]]["method"] == "POST"
-        entries.append(
-            {
-                "phase": entry["phase"],
-                "index": local,
-                "seconds": upload_seconds if upload else slot_seconds,
-            }
-        )
-    return entries
+        slot = {"phase": entry["phase"], "index": local}
+        entries.append(slot)
+        # A schedule entry carries exactly the two keys the shared Gate admits.
+        # The per-slot reservation lives beside it, because the Gate charges one
+        # plan-wide `requestSeconds` today and cannot yet reserve 60 seconds for
+        # an upload and 2 for a read. The values are frozen here so the approval
+        # binds them and the gap is visible rather than implied.
+        if operations[entry["index"]]["method"] == "POST":
+            reservations.append({**slot, "seconds": upload_seconds})
+    return entries, reservations
 
 
 def gate_plan(plan, *, upload_seconds, slot_seconds, wall_seconds=None):
@@ -445,21 +447,21 @@ def gate_plan(plan, *, upload_seconds, slot_seconds, wall_seconds=None):
     if upload_seconds > transport_deadline_seconds():
         raise ValueError("upload reservation above the enforced transport ceiling")
     jobs = {}
+    slot_reservations = {}
     for index, probe in enumerate(PROBE_SCOPES):
         observation, recovery = _probe_slice(plan, index)
+        schedule, reservations = _probe_schedule(
+            plan, index, upload_seconds=upload_seconds, slot_seconds=slot_seconds
+        )
         jobs[gate_job_name(probe)] = {
             "resources": [
                 name for name in plan["ownedResources"] if f"/{probe}/" in name
             ],
             "observation": copy.deepcopy(observation),
             "recovery": copy.deepcopy(recovery),
-            "schedule": _probe_schedule(
-                plan,
-                index,
-                upload_seconds=upload_seconds,
-                slot_seconds=slot_seconds,
-            ),
+            "schedule": schedule,
         }
+        slot_reservations[gate_job_name(probe)] = reservations
     recovery_time = math.ceil(
         len(PROBE_SCOPES) * PROBE_RECOVERY * (slot_seconds + GATE_INTERVAL_SECONDS)
     )
@@ -489,6 +491,10 @@ def gate_plan(plan, *, upload_seconds, slot_seconds, wall_seconds=None):
         "requestCostMicrousd": GATE_REQUEST_COST_MICROUSD,
         "costMicrousd": ledger_budget()["costMicrousd"],
         "receiptKind": RECEIPT_KIND,
+        # Frozen, not yet enforced: the shared Gate reserves `requestSeconds`
+        # for every slot, so the three uploads are under-reserved until it can
+        # take a per-slot value. Recording them binds the intent to the approval.
+        "slotReservationSeconds": slot_reservations,
         # The owner supplies the bearer token, so this campaign acquires no
         # credential and takes no management slot at all.
         "management": {

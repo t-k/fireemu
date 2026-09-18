@@ -453,13 +453,19 @@ def test_a_complete_o7_binding_is_admitted(tmp_path):
         {"launcherSha256": "0" * 64},
         {"artifactProfile": "repaired-567565bdd"},
         {"ledgerRoot": "/nonexistent/private/ledger"},
-        {"windowStartsAt": time.time() + 600},
-        {"windowExpiresAt": time.time() + 10},
+        {"windowStartsAt": lambda now: now + 600},
+        {"windowExpiresAt": lambda now: now + 10},
         {"executionHost": {"platform": "other", "machine": "other"}},
     ],
 )
 def test_an_incomplete_o7_binding_is_refused(tmp_path, override):
     built = Admission(tmp_path)
+    # Window cases are resolved now, not at import: a long suite would otherwise
+    # leave a "future" window already in the past by the time the case runs.
+    now = time.time()
+    override = {
+        key: value(now) if callable(value) else value for key, value in override.items()
+    }
     with pytest.raises(ValueError):
         admission.validate_o7_admission(
             **built.bindings(approval={**built.approval, **override})
@@ -873,8 +879,14 @@ def test_the_gate_plan_hosts_three_interleaved_probes(tmp_path):
         # Within one probe the order is its 35 observations then its 51
         # recovery slots, so the one-way recovery rule is satisfied per job.
         assert phases == ["observation"] * 35 + ["recovery"] * 51
-        uploads = [item for item in job["schedule"] if item["seconds"] == 60.0]
-        assert len(uploads) == 1
+        # A schedule entry carries exactly the two keys the shared Gate admits.
+        assert all(set(item) == {"phase", "index"} for item in job["schedule"])
+    # The per-slot reservations are frozen beside the schedule, because the Gate
+    # charges one plan-wide requestSeconds and cannot yet reserve 60 seconds for
+    # an upload and 2 for a read.
+    assert set(plan["slotReservationSeconds"]) == set(plan["jobs"])
+    for reserved in plan["slotReservationSeconds"].values():
+        assert reserved == [{"phase": "observation", "index": 17, "seconds": 60.0}]
     assert sum(len(job["resources"]) for job in plan["jobs"].values()) == 51
     # The campaign-wide schedule does interleave the two phases, which is what
     # the three-job split resolves: each probe finishes before the next begins.
@@ -979,45 +991,24 @@ def test_the_launcher_reads_no_credential_until_every_check_has_passed(
 
 
 def test_the_shared_evidence_contract_reads_this_campaigns_gate_plan(tmp_path):
-    """The retirement contract is derived from the plan, and finds no slots here.
+    """The retirement contract reads this campaign's plan, not Commit literals.
 
-    This campaign acquires no credential and makes no metadata preflight
-    request, so its Gate plan declares no management slots at all. The shared
-    no-data contract measures a stop by how many preflight slots it consumed,
-    which cannot express a campaign that has none: every stop of this campaign
-    is refused today. The lane contract below is what classifies them, and
-    closing the shared one is an open item for the Ledger owner.
+    Only the plan-derived readings are asserted here. How the contract then
+    judges a receipt is the Ledger owner's, and this campaign has an open item
+    with them: it acquires no credential and makes no metadata preflight
+    request, so its plan declares no management slots at all, and a contract
+    that measures a stop by preflight slots consumed cannot express one. The
+    lane contract below classifies all four of its stop points today.
     """
     import reservations
 
     built = Admission(tmp_path)
     plan = admission.gate_plan_for(built.inputs, built.permission)
-    gate = {
-        "plan": plan,
-        "managementUsed": [],
-        "total": 0,
-        "observation": 0,
-        "recovery": 0,
-        "jobs": {
-            name: {
-                "observation": 0,
-                "recovery": 0,
-                "owned": [],
-                "creationProofs": {},
-                "absent": [],
-            }
-            for name in plan["jobs"]
-        },
-    }
-    receipt = {"gate": gate, "metadata": []}
-    # Read from the plan, not from Commit literals: the kind and the slots are
-    # this campaign's.
+    gate = {"plan": plan}
     assert reservations._receipt_kind(gate) == campaign.RECEIPT_KIND
+    assert reservations._receipt_kind(gate) != "commit-acquisition-receipt-v2"
     assert reservations._credential_slots(gate) == []
     assert reservations._management(gate) == ([], [])
-    assert reservations._no_data_gate(gate) is True
-    # The open item: no preflight slots means no expressible stop point.
-    assert reservations._preflight_stop(receipt) is None
 
 
 def test_the_reservation_claim_binds_its_gate(tmp_path):

@@ -1305,6 +1305,14 @@ impl PubSubState {
     }
 
     /// Returns every source message waiting for dead-letter destination admission.
+    ///
+    /// The emulator's retention policy for these transfers: a message whose destination refuses
+    /// admission, including a destination topic that does not exist or was deleted, stays owned by
+    /// the source subscription. It is neither delivered to the source subscriber again nor
+    /// dropped, and a later retry forwards it once the destination accepts it. A seek supersedes a
+    /// pending transfer: it rewrites the entry like any other, so the reservation is released and
+    /// a superseded retry cannot complete the replayed entry. Production semantics for a missing
+    /// dead-letter topic are not asserted here; this is the local transfer state machine.
     #[must_use]
     pub fn pending_dead_letters(&self) -> Vec<DeadLetterForward> {
         self.subscriptions

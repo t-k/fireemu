@@ -7,6 +7,7 @@ from partition_cursor_case import OBSERVATION_COUNT, RECOVERY_COUNT
 from partition_cursor_collector import collect_local
 from partition_cursor_offline_fixture import Transport, plan
 from partition_cursor_shadow import (
+    KNOWN_LOCAL_DIFFERENCES,
     loopback_transport,
     shadow_contract,
     validate_shadow,
@@ -69,8 +70,9 @@ def test_a_passing_bundle_validates_against_the_contract(tmp_path) -> None:
 
 def test_a_mismatched_bundle_names_every_differing_slot(tmp_path) -> None:
     collected = bundle(tmp_path)
-    collected["rows"][17]["status"] = "mismatch"
-    collected["rows"][20]["status"] = "failed"
+    by_kind = {row["kind"]: row for row in collected["rows"]}
+    by_kind["cursor-start-at-value"]["status"] = "mismatch"
+    by_kind["cursor-end-before-value"]["status"] = "failed"
     result = validate_shadow(collected, plan())
     assert result["status"] == "DIFFERENT"
     assert [difference["kind"] for difference in result["differences"]] == [
@@ -126,3 +128,29 @@ def test_the_shadow_transport_refuses_any_non_loopback_origin(origin) -> None:
 
 def test_the_shadow_transport_accepts_a_loopback_origin() -> None:
     assert callable(loopback_transport("http://127.0.0.1:9099"))
+
+
+def test_only_ticketed_local_differences_are_classified_as_known(tmp_path) -> None:
+    collected = bundle(tmp_path)
+    by_kind = {row["kind"]: row for row in collected["rows"]}
+    for kind in KNOWN_LOCAL_DIFFERENCES:
+        by_kind[kind]["status"] = "mismatch"
+    result = validate_shadow(collected, plan())
+    assert result["status"] == "DIFFERENT_KNOWN"
+    assert {difference["ticket"] for difference in result["differences"]} == set(
+        KNOWN_LOCAL_DIFFERENCES.values()
+    )
+
+
+def test_one_unticketed_difference_downgrades_the_whole_run(tmp_path) -> None:
+    collected = bundle(tmp_path)
+    by_kind = {row["kind"]: row for row in collected["rows"]}
+    for kind in KNOWN_LOCAL_DIFFERENCES:
+        by_kind[kind]["status"] = "mismatch"
+    by_kind["baseline-collection-order"]["status"] = "mismatch"
+    assert validate_shadow(collected, plan())["status"] == "DIFFERENT"
+
+
+def test_every_known_difference_names_a_compiled_case() -> None:
+    kinds = {operation["kind"] for operation in plan()["observation"]}
+    assert set(KNOWN_LOCAL_DIFFERENCES) <= kinds

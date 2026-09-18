@@ -16,13 +16,13 @@ import re
 from typing import Any
 
 CAMPAIGN = "FS-QUERY-PARTITION-CURSOR-04"
-GROUP_COLLECTION = "items"
+GROUP_PREFIX = "o4pc"
 CURSOR_COLLECTION = "cur"
 PARTITION_PREFIX = "part"
 PARTITION_DOCUMENTS = 12
 CURSOR_DOCUMENTS = 8
 PARTITION_BUCKETS = 3
-OBSERVATION_COUNT = 30
+OBSERVATION_COUNT = 31
 RECOVERY_COUNT = 6
 RECONSTRUCTION_SLOTS = 2
 RESPONSE_BYTE_LIMIT = 65536
@@ -88,6 +88,14 @@ def _operation(
     }
 
 
+def group_collection(nonce: str) -> str:
+    """The collection group is nonce-unique so a database-wide PartitionQuery,
+    which production requires, still matches only this run's own documents."""
+    if not isinstance(nonce, str) or not _NONCE.fullmatch(nonce):
+        raise ValueError("nonce must be 32 lowercase hexadecimal characters")
+    return GROUP_PREFIX + nonce
+
+
 def _fields(ordinal: int) -> dict[str, Any]:
     return {
         "n": {"integerValue": str(ordinal)},
@@ -95,10 +103,10 @@ def _fields(ordinal: int) -> dict[str, Any]:
     }
 
 
-def _partition_documents(scope: str) -> list[str]:
+def _partition_documents(scope: str, group: str) -> list[str]:
     return [
         f"{scope}/{PARTITION_PREFIX}/p{index // (PARTITION_DOCUMENTS // PARTITION_BUCKETS)}"
-        f"/{GROUP_COLLECTION}/d{index:02d}"
+        f"/{group}/d{index:02d}"
         for index in range(PARTITION_DOCUMENTS)
     ]
 
@@ -113,9 +121,9 @@ def _expected(name: str, ordinal: int) -> dict[str, Any]:
     return {"name": name, "fields": _fields(ordinal)}
 
 
-def _group_query() -> dict[str, Any]:
+def _group_query(group: str) -> dict[str, Any]:
     return {
-        "from": [{"collectionId": GROUP_COLLECTION, "allDescendants": True}],
+        "from": [{"collectionId": group, "allDescendants": True}],
         "orderBy": copy.deepcopy(_ORDER_NAME_ASC),
     }
 
@@ -139,7 +147,7 @@ def _accepted_partition(count: int, **extra: Any) -> dict[str, Any]:
     return {
         "status": 200,
         "outcome": "accepted",
-        "maxPartitions": count - 1,
+        "maxPartitions": count,
         "cursorsOrdered": True,
         "documentsAsserted": False,
         **extra,
@@ -150,12 +158,22 @@ def _refused() -> dict[str, Any]:
     return {"status": 400, "outcome": "refused", "typed": "INVALID_ARGUMENT"}
 
 
+def _refused_open() -> dict[str, Any]:
+    """A typed refusal whose status code is recorded rather than pinned.
+
+    An order on an indexed field can fail index admission before PartitionQuery
+    shape admission, and which check answers first is one of the conditions this
+    campaign is meant to observe rather than assume.
+    """
+    return {"status": 400, "outcome": "refused", "typedOpen": True}
+
+
 def _partition_body(query: dict[str, Any], count: str, **extra: Any) -> dict[str, Any]:
     return {"structuredQuery": query, "partitionCount": count, **extra}
 
 
 def _setup_operations(
-    scope: str, root: str, database_root: str, seeded: list[str]
+    scope: str, root: str, database_root: str, group: str, seeded: list[str]
 ) -> list[dict[str, Any]]:
     group_documents = [
         _expected(name, index)
@@ -208,10 +226,10 @@ def _setup_operations(
         _operation(
             "baseline-group-name-order",
             "POST",
-            "/v1/" + scope + ":runQuery",
-            body={"structuredQuery": _group_query()},
+            "/v1/" + database_root + ":runQuery",
+            body={"structuredQuery": _group_query(group)},
             expect={"status": 200, "outcome": "accepted", "documents": group_documents},
-            parent=scope,
+            parent=database_root,
             targetResources=seeded[:PARTITION_DOCUMENTS],
         ),
         _operation(
@@ -231,11 +249,14 @@ def _setup_operations(
 
 
 def _partition_operations(
-    scope: str, database_root: str, seeded: list[str]
+    scope: str, database_root: str, group: str, seeded: list[str]
 ) -> list[dict[str, Any]]:
-    path = "/v1/" + scope + ":partitionQuery"
+    # Production requires a database parent for PartitionQuery, so every accepted
+    # partition operation is database-wide and isolation comes from the
+    # nonce-unique collection group rather than from a document parent.
+    path = "/v1/" + database_root + ":partitionQuery"
     owned_group = seeded[:PARTITION_DOCUMENTS]
-    filtered = _group_query()
+    filtered = _group_query(group)
     filtered["where"] = {
         "fieldFilter": {
             "field": {"fieldPath": "n"},
@@ -243,47 +264,49 @@ def _partition_operations(
             "value": _integer(0),
         }
     }
-    limited = _group_query()
+    limited = _group_query(group)
     limited["limit"] = 10
-    ordered = _group_query()
+    ordered = _group_query(group)
     ordered["orderBy"] = [{"field": {"fieldPath": "n"}, "direction": "ASCENDING"}]
-    scoped = _group_query()
-    scoped["from"] = [{"collectionId": GROUP_COLLECTION}]
+    offset_query = _group_query(group)
+    offset_query["offset"] = 1
+    scoped = _group_query(group)
+    scoped["from"] = [{"collectionId": group}]
     return [
         _operation(
             "partition-count-1",
             "POST",
             path,
-            body=_partition_body(_group_query(), "1"),
+            body=_partition_body(_group_query(group), "1"),
             expect=_accepted_partition(1),
-            parent=scope,
+            parent=database_root,
             targetResources=owned_group,
         ),
         _operation(
             "partition-count-4",
             "POST",
             path,
-            body=_partition_body(_group_query(), "4"),
+            body=_partition_body(_group_query(group), "4"),
             expect=_accepted_partition(4),
-            parent=scope,
+            parent=database_root,
             targetResources=owned_group,
         ),
         _operation(
             "partition-count-4-page-size-2",
             "POST",
             path,
-            body=_partition_body(_group_query(), "4", pageSize=2),
+            body=_partition_body(_group_query(group), "4", pageSize=2),
             expect=_accepted_partition(4),
-            parent=scope,
+            parent=database_root,
             targetResources=owned_group,
         ),
         _operation(
             "partition-page-token-continuation",
             "POST",
             path,
-            body=_partition_body(_group_query(), "4", pageSize=2),
+            body=_partition_body(_group_query(group), "4", pageSize=2),
             expect=_accepted_partition(4, skippable=True),
-            parent=scope,
+            parent=database_root,
             targetResources=owned_group,
             pageTokenFrom=7,
         ),
@@ -293,7 +316,7 @@ def _partition_operations(
             path,
             body=_partition_body(scoped, "2"),
             expect=_refused(),
-            parent=scope,
+            parent=database_root,
             targetResources=owned_group,
         ),
         _operation(
@@ -302,16 +325,16 @@ def _partition_operations(
             path,
             body=_partition_body(filtered, "2"),
             expect=_refused(),
-            parent=scope,
+            parent=database_root,
             targetResources=owned_group,
         ),
         _operation(
             "partition-count-zero",
             "POST",
             path,
-            body=_partition_body(_group_query(), "0"),
+            body=_partition_body(_group_query(group), "0"),
             expect=_refused(),
-            parent=scope,
+            parent=database_root,
             targetResources=owned_group,
         ),
         _operation(
@@ -320,7 +343,16 @@ def _partition_operations(
             path,
             body=_partition_body(limited, "2"),
             expect=_refused(),
-            parent=scope,
+            parent=database_root,
+            targetResources=owned_group,
+        ),
+        _operation(
+            "partition-with-offset",
+            "POST",
+            path,
+            body=_partition_body(offset_query, "2"),
+            expect=_refused(),
+            parent=database_root,
             targetResources=owned_group,
         ),
         _operation(
@@ -328,25 +360,24 @@ def _partition_operations(
             "POST",
             path,
             body=_partition_body(ordered, "2"),
+            expect=_refused_open(),
+            parent=database_root,
+            targetResources=owned_group,
+        ),
+        _operation(
+            "partition-document-parent",
+            "POST",
+            "/v1/" + scope + ":partitionQuery",
+            body=_partition_body(_group_query(group), "2"),
             expect=_refused(),
             parent=scope,
             targetResources=owned_group,
         ),
         _operation(
-            "partition-root-parent-control",
-            "POST",
-            "/v1/" + database_root + ":partitionQuery",
-            body=_partition_body(_group_query(), "2"),
-            expect=_accepted_partition(2),
-            parent=database_root,
-            targetResources=[],
-            sharedScope=True,
-        ),
-        _operation(
             "partition-reconstruction-range-0",
             "POST",
-            "/v1/" + scope + ":runQuery",
-            body={"structuredQuery": _group_query()},
+            "/v1/" + database_root + ":runQuery",
+            body={"structuredQuery": _group_query(group)},
             expect={
                 "status": 200,
                 "outcome": "accepted",
@@ -354,16 +385,16 @@ def _partition_operations(
                 "reconstruction": True,
                 "skippable": True,
             },
-            parent=scope,
+            parent=database_root,
             targetResources=owned_group,
-            cursorFrom=6,
+            cursorFrom=5,
             reconstructionSlot=0,
         ),
         _operation(
             "partition-reconstruction-range-1",
             "POST",
-            "/v1/" + scope + ":runQuery",
-            body={"structuredQuery": _group_query()},
+            "/v1/" + database_root + ":runQuery",
+            body={"structuredQuery": _group_query(group)},
             expect={
                 "status": 200,
                 "outcome": "accepted",
@@ -371,20 +402,22 @@ def _partition_operations(
                 "reconstruction": True,
                 "skippable": True,
             },
-            parent=scope,
+            parent=database_root,
             targetResources=owned_group,
-            cursorFrom=6,
+            cursorFrom=5,
             reconstructionSlot=1,
         ),
     ]
 
 
-def _cursor_operations(scope: str, seeded: list[str]) -> list[dict[str, Any]]:
+def _cursor_operations(
+    scope: str, group: str, seeded: list[str]
+) -> list[dict[str, Any]]:
     path = "/v1/" + scope + ":runQuery"
     cursor = seeded[PARTITION_DOCUMENTS:]
     expected = [_expected(name, index) for index, name in enumerate(cursor)]
     reference = {"referenceValue": cursor[3]}
-    foreign = {"referenceValue": f"{scope}/{GROUP_COLLECTION}/absent"}
+    foreign = {"referenceValue": f"{scope}/{group}/absent"}
 
     def case(
         kind: str, query: dict[str, Any], documents: list[dict[str, Any]]
@@ -486,7 +519,7 @@ def _cursor_operations(scope: str, seeded: list[str]) -> list[dict[str, Any]]:
 
 
 def _recovery_operations(
-    scope: str, root: str, database_root: str, seeded: list[str]
+    scope: str, root: str, database_root: str, group: str, seeded: list[str]
 ) -> list[dict[str, Any]]:
     return [
         _operation(
@@ -506,7 +539,12 @@ def _recovery_operations(
                     for name in seeded
                 ]
             },
-            expect={"status": 200, "owned": True, "writeResults": len(seeded)},
+            expect={
+                "status": 200,
+                "owned": True,
+                "writeResults": len(seeded),
+                "updateTimes": False,
+            },
             parent=database_root,
             targetResources=list(seeded),
             versionFrom=2,
@@ -522,10 +560,10 @@ def _recovery_operations(
         _operation(
             "cleanup-verify-group-absence",
             "POST",
-            "/v1/" + scope + ":runQuery",
-            body={"structuredQuery": _group_query()},
+            "/v1/" + database_root + ":runQuery",
+            body={"structuredQuery": _group_query(group)},
             expect={"status": 200, "outcome": "accepted", "documents": []},
-            parent=scope,
+            parent=database_root,
             targetResources=[],
         ),
         _operation(
@@ -561,17 +599,18 @@ def compile_plan(project: str, database: str, nonce: str) -> dict[str, Any]:
     scope = _document_path(
         project, database, "oracle", nonce, "o4-query-partition-cursor", "root"
     )
-    seeded = _partition_documents(scope) + _cursor_documents(scope)
+    group = group_collection(nonce)
+    seeded = _partition_documents(scope, group) + _cursor_documents(scope)
     observation = (
-        _setup_operations(scope, scope, database_root, seeded)
-        + _partition_operations(scope, database_root, seeded)
-        + _cursor_operations(scope, seeded)
+        _setup_operations(scope, scope, database_root, group, seeded)
+        + _partition_operations(scope, database_root, group, seeded)
+        + _cursor_operations(scope, group, seeded)
         + [
             _operation(
                 "post-state-group-readback",
                 "POST",
-                "/v1/" + scope + ":runQuery",
-                body={"structuredQuery": _group_query()},
+                "/v1/" + database_root + ":runQuery",
+                body={"structuredQuery": _group_query(group)},
                 expect={
                     "status": 200,
                     "outcome": "accepted",
@@ -580,7 +619,7 @@ def compile_plan(project: str, database: str, nonce: str) -> dict[str, Any]:
                         for index, name in enumerate(seeded[:PARTITION_DOCUMENTS])
                     ],
                 },
-                parent=scope,
+                parent=database_root,
                 targetResources=seeded[:PARTITION_DOCUMENTS],
             )
         ]
@@ -593,12 +632,12 @@ def compile_plan(project: str, database: str, nonce: str) -> dict[str, Any]:
         "nonce": nonce,
         "ownedScope": scope,
         "databaseRoot": database_root,
-        "groupCollection": GROUP_COLLECTION,
+        "groupCollection": group,
         "cursorCollection": CURSOR_COLLECTION,
         "ownedResources": [scope, *seeded],
         "ownership": "conditional-create-plus-exact-fields",
         "observation": observation,
-        "recovery": _recovery_operations(scope, scope, database_root, seeded),
+        "recovery": _recovery_operations(scope, scope, database_root, group, seeded),
         "budget": {
             "observationRequests": OBSERVATION_COUNT,
             "recoveryRequests": RECOVERY_COUNT,

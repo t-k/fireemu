@@ -159,6 +159,14 @@ def _partitions(body: Any) -> list[Any] | None:
     return found
 
 
+def _any_typed_error(body: Any) -> bool:
+    return (
+        isinstance(body, dict)
+        and isinstance(body.get("error"), dict)
+        and isinstance(body["error"].get("status"), str)
+    )
+
+
 def _typed_error(body: Any, status: str) -> bool:
     return (
         isinstance(body, dict)
@@ -205,12 +213,23 @@ def _matches(
         return False
     if expect.get("typed") and not _typed_error(body, expect["typed"]):
         return False
+    if expect.get("typedOpen") and not _any_typed_error(body):
+        return False
     if expect.get("outcome") == "refused":
         return True
     kind = operation["kind"]
     if kind in ("create-only-patch", "cleanup-ownership-read"):
         return status == 404 or _owned_root(body, plan)
     if kind in ("seed-commit", "cleanup-seed-delete"):
+        if expect.get("updateTimes") is False:
+            # A delete never reports an update time, so only the result count and
+            # the commit time bind this receipt.
+            return (
+                isinstance(body, dict)
+                and isinstance(body.get("writeResults"), list)
+                and len(body["writeResults"]) == expect["writeResults"]
+                and _typed_timestamp(body.get("commitTime"))
+            )
         return _write_versions(body, expect["writeResults"]) is not None
     if kind == "cleanup-root-delete":
         return isinstance(body, dict)
@@ -270,9 +289,12 @@ def _bind_reconstruction(
     operation: dict[str, Any], rows: list[dict[str, Any]]
 ) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
     source = rows[operation["cursorFrom"]]
-    if source["status"] != "pass":
+    receipt = source["receipt"] or {}
+    if source["status"] == "skipped" or receipt.get("status") != 200:
+        # A refused or undispatched partition response never authorizes a
+        # reconstruction range, which would otherwise read the whole query.
         return None, "no-partition-response", None
-    partitions = _partitions((source["receipt"] or {}).get("body"))
+    partitions = _partitions(receipt.get("body"))
     if partitions is None:
         return None, "malformed-partition-cursor", None
     ranges = len(partitions) + 1

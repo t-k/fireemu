@@ -9,12 +9,12 @@ from partition_cursor_case import (
     CAMPAIGN,
     CURSOR_COLLECTION,
     CURSOR_DOCUMENTS,
-    GROUP_COLLECTION,
     OBSERVATION_COUNT,
     PARTITION_DOCUMENTS,
     RECOVERY_COUNT,
     compile_plan,
     digest,
+    group_collection,
     validate_plan,
 )
 
@@ -61,7 +61,7 @@ def test_named_database_is_accepted() -> None:
 
 def test_operation_counts_are_frozen() -> None:
     value = plan()
-    assert len(value["observation"]) == OBSERVATION_COUNT == 30
+    assert len(value["observation"]) == OBSERVATION_COUNT == 31
     assert len(value["recovery"]) == RECOVERY_COUNT == 6
     assert value["budget"] == {
         "observationRequests": OBSERVATION_COUNT,
@@ -109,7 +109,7 @@ def test_partition_operations_declare_a_collection_group_query() -> None:
     for operation in accepted:
         query = operation["body"]["structuredQuery"]
         assert query["from"] == [
-            {"collectionId": GROUP_COLLECTION, "allDescendants": True}
+            {"collectionId": group_collection(NONCE), "allDescendants": True}
         ]
         assert query["orderBy"] == [
             {"field": {"fieldPath": "__name__"}, "direction": "ASCENDING"}
@@ -125,10 +125,12 @@ def test_negative_partition_cases_expect_typed_refusals() -> None:
         if operation["expect"].get("outcome") == "refused"
     }
     assert {
+        "partition-document-parent",
         "partition-not-collection-group",
         "partition-with-filter",
         "partition-count-zero",
         "partition-with-limit",
+        "partition-with-offset",
         "partition-order-non-name",
         "cursor-too-many-values",
         "cursor-reference-type-mismatch",
@@ -136,9 +138,19 @@ def test_negative_partition_cases_expect_typed_refusals() -> None:
         "cursor-negative-offset",
     } <= kinds
     for operation in value["observation"]:
-        if operation["expect"].get("outcome") == "refused":
-            assert operation["expect"]["status"] == 400
-            assert operation["expect"]["typed"] == "INVALID_ARGUMENT"
+        expect = operation["expect"]
+        if expect.get("outcome") == "refused":
+            assert expect["status"] == 400
+            assert expect.get("typed") == "INVALID_ARGUMENT" or expect["typedOpen"]
+
+
+def test_only_the_indexed_order_refusal_leaves_its_typed_code_open() -> None:
+    open_typed = [
+        operation["kind"]
+        for operation in plan()["observation"]
+        if operation["expect"].get("typedOpen")
+    ]
+    assert open_typed == ["partition-order-non-name"]
 
 
 def test_partition_page_token_continuation_binds_an_earlier_observation() -> None:
@@ -159,8 +171,8 @@ def test_reconstruction_slots_bind_the_recorded_partition_cursors() -> None:
     ]
     assert [operation["reconstructionSlot"] for operation in slots] == [0, 1]
     for operation in slots:
-        assert operation["cursorFrom"] == 6
-        assert value["observation"][6]["kind"] == "partition-count-4"
+        assert operation["cursorFrom"] == 5
+        assert value["observation"][5]["kind"] == "partition-count-1"
         assert operation["expect"]["outcome"] == "accepted"
 
 
@@ -204,13 +216,34 @@ def test_descending_limit_documents_the_absent_rest_limit_to_last() -> None:
     )
 
 
-def test_database_wide_control_claims_no_ownership_and_asserts_no_documents() -> None:
+def test_every_accepted_partition_operation_uses_the_database_parent() -> None:
+    value = plan()
+    accepted = [
+        operation
+        for operation in value["observation"]
+        if operation["kind"].startswith("partition-")
+        and operation["expect"].get("outcome") == "accepted"
+    ]
+    for operation in accepted:
+        assert operation["parent"] == value["databaseRoot"]
+        assert operation["path"].startswith("/v1/" + value["databaseRoot"])
+
+
+def test_the_collection_group_is_nonce_unique_so_a_database_query_stays_owned() -> None:
+    value = plan()
+    group = group_collection(NONCE)
+    assert value["groupCollection"] == group
+    assert NONCE in group
+    assert group != group_collection(OTHER)
+    for resource in value["ownedResources"][1:13]:
+        assert f"/{group}/" in resource
+
+
+def test_a_document_parent_partition_query_is_a_declared_refusal_control() -> None:
     by_kind = {operation["kind"]: operation for operation in plan()["observation"]}
-    control = by_kind["partition-root-parent-control"]
-    assert control["sharedScope"] is True
-    assert control["targetResources"] == []
-    assert control["expect"]["documentsAsserted"] is False
-    assert control["parent"].endswith("/documents")
+    control = by_kind["partition-document-parent"]
+    assert control["parent"] == plan()["ownedScope"]
+    assert control["expect"]["outcome"] == "refused"
 
 
 def test_recovery_deletes_are_bound_to_recorded_creation_versions() -> None:
@@ -228,6 +261,7 @@ def test_recovery_deletes_are_bound_to_recorded_creation_versions() -> None:
     assert value["recovery"][2]["versionFrom"] == 1
     for write in value["recovery"][1]["body"]["writes"]:
         assert write["currentDocument"] == {"updateTime": None}
+    assert value["recovery"][1]["expect"]["updateTimes"] is False
 
 
 def test_plan_is_never_production_ready() -> None:

@@ -11,6 +11,16 @@ from partition_cursor_collector import LOOPBACK_ORIGINS, collect_local
 from partition_cursor_offline_fixture import TIME, Transport, partition_cursor, plan
 
 
+def _reconstruction(result: dict) -> tuple[dict, dict]:
+    rows = [
+        row
+        for row in result["rows"]
+        if row["kind"].startswith("partition-reconstruction")
+    ]
+    assert len(rows) == 2
+    return rows[0], rows[1]
+
+
 def run(
     directory, *, transport: Transport | None = None, **kwargs
 ) -> tuple[dict, Transport]:
@@ -103,7 +113,7 @@ def test_a_recorded_next_page_token_is_substituted_exactly(tmp_path) -> None:
 
 def test_zero_partitions_use_one_reconstruction_slot(tmp_path) -> None:
     result, _ = run(tmp_path / "out")
-    first, second = result["rows"][15], result["rows"][16]
+    first, second = _reconstruction(result)
     assert first["status"] == "pass"
     assert "startAt" not in first["request"]["body"]["structuredQuery"]
     assert "endAt" not in first["request"]["body"]["structuredQuery"]
@@ -115,7 +125,7 @@ def test_one_partition_binds_both_reconstruction_ranges(tmp_path) -> None:
     value = plan()
     transport = Transport(value, partitions=1)
     result = collect_local(value, transport, tmp_path / "out")
-    first, second = result["rows"][15], result["rows"][16]
+    first, second = _reconstruction(result)
     cursor = partition_cursor(value["ownedResources"][2])
     assert first["request"]["body"]["structuredQuery"]["endAt"] == cursor
     assert "startAt" not in first["request"]["body"]["structuredQuery"]
@@ -127,7 +137,7 @@ def test_more_partitions_than_slots_send_no_reconstruction_request(tmp_path) -> 
     value = plan()
     transport = Transport(value, partitions=3)
     result = collect_local(value, transport, tmp_path / "out")
-    for row in result["rows"][15:17]:
+    for row in _reconstruction(result):
         assert row["status"] == "skipped"
         assert row["skipReason"] == "reconstruction-slots-exceeded"
     assert not any(
@@ -204,7 +214,7 @@ def test_a_refused_observation_is_recorded_as_a_pass_against_its_expectation(
         for row in result["rows"]
         if plan()["observation"][row["index"]]["expect"].get("outcome") == "refused"
     ]
-    assert len(refusals) == 9
+    assert len(refusals) == 11
     for row in refusals:
         assert row["status"] == "pass"
         assert row["receipt"]["status"] == 400

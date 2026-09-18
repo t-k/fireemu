@@ -72,13 +72,14 @@ BUDGET = MappingProxyType(
         "maxRuns": 1,
         "maxDurationSeconds": 600,
         "maxConcurrency": 1,
-        "maxListeners": 3,
+        "maxConcurrentListeners": 3,
+        "maxListenerRegistrations": 40,
         "maxClients": 2,
         "maxAccounts": 1,
         "maxDocuments": 6,
         "maxWrites": 60,
-        "maxDeletes": 20,
-        "maxReads": 400,
+        "maxDeletes": 80,
+        "maxReads": 600,
         "maxSnapshots": 120,
         "estimatedCostUsd": 0.01,
         "hardCostCeilingUsd": 0.5,
@@ -177,9 +178,12 @@ def count_operations() -> dict[str, int]:
         for event in case["expectedLocal"]:
             snapshots += 1
             reads += max(len(event["docs"]), 1)
+    # Each case is isolated by a conditional cleanup pass over every owned path:
+    # one read to prove ownership, one delete, one read to prove absence.
     owned = len(owned_paths("0" * 32)) - 1  # the run document itself is not seeded
-    reads += owned
-    deletes += owned
+    passes = len(cases.CASES) + 1  # once per case, plus one final pass
+    reads += owned * passes * 2
+    deletes += owned * passes
     return {
         "writes": writes,
         "deletes": deletes,
@@ -220,6 +224,7 @@ def compile_campaign(
         or counts["deletes"] > BUDGET["maxDeletes"]
         or counts["reads"] > BUDGET["maxReads"]
         or counts["snapshots"] > BUDGET["maxSnapshots"]
+        or counts["listenerRegistrations"] > BUDGET["maxListenerRegistrations"]
     ):
         raise ValueError("declared catalog exceeds the frozen budget")
     return {

@@ -1,0 +1,20 @@
+{
+  "budget": {
+    "estimatedCostUsd": 0.01,
+    "hardCostCeilingUsd": 0.5,
+    "maxAccounts": 1,
+    "maxClients": 2,
+    "maxConcurrency": 1,
+    "maxConcurrentListeners": 3,
+    "maxDeletes": 80,
+    "maxDocuments": 6,
+    "maxDurationSeconds": 600,
+    "maxListenerRegistrations": 40,
+    "maxReads": 600,
+    "maxRuns": 1,
+    "maxSnapshots": 120,
+    "maxWrites": 60
+  },
+  "note": "Local shadow runs use these same bounds; production adds a permission.",
+  "schema": "o6-listen-sdk-budget-v1"
+}

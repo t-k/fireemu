@@ -79,6 +79,7 @@ def test_planned_counts_fit_the_frozen_budget():
     assert counts["reads"] <= BUDGET["maxReads"]
     assert counts["snapshots"] <= BUDGET["maxSnapshots"]
     assert counts["listenerRegistrations"] >= len(cases.CASES)
+    assert counts["listenerRegistrations"] <= BUDGET["maxListenerRegistrations"]
 
 
 def test_estimated_cost_stays_far_below_one_dollar():

@@ -263,6 +263,32 @@ def test_approval_must_bind_the_running_execution_host(tmp_path, monkeypatch):
         )
 
 
+def test_the_window_must_hold_the_campaign_and_its_recovery(tmp_path, monkeypatch):
+    """A window sized to the wall budget alone leaves no room for recovery."""
+    assert acquisition.WINDOW_SECONDS == (
+        acquisition.CAMPAIGN_SECONDS + acquisition.RECOVERY_SECONDS
+    )
+    admission = Admission(tmp_path, monkeypatch)
+    archive, sha = archive_for(admission.inputs)
+    now = time.time()
+    with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
+        for margin in (acquisition.CAMPAIGN_SECONDS, acquisition.WINDOW_SECONDS - 1):
+            with pytest.raises(ValueError, match="window expired"):
+                admission.issue(
+                    fd,
+                    sha,
+                    windowStartsAt=now - 1,
+                    windowExpiresAt=now - 1 + margin,
+                )
+        capability = admission.issue(
+            fd,
+            sha,
+            windowStartsAt=now - 1,
+            windowExpiresAt=now + acquisition.WINDOW_SECONDS + 60,
+        )
+        assert capability.campaign_id == admission.inputs["plan"]["campaignId"]
+
+
 def test_capability_requires_a_verified_archive_descriptor(tmp_path, monkeypatch):
     admission = Admission(tmp_path, monkeypatch)
     inputs = admission.inputs
@@ -511,9 +537,7 @@ def test_issuance_runs_the_same_check_set_as_the_o8_cli():
     assert "artifactProfile" not in source
 
 
-def test_admission_binds_the_running_launcher_not_a_sibling_file(
-    tmp_path, monkeypatch
-):
+def test_admission_binds_the_running_launcher_not_a_sibling_file(tmp_path, monkeypatch):
     """launcherSha256 must bind the launcher that is actually running."""
     admission = Admission(tmp_path, monkeypatch)
     inputs = admission.inputs

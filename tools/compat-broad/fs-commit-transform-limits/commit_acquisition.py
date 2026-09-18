@@ -63,6 +63,10 @@ MANIFEST_KIND = "commit-o8-manifest-v1"
 REVIEWED_ARTIFACT_PROFILE = "repaired-567565bdd"
 CAMPAIGN_SECONDS = 1200
 RECOVERY_SECONDS = 180
+# An approved window has to hold the whole campaign and its recovery allocation.
+# A window sized to the wall budget alone admits a run that cannot finish its
+# recovery inside the time the owner approved.
+WINDOW_SECONDS = CAMPAIGN_SECONDS + RECOVERY_SECONDS
 # The source files whose digests a reservation records, so that a later abort
 # proves it runs the same closure the acquisition ran.
 ABORT_CLOSURE_SOURCES = (
@@ -206,7 +210,7 @@ class ProductionWireCapability:
         now = time.time()
         if (
             not self.window_starts_at <= now
-            or now + CAMPAIGN_SECONDS > self.window_expires_at
+            or now + WINDOW_SECONDS > self.window_expires_at
         ):
             raise ValueError("O7 execution window expired")
         self._consumed = True
@@ -379,8 +383,8 @@ def validate_o7_admission(
             raise ValueError("O7 execution window invalid")
     if (
         not approval["windowStartsAt"] <= time.time()
-        or time.time() + CAMPAIGN_SECONDS > approval["windowExpiresAt"]
-        or approval["windowStartsAt"] + CAMPAIGN_SECONDS > approval["windowExpiresAt"]
+        or time.time() + WINDOW_SECONDS > approval["windowExpiresAt"]
+        or approval["windowStartsAt"] + WINDOW_SECONDS > approval["windowExpiresAt"]
     ):
         raise ValueError("O7 execution window expired")
     retained = validate_retained_artifact(

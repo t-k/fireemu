@@ -69,7 +69,8 @@ class BudgetExceeded(Exception):
 # --- redaction ----------------------------------------------------------------
 
 
-def _is_secret_key(key: str) -> bool:
+def is_secret_key(key: str) -> bool:
+    """Whether a record member holds credential material, judged by its name."""
     lowered = key.replace("-", "").replace("_", "").lower()
     return any(
         fragment.replace("_", "") in lowered for fragment in SECRET_KEY_FRAGMENTS
@@ -78,7 +79,7 @@ def _is_secret_key(key: str) -> bool:
 
 def publishable(value: Any, key: str = "") -> Any:
     """Return the projection that may be committed: no secret value, no secret digest."""
-    if key and _is_secret_key(key):
+    if key and is_secret_key(key):
         if value is None:
             return {"present": False, "type": "null"}
         return {"present": True, "type": _json_type(value)}

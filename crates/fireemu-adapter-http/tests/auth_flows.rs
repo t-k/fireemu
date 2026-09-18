@@ -1729,6 +1729,101 @@ fn fixture_identity_providers_sign_in_link_and_show_up_as_provider_info() {
         .any(|p| p["providerId"] == "github.com"));
 }
 
+/// ITKM-2 follow-up. Control characters are refused on every path that stores a federated
+/// identity, not only on the one that states it directly: an identity-provider assertion
+/// and an import row reach the same store fields. The check lives in the store, so the three
+/// writers cannot drift. Production's refusal shape for this input is unobserved.
+#[test]
+fn federated_identities_reject_control_characters_from_every_writer() {
+    let s = state();
+    // 1. A sign-in assertion whose profile claims carry a control character.
+    let assertion = json!({
+        "sub": "ctrl-1",
+        "email": "ctrl@example.com",
+        "name": "na\u{0000}me",
+        "email_verified": true
+    });
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId=google.com&id_token={}", percent(&assertion.to_string())), "requestUri": DUMMY_URI}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : displayName must not contain control characters"
+    );
+    // Nothing was created for the refused assertion.
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"federatedUserId": [{"providerId": "google.com", "rawId": "ctrl-1"}]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert!(lookup.get("users").is_none(), "{lookup}");
+
+    // 2. The same assertion without the control character signs in, and a later assertion
+    // that carries one does not overwrite the stored profile.
+    let clean = json!({
+        "sub": "ctrl-1",
+        "email": "ctrl@example.com",
+        "name": "Ada",
+        "email_verified": true
+    });
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId=google.com&id_token={}", percent(&clean.to_string())), "requestUri": DUMMY_URI}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let local_id = signed["localId"].as_str().unwrap().to_owned();
+    let dirty = json!({
+        "sub": "ctrl-1",
+        "email": "ctrl@example.com",
+        "picture": "https://p.example/a.png\u{0007}",
+        "email_verified": true
+    });
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId=google.com&id_token={}", percent(&dirty.to_string())), "requestUri": DUMMY_URI}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : photoUrl must not contain control characters"
+    );
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [local_id]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert_eq!(lookup["users"][0]["displayName"], "Ada");
+
+    // 3. An import row carrying one is refused by index, and the neighbouring row lands.
+    let (status, imported) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:batchCreate"),
+        &json!({"users": [
+            {
+                "localId": "import-ctrl",
+                "providerUserInfo": [{"providerId": "github.com", "rawId": "gh-ctrl", "displayName": "gh\u{0001}user"}]
+            },
+            {
+                "localId": "import-clean",
+                "providerUserInfo": [{"providerId": "github.com", "rawId": "gh-clean", "displayName": "Grace"}]
+            }
+        ]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    assert_eq!(imported["error"].as_array().map(Vec::len), Some(1));
+    assert_eq!(imported["error"][0]["index"], 0);
+    let store = s.store.lock().unwrap();
+    assert!(store.user_by_id("import-ctrl").is_none());
+    assert!(store.user_by_id("import-clean").is_some());
+}
+
 fn percent(s: &str) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();

@@ -117,6 +117,29 @@ pub struct FederatedIdentity {
     pub photo_url: Option<String>,
 }
 
+impl FederatedIdentity {
+    /// Refuses a field carrying a NUL or another control character.
+    ///
+    /// Three writers reach these fields: a `linkProviderUserInfo` request, an
+    /// identity-provider assertion and an artifact import row. The check lives here so they
+    /// cannot drift, and every store entry point that writes an identity calls it before it
+    /// mutates anything. Production's refusal shape for this input is unobserved.
+    pub fn validate(&self) -> Result<(), AuthError> {
+        for (field, value) in [
+            ("providerId", Some(self.provider_id.as_str())),
+            ("rawId", Some(self.raw_id.as_str())),
+            ("email", self.email.as_deref()),
+            ("displayName", self.display_name.as_deref()),
+            ("photoUrl", self.photo_url.as_deref()),
+        ] {
+            if value.is_some_and(|value| value.chars().any(char::is_control)) {
+                return Err(AuthError::ControlCharacterInText(field));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The outcome of a federated identity-provider sign-in.
 ///
 /// The official emulator either signs the user in (linking the identity to an existing
@@ -735,6 +758,9 @@ pub enum AuthError {
     InvalidVerificationCode,
     /// The federated identity is linked to another user.
     FederatedUserIdAlreadyLinked,
+    /// A stored text field carries a NUL or another control character. The payload names the
+    /// field as the request spells it.
+    ControlCharacterInText(&'static str),
     /// The project already holds [`MAX_OUTSTANDING_CODES`] outstanding codes of the kind
     /// requested; nothing was created.
     TooManyOutstandingCodes,
@@ -768,6 +794,9 @@ impl fmt::Display for AuthError {
             Self::InvalidOobCode => f.write_str("invalid action code"),
             Self::InvalidSessionInfo => f.write_str("invalid verification session"),
             Self::InvalidVerificationCode => f.write_str("invalid verification code"),
+            Self::ControlCharacterInText(field) => {
+                write!(f, "{field} must not contain control characters")
+            }
             Self::FederatedUserIdAlreadyLinked => {
                 f.write_str("federated identity linked to another user")
             }
@@ -1794,6 +1823,9 @@ impl AuthStore {
                 return Err(ImportUserError::Account(AuthError::InvalidLocalId));
             }
         }
+        for identity in &user.federated {
+            identity.validate().map_err(ImportUserError::Account)?;
+        }
         user.custom_claims
             .check_size()
             .map_err(|e| ImportUserError::Account(AuthError::LimitExceeded(e)))?;
@@ -2630,6 +2662,7 @@ impl AuthStore {
         uid: &LocalId,
         identity: FederatedIdentity,
     ) -> Result<(), AuthError> {
+        identity.validate()?;
         if self
             .user_by_federated(&identity.provider_id, &identity.raw_id)
             .is_some_and(|u| u.local_id != *uid)
@@ -2717,6 +2750,8 @@ impl AuthStore {
         email_verified: bool,
         now: LogicalInstant,
     ) -> Result<IdpSignIn, AuthError> {
+        // Before anything is created, recycled or copied into a profile.
+        identity.validate()?;
         // 1. An account already linking this exact provider identity signs straight in.
         if let Some(u) = self.user_by_federated(&identity.provider_id, &identity.raw_id) {
             let (uid, disabled) = (u.local_id.clone(), u.disabled);
@@ -2754,44 +2789,12 @@ impl AuthStore {
                     if disabled {
                         return Err(AuthError::UserDisabled);
                     }
-                    // A verified IdP email over an unverified-email account recycles it: the
-                    // password, phone and any other providers are dropped and its tokens are
-                    // invalidated so nothing minted under the old owner survives.
                     if !owner_email_verified {
-                        let old_phone = self
-                            .users
-                            .get(&uid)
-                            .and_then(|user| user.phone_number.clone());
-                        let old_identities: Vec<(String, String)> = self
-                            .users
-                            .get(&uid)
-                            .map(|user| {
-                                user.federated
-                                    .iter()
-                                    .map(|identity| {
-                                        (identity.provider_id.clone(), identity.raw_id.clone())
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        if let Some(user) = self.users.get_mut(&uid).map(Arc::make_mut) {
-                            user.password = None;
-                            user.phone_number = None;
-                            user.federated.clear();
-                            user.provider = Provider::Federated(identity.provider_id.clone());
-                            user.tokens_valid_after = Self::whole_second(now);
-                            user.tokens_revoked = true;
-                        }
-                        if let Some(phone) = old_phone {
-                            Self::remove_index_owner(&mut self.local_ids_for_phone, &phone, &uid);
-                        }
-                        for identity in &old_identities {
-                            Self::remove_index_owner(
-                                &mut self.local_ids_for_federated,
-                                identity,
-                                &uid,
-                            );
-                        }
+                        self.recycle_account_for_verified_idp_email(
+                            &uid,
+                            &identity.provider_id,
+                            now,
+                        );
                     }
                     self.set_email_verified_flag(&uid, true);
                     self.link_profile_from_identity(&uid, &identity);
@@ -2824,6 +2827,46 @@ impl AuthStore {
             is_new: true,
             email_recycled: false,
         })
+    }
+
+    /// A verified identity-provider email over an unverified-email account recycles it: the
+    /// password, phone number and any other providers are dropped and its tokens are
+    /// invalidated, so nothing minted under the old owner survives. This is what the official
+    /// emulator does.
+    fn recycle_account_for_verified_idp_email(
+        &mut self,
+        uid: &LocalId,
+        provider_id: &str,
+        now: LogicalInstant,
+    ) {
+        let old_phone = self
+            .users
+            .get(uid)
+            .and_then(|user| user.phone_number.clone());
+        let old_identities: Vec<(String, String)> = self
+            .users
+            .get(uid)
+            .map(|user| {
+                user.federated
+                    .iter()
+                    .map(|identity| (identity.provider_id.clone(), identity.raw_id.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(user) = self.users.get_mut(uid).map(Arc::make_mut) {
+            user.password = None;
+            user.phone_number = None;
+            user.federated.clear();
+            user.provider = Provider::Federated(provider_id.to_owned());
+            user.tokens_valid_after = Self::whole_second(now);
+            user.tokens_revoked = true;
+        }
+        if let Some(phone) = old_phone {
+            Self::remove_index_owner(&mut self.local_ids_for_phone, &phone, uid);
+        }
+        for identity in &old_identities {
+            Self::remove_index_owner(&mut self.local_ids_for_federated, identity, uid);
+        }
     }
 
     /// Refreshes the account's display name and photo from an assertion when the assertion

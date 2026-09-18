@@ -391,3 +391,74 @@ fn an_imported_account_is_reachable_by_every_lookup_the_surface_uses() {
         Some(&expected)
     );
 }
+
+/// Every writer of a federated identity goes through `FederatedIdentity::validate`, so an
+/// import row cannot install what a request would be refused, and nothing is half-installed.
+/// Production's refusal shape for this input is unobserved.
+#[test]
+fn a_federated_identity_carrying_a_control_character_is_refused_by_every_writer() {
+    let dirty = |field: &str| {
+        let mut identity = FederatedIdentity {
+            provider_id: "github.com".to_owned(),
+            raw_id: "gh-1".to_owned(),
+            email: Some("gh@example.com".to_owned()),
+            display_name: Some("Grace".to_owned()),
+            photo_url: Some("https://p.example/a.png".to_owned()),
+        };
+        match field {
+            "providerId" => identity.provider_id.push('\u{0000}'),
+            "rawId" => identity.raw_id.push('\u{0001}'),
+            "email" => identity.email = Some("gh\u{0007}@example.com".to_owned()),
+            "displayName" => identity.display_name = Some("Gr\u{0000}ace".to_owned()),
+            "photoUrl" => identity.photo_url = Some("https://p.example/a.png\u{001f}".to_owned()),
+            other => unreachable!("unknown field {other}"),
+        }
+        identity
+    };
+
+    for field in ["providerId", "rawId", "email", "displayName", "photoUrl"] {
+        let mut store = store();
+
+        // The import boundary.
+        let mut row = account("import-ctrl");
+        row.federated = vec![dirty(field)];
+        assert_eq!(
+            store.import_user(row),
+            Err(ImportUserError::Account(AuthError::ControlCharacterInText(
+                field
+            ))),
+            "{field}"
+        );
+        assert!(store.user_by_id("import-ctrl").is_none(), "{field}");
+
+        // The link boundary.
+        let uid = store.import_user(account("linked")).expect("a clean row");
+        assert_eq!(
+            store.link_federated(&uid, dirty(field)),
+            Err(AuthError::ControlCharacterInText(field)),
+            "{field}"
+        );
+        assert!(store.user(&uid).expect("the user").federated.is_empty());
+
+        // The sign-in boundary, which creates an account before it links: it must refuse
+        // before creating anything.
+        let before = store.user_count();
+        assert_eq!(
+            store.sign_in_with_idp(dirty(field), true, t(0)).err(),
+            Some(AuthError::ControlCharacterInText(field)),
+            "{field}"
+        );
+        assert_eq!(store.user_count(), before, "{field}");
+    }
+
+    // The same identity without a control character installs, links and signs in.
+    let mut store = store();
+    let clean = FederatedIdentity {
+        provider_id: "github.com".to_owned(),
+        raw_id: "gh-1".to_owned(),
+        email: Some("gh@example.com".to_owned()),
+        display_name: Some("Grace".to_owned()),
+        photo_url: Some("https://p.example/a.png".to_owned()),
+    };
+    assert!(store.sign_in_with_idp(clean, true, t(0)).is_ok());
+}

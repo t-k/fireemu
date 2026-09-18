@@ -856,6 +856,10 @@ fn auth_error(e: &AuthError) -> JsonResponse {
         AuthError::InvalidSessionInfo => error(400, "INVALID_SESSION_INFO"),
         AuthError::InvalidVerificationCode => error(400, "INVALID_CODE"),
         AuthError::FederatedUserIdAlreadyLinked => error(400, "FEDERATED_USER_ID_ALREADY_LINKED"),
+        AuthError::ControlCharacterInText(field) => error(
+            400,
+            &format!("INVALID_ARGUMENT : {field} must not contain control characters"),
+        ),
         AuthError::TooManyOutstandingCodes => error(
             400,
             "QUOTA_EXCEEDED : too many outstanding codes; consume or expire some first",
@@ -6745,11 +6749,8 @@ fn parse_identity(v: &Value) -> Result<FederatedIdentity, JsonResponse> {
             "INVALID_ARGUMENT : linkProviderUserInfo takes a federated providerId",
         ));
     }
-    for field in ["email", "displayName", "photoUrl"] {
-        if let Some(value) = opt_str(v, field)? {
-            reject_control_characters(value, field)?;
-        }
-    }
+    // Control characters are refused by `FederatedIdentity::validate` in the store, which
+    // every writer of a federated identity goes through.
     Ok(FederatedIdentity {
         provider_id: provider_id.to_owned(),
         raw_id: raw_id.to_owned(),

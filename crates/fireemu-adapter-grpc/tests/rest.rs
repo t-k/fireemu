@@ -2156,6 +2156,95 @@ fn transaction_option_accepts_concurrency_mode_enum() {
     }
 }
 
+/// Production refuses an undecodable `bytes` field by naming the request field, its proto
+/// type and the offending value, rather than with a bare decoder message:
+/// `Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for "not base64!"`
+/// (conformance/firestore-production-matrix.json, transactions/lifecycle,
+/// `commit-with-malformed-transaction`, recorded against production 2026-09-07).
+#[test]
+fn malformed_transaction_token_is_refused_in_productions_wording() {
+    let s = state(None);
+    let expected = concat!(
+        "Invalid value at 'transaction' (TYPE_BYTES), ",
+        "Base64 decoding failed for \"not base64!\""
+    );
+    for (path, body) in [
+        (
+            format!("{DOCS}:commit"),
+            json!({"writes": [], "transaction": "not base64!"}),
+        ),
+        (
+            format!("{DOCS}:rollback"),
+            json!({"transaction": "not base64!"}),
+        ),
+        (
+            format!("{DOCS}:runQuery"),
+            json!({"structuredQuery": {"from": [{"collectionId": "tx"}]}, "transaction": "not base64!"}),
+        ),
+        (
+            format!("{DOCS}:batchGet"),
+            json!({"documents": [format!("{DOCS}/tx/third")], "transaction": "not base64!"}),
+        ),
+    ] {
+        let (status, response) = call(&s, "POST", &path, body);
+        assert_eq!(status, 400, "{path}: {response}");
+        assert_eq!(response["error"]["status"], "INVALID_ARGUMENT", "{path}");
+        assert_eq!(response["error"]["message"], expected, "{path}");
+    }
+}
+
+/// The same field carried as a query parameter on the two read routes that accept one.
+#[test]
+fn malformed_transaction_query_parameter_is_refused_in_productions_wording() {
+    let s = state(None);
+    let expected = concat!(
+        "Invalid value at 'transaction' (TYPE_BYTES), ",
+        "Base64 decoding failed for \"not base64!\""
+    );
+    for path in [
+        format!("{DOCS}/tx/third?transaction=not%20base64!"),
+        format!("{DOCS}/tx?transaction=not%20base64!"),
+    ] {
+        let (status, response) = call(&s, "GET", &path, Value::Null);
+        assert_eq!(status, 400, "{path}: {response}");
+        assert_eq!(response["error"]["status"], "INVALID_ARGUMENT", "{path}");
+        assert_eq!(response["error"]["message"], expected, "{path}");
+    }
+}
+
+/// `retryTransaction` is the sibling `bytes` field of the same request family. Production has
+/// not been observed on it, so the wording is the observed `transaction` shape with the proto
+/// field path this parser is given; the path segment naming follows production's own observed
+/// use of proto field names (`writes[0].update.fields[0].value.bytes_value` in the same
+/// recorded matrix, errors/rest-shapes).
+#[test]
+fn malformed_retry_transaction_token_is_refused_in_productions_wording() {
+    let s = state(None);
+    for (path, body, field) in [
+        (
+            format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readWrite": {"retryTransaction": "not base64!"}}}),
+            "options.read_write.retry_transaction",
+        ),
+        (
+            format!("{DOCS}:batchGet"),
+            json!({
+                "documents": [format!("{DOCS}/tx/third")],
+                "newTransaction": {"readWrite": {"retryTransaction": "not base64!"}}
+            }),
+            "new_transaction.read_write.retry_transaction",
+        ),
+    ] {
+        let expected = format!(
+            "Invalid value at '{field}' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+        );
+        let (status, response) = call(&s, "POST", &path, body);
+        assert_eq!(status, 400, "{path}: {response}");
+        assert_eq!(response["error"]["status"], "INVALID_ARGUMENT", "{path}");
+        assert_eq!(response["error"]["message"], expected, "{path}");
+    }
+}
+
 #[test]
 fn begin_transaction_accepts_request_options_with_request_tags() {
     let s = state(None);

@@ -83,6 +83,25 @@ pub fn base64_decode(text: &str) -> Result<Vec<u8>, JsonError> {
     Ok(out)
 }
 
+/// `base64_decode` for a named request field, in production's wording.
+///
+/// Production names the request field, its proto type and the offending value rather than
+/// reporting a bare decoder failure: `Invalid value at 'transaction' (TYPE_BYTES), Base64
+/// decoding failed for "not base64!"` (conformance/firestore-production-matrix.json,
+/// transactions/lifecycle, `commit-with-malformed-transaction`, recorded 2026-09-07). The
+/// same recording names a field by its proto path in `snake_case`
+/// (`writes[0].update.fields[0].value.bytes_value`), so `field` is a proto path, not the
+/// JSON spelling. The value is quoted the way JSON quotes a string, which reproduces the
+/// recorded text exactly and leaves a value containing a quote unambiguous.
+pub fn base64_decode_field(field: &str, text: &str) -> Result<Vec<u8>, JsonError> {
+    base64_decode(text).map_err(|_| {
+        JsonError(format!(
+            "Invalid value at '{field}' (TYPE_BYTES), Base64 decoding failed for {}",
+            Value::String(text.to_owned())
+        ))
+    })
+}
+
 // ------------------------------------------------------------------------------------------
 // timestamps
 // ------------------------------------------------------------------------------------------
@@ -1220,8 +1239,13 @@ pub fn aggregation_query_from_json(v: &Value) -> Result<pb::StructuredAggregatio
 /// Transaction options JSON (`{"readOnly": {}}` / `{"readWrite": {}}`). A
 /// `readOnly.readTime` is carried through so the backend can refuse it explicitly;
 /// `readWrite.retryTransaction` is accepted (retries start a fresh transaction here).
+///
+/// `field` is the proto path of the options message within the request that carries it
+/// (`options` on `BeginTransaction`, `new_transaction` on the read requests), so a refusal
+/// names the field production would name.
 pub fn transaction_options_from_json(
     v: Option<&Value>,
+    field: &str,
 ) -> Result<pb::TransactionOptions, JsonError> {
     let Some(v) = v.filter(|v| !v.is_null()) else {
         return Ok(pb::TransactionOptions::default());
@@ -1256,7 +1280,9 @@ pub fn transaction_options_from_json(
                 Some(value) => value
                     .as_str()
                     .ok_or_else(|| JsonError("readWrite.retryTransaction must be a string".into()))
-                    .and_then(base64_decode)?,
+                    .and_then(|text| {
+                        base64_decode_field(&format!("{field}.read_write.retry_transaction"), text)
+                    })?,
                 None => Vec::new(),
             };
             let concurrency_mode = match read_write

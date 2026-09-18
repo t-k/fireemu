@@ -12,6 +12,7 @@ then copy its `local-shadow.json` over the published record.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -23,8 +24,18 @@ for entry in (str(HERE), str(HERE.parent), str(ROOT / "tools/compat-inventory"))
         sys.path.insert(0, entry)
 
 import request_bytes_shadow as shadow_module
-from request_bytes_campaign import LOCAL_EXPECTATION
-from request_bytes_compiler import DOCUMENT_COUNT, REQUEST_LIMIT, REQUEST_TARGETS
+from request_bytes_campaign import (
+    LOCAL_EXPECTATION,
+    campaign_digest,
+    compile_request_bytes_campaign,
+)
+from request_bytes_compiler import (
+    DOCUMENT_COUNT,
+    REQUEST_LIMIT,
+    REQUEST_TARGETS,
+    compact_utf8,
+    compile_request_bytes_plan,
+)
 
 RECORD = ROOT / "spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json"
 
@@ -38,13 +49,24 @@ def record() -> dict:
     return json.loads(RECORD.read_bytes())
 
 
-def test_the_published_record_is_exactly_what_the_generator_emits():
-    """A hand-augmented or hand-redacted evidence file must fail here."""
+def test_the_published_record_is_assembled_the_way_the_generator_assembles_it():
+    """Check the record's assembly, which is all this particular check can do.
+
+    The generator is fed the record's own blocks, so this catches a changed,
+    added or dropped top-level key, a `complete` flag that does not follow from
+    the parts, and any constant the generator fills in itself. It does **not**
+    validate the contents of `shadow`, `observation`, `runtime`, `probeOutcomes`
+    or `cases`, because those are the inputs. The two checks below recompute
+    `shadow` and the gates from `observation`, which is what closes that gap;
+    `runtime` and `probeOutcomes` are pinned by the binding and boundary checks
+    further down.
+    """
     value = record()
     generated = shadow_module.build_shadow_document(
         before=value["sourceDigestBefore"],
         after=value["sourceDigestAfter"],
         runtime=value["runtime"],
+        nonce=value["nonce"],
         plan_digest=value["planDigest"],
         campaign_digest_value=value["campaignDigest"],
         probes=value["probeOutcomes"],
@@ -58,6 +80,41 @@ def test_the_published_record_is_exactly_what_the_generator_emits():
     )
     assert set(generated) == set(value), set(generated) ^ set(value)
     assert generated == value, "the published record is not the generator's output"
+
+
+def test_the_published_classification_recomputes_from_the_published_observation():
+    """A hand-edited `shadow` block must fail here."""
+    value = record()
+    assert value["shadow"] == shadow_module.classify_local_result(
+        value["observation"]
+    ), "the recorded classification does not follow from the recorded observation"
+
+
+def test_the_published_gates_recompute_from_the_published_observation():
+    """A hand-edited `recordingComplete` or `stateValidation` must fail here."""
+    value = record()
+    gates = shadow_module.shadow_gates(
+        value["observation"],
+        value["shadow"],
+        source_bound=value["sourceDigestBefore"] == value["sourceDigestAfter"],
+    )
+    assert gates == {
+        "recordingComplete": value["recordingComplete"],
+        "stateValidation": value["stateValidation"],
+    }, "the recorded gates do not follow from the recorded observation"
+
+
+def test_the_published_digests_recompute_from_the_published_nonce():
+    """The nonce is published so a reader need not take the digests on trust."""
+    value = record()
+    plan = compile_request_bytes_plan(
+        value["project"], value["database"], value["nonce"]
+    )
+    campaign = compile_request_bytes_campaign(
+        value["project"], value["database"], value["nonce"]
+    )
+    assert value["planDigest"] == hashlib.sha256(compact_utf8(plan)).hexdigest()
+    assert value["campaignDigest"] == campaign_digest(campaign)
 
 
 def test_the_published_record_was_produced_by_the_current_modules():

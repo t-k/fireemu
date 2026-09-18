@@ -183,6 +183,7 @@ def build_shadow_document(
     before: str,
     after: str,
     runtime: dict[str, Any],
+    nonce: str,
     plan_digest: str,
     campaign_digest_value: str,
     probes: list[dict[str, Any]],
@@ -207,6 +208,10 @@ def build_shadow_document(
         "sourceDigestAfter": after,
         "artifactSha256": runtime["artifactSha256"],
         "runtime": runtime,
+        # The run's own nonce, so a reader can recompute planDigest and
+        # campaignDigest instead of taking them on trust. It is a scope label
+        # for an owned local project, not a secret.
+        "nonce": nonce,
         "planDigest": plan_digest,
         "campaignDigest": campaign_digest_value,
         "probeOutcomes": probes,
@@ -497,6 +502,7 @@ def _child(output: Path, nonce: str) -> None:
             before=observation_source_digest(),
             after=observation_source_digest(),
             runtime=runtime_binding(artifact),
+            nonce=nonce,
             plan_digest=result["planDigest"],
             campaign_digest_value=campaign_digest(campaign),
             probes=probe_outcomes(output / "collection", plan),

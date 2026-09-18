@@ -47,8 +47,10 @@ MAX_INPUT_BYTES = 8 * 1024 * 1024
 MISSING_APPROVAL = "a fresh owner approval for an unreserved nonce is required"
 
 __all__ = [
+    "MEASURED_SHADOW",
     "MISSING_APPROVAL",
     "NO_DATA_STOP_POINTS",
+    "PLANNING_ASSUMPTION",
     "UNCERTAIN_STOP_POINTS",
     "ProductionWireCapability",
     "abort_generation",
@@ -136,24 +138,48 @@ def _provenance(source_root, expected_commit, expected_inputs) -> None:
             raise ValueError("source input not in frozen commit")
 
 
+# How a per-slot reservation came to be. There is no third option: a figure
+# with no record behind it is the v10 baseline failure in a different costume.
+PLANNING_ASSUMPTION = "owner-planning-assumption"
+MEASURED_SHADOW = "measured-shadow-percentile"
+RESERVATION_BASES = (PLANNING_ASSUMPTION, MEASURED_SHADOW)
+
+
 def gate_reservations(permission) -> dict:
     """The per-slot reservations the owner declared, checked but never invented.
 
     No single reservation covers this campaign: the three 10 MiB Commits are
     bounded by the transport at 60 seconds while the recovery window allows at
-    most 1.71 seconds per slot. The upload figure is the published ceiling; the
-    small-slot figure is a planning bound only the owner can set, because the
-    lane has never recorded per-request durations. This checks both and proves
-    the arithmetic, and refuses a permission that omits them.
+    most 1.71 seconds a slot. The upload figure is the published ceiling, which
+    the transport enforces. The small-slot figure has no measurement behind it:
+    the lane records outcomes, not durations, so nothing in the tree says how
+    long a small request takes. It is therefore an owner planning bound, and the
+    permission has to say which it is. A figure declared as measured must name
+    the shadow record it was read from, so the claim is checkable; a planning
+    assumption is admitted and labelled, never silently promoted.
     """
     declared = permission.get("gateReservationSeconds")
-    if not isinstance(declared, dict) or set(declared) != {"upload", "slot"}:
+    if not isinstance(declared, dict) or set(declared) - {"slotBasisRecord"} != {
+        "upload",
+        "slot",
+        "slotBasis",
+    }:
         raise ValueError("owner declared Gate reservations required")
-    for value in declared.values():
+    for name in ("upload", "slot"):
+        value = declared[name]
         if type(value) not in (int, float) or isinstance(value, bool) or value <= 0:
             raise ValueError("owner declared Gate reservations required")
     if declared["upload"] != campaign.transport_deadline_seconds():
         raise ValueError("upload reservation differs from the enforced ceiling")
+    basis = declared["slotBasis"]
+    if basis not in RESERVATION_BASES:
+        raise ValueError("declared basis for the slot reservation required")
+    if basis == MEASURED_SHADOW and not isinstance(
+        declared.get("slotBasisRecord"), str
+    ):
+        raise ValueError("a measured slot reservation must name its record")
+    if basis == PLANNING_ASSUMPTION and "slotBasisRecord" in declared:
+        raise ValueError("a planning assumption names no record")
     return dict(declared)
 
 

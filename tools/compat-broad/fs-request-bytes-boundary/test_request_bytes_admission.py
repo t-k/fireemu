@@ -138,9 +138,14 @@ def test_the_descriptor_is_complete_and_published_budget_bound():
         "requests": 258,
         "accounts": 1,
         "resources": 51,
-        "costMicrousd": 262,
+        # The maximum, every probe accepted, plus the declared recovery reserve.
+        "costMicrousd": 296,
     }
-    assert descriptor.artifact_profile == "request-bytes-689af9482"
+    # Derived from the published shadow's own Rust SHA, so it rebinds with it.
+    assert (
+        descriptor.artifact_profile
+        == "request-bytes-" + campaign.shadow_record()["runtime"]["sourceCommit"][:9]
+    )
     assert (descriptor.campaign_seconds, descriptor.recovery_seconds) == (900, 300)
     assert descriptor.window_seconds == 1200
 
@@ -213,7 +218,11 @@ def owner_permission(plan, commit, artifact_digest, inputs, baseline):
         "ownerIdentity": "offline-fixture-not-permission",
         "permissionReference": "offline-fixture",
         "recoveryOwner": "offline-recovery",
-        "gateReservationSeconds": {"upload": 60.0, "slot": 2.0},
+        "gateReservationSeconds": {
+            "upload": 60.0,
+            "slot": 2.0,
+            "slotBasis": admission.PLANNING_ASSUMPTION,
+        },
         "issuedAt": time.time() - 1,
         "expiresAt": time.time() + 4800,
     }
@@ -879,14 +888,20 @@ def test_the_gate_plan_hosts_three_interleaved_probes(tmp_path):
         # Within one probe the order is its 35 observations then its 51
         # recovery slots, so the one-way recovery rule is satisfied per job.
         assert phases == ["observation"] * 35 + ["recovery"] * 51
-        # A schedule entry carries exactly the two keys the shared Gate admits.
-        assert all(set(item) == {"phase", "index"} for item in job["schedule"])
-    # The per-slot reservations are frozen beside the schedule, because the Gate
-    # charges one plan-wide requestSeconds and cannot yet reserve 60 seconds for
-    # an upload and 2 for a read.
-    assert set(plan["slotReservationSeconds"]) == set(plan["jobs"])
-    for reserved in plan["slotReservationSeconds"].values():
-        assert reserved == [{"phase": "observation", "index": 17, "seconds": 60.0}]
+        # Each slot declares its own reservation, and whether it can write.
+        uploads = [item for item in job["schedule"] if item["seconds"] == 60.0]
+        assert uploads == [{"phase": "observation", "index": 17, "seconds": 60.0}]
+        assert all(
+            item["seconds"] == 2.0 for item in job["schedule"] if item not in uploads
+        )
+        # Absent means creating, so only the one Commit per probe omits it.
+        creating = [item for item in job["schedule"] if "creates" not in item]
+        assert creating == uploads
+        assert all(
+            item["creates"] is False for item in job["schedule"] if item not in creating
+        )
+    # The ceiling every body-carrying slot must reserve, so the 60 is checkable.
+    assert plan["transportCeilingSeconds"] == 60.0
     assert sum(len(job["resources"]) for job in plan["jobs"].values()) == 51
     # The campaign-wide schedule does interleave the two phases, which is what
     # the three-job split resolves: each probe finishes before the next begins.
@@ -902,16 +917,30 @@ def test_the_gate_plan_hosts_three_interleaved_probes(tmp_path):
 def test_the_gate_reservations_are_owner_declared_and_must_fit(tmp_path):
     """No single reservation covers a 60 second upload and a 1.71 second slot."""
     built = Admission(tmp_path)
-    assert admission.gate_reservations(built.permission) == {
-        "upload": 60.0,
-        "slot": 2.0,
-    }
+    declared = admission.gate_reservations(built.permission)
+    assert declared["upload"] == 60.0
+    # The small-slot figure has no measurement behind it and says so.
+    assert declared["slotBasis"] == admission.PLANNING_ASSUMPTION
+    assert "slotBasisRecord" not in declared
+    assumption = {"upload": 60.0, "slot": 2.0, "slotBasis": "owner-planning-assumption"}
     for damage in (
         {"gateReservationSeconds": None},
         {"gateReservationSeconds": {"upload": 60.0}},
-        {"gateReservationSeconds": {"upload": 12.0, "slot": 2.0}},
-        {"gateReservationSeconds": {"upload": 60.0, "slot": 0}},
-        {"gateReservationSeconds": {"upload": 60.0, "slot": True}},
+        {"gateReservationSeconds": {**assumption, "upload": 12.0}},
+        {"gateReservationSeconds": {**assumption, "slot": 0}},
+        {"gateReservationSeconds": {**assumption, "slot": True}},
+        # A figure with no declared basis is the v10 failure in a new costume.
+        {"gateReservationSeconds": {"upload": 60.0, "slot": 2.0}},
+        {"gateReservationSeconds": {**assumption, "slotBasis": "measured"}},
+        # A measured figure must name the record it was read from.
+        {
+            "gateReservationSeconds": {
+                **assumption,
+                "slotBasis": admission.MEASURED_SHADOW,
+            }
+        },
+        # A planning assumption may not claim one.
+        {"gateReservationSeconds": {**assumption, "slotBasisRecord": "somewhere"}},
     ):
         with pytest.raises(ValueError):
             admission.gate_reservations({**built.permission, **damage})
@@ -1033,7 +1062,7 @@ def test_the_reservation_claim_binds_its_gate(tmp_path):
     # 258 already covers observation and recovery; no reserve is added on top.
     assert claim["budget"]["requests"] == 258 == 105 + 153
     assert claim["budget"]["accounts"] == 1
-    assert claim["budget"]["costMicrousd"] == 262
+    assert claim["budget"]["costMicrousd"] == 296
     assert claim["nonceDigest"] == digest(built.plan["nonce"])
     assert claim["durationSeconds"] == 900
     assert any(lock["mode"] == "WRITE" for lock in claim["locks"])
@@ -1074,9 +1103,10 @@ def test_the_receipt_binds_every_route_it_observed(tmp_path):
 
 
 def test_the_launcher_admits_the_campaign_and_stops_only_for_the_approval(tmp_path):
+    """Exit 2 is the documented "nothing was created", not a fourth code."""
     built = Admission(tmp_path)
     before = len(admission.o8_admission._ISSUED)
-    assert request_bytes_o8.main(built.argv(tmp_path)) == 3
+    assert request_bytes_o8.main(built.argv(tmp_path)) == 2
     # The admission that will not be executed is not left issued.
     assert len(admission.o8_admission._ISSUED) == before
     assert not (tmp_path / "output").exists()

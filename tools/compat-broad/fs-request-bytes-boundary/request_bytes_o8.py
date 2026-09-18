@@ -7,7 +7,9 @@ credential discovery: the bearer token arrives only on a private descriptor.
 The launcher completes the admission, proves the worker binding, compiles the
 campaign's Gate plan and builds the Ledger claim. It stops only for what the
 owner has not supplied: a fresh approval for an unreserved nonce. No credential
-is read until every refusable check has run.
+is read until every refusable check has run, and an admitted run that starts
+nothing exits 2, the documented code for "nothing was created", with a message
+that distinguishes it from a refusal.
 """
 
 # ruff: noqa: TRY004 -- Public boundary collapses malformed private input to one refusal class.
@@ -190,12 +192,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         execute(args)
     except ValueError as error:
+        # Exit 2 is the documented "nothing was created" outcome, and an
+        # admitted run that starts nothing is one: no reservation was taken, no
+        # output directory exists and no request was sent. The message says
+        # which of the two it was; the code does not invent a fourth value.
         if str(error).startswith("request-byte run not started"):
-            print(
-                f"Request-byte O8 admitted but not executable: {error}", file=sys.stderr
-            )
-            return 3
-        print(f"Request-byte O8 refused ({type(error).__name__}).", file=sys.stderr)
+            print(f"Request-byte O8 admitted, not started: {error}", file=sys.stderr)
+        else:
+            print(f"Request-byte O8 refused ({type(error).__name__}).", file=sys.stderr)
         return 2
     except Exception as error:  # noqa: BLE001 -- public output must be secret-free.
         print(f"Request-byte O8 refused ({type(error).__name__}).", file=sys.stderr)

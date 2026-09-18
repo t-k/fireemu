@@ -240,30 +240,38 @@ def ledger_budget() -> dict:
     same wire calls. `accounts` is 1, matching the published `maxAccounts`: this
     campaign spends one authorized principal's quota, where the Commit campaign
     claimed 0 because it consumed no account-scoped resource at all. The cost
-    covers the estimate plus the declared recovery reserve, far under the
-    published hard ceiling.
+    covers the maximum usage, every probe accepted, plus the declared recovery
+    reserve, and not the expected forecast, which the published budget says
+    binds nothing.
     """
-    _published, published_budget, _cost, micro = _budget_numbers()
+    _published, published_budget, cost, _micro = _budget_numbers()
+    maximum = math.ceil(cost["maximumCostUsd"] * 1_000_000)
     return {
         "requests": int(published_budget["maxHttpRequests"]),
         "accounts": int(published_budget["maxAccounts"]),
         "resources": int(published_budget["maxDistinctResources"]),
-        "costMicrousd": micro + recovery_reserve_microusd(),
+        "costMicrousd": maximum + recovery_reserve_microusd(),
     }
 
 
 def frozen_bounds() -> dict:
     """The bounded shape of one run, every figure taken from the published budget."""
     published, published_budget, _cost, _micro = _budget_numbers()
+    # The maximum, every probe accepted, is what a bound must cover; the
+    # published `accounting` is the forecast under the expected outcome, and the
+    # budget itself says it binds nothing.
+    maximum = published["maximumUsage"]
     accounting = published["accounting"]
     return {
-        "dataRequests": int(accounting["httpRequests"]),
+        "dataRequests": int(maximum["httpRequests"]),
         "observationRequests": 105,
         "recoveryRequests": 153,
-        "documentWrites": int(accounting["documentWrites"]),
-        "documentReads": int(accounting["documentReads"]),
-        "documentDeletes": int(accounting["documentDeletes"]),
-        "uploadedBytes": int(accounting["uploadedBytes"]),
+        "documentWrites": int(maximum["documentWrites"]),
+        "documentReads": int(maximum["documentReads"]),
+        "documentDeletes": int(maximum["documentDeletes"]),
+        "uploadedBytes": int(maximum["uploadedBytes"]),
+        "expectedWrites": int(accounting["documentWrites"]),
+        "expectedDeletes": int(accounting["documentDeletes"]),
         "totalRequests": int(published_budget["maxHttpRequests"]),
         "distinctResources": int(published_budget["maxDistinctResources"]),
         "peakLiveDocuments": int(published_budget["maxPeakLiveDocuments"]),
@@ -279,9 +287,11 @@ def cost_model() -> dict:
     return {
         "campaignId": CAMPAIGN,
         "estimatedCostMicrousd": micro,
+        "maximumCostMicrousd": math.ceil(cost["maximumCostUsd"] * 1_000_000),
+        "recoveryReserveMicrousd": recovery_reserve_microusd(),
         "hardCeilingMicrousd": math.ceil(cost["hardCostCeilingUsd"] * 1_000_000),
         "unitPricesUsd": dict(cost["unitPricesUsd"]),
-        "totalCostMicrousd": micro,
+        "totalCostMicrousd": ledger_budget()["costMicrousd"],
         "requests": int(published_budget["maxHttpRequests"]),
         "basis": cost["basis"],
     }
@@ -404,28 +414,30 @@ def _probe_schedule(plan, probe_index, *, upload_seconds, slot_seconds):
     """The campaign schedule projected onto one probe's own slot indices.
 
     The campaign's `executionSchedule` indexes the whole plan; a Gate job indexes
-    its own lists. The projection keeps the campaign's order and renumbers, so
-    the interleaving the Gate now admits is the one the collector actually runs.
+    its own lists. The projection keeps the campaign's order and renumbers, and
+    each slot declares what the Gate needs in order to charge it honestly: its
+    own reservation, and whether it can create a document. Only the one Commit
+    per probe carries a body and can write; the 17 ownership reads, the 17
+    readbacks and every recovery read and delete cannot.
     """
     bounds = {"observation": PROBE_OBSERVATIONS, "recovery": PROBE_RECOVERY}
     entries = []
-    reservations = []
     for entry in plan["executionSchedule"]:
         span = bounds[entry["phase"]]
         if entry["index"] // span != probe_index:
             continue
-        local = entry["index"] % span
-        operations = plan[entry["phase"]]
-        slot = {"phase": entry["phase"], "index": local}
+        operation = plan[entry["phase"]][entry["index"]]
+        carries_body = operation.get("body") is not None
+        slot = {
+            "phase": entry["phase"],
+            "index": entry["index"] % span,
+            "seconds": upload_seconds if carries_body else slot_seconds,
+        }
+        if operation["method"] != "POST":
+            # Absent means creating, so only a slot that cannot write says so.
+            slot["creates"] = False
         entries.append(slot)
-        # A schedule entry carries exactly the two keys the shared Gate admits.
-        # The per-slot reservation lives beside it, because the Gate charges one
-        # plan-wide `requestSeconds` today and cannot yet reserve 60 seconds for
-        # an upload and 2 for a read. The values are frozen here so the approval
-        # binds them and the gap is visible rather than implied.
-        if operations[entry["index"]]["method"] == "POST":
-            reservations.append({**slot, "seconds": upload_seconds})
-    return entries, reservations
+    return entries
 
 
 def gate_plan(plan, *, upload_seconds, slot_seconds, wall_seconds=None):
@@ -447,10 +459,9 @@ def gate_plan(plan, *, upload_seconds, slot_seconds, wall_seconds=None):
     if upload_seconds > transport_deadline_seconds():
         raise ValueError("upload reservation above the enforced transport ceiling")
     jobs = {}
-    slot_reservations = {}
     for index, probe in enumerate(PROBE_SCOPES):
         observation, recovery = _probe_slice(plan, index)
-        schedule, reservations = _probe_schedule(
+        schedule = _probe_schedule(
             plan, index, upload_seconds=upload_seconds, slot_seconds=slot_seconds
         )
         jobs[gate_job_name(probe)] = {
@@ -461,17 +472,21 @@ def gate_plan(plan, *, upload_seconds, slot_seconds, wall_seconds=None):
             "recovery": copy.deepcopy(recovery),
             "schedule": schedule,
         }
-        slot_reservations[gate_job_name(probe)] = reservations
     recovery_time = math.ceil(
-        len(PROBE_SCOPES) * PROBE_RECOVERY * (slot_seconds + GATE_INTERVAL_SECONDS)
+        sum(
+            slot["seconds"] + GATE_INTERVAL_SECONDS
+            for job in jobs.values()
+            for slot in job["schedule"]
+            if slot["phase"] == "recovery"
+        )
     )
     wall = int(wall_seconds if wall_seconds is not None else campaign_seconds())
     observation_time = math.ceil(
-        len(PROBE_SCOPES)
-        * (
-            (PROBE_OBSERVATIONS - 1) * (slot_seconds + GATE_INTERVAL_SECONDS)
-            + upload_seconds
-            + GATE_INTERVAL_SECONDS
+        sum(
+            slot["seconds"] + GATE_INTERVAL_SECONDS
+            for job in jobs.values()
+            for slot in job["schedule"]
+            if slot["phase"] == "observation"
         )
     )
     if not 0 < recovery_time < wall or observation_time > wall - recovery_time:
@@ -491,10 +506,10 @@ def gate_plan(plan, *, upload_seconds, slot_seconds, wall_seconds=None):
         "requestCostMicrousd": GATE_REQUEST_COST_MICROUSD,
         "costMicrousd": ledger_budget()["costMicrousd"],
         "receiptKind": RECEIPT_KIND,
-        # Frozen, not yet enforced: the shared Gate reserves `requestSeconds`
-        # for every slot, so the three uploads are under-reserved until it can
-        # take a per-slot value. Recording them binds the intent to the approval.
-        "slotReservationSeconds": slot_reservations,
+        # The wire ceiling every body-carrying slot must reserve, so the 60 on
+        # the three Commits is checkable rather than conventional and a later
+        # edit cannot quietly shrink it.
+        "transportCeilingSeconds": transport_deadline_seconds(),
         # The owner supplies the bearer token, so this campaign acquires no
         # credential and takes no management slot at all.
         "management": {

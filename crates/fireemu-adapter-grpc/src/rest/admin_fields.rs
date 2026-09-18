@@ -63,8 +63,104 @@ fn ancestor_field(project: &str, database: &str) -> String {
     format!("projects/{project}/databases/{database}/collectionGroups/{DEFAULT_GROUP}/fields/{WILDCARD_FIELD}")
 }
 
-fn mode_json(field_id: &str, scope: IndexQueryScope, mode: IndexFieldMode) -> Value {
-    let mut entry = json!({ "fieldPath": field_id });
+fn scope_name(scope: IndexQueryScope) -> &'static str {
+    match scope {
+        IndexQueryScope::Collection => "COLLECTION",
+        IndexQueryScope::CollectionGroup => "COLLECTION_GROUP",
+    }
+}
+
+fn mode_name(mode: IndexFieldMode) -> String {
+    match mode {
+        IndexFieldMode::Ascending => "ASCENDING".to_owned(),
+        IndexFieldMode::Descending => "DESCENDING".to_owned(),
+        IndexFieldMode::Contains => "CONTAINS".to_owned(),
+        IndexFieldMode::Vector { dimension } => format!("VECTOR:{dimension}"),
+    }
+}
+
+/// The resource name of one automatic single-field index.
+///
+/// Production assigns an opaque server-side id to every index, including the automatic
+/// single-field ones a field configuration reports. A local run has no index resource to
+/// draw an id from, so the id is derived from what defines the index: the collection group,
+/// the field, the query scope and the mode. It is therefore stable across restarts of the
+/// same configuration and distinct for distinct indexes, which is what a caller that stores
+/// or compares the name needs. It is a derived value, not an observed one.
+fn single_field_index_name(
+    selector: &FieldSelector,
+    scope: IndexQueryScope,
+    mode: IndexFieldMode,
+) -> String {
+    let mut digest = fireemu_core_types::hash::Sha256::new();
+    digest.update(b"fireemu:single-field-index:");
+    digest.update(selector.project.as_bytes());
+    digest.update(b"/");
+    digest.update(selector.database.as_bytes());
+    digest.update(b"/");
+    digest.update(selector.collection_group.as_str().as_bytes());
+    digest.update(b"/");
+    digest.update(selector.field_id.as_bytes());
+    digest.update(b"/");
+    digest.update(scope_name(scope).as_bytes());
+    digest.update(b"/");
+    digest.update(mode_name(mode).as_bytes());
+    let id = fireemu_core_types::hash::hex_lower(&digest.finalize()[..12]);
+    format!(
+        "projects/{}/databases/{}/collectionGroups/{}/indexes/{id}",
+        selector.project,
+        selector.database,
+        selector.collection_group.as_str()
+    )
+}
+
+/// Binds a page token to the listing that issued it.
+///
+/// Production's page token is opaque and belongs to one listing. Reusing a token across a
+/// different collection group, a different database or a different filter is a caller error,
+/// not a shortcut into another listing, so the token carries a digest of what it was issued
+/// for and a token that does not match is refused.
+fn listing_binding(project: &str, database: &str, collection_group: &str, filter: &str) -> [u8; 6] {
+    let mut digest = fireemu_core_types::hash::Sha256::new();
+    digest.update(b"fireemu:field-listing:");
+    for part in [project, database, collection_group, filter] {
+        digest.update(part.as_bytes());
+        digest.update(b"\x1f");
+    }
+    let bytes = digest.finalize();
+    let mut binding = [0_u8; 6];
+    binding.copy_from_slice(&bytes[..6]);
+    binding
+}
+
+/// The opaque continuation token of one page of a field listing.
+fn page_token(binding: [u8; 6], offset: usize) -> String {
+    let offset = u32::try_from(offset).unwrap_or(u32::MAX);
+    let mut bytes = binding.to_vec();
+    bytes.extend_from_slice(&offset.to_be_bytes());
+    fireemu_core_types::hash::hex_lower(&bytes)
+}
+
+/// Reads a continuation token back, refusing one issued for another listing.
+fn page_offset(binding: [u8; 6], token: &str) -> Result<usize, Status> {
+    let refuse = || Status::invalid_argument("pageToken is not a page of this listing");
+    if token.len() != 20 {
+        return Err(refuse());
+    }
+    let mut bytes = [0_u8; 10];
+    for (index, slot) in bytes.iter_mut().enumerate() {
+        let pair = token.get(index * 2..index * 2 + 2).ok_or_else(refuse)?;
+        *slot = u8::from_str_radix(pair, 16).map_err(|_| refuse())?;
+    }
+    if bytes[..6] != binding {
+        return Err(refuse());
+    }
+    let offset = u32::from_be_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]);
+    Ok(offset as usize)
+}
+
+fn mode_json(selector: &FieldSelector, scope: IndexQueryScope, mode: IndexFieldMode) -> Value {
+    let mut entry = json!({ "fieldPath": selector.field_id });
     match mode {
         IndexFieldMode::Ascending => entry["order"] = json!("ASCENDING"),
         IndexFieldMode::Descending => entry["order"] = json!("DESCENDING"),
@@ -74,10 +170,8 @@ fn mode_json(field_id: &str, scope: IndexQueryScope, mode: IndexFieldMode) -> Va
         }
     }
     json!({
-        "queryScope": match scope {
-            IndexQueryScope::Collection => "COLLECTION",
-            IndexQueryScope::CollectionGroup => "COLLECTION_GROUP",
-        },
+        "name": single_field_index_name(selector, scope, mode),
+        "queryScope": scope_name(scope),
         "fields": [entry],
     })
 }
@@ -109,7 +203,7 @@ fn index_config_json(selector: &FieldSelector, indexes: &IndexSet) -> Value {
     };
     let indexes_json: Vec<Value> = modes
         .into_iter()
-        .map(|(scope, mode)| mode_json(&selector.field_id, scope, mode))
+        .map(|(scope, mode)| mode_json(selector, scope, mode))
         .collect();
     let mut config = json!({ "indexes": indexes_json });
     if uses_ancestor {
@@ -352,6 +446,12 @@ impl RestState {
                 )))
             }
         };
+        let binding = listing_binding(
+            project,
+            database,
+            collection_group.as_str(),
+            single(params, "filter")?.unwrap_or_default(),
+        );
         let page_size = match single(params, "pageSize")? {
             None => MAX_FIELDS_PAGE_SIZE,
             Some(raw) => {
@@ -367,9 +467,7 @@ impl RestState {
         };
         let offset = match single(params, "pageToken")? {
             None | Some("") => 0,
-            Some(raw) => raw
-                .parse()
-                .map_err(|_| Status::invalid_argument("pageToken is not a page of this listing"))?,
+            Some(raw) => page_offset(binding, raw)?,
         };
         let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         let ttl = self.local.ttl_catalog(project, database);
@@ -414,7 +512,7 @@ impl RestState {
         let mut body = json!({ "fields": page });
         let consumed = offset.saturating_add(page_size);
         if consumed < total {
-            body["nextPageToken"] = json!(consumed.to_string());
+            body["nextPageToken"] = json!(page_token(binding, consumed));
         }
         Ok(ok(body))
     }

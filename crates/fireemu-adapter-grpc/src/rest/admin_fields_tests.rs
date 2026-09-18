@@ -336,9 +336,17 @@ fn an_exempted_field_reports_the_modes_that_remain() {
         Value::Null,
     );
     assert_eq!(status, 200, "{body}");
+    let indexes = body["indexConfig"]["indexes"].as_array().expect("indexes");
+    assert_eq!(indexes.len(), 1, "{body}");
+    assert_eq!(indexes[0]["queryScope"], json!("COLLECTION"));
     assert_eq!(
-        body["indexConfig"]["indexes"],
-        json!([{"queryScope": "COLLECTION", "fields": [{"fieldPath": "payload", "order": "ASCENDING"}]}])
+        indexes[0]["fields"],
+        json!([{"fieldPath": "payload", "order": "ASCENDING"}])
+    );
+    assert!(
+        indexes[0]["name"].as_str().is_some_and(|name| name
+            .starts_with("projects/demo/databases/(default)/collectionGroups/sessions/indexes/")),
+        "{body}"
     );
     assert!(
         body["indexConfig"].get("usesAncestorConfig").is_none(),
@@ -359,8 +367,8 @@ fn an_unsupported_list_filter_is_refused() {
     assert_eq!(body["error"]["status"], json!("INVALID_ARGUMENT"));
 }
 
-#[test]
-fn a_page_size_of_one_pages_the_listing() {
+/// A state whose `sessions` collection group carries two explicitly overridden fields.
+fn paged_state() -> RestState {
     let mut indexes = IndexSet::default();
     let collection =
         fireemu_core_types::ids::CollectionId::try_new("sessions").expect("collection");
@@ -375,6 +383,12 @@ fn a_page_size_of_one_pages_the_listing() {
     state
         .local
         .replace_project_database_indexes("demo", "(default)", indexes);
+    state
+}
+
+#[test]
+fn a_page_size_of_one_pages_the_listing() {
+    let state = paged_state();
     let (status, first) = call(
         &state,
         "GET",
@@ -394,6 +408,129 @@ fn a_page_size_of_one_pages_the_listing() {
     assert_eq!(second["fields"].as_array().map(Vec::len), Some(1));
     assert!(second.get("nextPageToken").is_none(), "{second}");
     assert_ne!(first["fields"][0]["name"], second["fields"][0]["name"]);
+}
+
+#[test]
+fn every_reported_index_carries_a_distinct_stable_resource_name() {
+    let state = state();
+    let (status, body) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields/expiresAt"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{body}");
+    let names: Vec<&str> = body["indexConfig"]["indexes"]
+        .as_array()
+        .expect("indexes")
+        .iter()
+        .map(|index| index["name"].as_str().expect("an index name"))
+        .collect();
+    assert_eq!(names.len(), 3, "{body}");
+    for name in &names {
+        assert!(
+            name.starts_with(
+                "projects/demo/databases/(default)/collectionGroups/sessions/indexes/"
+            ),
+            "{name}"
+        );
+    }
+    let distinct: std::collections::BTreeSet<&&str> = names.iter().collect();
+    assert_eq!(distinct.len(), 3, "{body}");
+
+    // The name is derived from what defines the index, so a second read reports the same one.
+    let (_, again) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields/expiresAt"),
+        Value::Null,
+    );
+    assert_eq!(
+        again["indexConfig"]["indexes"],
+        body["indexConfig"]["indexes"]
+    );
+
+    // A different field is a different index, so the names do not collide.
+    let (_, other) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields/payload"),
+        Value::Null,
+    );
+    assert_ne!(
+        other["indexConfig"]["indexes"][0]["name"],
+        body["indexConfig"]["indexes"][0]["name"]
+    );
+}
+
+#[test]
+fn a_page_token_is_opaque_and_carries_no_offset_a_caller_can_read() {
+    let state = paged_state();
+    let (status, first) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields?pageSize=1"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{first}");
+    let token = first["nextPageToken"].as_str().expect("a next page");
+    assert_eq!(token.len(), 20, "{token}");
+    assert!(token.chars().all(|c| c.is_ascii_hexdigit()), "{token}");
+    assert_ne!(token, "1");
+}
+
+#[test]
+fn a_page_token_issued_for_another_listing_is_refused() {
+    let state = paged_state();
+    let (_, first) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields?pageSize=1"),
+        Value::Null,
+    );
+    let token = first["nextPageToken"].as_str().expect("a next page");
+
+    // The same token against a different collection group names a page of a listing that
+    // never issued it.
+    let (status, body) = call(
+        &state,
+        "GET",
+        &format!(
+            "/v1/projects/demo/databases/(default)/collectionGroups/orders/fields?pageSize=1&pageToken={token}"
+        ),
+        Value::Null,
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], json!("INVALID_ARGUMENT"));
+
+    // So does the same token against a different filter of the same collection group.
+    let (status, body) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields?filter=ttlConfig:*&pageSize=1&pageToken={token}"),
+        Value::Null,
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], json!("INVALID_ARGUMENT"));
+}
+
+#[test]
+fn a_malformed_page_token_is_refused() {
+    let state = paged_state();
+    for token in ["1", "notahexstring0000000", "00112233445566778899aa"] {
+        let (status, body) = call(
+            &state,
+            "GET",
+            &format!("{GROUP}/fields?pageSize=1&pageToken={token}"),
+            Value::Null,
+        );
+        assert_eq!(status, 400, "{token}: {body}");
+        assert_eq!(
+            body["error"]["status"],
+            json!("INVALID_ARGUMENT"),
+            "{token}"
+        );
+    }
 }
 
 #[test]

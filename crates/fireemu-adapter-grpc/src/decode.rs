@@ -328,14 +328,50 @@ fn database_resource(parent: &Parent) -> String {
     )
 }
 
+/// Longest `projects/{p}/databases/{d}` that may be quoted back to the caller. A project ID
+/// and a database ID are each at most 63 bytes, so a well-formed prefix is at most
+/// `projects/` + 63 + `/databases/` + 63 = 146 bytes. The cap leaves headroom above every
+/// prefix that could be real and still stops a caller from choosing the length of a log line.
+const MAX_ECHOED_DATABASE_BYTES: usize = 160;
+
+/// What is quoted in place of a reference prefix that may not be echoed. Project and
+/// database IDs are lowercase and hyphenated, so this can never collide with a real one.
+const UNPRINTABLE_DATABASE: &str = "[unprintable reference]";
+
+/// The `projects/{p}/databases/{d}` prefix of `name`, when it is safe to quote back.
+///
+/// Production's message names the database the caller reached for, and that stays exact for
+/// every well-formed reference. A `referenceValue` is an arbitrary caller string that never
+/// passes through [`DocumentPath`], though, so nothing else rejects a NUL, a newline or
+/// megabytes of padding before this text reaches a log line. A prefix that is over the cap or
+/// carries a control character is therefore replaced wholesale rather than escaped: the
+/// caller learns the request was refused without choosing what a log line contains.
+fn echoable_database(name: &str) -> &str {
+    // The prefix is everything before the fourth `/`, which is the whole string when there
+    // are fewer. Taken as a slice, so an oversized reference is never copied.
+    let end = name
+        .char_indices()
+        .filter(|&(_, character)| character == '/')
+        .nth(3)
+        .map_or(name.len(), |(index, _)| index);
+    let prefix = &name[..end];
+    if prefix.len() > MAX_ECHOED_DATABASE_BYTES || prefix.chars().any(char::is_control) {
+        return UNPRINTABLE_DATABASE;
+    }
+    prefix
+}
+
 /// The guard production applies to every document reference a query uses as a document
 /// name: a reference outside the request's database is refused rather than followed.
+///
+/// `database` is built from the request's own [`Parent`], whose project and database have
+/// already passed their identifier validation, so only the caller's reference needs bounding.
 fn check_reference_database(name: &str, database: &str) -> Result<(), DecodeError> {
     let prefix = format!("{database}/documents/");
     if name.starts_with(&prefix) {
         return Ok(());
     }
-    let other = name.splitn(5, '/').take(4).collect::<Vec<_>>().join("/");
+    let other = echoable_database(name);
     Err(DecodeError::InvalidQuery(format!(
         "The request was for database '{database}' but was attempting to access database '{other}'"
     )))
@@ -686,6 +722,99 @@ mod tests {
             );
             decode_structured_query(&request_parent(), &query)
                 .expect("a reference in the request database is a position, not an error");
+        }
+    }
+
+    fn name_filtered(reference: &str) -> pb::StructuredQuery {
+        pb::StructuredQuery {
+            from: vec![pb::structured_query::CollectionSelector {
+                collection_id: "cur".to_owned(),
+                all_descendants: false,
+            }],
+            r#where: Some(sq::Filter {
+                filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+                    field: Some(pb::structured_query::FieldReference {
+                        field_path: "__name__".to_owned(),
+                    }),
+                    op: sq::field_filter::Operator::Equal as i32,
+                    value: Some(pb_reference(reference)),
+                })),
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// The same hostile reference on both paths that echo it: a `__name__` filter value and
+    /// a cursor value in a `__name__` position.
+    fn both_paths(reference: &str) -> [pb::StructuredQuery; 2] {
+        [
+            name_filtered(reference),
+            name_ordered(false, Some(cursor(reference)), None),
+        ]
+    }
+
+    #[test]
+    fn a_reference_carrying_control_characters_is_not_echoed_into_the_message() {
+        // `referenceValue` never passes through `DocumentPath`, so nothing else rejects a
+        // NUL or a newline before the message that quotes it reaches a log line.
+        for reference in [
+            "projects/other\u{0}app/databases/(default)/documents/cur/c3",
+            "projects/other\r\napp/databases/(default)/documents/cur/c3",
+            "projects/other\u{7f}app/databases/(default)/documents/cur/c3",
+            "projects/other\u{85}app/databases/(default)/documents/cur/c3",
+        ] {
+            for query in both_paths(reference) {
+                let message = foreign_cursor_error(&query);
+                assert!(
+                    message.contains("[unprintable reference]"),
+                    "the caller text must be replaced, got {message:?}"
+                );
+                assert!(
+                    !message.chars().any(char::is_control),
+                    "no control character may survive into the message, got {message:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_oversized_reference_prefix_is_not_echoed_into_the_message() {
+        // A project ID is at most 63 bytes, so this prefix could never be well formed; the
+        // cap is what stops a caller from choosing the length of a log line.
+        let reference = format!(
+            "projects/{}/databases/(default)/documents/cur/c3",
+            "a".repeat(4096)
+        );
+        for query in both_paths(&reference) {
+            let message = foreign_cursor_error(&query);
+            assert!(message.contains("[unprintable reference]"), "{message}");
+            assert!(message.len() < 512, "message length {}", message.len());
+        }
+    }
+
+    #[test]
+    fn a_well_formed_foreign_database_is_still_echoed_verbatim() {
+        // Production quotes the database the caller reached for, and that stays exact.
+        for query in both_paths("projects/other-app/databases/other/documents/cur/c3") {
+            let message = foreign_cursor_error(&query);
+            assert!(
+                message.contains(
+                    "but was attempting to access database 'projects/other-app/databases/other'"
+                ),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_short_malformed_reference_is_still_echoed_verbatim() {
+        // Printable and bounded: nothing to sanitize, so the answer stays what it was.
+        for query in both_paths("not-a-resource-name") {
+            let message = foreign_cursor_error(&query);
+            assert!(
+                message.contains("access database 'not-a-resource-name'"),
+                "{message}"
+            );
         }
     }
 

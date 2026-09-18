@@ -136,18 +136,49 @@ network component is zero to the published precision: about 30 MiB is uploaded
 and ingress is not billed, and under 1 MiB is returned. The 30 MiB upload is the
 unusual quantity here, not the money.
 
-The recovery window reserves 300 seconds, 102 reads and 51 delete slots inside
-the 900-second run. The reserve is sized by the maximum, not the forecast: 51
+The recovery window reserves 500 seconds, 102 reads and 51 delete slots inside an
+1100-second run. The reserve is sized by the maximum, not the forecast: 51
 deletes for every document the worst outcome creates, and two reads per owned
 resource for an ownership read and an absence proof. The validator enforces
 both, and enforces that the hard ceiling clears the maximum cost rather than the
 forecast.
-It opens on any probe that reaches an observation failure, an uncertain Commit or
-an interrupted run. Its authority is read-only unless the same run holds a
-conditional-creation proof and a matching version-bound ownership read. It exits
-when all 51 owned resources return a typed `NOT_FOUND`. On exhaustion the run
-stops, records the remaining resources as unresolved and escalates to the owner;
-it never widens scope and never retries a Commit.
+
+The seconds are what the shared Gate charges, computed by calling it rather than
+by re-deriving its formula. `shared_gate` charges each slot its own reserved
+seconds plus an interval with a floor of 0.25, requires a slot carrying a body to
+reserve the transport ceiling, refuses a wall above 1200 seconds, and refuses a
+recovery reservation that cannot pay for its slots. At three seconds a small
+request:
+
+| Phase | Slots | Reserved |
+| --- | ---: | ---: |
+| observation, small reads | 102 | 331.50 s |
+| observation, boundary Commits | 3 | 180.75 s |
+| recovery | 153 | 497.25 s |
+| **total** | **258** | **1009.50 s** |
+
+So the recovery reserve is 500 against 497.25 needed, and the wall is 1100
+against 1009.50, inside the Gate's 1200 cap. The earlier published pair, 300 and
+900, could not carry this: 300 seconds admits at most 1.71 seconds a recovery
+slot, and at two seconds the recovery phase alone needs 344.25. That figure was
+never stated in the artifact, which is how the published windows and the
+runner's reservation came to disagree. The arithmetic is now computed in
+`budget.schedulingReservation` by calling the Gate, and a test drives
+`shared_gate.create` on this campaign's schedule to prove it admits the published
+windows and refuses 900/300, 900/500 and 1100/300.
+
+Three seconds is roughly an order of magnitude over a few-hundred-millisecond
+round trip, which is the shape a bound should have. It is also the per-request
+timeout for a small read or delete, so a slot cannot outrun its own reservation;
+a reservation nothing enforces is a plan, not a bound. The boundary Commits keep
+the 60-second transport deadline.
+
+The window opens on any probe that reaches an observation failure, an uncertain
+Commit or an interrupted run. Its authority is read-only unless the same run
+holds a conditional-creation proof and a matching version-bound ownership read.
+It exits when all 51 owned resources return a typed `NOT_FOUND`. On exhaustion
+the run stops, records the remaining resources as unresolved and escalates to
+the owner; it never widens scope and never retries a Commit.
 
 ## Owner preconditions
 
@@ -215,8 +246,8 @@ has lost the implemented shape.
 
 The recorded run is published as
 `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, at source
-`f3dfc71b26210f855724f8085f9c12853a4ac506`, artifact SHA-256
-`2ac9a48c0795e75eda342734a79e669fb4e5603b3cb9cc2b1f80cad58d79c779`, nonce `a662d4181ae4427e929fb297f930478f`, with supervisor status
+`31a5102c9d357a6b5349f364a3b84a37a21c6a35`, artifact SHA-256
+`f493ac8bf8b4bf74642e65f3be97a24e745d16299fcdc3bafd141c01d2f6602e`, nonce `54e96c7d41094fa5928672d4adae6efe`, with supervisor status
 `completed`, `recordingComplete` and `stateValidation` true, the owned process
 stopped and all listeners closed. It completed 105 observation rows and 153
 recovery rows, sent 241 of the 258 bounded requests, and proved all 51 owned
@@ -270,8 +301,8 @@ zero-wire skips are excluded, since they send nothing.
 
 **The published figures are a floor and not an estimate, and the record says so
 beside them.** A local shadow runs over loopback against an emulator on the same
-machine. In the published run the small-request median is 0.0010 s with a p99 of 0.0111 s, and the
-three boundary Commits ran 0.0246 s at the median. That is service time with no
+machine. In the published run the small-request median is 0.0011 s with a p99 of 0.0115 s, and the
+three boundary Commits ran 0.0249 s at the median. That is service time with no
 network in it at all; a production small read is an HTTPS round trip and
 will be one to two orders of magnitude higher. Citing the local p99 as a
 production per-slot figure would be wrong by that margin. It bounds the

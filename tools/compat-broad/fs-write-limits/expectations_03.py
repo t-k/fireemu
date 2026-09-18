@@ -233,6 +233,11 @@ def writes_safe(rows: list[dict], plan: dict) -> bool:
                 return False
             continue
         request = plan["requests"][index]
+        if request["expect"].get("pendingReason"):
+            # A row the campaign has declared it cannot predict locally cannot
+            # serve as a local safety invariant. Its journal integrity is still
+            # checked above; only its API outcome is excused.
+            continue
         if request["kind"] == "batch-write":
             versions.update(_batch_landed(request, status, body))
             continue

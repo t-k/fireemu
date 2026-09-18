@@ -192,6 +192,45 @@ impl IndexSet {
             )
     }
 
+    /// The override declared for exactly this field, absent when the field inherits its
+    /// automatic indexes from the collection group default or from the built-in default.
+    ///
+    /// This is what `collectionGroups.fields.get` reports as `usesAncestorConfig`: a field
+    /// with no override of its own is described by an ancestor's configuration.
+    #[must_use]
+    pub fn single_field_override(
+        &self,
+        collection: &CollectionId,
+        field: &FieldPath,
+    ) -> Option<&[(IndexQueryScope, IndexFieldMode)]> {
+        self.single_fields
+            .get(&(collection.as_str().to_owned(), field.segments().to_vec()))
+            .map(Vec::as_slice)
+    }
+
+    /// The collection group's default (`*`) override, absent when it declares none.
+    #[must_use]
+    pub fn default_single_field_override(
+        &self,
+        collection: &CollectionId,
+    ) -> Option<&[(IndexQueryScope, IndexFieldMode)]> {
+        self.single_fields
+            .get(&(collection.as_str().to_owned(), Vec::new()))
+            .map(Vec::as_slice)
+    }
+
+    /// Every explicitly configured single-field override, as collection group, field
+    /// segments and modes. The collection-group default (the unquoted `*`) has no segments.
+    pub fn single_field_overrides(
+        &self,
+    ) -> impl Iterator<Item = (&str, &[String], &[(IndexQueryScope, IndexFieldMode)])> {
+        self.single_fields
+            .iter()
+            .map(|((collection, path), modes)| {
+                (collection.as_str(), path.as_slice(), modes.as_slice())
+            })
+    }
+
     /// Composite indexes.
     #[must_use]
     pub fn composites(&self) -> &[IndexDefinition] {

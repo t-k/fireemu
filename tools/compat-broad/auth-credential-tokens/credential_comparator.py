@@ -9,8 +9,9 @@ Three rules carry most of the weight:
   A trust-root difference is therefore expected and is never a semantic difference. The
   roots observed on each side are reported separately so review can see them.
 * The same-second revocation boundary is classified `EXPECTED_NONDETERMINISM` unless both
-  sides recorded that they pinned the boundary from server-reported values. A run that
-  could not pin it observed something real but not the boundary.
+  sides pinned the boundary from server-reported values, which is judged from the seconds
+  each side recorded rather than from its own claim to have pinned them. A run that could
+  not pin it observed something real but not the boundary.
 * The boundary row means nothing unless its neighbouring controls held on each side
   independently. A refusal below and an acceptance above are what place the boundary;
   two sides that both accepted the older session agree with each other and have still

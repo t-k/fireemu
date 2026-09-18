@@ -669,6 +669,11 @@ def build_report(rows: dict[str, dict], state: dict[str, Any]) -> dict[str, Any]
                 0 if resource["deleted"] and resource["absenceVerified"] else 1
                 for resource in state["ownedResources"]
             ),
+            # The owned instance is created for this run and discarded with it, so no
+            # project configuration is mutated and nothing has to be restored. The
+            # production side of this campaign does mutate configuration and must prove
+            # the readback and digest equality the manifest requires.
+            "configurationMutated": False,
             "configurationRestored": True,
             "ownedAccounts": len(state["ownedResources"]),
         },

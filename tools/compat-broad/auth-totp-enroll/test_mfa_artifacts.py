@@ -35,6 +35,8 @@ def test_the_checked_in_ledger_covers_every_case_without_secret_material() -> No
     assert ledger["recordingComplete"] is True
     assert ledger["disagreements"] == []
     assert ledger["recovery"]["remainingOwnedResources"] == 0
+    assert ledger["recovery"]["configurationMutated"] is False
+    assert ledger["recovery"]["ownedAccounts"] == 10
     serialized = json.dumps(ledger).lower()
     for material in (
         "sharedsecretkey",

@@ -62,6 +62,12 @@ NON_SECRET_KEY_NAMES = ("assertions",)
 
 RECEIPT_SIDES = ("local", "production")
 
+#: The error code a collector writes for a case it never reached.
+NOT_RUN_ERROR_CODE = "NOT_RUN"
+
+#: The status range a row must carry to record a response that actually arrived.
+HTTP_STATUS_RANGE = (100, 599)
+
 #: Modules whose bytes every receipt binds. The comparison contract requires both sides
 #: to have been recorded by the same collector, so this binding is what makes a pair
 #: comparable at all.
@@ -437,6 +443,27 @@ def collector_binding(commit: str | None = None) -> dict[str, Any]:
 # --- receipt -----------------------------------------------------------------------
 
 
+def unobserved_reason(row: Any) -> str | None:
+    """Why this row records no observation, or None when it records one.
+
+    A run that stops part way still writes a row for every case, so a row has to say for
+    itself whether anything was observed. Every reader derives that here rather than
+    trusting a receipt-level boolean, which a collector fills in and could be wrong.
+    """
+    if not isinstance(row, dict):
+        return "row-is-not-an-object"
+    status = row.get("status")
+    if isinstance(status, bool) or not isinstance(status, int):
+        return "status-is-not-an-integer"
+    if not HTTP_STATUS_RANGE[0] <= status <= HTTP_STATUS_RANGE[1]:
+        return "status-is-outside-the-http-range"
+    if row.get("errorCode") == NOT_RUN_ERROR_CODE:
+        return "row-is-marked-not-run"
+    if not isinstance(row.get("assertions"), dict):
+        return "assertions-are-not-an-object"
+    return None
+
+
 def build_receipt(
     *,
     side: str,
@@ -453,8 +480,14 @@ def build_receipt(
     if [row.get("caseId") for row in rows] != expected:
         raise ValueError("rows must be every case in the declared order")
     cleanup = cleanup_report(tracker)
-    # An owned-nothing run never signed anybody in, so it never observed anything.
-    complete = cleanup["cleanupComplete"] and cleanup["ownedAccounts"] > 0
+    # Recording completion and cleanup completion are separate facts. A run that stopped
+    # part way still cleans up after itself, and a clean cleanup has never been evidence
+    # that every case was observed.
+    # An owned-nothing run never signed anybody in, so it never observed anything either.
+    complete = (
+        all(unobserved_reason(row) is None for row in rows)
+        and cleanup["ownedAccounts"] > 0
+    )
     return {
         "side": side,
         "productionExecuted": bool(production_executed),

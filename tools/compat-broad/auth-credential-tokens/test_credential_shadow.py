@@ -19,12 +19,14 @@ sys.path.insert(0, str(HERE))
 
 import credential_shadow as shadow
 from credential_cases import observation_cases
+from credential_comparator import compare
 from credential_collector import (
     BudgetExceeded,
     build_receipt,
     claim_shape,
     cleanup_report,
     enter_recovery,
+    mark_deleted,
     new_budget,
     new_tracker,
     owned_email,
@@ -33,6 +35,10 @@ from credential_collector import (
     track_account,
 )
 from credential_plan import BUDGET
+
+
+def _classes(report: dict) -> dict:
+    return {row["caseId"]: row["classification"] for row in report["rows"]}
 
 
 def test_transport_refuses_a_target_outside_the_loopback_interface() -> None:
@@ -232,7 +238,7 @@ def test_an_addressless_account_skips_the_address_lookup_entirely() -> None:
     assert cleanup_report(tracker)["addressReadbacks"] == 0
 
 
-def test_a_cleanup_failure_keeps_the_receipt_incomplete() -> None:
+def test_a_cleanup_failure_keeps_the_receipt_uncomparable() -> None:
     email = owned_email(new_tracker("a" * 32), 0)
     tracker = _tracker_with("uid-1", email)
     poster = _stub([(200, {}), (429, {"error": {"message": "RESOURCE_EXHAUSTED"}})])
@@ -246,7 +252,11 @@ def test_a_cleanup_failure_keeps_the_receipt_incomplete() -> None:
     receipt = build_receipt(
         side="local", rows=rows, tracker=tracker, budget=new_budget(60, 600, 0.05)
     )
-    assert receipt["recordingComplete"] is False
+    # The rows were observed, so the recording is complete; the cleanup is not, and that
+    # alone is enough to keep the receipt out of a comparison.
+    assert receipt["recordingComplete"] is True
+    assert receipt["cleanup"]["cleanupComplete"] is False
+    assert receipt["cleanup"]["remainingAccounts"] == 1
 
 
 # --- a stopped run still records what it observed -----------------------------
@@ -714,3 +724,98 @@ def test_a_cookie_minted_for_a_different_subject_fails_the_real_case_run(
     assert [item["caseId"] for item in unexpected] == [
         "session-cookie-claim-composition"
     ]
+
+
+# --- a stopped run is never comparable, whatever the receipt claims -------------
+
+
+def _expected_row(case: dict, *, trust_root: str = "unsigned-emulator") -> dict:
+    expected = case["expectedLocal"]
+    row = {
+        "caseId": case["id"],
+        "status": expected["status"],
+        "errorCode": expected["errorCode"],
+        "assertions": {name: True for name in expected["assertions"]},
+        "trustRoot": trust_root,
+    }
+    if case["nondeterminism"] == "SAME_SECOND_BOUNDARY":
+        row["boundaryPinned"] = False
+    return row
+
+
+def _cleaned_tracker() -> dict:
+    tracker = new_tracker("a" * 32)
+    track_account(tracker, "uid-1", owned_email(tracker, 0))
+    mark_deleted(tracker, "uid-1", uid_absent=True, email_absent=True)
+    return tracker
+
+
+def _stopped_local_receipt() -> dict:
+    """The receipt a run that stopped after one case actually produces."""
+    first = observation_cases()[0]
+    record, exit_code = shadow.finish_record(
+        rows={first["id"]: _expected_row(first)},
+        tracker=_cleaned_tracker(),
+        budget=new_budget(60, 600, 0.0),
+        failure="BudgetExceeded: request budget exhausted",
+        shutdown={"exitCode": 0, "processStopped": True, "remainingChildren": 0},
+        source_binding={"commit": "a" * 40, "artifactSha256": "c" * 64},
+    )
+    assert exit_code == 1
+    return record["receipt"]
+
+
+def _full_production_receipt() -> dict:
+    return build_receipt(
+        side="production",
+        rows=[_expected_row(case, trust_root="signed") for case in observation_cases()],
+        tracker=_cleaned_tracker(),
+        budget=new_budget(60, 600, 0.05),
+        source_binding={"commit": "a" * 40, "artifactSha256": "d" * 64},
+        production_executed=True,
+    )
+
+
+def test_a_row_the_run_never_reached_is_not_a_recorded_observation() -> None:
+    receipt = _stopped_local_receipt()
+    # Cleanup succeeded; the recording did not. The two are separate facts.
+    assert receipt["cleanup"]["cleanupComplete"] is True
+    assert receipt["recordingComplete"] is False
+
+
+def test_a_stopped_run_is_refused_by_the_comparator_end_to_end() -> None:
+    report = compare(_stopped_local_receipt(), _full_production_receipt())
+    assert report["productionCompared"] is False
+    assert report["reason"] == "incomplete-recording"
+    assert set(_classes(report).values()) == {"INDETERMINATE"}
+
+
+def test_a_receipt_claiming_a_complete_recording_cannot_pass_off_unrun_rows() -> None:
+    local = _stopped_local_receipt()
+    # The comparator re-derives observation from each row; a caller boolean is not
+    # evidence, so forcing this member cannot turn a case nobody ran into a MATCH.
+    local["recordingComplete"] = True
+    classes = _classes(compare(local, _full_production_receipt()))
+    first = observation_cases()[0]["id"]
+    assert classes[first] == "MATCH"
+    assert set(value for case_id, value in classes.items() if case_id != first) == {
+        "INDETERMINATE"
+    }
+
+
+def test_a_complete_recording_with_a_failed_cleanup_is_refused_for_the_cleanup() -> (
+    None
+):
+    tracker = new_tracker("a" * 32)
+    track_account(tracker, "uid-1", owned_email(tracker, 0))
+    mark_deleted(tracker, "uid-1", uid_absent=True, email_absent=False)
+    local = build_receipt(
+        side="local",
+        rows=[_expected_row(case) for case in observation_cases()],
+        tracker=tracker,
+        budget=new_budget(60, 600, 0.0),
+        source_binding={"commit": "a" * 40, "artifactSha256": "c" * 64},
+    )
+    assert local["recordingComplete"] is True
+    assert local["cleanup"]["cleanupComplete"] is False
+    assert compare(local, _full_production_receipt())["reason"] == "incomplete-cleanup"

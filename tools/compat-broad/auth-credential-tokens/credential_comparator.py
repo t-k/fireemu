@@ -22,7 +22,11 @@ import copy
 from typing import Any
 
 from credential_cases import CAMPAIGN_ID, case_by_id, observation_cases
-from credential_collector import is_module_digest, is_secret_key
+from credential_collector import (
+    is_module_digest,
+    is_secret_key,
+    unobserved_reason,
+)
 
 CONTRACT = "auth-credential-tokens-v1"
 
@@ -129,6 +133,11 @@ def compare(local: Any, production: Any) -> dict[str, Any]:
     classes: dict[str, str] = {}
     for case_id in case_ids:
         case = case_by_id(case_id)
+        # A row nobody ran is not a row that agreed. This is re-derived from the row
+        # itself, because `recordingComplete` is written by the collector under review.
+        if any(unobserved_reason(side[case_id]) is not None for side in (left, right)):
+            classes[case_id] = "INDETERMINATE"
+            continue
         agree = _semantic(left[case_id]) == _semantic(right[case_id])
         if case["nondeterminism"] == "SAME_SECOND_BOUNDARY":
             pinned = (

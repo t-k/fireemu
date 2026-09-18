@@ -328,6 +328,44 @@ def _request_impl(
     timeout: float = TIMEOUT,
     clock: Clock = time.monotonic,
 ) -> dict[str, Any]:
+    """Time one operation and return its receipt.
+
+    The elapsed figure spans the whole slot: request preparation, the worker
+    process, the connection, the upload and the bounded response read. That is
+    the boundary a per-slot reservation has to pay for, so it is measured here
+    rather than inside the worker.
+
+    This wrapper is additive. It does not look at the receipt, so it cannot
+    change a refusal classification, and it does not touch the deadline, which
+    `_dispatch` still computes and enforces on its own.
+    """
+    started = clock()
+    receipt = _dispatch(
+        plan,
+        phase,
+        index,
+        operation,
+        token,
+        exchange=exchange,
+        timeout=timeout,
+        clock=clock,
+    )
+    if isinstance(receipt, dict) and "elapsedSeconds" not in receipt:
+        receipt["elapsedSeconds"] = clock() - started
+    return receipt
+
+
+def _dispatch(
+    plan: dict[str, Any],
+    phase: str,
+    index: int,
+    operation: dict[str, Any],
+    token: str,
+    *,
+    exchange: Exchange | None = None,
+    timeout: float = TIMEOUT,
+    clock: Clock = time.monotonic,
+) -> dict[str, Any]:
     """Send one fixed-origin operation, or return a typed transport failure.
 
     ``clock`` is the monotonic time source used for the one total wire

@@ -258,3 +258,82 @@ def test_published_evidence_contains_no_credential_material():
 
 def test_the_published_record_is_small_enough_to_review():
     assert RECORD.stat().st_size < 64 * 1024
+
+
+# --- The published timings are a floor, and say so ---------------------------
+
+
+def test_the_published_timings_are_internally_consistent():
+    value = record()
+    shadow_module.validate_slot_timings(
+        value["slotTimings"], value["observation"]["requestCount"]
+    )
+
+
+def test_the_published_timings_are_labelled_a_floor_not_an_estimate():
+    """Anyone citing these must be told what they exclude."""
+    timings = record()["slotTimings"]
+    assert timings["measurement"] == "loopback-floor"
+    assert timings["isProductionEstimate"] is False
+    for phrase in ("round trip", "TLS", "floor", "never an estimate"):
+        assert phrase in timings["disclaimer"]
+
+
+def test_the_published_timings_separate_the_two_slot_classes():
+    timings = record()["slotTimings"]["classes"]
+    assert set(timings) == {"boundaryCommit", "smallRequest"}
+    assert timings["boundaryCommit"]["count"] == len(REQUEST_TARGETS)
+    # The 255 non-Commit slots minus the over probe's zero-wire delete skips.
+    assert timings["smallRequest"]["count"] > 200
+    assert (
+        timings["boundaryCommit"]["count"] + timings["smallRequest"]["count"]
+        == record()["observation"]["requestCount"]
+    )
+
+
+def test_the_published_timings_cover_only_slots_that_sent_something():
+    """A zero-wire skip costs no time and must not enter a percentile."""
+    value = record()
+    assert (
+        value["slotTimings"]["dispatchedCount"] == value["observation"]["requestCount"]
+    )
+    assert value["slotTimings"]["dispatchedCount"] < 258
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(
+            lambda t: t["classes"]["smallRequest"].update(medianSeconds=9.0),
+            id="median-above-p99",
+        ),
+        pytest.param(
+            lambda t: t["classes"]["smallRequest"].update(p99Seconds=0.0),
+            id="p99-below-median",
+        ),
+        pytest.param(
+            lambda t: t["classes"]["smallRequest"].update(count=1),
+            id="count-does-not-sum",
+        ),
+        pytest.param(
+            lambda t: t.update(isProductionEstimate=True), id="claimed-as-an-estimate"
+        ),
+        pytest.param(lambda t: t.update(disclaimer=""), id="disclaimer-stripped"),
+        pytest.param(
+            lambda t: t.update(measurement="production"), id="mislabelled-measurement"
+        ),
+        pytest.param(lambda t: t["classes"].pop("boundaryCommit"), id="classes-merged"),
+        pytest.param(
+            lambda t: t["classes"]["boundaryCommit"].update(totalSeconds=0.0),
+            id="total-below-maximum",
+        ),
+    ],
+)
+def test_a_tampered_timing_block_is_rejected(mutate):
+    value = record()
+    timings = json.loads(json.dumps(value["slotTimings"]))
+    mutate(timings)
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        shadow_module.validate_slot_timings(
+            timings, value["observation"]["requestCount"]
+        )

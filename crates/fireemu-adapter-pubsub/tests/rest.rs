@@ -1713,3 +1713,349 @@ async fn a_supported_topic_round_trips_through_get_and_list_on_both_transports()
     assert!(grpc_get.message_transforms.is_empty());
     assert!(grpc_get.tags.is_empty());
 }
+
+#[tokio::test]
+async fn a_rest_body_spelled_in_snake_case_applies_every_supported_option() {
+    let address = start().await;
+    for topic in ["snake", "snake-dead"] {
+        let (status, _) = rest_request(
+            address,
+            "PUT",
+            &format!("/v1/projects/demo-app/topics/{topic}"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, 200);
+    }
+    // proto3 JSON accepts the original field names, so these must be applied, never dropped.
+    let (status, created) = rest_request(
+        address,
+        "PUT",
+        "/v1/projects/demo-app/subscriptions/snake",
+        json!({
+            "topic": "projects/demo-app/topics/snake",
+            "ack_deadline_seconds": 30,
+            "enable_message_ordering": true,
+            "filter": "attributes.kind = \"kept\"",
+            "dead_letter_policy": {
+                "dead_letter_topic": "projects/demo-app/topics/snake-dead",
+                "max_delivery_attempts": 7
+            },
+            "retry_policy": {"minimum_backoff": "1.500s", "maximum_backoff": "3s"},
+            "push_config": {"push_endpoint": "http://127.0.0.1:8080/snake"}
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{created}");
+    assert_eq!(created["ackDeadlineSeconds"], 30, "{created}");
+    assert_eq!(created["enableMessageOrdering"], true, "{created}");
+    assert_eq!(created["filter"], "attributes.kind = \"kept\"", "{created}");
+    assert_eq!(
+        created["deadLetterPolicy"]["deadLetterTopic"], "projects/demo-app/topics/snake-dead",
+        "{created}"
+    );
+    assert_eq!(created["deadLetterPolicy"]["maxDeliveryAttempts"], 7);
+    assert_eq!(created["retryPolicy"]["minimumBackoff"], "1.500s");
+    assert_eq!(
+        created["pushConfig"]["pushEndpoint"],
+        "http://127.0.0.1:8080/snake"
+    );
+
+    let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
+    let from_grpc = subscriber
+        .get_subscription(pb::GetSubscriptionRequest {
+            subscription: "projects/demo-app/subscriptions/snake".to_owned(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(from_grpc.ack_deadline_seconds, 30);
+    assert!(from_grpc.enable_message_ordering);
+    assert_eq!(
+        from_grpc.dead_letter_policy.unwrap().max_delivery_attempts,
+        7
+    );
+    assert_eq!(
+        from_grpc.push_config.unwrap().push_endpoint,
+        "http://127.0.0.1:8080/snake"
+    );
+
+    // A snake_case mask with a snake_case body updates the endpoint; it must never clear it.
+    let (status, updated) = rest_request(
+        address,
+        "PATCH",
+        "/v1/projects/demo-app/subscriptions/snake",
+        json!({
+            "subscription": {"push_config": {"push_endpoint": "http://127.0.0.1:8081/snake"}},
+            "update_mask": "push_config"
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{updated}");
+    assert_eq!(
+        updated["pushConfig"]["pushEndpoint"], "http://127.0.0.1:8081/snake",
+        "a snake_case update must apply its value, not clear the endpoint"
+    );
+    assert_subscription_values(
+        address,
+        "/v1/projects/demo-app/subscriptions/snake",
+        30,
+        "http://127.0.0.1:8081/snake",
+    )
+    .await;
+
+    // A snake_case ack deadline update is applied too.
+    let (status, updated) = rest_request(
+        address,
+        "PATCH",
+        "/v1/projects/demo-app/subscriptions/snake",
+        json!({
+            "subscription": {"ack_deadline_seconds": 45},
+            "updateMask": "ack_deadline_seconds"
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{updated}");
+    assert_eq!(updated["ackDeadlineSeconds"], 45);
+}
+
+#[tokio::test]
+async fn a_rest_body_that_spells_one_field_twice_is_rejected() {
+    let address = start().await;
+    let (status, _) = rest_request(
+        address,
+        "PUT",
+        "/v1/projects/demo-app/topics/duplicate",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let (status, error) = rest_request(
+        address,
+        "PUT",
+        "/v1/projects/demo-app/subscriptions/duplicate",
+        json!({
+            "topic": "projects/demo-app/topics/duplicate",
+            "ackDeadlineSeconds": 30,
+            "ack_deadline_seconds": 45
+        }),
+    )
+    .await;
+    assert_eq!(status, 400, "{error}");
+    let (status, _) = rest_request(
+        address,
+        "GET",
+        "/v1/projects/demo-app/subscriptions/duplicate",
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        status, 404,
+        "an ambiguous body must not create a subscription"
+    );
+}
+
+#[tokio::test]
+async fn a_nested_update_mask_path_is_refused_under_its_protobuf_name_on_both_transports() {
+    let address = start().await;
+    let (status, _) = rest_request(
+        address,
+        "PUT",
+        "/v1/projects/demo-app/topics/nested-mask",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let (status, _) = rest_request(
+        address,
+        "PUT",
+        "/v1/projects/demo-app/subscriptions/nested-mask",
+        json!({"topic": "projects/demo-app/topics/nested-mask"}),
+    )
+    .await;
+    assert_eq!(status, 200);
+
+    let (status, error) = rest_request(
+        address,
+        "PATCH",
+        "/v1/projects/demo-app/subscriptions/nested-mask",
+        json!({"subscription": {}, "updateMask": "pushConfig.oidcToken"}),
+    )
+    .await;
+    assert_eq!(status, 501, "{error}");
+    let message = error["error"]["message"].as_str().unwrap().to_owned();
+    assert!(message.contains("push_config.oidc_token"), "{message}");
+
+    let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
+    let grpc_error = subscriber
+        .update_subscription(pb::UpdateSubscriptionRequest {
+            subscription: Some(pb::Subscription {
+                name: "projects/demo-app/subscriptions/nested-mask".to_owned(),
+                ..Default::default()
+            }),
+            update_mask: Some(prost_types::FieldMask {
+                paths: vec!["push_config.oidc_token".to_owned()],
+            }),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(grpc_error.code(), tonic::Code::Unimplemented);
+    assert_eq!(grpc_error.message(), message);
+}
+
+#[tokio::test]
+async fn rest_seek_accepts_a_time_target_and_replays_the_backlog() {
+    let address = start().await;
+    let (status, _) = rest_request(
+        address,
+        "PUT",
+        "/v1/projects/demo-app/topics/seek-time",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let (status, _) = rest_request(
+        address,
+        "PUT",
+        "/v1/projects/demo-app/subscriptions/seek-time",
+        json!({"topic": "projects/demo-app/topics/seek-time"}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let (status, _) = rest_request(
+        address,
+        "POST",
+        "/v1/projects/demo-app/topics/seek-time:publish",
+        json!({"messages": [{"data": "cmVwbGF5"}]}),
+    )
+    .await;
+    assert_eq!(status, 200);
+
+    let (status, pulled) = rest_request(
+        address,
+        "POST",
+        "/v1/projects/demo-app/subscriptions/seek-time:pull",
+        json!({"maxMessages": 10}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let ack_id = pulled["receivedMessages"][0]["ackId"].as_str().unwrap();
+    let (status, _) = rest_request(
+        address,
+        "POST",
+        "/v1/projects/demo-app/subscriptions/seek-time:acknowledge",
+        json!({"ackIds": [ack_id]}),
+    )
+    .await;
+    assert_eq!(status, 200);
+
+    // The harness clock starts at 2023-11-14T22:13:20Z; seek before the publish to replay it.
+    let (status, error) = rest_request(
+        address,
+        "POST",
+        "/v1/projects/demo-app/subscriptions/seek-time:seek",
+        json!({"time": "2023-11-14T22:00:00Z"}),
+    )
+    .await;
+    assert_eq!(status, 200, "{error}");
+    let (status, replayed) = rest_request(
+        address,
+        "POST",
+        "/v1/projects/demo-app/subscriptions/seek-time:pull",
+        json!({"maxMessages": 10}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        replayed["receivedMessages"].as_array().unwrap().len(),
+        1,
+        "a seek by time must replay the acknowledged message: {replayed}"
+    );
+
+    for (body, expected) in [
+        (json!({}), 400),
+        (json!({"time": "not-a-time"}), 400),
+        (
+            json!({"time": "2023-11-14T22:00:00Z", "snapshot": "projects/demo-app/snapshots/x"}),
+            400,
+        ),
+    ] {
+        let (status, _) = rest_request(
+            address,
+            "POST",
+            "/v1/projects/demo-app/subscriptions/seek-time:seek",
+            body,
+        )
+        .await;
+        assert_eq!(status, expected);
+    }
+}
+
+#[tokio::test]
+async fn rest_snapshot_creation_separates_unknown_names_from_unsupported_fields() {
+    let address = start().await;
+    let (status, _) = rest_request(
+        address,
+        "PUT",
+        "/v1/projects/demo-app/topics/snapshot-keys",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let (status, _) = rest_request(
+        address,
+        "PUT",
+        "/v1/projects/demo-app/subscriptions/snapshot-keys",
+        json!({"topic": "projects/demo-app/topics/snapshot-keys"}),
+    )
+    .await;
+    assert_eq!(status, 200);
+
+    for (body, expected) in [
+        (
+            json!({
+                "subscription": "projects/demo-app/subscriptions/snapshot-keys",
+                "notAField": true
+            }),
+            400,
+        ),
+        (
+            json!({
+                "subscription": "projects/demo-app/subscriptions/snapshot-keys",
+                "expireTime": "2023-11-15T00:00:00Z"
+            }),
+            501,
+        ),
+    ] {
+        let (status, error) = rest_request(
+            address,
+            "PUT",
+            "/v1/projects/demo-app/snapshots/snapshot-keys",
+            body,
+        )
+        .await;
+        assert_eq!(status, expected, "{error}");
+        let (status, _) = rest_request(
+            address,
+            "GET",
+            "/v1/projects/demo-app/snapshots/snapshot-keys",
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, 404, "a refused snapshot must not be created");
+    }
+
+    // The snake_case spelling of a supported field is applied.
+    let (status, snapshot) = rest_request(
+        address,
+        "PUT",
+        "/v1/projects/demo-app/snapshots/snapshot-keys",
+        json!({
+            "subscription": "projects/demo-app/subscriptions/snapshot-keys",
+            "labels": {"owner": "test"}
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{snapshot}");
+    assert_eq!(snapshot["labels"]["owner"], "test");
+}

@@ -126,6 +126,204 @@ fn an_expired_document_stays_readable_until_the_sweep_interval_elapses() {
     assert!(!exists(&backend, "sessions/s1"));
 }
 
+/// Deletes one document the way an ordinary client does.
+fn delete_document(backend: &LocalBackend, relative: &str) {
+    backend
+        .delete_document(&pb::DeleteDocumentRequest {
+            name: format!("{DB}/documents/{relative}"),
+            ..Default::default()
+        })
+        .expect("delete");
+}
+
+/// The creation time of one document, which distinguishes a recreated document from the one
+/// a sweep scanned.
+fn create_time(backend: &LocalBackend, relative: &str) -> Option<prost_types::Timestamp> {
+    backend
+        .get_document(
+            &pb::GetDocumentRequest {
+                name: format!("{DB}/documents/{relative}"),
+                ..Default::default()
+            },
+            &fireemu_adapter_grpc::rules::allow_all_reads,
+        )
+        .ok()
+        .and_then(|document| document.create_time)
+}
+
+/// Runs one forced sweep with `between` applied after the candidate scan and before the
+/// first deletion, and returns how many documents the sweep deleted.
+///
+/// This is the window a client writes into in production: the expiry scan has already chosen
+/// the document and the deletion has not happened yet. Without the seam the interleaving is a
+/// race no test could pin down.
+fn sweep_with_write_between(
+    backend: &Arc<LocalBackend>,
+    now: LogicalInstant,
+    between: impl FnOnce(),
+) -> usize {
+    let (scanned_tx, scanned_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    let resume_rx = Mutex::new(resume_rx);
+    let sweeper = Arc::clone(backend);
+    std::thread::scope(|scope| {
+        let handle = scope.spawn(move || {
+            sweeper.sweep_expired_documents_now_with_hook(&everything(), now, &|| {
+                scanned_tx.send(()).expect("the sweep reached the seam");
+                resume_rx
+                    .lock()
+                    .expect("resume")
+                    .recv()
+                    .expect("the test released the seam");
+            })
+        });
+        scanned_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the sweep scanned its candidates");
+        between();
+        resume_tx.send(()).expect("release the sweep");
+        handle.join().expect("the sweep finished")
+    })
+}
+
+#[test]
+fn a_document_whose_ttl_is_extended_after_the_scan_survives_the_sweep() {
+    let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
+    write_document(&backend, "sessions/s1", Some(timestamp(1_100)));
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .expect("enable ttl");
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
+
+    let deleted = sweep_with_write_between(
+        &backend,
+        LogicalInstant::from_unix_seconds(1_101),
+        // The client pushes the expiry into the future while the sweep holds the candidate.
+        || write_document(&backend, "sessions/s1", Some(timestamp(9_000_000))),
+    );
+
+    assert_eq!(deleted, 0);
+    assert!(exists(&backend, "sessions/s1"));
+}
+
+#[test]
+fn a_document_whose_ttl_field_is_cleared_after_the_scan_survives_the_sweep() {
+    for (name, value) in [
+        ("sessions/removed", None),
+        (
+            "sessions/nulled",
+            Some(pb::Value {
+                value_type: Some(pb::value::ValueType::NullValue(0)),
+            }),
+        ),
+    ] {
+        let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
+        write_document(&backend, name, Some(timestamp(1_100)));
+        backend
+            .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+            .expect("enable ttl");
+        backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
+
+        let deleted =
+            sweep_with_write_between(&backend, LogicalInstant::from_unix_seconds(1_101), || {
+                write_document(&backend, name, value);
+            });
+
+        assert_eq!(deleted, 0, "{name}");
+        assert!(exists(&backend, name), "{name}");
+    }
+}
+
+#[test]
+fn a_document_recreated_after_the_scan_is_not_deleted_by_the_sweep() {
+    let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
+    write_document(&backend, "sessions/s1", Some(timestamp(1_100)));
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .expect("enable ttl");
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
+    let scanned = create_time(&backend, "sessions/s1").expect("the scanned document exists");
+
+    let deleted = sweep_with_write_between(
+        &backend,
+        LogicalInstant::from_unix_seconds(1_101),
+        // The path is reused by a document of its own, which the expiry of the document the
+        // sweep scanned says nothing about.
+        || {
+            delete_document(&backend, "sessions/s1");
+            write_document(&backend, "sessions/s1", Some(timestamp(9_000_000)));
+        },
+    );
+
+    assert_eq!(deleted, 0);
+    let recreated = create_time(&backend, "sessions/s1").expect("the recreated document exists");
+    assert_ne!(recreated, scanned);
+}
+
+#[test]
+fn an_expired_document_left_alone_during_the_sweep_is_still_deleted() {
+    let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
+    write_document(&backend, "sessions/s1", Some(timestamp(1_100)));
+    write_document(&backend, "sessions/s2", Some(timestamp(1_100)));
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .expect("enable ttl");
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
+
+    // The control of the three cases above: one candidate is extended, the other is left
+    // alone, and only the untouched one is deleted.
+    let deleted =
+        sweep_with_write_between(&backend, LogicalInstant::from_unix_seconds(1_101), || {
+            write_document(&backend, "sessions/s1", Some(timestamp(9_000_000)));
+        });
+
+    assert_eq!(deleted, 1);
+    assert!(exists(&backend, "sessions/s1"));
+    assert!(!exists(&backend, "sessions/s2"));
+}
+
+#[test]
+fn the_expiration_offset_moves_the_instant_the_sweep_deletes_a_document() {
+    let week = 604_800;
+    let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
+    write_document(&backend, "sessions/s1", Some(timestamp(1_100)));
+    backend
+        .enable_ttl_with_offset(
+            PROJECT,
+            DATABASE,
+            group("sessions"),
+            field("expiresAt"),
+            Some(LogicalDuration::from_seconds(week)),
+        )
+        .expect("enable ttl");
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
+
+    // The expiration time is the stored timestamp plus the offset, so the document that a
+    // zero offset would have deleted at 1101 survives until one week later.
+    assert_eq!(
+        backend
+            .sweep_expired_documents_now(&everything(), LogicalInstant::from_unix_seconds(1_101)),
+        0
+    );
+    assert!(exists(&backend, "sessions/s1"));
+    assert_eq!(
+        backend.sweep_expired_documents_now(
+            &everything(),
+            LogicalInstant::from_unix_seconds(1_100 + week)
+        ),
+        0
+    );
+    assert!(exists(&backend, "sessions/s1"));
+    assert_eq!(
+        backend.sweep_expired_documents_now(
+            &everything(),
+            LogicalInstant::from_unix_seconds(1_100 + week + 1)
+        ),
+        1
+    );
+    assert!(!exists(&backend, "sessions/s1"));
+}
+
 #[test]
 fn an_unexpired_document_survives_a_sweep() {
     let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));

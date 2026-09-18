@@ -551,10 +551,10 @@
       "dataPlaneConsequence": "A caller can read back the TTL policy and the single-field index configuration, so the expiry and refusal behavior each implies is observable locally.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:215",
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:311",
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:186",
-          "crates/fireemu-core-firestore/src/ttl.rs:127"
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:218",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:314",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:189",
+          "crates/fireemu-core-firestore/src/ttl.rs:226"
         ],
         "status": "implemented"
       },
@@ -566,8 +566,8 @@
       "dataPlaneConsequence": "Both documented filters are served and any other filter is refused, so an exemption set and a TTL policy set are each discoverable through a read path.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:424",
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:137",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:439",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:140",
           "crates/fireemu-core-firestore/src/index.rs:224"
         ],
         "status": "implemented"
@@ -580,9 +580,9 @@
       "dataPlaneConsequence": "The ttlConfig transition is driven at runtime and an expiry sweep applies it. The indexConfig transition is refused with UNIMPLEMENTED: the local runtime still accepts exemptions only from static configuration, so that half of the surface cannot be driven at runtime.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:332",
-          "crates/fireemu-core-firestore/src/ttl.rs:142",
-          "crates/fireemu-adapter-grpc/src/local.rs:2930",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:343",
+          "crates/fireemu-core-firestore/src/ttl.rs:242",
+          "crates/fireemu-adapter-grpc/src/local.rs:2960",
           "crates/fireemu/src/control.rs:148"
         ],
         "status": "partial"
@@ -737,9 +737,9 @@
       "dataPlaneConsequence": "A campaign that drives fields.patch can poll the operation it was handed, and it is always already done; every other long-running operation of the Admin API remains managed infrastructure the runtime does not hold. A campaign must still bound its own polling, which the collector contract handles.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:531",
-          "crates/fireemu-adapter-grpc/src/local.rs:2781",
-          "crates/fireemu-adapter-grpc/src/local.rs:2823"
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:546",
+          "crates/fireemu-adapter-grpc/src/local.rs:2796",
+          "crates/fireemu-adapter-grpc/src/local.rs:2838"
         ],
         "status": "partial"
       },
@@ -751,8 +751,8 @@
       "dataPlaneConsequence": "Enumeration is how an interrupted campaign resumes its cleanup. Locally it enumerates the field-configuration operations alone, and the record is bounded, so a campaign must not treat it as the managed operation history.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:531",
-          "crates/fireemu-adapter-grpc/src/local.rs:2835"
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:546",
+          "crates/fireemu-adapter-grpc/src/local.rs:2850"
         ],
         "status": "partial"
       },
@@ -945,7 +945,7 @@
     },
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:332",
+        "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:343",
         "crates/fireemu/src/control.rs:148",
         "crates/fireemu-core-firestore/src/index.rs:201"
       ],

@@ -2731,13 +2731,28 @@ impl LocalBackend {
         collection_group: CollectionId,
         field: FieldPath,
     ) -> Result<TtlState, TtlError> {
+        self.enable_ttl_with_offset(project, database, collection_group, field, None)
+    }
+
+    /// Enables a time-to-live policy carrying the `expirationOffset` the patch named.
+    ///
+    /// The expiration time of a document is the stored timestamp plus this offset, so the
+    /// sweep that follows honours it without any further bookkeeping.
+    pub fn enable_ttl_with_offset(
+        &self,
+        project: &str,
+        database: &str,
+        collection_group: CollectionId,
+        field: FieldPath,
+        expiration_offset: Option<fireemu_core_types::time::LogicalDuration>,
+    ) -> Result<TtlState, TtlError> {
         let key = (Some(project.to_owned()), database.to_owned());
         let mut catalogs = self
             .ttl
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let catalog = catalogs.entry(key).or_default();
-        let state = catalog.enable(collection_group, field)?;
+        let state = catalog.enable_with_offset(collection_group, field, expiration_offset)?;
         drop(catalogs);
         // The policy takes effect now, so the sweep interval is measured from now: a
         // document that was already expired when the policy was created still survives one
@@ -2927,11 +2942,36 @@ impl LocalBackend {
         self.sweep_ttl(scope, now, true)
     }
 
+    /// One forced sweep with a seam between the candidate scan and the first deletion.
+    ///
+    /// The sweep selects candidates with a query and then deletes each one under the
+    /// database's own lock, re-reading it there. `after_scan` runs between the two, which is
+    /// the only way a test can drive a write into that window deterministically; the
+    /// production entry points pass a hook that does nothing.
+    pub fn sweep_expired_documents_now_with_hook(
+        &self,
+        scope: &fireemu_core_session::tenancy::Scope,
+        now: fireemu_core_types::time::LogicalInstant,
+        after_scan: &(dyn Fn() + Sync),
+    ) -> usize {
+        self.sweep_ttl_with_hook(scope, now, true, after_scan)
+    }
+
     fn sweep_ttl(
         &self,
         scope: &fireemu_core_session::tenancy::Scope,
         now: fireemu_core_types::time::LogicalInstant,
         force: bool,
+    ) -> usize {
+        self.sweep_ttl_with_hook(scope, now, force, &|| {})
+    }
+
+    fn sweep_ttl_with_hook(
+        &self,
+        scope: &fireemu_core_session::tenancy::Scope,
+        now: fireemu_core_types::time::LogicalInstant,
+        force: bool,
+        after_scan: &(dyn Fn() + Sync),
     ) -> usize {
         let Ok(catalog) = self.database_catalog() else {
             return 0;
@@ -2959,7 +2999,7 @@ impl LocalBackend {
                 continue;
             };
             let (swept, complete) =
-                self.sweep_one_database(&project, &database, &policies, now, budget);
+                self.sweep_one_database(&project, &database, &policies, now, budget, after_scan);
             deleted += swept;
             // Only a sweep that reached the end of its work counts as having run. One that
             // stopped at the budget gives the schedule back, so the next clock move
@@ -3021,6 +3061,7 @@ impl LocalBackend {
         policies: &TtlCatalog,
         now: fireemu_core_types::time::LogicalInstant,
         budget: usize,
+        after_scan: &(dyn Fn() + Sync),
     ) -> (usize, bool) {
         let (Ok(project_id), Ok(database_id)) = (
             fireemu_core_types::ids::ProjectId::try_new(project),
@@ -3054,26 +3095,18 @@ impl LocalBackend {
             };
             let mut expired = documents
                 .into_iter()
-                .filter(|document| {
-                    fireemu_core_firestore::ttl::is_expired(
-                        &document.fields,
-                        &policy.field,
-                        expires_at,
-                    )
-                })
+                .filter(|document| policy.is_expired(&document.fields, expires_at))
                 .map(|document| document.path)
                 .peekable();
+            // The scan is over; anything a client writes from here on is seen by the
+            // re-evaluation each deletion performs, not by the selection above.
+            after_scan();
             for path in expired.by_ref() {
                 if deleted >= budget {
                     complete = false;
                     break;
                 }
-                let request = pb::DeleteDocumentRequest {
-                    name: path.resource_name(),
-                    current_document: None,
-                    request_options: None,
-                };
-                if self.delete_document(&request).is_ok() {
+                if self.delete_if_still_expired(&parent, &path, policy, expires_at) {
                     deleted += 1;
                 }
             }
@@ -3085,6 +3118,49 @@ impl LocalBackend {
             }
         }
         (deleted, complete)
+    }
+
+    /// Deletes one expiry candidate, reporting whether it was deleted.
+    ///
+    /// The candidate was chosen by a query that ran earlier, so the version it named may no
+    /// longer be the current one: a client may have extended the time-to-live field, cleared
+    /// it, written a value of another type, or deleted the document and written a new one at
+    /// the same path. Expiry is therefore decided again here, on the version current inside
+    /// the database's own critical section, and the deletion is committed in that same
+    /// section. A document whose current version is not expired is kept, which is what
+    /// production's own expiry does: the latest value of the field decides.
+    fn delete_if_still_expired(
+        &self,
+        parent: &Parent,
+        path: &DocumentPath,
+        policy: &fireemu_core_firestore::ttl::TtlPolicy,
+        expires_at: fireemu_core_firestore::value::Timestamp,
+    ) -> bool {
+        if self
+            .fault(parent.project.as_str(), "firestore.commit")
+            .is_err()
+        {
+            return false;
+        }
+        let write = Write {
+            op: WriteOp::Delete { path: path.clone() },
+            precondition: None,
+            transforms: vec![],
+        };
+        self.retry_on_contention(parent, None, std::slice::from_ref(&write), || {
+            let now = self.write_time();
+            self.with_db(parent, |db| {
+                let still_expired = db
+                    .get(path)
+                    .is_some_and(|document| policy.is_expired(&document.fields, expires_at));
+                if !still_expired {
+                    return Ok(false);
+                }
+                self.commit_with_events(parent, db, std::slice::from_ref(&write), None, now)?;
+                Ok(true)
+            })
+        })
+        .unwrap_or(false)
     }
 
     /// Runs an accepted query at the latest version and returns core documents.

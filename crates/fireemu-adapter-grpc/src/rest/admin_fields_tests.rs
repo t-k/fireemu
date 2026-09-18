@@ -794,3 +794,215 @@ fn field_configuration_does_not_shadow_the_document_routes() {
     );
     assert_eq!(status, 200, "{read}");
 }
+
+/// The state a refused patch must leave exactly as it found it: the field resource, the
+/// listing that selects TTL-configured fields, and the operation record.
+fn ttl_observations(state: &RestState) -> (Value, Value, Value) {
+    let (_, field) = call(
+        state,
+        "GET",
+        &format!("{GROUP}/fields/expiresAt"),
+        Value::Null,
+    );
+    let (_, listed) = call(
+        state,
+        "GET",
+        &format!("{GROUP}/fields?filter=ttlConfig:*"),
+        Value::Null,
+    );
+    let (_, operations) = call(
+        state,
+        "GET",
+        "/v1/projects/demo/databases/(default)/operations",
+        Value::Null,
+    );
+    (field, listed, operations)
+}
+
+fn patch_ttl(state: &RestState, config: &Value) -> (u16, Value) {
+    call(
+        state,
+        "PATCH",
+        &format!("{GROUP}/fields/expiresAt?updateMask=ttlConfig"),
+        json!({ "ttlConfig": config }),
+    )
+}
+
+#[test]
+fn a_ttl_config_that_is_not_an_object_is_refused_without_changing_anything() {
+    let state = state();
+    let before = ttl_observations(&state);
+    for config in [
+        json!(false),
+        json!(true),
+        json!(0),
+        json!(604_800),
+        json!("604800s"),
+        json!([]),
+        json!([{}]),
+    ] {
+        let (status, body) = patch_ttl(&state, &config);
+        assert_eq!(status, 400, "{config}: {body}");
+        assert_eq!(
+            body["error"]["status"],
+            json!("INVALID_ARGUMENT"),
+            "{config}"
+        );
+        assert_eq!(ttl_observations(&state), before, "{config}");
+    }
+}
+
+#[test]
+fn a_ttl_config_naming_an_unknown_setting_is_refused_without_changing_anything() {
+    let state = state();
+    let before = ttl_observations(&state);
+    let (status, body) = patch_ttl(&state, &json!({ "retention": "604800s" }));
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], json!("INVALID_ARGUMENT"));
+    assert_eq!(ttl_observations(&state), before);
+}
+
+#[test]
+fn an_empty_ttl_config_enables_the_policy_without_an_expiration_offset() {
+    let state = state();
+    let (status, body) = patch_ttl(&state, &json!({}));
+    assert_eq!(status, 200, "{body}");
+    let (_, field) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields/expiresAt"),
+        Value::Null,
+    );
+    assert_eq!(field["ttlConfig"], json!({ "state": "ACTIVE" }));
+}
+
+#[test]
+fn an_echoed_output_only_state_is_ignored_rather_than_installed() {
+    let state = state();
+    let (status, body) = patch_ttl(&state, &json!({ "state": "NEEDS_REPAIR" }));
+    assert_eq!(status, 200, "{body}");
+    let (_, field) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields/expiresAt"),
+        Value::Null,
+    );
+    assert_eq!(field["ttlConfig"]["state"], json!("ACTIVE"));
+}
+
+#[test]
+fn an_expiration_offset_is_stored_and_read_back_by_every_surface() {
+    let state = state();
+    let (status, operation) = patch_ttl(&state, &json!({ "expirationOffset": "604800s" }));
+    assert_eq!(status, 200, "{operation}");
+    let expected = json!({ "state": "ACTIVE", "expirationOffset": "604800s" });
+    assert_eq!(operation["response"]["ttlConfig"], expected);
+    let (_, field) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields/expiresAt"),
+        Value::Null,
+    );
+    assert_eq!(field["ttlConfig"], expected);
+    let (_, listed) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields?filter=ttlConfig:*"),
+        Value::Null,
+    );
+    assert_eq!(listed["fields"][0]["ttlConfig"], expected);
+}
+
+#[test]
+fn a_second_patch_replaces_the_expiration_offset_it_found() {
+    let state = state();
+    patch_ttl(&state, &json!({ "expirationOffset": "604800s" }));
+    let (status, body) = patch_ttl(&state, &json!({ "expirationOffset": "60s" }));
+    assert_eq!(status, 200, "{body}");
+    let (_, field) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields/expiresAt"),
+        Value::Null,
+    );
+    assert_eq!(field["ttlConfig"]["expirationOffset"], json!("60s"));
+
+    // A bare `{}` names no offset, so the policy carries none again.
+    let (status, body) = patch_ttl(&state, &json!({}));
+    assert_eq!(status, 200, "{body}");
+    let (_, field) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields/expiresAt"),
+        Value::Null,
+    );
+    assert_eq!(field["ttlConfig"], json!({ "state": "ACTIVE" }));
+}
+
+#[test]
+fn the_documented_expiration_offset_bounds_are_the_ones_enforced() {
+    let state = state();
+    for accepted in ["0s", "1s", "2147483647s", "60.000000000s"] {
+        let (status, body) = patch_ttl(&state, &json!({ "expirationOffset": accepted }));
+        assert_eq!(status, 200, "{accepted}: {body}");
+    }
+    let (_, field) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields/expiresAt"),
+        Value::Null,
+    );
+    assert_eq!(field["ttlConfig"]["expirationOffset"], json!("60s"));
+
+    let before = ttl_observations(&state);
+    for refused in [
+        json!("2147483648s"),
+        json!("-1s"),
+        json!("1.5s"),
+        json!("0.000000001s"),
+        json!("604800"),
+        json!("P7D"),
+        json!(604_800),
+        json!(true),
+        json!([]),
+        json!({}),
+    ] {
+        let (status, body) = patch_ttl(&state, &json!({ "expirationOffset": refused }));
+        assert_eq!(status, 400, "{refused}: {body}");
+        assert_eq!(
+            body["error"]["status"],
+            json!("INVALID_ARGUMENT"),
+            "{refused}"
+        );
+        assert_eq!(ttl_observations(&state), before, "{refused}");
+    }
+}
+
+#[test]
+fn a_null_expiration_offset_is_the_unset_one() {
+    let state = state();
+    let (status, body) = patch_ttl(&state, &json!({ "expirationOffset": Value::Null }));
+    assert_eq!(status, 200, "{body}");
+    let (_, field) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields/expiresAt"),
+        Value::Null,
+    );
+    assert_eq!(field["ttlConfig"], json!({ "state": "ACTIVE" }));
+}
+
+#[test]
+fn a_null_ttl_config_disables_the_policy_the_patch_found() {
+    let state = state();
+    patch_ttl(&state, &json!({ "expirationOffset": "604800s" }));
+    let (status, body) = patch_ttl(&state, &Value::Null);
+    assert_eq!(status, 200, "{body}");
+    let (_, field) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields/expiresAt"),
+        Value::Null,
+    );
+    assert!(field.get("ttlConfig").is_none(), "{field}");
+}

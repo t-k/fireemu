@@ -3,9 +3,11 @@
 //! Firestore expresses a time-to-live policy as a field configuration on a collection group:
 //! `projects/{p}/databases/{d}/collectionGroups/{cg}/fields/{field}` carries a `ttlConfig`
 //! whose state is output-only. A document of that collection group is eligible for deletion
-//! once the configured field holds a timestamp earlier than the current time. A value that is
-//! not a timestamp is ignored: production never deletes such a document and never reports an
-//! error for it.
+//! once the configured field holds a timestamp whose expiration time is earlier than the
+//! current time. The expiration time is the sum of the stored timestamp and the
+//! configuration's `expirationOffset`, which defaults to zero. A value that is not a
+//! timestamp is ignored: production never deletes such a document and never reports an error
+//! for it.
 //!
 //! Production deletes an eligible document asynchronously, typically within 24 hours of
 //! expiry and within 72 hours at worst, so an expired document stays readable until the
@@ -36,6 +38,87 @@ pub const DEFAULT_SWEEP_INTERVAL: LogicalDuration = LogicalDuration::from_second
 
 /// The longest sweep interval that still deletes inside the documented 72-hour bound.
 pub const MAX_SWEEP_INTERVAL: LogicalDuration = LogicalDuration::from_seconds(72 * 60 * 60);
+
+/// Largest `expirationOffset` a time-to-live configuration may carry, in seconds.
+///
+/// `google.firestore.admin.v1.Field.TtlConfig.expiration_offset` documents
+/// `expiration_offset.seconds` as between 0 and 2,147,483,647 inclusive.
+pub const MAX_EXPIRATION_OFFSET_SECONDS: i64 = 2_147_483_647;
+
+/// Why an `expirationOffset` was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OffsetError {
+    /// The value is not a `google.protobuf.Duration` in its JSON spelling.
+    NotADuration,
+    /// The duration names a fraction of a second, which the field rejects.
+    SubSecondPrecision,
+    /// The duration is negative or larger than [`MAX_EXPIRATION_OFFSET_SECONDS`].
+    OutOfRange,
+}
+
+impl fmt::Display for OffsetError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotADuration => f.write_str(
+                "ttlConfig.expirationOffset must be a duration in seconds, such as \"604800s\"",
+            ),
+            Self::SubSecondPrecision => f.write_str(
+                "ttlConfig.expirationOffset values more precise than seconds are rejected",
+            ),
+            Self::OutOfRange => write!(
+                f,
+                "ttlConfig.expirationOffset seconds must be between 0 and \
+                 {MAX_EXPIRATION_OFFSET_SECONDS} inclusive"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for OffsetError {}
+
+/// Reads an `expirationOffset` in its `google.protobuf.Duration` JSON spelling.
+///
+/// The field's own contract is narrower than a duration: the seconds must lie between 0 and
+/// [`MAX_EXPIRATION_OFFSET_SECONDS`] inclusive and anything more precise than a second is
+/// refused, so `"1.5s"` is an error rather than a rounded value.
+pub fn parse_expiration_offset(text: &str) -> Result<LogicalDuration, OffsetError> {
+    let body = text.strip_suffix('s').ok_or(OffsetError::NotADuration)?;
+    let (seconds, fraction) = match body.split_once('.') {
+        Some((seconds, fraction)) => (seconds, Some(fraction)),
+        None => (body, None),
+    };
+    let (negative, digits) = match seconds.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, seconds),
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(OffsetError::NotADuration);
+    }
+    if let Some(fraction) = fraction {
+        if fraction.is_empty()
+            || fraction.len() > 9
+            || !fraction.bytes().all(|b| b.is_ascii_digit())
+        {
+            return Err(OffsetError::NotADuration);
+        }
+        if fraction.bytes().any(|b| b != b'0') {
+            return Err(OffsetError::SubSecondPrecision);
+        }
+    }
+    let value: i64 = digits.parse().map_err(|_| OffsetError::OutOfRange)?;
+    if (negative && value != 0) || value > MAX_EXPIRATION_OFFSET_SECONDS {
+        return Err(OffsetError::OutOfRange);
+    }
+    Ok(LogicalDuration::from_seconds(value))
+}
+
+/// Writes an `expirationOffset` back in the spelling a readback reports.
+///
+/// The field carries whole seconds, so the JSON form never needs a fractional part.
+#[must_use]
+pub fn format_expiration_offset(offset: LogicalDuration) -> String {
+    format!("{}s", offset.as_seconds())
+}
 
 /// Output-only state of a time-to-live configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -116,6 +199,22 @@ pub struct TtlPolicy {
     pub field: FieldPath,
     /// Output-only state of the policy.
     pub state: TtlState,
+    /// The offset added to the stored timestamp to get the expiration time.
+    ///
+    /// `None` is an unset `expirationOffset`, which a readback omits and which behaves as
+    /// zero; `Some(zero)` is an offset the caller spelled out, which a readback reports.
+    pub expiration_offset: Option<LogicalDuration>,
+}
+
+impl TtlPolicy {
+    /// Whether a document's fields make it eligible for deletion at `now` under this policy.
+    ///
+    /// The expiration time is the stored timestamp plus the configured offset, so a policy
+    /// with a one-week offset keeps a document for one week after the timestamp it carries.
+    #[must_use]
+    pub fn is_expired(&self, fields: &BTreeMap<String, Value>, now: Timestamp) -> bool {
+        is_expired_with_offset(fields, &self.field, now, self.expiration_offset)
+    }
 }
 
 /// One database's time-to-live field configuration.
@@ -135,7 +234,8 @@ impl TtlCatalog {
         Self::default()
     }
 
-    /// Enables a time-to-live policy, returning the state a readback reports.
+    /// Enables a time-to-live policy with no `expirationOffset`, returning the state a
+    /// readback reports.
     ///
     /// Re-enabling the field that already carries the policy is accepted and leaves the
     /// state unchanged, so a campaign may replay its own patch.
@@ -144,11 +244,26 @@ impl TtlCatalog {
         collection_group: CollectionId,
         field: FieldPath,
     ) -> Result<TtlState, TtlError> {
+        self.enable_with_offset(collection_group, field, None)
+    }
+
+    /// Enables a time-to-live policy carrying an `expirationOffset`.
+    ///
+    /// Re-enabling the field that already carries the policy installs the offset the patch
+    /// names, which is what a second `fields.patch` on the same field asks for: the
+    /// configuration is replaced, not merged with the one it replaces.
+    pub fn enable_with_offset(
+        &mut self,
+        collection_group: CollectionId,
+        field: FieldPath,
+        expiration_offset: Option<LogicalDuration>,
+    ) -> Result<TtlState, TtlError> {
         if field.is_document_name() {
             return Err(TtlError::DocumentNameField);
         }
-        if let Some(existing) = self.entries.get(&collection_group) {
+        if let Some(existing) = self.entries.get_mut(&collection_group) {
             if existing.field == field {
+                existing.expiration_offset = expiration_offset;
                 return Ok(existing.state);
             }
             return Err(TtlError::ConflictingField {
@@ -168,6 +283,7 @@ impl TtlCatalog {
             TtlPolicy {
                 field,
                 state: TtlState::Active,
+                expiration_offset,
             },
         );
         Ok(TtlState::Active)
@@ -237,10 +353,32 @@ impl<'a> IntoIterator for &'a TtlCatalog {
 /// does: a non-timestamp value is ignored rather than refused.
 #[must_use]
 pub fn is_expired(fields: &BTreeMap<String, Value>, field: &FieldPath, now: Timestamp) -> bool {
-    matches!(
-        crate::store::get_field(fields, field),
-        Some(Value::Timestamp(at)) if *at < now
-    )
+    is_expired_with_offset(fields, field, now, None)
+}
+
+/// Whether a document's fields make it eligible for deletion at `now` under an offset.
+///
+/// The expiration time is the stored timestamp plus `offset`, so the document is eligible
+/// once that sum lies before `now`. The sum is computed in nanoseconds wide enough that an
+/// offset added to the largest representable timestamp cannot wrap: an expiration time past
+/// the end of the timestamp range is simply never reached.
+#[must_use]
+pub fn is_expired_with_offset(
+    fields: &BTreeMap<String, Value>,
+    field: &FieldPath,
+    now: Timestamp,
+    offset: Option<LogicalDuration>,
+) -> bool {
+    let Some(Value::Timestamp(at)) = crate::store::get_field(fields, field) else {
+        return false;
+    };
+    let expires_at = total_nanos(*at).saturating_add(offset.map_or(0, LogicalDuration::as_nanos));
+    expires_at < total_nanos(now)
+}
+
+/// A timestamp as a count of nanoseconds since the epoch.
+fn total_nanos(at: Timestamp) -> i128 {
+    i128::from(at.seconds()) * 1_000_000_000 + i128::from(at.nanos())
 }
 
 /// Converts a logical instant to the timestamp a stored value is compared against.
@@ -529,6 +667,197 @@ mod tests {
         assert_eq!(
             schedule.last_swept_at(),
             Some(LogicalInstant::from_unix_seconds(10))
+        );
+    }
+
+    fn ttl_policy(field_path: &str, offset: Option<LogicalDuration>) -> TtlPolicy {
+        TtlPolicy {
+            field: path(field_path),
+            state: TtlState::Active,
+            expiration_offset: offset,
+        }
+    }
+
+    #[test]
+    fn an_offset_moves_the_expiration_time_past_the_stored_timestamp() {
+        let mut fields = BTreeMap::new();
+        fields.insert("expiresAt".to_owned(), Value::Timestamp(at(1_000)));
+        let week = LogicalDuration::from_seconds(604_800);
+        let policy = ttl_policy("expiresAt", Some(week));
+        // The expiration time is the sum, so nothing expires until one offset has passed.
+        assert!(!policy.is_expired(&fields, at(1_000 + 604_800)));
+        assert!(policy.is_expired(&fields, at(1_000 + 604_801)));
+        // The same document under no offset is already expired.
+        assert!(ttl_policy("expiresAt", None).is_expired(&fields, at(1_001)));
+    }
+
+    #[test]
+    fn an_offset_spelled_as_zero_behaves_as_no_offset() {
+        let mut fields = BTreeMap::new();
+        fields.insert("expiresAt".to_owned(), Value::Timestamp(at(1_000)));
+        let zero = ttl_policy("expiresAt", Some(LogicalDuration::from_seconds(0)));
+        assert!(!zero.is_expired(&fields, at(1_000)));
+        assert!(zero.is_expired(&fields, at(1_001)));
+    }
+
+    #[test]
+    fn an_offset_never_expires_a_value_that_is_not_a_timestamp() {
+        let mut fields = BTreeMap::new();
+        fields.insert("expiresAt".to_owned(), Value::Integer(1));
+        let policy = ttl_policy("expiresAt", Some(LogicalDuration::from_seconds(1)));
+        assert!(!policy.is_expired(&fields, at(1_000_000)));
+    }
+
+    #[test]
+    fn an_offset_on_the_largest_timestamp_is_never_reached() {
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "expiresAt".to_owned(),
+            Value::Timestamp(Timestamp::new(Timestamp::MAX_SECONDS, 999_999_999).expect("max")),
+        );
+        let policy = ttl_policy(
+            "expiresAt",
+            Some(LogicalDuration::from_seconds(MAX_EXPIRATION_OFFSET_SECONDS)),
+        );
+        assert!(!policy.is_expired(&fields, at(Timestamp::MAX_SECONDS)));
+    }
+
+    #[test]
+    fn enabling_with_an_offset_reports_it_on_readback() {
+        let mut catalog = TtlCatalog::new();
+        let week = LogicalDuration::from_seconds(604_800);
+        catalog
+            .enable_with_offset(group("orders"), path("expiresAt"), Some(week))
+            .expect("enable");
+        assert_eq!(
+            catalog
+                .policy(&group("orders"))
+                .expect("policy")
+                .expiration_offset,
+            Some(week)
+        );
+    }
+
+    #[test]
+    fn re_enabling_the_same_field_replaces_the_offset() {
+        let mut catalog = TtlCatalog::new();
+        catalog
+            .enable_with_offset(
+                group("orders"),
+                path("expiresAt"),
+                Some(LogicalDuration::from_seconds(60)),
+            )
+            .expect("enable");
+        catalog
+            .enable_with_offset(group("orders"), path("expiresAt"), None)
+            .expect("re-enable");
+        assert_eq!(
+            catalog
+                .policy(&group("orders"))
+                .expect("policy")
+                .expiration_offset,
+            None
+        );
+        assert_eq!(catalog.len(), 1);
+    }
+
+    #[test]
+    fn a_conflicting_field_leaves_the_offset_of_the_policy_in_force() {
+        let mut catalog = TtlCatalog::new();
+        let minute = LogicalDuration::from_seconds(60);
+        catalog
+            .enable_with_offset(group("orders"), path("expiresAt"), Some(minute))
+            .expect("enable");
+        catalog
+            .enable_with_offset(group("orders"), path("purgeAt"), None)
+            .expect_err("conflicting field");
+        assert_eq!(
+            catalog
+                .policy(&group("orders"))
+                .expect("policy")
+                .expiration_offset,
+            Some(minute)
+        );
+    }
+
+    #[test]
+    fn a_whole_second_duration_is_the_offset_it_names() {
+        assert_eq!(
+            parse_expiration_offset("604800s"),
+            Ok(LogicalDuration::from_seconds(604_800))
+        );
+        assert_eq!(
+            parse_expiration_offset("0s"),
+            Ok(LogicalDuration::from_seconds(0))
+        );
+        assert_eq!(
+            parse_expiration_offset("-0s"),
+            Ok(LogicalDuration::from_seconds(0))
+        );
+        assert_eq!(
+            parse_expiration_offset("60.000000000s"),
+            Ok(LogicalDuration::from_seconds(60))
+        );
+    }
+
+    #[test]
+    fn a_duration_more_precise_than_seconds_is_refused() {
+        assert_eq!(
+            parse_expiration_offset("1.5s"),
+            Err(OffsetError::SubSecondPrecision)
+        );
+        assert_eq!(
+            parse_expiration_offset("0.000000001s"),
+            Err(OffsetError::SubSecondPrecision)
+        );
+    }
+
+    #[test]
+    fn a_duration_outside_the_documented_range_is_refused() {
+        assert_eq!(parse_expiration_offset("-1s"), Err(OffsetError::OutOfRange));
+        assert_eq!(
+            parse_expiration_offset(&format!("{}s", MAX_EXPIRATION_OFFSET_SECONDS + 1)),
+            Err(OffsetError::OutOfRange)
+        );
+        assert_eq!(
+            parse_expiration_offset(&format!("{MAX_EXPIRATION_OFFSET_SECONDS}s")),
+            Ok(LogicalDuration::from_seconds(MAX_EXPIRATION_OFFSET_SECONDS))
+        );
+        assert_eq!(
+            parse_expiration_offset("99999999999999999999s"),
+            Err(OffsetError::OutOfRange)
+        );
+    }
+
+    #[test]
+    fn a_value_that_is_not_a_duration_is_refused() {
+        for text in [
+            "604800",
+            "s",
+            "",
+            "abc",
+            "1e3s",
+            " 1s",
+            "1.s",
+            "1.0000000000s",
+        ] {
+            assert_eq!(
+                parse_expiration_offset(text),
+                Err(OffsetError::NotADuration),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_offset_reads_back_in_the_spelling_it_was_given() {
+        assert_eq!(
+            format_expiration_offset(LogicalDuration::from_seconds(604_800)),
+            "604800s"
+        );
+        assert_eq!(
+            format_expiration_offset(LogicalDuration::from_seconds(0)),
+            "0s"
         );
     }
 

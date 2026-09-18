@@ -35,6 +35,7 @@ _DIAGNOSTIC_LIMIT = 512
 _WORKER_SHA256 = "99db0c3cfe940a403ac010ee09b6534936151d7fedda1dc5d808dc9dafa1b745"
 
 Exchange = Callable[[str, str, bytes | None, dict[str, str], float, int], Any]
+Clock = Callable[[], float]
 
 
 def _compact(value: Any) -> bytes:
@@ -124,7 +125,10 @@ def _diagnostic(raw: bytes) -> str:
 
 
 def _read_bounded(
-    response: Any, cap: int, deadline: float | None = None
+    response: Any,
+    cap: int,
+    deadline: float | None = None,
+    clock: Clock = time.monotonic,
 ) -> tuple[bytes, str | None]:
     declared = _header(getattr(response, "headers", {}), "Content-Length")
     if declared:
@@ -140,11 +144,9 @@ def _read_bounded(
     chunks: list[bytes] = []
     total = 0
     while True:
-        if deadline is not None and time.monotonic() >= deadline:
+        if deadline is not None and clock() >= deadline:
             return b"".join(chunks), "response-timeout"
-        remaining = (
-            None if deadline is None else max(0.001, deadline - time.monotonic())
-        )
+        remaining = None if deadline is None else max(0.001, deadline - clock())
         socket = getattr(
             getattr(getattr(response, "fp", None), "raw", None), "_sock", None
         )
@@ -304,14 +306,20 @@ def _request_impl(
     *,
     exchange: Exchange | None = None,
     timeout: float = TIMEOUT,
+    clock: Clock = time.monotonic,
 ) -> dict[str, Any]:
-    """Send one fixed-origin operation, or return a typed transport failure."""
+    """Send one fixed-origin operation, or return a typed transport failure.
+
+    ``clock`` is the monotonic time source used for the one total wire
+    deadline. It exists so tests can drive the deadline with simulated time;
+    production always uses ``time.monotonic``.
+    """
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
         raise TypeError("timeout must be a finite number in 0..12 seconds")
     if not math.isfinite(timeout) or not 0 < timeout <= TIMEOUT:
         raise ValueError("timeout must be a finite number in 0..12 seconds")
     url, method, body, headers = prepare(plan, phase, index, operation, token)
-    deadline = time.monotonic() + timeout
+    deadline = clock() + timeout
     try:
         if exchange is None:
             status, response_headers, raw_body, failure = _process_exchange(
@@ -323,13 +331,15 @@ def _request_impl(
                 method,
                 body,
                 headers,
-                max(0.001, deadline - time.monotonic()),
+                max(0.001, deadline - clock()),
                 RESPONSE_BYTES,
             )
             try:
                 status = _status(getattr(response, "status", None))
                 response_headers = getattr(response, "headers", {})
-                raw_body, failure = _read_bounded(response, RESPONSE_BYTES, deadline)
+                raw_body, failure = _read_bounded(
+                    response, RESPONSE_BYTES, deadline, clock
+                )
             finally:
                 close = getattr(response, "close", None)
                 if callable(close):
@@ -343,7 +353,7 @@ def _request_impl(
     if status is None:
         return _transport_failure(failure or "transport-error")
     status = _status(status)
-    if time.monotonic() >= deadline and failure is None:
+    if clock() >= deadline and failure is None:
         failure = "response-timeout"
     receipt = _result(status, response_headers, raw_body, failure, body)
     receipt["requestBytes"] = len(body or b"")

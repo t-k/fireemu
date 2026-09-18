@@ -24,6 +24,8 @@ from request_bytes_remote_transport import (
 )
 
 NONCE = "0123456789abcdef0123456789abcdef"
+# Generous wall-clock ceiling for the one real-time deadline smoke test.
+WIRE_SMOKE_BUDGET_SECONDS = 30.0
 
 
 def request(*args, exchange=None, **kwargs):
@@ -59,6 +61,38 @@ class FakeResponse:
 
     def close(self):
         self.closed = True
+
+
+class FakeClock:
+    """Monotonic clock that only advances when a test says it does."""
+
+    def __init__(self, start=1_000.0):
+        self._start = start
+        self.now = start
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+    def elapsed(self):
+        return self.now - self._start
+
+
+class TrickleResponse(FakeResponse):
+    """Response that yields one byte per read and burns simulated wire time."""
+
+    def __init__(self, status, headers, body, *, clock, chunk_cost):
+        super().__init__(status, headers, body)
+        self._clock = clock
+        self._chunk_cost = chunk_cost
+        self.reads = 0
+
+    def read(self, size=-1):
+        self.reads += 1
+        self._clock.advance(self._chunk_cost)
+        return super().read(1)
 
 
 def response(status, headers, body, *, error=None):
@@ -216,8 +250,52 @@ def test_timeout_is_transport_failure_and_does_not_retry():
     assert calls == 1
 
 
-def test_trickle_response_obeys_one_total_wire_deadline():
+# Steps are binary-exact fractions of the wire budget so the simulated clock
+# accumulates without rounding and the expected read count is exact.
+@pytest.mark.parametrize("chunk_cost", [0.25, 0.125, 0.0625])
+def test_trickle_response_obeys_one_total_wire_deadline(chunk_cost):
     plan, operation = plan_and_commit()
+    clock = FakeClock()
+    timeout = 0.5
+    trickle = TrickleResponse(
+        200, {"Content-Length": "100"}, b"x" * 100, clock=clock, chunk_cost=chunk_cost
+    )
+    budgets = []
+
+    def exchange(_url, _method, _body, _headers, budget, _cap):
+        budgets.append(budget)
+        return trickle
+
+    result = request(
+        plan,
+        "observation",
+        17,
+        operation,
+        "token",
+        timeout=timeout,
+        exchange=exchange,
+        clock=clock,
+    )
+
+    # The deadline is enforced on simulated time only: the read loop stops
+    # after exactly as many trickled chunks as fit inside the wire budget.
+    expected_reads = int(timeout / chunk_cost)
+    assert trickle.reads == expected_reads
+    assert result["kind"] == "typed-receipt"
+    assert result["complete"] is False
+    assert result["failure"] == "timeout"
+    assert result["rawBodyBytes"] == expected_reads
+    assert budgets == [timeout]
+    assert clock.elapsed() == pytest.approx(timeout)
+    assert trickle.closed is True
+
+
+def test_trickle_response_wire_deadline_smoke_uses_real_time():
+    # Real-time smoke check for the same property. The budget is generous by
+    # design: it only proves the call returns promptly relative to a stalled
+    # wire, so a loaded host cannot turn it into a flake.
+    plan, operation = plan_and_commit()
+    timeout = 0.01
     started = time.monotonic()
     result = request(
         plan,
@@ -225,13 +303,13 @@ def test_trickle_response_obeys_one_total_wire_deadline():
         17,
         operation,
         "token",
-        timeout=0.01,
+        timeout=timeout,
         exchange=lambda *_: (
-            time.sleep(0.02) or response(200, {"Content-Length": "1"}, b"x")
+            time.sleep(timeout * 2) or response(200, {"Content-Length": "1"}, b"x")
         ),
     )
     assert result["complete"] is False
-    assert time.monotonic() - started < 1
+    assert time.monotonic() - started < WIRE_SMOKE_BUDGET_SECONDS
 
 
 def test_incomplete_read_is_transport_failure_with_partial_bytes():

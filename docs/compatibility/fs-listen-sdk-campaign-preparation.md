@@ -144,7 +144,12 @@ comparator can answer `MATCH`, but only after both receipts pass admission:
   the digests the receipt declares, so a copied digest does not pass;
 - the production receipt names the campaign permission, its campaign is
   `PREPARED`, its resolved SDK identities match the manifest, and it carries an
-  ordered transport timeline with connect, disconnect and reconnect entries;
+  ordered transport timeline with connect, disconnect and reconnect entries.
+  The Node SDK does not surface wire frames, so the collector derives that
+  timeline from what it can observe: the first server-backed snapshot, a
+  listener falling back to the local cache, and its recovery. Each entry records
+  what it was derived from and which case produced it, so it is never read as a
+  transport frame;
 - both receipts report an unexhausted budget, a complete cleanup, closed
   listeners and no invariant violations;
 - neither receipt carries secret material.

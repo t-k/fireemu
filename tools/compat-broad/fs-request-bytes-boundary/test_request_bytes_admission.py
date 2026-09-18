@@ -220,7 +220,8 @@ def owner_permission(plan, commit, artifact_digest, inputs, baseline):
         "recoveryOwner": "offline-recovery",
         "gateReservationSeconds": {
             "upload": 60.0,
-            "slot": 2.0,
+            "observationSlot": 2.0,
+            "recoverySlot": 2.0,
             "slotBasis": admission.PLANNING_ASSUMPTION,
         },
         "issuedAt": time.time() - 1,
@@ -919,18 +920,31 @@ def test_the_gate_reservations_are_owner_declared_and_must_fit(tmp_path):
     built = Admission(tmp_path)
     declared = admission.gate_reservations(built.permission)
     assert declared["upload"] == 60.0
+    assert declared["observationSlot"] == 2.0
+    assert declared["recoverySlot"] == 2.0
     # The small-slot figure has no measurement behind it and says so.
     assert declared["slotBasis"] == admission.PLANNING_ASSUMPTION
     assert "slotBasisRecord" not in declared
-    assumption = {"upload": 60.0, "slot": 2.0, "slotBasis": "owner-planning-assumption"}
+    assumption = {
+        "upload": 60.0,
+        "observationSlot": 2.0,
+        "recoverySlot": 2.0,
+        "slotBasis": "owner-planning-assumption",
+    }
     for damage in (
         {"gateReservationSeconds": None},
         {"gateReservationSeconds": {"upload": 60.0}},
         {"gateReservationSeconds": {**assumption, "upload": 12.0}},
-        {"gateReservationSeconds": {**assumption, "slot": 0}},
-        {"gateReservationSeconds": {**assumption, "slot": True}},
+        {"gateReservationSeconds": {**assumption, "recoverySlot": 0}},
+        {"gateReservationSeconds": {**assumption, "observationSlot": True}},
         # A figure with no declared basis is the v10 failure in a new costume.
-        {"gateReservationSeconds": {"upload": 60.0, "slot": 2.0}},
+        {
+            "gateReservationSeconds": {
+                "upload": 60.0,
+                "observationSlot": 2.0,
+                "recoverySlot": 2.0,
+            }
+        },
         {"gateReservationSeconds": {**assumption, "slotBasis": "measured"}},
         # A measured figure must name the record it was read from.
         {
@@ -947,12 +961,63 @@ def test_the_gate_reservations_are_owner_declared_and_must_fit(tmp_path):
     execution = campaign.execution_plan(built.plan)
     # A slot reservation that cannot fit 153 recovery slots in the window is
     # refused by arithmetic, not by a comment.
+    fitting = {
+        "upload_seconds": 60.0,
+        "observation_slot_seconds": 2.0,
+        "recovery_slot_seconds": 2.0,
+    }
     with pytest.raises(ValueError, match="do not fit"):
-        campaign.gate_plan(execution, upload_seconds=60.0, slot_seconds=13.0)
+        campaign.gate_plan(execution, **{**fitting, "recovery_slot_seconds": 13.0})
     with pytest.raises(ValueError, match="above the enforced transport ceiling"):
-        campaign.gate_plan(execution, upload_seconds=61.0, slot_seconds=2.0)
+        campaign.gate_plan(execution, **{**fitting, "upload_seconds": 61.0})
     with pytest.raises(ValueError, match="declared upload_seconds required"):
-        campaign.gate_plan(execution, upload_seconds=None, slot_seconds=2.0)
+        campaign.gate_plan(execution, **{**fitting, "upload_seconds": None})
+
+
+def test_a_three_second_recovery_slot_needs_a_wall_the_budget_does_not_publish(
+    tmp_path,
+):
+    """The reservation a production round trip deserves does not fit today.
+
+    At 2.0 seconds the recovery phase reserves 344.25 against the 345 the plan
+    declares, so a single slot slower than about 2.005 seconds makes the Gate
+    refuse mid-cleanup, which is the worst place to stop: the run holds no
+    creation proof for what it has not deleted yet. Three seconds is an order of
+    magnitude over a few hundred millisecond round trip, and it needs a wall the
+    published budget does not carry. The deficit is named rather than rounded
+    away, and the budget is the preparation lane's artifact to change.
+    """
+    built = Admission(tmp_path)
+    execution = campaign.execution_plan(built.plan)
+    published = campaign.budget_document()["budget"]
+    assert published["maxDurationSeconds"] == 900
+    assert published["recoveryWindow"]["reserveSeconds"] == 300
+
+    fitting = campaign.gate_plan(
+        execution,
+        upload_seconds=60.0,
+        observation_slot_seconds=2.0,
+        recovery_slot_seconds=2.0,
+    )
+    recovery = sum(
+        slot["seconds"] + campaign.GATE_INTERVAL_SECONDS
+        for job in fitting["jobs"].values()
+        for slot in job["schedule"]
+        if slot["phase"] == "recovery"
+    )
+    # Under a second of slack across the whole cleanup phase.
+    assert fitting["recoverySeconds"] - recovery < 1
+    # The published recovery reserve is already exceeded by the Gate's split.
+    assert fitting["recoverySeconds"] > published["recoveryWindow"]["reserveSeconds"]
+
+    for observation_slot, expected in ((2.0, "909 s"), (3.0, "1011 s")):
+        with pytest.raises(ValueError, match=f"need {expected} against"):
+            campaign.gate_plan(
+                execution,
+                upload_seconds=60.0,
+                observation_slot_seconds=observation_slot,
+                recovery_slot_seconds=3.0,
+            )
 
 
 def test_both_owner_fields_refuse_every_placeholder_shape(tmp_path):

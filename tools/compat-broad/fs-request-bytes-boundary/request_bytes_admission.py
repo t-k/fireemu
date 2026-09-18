@@ -150,8 +150,11 @@ def gate_reservations(permission) -> dict:
 
     No single reservation covers this campaign: the three 10 MiB Commits are
     bounded by the transport at 60 seconds while the recovery window allows at
-    most 1.71 seconds a slot. The upload figure is the published ceiling, which
-    the transport enforces. The small-slot figure has no measurement behind it:
+    most 1.71 seconds a slot once the Gate's 0.25 second spacing is taken off
+    the 1.96 the window allows. The upload figure is the published ceiling,
+    which the transport enforces. Observation and recovery declare separately,
+    because the recovery phase is where a reservation that is too tight does the
+    most damage: the Gate refuses mid-cleanup and leaves documents behind. The small-slot figure has no measurement behind it:
     the lane records outcomes, not durations, so nothing in the tree says how
     long a small request takes. It is therefore an owner planning bound, and the
     permission has to say which it is. A figure declared as measured must name
@@ -161,11 +164,12 @@ def gate_reservations(permission) -> dict:
     declared = permission.get("gateReservationSeconds")
     if not isinstance(declared, dict) or set(declared) - {"slotBasisRecord"} != {
         "upload",
-        "slot",
+        "observationSlot",
+        "recoverySlot",
         "slotBasis",
     }:
         raise ValueError("owner declared Gate reservations required")
-    for name in ("upload", "slot"):
+    for name in ("upload", "observationSlot", "recoverySlot"):
         value = declared[name]
         if type(value) not in (int, float) or isinstance(value, bool) or value <= 0:
             raise ValueError("owner declared Gate reservations required")
@@ -189,7 +193,8 @@ def gate_plan_for(inputs, permission) -> dict:
     return campaign.gate_plan(
         campaign.execution_plan(inputs["plan"]),
         upload_seconds=declared["upload"],
-        slot_seconds=declared["slot"],
+        observation_slot_seconds=declared["observationSlot"],
+        recovery_slot_seconds=declared["recoverySlot"],
     )
 
 
@@ -222,10 +227,12 @@ def _approve(
     # The Gate reservations are owner-declared planning bounds, and compiling
     # the Gate plan here proves they fit the campaign's wall and recovery split
     # before anything is frozen around them.
+    declared = gate_reservations(permission)
     campaign.gate_plan(
         campaign.execution_plan(plan),
-        upload_seconds=gate_reservations(permission)["upload"],
-        slot_seconds=gate_reservations(permission)["slot"],
+        upload_seconds=declared["upload"],
+        observation_slot_seconds=declared["observationSlot"],
+        recovery_slot_seconds=declared["recoverySlot"],
     )
     # A permission always names where its production baseline came from, even
     # where the observation journals themselves are not available to re-read.

@@ -410,7 +410,14 @@ def _probe_slice(plan, probe_index):
     return observation, recovery
 
 
-def _probe_schedule(plan, probe_index, *, upload_seconds, slot_seconds):
+def _probe_schedule(
+    plan,
+    probe_index,
+    *,
+    upload_seconds,
+    observation_slot_seconds,
+    recovery_slot_seconds,
+):
     """The campaign schedule projected onto one probe's own slot indices.
 
     The campaign's `executionSchedule` indexes the whole plan; a Gate job indexes
@@ -428,10 +435,15 @@ def _probe_schedule(plan, probe_index, *, upload_seconds, slot_seconds):
             continue
         operation = plan[entry["phase"]][entry["index"]]
         carries_body = operation.get("body") is not None
+        small = (
+            observation_slot_seconds
+            if entry["phase"] == "observation"
+            else recovery_slot_seconds
+        )
         slot = {
             "phase": entry["phase"],
             "index": entry["index"] % span,
-            "seconds": upload_seconds if carries_body else slot_seconds,
+            "seconds": upload_seconds if carries_body else small,
         }
         if operation["method"] != "POST":
             # Absent means creating, so only a slot that cannot write says so.
@@ -440,7 +452,14 @@ def _probe_schedule(plan, probe_index, *, upload_seconds, slot_seconds):
     return entries
 
 
-def gate_plan(plan, *, upload_seconds, slot_seconds, wall_seconds=None):
+def gate_plan(
+    plan,
+    *,
+    upload_seconds,
+    observation_slot_seconds,
+    recovery_slot_seconds,
+    wall_seconds=None,
+):
     """Project the compiled campaign onto the shared Gate schema.
 
     Both reservations are required arguments with no default. The three 10 MiB
@@ -452,7 +471,8 @@ def gate_plan(plan, *, upload_seconds, slot_seconds, wall_seconds=None):
     """
     for name, value in (
         ("upload_seconds", upload_seconds),
-        ("slot_seconds", slot_seconds),
+        ("observation_slot_seconds", observation_slot_seconds),
+        ("recovery_slot_seconds", recovery_slot_seconds),
     ):
         if type(value) not in (int, float) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"declared {name} required")
@@ -462,7 +482,11 @@ def gate_plan(plan, *, upload_seconds, slot_seconds, wall_seconds=None):
     for index, probe in enumerate(PROBE_SCOPES):
         observation, recovery = _probe_slice(plan, index)
         schedule = _probe_schedule(
-            plan, index, upload_seconds=upload_seconds, slot_seconds=slot_seconds
+            plan,
+            index,
+            upload_seconds=upload_seconds,
+            observation_slot_seconds=observation_slot_seconds,
+            recovery_slot_seconds=recovery_slot_seconds,
         )
         jobs[gate_job_name(probe)] = {
             "resources": [
@@ -489,16 +513,23 @@ def gate_plan(plan, *, upload_seconds, slot_seconds, wall_seconds=None):
             if slot["phase"] == "observation"
         )
     )
+    # The deficit is named, because "does not fit" is the message that sends
+    # someone to guess at the numbers instead of reading them.
     if not 0 < recovery_time < wall or observation_time > wall - recovery_time:
         raise ValueError(
-            "declared reservations do not fit the campaign wall and recovery split"
+            "declared reservations do not fit the campaign wall: observation "
+            f"{observation_time} s and recovery {recovery_time} s need "
+            f"{observation_time + recovery_time} s against a published wall of "
+            f"{wall} s"
         )
     return {
         "contract": GATE_CONTRACT,
         "campaignId": CAMPAIGN,
         "nonce": plan["nonce"],
         "jobSlots": len(PROBE_SCOPES),
-        "requestSeconds": slot_seconds,
+        # The plan-wide fallback for a slot that declares none; every slot in
+        # this schedule declares its own, so this is the floor, not the figure.
+        "requestSeconds": min(observation_slot_seconds, recovery_slot_seconds),
         "wallSeconds": wall,
         "recoverySeconds": recovery_time,
         "intervalSeconds": GATE_INTERVAL_SECONDS,

@@ -23,6 +23,11 @@ CASE_KINDS = ("observation", "control", "negative")
 
 SAME_SECOND_CASE_ID = "revocation-same-second-session"
 
+#: What a boundary control must have done on the side that recorded it. A boundary row
+#: means nothing unless the older session was refused and the newer one accepted on that
+#: same side; two sides agreeing on the wrong answer place no boundary at all.
+CONTROL_OUTCOMES = ("accepted", "refused")
+
 #: The vocabulary a receipt may use to describe an accepted response. Each name is a
 #: decidable check over decoded non-secret claim shapes, never over token bytes.
 ASSERTION_NAMES = (
@@ -76,7 +81,7 @@ def _case(
     inputs: dict[str, Any] | None = None,
     nondeterminism: str = "NONE",
     covered_elsewhere: tuple[str, ...] = (),
-    boundary_controls: dict[str, str] | None = None,
+    boundary_controls: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     case: dict[str, Any] = {
         "id": case_id,
@@ -92,7 +97,12 @@ def _case(
         "requiresSigning": group in SIGNING_DEPENDENT_GROUPS,
     }
     if boundary_controls is not None:
-        case["boundaryControls"] = dict(boundary_controls)
+        for control in boundary_controls.values():
+            if control["requires"] not in CONTROL_OUTCOMES:
+                raise ValueError(f"a control must require one of {CONTROL_OUTCOMES}")
+        case["boundaryControls"] = {
+            position: dict(control) for position, control in boundary_controls.items()
+        }
     return case
 
 
@@ -161,8 +171,14 @@ def observation_cases() -> list[dict[str, Any]]:
             inputs={"authTimeMinusValidSinceSeconds": 0},
             nondeterminism="SAME_SECOND_BOUNDARY",
             boundary_controls={
-                "below": "revocation-older-session-rejected",
-                "above": "revocation-newer-session-accepted",
+                "below": {
+                    "case": "revocation-older-session-rejected",
+                    "requires": "refused",
+                },
+                "above": {
+                    "case": "revocation-newer-session-accepted",
+                    "requires": "accepted",
+                },
             },
         ),
         _case(

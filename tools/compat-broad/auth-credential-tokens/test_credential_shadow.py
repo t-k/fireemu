@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -23,12 +24,21 @@ from credential_collector import (
     build_receipt,
     claim_shape,
     cleanup_report,
+    enter_recovery,
+    mark_deleted,
     new_budget,
     new_tracker,
     owned_email,
+    reserve_request,
+    subjects_match,
     track_account,
 )
+from credential_comparator import compare
 from credential_plan import BUDGET
+
+
+def _classes(report: dict) -> dict:
+    return {row["caseId"]: row["classification"] for row in report["rows"]}
 
 
 def test_transport_refuses_a_target_outside_the_loopback_interface() -> None:
@@ -228,7 +238,7 @@ def test_an_addressless_account_skips_the_address_lookup_entirely() -> None:
     assert cleanup_report(tracker)["addressReadbacks"] == 0
 
 
-def test_a_cleanup_failure_keeps_the_receipt_incomplete() -> None:
+def test_a_cleanup_failure_keeps_the_receipt_uncomparable() -> None:
     email = owned_email(new_tracker("a" * 32), 0)
     tracker = _tracker_with("uid-1", email)
     poster = _stub([(200, {}), (429, {"error": {"message": "RESOURCE_EXHAUSTED"}})])
@@ -242,7 +252,11 @@ def test_a_cleanup_failure_keeps_the_receipt_incomplete() -> None:
     receipt = build_receipt(
         side="local", rows=rows, tracker=tracker, budget=new_budget(60, 600, 0.05)
     )
-    assert receipt["recordingComplete"] is False
+    # The rows were observed, so the recording is complete; the cleanup is not, and that
+    # alone is enough to keep the receipt out of a comparison.
+    assert receipt["recordingComplete"] is True
+    assert receipt["cleanup"]["cleanupComplete"] is False
+    assert receipt["cleanup"]["remainingAccounts"] == 1
 
 
 # --- a stopped run still records what it observed -----------------------------
@@ -327,3 +341,481 @@ def test_the_shadow_budget_cannot_drift_from_the_declared_campaign_budget() -> N
     # A local run spends nothing, so its cost ceiling is zero rather than the campaign's.
     assert budget["maxCostUsd"] == 0.0
     assert budget["enforced"] is True
+
+
+# --- an in-memory Identity service the real case run can be driven against -------
+
+SESSION_ISSUER = "https://session.firebase.google.com/demo-app"
+TOKEN_ISSUER = "https://securetoken.google.com/demo-app"
+COOKIE_MIN_SECONDS = 300
+COOKIE_MAX_SECONDS = 1209600
+RESERVED_COOKIE_CLAIMS = ("iss", "sub", "aud", "iat", "exp", "auth_time")
+
+
+def _payload(token: str) -> dict:
+    body = token.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+
+
+def _refused(code: str) -> tuple[int, dict]:
+    return 400, {"error": {"message": code}}
+
+
+def _service(*, cookie_subject: str | None = None) -> dict:
+    """A minimal in-memory Identity service, enough to drive `run_cases` end to end.
+
+    Every request the declared case list makes is answered here, so the shadow's own
+    reasoning is what the resulting rows measure. `cookie_subject` replaces the subject
+    a session cookie carries, which is the mutant the subject check must catch.
+    """
+    state: dict = {
+        "now": int(time.time()),
+        "accounts": {},
+        "sessions": {},
+        "sent": [],
+    }
+
+    def issue(session: dict) -> str:
+        account = state["accounts"][session["uid"]]
+        claims = {**account["customAttributes"], **session["claims"]}
+        return shadow.unsigned_jwt(
+            {
+                "iss": TOKEN_ISSUER,
+                "sub": session["uid"],
+                "auth_time": session["authTime"],
+                "iat": state["now"],
+                "exp": state["now"] + 3600,
+                **claims,
+            }
+        )
+
+    def start_session(uid: str, claims: dict | None = None) -> dict:
+        refresh_token = f"refresh-{len(state['sessions'])}"
+        session = {
+            "uid": uid,
+            "authTime": state["now"],
+            "claims": dict(claims or {}),
+            "refreshToken": refresh_token,
+        }
+        state["sessions"][refresh_token] = session
+        return session
+
+    def signed_in(session: dict) -> tuple[int, dict]:
+        return 200, {
+            "localId": session["uid"],
+            "idToken": issue(session),
+            "refreshToken": session["refreshToken"],
+        }
+
+    def revoked(id_token: str) -> bool:
+        claims = _payload(id_token)
+        account = state["accounts"].get(claims.get("sub"))
+        return account is None or claims.get("auth_time", 0) < account["validSince"]
+
+    def create_session_cookie(body: dict) -> tuple[int, dict]:
+        if revoked(body["idToken"]):
+            return _refused("TOKEN_EXPIRED")
+        duration = int(body.get("validDuration", COOKIE_MAX_SECONDS))
+        if not COOKIE_MIN_SECONDS <= duration <= COOKIE_MAX_SECONDS:
+            return _refused("INVALID_DURATION")
+        source = _payload(body["idToken"])
+        carried = {
+            name: value
+            for name, value in source.items()
+            if name not in RESERVED_COOKIE_CLAIMS
+        }
+        return 200, {
+            "sessionCookie": shadow.unsigned_jwt(
+                {
+                    "iss": SESSION_ISSUER,
+                    "sub": cookie_subject or source["sub"],
+                    "auth_time": source["auth_time"],
+                    "iat": state["now"],
+                    "exp": state["now"] + duration,
+                    **carried,
+                }
+            )
+        }
+
+    def custom_token_sign_in(body: dict) -> tuple[int, dict]:
+        token = _payload(body["token"])
+        if token["exp"] < state["now"]:
+            return _refused("TOKEN_EXPIRED")
+        claims = token.get("claims") or {}
+        if any(name in RESERVED_COOKIE_CLAIMS for name in claims):
+            return _refused("INVALID_CUSTOM_TOKEN")
+        uid = token["uid"]
+        state["accounts"].setdefault(
+            uid, {"email": None, "validSince": 0, "customAttributes": {}}
+        )
+        return signed_in(start_session(uid, claims))
+
+    def sign_up(body: dict) -> tuple[int, dict]:
+        uid = f"uid-{len(state['accounts']) + 1}"
+        state["accounts"][uid] = {
+            "email": body["email"],
+            "validSince": 0,
+            "customAttributes": {},
+        }
+        return signed_in(start_session(uid))
+
+    def sign_in(body: dict) -> tuple[int, dict]:
+        for uid, account in state["accounts"].items():
+            if account["email"] == body["email"]:
+                return signed_in(start_session(uid))
+        return _refused("EMAIL_NOT_FOUND")
+
+    def refresh(body: dict) -> tuple[int, dict]:
+        session = state["sessions"].get(body.get("refresh_token"))
+        if session is None:
+            return _refused("INVALID_REFRESH_TOKEN")
+        return 200, {
+            "id_token": issue(session),
+            "refresh_token": session["refreshToken"],
+        }
+
+    def admin_update(body: dict) -> tuple[int, dict]:
+        account = state["accounts"][body["localId"]]
+        if "validSince" in body:
+            account["validSince"] = int(body["validSince"])
+        if "customAttributes" in body:
+            account["customAttributes"] = json.loads(body["customAttributes"])
+        return 200, {"localId": body["localId"]}
+
+    def admin_lookup(body: dict) -> tuple[int, dict]:
+        found = [
+            {"localId": uid, "validSince": str(account["validSince"])}
+            for uid, account in state["accounts"].items()
+            if uid in body.get("localId", [])
+            or account["email"] in body.get("email", [])
+        ]
+        return 200, ({"users": found} if found else {})
+
+    def user_lookup(body: dict) -> tuple[int, dict]:
+        if revoked(body["idToken"]):
+            return _refused("TOKEN_EXPIRED")
+        return 200, {"users": [{"localId": _payload(body["idToken"])["sub"]}]}
+
+    def respond(base: str, path: str, body: dict) -> tuple[int, dict]:
+        state["now"] += 1
+        if "securetoken" in base:
+            return refresh(body)
+        name = path.split("?")[0]
+        if name == "/accounts:signUp":
+            return sign_up(body)
+        if name == "/accounts:signInWithPassword":
+            return sign_in(body)
+        if name == "/accounts:signInWithCustomToken":
+            return custom_token_sign_in(body)
+        if name == "/accounts:lookup":
+            return user_lookup(body) if "key=" in path else admin_lookup(body)
+        if name == "/accounts:update":
+            return admin_update(body)
+        if name == "/accounts:delete":
+            state["accounts"].pop(body["localId"], None)
+            return 200, {}
+        if name == ":createSessionCookie":
+            return create_session_cookie(body)
+        raise AssertionError(f"the service was asked for an unknown path: {path!r}")
+
+    def sender(base: str, path: str, body: dict, owner: bool) -> tuple[int, bytes]:
+        state["sent"].append(path or "token")
+        status, parsed = respond(base, path, body)
+        return status, json.dumps(parsed).encode()
+
+    state["sender"] = sender
+    return state
+
+
+def _poster(service: dict):
+    """Drive the real `shadow.post`, so budget reservation is never mocked away."""
+
+    def poster(budget, base, path, body, *, owner=False):
+        return shadow.post(
+            budget, base, path, body, owner=owner, sender=service["sender"]
+        )
+
+    return poster
+
+
+@pytest.fixture
+def _instant_rest(monkeypatch) -> None:
+    monkeypatch.setattr(shadow, "_rest", lambda seconds: None)
+
+
+# --- the budget is reserved before a request is sent, never charged after ------
+
+
+def test_no_request_is_sent_once_the_request_budget_is_exhausted() -> None:
+    service = _service()
+    budget = new_budget(2, 60, 0.0)
+    for _ in range(2):
+        shadow.post(
+            budget,
+            "http://127.0.0.1:1",
+            "/accounts:delete",
+            {"localId": "uid-1"},
+            sender=service["sender"],
+        )
+    with pytest.raises(BudgetExceeded, match="request"):
+        shadow.post(
+            budget,
+            "http://127.0.0.1:1",
+            "/accounts:delete",
+            {"localId": "uid-1"},
+            sender=service["sender"],
+        )
+    assert len(service["sent"]) == 2
+    assert budget["requests"] == 2
+
+
+def test_a_response_already_received_is_never_discarded_by_the_wall_clock_bound(
+    monkeypatch,
+) -> None:
+    service = _service()
+    budget = new_budget(10, 2, 0.0)
+    ticks = iter([0.0, 5.0, 5.0])
+    monkeypatch.setattr(shadow.time, "monotonic", lambda: next(ticks))
+    # The request was sent and paid for, so its result must reach the caller.
+    status, _ = shadow.post(
+        budget,
+        "http://127.0.0.1:1",
+        "/accounts:signUp?key=k",
+        {"email": "a@b.invalid", "password": "p"},
+        sender=service["sender"],
+    )
+    assert status == 200
+    assert budget["wallSeconds"] == 5.0
+    with pytest.raises(BudgetExceeded, match="wall"):
+        shadow.post(
+            budget,
+            "http://127.0.0.1:1",
+            "/accounts:delete",
+            {"localId": "uid-1"},
+            sender=service["sender"],
+        )
+    assert len(service["sent"]) == 1
+
+
+def test_an_account_created_at_the_budget_edge_is_still_tracked_and_cleaned_up(
+    _instant_rest,
+) -> None:
+    service = _service()
+    tracker = new_tracker("b" * 32)
+    # One request for the whole run, three held back so cleanup can still complete.
+    budget = new_budget(4, 600, 0.0, recovery_requests=3, recovery_wall_seconds=60)
+    rows, failure = shadow.collect(
+        "http://127.0.0.1:1",
+        budget,
+        tracker,
+        runner=lambda base, b, t, r: shadow.run_cases(
+            base, b, t, r, poster=_poster(service)
+        ),
+    )
+    assert failure is not None and "BudgetExceeded" in failure
+    # The sign-up that spent the last run request created an account; losing it here
+    # would leave a live account behind with nothing recording that it exists.
+    assert len(tracker["accounts"]) == 1
+    assert rows == {}
+    assert len(service["sent"]) == 1
+
+    enter_recovery(budget)
+    assert (
+        shadow.cleanup("http://127.0.0.1:1", budget, tracker, poster=_poster(service))
+        == []
+    )
+    assert cleanup_report(tracker)["cleanupComplete"] is True
+    assert budget["requests"] == 4
+
+
+def test_the_run_phase_cannot_spend_the_reserve_cleanup_depends_on() -> None:
+    budget = new_budget(10, 60, 0.0, recovery_requests=4, recovery_wall_seconds=10)
+    for _ in range(6):
+        reserve_request(budget)
+    with pytest.raises(BudgetExceeded, match="request"):
+        reserve_request(budget)
+    enter_recovery(budget)
+    for _ in range(4):
+        reserve_request(budget)
+    with pytest.raises(BudgetExceeded, match="request"):
+        reserve_request(budget)
+
+
+def test_the_shadow_holds_back_the_recovery_reserve_the_manifest_declares() -> None:
+    budget = shadow.shadow_budget()
+    assert budget["recoveryRequests"] == BUDGET["recoveryRequests"]
+    assert budget["recoveryWallSeconds"] == BUDGET["recoveryWallSeconds"]
+    assert budget["recoveryRequests"] < budget["maxRequests"]
+
+
+# --- the session cookie must carry the ID token's own subject -------------------
+
+
+def _token(claims: dict) -> str:
+    return shadow.unsigned_jwt({"iat": 1, "exp": 2, **claims})
+
+
+def test_two_tokens_naming_the_same_subject_match() -> None:
+    assert subjects_match(_token({"sub": "uid-1"}), _token({"sub": "uid-1"})) is True
+
+
+def test_a_cookie_minted_for_another_account_is_not_a_subject_match() -> None:
+    assert subjects_match(_token({"sub": "uid-1"}), _token({"sub": "uid-2"})) is False
+
+
+def test_a_missing_subject_on_either_side_is_not_a_subject_match() -> None:
+    assert subjects_match(_token({"sub": "uid-1"}), _token({})) is False
+    assert subjects_match(_token({}), _token({"sub": "uid-1"})) is False
+    assert subjects_match(_token({}), _token({})) is False
+
+
+@pytest.mark.parametrize(
+    "subject", [7, 7.5, True, None, "", ["uid-1"], {"id": "uid-1"}]
+)
+def test_a_subject_that_is_not_a_non_empty_string_is_never_a_match(subject) -> None:
+    assert subjects_match(_token({"sub": subject}), _token({"sub": subject})) is False
+
+
+def test_a_malformed_token_is_not_a_subject_match_rather_than_an_error() -> None:
+    assert subjects_match("not-a-jwt", _token({"sub": "uid-1"})) is False
+    assert subjects_match(_token({"sub": "uid-1"}), "a.b.c") is False
+
+
+def test_the_subject_check_publishes_only_the_boolean() -> None:
+    source = (HERE / "credential_collector.py").read_text()
+    assert "def subjects_match" in source
+    assert "sub" not in claim_shape(_token({"sub": "uid-1"}))["claimValues"]
+
+
+# --- the declared cases run end to end against a service ------------------------
+
+
+def _run(service: dict, tracker: dict) -> dict:
+    budget = new_budget(
+        BUDGET["maxRequests"],
+        BUDGET["maxWallSeconds"],
+        0.0,
+        recovery_requests=BUDGET["recoveryRequests"],
+        recovery_wall_seconds=BUDGET["recoveryWallSeconds"],
+    )
+    rows: dict = {}
+    shadow.run_cases(
+        "http://127.0.0.1:1", budget, tracker, rows, poster=_poster(service)
+    )
+    return rows
+
+
+def test_every_declared_case_holds_against_a_service_that_behaves(
+    _instant_rest,
+) -> None:
+    rows = _run(_service(), new_tracker("c" * 32))
+    assert set(rows) == {case["id"] for case in observation_cases()}
+    assert shadow._agreement(list(rows.values()))["unexpected"] == []
+
+
+def test_a_cookie_minted_for_a_different_subject_fails_the_real_case_run(
+    _instant_rest,
+) -> None:
+    rows = _run(_service(cookie_subject="uid-impostor"), new_tracker("c" * 32))
+    composition = rows["session-cookie-claim-composition"]
+    assert composition["status"] == 200
+    assert composition["assertions"]["cookieSubjectMatchesIdToken"] is False
+    unexpected = shadow._agreement(list(rows.values()))["unexpected"]
+    assert [item["caseId"] for item in unexpected] == [
+        "session-cookie-claim-composition"
+    ]
+
+
+# --- a stopped run is never comparable, whatever the receipt claims -------------
+
+
+def _expected_row(case: dict, *, trust_root: str = "unsigned-emulator") -> dict:
+    expected = case["expectedLocal"]
+    row = {
+        "caseId": case["id"],
+        "status": expected["status"],
+        "errorCode": expected["errorCode"],
+        "assertions": {name: True for name in expected["assertions"]},
+        "trustRoot": trust_root,
+    }
+    if case["nondeterminism"] == "SAME_SECOND_BOUNDARY":
+        row["boundaryPinned"] = False
+    return row
+
+
+def _cleaned_tracker() -> dict:
+    tracker = new_tracker("a" * 32)
+    track_account(tracker, "uid-1", owned_email(tracker, 0))
+    mark_deleted(tracker, "uid-1", uid_absent=True, email_absent=True)
+    return tracker
+
+
+def _stopped_local_receipt() -> dict:
+    """The receipt a run that stopped after one case actually produces."""
+    first = observation_cases()[0]
+    record, exit_code = shadow.finish_record(
+        rows={first["id"]: _expected_row(first)},
+        tracker=_cleaned_tracker(),
+        budget=new_budget(60, 600, 0.0),
+        failure="BudgetExceeded: request budget exhausted",
+        shutdown={"exitCode": 0, "processStopped": True, "remainingChildren": 0},
+        source_binding={"commit": "a" * 40, "artifactSha256": "c" * 64},
+    )
+    assert exit_code == 1
+    return record["receipt"]
+
+
+def _full_production_receipt() -> dict:
+    return build_receipt(
+        side="production",
+        rows=[_expected_row(case, trust_root="signed") for case in observation_cases()],
+        tracker=_cleaned_tracker(),
+        budget=new_budget(60, 600, 0.05),
+        source_binding={"commit": "a" * 40, "artifactSha256": "d" * 64},
+        production_executed=True,
+    )
+
+
+def test_a_row_the_run_never_reached_is_not_a_recorded_observation() -> None:
+    receipt = _stopped_local_receipt()
+    # Cleanup succeeded; the recording did not. The two are separate facts.
+    assert receipt["cleanup"]["cleanupComplete"] is True
+    assert receipt["recordingComplete"] is False
+
+
+def test_a_stopped_run_is_refused_by_the_comparator_end_to_end() -> None:
+    report = compare(_stopped_local_receipt(), _full_production_receipt())
+    assert report["productionCompared"] is False
+    assert report["reason"] == "incomplete-recording"
+    assert set(_classes(report).values()) == {"INDETERMINATE"}
+
+
+def test_a_receipt_claiming_a_complete_recording_cannot_pass_off_unrun_rows() -> None:
+    local = _stopped_local_receipt()
+    # The comparator re-derives observation from each row; a caller boolean is not
+    # evidence, so forcing this member cannot turn a case nobody ran into a MATCH.
+    local["recordingComplete"] = True
+    classes = _classes(compare(local, _full_production_receipt()))
+    first = observation_cases()[0]["id"]
+    assert classes[first] == "MATCH"
+    assert {value for case_id, value in classes.items() if case_id != first} == {
+        "INDETERMINATE"
+    }
+
+
+def test_a_complete_recording_with_a_failed_cleanup_is_refused_for_the_cleanup() -> (
+    None
+):
+    tracker = new_tracker("a" * 32)
+    track_account(tracker, "uid-1", owned_email(tracker, 0))
+    mark_deleted(tracker, "uid-1", uid_absent=True, email_absent=False)
+    local = build_receipt(
+        side="local",
+        rows=[_expected_row(case) for case in observation_cases()],
+        tracker=tracker,
+        budget=new_budget(60, 600, 0.0),
+        source_binding={"commit": "a" * 40, "artifactSha256": "c" * 64},
+    )
+    assert local["recordingComplete"] is True
+    assert local["cleanup"]["cleanupComplete"] is False
+    assert compare(local, _full_production_receipt())["reason"] == "incomplete-cleanup"

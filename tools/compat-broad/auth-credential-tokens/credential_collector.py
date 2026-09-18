@@ -62,6 +62,12 @@ NON_SECRET_KEY_NAMES = ("assertions",)
 
 RECEIPT_SIDES = ("local", "production")
 
+#: The error code a collector writes for a case it never reached.
+NOT_RUN_ERROR_CODE = "NOT_RUN"
+
+#: The status range a row must carry to record a response that actually arrived.
+HTTP_STATUS_RANGE = (100, 599)
+
 #: Modules whose bytes every receipt binds. The comparison contract requires both sides
 #: to have been recorded by the same collector, so this binding is what makes a pair
 #: comparable at all.
@@ -228,6 +234,40 @@ def claim_shape(token: str, reveal: tuple[str, ...] = ()) -> dict[str, Any]:
     }
 
 
+def _subject(token: str) -> str | None:
+    """Return a token's `sub` claim when it is a non-empty string, else None.
+
+    The subject is an account identifier, so it never leaves this module: only the
+    boolean `subjects_match` derives from it may be recorded. A malformed token answers
+    None rather than raising, because an undecidable subject is not a match and an
+    assertion must stay decidable.
+    """
+    if not isinstance(token, str):
+        return None
+    segments = token.split(".")
+    if len(segments) != 3:
+        return None
+    try:
+        payload = _decode_segment(segments[1])
+    except ValueError:
+        return None
+    subject = payload.get("sub")
+    if isinstance(subject, bool) or not isinstance(subject, str) or not subject:
+        return None
+    return subject
+
+
+def subjects_match(first: str, second: str) -> bool:
+    """Whether two tokens name the same subject, publishing only the answer.
+
+    Both payloads are decoded in memory and compared here. Checking that a `sub` claim
+    merely exists would accept a session cookie minted for another account, which is the
+    one thing this assertion is for.
+    """
+    subject = _subject(first)
+    return subject is not None and subject == _subject(second)
+
+
 # --- owned resources ------------------------------------------------------------
 
 
@@ -293,32 +333,84 @@ def cleanup_report(tracker: dict[str, Any]) -> dict[str, Any]:
 # --- budget ----------------------------------------------------------------------
 
 
+RUN_PHASE = "run"
+RECOVERY_PHASE = "recovery"
+
+
 def new_budget(
-    max_requests: int, max_wall_seconds: float, max_cost_usd: float
+    max_requests: int,
+    max_wall_seconds: float,
+    max_cost_usd: float,
+    *,
+    recovery_requests: int = 0,
+    recovery_wall_seconds: float = 0.0,
 ) -> dict[str, Any]:
-    """Create an enforced budget. The ceiling is checked here, not merely declared."""
+    """Create an enforced budget. The ceiling is checked here, not merely declared.
+
+    Part of the total is held back for recovery. Cleanup has to delete every account the
+    run created and read both its UID and its address back, and a run that spent its last
+    request observing a case would have nothing left to do that with. The reserve is
+    carved out of the total rather than added to it, so the declared bound still holds.
+    """
     if not max_cost_usd < COST_CEILING_USD:
         raise ValueError(f"cost ceiling is US${COST_CEILING_USD}")
     if max_requests < 1 or max_wall_seconds <= 0:
         raise ValueError("positive request and wall-clock bounds are required")
+    if recovery_requests < 0 or recovery_wall_seconds < 0:
+        raise ValueError("a recovery reserve cannot be negative")
+    if recovery_requests >= max_requests or recovery_wall_seconds >= max_wall_seconds:
+        raise ValueError("the recovery reserve must leave the run something to spend")
     return {
         "maxRequests": max_requests,
         "maxWallSeconds": max_wall_seconds,
         "maxCostUsd": max_cost_usd,
+        "recoveryRequests": recovery_requests,
+        "recoveryWallSeconds": recovery_wall_seconds,
         "requests": 0,
         "wallSeconds": 0.0,
+        "phase": RUN_PHASE,
         "enforced": True,
     }
 
 
-def charge_request(budget: dict[str, Any], elapsed_seconds: float) -> None:
-    """Charge one request; exceeding either bound stops the run."""
-    budget["requests"] += 1
-    budget["wallSeconds"] += float(elapsed_seconds)
-    if budget["requests"] > budget["maxRequests"]:
+def request_allowance(budget: dict[str, Any]) -> int:
+    """How many requests this phase may spend in total."""
+    held_back = budget["recoveryRequests"] if budget["phase"] == RUN_PHASE else 0
+    return budget["maxRequests"] - held_back
+
+
+def wall_allowance(budget: dict[str, Any]) -> float:
+    """How many wall-clock seconds this phase may spend in total."""
+    held_back = budget["recoveryWallSeconds"] if budget["phase"] == RUN_PHASE else 0.0
+    return budget["maxWallSeconds"] - held_back
+
+
+def reserve_request(budget: dict[str, Any]) -> None:
+    """Reserve one request before it is sent; an exhausted bound sends nothing.
+
+    Charging after the fact would let an exhausted budget spend one more request against
+    the service, which is the one thing an enforced bound exists to prevent.
+    """
+    if budget["requests"] + 1 > request_allowance(budget):
         raise BudgetExceeded("request budget exhausted")
-    if budget["wallSeconds"] > budget["maxWallSeconds"]:
+    if budget["wallSeconds"] >= wall_allowance(budget):
         raise BudgetExceeded("wall-clock budget exhausted")
+    budget["requests"] += 1
+
+
+def charge_elapsed(budget: dict[str, Any], elapsed_seconds: float) -> None:
+    """Charge the wall time a sent request took.
+
+    This never raises. The response is already in hand by the time it is called, and a
+    sign-up whose result is thrown away leaves a live account nothing knows about. The
+    overrun stops the run at the next reservation instead.
+    """
+    budget["wallSeconds"] += float(elapsed_seconds)
+
+
+def enter_recovery(budget: dict[str, Any]) -> None:
+    """Release the reserve so cleanup can run after the run's own bound is spent."""
+    budget["phase"] = RECOVERY_PHASE
 
 
 # --- collector binding ---------------------------------------------------------------
@@ -351,6 +443,27 @@ def collector_binding(commit: str | None = None) -> dict[str, Any]:
 # --- receipt -----------------------------------------------------------------------
 
 
+def unobserved_reason(row: Any) -> str | None:
+    """Why this row records no observation, or None when it records one.
+
+    A run that stops part way still writes a row for every case, so a row has to say for
+    itself whether anything was observed. Every reader derives that here rather than
+    trusting a receipt-level boolean, which a collector fills in and could be wrong.
+    """
+    if not isinstance(row, dict):
+        return "row-is-not-an-object"
+    status = row.get("status")
+    if isinstance(status, bool) or not isinstance(status, int):
+        return "status-is-not-an-integer"
+    if not HTTP_STATUS_RANGE[0] <= status <= HTTP_STATUS_RANGE[1]:
+        return "status-is-outside-the-http-range"
+    if row.get("errorCode") == NOT_RUN_ERROR_CODE:
+        return "row-is-marked-not-run"
+    if not isinstance(row.get("assertions"), dict):
+        return "assertions-are-not-an-object"
+    return None
+
+
 def build_receipt(
     *,
     side: str,
@@ -367,8 +480,14 @@ def build_receipt(
     if [row.get("caseId") for row in rows] != expected:
         raise ValueError("rows must be every case in the declared order")
     cleanup = cleanup_report(tracker)
-    # An owned-nothing run never signed anybody in, so it never observed anything.
-    complete = cleanup["cleanupComplete"] and cleanup["ownedAccounts"] > 0
+    # Recording completion and cleanup completion are separate facts. A run that stopped
+    # part way still cleans up after itself, and a clean cleanup has never been evidence
+    # that every case was observed.
+    # An owned-nothing run never signed anybody in, so it never observed anything either.
+    complete = (
+        all(unobserved_reason(row) is None for row in rows)
+        and cleanup["ownedAccounts"] > 0
+    )
     return {
         "side": side,
         "productionExecuted": bool(production_executed),

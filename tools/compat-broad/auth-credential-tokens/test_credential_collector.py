@@ -243,10 +243,12 @@ def test_budget_is_enforced_not_merely_declared() -> None:
     budget = collector.new_budget(
         max_requests=2, max_wall_seconds=10, max_cost_usd=0.05
     )
-    collector.charge_request(budget, elapsed_seconds=1.0)
-    collector.charge_request(budget, elapsed_seconds=1.0)
+    for _ in range(2):
+        collector.reserve_request(budget)
+        collector.charge_elapsed(budget, 1.0)
     with pytest.raises(collector.BudgetExceeded, match="request"):
-        collector.charge_request(budget, elapsed_seconds=1.0)
+        collector.reserve_request(budget)
+    assert budget["requests"] == 2
     assert budget["enforced"] is True
 
 
@@ -254,8 +256,20 @@ def test_wall_clock_budget_stops_the_run() -> None:
     budget = collector.new_budget(
         max_requests=10, max_wall_seconds=2, max_cost_usd=0.05
     )
+    collector.reserve_request(budget)
+    # Charging never raises: the request it pays for has already been answered.
+    collector.charge_elapsed(budget, 3.0)
     with pytest.raises(collector.BudgetExceeded, match="wall"):
-        collector.charge_request(budget, elapsed_seconds=3.0)
+        collector.reserve_request(budget)
+
+
+def test_a_recovery_reserve_may_not_consume_the_whole_budget() -> None:
+    with pytest.raises(ValueError, match="recovery reserve"):
+        collector.new_budget(10, 60, 0.05, recovery_requests=10)
+    with pytest.raises(ValueError, match="recovery reserve"):
+        collector.new_budget(10, 60, 0.05, recovery_wall_seconds=60)
+    with pytest.raises(ValueError, match="recovery reserve"):
+        collector.new_budget(10, 60, 0.05, recovery_requests=-1)
 
 
 def test_budget_ceiling_stays_well_under_one_dollar() -> None:

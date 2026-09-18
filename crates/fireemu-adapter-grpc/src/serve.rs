@@ -9,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 use bytes::Bytes;
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
-use hyper::body::{Frame, Incoming};
+use hyper::body::{Body, Frame, Incoming};
 use hyper::service::service_fn;
 use hyper::HeaderMap;
 use hyper::{Request, Response};
@@ -86,6 +86,23 @@ fn api_request_too_large(enforce_limits: bool) -> RestResponse {
     }
 }
 
+/// The refusal a Firestore request gets when the runtime already holds as many request
+/// bodies as it admits ([`MAX_BLOCKING_REST_REQUESTS`]).
+///
+/// Every surface that reads a body answers this, so the admission bound is one pool with one
+/// answer rather than a per-transport accident. The wording is the one the REST path has
+/// always used.
+fn too_many_concurrent_requests() -> RestResponse {
+    RestResponse {
+        status: 503,
+        body: fireemu_adapter_support::api_error::google_rpc(
+            503,
+            "too many concurrent Firestore REST requests",
+            "RESOURCE_EXHAUSTED",
+        ),
+    }
+}
+
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type OutBody = UnsyncBoxBody<Bytes, BoxError>;
 
@@ -156,11 +173,15 @@ fn dropped() -> std::io::Error {
     std::io::Error::other("fault plan: connection dropped")
 }
 
-fn header<'a>(req: &'a Request<Incoming>, name: &str) -> Option<&'a str> {
+fn header<'a, B>(req: &'a Request<B>, name: &str) -> Option<&'a str> {
     req.headers().get(name).and_then(|v| v.to_str().ok())
 }
 
-async fn read_body(req: Request<Incoming>, limit: usize) -> Result<Bytes, ()> {
+async fn read_body<B>(req: Request<B>, limit: usize) -> Result<Bytes, ()>
+where
+    B: Body<Data = Bytes>,
+    B::Error: Into<BoxError>,
+{
     fireemu_adapter_support::body::collect_limited(req.into_body(), limit)
         .await
         .map_err(|_| ())
@@ -174,14 +195,7 @@ async fn rest_call(
     let origin = header(&req, "origin").map(str::to_owned);
     let Some(permit) = try_admit_rest_work(rest_work_limiter()) else {
         return Ok(json_response(
-            &RestResponse {
-                status: 503,
-                body: fireemu_adapter_support::api_error::google_rpc(
-                    503,
-                    "too many concurrent Firestore REST requests",
-                    "RESOURCE_EXHAUSTED",
-                ),
-            },
+            &too_many_concurrent_requests(),
             origin.as_deref(),
         ));
     };
@@ -258,14 +272,7 @@ async fn rest_call(
             Some(admitted) => permit = admitted,
             None => {
                 return Ok(json_response(
-                    &RestResponse {
-                        status: 503,
-                        body: fireemu_adapter_support::api_error::google_rpc(
-                            503,
-                            "too many concurrent Firestore REST requests",
-                            "RESOURCE_EXHAUSTED",
-                        ),
-                    },
+                    &too_many_concurrent_requests(),
                     origin.as_deref(),
                 ));
             }
@@ -278,13 +285,30 @@ async fn rest_call(
     Ok(json_response(&response, origin.as_deref()))
 }
 
-async fn channel_call(
+async fn channel_call<B>(
     hub: Arc<Hub>,
     kind: StreamKind,
-    req: Request<Incoming>,
+    req: Request<B>,
     enforce_limits: bool,
-) -> Response<OutBody> {
+    limiter: &Arc<tokio::sync::Semaphore>,
+) -> Response<OutBody>
+where
+    B: Body<Data = Bytes>,
+    B::Error: Into<BoxError>,
+{
     let origin = header(&req, "origin").map(str::to_owned);
+    // A form body is up to `MAX_FORM_BYTES`, the same as a REST body, so it is admitted from
+    // the same pool: without this, peak body memory on this path was bounded only by how
+    // fast clients connect.
+    //
+    // The permit covers reading and parsing the body and the synchronous `Hub::handle`, and
+    // is released when this function returns. A streaming back channel produces its frames
+    // from the body returned here, after the permit is gone, so a `Listen` client long-polling
+    // for up to `LONG_POLL_MAX` never holds one -- which would otherwise let a handful of
+    // idle listeners starve every write surface.
+    let Some(_permit) = try_admit_rest_work(limiter) else {
+        return json_response(&too_many_concurrent_requests(), origin.as_deref());
+    };
     let method = req.method().as_str().to_owned();
     let params = crate::webchannel::parse_form(req.uri().query().unwrap_or(""));
     let authorization = header(&req, "authorization").map(str::to_owned);
@@ -504,7 +528,14 @@ where
                     }
                     if let Some(kind) = channel_kind(req.uri().path()) {
                         let enforce_limits = rest.gateway.enforce_limits;
-                        return Ok(channel_call(hub, kind, req, enforce_limits).await);
+                        return Ok(channel_call(
+                            hub,
+                            kind,
+                            req,
+                            enforce_limits,
+                            rest_work_limiter(),
+                        )
+                        .await);
                     }
                     rest_call(rest, req).await
                 }
@@ -614,6 +645,244 @@ mod tests {
             let kept = Status::from_header_map(&unrelated).unwrap();
             assert_eq!(kept.code(), Code::OutOfRange);
             assert_eq!(kept.message(), "cursor past the end");
+        }
+    }
+
+    /// A `WebChannel` form body is up to the same 10 MiB a REST body is, so it draws on the
+    /// same admission pool. Before this, `channel_call` had no gate at all and peak body
+    /// memory on that path was bounded only by the connection rate.
+    mod channel_admission {
+        use super::super::{
+            channel_call, rest_work_limiter, too_many_concurrent_requests,
+            MAX_BLOCKING_REST_REQUESTS,
+        };
+        use crate::gateway::Gateway;
+        use crate::local::LocalBackend;
+        use crate::rest::RestState;
+        use crate::webchannel::{Hub, StreamKind};
+        use bytes::Bytes;
+        use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+        use fireemu_core_types::time::LogicalInstant;
+        use http_body_util::{BodyExt, Full};
+        use hyper::{Request, Response};
+        use std::sync::{Arc, Mutex};
+
+        fn hub() -> Arc<Hub> {
+            let gateway = Gateway {
+                enforce_limits: true,
+                ctx: PlanningContext {
+                    edition: FirestoreEdition::Standard,
+                    api_mode: FirestoreApiMode::Native,
+                    policy: IndexValidationPolicy::Production,
+                },
+                indexes: IndexSet::default(),
+            };
+            let clock = Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            )));
+            let local = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+            Arc::new(Hub::new(Arc::new(RestState {
+                local,
+                gateway: Arc::new(gateway),
+                rules: None,
+                app_check: None,
+                control_token: None,
+            })))
+        }
+
+        const DB: &str = "projects/demo-app/databases/(default)";
+
+        /// A forward-channel POST carrying a real form body.
+        fn forward_channel_request() -> Request<Full<Bytes>> {
+            Request::builder()
+                .method("POST")
+                .uri("/google.firestore.v1.Firestore/Write/channel?VER=8&RID=1&CI=0")
+                .body(Full::new(Bytes::from_static(
+                    b"count=1&ofs=0&req0___data__=%7B%7D",
+                )))
+                .expect("a well-formed forward-channel request")
+        }
+
+        /// Percent-encodes every byte, which is always a valid form or query encoding.
+        fn percent_encode(value: &str) -> String {
+            use std::fmt::Write as _;
+            value.bytes().fold(String::new(), |mut out, byte| {
+                let _ = write!(out, "%{byte:02X}");
+                out
+            })
+        }
+
+        /// A `Listen` handshake POST, which opens a session and names it in a response header.
+        fn listen_handshake_request() -> Request<Full<Bytes>> {
+            let target = serde_json::json!({
+                "database": DB,
+                "addTarget": {
+                    "targetId": 2,
+                    "query": {
+                        "parent": format!("{DB}/documents"),
+                        "structuredQuery": {"from": [{"collectionId": "open"}]},
+                    },
+                },
+            })
+            .to_string();
+            let body = format!("count=1&ofs=0&req0___data__={}", percent_encode(&target));
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/google.firestore.v1.Firestore/Listen/channel?database={}&VER=8&RID=1&CVER=22",
+                    percent_encode(DB)
+                ))
+                .body(Full::new(Bytes::from(body)))
+                .expect("a well-formed handshake")
+        }
+
+        /// A long-polling `Listen` back channel on an open session. This is the request whose
+        /// response streams for up to `LONG_POLL_MAX`.
+        fn backchannel_request(session: &str) -> Request<Full<Bytes>> {
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/google.firestore.v1.Firestore/Listen/channel?SID={session}&RID=rpc&AID=0&CI=1&TYPE=xmlhttp"
+                ))
+                .body(Full::new(Bytes::new()))
+                .expect("a well-formed back channel")
+        }
+
+        async fn body_of(response: Response<super::super::OutBody>) -> (u16, serde_json::Value) {
+            let status = response.status().as_u16();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            (status, serde_json::from_slice(&bytes).unwrap_or_default())
+        }
+
+        /// The process-wide pool that every body-reading surface now shares. Adding the
+        /// `WebChannel` path must not change how many requests are admitted.
+        #[test]
+        fn the_admitted_count_is_unchanged() {
+            assert_eq!(MAX_BLOCKING_REST_REQUESTS, 64);
+            assert_eq!(
+                rest_work_limiter().available_permits(),
+                MAX_BLOCKING_REST_REQUESTS,
+                "the shared pool is still one pool of MAX_BLOCKING_REST_REQUESTS permits"
+            );
+        }
+
+        /// An exhausted pool refuses a form body with the answer the REST path gives, and
+        /// never reads the body.
+        #[test]
+        fn an_over_admission_form_body_is_refused_exactly_as_a_rest_body_is() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let exhausted = Arc::new(tokio::sync::Semaphore::new(0));
+                let response = channel_call(
+                    hub(),
+                    StreamKind::Write,
+                    forward_channel_request(),
+                    true,
+                    &exhausted,
+                )
+                .await;
+                let (status, body) = body_of(response).await;
+                assert_eq!(status, 503);
+                assert_eq!(body, too_many_concurrent_requests().body);
+                assert_eq!(body["error"]["status"], "RESOURCE_EXHAUSTED");
+            });
+        }
+
+        /// The starvation case the bound exists to prevent: a long-polling back channel holds
+        /// its response open for up to `LONG_POLL_MAX`, but `Hub::handle` spawns that loop and
+        /// returns at once, so the permit is gone before a single frame is produced. One
+        /// permit is enough to open a back channel and then still serve a write.
+        #[test]
+        fn a_long_polling_back_channel_holds_no_permit_while_it_streams() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let one = Arc::new(tokio::sync::Semaphore::new(1));
+                let hub = hub();
+
+                let handshake = channel_call(
+                    hub.clone(),
+                    StreamKind::Listen,
+                    listen_handshake_request(),
+                    true,
+                    &one,
+                )
+                .await;
+                assert_eq!(handshake.status().as_u16(), 200);
+                let session = handshake
+                    .headers()
+                    .get("x-http-session-id")
+                    .and_then(|v| v.to_str().ok())
+                    .expect("the handshake names its session")
+                    .to_owned();
+                assert_eq!(one.available_permits(), 1);
+
+                let streaming = channel_call(
+                    hub.clone(),
+                    StreamKind::Listen,
+                    backchannel_request(&session),
+                    true,
+                    &one,
+                )
+                .await;
+                assert_eq!(streaming.status().as_u16(), 200);
+                assert_eq!(
+                    one.available_permits(),
+                    1,
+                    "a streaming back channel must not hold a permit for its poll"
+                );
+
+                // The write surface is still served while that back channel is open and
+                // unconsumed.
+                let write = channel_call(
+                    hub,
+                    StreamKind::Write,
+                    forward_channel_request(),
+                    true,
+                    &one,
+                )
+                .await;
+                assert_ne!(write.status().as_u16(), 503);
+                drop(streaming);
+            });
+        }
+
+        /// The permit is released when `channel_call` returns. A streaming back channel
+        /// produces its frames after that, so a long-polling `Listen` client cannot hold a
+        /// permit for its poll and starve every other write surface.
+        #[test]
+        fn a_permit_is_released_when_the_call_returns() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let one = Arc::new(tokio::sync::Semaphore::new(1));
+                let hub = hub();
+                for _ in 0..3 {
+                    let response = channel_call(
+                        hub.clone(),
+                        StreamKind::Write,
+                        forward_channel_request(),
+                        true,
+                        &one,
+                    )
+                    .await;
+                    assert_ne!(
+                        response.status().as_u16(),
+                        503,
+                        "a released permit must admit the next request"
+                    );
+                    assert_eq!(one.available_permits(), 1);
+                }
+            });
         }
     }
 

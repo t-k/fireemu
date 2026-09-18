@@ -450,3 +450,63 @@ def test_every_request_carries_the_plan_s_per_request_timeout():
     assert all(isinstance(value, int) and value > 0 for value in timeouts)
     assert plan_module.CONTENDED_REQUEST_TIMEOUT_SECONDS in timeouts
     assert plan_module.DEFAULT_REQUEST_TIMEOUT_SECONDS in timeouts
+
+
+def _aborting_rollback(message):
+    """An endpoint whose rollbacks are refused with ABORTED."""
+    endpoint = Endpoint()
+
+    def transport(request):
+        if request["rpc"] == "Rollback":
+            endpoint.calls.append(request)
+            return {"code": 10, "status": "ABORTED", "message": message}
+        return endpoint(request)
+
+    return endpoint, transport
+
+
+def test_a_contention_abort_does_not_count_as_releasing_a_transaction():
+    _endpoint, transport = _aborting_rollback(
+        "Too much contention on these documents. Please try again."
+    )
+    receipt = collector.collect(
+        options(), transport, advance=advances([]), monotonic=lambda: 0.0
+    )
+    releases = receipt["transactionReleases"]
+    assert releases
+    unproven = [e for e in releases if e["idleSeconds"] is None]
+    assert unproven, "a transaction that never took a lock must not be released"
+    for entry in unproven:
+        assert entry["released"] is False
+        assert entry["failure"] == "rollback-aborted-without-proven-expiry"
+        assert entry["message"]
+    assert receipt["openTransactions"]
+    assert receipt["complete"] is False
+
+
+def test_an_expired_transaction_abort_counts_as_released_and_keeps_the_message():
+    message = "The referenced transaction has expired or is no longer valid."
+    _endpoint, transport = _aborting_rollback(message)
+    receipt = collector.collect(
+        options(), transport, advance=advances([]), monotonic=lambda: 0.0
+    )
+    expired = [
+        entry
+        for entry in receipt["transactionReleases"]
+        if entry["idleSeconds"] is not None
+        and entry["idleSeconds"] >= cases.DECLARED_IDLE_LIMIT_SECONDS
+    ]
+    assert expired
+    for entry in expired:
+        assert entry["released"] is True
+        assert entry["expiryProven"] is True
+        assert entry["message"] == message
+
+
+def test_every_release_records_the_rollback_message():
+    receipt = collector.collect(
+        options(), Endpoint(), advance=advances([]), monotonic=lambda: 0.0
+    )
+    for entry in receipt["transactionReleases"]:
+        assert "message" in entry
+        assert "idleSeconds" in entry

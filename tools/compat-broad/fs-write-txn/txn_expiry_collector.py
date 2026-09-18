@@ -513,12 +513,28 @@ class Collection:
                 entry["failure"] = type(error).__name__
                 releases.append(entry)
                 continue
-            entry["code"] = response.get("code")
+            code = response.get("code")
+            entry["code"] = code
             entry["status"] = response.get("status")
-            # A finished or expired transaction is already released; the refusal
-            # is the proof, not a failure.
-            entry["released"] = response.get("code") in (OK, ABORTED)
-            if not entry["released"]:
+            entry["message"] = response.get("message")
+            idle = None
+            if tag in self.locked_at:
+                idle = self._campaign_now() - self.locked_at[tag]
+            entry["idleSeconds"] = idle
+            if code == OK:
+                entry["released"] = True
+            elif code == ABORTED:
+                # ABORTED is only proof of release when the transaction really
+                # did run out of time. The same code also means contention,
+                # which says nothing about whether this transaction still holds
+                # its locks, so it must not be read as a successful release.
+                expired = idle is not None and idle >= cases.DECLARED_IDLE_LIMIT_SECONDS
+                entry["released"] = expired
+                entry["expiryProven"] = expired
+                if not expired:
+                    entry["failure"] = "rollback-aborted-without-proven-expiry"
+            else:
+                entry["released"] = False
                 entry["failure"] = "rollback-refused"
             releases.append(entry)
         for entry in releases:

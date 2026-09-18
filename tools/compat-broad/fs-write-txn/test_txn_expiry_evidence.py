@@ -189,10 +189,19 @@ def test_local_shadow_artifact_is_bound_to_this_branch_source():
     assert len(runtime["runtimeInputsDigest"]) == 64
     assert runtime["runtimeInputsClean"] is True
     assert runtime["artifactSha256"] == value["artifactSha256"]
-    assert str(ROOT) == runtime["sourceRoot"], (
-        "the rehearsal artifact must be built in this worktree, "
-        "never taken from the shared checkout or a sibling worktree"
-    )
+    # The binding that the artifact was built from this repository is the Rust
+    # input digest, checked path-independently below. `sourceRoot` is only a
+    # marker: an absolute path would leak the operator's filesystem into a
+    # published record and could never hold from another checkout.
+    assert runtime["sourceRoot"] == shadow_module.REPOSITORY_ROOT_MARKER
+
+
+def test_published_evidence_contains_no_absolute_filesystem_path():
+    """This repository is published; a personal path must never be committed."""
+    for path in (MANIFEST, SHADOW):
+        text = path.read_text()
+        for needle in ('"/Users/', '"/home/', '"/private/', '"/tmp/', '"/var/'):
+            assert needle not in text, f"{path.name} records {needle}"
 
 
 def test_local_shadow_runtime_inputs_match_the_current_rust_source():
@@ -238,7 +247,11 @@ def test_the_published_shadow_equals_a_fresh_run_modulo_volatile_keys():
 
     fresh_path = os.environ.get("FIREEMU_O3_FRESH_SHADOW")
     if not fresh_path:
-        pytest.skip("set FIREEMU_O3_FRESH_SHADOW to a fresh shadow.json to compare")
+        pytest.skip(
+            "reproduction NOT verified in this run: build fireemu, run "
+            "txn_expiry_shadow.py into a fresh directory, and set "
+            "FIREEMU_O3_FRESH_SHADOW to its shadow.json"
+        )
     fresh = json.loads(Path(fresh_path).read_bytes())
     volatile = set(shadow_module.VOLATILE_KEYS)
 

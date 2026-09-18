@@ -155,6 +155,13 @@ is itself the finding.
   transaction is incomplete. Without this, aborting after the transactional
   reads stranded four of the five owned documents.
 
+  A rollback answered `OK` released the transaction. A rollback answered
+  `ABORTED` counts as released only when that transaction's measured idle time
+  has passed the idle limit, because `ABORTED` also means contention and says
+  nothing about whether the locks are gone. Every release records the rollback
+  message and the measured idle time, so the judgement is reviewable rather than
+  implied by the code alone.
+
 Waiting blocks the collector. A wall-clock wait is served in five-second steps
 and each step records a checkpoint, so the run reports progress and can be
 interrupted between steps, but a collector that is killed mid-wait still loses
@@ -240,12 +247,19 @@ The recorded run is
 | Child exit | 0, no signal needed |
 
 The runtime artifact is SHA-256
-`cc3f799d4fb21bdd80aaae99ca1ae889595ed59ad64ab14a7824c372f1f33e0c`
+`caf3b254ceabd5f0b3280b6e39884326aeea28ffa4536249f93b5c52c1ab1f81`
 (`fireemu 0.7.1`), built with `cargo build -p fireemu` inside this lane's own
 worktree. The rehearsal records the source commit, the hashed Rust input set
 (`32a872989f5e0d8fabf17a2a30cda85a2467574e23c4712a37711f0dbd196d18`, 400 files)
 and that those inputs were clean. That digest is byte-identical to the one at the
 lane base `3d0e56bdf`, so the artifact provably describes this branch.
+
+The record never carries an absolute filesystem path. `sourceRoot` is the marker
+`repository-root`, and the child records the artifact's basename rather than its
+path. This repository is published, so an operator's directory layout is not
+evidence, and a test refuses any published record containing one. The claim that
+the binary was built from this repository rests on the Rust input digest, which
+is checked path-independently and therefore still holds from any checkout.
 
 The Rust input digest, not the artifact digest, is the stable binding. A debug
 build is not bit-reproducible, so rebuilding the same source yields a different

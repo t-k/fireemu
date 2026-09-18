@@ -80,7 +80,8 @@ The published rehearsal is exactly what `run_shadow` writes, with no hand
 editing. `test_txn_expiry_evidence.py` rebuilds the record from the generator and
 requires equality, and with `FIREEMU_O3_FRESH_SHADOW` set to an independently
 produced `shadow.json` it requires the committed file to equal that fresh run
-once per-run identities and instants are scrubbed.
+once per-run identities, instants and the per-build artifact digest are
+scrubbed. No published record carries an absolute filesystem path.
 
 The frozen proposal and the recorded rehearsal are
 `spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-manifest.json` and

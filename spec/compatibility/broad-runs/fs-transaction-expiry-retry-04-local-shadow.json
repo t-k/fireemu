@@ -1,6 +1,6 @@
 {
   "acquisitionValidated": false,
-  "artifactSha256": "cc3f799d4fb21bdd80aaae99ca1ae889595ed59ad64ab14a7824c372f1f33e0c",
+  "artifactSha256": "caf3b254ceabd5f0b3280b6e39884326aeea28ffa4536249f93b5c52c1ab1f81",
   "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
   "casesDigest": "f1b3320febc65af2ea8cba068adf51dc53495f159506043436e1d5ff219e289d",
   "child": {
@@ -9,11 +9,11 @@
     "stopped": true
   },
   "complete": true,
-  "elapsedSeconds": 15.123,
+  "elapsedSeconds": 15.165,
   "kind": "txn-expiry-local-shadow-v1",
-  "nonce": "o3expiry-33c96ab478267dca",
+  "nonce": "o3expiry-82b9716b5a179576",
   "note": "Owned local rehearsal only. The elapsed time was produced by advancing the emulator's virtual clock, not by waiting. No production request was sent and no parent group is promoted.",
-  "ownerId": "cdf80f6046c0e695c575c7c73f8f7123",
+  "ownerId": "65d80aa513ae69f3ebc110c90700a846",
   "productionExecuted": false,
   "promotionReady": false,
   "receipt": {
@@ -36,7 +36,7 @@
           "code": 0,
           "status": "OK"
         },
-        "path": "compat/o3-txn-expiry/o3expiry-33c96ab478267dca/control",
+        "path": "compat/o3-txn-expiry/o3expiry-82b9716b5a179576/control",
         "role": "control",
         "skipped": false
       },
@@ -55,7 +55,7 @@
           "code": 0,
           "status": "OK"
         },
-        "path": "compat/o3-txn-expiry/o3expiry-33c96ab478267dca/locked-a",
+        "path": "compat/o3-txn-expiry/o3expiry-82b9716b5a179576/locked-a",
         "role": "locked-a",
         "skipped": false
       },
@@ -74,7 +74,7 @@
           "code": 0,
           "status": "OK"
         },
-        "path": "compat/o3-txn-expiry/o3expiry-33c96ab478267dca/locked-b",
+        "path": "compat/o3-txn-expiry/o3expiry-82b9716b5a179576/locked-b",
         "role": "locked-b",
         "skipped": false
       },
@@ -93,7 +93,7 @@
           "code": 0,
           "status": "OK"
         },
-        "path": "compat/o3-txn-expiry/o3expiry-33c96ab478267dca/locked-c",
+        "path": "compat/o3-txn-expiry/o3expiry-82b9716b5a179576/locked-c",
         "role": "locked-c",
         "skipped": false
       },
@@ -112,28 +112,28 @@
           "code": 0,
           "status": "OK"
         },
-        "path": "compat/o3-txn-expiry/o3expiry-33c96ab478267dca/locked-d",
+        "path": "compat/o3-txn-expiry/o3expiry-82b9716b5a179576/locked-d",
         "role": "locked-d",
         "skipped": false
       }
     ],
     "complete": true,
     "database": "(default)",
-    "documentPrefix": "compat/o3-txn-expiry/o3expiry-33c96ab478267dca",
+    "documentPrefix": "compat/o3-txn-expiry/o3expiry-82b9716b5a179576",
     "failure": null,
-    "finishedAt": "2026-09-18T02:19:59.902675Z",
+    "finishedAt": "2026-09-18T02:39:05.717660Z",
     "instance": {
-      "artifactPath": "/private/tmp/claude-501/-Users-tk-work-firebase-emulator/f29dd31f-32fa-43d4-838b-f9eb8aaaef1e/scratchpad/pub/fireemu",
-      "artifactSha256": "cc3f799d4fb21bdd80aaae99ca1ae889595ed59ad64ab14a7824c372f1f33e0c",
-      "controlOrigin": "http://127.0.0.1:55380",
-      "firestoreOrigin": "http://127.0.0.1:55379",
-      "parentPid": 71780,
-      "pid": 71781,
+      "artifactName": "fireemu",
+      "artifactSha256": "caf3b254ceabd5f0b3280b6e39884326aeea28ffa4536249f93b5c52c1ab1f81",
+      "controlOrigin": "http://127.0.0.1:60176",
+      "firestoreOrigin": "http://127.0.0.1:60175",
+      "parentPid": 24029,
+      "pid": 24030,
       "wrongTokenStatus": 403
     },
     "kind": "txn-expiry-collector-v1",
     "missingCases": [],
-    "nonce": "o3expiry-33c96ab478267dca",
+    "nonce": "o3expiry-82b9716b5a179576",
     "openTransactions": [],
     "projectId": "fireemu-test",
     "requestCount": 60,
@@ -144,7 +144,7 @@
         "detail": null,
         "observed": {
           "code": 5,
-          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-33c96ab478267dca/control\" not found.",
+          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-82b9716b5a179576/control\" not found.",
           "status": "NOT_FOUND"
         },
         "phase": "preflight",
@@ -159,7 +159,7 @@
         "detail": null,
         "observed": {
           "code": 5,
-          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-33c96ab478267dca/locked-a\" not found.",
+          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-82b9716b5a179576/locked-a\" not found.",
           "status": "NOT_FOUND"
         },
         "phase": "preflight",
@@ -174,7 +174,7 @@
         "detail": null,
         "observed": {
           "code": 5,
-          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-33c96ab478267dca/locked-b\" not found.",
+          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-82b9716b5a179576/locked-b\" not found.",
           "status": "NOT_FOUND"
         },
         "phase": "preflight",
@@ -189,7 +189,7 @@
         "detail": null,
         "observed": {
           "code": 5,
-          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-33c96ab478267dca/locked-c\" not found.",
+          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-82b9716b5a179576/locked-c\" not found.",
           "status": "NOT_FOUND"
         },
         "phase": "preflight",
@@ -204,7 +204,7 @@
         "detail": null,
         "observed": {
           "code": 5,
-          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-33c96ab478267dca/locked-d\" not found.",
+          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-82b9716b5a179576/locked-d\" not found.",
           "status": "NOT_FOUND"
         },
         "phase": "preflight",
@@ -452,12 +452,12 @@
         "slot": "idle/commit-before",
         "waited": {
           "checkpoints": 1,
-          "endedAt": "2026-09-18T02:19:59.890575Z",
+          "endedAt": "2026-09-18T02:39:05.707418Z",
           "measuredSeconds": 20.0,
           "mode": "control-clock",
           "requestedSeconds": 20,
-          "startedAt": "2026-09-18T02:19:59.890138Z",
-          "wallSeconds": 0.00043773651123046875
+          "startedAt": "2026-09-18T02:39:05.707016Z",
+          "wallSeconds": 0.0004038810729980469
         }
       },
       {
@@ -483,12 +483,12 @@
         "slot": "idle/commit-after",
         "waited": {
           "checkpoints": 1,
-          "endedAt": "2026-09-18T02:19:59.891339Z",
+          "endedAt": "2026-09-18T02:39:05.708160Z",
           "measuredSeconds": 70.0,
           "mode": "control-clock",
           "requestedSeconds": 70,
-          "startedAt": "2026-09-18T02:19:59.891082Z",
-          "wallSeconds": 0.0002579689025878906
+          "startedAt": "2026-09-18T02:39:05.707913Z",
+          "wallSeconds": 0.00024819374084472656
         }
       },
       {
@@ -916,13 +916,16 @@
         "waited": null
       }
     ],
-    "sourceDigest": "a70866004417739ad7002aaf7b0b3261f9c9b638758e7dda402d3788556b7331",
-    "startedAt": "2026-09-18T02:19:44.873402Z",
+    "sourceDigest": "1255dac7772a01840d31122c5a183660383060e306dcde9f251e6aa90ea01738",
+    "startedAt": "2026-09-18T02:38:50.690961Z",
     "target": "local",
     "timing": "control-clock",
     "transactionReleases": [
       {
         "code": 10,
+        "expiryProven": true,
+        "idleSeconds": 90.0,
+        "message": "The referenced transaction has expired or is no longer valid.",
         "released": true,
         "skipped": false,
         "status": "ABORTED",
@@ -930,6 +933,9 @@
       },
       {
         "code": 10,
+        "expiryProven": true,
+        "idleSeconds": 90.0,
+        "message": "The referenced transaction has expired or is no longer valid.",
         "released": true,
         "skipped": false,
         "status": "ABORTED",
@@ -937,6 +943,9 @@
       },
       {
         "code": 10,
+        "expiryProven": true,
+        "idleSeconds": 90.0,
+        "message": "The referenced transaction has expired or is no longer valid.",
         "released": true,
         "skipped": false,
         "status": "ABORTED",
@@ -946,13 +955,13 @@
     "unrecovered": []
   },
   "runtime": {
-    "artifactSha256": "cc3f799d4fb21bdd80aaae99ca1ae889595ed59ad64ab14a7824c372f1f33e0c",
-    "childObservedArtifactSha256": "cc3f799d4fb21bdd80aaae99ca1ae889595ed59ad64ab14a7824c372f1f33e0c",
+    "artifactSha256": "caf3b254ceabd5f0b3280b6e39884326aeea28ffa4536249f93b5c52c1ab1f81",
+    "childObservedArtifactSha256": "caf3b254ceabd5f0b3280b6e39884326aeea28ffa4536249f93b5c52c1ab1f81",
     "runtimeInputCount": 400,
     "runtimeInputsClean": true,
     "runtimeInputsDigest": "32a872989f5e0d8fabf17a2a30cda85a2467574e23c4712a37711f0dbd196d18",
-    "sourceCommit": "62bb44f6d812a19af3cf360ffa4c578a09e0b81d",
-    "sourceRoot": "/Users/tk/work/firebase-emulator/.worktree/o3-transaction-prep",
+    "sourceCommit": "4114ae6355516a919502dc7c8aecc0ad7c7ad97b",
+    "sourceRoot": "repository-root",
     "version": "fireemu 0.7.1",
     "wrongControlTokenStatus": 403
   },
@@ -976,6 +985,6 @@
     "disagreements": {},
     "kind": "txn-expiry-local-self-contract-v1"
   },
-  "sourceDigestAfter": "a70866004417739ad7002aaf7b0b3261f9c9b638758e7dda402d3788556b7331",
-  "sourceDigestBefore": "a70866004417739ad7002aaf7b0b3261f9c9b638758e7dda402d3788556b7331"
+  "sourceDigestAfter": "1255dac7772a01840d31122c5a183660383060e306dcde9f251e6aa90ea01738",
+  "sourceDigestBefore": "1255dac7772a01840d31122c5a183660383060e306dcde9f251e6aa90ea01738"
 }

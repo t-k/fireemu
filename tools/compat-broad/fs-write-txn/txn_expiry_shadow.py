@@ -69,6 +69,11 @@ STATUS_TO_CODE = {
 }
 
 DEFAULT_TIMEOUT_SECONDS = plan_module.DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+#: What `sourceRoot` records. The artifact was built from the repository that
+#: contains these campaign modules; which directory that is on disk is not part
+#: of the evidence.
+REPOSITORY_ROOT_MARKER = "repository-root"
 CHILD_TIMEOUT_SECONDS = 600
 
 PUBLICATION_NOTE = (
@@ -105,6 +110,7 @@ VOLATILE_KEYS = (
     # runtimeInputsDigest, which is deliberately not listed here.
     "artifactSha256",
     "childObservedArtifactSha256",
+    "sourceRoot",
 )
 
 
@@ -138,7 +144,11 @@ def runtime_binding(artifact, root):
     return {
         "artifactSha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
         "sourceCommit": commit,
-        "sourceRoot": str(root),
+        # A repo-relative marker, never an absolute path. This record is
+        # published, and an absolute path both leaks the operator's filesystem
+        # and makes any assertion about it fail from another checkout. The
+        # path-independent binding is runtimeInputsDigest.
+        "sourceRoot": REPOSITORY_ROOT_MARKER,
         "runtimeInputsDigest": digest(inputs),
         "runtimeInputCount": len(inputs),
         "runtimeInputsClean": dirty == "",
@@ -312,7 +322,9 @@ def child(output, nonce, owner_id):
         "firestoreOrigin": firestore,
         "controlOrigin": control,
         "wrongTokenStatus": wrong,
-        "artifactPath": argv[0],
+        # The basename only: the absolute path is the operator's filesystem and
+        # this record is published. The digest below is the actual proof.
+        "artifactName": Path(argv[0]).name,
         "artifactSha256": hashlib.sha256(Path(argv[0]).read_bytes()).hexdigest(),
     }
     save(Path(output) / "receipt.json", receipt)

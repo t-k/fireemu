@@ -67,6 +67,50 @@ def endpoint(target: str, origin: str | None) -> str:
 
 BUILD_COMMAND = ["cargo", "build", "--locked", "-p", "fireemu", "--message-format=json"]
 
+# The limit below is a hang guard, not a performance budget: a cold worktree with an
+# empty target/ legitimately needs many minutes to build fireemu from scratch, so the
+# default is generous enough that a slow first build never looks like a failure.
+BUILD_TIMEOUT_VARIABLE = "FIREEMU_BUILD_TIMEOUT_SECONDS"
+DEFAULT_BUILD_TIMEOUT_SECONDS = 1800
+
+
+def build_timeout(environment: dict) -> int:
+    """Seconds allowed for the artifact build, overridable per environment."""
+    raw = environment.get(BUILD_TIMEOUT_VARIABLE)
+    if raw is None:
+        return DEFAULT_BUILD_TIMEOUT_SECONDS
+    value = raw.strip()
+    if not (value.isascii() and value.isdigit()) or int(value) <= 0:
+        raise ValueError(
+            f"{BUILD_TIMEOUT_VARIABLE} must be a positive whole number of seconds, "
+            f"got {raw!r}"
+        )
+    return int(value)
+
+
+def run_build(
+    command: list[str], environment: dict, limit: int
+) -> subprocess.CompletedProcess:
+    """Run the build, translating a hang into an actionable error."""
+    try:
+        return subprocess.run(
+            command,
+            cwd=ROOT,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            check=True,
+            timeout=limit,
+        )
+    except subprocess.TimeoutExpired as error:
+        # subprocess.run kills and reaps the child before re-raising, so no cargo
+        # process survives this path.
+        raise TimeoutError(
+            f"the artifact build did not finish within {limit} seconds; warm the "
+            "build with `cargo build -p fireemu` in this worktree, or raise "
+            f"{BUILD_TIMEOUT_VARIABLE}"
+        ) from error
+
 
 def child_identity_matches(command: str, argv: list[str]) -> bool:
     return command.strip() == " ".join(argv)
@@ -168,16 +212,11 @@ def validate_normal_build(workspace: Path, environment: dict) -> None:
 
 def build_artifact() -> tuple[Path, dict]:
     inputs = runtime_inputs(ROOT)
+    # Read the limit from the full environment: it steers this Python supervisor, so the
+    # sanitized child environment deliberately never carries it into cargo.
+    limit = build_timeout(dict(os.environ))
     validate_normal_build(ROOT, sanitized_environment(dict(os.environ)))
-    completed = subprocess.run(
-        BUILD_COMMAND,
-        cwd=ROOT,
-        env=sanitized_environment(dict(os.environ)),
-        text=True,
-        stdout=subprocess.PIPE,
-        check=True,
-        timeout=300,
-    )
+    completed = run_build(BUILD_COMMAND, sanitized_environment(dict(os.environ)), limit)
     messages = [json.loads(line) for line in completed.stdout.splitlines()]
     paths = [
         Path(message["executable"])

@@ -3,6 +3,8 @@
 import os
 import subprocess
 import sys
+import time
+import uuid
 from copy import deepcopy
 from itertools import product
 from pathlib import Path
@@ -10,9 +12,13 @@ from pathlib import Path
 import pytest
 from aggregation_corpus import CONFIG
 from owned_runner import (
+    BUILD_TIMEOUT_VARIABLE,
+    DEFAULT_BUILD_TIMEOUT_SECONDS,
+    build_timeout,
     child_identity_matches,
     local_addresses,
     observation_complete,
+    run_build,
     run_owned,
     sanitized_environment,
     validate_build,
@@ -221,3 +227,48 @@ def test_bounded_lifecycle_state_space_keeps_semantic_mismatch_separate():
         else:
             with pytest.raises(AssertionError):
                 assert_owned_run_completed(report)
+
+
+def test_build_timeout_defaults_to_a_cold_build_safe_limit():
+    assert DEFAULT_BUILD_TIMEOUT_SECONDS == 1800
+    assert build_timeout({}) == DEFAULT_BUILD_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize("raw,seconds", [("60", 60), (" 900 ", 900), ("3600", 3600)])
+def test_build_timeout_honours_a_positive_integer_override(raw, seconds):
+    assert build_timeout({BUILD_TIMEOUT_VARIABLE: raw}) == seconds
+
+
+@pytest.mark.parametrize("raw", ["", "0", "-1", "abc", "1.5", "60s", "1e3", "０"])
+def test_build_timeout_rejects_invalid_values_instead_of_falling_back(raw):
+    with pytest.raises(ValueError, match=BUILD_TIMEOUT_VARIABLE):
+        build_timeout({BUILD_TIMEOUT_VARIABLE: raw})
+
+
+def test_build_timeout_variable_never_reaches_the_build_child_environment():
+    assert BUILD_TIMEOUT_VARIABLE not in sanitized_environment(
+        {"PATH": "/bin", BUILD_TIMEOUT_VARIABLE: "60"}
+    )
+
+
+def test_run_build_reports_a_hung_build_and_reaps_the_child():
+    marker = "fireemu-build-timeout-probe-" + uuid.uuid4().hex
+    started = time.monotonic()
+    with pytest.raises(TimeoutError) as raised:
+        run_build(
+            ["sh", "-c", f"sleep 120 # {marker}"], {"PATH": os.environ["PATH"]}, 1
+        )
+    assert time.monotonic() - started < 30
+    assert "1 seconds" in str(raised.value)
+    assert "cargo build -p fireemu" in str(raised.value)
+    assert BUILD_TIMEOUT_VARIABLE in str(raised.value)
+    listing = subprocess.run(
+        ["ps", "-A", "-o", "args="], text=True, stdout=subprocess.PIPE, check=True
+    )
+    assert marker not in listing.stdout
+
+
+def test_run_build_returns_the_completed_process_when_it_finishes():
+    completed = run_build(["sh", "-c", "printf ok"], {"PATH": os.environ["PATH"]}, 60)
+    assert completed.returncode == 0
+    assert completed.stdout == "ok"

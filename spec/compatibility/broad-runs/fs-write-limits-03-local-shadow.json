@@ -1,79 +1,174 @@
 {
-  "artifact": {
-    "buildCommand": [
-      "cargo",
-      "build",
-      "--locked",
-      "-p",
-      "fireemu",
-      "--message-format=json"
-    ],
-    "runtimeInputCount": 407,
-    "runtimeInputsDigest": "e146866b0aa7a21ef9069508ffb57820d7c6bb245f6b692298b1838aea3d5330",
-    "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-    "sha256": "c35e1d5c2ddc13f44df59fea5c5ce257ecabd3130bd6c3acf3a8827754e1d5c9"
-  },
   "campaignId": "FS-WRITE-LIMITS-03",
-  "codeSourceHead": "4e301e8691fe7e65d424777c08d7d332b3b6828d",
-  "digests": {
-    "campaignSources": {
-      "spec/limits/firestore-standard-2026-08-25.json": "2c29e7492fd581e236ce9f044294bf59e9a6b89f2c4dc3c48d9f74beb291d406",
-      "tools/compat-broad/fs-write-limits/collector_03.py": "5c69fa9d316392dfc9d7a09e5db5e2cd2e5faa42ba4c0e9bfc763615d326f4de",
-      "tools/compat-broad/fs-write-limits/comparator_03.py": "09028e8f57e2f9d7dc7dbade3ec6435d01efa466d76a4be6fb82c8fb02e9a477",
-      "tools/compat-broad/fs-write-limits/compiler_03.py": "b19e3d391f700fc8bcc9b6029f5b1e59ee642eea359609add300b4ff192aa747",
-      "tools/compat-broad/fs-write-limits/expectations_03.py": "65b66779abdd365b358d01271658c9f047c8f312248e204900711ffd2c8ab4bd",
-      "tools/compat-broad/fs-write-limits/shadow.py": "a340d768ad298390ea64d027cc9b798111e157e5207790c398baaefe012db712",
-      "tools/compat-broad/fs-write-limits/shadow_03.py": "38cbf8bc501648a3edeb9e92a3b6cfc70670c67fceca273049cf420c04526556",
-      "tools/compat-broad/shared_gate.py": "15f7006c43b3d1969d9a00c9c8f8f4a077645f8e8ae81aa6d38b372cef3b39e3"
-    },
-    "childManifestDigest": "6293ad9322c4322ecdd6f524796187c1574536cee7e5f4e33b0422b7b0a0c617",
-    "parentManifestSha256": "90e75798583c5ac12482286140bd8fc79197eff4146f045713d6fc14e6bef271",
-    "sourceInputsBound": true,
-    "supervisorManifestSha256": "6bfa06bfebee1ae4e9f861ccad3fd5f3244cd957b3fa55a6f0381afc7412a0d2"
-  },
-  "execution": {
-    "allOwnedResourcesAbsentAfterRecovery": true,
-    "cleanupComplete": true,
-    "cleanupValidated": true,
-    "configurationDigest": "a6afc181a4c7beb7e62f9be69a0b2b938d440339a4fec3dd9d533fff6c9b16a4",
-    "database": "(default)",
-    "indexConfiguration": {
-      "sha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
-      "sourceCommit": "2526c61eda5fc53ac91250307786127ae3c601be"
-    },
-    "infrastructureFailures": [],
-    "observationRequests": 63,
-    "ownedDocuments": 20,
-    "ownedProcess": {
-      "listenersClosed": true,
-      "pid": 50915,
-      "stopped": true
-    },
-    "pendingDifferences": [
-      {
-        "basis": "whole-request refusal was not a typed INVALID_ARGUMENT",
-        "index": 58,
-        "pending": true
-      }
-    ],
-    "pendingRows": [
-      54,
-      57,
-      58,
-      61
-    ],
-    "project": "demo-firestore-probe",
-    "receiptValidated": true,
-    "recordingComplete": true,
-    "recoveryRequests": 60,
-    "semanticMismatches": [],
-    "stateValidation": true,
-    "target": "owned-local-artifact-on-loopback"
+  "campaignSources": {
+    "spec/limits/firestore-standard-2026-08-25.json": "2c29e7492fd581e236ce9f044294bf59e9a6b89f2c4dc3c48d9f74beb291d406",
+    "tools/compat-broad/fs-write-limits/collector_03.py": "5c69fa9d316392dfc9d7a09e5db5e2cd2e5faa42ba4c0e9bfc763615d326f4de",
+    "tools/compat-broad/fs-write-limits/comparator_03.py": "1528fd6bb73c9c7228a155d4228893cda0653d2547b41042cd7a2668b091d843",
+    "tools/compat-broad/fs-write-limits/compiler_03.py": "691c8b6930cebdf8dd83f1a2e238726e2fdeea0a1bce69012de3567a5bfc05e7",
+    "tools/compat-broad/fs-write-limits/expectations_03.py": "390f0b56bd7fd97d6be8aedb8cb105860e7e6cbc36fc0fd70a20fac089334d1d",
+    "tools/compat-broad/fs-write-limits/shadow.py": "a340d768ad298390ea64d027cc9b798111e157e5207790c398baaefe012db712",
+    "tools/compat-broad/fs-write-limits/shadow_03.py": "302b9a59390ec4a65b172cb0e78a2bd36e12e03a99da2b48c2587dfad7258c4f",
+    "tools/compat-broad/fs-write-limits/shadow_03b.py": "87924f501a6c5a6173eb887bf12e44c75a61e89084f2be8b2e37c10b43684899",
+    "tools/compat-broad/shared_gate.py": "15f7006c43b3d1969d9a00c9c8f8f4a077645f8e8ae81aa6d38b372cef3b39e3"
   },
   "formalCompatibilityClaim": false,
-  "kind": "fs-write-limits-03-local-shadow-v1",
-  "note": "Local artifact evidence only. The executed nonce, the owned resource names and the retained binary live in a private output directory and are not published here. This is not a production observation and promotes nothing.",
+  "kind": "fs-write-limits-03-local-shadow-v2",
+  "note": "Local artifact evidence only. The executed nonces, the owned resource names and the retained binaries live in private output directories and are not published here. This is not a production observation and promotes nothing. The local shadow supervisor pins the historical index configuration and verifies its digest, so it cannot apply the declared exemption; the document-name rows are pending for exactly that reason.",
+  "parts": {
+    "A": {
+      "artifact": {
+        "buildCommand": [
+          "cargo",
+          "build",
+          "--locked",
+          "-p",
+          "fireemu",
+          "--message-format=json"
+        ],
+        "runtimeInputCount": 407,
+        "runtimeInputsDigest": "e146866b0aa7a21ef9069508ffb57820d7c6bb245f6b692298b1838aea3d5330",
+        "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+        "sha256": "ad675de6443bf2e04058362313209a2b2cdd6ce21d181f93def649b224c3adae"
+      },
+      "campaignId": "FS-WRITE-LIMITS-03A",
+      "digests": {
+        "parentManifestSha256": "77a52711edb7577f5b240faa9323b45905537b1add9f7a2ce31832f281dfbb88",
+        "sourceInputsBound": true,
+        "supervisorManifestSha256": "4546e00bddb46f270c708c1827e4a36d9ed6563dbc24c7d926b9c797e32865b0"
+      },
+      "execution": {
+        "allOwnedResourcesAbsentAfterRecovery": true,
+        "cleanupComplete": true,
+        "cleanupValidated": true,
+        "configurationDigest": "af921b359103ea893c89103a27328472b6aa104bbfc7ac33f5c63047bc2c0f38",
+        "database": "(default)",
+        "indexConfiguration": {
+          "sha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
+          "sourceCommit": "2526c61eda5fc53ac91250307786127ae3c601be"
+        },
+        "infrastructureFailures": [],
+        "observationRequests": 56,
+        "ownedDocuments": 18,
+        "ownedProcess": {
+          "listenersClosed": true,
+          "pid": 24053,
+          "stopped": true
+        },
+        "pendingDifferences": [
+          {
+            "basis": "exact typed document/version not returned",
+            "index": 36,
+            "pending": true,
+            "reason": "the local shadow supervisor pins the historical index configuration and cannot apply the declared exemption, so the local run shows the index-entry refusal the exemption exists to remove"
+          },
+          {
+            "basis": "exact typed document/version not returned",
+            "index": 39,
+            "pending": true,
+            "reason": "the local shadow supervisor pins the historical index configuration and cannot apply the declared exemption, so the local run shows the index-entry refusal the exemption exists to remove"
+          }
+        ],
+        "pendingRows": [
+          36,
+          37,
+          38,
+          39,
+          52,
+          53,
+          54,
+          55
+        ],
+        "project": "demo-firestore-probe",
+        "receiptValidated": true,
+        "recordingComplete": true,
+        "recoveryRequests": 54,
+        "semanticMismatches": [],
+        "stateValidation": true,
+        "target": "owned-local-artifact-on-loopback"
+      }
+    },
+    "B": {
+      "artifact": {
+        "buildCommand": [
+          "cargo",
+          "build",
+          "--locked",
+          "-p",
+          "fireemu",
+          "--message-format=json"
+        ],
+        "runtimeInputCount": 407,
+        "runtimeInputsDigest": "e146866b0aa7a21ef9069508ffb57820d7c6bb245f6b692298b1838aea3d5330",
+        "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+        "sha256": "9a609d87b96f2600cd5ee6516e1d9cce086b189b8d13c219d6eb085a564eb267"
+      },
+      "campaignId": "FS-WRITE-LIMITS-03B",
+      "digests": {
+        "parentManifestSha256": "aae00c092f7e3313bba91cf44dc0b9a77e22eb1357b7097f6dfcecbd27e5b42d",
+        "sourceInputsBound": true,
+        "supervisorManifestSha256": "e7cb3d9c18cbe3ce623a2e73834ab8f889944c7e75db04ed7aa34b6a87070579"
+      },
+      "execution": {
+        "allOwnedResourcesAbsentAfterRecovery": true,
+        "cleanupComplete": true,
+        "cleanupValidated": true,
+        "configurationDigest": "2ab7fc20e10a3442a8f810dd401929adbf3406c296eacdf4dd0b7495a4016f58",
+        "database": "(default)",
+        "indexConfiguration": {
+          "sha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
+          "sourceCommit": "2526c61eda5fc53ac91250307786127ae3c601be"
+        },
+        "infrastructureFailures": [],
+        "observationRequests": 33,
+        "ownedDocuments": 11,
+        "ownedProcess": {
+          "listenersClosed": true,
+          "pid": 24283,
+          "stopped": true
+        },
+        "pendingDifferences": [
+          {
+            "basis": "negative boundary was not refused with INVALID_ARGUMENT",
+            "index": 16,
+            "pending": true,
+            "reason": "the catalog records this limit as unsupported, so the expectation is the documented production behaviour rather than an observed local one"
+          },
+          {
+            "basis": "typed resource absence not proven",
+            "index": 17,
+            "pending": true,
+            "reason": "the catalog records this limit as unsupported, so the expectation is the documented production behaviour rather than an observed local one"
+          },
+          {
+            "basis": "whole-request refusal was not a typed INVALID_ARGUMENT",
+            "index": 20,
+            "pending": true,
+            "reason": "the catalog records this limit as unsupported, so the expectation is the documented production behaviour rather than an observed local one"
+          }
+        ],
+        "pendingRows": [
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24
+        ],
+        "project": "demo-firestore-probe",
+        "receiptValidated": true,
+        "recordingComplete": true,
+        "recoveryRequests": 33,
+        "semanticMismatches": [],
+        "stateValidation": true,
+        "target": "owned-local-artifact-on-loopback"
+      }
+    }
+  },
   "productionExecuted": false,
-  "sourceCommit": "4e301e8691fe7e65d424777c08d7d332b3b6828d",
+  "sourceCommit": "2d563ec82bc117a7772f42b988b26b8ec488886a",
   "status": "completed-local-only"
 }

@@ -3,22 +3,23 @@
     "owner permission envelope fields are unset",
     "no production release artifact SHA-256 is bound",
     "the limits production runner is bound to the limits-02 compiler and cannot execute this campaign",
-    "no fresh production nonce is reserved"
+    "no fresh production nonce is reserved for either part",
+    "the declared index exemption is not deployed"
   ],
   "campaignId": "FS-WRITE-LIMITS-03",
   "collector": {
-    "differenceFromLimits02": "Every mutating method is gated by the write-safety predicate, not PATCH alone, because this campaign sends its first writes over :batchWrite. The preflight prefix length is read from the plan. collector.py is byte-for-byte unchanged, so the frozen limits-02 collector source digest still resolves.",
+    "differenceFromLimits02": "Every mutating method is gated by the write-safety predicate, not PATCH alone, because this campaign sends writes over :batchWrite. The preflight prefix length is read from the plan. A row the campaign has declared it cannot predict locally is excused from the safety predicate, though its journal integrity is still checked. collector.py is byte-for-byte unchanged, so the frozen limits-02 collector source digest still resolves.",
     "digest": "5c69fa9d316392dfc9d7a09e5db5e2cd2e5faa42ba4c0e9bfc763615d326f4de",
     "path": "tools/compat-broad/fs-write-limits/collector_03.py",
     "productionCollector": null,
     "scope": "REST BatchWrite per-position outcome, create-only document writes, typed readbacks and request-stage name refusals, with ownership and version bound cleanup. No configuration, index, Rules or account operation.",
     "status": "local-only",
-    "technicalBlocker": "The limits production runner in tools/compat-broad/fs-write-limits/production.py is bound to the limits-02 compiler and does not yet accept this campaign. No frozen artifact, permission envelope or nonce reservation exists."
+    "technicalBlocker": "The limits production runner in tools/compat-broad/fs-write-limits/production.py is bound to the limits-02 compiler and does not yet accept this campaign."
   },
   "comparator": {
-    "addition": "A per-row structural field reports status, typed error code and status, the per-item BatchWrite codes and whether the document is present, with diagnostic wording removed. It is additive and never changes the classification. The duplicate-document control is expected to differ in wording, and this field keeps that from hiding the continuation answer.",
+    "addition": "A per-row structural field reports status, typed error code and status, the per-item BatchWrite codes and whether the document is present, with diagnostic wording removed. It is additive and never changes the classification. It is what keeps a known wording difference from hiding the answer this campaign exists to get.",
     "contract": "The limits-02 contract: both plans are regenerated from the compiler, every ordered request including its typed body is checked, a complete response journal is required, and normalized document identity and server timestamps may differ as EXPECTED_NONDETERMINISM while everything else, message text included, is significant.",
-    "digest": "09028e8f57e2f9d7dc7dbade3ec6435d01efa466d76a4be6fb82c8fb02e9a477",
+    "digest": "1528fd6bb73c9c7228a155d4228893cda0653d2547b41042cd7a2668b091d843",
     "path": "tools/compat-broad/fs-write-limits/comparator_03.py",
     "productionComparator": null,
     "status": "preparation-only"
@@ -32,10 +33,11 @@
     "requiredInputs": [
       "owner identity and explicit permission reference covering this owned-data campaign",
       "project/database/tenant and configuration readback",
-      "fresh nonce, absent from every current, next and backlog campaign",
+      "a fresh nonce per part, absent from every current, next and backlog campaign",
       "current release artifact SHA-256",
       "collector and comparator digests",
-      "recovery owner and tariff acceptance"
+      "recovery owner and tariff acceptance",
+      "the declared index exemption deployed and READY"
     ],
     "stopConditions": [
       "binding drift",
@@ -46,23 +48,30 @@
       "incomplete receipt"
     ]
   },
-  "kind": "firestore-write-limits-campaign-binding-v1",
+  "kind": "firestore-write-limits-campaign-binding-v2",
   "localShadow": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03-local-shadow.json",
     "productionExecuted": false,
-    "sha256": "dcda7f42ee489b16175771b12c52fa4195869c27aa190d239b80808106f2d232",
+    "sha256": "68d9c33753342814dc7dfb74c91c172626c9d883ed6d0f5f19a48dff120f1fbe",
     "status": "completed"
   },
   "manifest": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03.json",
-    "sha256": "5b7f987cfeac11970d7b9f0a3747f765c62631b6dbe00493809906a595b8b06d"
+    "sha256": "441117da6077e3a78cb217301636ab466a7b6d3a79ce6ef368eaf870ddf34196"
   },
+  "parts": [
+    "FS-WRITE-LIMITS-03A",
+    "FS-WRITE-LIMITS-03B"
+  ],
   "productionExecuted": false,
   "source": {
-    "codeSourceHead": "4e301e8691fe7e65d424777c08d7d332b3b6828d",
-    "commit": "4e301e8691fe7e65d424777c08d7d332b3b6828d",
+    "codeSourceHead": "2d563ec82bc117a7772f42b988b26b8ec488886a",
+    "commit": "2d563ec82bc117a7772f42b988b26b8ec488886a",
     "productionArtifactSha256": null,
-    "shadowArtifactSha256": "c35e1d5c2ddc13f44df59fea5c5ce257ecabd3130bd6c3acf3a8827754e1d5c9"
+    "shadowArtifactSha256": {
+      "A": "ad675de6443bf2e04058362313209a2b2cdd6ce21d181f93def649b224c3adae",
+      "B": "9a609d87b96f2600cd5ee6516e1d9cce086b189b8d13c219d6eb085a564eb267"
+    }
   },
   "status": "BLOCKED_OWNER",
   "technicalStatus": "BLOCKED_TECHNICAL"

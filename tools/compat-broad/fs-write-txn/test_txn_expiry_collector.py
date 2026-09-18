@@ -969,3 +969,419 @@ def test_a_request_the_collector_refused_to_send_is_not_counted():
     endpoint = StatefulEndpoint(preexisting_role="control")
     receipt, _ = run_against(endpoint)
     assert receipt["requestCount"] == len(endpoint.calls)
+
+
+# -- a create whose outcome the run never learned ---------------------------
+
+
+class LostCreateResponseEndpoint(StatefulEndpoint):
+    """A create whose response never reaches the run, with or without effect.
+
+    A request that was sent and never answered leaves the run unable to say
+    whether the document exists. The endpoint can apply the write, drop it, or
+    leave a foreign document in its place, so the collector's answer to each
+    can be checked separately.
+    """
+
+    def __init__(self, *, role="control", applies=True, raises=False, foreign=False):
+        super().__init__()
+        self.role = role
+        self.applies = applies
+        self.raises = raises
+        self.foreign = foreign
+
+    def _is_create_of(self, request):
+        if request["rpc"] != "Commit":
+            return False
+        writes = (request.get("body") or {}).get("writes") or []
+        if len(writes) != 1 or "update" not in writes[0]:
+            return False
+        if (writes[0].get("currentDocument") or {}).get("exists") is not False:
+            return False
+        return writes[0]["update"]["name"].endswith("/" + self.role)
+
+    def __call__(self, request):
+        if not self._is_create_of(request):
+            return super().__call__(request)
+        name = request["body"]["writes"][0]["update"]["name"]
+        if self.applies:
+            super().__call__(request)
+            if self.foreign:
+                self.documents[name] = {"external": {"stringValue": "KEEP-THIS"}}
+        else:
+            self.calls.append(request)
+        if self.raises:
+            raise OSError("injected lost create response")
+        return {"code": None, "status": None, "message": "timeout", "complete": False}
+
+
+def cleanup_entries(receipt):
+    return {entry["role"]: entry for entry in receipt["cleanup"]}
+
+
+def test_a_create_whose_response_is_lost_stays_this_run_s_responsibility():
+    endpoint = LostCreateResponseEndpoint()
+    receipt, collection = run_against(endpoint)
+    assert receipt["failure"] == "incomplete-response"
+    entry = cleanup_entries(receipt)["control"]
+    assert entry["ownershipUnconfirmed"] is True
+    assert entry["resourceState"] == collector.CREATION_CONFIRMED
+    assert entry["complete"] is True
+    assert entry["absent"] is True
+    assert collection._name("control") in endpoint.deletes
+    assert receipt["responsibility"] == [
+        {
+            "role": "control",
+            "state": collector.CREATION_CONFIRMED,
+            "resolved": True,
+        }
+    ]
+    assert receipt["unrecovered"] == []
+
+
+def test_a_create_lost_to_an_exception_is_still_read_back_and_recovered():
+    endpoint = LostCreateResponseEndpoint(raises=True)
+    receipt, collection = run_against(endpoint)
+    assert receipt["failure"] == "OSError"
+    entry = cleanup_entries(receipt)["control"]
+    assert entry["ownershipUnconfirmed"] is True
+    assert entry["ownedRead"]["code"] == collector.OK
+    assert collection._name("control") in endpoint.deletes
+    assert endpoint.documents == {}
+    assert receipt["unrecovered"] == []
+
+
+def test_a_lost_create_response_whose_write_never_landed_is_proven_absent():
+    endpoint = LostCreateResponseEndpoint(applies=False)
+    receipt, _ = run_against(endpoint)
+    entry = cleanup_entries(receipt)["control"]
+    assert entry["resourceState"] == collector.ABSENCE_CONFIRMED
+    assert entry["absent"] is True
+    assert entry["complete"] is True
+    assert endpoint.deletes == []
+    assert receipt["responsibility"] == [
+        {"role": "control", "state": collector.ABSENCE_CONFIRMED, "resolved": True}
+    ]
+    assert receipt["unrecovered"] == []
+
+
+def test_a_lost_create_response_never_deletes_a_document_it_cannot_prove_it_owns():
+    endpoint = LostCreateResponseEndpoint(foreign=True)
+    receipt, collection = run_against(endpoint)
+    entry = cleanup_entries(receipt)["control"]
+    assert entry["resourceState"] == collector.SENT_UNKNOWN
+    assert entry["failure"] == "ownership-not-proven"
+    assert endpoint.deletes == []
+    assert endpoint.documents[collection._name("control")] == {
+        "external": {"stringValue": "KEEP-THIS"}
+    }
+    assert receipt["responsibility"] == [
+        {"role": "control", "state": collector.SENT_UNKNOWN, "resolved": False}
+    ]
+    assert receipt["unrecovered"] == ["control"]
+    assert receipt["complete"] is False
+
+
+def test_a_resource_no_create_was_ever_sent_for_is_not_a_responsibility():
+    endpoint = StatefulEndpoint(preexisting_role="control")
+    receipt, _ = run_against(endpoint)
+    entries = cleanup_entries(receipt)
+    assert set(receipt["resourceStates"]) == set(cases.RESOURCE_ROLES)
+    for state in receipt["resourceStates"].values():
+        assert state in collector.RESOURCE_STATES
+    assert entries["control"]["resourceState"] == collector.ABSENCE_CONFIRMED
+    assert entries["locked-d"]["resourceState"] == collector.NOT_SENT
+    assert receipt["responsibility"] == []
+
+
+# -- a readback has to name the document that was requested -----------------
+
+
+def collection_with(transport):
+    prepared = collector.validate_collector_options(options())
+    compiled = plan_module.compile_plan(
+        prepared["nonce"],
+        prepared["ownerId"],
+        project=prepared["projectId"],
+        database=prepared["database"],
+    )
+    return collector.Collection(
+        options(), compiled, transport, advance=advances([]), monotonic=lambda: 0.0
+    )
+
+
+def owned_body(collection, role="control", state="created"):
+    return {
+        "name": collection._name(role),
+        "createTime": "2026-09-18T00:00:00.000001Z",
+        "updateTime": "2026-09-18T00:00:00.000001Z",
+        "fields": collector._marker_fields(OWNER, role, NONCE, state),
+    }
+
+
+def verify_step(role="control"):
+    return {
+        "slot": f"verify/example/{role}",
+        "phase": "readback",
+        "caseId": None,
+        "rpc": "GetDocument",
+        "role": role,
+        "verifiesCase": "idle-expiry/commit-after-idle",
+    }
+
+
+def readback_row(mutate=None):
+    """One recorded readback whose response body can be altered first."""
+    held = {}
+
+    def transport(request):
+        return {
+            "code": 0,
+            "status": "OK",
+            "message": None,
+            "complete": True,
+            "body": held["body"],
+        }
+
+    collection = collection_with(transport)
+    body = owned_body(collection)
+    if mutate is not None:
+        mutate(body)
+    held["body"] = body
+    response = collection._get("control")
+    return response, collection._record(verify_step(), response)
+
+
+def test_a_readback_naming_another_document_is_never_a_normal_readback():
+    correct, correct_row = readback_row()
+    variants = {
+        "get-wrong-document": [
+            readback_row(
+                lambda b: b.update(
+                    name=b["name"].replace(f"projects/{PROJECT}/", "projects/foreign/")
+                )
+            ),
+            readback_row(
+                lambda b: b.update(name=b["name"].rsplit("/", 1)[0] + "/someone-else")
+            ),
+            readback_row(
+                lambda b: b.update(
+                    name=b["name"].replace("/databases/(default)/", "/databases/other/")
+                )
+            ),
+        ],
+        "get-without-document": [readback_row(lambda b: b.pop("name"))],
+    }
+    assert correct["complete"] is True
+    assert correct_row["document"]["exists"] is True
+    for reason, rows in variants.items():
+        for response, row in rows:
+            assert response["complete"] is False, reason
+            assert response["incomplete"] == reason
+            assert row["complete"] is False
+            assert row["document"]["exists"] is None
+            assert row["document"]["incomplete"] == reason
+            assert row["document"] != correct_row["document"]
+
+
+def test_a_readback_of_a_different_value_stays_distinguishable():
+    _, correct_row = readback_row()
+    _, changed_row = readback_row(
+        lambda b: b["fields"].update(state={"stringValue": "not-created"})
+    )
+    assert changed_row["complete"] is True
+    assert changed_row["document"]["exists"] is True
+    assert changed_row["document"] != correct_row["document"]
+
+
+def test_a_wrong_document_readback_records_the_mismatch_without_run_identities():
+    _, row = readback_row(
+        lambda b: b.update(name=b["name"].rsplit("/", 1)[0] + "/someone-else")
+    )
+    mismatch = row["nameMismatch"]
+    assert mismatch["requested"] != mismatch["observed"]
+    rendered = repr(row)
+    for secret in (NONCE, OWNER, PROJECT):
+        assert secret not in rendered
+
+
+class WrongDocumentCleanupEndpoint(StatefulEndpoint):
+    """Every cleanup read answers with a document from another project."""
+
+    def __init__(self):
+        super().__init__()
+        self.collection = None
+
+    def attach(self, collection):
+        super().attach(collection)
+        self.collection = collection
+
+    def __call__(self, request):
+        response = super().__call__(request)
+        if (
+            in_cleanup(self.collection)
+            and request["rpc"] == "GetDocument"
+            and response.get("code") == collector.OK
+        ):
+            response["body"]["name"] = response["body"]["name"].replace(
+                f"projects/{PROJECT}/", "projects/foreign/"
+            )
+        return response
+
+    def run_recovery_read(self):
+        return None
+
+
+def test_a_cleanup_read_answered_with_another_document_deletes_nothing():
+    endpoint = WrongDocumentCleanupEndpoint()
+    receipt, _ = run_against(endpoint)
+    assert endpoint.deletes == []
+    for entry in receipt["cleanup"]:
+        assert entry["failure"] == "owned-read-incomplete"
+        assert entry["complete"] is False
+    assert sorted(receipt["unrecovered"]) == sorted(cases.RESOURCE_ROLES)
+
+
+# -- one authority-refusal latch shared by every send site ------------------
+
+
+class AuthorityRefusalInjector:
+    """Refuses one chosen request and records every request that follows it."""
+
+    def __init__(self, inner, *, code, status, when):
+        self.inner = inner
+        self.code = code
+        self.status = status
+        self.when = when
+        self.fired = False
+        self.after = []
+        self.collection = None
+
+    def attach(self, collection):
+        self.collection = collection
+        self.inner.attach(collection)
+
+    @property
+    def deletes(self):
+        return self.inner.deletes
+
+    @property
+    def documents(self):
+        return self.inner.documents
+
+    @property
+    def calls(self):
+        return self.inner.calls
+
+    def __call__(self, request):
+        if self.fired:
+            self.after.append(request)
+            return self.inner(request)
+        if self.when(self, request):
+            self.fired = True
+            return {
+                "code": self.code,
+                "status": self.status,
+                "message": "caller has no access",
+                "complete": True,
+            }
+        return self.inner(request)
+
+
+def _is_case_commit(injector, request):
+    if request["rpc"] != "Commit" or in_cleanup(injector.collection):
+        return False
+    writes = (request.get("body") or {}).get("writes") or []
+    return (
+        bool(writes)
+        and (writes[0].get("currentDocument") or {}).get("exists") is not False
+    )
+
+
+def _is_release_rollback(injector, request):
+    return request["rpc"] == "Rollback" and in_cleanup(injector.collection)
+
+
+def _is_ownership_read(injector, request):
+    return request["rpc"] == "GetDocument" and in_cleanup(injector.collection)
+
+
+def _is_conditional_delete(injector, request):
+    return request["rpc"] == "Commit" and in_cleanup(injector.collection)
+
+
+def _is_final_absence_read(injector, request):
+    return (
+        request["rpc"] == "GetDocument"
+        and in_cleanup(injector.collection)
+        and bool(injector.inner.deletes)
+    )
+
+
+POSITIONS = [
+    ("observation", _is_case_commit),
+    ("release", _is_release_rollback),
+    ("ownership-read", _is_ownership_read),
+    ("conditional-delete", _is_conditional_delete),
+    ("final-absence-read", _is_final_absence_read),
+]
+
+
+@pytest.mark.parametrize("position,when", POSITIONS, ids=[p for p, _ in POSITIONS])
+@pytest.mark.parametrize(
+    "code,status",
+    [
+        (collector.PERMISSION_DENIED, "PERMISSION_DENIED"),
+        (collector.UNAUTHENTICATED, "UNAUTHENTICATED"),
+    ],
+)
+def test_an_authority_refusal_at_any_send_site_stops_every_later_send(
+    position, when, code, status
+):
+    endpoint = AuthorityRefusalInjector(
+        StatefulEndpoint(), code=code, status=status, when=when
+    )
+    receipt, _ = run_against(endpoint)
+    assert endpoint.fired, position
+    assert endpoint.after == [], position
+    assert receipt["authorityRefusal"] == status
+    assert receipt["complete"] is False
+    assert receipt["unrecovered"]
+    assert any(
+        site["reason"] == "authority-refused" for site in receipt["failureSites"]
+    )
+
+
+@pytest.mark.parametrize(
+    "code,status",
+    [
+        (collector.PERMISSION_DENIED, "PERMISSION_DENIED"),
+        (collector.UNAUTHENTICATED, "UNAUTHENTICATED"),
+    ],
+)
+def test_an_authority_refusal_during_observation_keeps_open_transactions(code, status):
+    endpoint = AuthorityRefusalInjector(
+        StatefulEndpoint(), code=code, status=status, when=_is_case_commit
+    )
+    receipt, _ = run_against(endpoint)
+    assert receipt["failure"] == "authority-refused"
+    assert receipt["openTransactions"]
+    for entry in receipt["transactionReleases"]:
+        assert entry["skipped"] is True
+        assert entry["failure"] == "authority-refused-earlier"
+    assert endpoint.deletes == []
+
+
+def test_a_contention_abort_is_not_an_authority_refusal():
+    endpoint = AuthorityRefusalInjector(
+        StatefulEndpoint(),
+        code=collector.ABORTED,
+        status="ABORTED",
+        when=_is_case_commit,
+    )
+    receipt, _ = run_against(endpoint)
+    assert endpoint.fired
+    assert endpoint.after
+    assert receipt["authorityRefusal"] is None
+    assert receipt["missingCases"] == []
+    assert receipt["unrecovered"] == []

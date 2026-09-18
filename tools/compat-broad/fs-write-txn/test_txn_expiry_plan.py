@@ -252,3 +252,20 @@ def test_every_declared_post_state_has_a_readback_that_can_prove_it():
     for case in cases.CASES:
         if case["postState"]:
             assert case["id"] in verified, case["id"]
+
+
+def test_the_declared_time_bound_covers_recovery_as_well_as_observation():
+    """The owner grants one window; the run uses observation then recovery."""
+    value = plan.compile_plan(NONCE, OWNER)
+    budget = value["budget"]
+    assert budget["observationSeconds"] == plan.WALL_SECONDS
+    assert budget["recoverySeconds"] == plan.RECOVERY_SECONDS
+    assert budget["wallSeconds"] == (plan.WALL_SECONDS + plan.RECOVERY_SECONDS)
+    permission = plan.required_permission(value)
+    assert permission["timeUpperBound"] == budget["wallSeconds"]
+
+
+def test_the_collector_recovers_inside_the_window_the_plan_declares():
+    import txn_expiry_collector as collector
+
+    assert collector.RECOVERY_SECONDS == plan.RECOVERY_SECONDS

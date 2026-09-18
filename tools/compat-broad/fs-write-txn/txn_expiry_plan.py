@@ -54,9 +54,17 @@ CONTENDED_REQUEST_TIMEOUT_SECONDS = 120
 METADATA_REQUESTS = 8
 CREDENTIAL_REQUESTS = 2
 
-#: Wall-clock envelope. It must cover every per-request timeout plus every
-#: scheduled wait, with headroom; a test enforces that.
+#: Wall-clock envelope for the observation phase. It must cover every
+#: per-request timeout plus every scheduled wait, with headroom; a test
+#: enforces that.
 WALL_SECONDS = 1200
+
+#: Recovery runs on its own deadline after the observation envelope is spent,
+#: so an exhausted observation budget still leaves room to give owned documents
+#: back. The run can therefore occupy the project for the two windows in
+#: sequence, and the permission the owner grants has to say so rather than
+#: naming the observation window alone.
+RECOVERY_SECONDS = 180
 
 REQUEST_COST_MICROUSD = 100
 #: Conservative fixed network reserve. Every response is capped at 64 KiB and
@@ -423,6 +431,7 @@ def compile_plan(nonce, owner_id, *, project=PROJECT, database=DATABASE):
             "maxRequestBytes": MAX_REQUEST_BYTES,
             "maxResponseBytes": MAX_RESPONSE_BYTES,
             "deadlineSeconds": WALL_SECONDS,
+            "recoverySeconds": RECOVERY_SECONDS,
             "defaultRequestTimeoutSeconds": DEFAULT_REQUEST_TIMEOUT_SECONDS,
             "worstCaseSeconds": (
                 sum(step["timeoutSeconds"] for step in operations)
@@ -438,7 +447,9 @@ def compile_plan(nonce, owner_id, *, project=PROJECT, database=DATABASE):
             "accounts": 0,
             "resources": len(resources),
             "concurrency": 1,
-            "wallSeconds": WALL_SECONDS,
+            "observationSeconds": WALL_SECONDS,
+            "recoverySeconds": RECOVERY_SECONDS,
+            "wallSeconds": WALL_SECONDS + RECOVERY_SECONDS,
             "costMicrousd": cost,
             "networkMicrousd": network_microusd,
         },

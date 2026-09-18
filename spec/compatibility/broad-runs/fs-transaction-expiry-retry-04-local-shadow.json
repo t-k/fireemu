@@ -1,6 +1,6 @@
 {
   "acquisitionValidated": false,
-  "artifactSha256": "1a3cfc60bd22daf72964ccc3140a11966faeaa4314cc7b11a6f6e631aac465b9",
+  "artifactSha256": "59c81c3f409b7567d4f6be36066a67849b3486ca767328fb58d8ceb641a42691",
   "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
   "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
   "child": {
@@ -9,11 +9,11 @@
     "stopped": true
   },
   "complete": true,
-  "elapsedSeconds": 15.153,
+  "elapsedSeconds": 15.137,
   "kind": "txn-expiry-local-shadow-v1",
-  "nonce": "o3expiry-acb418ab1633e700",
+  "nonce": "o3expiry-b1659cf43fceeb3a",
   "note": "Owned local rehearsal only. The elapsed time was produced by advancing the emulator's virtual clock, not by waiting. No production request was sent and no parent group is promoted.",
-  "ownerId": "a52a5446d84b3c4bd48edfa6ab31b84f",
+  "ownerId": "828986fa29a7d896258a850e628b6f13",
   "productionExecuted": false,
   "promotionReady": false,
   "receipt": {
@@ -24,7 +24,8 @@
     "cleanup": [
       {
         "absence": {
-          "code": 5
+          "code": 5,
+          "incomplete": null
         },
         "absent": true,
         "complete": true,
@@ -43,13 +44,16 @@
           "code": 0,
           "status": "OK"
         },
-        "path": "compat/o3-txn-expiry/o3expiry-acb418ab1633e700/control",
+        "ownershipUnconfirmed": false,
+        "path": "compat/o3-txn-expiry/o3expiry-b1659cf43fceeb3a/control",
+        "resourceState": "creation-confirmed",
         "role": "control",
         "skipped": false
       },
       {
         "absence": {
-          "code": 5
+          "code": 5,
+          "incomplete": null
         },
         "absent": true,
         "complete": true,
@@ -68,13 +72,16 @@
           "code": 0,
           "status": "OK"
         },
-        "path": "compat/o3-txn-expiry/o3expiry-acb418ab1633e700/locked-a",
+        "ownershipUnconfirmed": false,
+        "path": "compat/o3-txn-expiry/o3expiry-b1659cf43fceeb3a/locked-a",
+        "resourceState": "creation-confirmed",
         "role": "locked-a",
         "skipped": false
       },
       {
         "absence": {
-          "code": 5
+          "code": 5,
+          "incomplete": null
         },
         "absent": true,
         "complete": true,
@@ -93,13 +100,16 @@
           "code": 0,
           "status": "OK"
         },
-        "path": "compat/o3-txn-expiry/o3expiry-acb418ab1633e700/locked-b",
+        "ownershipUnconfirmed": false,
+        "path": "compat/o3-txn-expiry/o3expiry-b1659cf43fceeb3a/locked-b",
+        "resourceState": "creation-confirmed",
         "role": "locked-b",
         "skipped": false
       },
       {
         "absence": {
-          "code": 5
+          "code": 5,
+          "incomplete": null
         },
         "absent": true,
         "complete": true,
@@ -118,13 +128,16 @@
           "code": 0,
           "status": "OK"
         },
-        "path": "compat/o3-txn-expiry/o3expiry-acb418ab1633e700/locked-c",
+        "ownershipUnconfirmed": false,
+        "path": "compat/o3-txn-expiry/o3expiry-b1659cf43fceeb3a/locked-c",
+        "resourceState": "creation-confirmed",
         "role": "locked-c",
         "skipped": false
       },
       {
         "absence": {
-          "code": 5
+          "code": 5,
+          "incomplete": null
         },
         "absent": true,
         "complete": true,
@@ -143,29 +156,31 @@
           "code": 0,
           "status": "OK"
         },
-        "path": "compat/o3-txn-expiry/o3expiry-acb418ab1633e700/locked-d",
+        "ownershipUnconfirmed": false,
+        "path": "compat/o3-txn-expiry/o3expiry-b1659cf43fceeb3a/locked-d",
+        "resourceState": "creation-confirmed",
         "role": "locked-d",
         "skipped": false
       }
     ],
     "complete": true,
     "database": "(default)",
-    "documentPrefix": "compat/o3-txn-expiry/o3expiry-acb418ab1633e700",
+    "documentPrefix": "compat/o3-txn-expiry/o3expiry-b1659cf43fceeb3a",
     "failure": null,
     "failureSites": [],
-    "finishedAt": "2026-09-18T06:20:03.503698Z",
+    "finishedAt": "2026-09-18T06:22:34.063044Z",
     "instance": {
       "artifactName": "fireemu",
-      "artifactSha256": "1a3cfc60bd22daf72964ccc3140a11966faeaa4314cc7b11a6f6e631aac465b9",
-      "controlOrigin": "http://127.0.0.1:65278",
-      "firestoreOrigin": "http://127.0.0.1:65277",
-      "parentPid": 33414,
-      "pid": 33416,
+      "artifactSha256": "59c81c3f409b7567d4f6be36066a67849b3486ca767328fb58d8ceb641a42691",
+      "controlOrigin": "http://127.0.0.1:49619",
+      "firestoreOrigin": "http://127.0.0.1:49618",
+      "parentPid": 48232,
+      "pid": 48234,
       "wrongTokenStatus": 403
     },
     "kind": "txn-expiry-collector-v1",
     "missingCases": [],
-    "nonce": "o3expiry-acb418ab1633e700",
+    "nonce": "o3expiry-b1659cf43fceeb3a",
     "openTransactions": [],
     "preconditions": [
       {
@@ -196,6 +211,14 @@
     ],
     "projectId": "fireemu-test",
     "requestCount": 68,
+    "resourceStates": {
+      "control": "creation-confirmed",
+      "locked-a": "creation-confirmed",
+      "locked-b": "creation-confirmed",
+      "locked-c": "creation-confirmed",
+      "locked-d": "creation-confirmed"
+    },
+    "responsibility": [],
     "rows": [
       {
         "caseId": null,
@@ -207,7 +230,7 @@
         },
         "observed": {
           "code": 5,
-          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-acb418ab1633e700/control\" not found.",
+          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-b1659cf43fceeb3a/control\" not found.",
           "status": "NOT_FOUND"
         },
         "phase": "preflight",
@@ -226,7 +249,7 @@
         },
         "observed": {
           "code": 5,
-          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-acb418ab1633e700/locked-a\" not found.",
+          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-b1659cf43fceeb3a/locked-a\" not found.",
           "status": "NOT_FOUND"
         },
         "phase": "preflight",
@@ -245,7 +268,7 @@
         },
         "observed": {
           "code": 5,
-          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-acb418ab1633e700/locked-b\" not found.",
+          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-b1659cf43fceeb3a/locked-b\" not found.",
           "status": "NOT_FOUND"
         },
         "phase": "preflight",
@@ -264,7 +287,7 @@
         },
         "observed": {
           "code": 5,
-          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-acb418ab1633e700/locked-c\" not found.",
+          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-b1659cf43fceeb3a/locked-c\" not found.",
           "status": "NOT_FOUND"
         },
         "phase": "preflight",
@@ -283,7 +306,7 @@
         },
         "observed": {
           "code": 5,
-          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-acb418ab1633e700/locked-d\" not found.",
+          "message": "Document \"projects/fireemu-test/databases/(default)/documents/compat/o3-txn-expiry/o3expiry-b1659cf43fceeb3a/locked-d\" not found.",
           "status": "NOT_FOUND"
         },
         "phase": "preflight",
@@ -676,12 +699,12 @@
         "slot": "idle/commit-before",
         "waited": {
           "checkpoints": 1,
-          "endedAt": "2026-09-18T06:20:03.488148Z",
+          "endedAt": "2026-09-18T06:22:34.051848Z",
           "measuredSeconds": 20.0,
           "mode": "control-clock",
           "requestedSeconds": 20,
-          "startedAt": "2026-09-18T06:20:03.487714Z",
-          "wallSeconds": 0.00043487548828125
+          "startedAt": "2026-09-18T06:22:34.051477Z",
+          "wallSeconds": 0.0003719329833984375
         }
       },
       {
@@ -744,12 +767,12 @@
         "slot": "idle/commit-after",
         "waited": {
           "checkpoints": 1,
-          "endedAt": "2026-09-18T06:20:03.489403Z",
+          "endedAt": "2026-09-18T06:22:34.052803Z",
           "measuredSeconds": 70.0,
           "mode": "control-clock",
           "requestedSeconds": 70,
-          "startedAt": "2026-09-18T06:20:03.489083Z",
-          "wallSeconds": 0.0003211498260498047
+          "startedAt": "2026-09-18T06:22:34.052559Z",
+          "wallSeconds": 0.0002460479736328125
         }
       },
       {
@@ -1387,8 +1410,8 @@
         "waited": null
       }
     ],
-    "sourceDigest": "60305305da9cf424fb3761b9e94fdba171160f932811bce5a1e946626db2dfed",
-    "startedAt": "2026-09-18T06:19:48.467703Z",
+    "sourceDigest": "946b895c25d4f15f582927b984abd54c29c9a6552bd7188c6668e8622c5d1ef1",
+    "startedAt": "2026-09-18T06:22:19.034408Z",
     "target": "local",
     "timing": "control-clock",
     "transactionReleases": [
@@ -1426,8 +1449,8 @@
     "unrecovered": []
   },
   "runtime": {
-    "artifactSha256": "1a3cfc60bd22daf72964ccc3140a11966faeaa4314cc7b11a6f6e631aac465b9",
-    "childObservedArtifactSha256": "1a3cfc60bd22daf72964ccc3140a11966faeaa4314cc7b11a6f6e631aac465b9",
+    "artifactSha256": "59c81c3f409b7567d4f6be36066a67849b3486ca767328fb58d8ceb641a42691",
+    "childObservedArtifactSha256": "59c81c3f409b7567d4f6be36066a67849b3486ca767328fb58d8ceb641a42691",
     "runtimeInputCount": 407,
     "runtimeInputsClean": true,
     "runtimeInputsDigest": "f61d1039be89bf7e25c322c8da9d997bfe86fe03f62e2d3afd7e75c30b56b7a1",
@@ -1456,6 +1479,6 @@
     "disagreements": {},
     "kind": "txn-expiry-local-self-contract-v1"
   },
-  "sourceDigestAfter": "60305305da9cf424fb3761b9e94fdba171160f932811bce5a1e946626db2dfed",
-  "sourceDigestBefore": "60305305da9cf424fb3761b9e94fdba171160f932811bce5a1e946626db2dfed"
+  "sourceDigestAfter": "946b895c25d4f15f582927b984abd54c29c9a6552bd7188c6668e8622c5d1ef1",
+  "sourceDigestBefore": "946b895c25d4f15f582927b984abd54c29c9a6552bd7188c6668e8622c5d1ef1"
 }

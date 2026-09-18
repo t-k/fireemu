@@ -508,3 +508,46 @@ def test_a_refusal_that_nevertheless_changes_its_document_is_detected():
     report = comparison.compare(produced, local)
     assert report["classification"] == comparison.SEMANTIC_MISMATCH
     assert "idle-expiry/commit-after-idle#postState" in report["differences"]
+
+
+def test_a_resource_whose_ownership_was_never_confirmed_is_indeterminate():
+    value = local()
+    value["responsibility"] = [
+        {"role": "control", "state": "sent-unknown", "resolved": False}
+    ]
+    result = comparison.compare(production(), value)
+    assert result["classification"] == comparison.INDETERMINATE
+    assert any(r["code"] == "unconfirmed-resource-ownership" for r in result["reasons"])
+
+
+def test_a_responsibility_the_run_discharged_is_not_a_reason():
+    value = local()
+    value["responsibility"] = [
+        {"role": "control", "state": "absence-confirmed", "resolved": True}
+    ]
+    result = comparison.compare(production(), value)
+    assert result["classification"] == comparison.EXPECTED_NONDETERMINISM
+
+
+def test_a_receipt_that_stopped_on_an_authority_refusal_is_indeterminate():
+    value = local()
+    value["authorityRefusal"] = "PERMISSION_DENIED"
+    result = comparison.compare(production(), value)
+    assert result["classification"] == comparison.INDETERMINATE
+    assert any(r["code"] == "authority-refused" for r in result["reasons"])
+
+
+def test_a_post_state_readback_that_named_another_document_is_indeterminate():
+    value = local()
+    for row in value["rows"]:
+        if row.get("verifiesCase") == "idle-expiry/commit-after-idle":
+            row["complete"] = False
+            row["incomplete"] = "get-wrong-document"
+            row["document"] = {
+                "exists": None,
+                "code": 0,
+                "incomplete": "get-wrong-document",
+            }
+    result = comparison.compare(production(), value)
+    assert result["classification"] == comparison.INDETERMINATE
+    assert any(r["code"] == "post-state-readback-incomplete" for r in result["reasons"])

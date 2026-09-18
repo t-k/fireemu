@@ -33,6 +33,7 @@
         "defaultRequestTimeoutSeconds": 10,
         "maxRequestBytes": 8192,
         "maxResponseBytes": 65536,
+        "recoverySeconds": 180,
         "worstCaseSeconds": 960
       },
       "budget": {
@@ -43,9 +44,11 @@
         "dataRequests": 85,
         "metadataRequests": 8,
         "networkMicrousd": 7188,
+        "observationSeconds": 1200,
+        "recoverySeconds": 180,
         "requests": 95,
         "resources": 5,
-        "wallSeconds": 1200
+        "wallSeconds": 1380
       },
       "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
       "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
@@ -1160,9 +1163,9 @@
         "mode": "READ"
       }
     ],
-    "sourceDigest": "60305305da9cf424fb3761b9e94fdba171160f932811bce5a1e946626db2dfed"
+    "sourceDigest": "946b895c25d4f15f582927b984abd54c29c9a6552bd7188c6668e8622c5d1ef1"
   },
-  "manifestDigest": "50c51e26427b114bd61dd5e9e698f8a54fcbd5973dc91a0494c152a184f264fa",
+  "manifestDigest": "daf9b3e7b88f601d93a483e37ac5e9213585e5fe72a9ea2b38ff78badaa7a80d",
   "note": "Preparation only. No credential, endpoint or production request is bound here. Execution needs a separate owner permission, a fresh nonce and admission review.",
   "ownerFieldsRequired": [
     "issuedAt",
@@ -1184,12 +1187,12 @@
     "allowedReobservations": 0,
     "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
     "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
-    "collectorSourceDigest": "60305305da9cf424fb3761b9e94fdba171160f932811bce5a1e946626db2dfed",
+    "collectorSourceDigest": "946b895c25d4f15f582927b984abd54c29c9a6552bd7188c6668e8622c5d1ef1",
     "concurrencyUpperBound": 1,
     "costUpperMicrousd": 16688,
     "database": "(default)",
     "kind": "txn-expiry-required-permission-v1",
-    "manifestSha256": "50c51e26427b114bd61dd5e9e698f8a54fcbd5973dc91a0494c152a184f264fa",
+    "manifestSha256": "daf9b3e7b88f601d93a483e37ac5e9213585e5fe72a9ea2b38ff78badaa7a80d",
     "nonce": "o3expiry-reference-000000001",
     "ownerId": "00000000000000000000000000000000",
     "project": "fireemu-35fe6",
@@ -1222,7 +1225,7 @@
       }
     ],
     "resourceUpperBound": 5,
-    "timeUpperBound": 1200
+    "timeUpperBound": 1380
   },
   "status": "BLOCKED_OWNER"
 }

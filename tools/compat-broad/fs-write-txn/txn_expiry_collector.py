@@ -55,9 +55,20 @@ UNAUTHENTICATED = 16
 OK = 0
 
 #: A refusal that says the caller may not act at all. Sending more requests
-#: after one of these cannot help and may make things worse, so recovery stops
-#: sending, but it still records what it was responsible for.
+#: after one of these cannot help and may make things worse, so every send site
+#: stops at the same latch, but the run still records what it was responsible
+#: for.
 AUTHORITY_REFUSALS = (PERMISSION_DENIED, UNAUTHENTICATED)
+
+#: What this run knows about a document it was asked to create. The states are
+#: about the run's own creation attempt, not about the document's existence:
+#: a create that was refused proves this run did not create it, which is what
+#: recovery has to decide before it may delete anything.
+NOT_SENT = "not-sent"
+SENT_UNKNOWN = "sent-unknown"
+CREATION_CONFIRMED = "creation-confirmed"
+ABSENCE_CONFIRMED = "absence-confirmed"
+RESOURCE_STATES = (NOT_SENT, SENT_UNKNOWN, CREATION_CONFIRMED, ABSENCE_CONFIRMED)
 
 #: Steps whose refusal is not a precondition failure. The contention holder is
 #: released on a best-effort basis; the campaign has already observed what it
@@ -65,8 +76,9 @@ AUTHORITY_REFUSALS = (PERMISSION_DENIED, UNAUTHENTICATED)
 BEST_EFFORT_SLOTS = ("idle/release/c",)
 
 #: Recovery gets its own deadline so an exhausted observation budget still
-#: leaves room to give owned documents back.
-RECOVERY_SECONDS = 180
+#: leaves room to give owned documents back. The number lives with the rest of
+#: the budget, in the plan, because the owner permission has to cover it.
+RECOVERY_SECONDS = plan_module.RECOVERY_SECONDS
 
 #: A wall-clock wait is served in bounded steps rather than one long sleep, so
 #: the run records progress and can be interrupted between steps. This records
@@ -213,6 +225,11 @@ class Collection:
         self.checkpoints = []
         self.created = {}
         self.established = {}
+        self.resource_state = {
+            resource["role"]: NOT_SENT for resource in plan["resources"]
+        }
+        self.unknown_outcomes = []
+        self.current_site = None
         self.update_times = {}
         self.preconditions = []
         self.failure_sites = []
@@ -236,6 +253,16 @@ class Collection:
         )
 
     def _send(self, rpc, body=None, *, role=None, query=None):
+        """The one place a request leaves this run, and the one authority latch.
+
+        A refusal that says the caller may not act at all is not specific to the
+        phase that met it. Once one has been seen, no later request can help and
+        some could make things worse, so the latch lives here and every site
+        stops at it: observation, transaction release, the ownership read, the
+        conditional delete and the final absence read alike.
+        """
+        if self.authority_refusal is not None:
+            return self._blocked("authority-refused-earlier")
         request = {
             "rpc": rpc,
             "database": self.options["database"],
@@ -248,7 +275,16 @@ class Collection:
             "timeoutSeconds": self.current_timeout,
         }
         self.request_count += 1
-        return self.transport(request)
+        response = self.transport(request)
+        if isinstance(response, dict) and response.get("code") in AUTHORITY_REFUSALS:
+            self._latch_authority(response)
+        return response
+
+    def _latch_authority(self, response):
+        if self.authority_refusal is not None:
+            return
+        self.authority_refusal = response.get("status") or response.get("code")
+        self._note_failure(self.current_site or "send", "authority-refused")
 
     def _begin(self, options_body):
         return self._send("BeginTransaction", {"options": options_body})
@@ -273,6 +309,22 @@ class Collection:
             # reply proves neither presence nor absence, so it is an incomplete
             # response rather than evidence that the document exists.
             return {**response, "complete": False, "incomplete": "get-without-document"}
+        requested = self._name(role)
+        if body["name"] != requested:
+            # The answer describes some other document. Another project, another
+            # database or another path all arrive here. Recording it as this
+            # document's readback would put a body the run never asked for into
+            # the post-state comparison, where the slot substitution would make
+            # it indistinguishable from the right one.
+            return {
+                **response,
+                "complete": False,
+                "incomplete": "get-wrong-document",
+                "nameMismatch": {
+                    "requested": self._scrub(requested),
+                    "observed": self._scrub(body["name"]),
+                },
+            }
         return response
 
     def _blocked(self, reason):
@@ -335,6 +387,14 @@ class Collection:
 
     def _observed_document(self, role, response):
         code = response.get("code")
+        if not response.get("complete", True):
+            # An incomplete reply proves neither presence nor absence, whatever
+            # code it carried. It never becomes an observed document.
+            return {
+                "exists": None,
+                "code": code,
+                "incomplete": response.get("incomplete") or response.get("blocked"),
+            }
         if code == NOT_FOUND:
             return {"exists": False, "code": code}
         if code != OK:
@@ -367,7 +427,7 @@ class Collection:
             "waited": waited,
             "detail": detail,
         }
-        for key in ("blocked", "incomplete"):
+        for key in ("blocked", "incomplete", "nameMismatch"):
             if response.get(key):
                 row[key] = response[key]
         if response.get("acquisition"):
@@ -481,6 +541,8 @@ class Collection:
                 "absent": False,
                 "createdByThisRun": resource["role"] in self.established,
                 "creationEvidence": self.established.get(resource["role"]),
+                "resourceState": self.resource_state.get(resource["role"], NOT_SENT),
+                "ownershipUnconfirmed": resource["role"] in self.unknown_outcomes,
                 "failure": reason,
             }
             for resource in self.plan["resources"]
@@ -499,6 +561,7 @@ class Collection:
             self._guard(deadline, wait + step["timeoutSeconds"])
             waited = self._elapse(wait, step["slot"])
             self.current_timeout = step["timeoutSeconds"]
+            self.current_site = step["slot"]
             response = self._dispatch(step)
             row = self._record(step, response, waited=waited)
             closes = step["closesTransaction"]
@@ -509,6 +572,11 @@ class Collection:
             if not row["complete"]:
                 self._note_failure(step["slot"], "incomplete-response", row)
                 raise _Stopped("incomplete-response")
+            if self.authority_refusal is not None:
+                # The backend has said this caller may not act. Observation ends
+                # here rather than sending the rest of the plan at a credential
+                # that has already been refused.
+                raise _Stopped("authority-refused")
             failure = self._precondition(step, response)
             if failure is not None:
                 row["precondition"] = failure
@@ -560,7 +628,9 @@ class Collection:
                 if observed.get("absence") is False:
                     # The preflight saw a document and the create-only commit
                     # was accepted anyway. One of the two is wrong, so this run
-                    # cannot claim it owns anything here.
+                    # cannot claim it owns anything here. The creation outcome
+                    # stays unknown, which keeps the resource on the
+                    # responsibility list and out of reach of any delete.
                     self._record_precondition(role, created=False)
                     return "absence-contradicted-by-accepted-create"
                 body = response.get("body") or {}
@@ -571,10 +641,14 @@ class Collection:
                     "updateTime": (results[0] or {}).get("updateTime"),
                 }
                 self.created[role] = True
+                self._mark_resource(role, CREATION_CONFIRMED)
                 self._version_ordinal(role, self.established[role]["updateTime"])
                 self._record_precondition(role, created=True)
                 return None
             self._record_precondition(role, created=False)
+            # A complete refusal is the backend saying the write did not happen,
+            # so this run's creation is confirmed not to have taken effect.
+            self._mark_resource(role, ABSENCE_CONFIRMED)
             if code == ALREADY_EXISTS:
                 return "conditional-create-refused-already-exists"
             return "conditional-create-refused"
@@ -596,6 +670,24 @@ class Collection:
         self.preconditions.append(entry)
         return entry
 
+    def _mark_resource(self, role, state):
+        """Move one resource through the creation state machine.
+
+        ``sent-unknown`` is recorded before the create leaves this process, so a
+        response that never arrives still leaves the run answerable for the
+        document.
+        """
+        if role not in self.resource_state:
+            self.resource_state[role] = NOT_SENT
+        self.resource_state[role] = state
+
+    def _create(self, role):
+        """Send the create-only commit, taking responsibility before sending."""
+        if self.authority_refusal is not None:
+            return self._blocked("authority-refused-earlier")
+        self._mark_resource(role, SENT_UNKNOWN)
+        return self._commit([self._write_marker(role, "created", create=True)])
+
     def _dispatch(self, step):
         slot = step["slot"]
         if (
@@ -614,9 +706,7 @@ class Collection:
         if slot.startswith("preflight/absence/"):
             return self._get(step["role"])
         if slot.startswith("setup/create/"):
-            return self._commit(
-                [self._write_marker(step["role"], "created", create=True)]
-            )
+            return self._create(step["role"])
         if slot.startswith(("readback/", "verify/")):
             return self._get(step["role"])
         if slot.startswith("idle/begin/"):
@@ -753,6 +843,14 @@ class Collection:
     # -- cleanup ------------------------------------------------------------
 
     def _cleanup(self):
+        # What observation failed to settle. A create whose response arrived,
+        # whatever it said, is not on this list; a create whose outcome the run
+        # never learned is, and stays on it even once a readback settles it.
+        self.unknown_outcomes = [
+            resource["role"]
+            for resource in self.plan["resources"]
+            if self.resource_state.get(resource["role"]) == SENT_UNKNOWN
+        ]
         self.current_timeout = plan_module.DEFAULT_REQUEST_TIMEOUT_SECONDS
         recovery = _Deadline(RECOVERY_SECONDS, self.monotonic)
         releases = self._release_transactions(recovery)
@@ -775,6 +873,8 @@ class Collection:
                         "absent": False,
                         "createdByThisRun": role in self.established,
                         "creationEvidence": self.established.get(role),
+                        "resourceState": self.resource_state.get(role, NOT_SENT),
+                        "ownershipUnconfirmed": role in self.unknown_outcomes,
                         "failure": reason,
                     }
                 )
@@ -791,6 +891,7 @@ class Collection:
         """
         releases = []
         for tag in sorted(self.open_tokens):
+            self.current_site = f"release/{tag}"
             entry = {"transaction": tag, "released": False, "skipped": False}
             if self.authority_refusal is not None:
                 entry["skipped"] = True
@@ -811,8 +912,8 @@ class Collection:
                 continue
             code = response.get("code")
             if code in AUTHORITY_REFUSALS:
-                self.authority_refusal = response.get("status") or code
-                self._note_failure(f"release/{tag}", "authority-refused")
+                # The latch is already set by the send site; this only classifies
+                # the entry so the receipt names what stayed open and why.
                 entry["code"] = code
                 entry["status"] = response.get("status")
                 entry["message"] = response.get("message")
@@ -848,6 +949,8 @@ class Collection:
         return releases
 
     def _recover_one(self, role, recovery):
+        self.current_site = f"cleanup/{role}"
+        state = self.resource_state.get(role, NOT_SENT)
         evidence = self.established.get(role)
         entry = {
             "role": role,
@@ -857,18 +960,22 @@ class Collection:
             "absent": False,
             "createdByThisRun": evidence is not None,
             "creationEvidence": evidence,
+            "resourceState": state,
+            "ownershipUnconfirmed": role in self.unknown_outcomes,
             "failure": None,
         }
-        if evidence is None:
+        if evidence is None and state != SENT_UNKNOWN:
             # Recovery is bound to what this run created, not to what the
             # document currently says. A marker can be written by a mutation
-            # this run should never have made; a creation record cannot.
+            # this run should never have made; a creation record cannot. A
+            # create that was never sent, or that the backend refused, leaves
+            # nothing here for this run to answer for.
             entry.update(skipped=True, failure="not-created-by-this-run")
             return entry
         if self.authority_refusal is not None:
             # The caller has already been told it may not act here. Sending
             # more requests cannot help, but this run still created the
-            # document, so it stays on the unrecovered list.
+            # document, or may have, so it stays on the unrecovered list.
             entry.update(skipped=True, failure="authority-refused-earlier")
             return entry
         if recovery.expired():
@@ -880,20 +987,49 @@ class Collection:
             "status": read.get("status"),
         }
         if read.get("code") == NOT_FOUND:
+            if state == SENT_UNKNOWN:
+                # The create whose answer was lost left nothing behind. The
+                # responsibility is discharged by the readback, not assumed.
+                self._mark_resource(role, ABSENCE_CONFIRMED)
+                entry["resourceState"] = ABSENCE_CONFIRMED
             entry.update(skipped=True, complete=True, absent=True)
             return entry
         if read.get("code") in AUTHORITY_REFUSALS:
-            self.authority_refusal = read.get("status") or read.get("code")
-            self._note_failure(f"cleanup/{role}", "authority-refused")
             entry.update(skipped=True, failure="owned-read-refused-authority")
             return entry
-        if read.get("code") != OK:
+        if not read.get("complete", True) or read.get("code") != OK:
+            # A reply that named another document, or carried no document at
+            # all, is not a reading of this one and can never justify a delete.
+            entry["ownedRead"]["incomplete"] = read.get("incomplete")
             entry.update(skipped=True, failure="owned-read-incomplete")
             return entry
         document = read.get("body") or {}
         if not is_owned(document, self.options["ownerId"], role, self.options["nonce"]):
             entry.update(skipped=True, failure="ownership-not-proven")
             return entry
+        if evidence is None:
+            # The create was sent and its answer was lost. The document now at
+            # that name carries this run's owner, role and nonce, and the only
+            # request this run ever sent to it was that create, so the readback
+            # is the creation evidence the lost response would have been.
+            if self._record_precondition(role).get("absence") is False:
+                # Except where the preflight had already seen a document there.
+                # Then the marker cannot be attributed and the document stays.
+                entry.update(
+                    skipped=True, failure="preexisting-document-not-attributable"
+                )
+                return entry
+            evidence = {
+                "role": role,
+                "slot": f"setup/create/{role}",
+                "updateTime": document.get("updateTime"),
+                "source": "recovery-readback",
+            }
+            self.established[role] = evidence
+            self._mark_resource(role, CREATION_CONFIRMED)
+            entry["resourceState"] = CREATION_CONFIRMED
+            entry["createdByThisRun"] = True
+            entry["creationEvidence"] = evidence
         delete = self._commit(
             [
                 {
@@ -904,15 +1040,16 @@ class Collection:
         )
         entry["delete"] = {"code": delete.get("code"), "status": delete.get("status")}
         if delete.get("code") in AUTHORITY_REFUSALS:
-            self.authority_refusal = delete.get("status") or delete.get("code")
-            self._note_failure(f"cleanup/{role}", "authority-refused")
             entry["failure"] = "conditional-delete-refused-authority"
             return entry
         if delete.get("code") != OK:
             entry["failure"] = "conditional-delete-refused"
             return entry
         absence = self._get(role)
-        entry["absence"] = {"code": absence.get("code")}
+        entry["absence"] = {
+            "code": absence.get("code"),
+            "incomplete": absence.get("incomplete"),
+        }
         entry["absent"] = absence.get("code") == NOT_FOUND
         entry["complete"] = entry["absent"]
         if not entry["absent"]:
@@ -927,7 +1064,19 @@ class Collection:
         unrecovered = [
             entry["role"]
             for entry in cleanup
-            if entry.get("createdByThisRun") and not entry["complete"]
+            if (entry.get("createdByThisRun") or entry.get("ownershipUnconfirmed"))
+            and not entry["complete"]
+        ]
+        # Resources whose creation outcome this run never learned directly. The
+        # list is kept even once a readback settled them, so a reader can see
+        # what the run had to go and check rather than only what remains.
+        responsibility = [
+            {
+                "role": role,
+                "state": self.resource_state.get(role, NOT_SENT),
+                "resolved": self.resource_state.get(role, NOT_SENT) != SENT_UNKNOWN,
+            }
+            for role in self.unknown_outcomes
         ]
         return {
             "kind": CONTRACT,
@@ -949,6 +1098,8 @@ class Collection:
             "startedAt": self.started_at,
             "finishedAt": self.finished_at,
             "unrecovered": unrecovered,
+            "responsibility": responsibility,
+            "resourceStates": dict(self.resource_state),
             "missingCases": missing,
             "failureSites": self.failure_sites,
             "authorityRefusal": self.authority_refusal,
@@ -956,7 +1107,9 @@ class Collection:
             "complete": (
                 not missing
                 and not unrecovered
+                and not [entry for entry in responsibility if not entry["resolved"]]
                 and not self.open_tokens
+                and self.authority_refusal is None
                 and self.failure is None
             ),
             # Counted where the requests are actually sent, so releases and

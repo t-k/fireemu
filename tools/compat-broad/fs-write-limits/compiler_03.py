@@ -415,7 +415,7 @@ def _conditional_create(resource: str, fields: dict[str, Any]) -> dict[str, Any]
 
 
 def compile_limits_plan(
-    project: str, database: str, nonce: str, part: str = "A"
+    project: str, database: str, nonce: str, part: str = "ALL"
 ) -> dict[str, Any]:
     """Compile one admitted part of the campaign and its ordered request plan."""
     if (
@@ -512,7 +512,7 @@ def compile_limits_plan(
     for document in owned:
         requests.append(_preflight(document["resource"]))
 
-    if part == "A":
+    if part in ("A", "ALL"):
         # R3-1: a write with no operation between two valid create-only writes.
         requests.append(
             {
@@ -651,6 +651,15 @@ def compile_limits_plan(
     keys = ("service", "path", "method", "body", "privileged", "form", "versionFrom")
     operations = [{k: row[k] for k in keys if k in row} for row in requests]
     recovery_operations = operations[observation_count:]
+    schedule = [
+        {
+            "phase": "observation" if index < observation_count else "recovery",
+            "index": index if index < observation_count else index - observation_count,
+            "seconds": slot_seconds(row),
+            "creates": slot_creates(row),
+        }
+        for index, row in enumerate(requests)
+    ]
     gate_plan = {
         "contract": "shared-local-v2",
         "nonce": nonce,
@@ -659,17 +668,17 @@ def compile_limits_plan(
                 "resources": [d["resource"] for d in owned],
                 "observation": operations[:observation_count],
                 "recovery": recovery_operations,
+                "schedule": schedule,
             }
         },
-        # The Gate can take a per-slot reservation, and this campaign
-        # deliberately does not declare one. A declared schedule makes the Gate
-        # admit only the next unconsumed slot, so an observation that stops
-        # early can no longer dispatch its recovery: every cleanup request is
-        # refused as outside the frozen schedule. Stopping early and still
-        # reclaiming every owned document is this campaign's fail-closed
-        # guarantee, so it pays the lane default for every request instead.
-        "wallSeconds": _wall_seconds(len(recovery_operations), observation_count),
-        "recoverySeconds": _recovery_seconds(len(recovery_operations)),
+        # Every slot declares what it can spend: a request carrying a body
+        # reserves the transport ceiling, which the Gate's own check enforces,
+        # and a read or delete reserves the small bound that is also its
+        # timeout. The totals below are what the Gate will charge, computed by
+        # calling it rather than derived alongside it.
+        "transportCeilingSeconds": TRANSPORT_CEILING_SECONDS,
+        "wallSeconds": _wall_seconds(schedule, recovery_operations, operations),
+        "recoverySeconds": _recovery_seconds(schedule, recovery_operations, operations),
         "observationRequests": observation_count,
         "intervalSeconds": 0.25,
         "requestCostMicrousd": 100,
@@ -683,7 +692,7 @@ def compile_limits_plan(
         for row in requests
     ]
     return {
-        "campaignId": f"{CAMPAIGN}{part}",
+        "campaignId": CAMPAIGN if part == "ALL" else f"{CAMPAIGN}{part}",
         "part": part,
         "catalog": catalog,
         "nonce": nonce,
@@ -1164,7 +1173,7 @@ def _document_name_case(root: str) -> dict[str, Any]:
     }
 
 
-def _limit_specs(root: str, part: str = "A") -> list[dict[str, Any]]:
+def _limit_specs(root: str, part: str = "ALL") -> list[dict[str, Any]]:
     """The write-path limits this part of the campaign observes, in request order.
 
     The campaign runs as two admitted parts because the shared Gate reserves
@@ -1366,65 +1375,91 @@ def _masked_batch_write(
 GATE_REQUEST_SECONDS = 13
 GATE_INTERVAL_SECONDS = 0.25
 GATE_WALL_SECONDS_MAX = 1200
-OBSERVATION_WINDOW_SECONDS = 300
+# Headroom above what the Gate charges. The charge is already an upper bound,
+# not a forecast: every body slot reserves the full transport ceiling and every
+# read the small bound, where real requests take milliseconds. This is margin
+# on top of that, not a second estimate of the work.
+PHASE_SLACK_SECONDS = 30
 # A request's own reservation: a floor every request gets, plus time for its
 # payload at a deliberately pessimistic rate. One plan-wide value cannot be
 # honest for a campaign that mixes a megabyte upload with a cleanup read; it
 # would either under-reserve the upload or refuse the plan outright.
-SLOT_FLOOR_SECONDS = 5
-SLOT_BYTES_PER_SECOND = 128 * 1024
+# A small read or delete carries no body, so it cannot spend the wire deadline.
+# This is also the per-request timeout such a slot is given, so a slot cannot
+# outrun its own reservation.
+SMALL_REQUEST_SECONDS = 5.0
+# A slot whose request carries a body may spend the whole transport deadline,
+# and the Gate's ceiling check requires it to reserve exactly that.
+TRANSPORT_CEILING_SECONDS = 12.0
 
 
-def slot_seconds(row: dict[str, Any]) -> int:
-    """The reservation one request needs, from its own payload."""
-    body = row["body"]
-    payload = max(
-        len(json.dumps(body).encode()) if body is not None else 0,
-        row["responseByteLimit"],
-    )
-    return SLOT_FLOOR_SECONDS + -(-payload // SLOT_BYTES_PER_SECOND)
+def slot_seconds(row: dict[str, Any]) -> float:
+    """The reservation one request needs.
 
-
-def _schedule(requests: list[dict[str, Any]], observation: int) -> list[dict[str, Any]]:
-    """Every slot in dispatch order, each carrying its own reservation.
-
-    The order is the historical one, every observation then every recovery; the
-    schedule exists to declare the per-slot bound, not to interleave.
+    A request carrying a body may spend the transport deadline and must reserve
+    it, which the Gate's own ceiling check enforces. A read or a delete carries
+    no body and is given the small bound as its timeout too, so it cannot
+    outrun what it reserved.
     """
-    return [
-        {
-            "phase": "observation" if index < observation else "recovery",
-            "index": index if index < observation else index - observation,
-            "seconds": slot_seconds(row),
-        }
-        for index, row in enumerate(requests)
-    ]
-
-
-def _phase_seconds(schedule: list[dict[str, Any]], phase: str) -> float:
-    return sum(
-        entry["seconds"] + GATE_INTERVAL_SECONDS
-        for entry in schedule
-        if entry["phase"] == phase
+    return (
+        TRANSPORT_CEILING_SECONDS if row["body"] is not None else SMALL_REQUEST_SECONDS
     )
 
 
-def _recovery_seconds(operations: int) -> int:
-    """The reserve the Gate demands for this many recovery requests, plus slack."""
-    return int(operations * (GATE_REQUEST_SECONDS + GATE_INTERVAL_SECONDS)) + 60
+def slot_creates(row: dict[str, Any]) -> bool:
+    """Whether this slot can bring an owned document into existence.
 
-
-def _wall_seconds(recovery: int, observation: int) -> int:
-    """The wall budget: the recovery reserve plus a window for observation.
-
-    Only the recovery reserve is checked statically by the Gate, because it is
-    the allocation a stopped run must still be able to spend. Observation is
-    bounded per dispatch instead, so the window is sized for requests that
-    complete in seconds rather than for the reserve every one of them could
-    claim.
+    Declaring it lets the Gate admit a no-data abort while the run is still
+    inside a prefix of slots that cannot have created anything.
     """
-    del observation
-    total = _recovery_seconds(recovery) + OBSERVATION_WINDOW_SECONDS
+    return row["kind"] in ("create-only-patch", "batch-write")
+
+
+def _charging_plan(schedule, recovery, observation) -> dict[str, Any]:
+    """The shape shared_gate charges, so its own helpers can be asked."""
+    return {
+        "intervalSeconds": GATE_INTERVAL_SECONDS,
+        "transportCeilingSeconds": TRANSPORT_CEILING_SECONDS,
+        "jobs": {
+            "limits": {
+                "observation": observation[: len(observation) - len(recovery)],
+                "recovery": recovery,
+                "schedule": schedule,
+            }
+        },
+    }
+
+
+def gate_charge(schedule, recovery, observation) -> dict[str, float]:
+    """What the Gate will charge this schedule, from the Gate's own helpers."""
+    import shared_gate
+
+    plan = _charging_plan(schedule, recovery, observation)
+    seconds = shared_gate.request_seconds(plan)
+    job = plan["jobs"]["limits"]
+    if not shared_gate._valid_schedule(job):
+        raise ValueError("the charging schedule is not one the Gate accepts")
+    if not shared_gate._ceiling_honoured(plan, seconds):
+        raise ValueError("a slot carrying a body reserves less than the ceiling")
+    return {
+        "observationSeconds": shared_gate._observation_time(plan, seconds),
+        "recoverySeconds": shared_gate._recovery_time(plan, seconds),
+    }
+
+
+def _recovery_seconds(schedule, recovery, observation) -> int:
+    """The reserve the Gate demands for this schedule's recovery, plus headroom."""
+    charge = gate_charge(schedule, recovery, observation)
+    return -(-int(charge["recoverySeconds"] * 100) // 100) + PHASE_SLACK_SECONDS
+
+
+def _wall_seconds(schedule, recovery, observation) -> int:
+    charge = gate_charge(schedule, recovery, observation)
+    total = (
+        _recovery_seconds(schedule, recovery, observation)
+        + -(-int(charge["observationSeconds"] * 100) // 100)
+        + PHASE_SLACK_SECONDS
+    )
     if total > GATE_WALL_SECONDS_MAX:
         raise ValueError(
             f"this allocation needs {total} seconds and the Gate's ceiling is "
@@ -1446,13 +1481,14 @@ def _case_index(limits: list[dict[str, Any]], part: str) -> list[dict[str, Any]]
             ("batch-duplicate-document", "BatchWrite whole-request validation control"),
         ]
     )
+    prefix = CAMPAIGN if part == "ALL" else f"{CAMPAIGN}{part}"
     cases = [
-        {"id": f"{CAMPAIGN}{part}/{name}", "residue": "R3", "condition": condition}
+        {"id": f"{prefix}/{name}", "residue": "R3", "condition": condition}
         for name, condition in batch
     ]
     for spec in limits:
         case = {
-            "id": f"{CAMPAIGN}{part}/{spec['label']}",
+            "id": f"{prefix}/{spec['label']}",
             "residue": "R4",
             "condition": f"{spec['id']} boundary",
             "limitId": spec["id"],

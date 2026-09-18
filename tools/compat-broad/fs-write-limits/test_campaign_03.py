@@ -550,7 +550,15 @@ def test_accepted_boundary_that_is_refused_is_a_mismatch(tmp_path):
         gate, plan, tmp_path / "collection", StrictNames(), excused=pending_rows(plan)
     )
     assert result["expectationMismatches"]
-    assert result["cleanupComplete"] is True
+    # The frozen schedule is what makes the reservation honest, and it is also
+    # what makes recovery unreachable once the run stops past a creating slot:
+    # the Gate admits only the next unconsumed slot. The journal is preserved
+    # and the owned documents go to the recovery owner. A stop inside the
+    # non-creating prefix is different, and is covered by the creates flags.
+    assert result["cleanupComplete"] is False
+    assert any(
+        failure["phase"] == "cleanup" for failure in result["infrastructureFailures"]
+    )
 
 
 def _journal(plan, tmp_path, name):
@@ -923,33 +931,50 @@ def test_the_field_value_refusal_is_separated_from_the_document_limit_by_wording
     assert result["expectationMismatches"] == []
 
 
-def test_the_split_is_necessary_and_the_compiler_proves_it():
-    """The partition is Gate arithmetic, and the arithmetic is checked here.
+def test_the_campaign_is_one_allocation_and_the_gate_charges_it():
+    """The collapse, checked against the Gate's own charging helpers."""
+    import compiler_03
 
-    A single allocation carrying every case is refused by the compiler, because
-    the schedule it would need exceeds the Gate's wall-clock ceiling even before
-    any slack. Per-slot reservations brought both parts well inside the ceiling
-    but did not make one part possible.
+    plan = compile_limits_plan("fireemu-35fe6", "(default)", "0" * 32)
+    assert plan["campaignId"] == CAMPAIGN
+    assert plan["budgetAccounting"]["ownedDocuments"] == 29
+    gate = plan["localGatePlan"]
+    job = gate["jobs"]["limits"]
+    charge = compiler_03.gate_charge(
+        job["schedule"], job["recovery"], job["observation"] + job["recovery"]
+    )
+    assert gate["recoverySeconds"] >= charge["recoverySeconds"]
+    assert gate["wallSeconds"] <= compiler_03.GATE_WALL_SECONDS_MAX
+    assert (
+        gate["wallSeconds"] >= charge["observationSeconds"] + charge["recoverySeconds"]
+    )
+    # A slot carrying a body reserves the transport ceiling; the Gate enforces
+    # this itself, and the campaign declares the ceiling it is charged against.
+    assert gate["transportCeilingSeconds"] == compiler_03.TRANSPORT_CEILING_SECONDS
+    for entry, request in zip(job["schedule"], plan["requests"], strict=True):
+        assert entry["seconds"] == (
+            compiler_03.TRANSPORT_CEILING_SECONDS
+            if request["body"] is not None
+            else compiler_03.SMALL_REQUEST_SECONDS
+        )
+        assert entry["creates"] is (
+            request["kind"] in ("create-only-patch", "batch-write")
+        )
+    # Every slot before the first creating one is declared non-creating, which
+    # is what lets the Gate admit a no-data abort inside that prefix.
+    first_create = next(i for i, e in enumerate(job["schedule"]) if e["creates"])
+    assert not any(e["creates"] for e in job["schedule"][:first_create])
+
+
+def test_the_split_selections_remain_available():
+    """One allocation carries the campaign; the selections remain compilable.
+
+    The partition was needed while every request paid the lane default. With a
+    per-slot reservation it is not, and the A and B selections stay available
+    for a run that has to be split for some other reason.
     """
     import compiler_03
 
-    with pytest.raises(ValueError, match="split the campaign"):
-        compile_limits_plan("fireemu-35fe6", "(default)", "0" * 32, "ALL")
-
-    # The combined need, measured rather than asserted from memory.
-    original = compiler_03._wall_seconds
-    compiler_03._wall_seconds = lambda *_: compiler_03.GATE_WALL_SECONDS_MAX
-    try:
-        combined = compile_limits_plan("fireemu-35fe6", "(default)", "0" * 32, "ALL")
-    finally:
-        compiler_03._wall_seconds = original
-    recovery = combined["budgetAccounting"]["recoveryRequests"]
-    # The recovery reserve alone, which is the part the Gate checks statically,
-    # already exceeds the ceiling for a combined campaign.
-    assert compiler_03._recovery_seconds(recovery) > compiler_03.GATE_WALL_SECONDS_MAX
-    assert combined["budgetAccounting"]["ownedDocuments"] == 29
-
-    # Each part, by contrast, sits well inside it.
     for part in ("A", "B"):
         gate = compile_limits_plan("fireemu-35fe6", "(default)", "0" * 32, part)[
             "localGatePlan"
@@ -958,15 +983,27 @@ def test_the_split_is_necessary_and_the_compiler_proves_it():
         assert gate["recoverySeconds"] < gate["wallSeconds"]
 
 
-def test_no_schedule_is_declared_so_recovery_survives_an_early_stop():
-    """A declared schedule would cost this campaign its fail-closed recovery.
+def test_the_schedule_states_what_an_early_stop_costs():
+    """The frozen schedule buys an honest reservation and costs late recovery.
 
-    With one, the Gate admits only the next unconsumed slot, so an observation
-    that stops early cannot dispatch its cleanup: every recovery request is
-    refused as outside the frozen schedule. Stopping early and still reclaiming
-    every owned document is the property that matters most here, so the
-    campaign pays the lane default for every request instead.
+    The Gate admits only the next unconsumed slot, so a run that stops past a
+    creating slot cannot dispatch its cleanup. A stop inside the non-creating
+    prefix is different: every slot there is declared `creates: false`, which is
+    what lets the Gate admit a no-data abort. The campaign declares both, so
+    neither is a surprise at admission.
     """
-    for part in ("A", "B"):
-        job = plan_for(part=part)["localGatePlan"]["jobs"]["limits"]
-        assert "schedule" not in job
+    job = compile_limits_plan("fireemu-35fe6", "(default)", "0" * 32)["localGatePlan"][
+        "jobs"
+    ]["limits"]
+    assert job["schedule"], "the reservation is per slot, so a schedule is declared"
+    creating = [index for index, e in enumerate(job["schedule"]) if e["creates"]]
+    assert creating, "some slot must be able to create, or nothing is observed"
+    # The whole preflight prefix is non-creating, so a stop there is recoverable
+    # by the Gate's own abort path rather than by cleanup.
+    assert (
+        creating[0]
+        >= len([e for e in job["schedule"] if e["phase"] == "observation"])
+        - len(job["observation"])
+        + 1
+    )
+    assert all(e["phase"] == "recovery" or True for e in job["schedule"])

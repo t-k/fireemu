@@ -39,7 +39,7 @@ def source_inputs() -> dict[str, str]:
     }
 
 
-def _real_child(output: Path, nonce: str, part: str = "A") -> None:
+def _real_child(output: Path, nonce: str, part: str = "ALL") -> None:
     from broad import local_origin
     from owned_runner import control_get, local_addresses
     from shared_gate import Gate, create
@@ -174,7 +174,7 @@ def _real_child(output: Path, nonce: str, part: str = "A") -> None:
     )
 
 
-def run(output: Path, part: str = "A") -> dict:
+def run(output: Path, part: str = "ALL") -> dict:
     import broad
 
     before = source_inputs()
@@ -197,7 +197,7 @@ def run(output: Path, part: str = "A") -> dict:
     save(
         output / "shadow-binding.json",
         {
-            "campaignId": f"{CAMPAIGN}{part}",
+            "campaignId": CAMPAIGN if part == "ALL" else f"{CAMPAIGN}{part}",
             "part": part,
             "sourceInputsBefore": before,
             "sourceInputsAfter": after,
@@ -219,7 +219,9 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--output", type=Path)
     mode.add_argument("--child", type=Path)
     parser.add_argument("--nonce")
-    parser.add_argument("--part", choices=("A", "B"), default="A")
+    # The campaign is one allocation; the selections remain for a run that has
+    # to be split for some other reason.
+    parser.add_argument("--part", choices=("A", "B", "ALL"), default="ALL")
     args = parser.parse_args(argv)
     if args.child is not None:
         if not args.nonce:

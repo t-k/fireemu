@@ -60,7 +60,7 @@ def run():
             or type(count) is not int
             or not 0 <= count <= 10_485_761
             or type(deadline) not in (int, float)
-            or not 0 < deadline - time.monotonic() <= 12
+            or not 0 < deadline - time.monotonic() <= 60
         ):
             raise ValueError
         if path.split("/", 4)[3] != project:

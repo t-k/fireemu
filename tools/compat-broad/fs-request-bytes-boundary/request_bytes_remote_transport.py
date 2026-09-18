@@ -28,11 +28,31 @@ from request_bytes_process_exchange import _run_process_exchange
 ORIGIN = "https://firestore.googleapis.com"
 MAX_REQUEST_BYTES = 10_485_761
 RESPONSE_BYTES = 2 * 1024 * 1024
-TIMEOUT = 12.0
+# One total wire deadline covering connection setup, TLS, the upload, server
+# processing and the response. It is sized for the 10,485,761-byte boundary
+# Commit, not for a kilobyte request.
+#
+#   upload            83,886,088 bits at a conservative 5 Mbit/s sustained   16.8 s
+#   DNS, TCP and TLS 1.3 setup                                                1.5 s
+#   server processing of one 17-document conditional-create Commit            8.0 s
+#   response read, bounded at 2 MiB                                           0.5 s
+#   ------------------------------------------------------------------------------
+#   derived requirement                                                      26.8 s
+#
+# 60 s is that requirement with roughly a 2x margin. At 60 s, reserving 10 s for
+# setup, processing and the response leaves 50 s for the body, so the slowest
+# link that can complete a boundary probe sustains about 1.7 Mbit/s upstream.
+# A slower link yields an incomplete receipt and an uncertain Commit; see
+# `request_bytes_campaign.TRANSPORT_DEADLINE` for the consequence that binds.
+TIMEOUT = 60.0
+#: Bits in the largest compiled request body, used by the derivation above.
+BOUNDARY_REQUEST_BITS = MAX_REQUEST_BYTES * 8
+#: Seconds of the deadline reserved for everything that is not the upload.
+NON_UPLOAD_RESERVE_SECONDS = 10.0
 _TOKEN = re.compile(r"[A-Za-z0-9._~+/-]{1,8192}=*")
 _VERSION = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z")
 _DIAGNOSTIC_LIMIT = 512
-_WORKER_SHA256 = "99db0c3cfe940a403ac010ee09b6534936151d7fedda1dc5d808dc9dafa1b745"
+_WORKER_SHA256 = "ce29745aa7994861754f96a82be5833d2e2008035342e6dcf4f26e45e222ec07"
 
 Exchange = Callable[[str, str, bytes | None, dict[str, str], float, int], Any]
 Clock = Callable[[], float]
@@ -315,9 +335,9 @@ def _request_impl(
     production always uses ``time.monotonic``.
     """
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
-        raise TypeError("timeout must be a finite number in 0..12 seconds")
+        raise TypeError(f"timeout must be a finite number in 0..{TIMEOUT:g} seconds")
     if not math.isfinite(timeout) or not 0 < timeout <= TIMEOUT:
-        raise ValueError("timeout must be a finite number in 0..12 seconds")
+        raise ValueError(f"timeout must be a finite number in 0..{TIMEOUT:g} seconds")
     url, method, body, headers = prepare(plan, phase, index, operation, token)
     deadline = clock() + timeout
     try:

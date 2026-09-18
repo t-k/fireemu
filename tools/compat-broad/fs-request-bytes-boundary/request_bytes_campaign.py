@@ -31,6 +31,12 @@ from request_bytes_compiler import (
     compile_request_bytes_plan,
     validate_request_bytes_plan,
 )
+from request_bytes_remote_transport import (
+    NON_UPLOAD_RESERVE_SECONDS,
+)
+from request_bytes_remote_transport import (
+    TIMEOUT as TRANSPORT_TIMEOUT_SECONDS,
+)
 
 SCHEMA = "fs-request-bytes-campaign-v1"
 CATALOG_SOURCE = "spec/limits/firestore-standard-2026-08-25.json"
@@ -94,10 +100,14 @@ REFUSAL_EXPECTATION: dict[str, Any] = {
         "a connection reset with no response",
     ],
     "untypedTransportRefusal": {
+        "classification": "untyped-transport-refusal",
+        "resultKey": "untypedOverRefusal",
         "state": "commit-uncertain",
-        "handling": "The reviewed collector cannot classify a non-JSON transport refusal as a typed refusal. Such a receipt leaves the probe uncertain, recovery stays read-only, and the campaign is inconclusive on the refusal shape.",
+        "isRefusalProof": False,
+        "handling": "A non-JSON refusal, such as a front-end HTML 413 or a reset, is not Firestore's answer and is never upgraded to a typed row. The collector records it as its own outcome with the HTTP status, the content type and the response bytes verbatim, and keeps the refusal shape unproven.",
+        "recoveryAuthority": "read-only; it grants no cleanup ownership, so every version-bound delete is a zero-wire skip",
         "stillProven": "The post-state readback and the recovery absence proofs still establish that the refused request wrote nothing.",
-        "ownerAction": "If production answers with an untyped transport refusal, the collector needs an explicit untyped-refusal classification before a second run can conclude the boundary.",
+        "ownerAction": "Adjudicate the recorded status, content type and bytes. The primary boundary question stays open and needs a second run once the intermediary is identified.",
     },
 }
 
@@ -131,6 +141,39 @@ LOCAL_EXPECTATION: dict[str, Any] = {
     "classification": "local-boundary-enforced-shape-differs",
     "pendingLimitsImplementation": "A separate Rust lane is implementing this condition in the limits layer. The transport cap already refuses at the same boundary, so a limits-layer check will never be reached on the REST path unless it runs before the body cap or the cap is raised. That lane needs this observation.",
     "note": "A local run in which the over probe is accepted would mean the transport cap was removed or raised; the shadow reports that as `local-boundary-not-enforced` rather than passing.",
+}
+
+
+#: The one total wire deadline every probe must finish inside, and what happens
+#: when it is missed. The transport enforces this ceiling independently and the
+#: worker re-checks it, so the campaign cannot raise it at run time. O7 binds
+#: this block along with the rest of the artifact.
+TRANSPORT_DEADLINE: dict[str, Any] = {
+    "perRequestSeconds": TRANSPORT_TIMEOUT_SECONDS,
+    "covers": "connection setup, TLS, the request upload, server processing and the bounded response read",
+    "enforcedBy": [
+        "request_bytes_remote_transport.TIMEOUT, rejecting any larger timeout argument",
+        "request_bytes_https_worker, re-checking the same ceiling independently",
+    ],
+    "derivation": {
+        "uploadBits": max(REQUEST_TARGETS) * 8,
+        "assumedSustainedBitsPerSecond": 5_000_000,
+        "uploadSeconds": 16.8,
+        "connectionSetupSeconds": 1.5,
+        "serverProcessingSeconds": 8.0,
+        "responseReadSeconds": 0.5,
+        "derivedRequirementSeconds": 26.8,
+        "marginNote": "The published ceiling is that requirement with roughly a 2x margin.",
+    },
+    "nonUploadReserveSeconds": NON_UPLOAD_RESERVE_SECONDS,
+    "slowestUsableUpstreamBitsPerSecond": round(
+        max(REQUEST_TARGETS)
+        * 8
+        / (TRANSPORT_TIMEOUT_SECONDS - NON_UPLOAD_RESERVE_SECONDS)
+    ),
+    "consequenceIfMissed": "The receipt is incomplete, the Commit is uncertain, and the run holds no conditional-creation proof. The version-bound delete is then a zero-wire skip by design, so cleanup detects the residue as `cleanup-not-absent` but cannot remove it: up to 17 documents stay in the project pending manual owner action.",
+    "detection": "Detected, never silent. The absence proofs are only recorded on a typed NOT_FOUND, so an unremovable residue fails the run rather than passing it.",
+    "ownerAction": "Run from a link that sustains the rate above. If a probe times out, the owner removes the residue under the recorded owned scope; the campaign never retries a Commit to compensate.",
 }
 
 
@@ -197,7 +240,7 @@ def _budget(accounting: dict[str, int]) -> dict[str, Any]:
         "maxHttpRequests": accounting["httpRequests"],
         "maxRequestBytes": max(REQUEST_TARGETS),
         "maxResponseBytes": 2 * 1024 * 1024,
-        "perRequestTimeoutSeconds": 12,
+        "perRequestTimeoutSeconds": TRANSPORT_TIMEOUT_SECONDS,
         "maxDurationSeconds": 900,
         "recoveryWindow": {
             "reserveSeconds": 300,
@@ -324,6 +367,7 @@ def compile_request_bytes_campaign(
         "ownerPreconditions": _owner_preconditions(project, database),
         "accounting": accounting,
         "planBounds": plan["bounds"],
+        "transportDeadline": TRANSPORT_DEADLINE,
         "cost": _cost(accounting),
         "budget": _budget(accounting),
         "planDigest": hashlib.sha256(compact_utf8(plan)).hexdigest(),
@@ -422,6 +466,11 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
 
     if campaign.get("refusalExpectation") != REFUSAL_EXPECTATION:
         raise ValueError("refusal expectation drifted")
+    untyped = REFUSAL_EXPECTATION["untypedTransportRefusal"]
+    if untyped.get("isRefusalProof") is not False:
+        raise ValueError("an untyped transport refusal is never a refusal proof")
+    if "read-only" not in untyped.get("recoveryAuthority", ""):
+        raise ValueError("an untyped refusal must keep recovery read-only")
     local = campaign.get("localExpectation")
     if not isinstance(local, dict):
         raise TypeError("missing local expectation")
@@ -525,6 +574,40 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
             ]
         ):
             raise ValueError(f"budget {key} does not match the accounting")
+    deadline = campaign.get("transportDeadline")
+    if not isinstance(deadline, dict):
+        raise TypeError("the campaign must publish the transport deadline")
+    published = deadline.get("perRequestSeconds")
+    if published != TRANSPORT_TIMEOUT_SECONDS:
+        raise ValueError("the published deadline is not the transport's ceiling")
+    # The transport rejects any larger timeout argument, so a budget that
+    # promised more than the ceiling could never be honoured.
+    if budget.get("perRequestTimeoutSeconds") != published:
+        raise ValueError("the budget timeout does not match the transport ceiling")
+    if budget.get("perRequestTimeoutSeconds") > TRANSPORT_TIMEOUT_SECONDS:
+        raise ValueError("the budget timeout exceeds what the transport can honour")
+    derivation = deadline.get("derivation")
+    if not isinstance(derivation, dict):
+        raise TypeError("the deadline needs a written derivation")
+    if derivation.get("uploadBits") != max(REQUEST_TARGETS) * 8:
+        raise ValueError("the derivation does not use the boundary request size")
+    required = derivation.get("derivedRequirementSeconds")
+    if not isinstance(required, (int, float)) or required <= 0:
+        raise ValueError("the derived requirement is malformed")
+    if published < required:
+        raise ValueError("the published deadline is below its own derivation")
+    reserve = deadline.get("nonUploadReserveSeconds")
+    if not isinstance(reserve, (int, float)) or not 0 < reserve < published:
+        raise ValueError("the non-upload reserve must fit inside the deadline")
+    rate = deadline.get("slowestUsableUpstreamBitsPerSecond")
+    if rate != round(max(REQUEST_TARGETS) * 8 / (published - reserve)):
+        raise ValueError("the slowest usable upstream rate does not follow")
+    for key in ("covers", "consequenceIfMissed", "detection", "ownerAction"):
+        if not deadline.get(key):
+            raise ValueError(f"the deadline block is missing {key}")
+    if not isinstance(deadline.get("enforcedBy"), list) or not deadline["enforcedBy"]:
+        raise ValueError("the deadline must name what enforces it")
+
     window = budget.get("recoveryWindow")
     if not isinstance(window, dict):
         raise TypeError("the budget must declare a recovery window")

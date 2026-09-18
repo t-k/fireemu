@@ -35,6 +35,7 @@ from request_bytes_campaign import (
 from request_bytes_collector import collect_local
 from request_bytes_compiler import (
     CAMPAIGN,
+    DOCUMENT_COUNT,
     compile_request_bytes_plan,
     validate_request_bytes_plan,
 )
@@ -42,6 +43,30 @@ from request_bytes_compiler import (
 PROJECT = "demo-firestore-probe"
 DATABASE = "(default)"
 SHADOW_KIND = "fs-request-bytes-local-shadow-v1"
+
+#: A repo-relative marker, never an absolute path. This record is published, so
+#: an absolute path would leak the operator's filesystem and could never hold
+#: from another checkout. The path-independent binding is runtimeInputsDigest.
+REPOSITORY_ROOT_MARKER = "repository-root"
+
+#: The modules that produce the observation. Test files are deliberately out of
+#: this binding: editing a test must not invalidate a recorded run.
+OBSERVATION_MODULES = (
+    "request_bytes_campaign.py",
+    "request_bytes_collector.py",
+    "request_bytes_compiler.py",
+    "request_bytes_https_worker.py",
+    "request_bytes_local_transport.py",
+    "request_bytes_process_exchange.py",
+    "request_bytes_remote_transport.py",
+    "request_bytes_shadow.py",
+)
+
+PUBLICATION_NOTE = (
+    "Owned local artifact shadow. No production request was sent, no credential "
+    "was used and no parent group is promoted. The raw REST body byte count "
+    "remains an observation hypothesis about production's enforcement metric."
+)
 
 
 def save(path: Path, value: Any) -> None:
@@ -56,6 +81,130 @@ def source_inputs() -> dict[str, str]:
         str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(HERE.glob("*.py"))
     }
+
+
+def observation_source_digest() -> str:
+    """One digest over the modules that produced an observation."""
+    import hashlib as _hashlib
+
+    inputs = {
+        name: _hashlib.sha256((HERE / name).read_bytes()).hexdigest()
+        for name in OBSERVATION_MODULES
+    }
+    return _hashlib.sha256(
+        json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def runtime_binding(artifact: Path) -> dict[str, Any]:
+    """Bind the executed artifact to the Rust source it was built from."""
+    import subprocess
+
+    sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
+    from broad_contract import digest
+    from evidence_common import runtime_inputs
+
+    commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    dirty = subprocess.check_output(
+        ["git", "status", "--porcelain", "--", "Cargo.toml", "Cargo.lock", "crates"],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    inputs = runtime_inputs(ROOT)
+    return {
+        "artifactSha256": hashlib.sha256(Path(artifact).read_bytes()).hexdigest(),
+        "sourceCommit": commit,
+        "sourceRoot": REPOSITORY_ROOT_MARKER,
+        "runtimeInputsDigest": digest(inputs),
+        "runtimeInputCount": len(inputs),
+        "runtimeInputsClean": dirty == "",
+    }
+
+
+def probe_outcomes(collection: Path, plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read each probe's Commit outcome back out of the immutable row files.
+
+    The per-probe HTTP status is the observation this lane exists to record, and
+    it lives only in the multi-megabyte row directory otherwise.
+    """
+    by_probe: dict[str, dict[str, Any]] = {}
+    for path in sorted(collection.glob("row-*.json")):
+        row = json.loads(path.read_bytes())
+        if row.get("kind") != "conditional-create-commit":
+            continue
+        receipt = row.get("receipt") or {}
+        body = receipt.get("body")
+        error = body.get("error") if isinstance(body, dict) else None
+        by_probe[row["probe"]] = {
+            "probe": row["probe"],
+            "requestBytes": row.get("requestBytes"),
+            "httpStatus": receipt.get("status"),
+            "complete": receipt.get("complete"),
+            "responseBytes": row.get("responseBytes"),
+            "errorCode": error.get("code") if isinstance(error, dict) else None,
+            "errorStatus": error.get("status") if isinstance(error, dict) else None,
+            "errorMessage": error.get("message") if isinstance(error, dict) else None,
+        }
+    return [
+        by_probe[probe["label"]]
+        for probe in plan["probes"]
+        if probe["label"] in by_probe
+    ]
+
+
+def build_shadow_document(
+    *,
+    before: str,
+    after: str,
+    runtime: dict[str, Any],
+    plan_digest: str,
+    campaign_digest_value: str,
+    probes: list[dict[str, Any]],
+    collector: dict[str, Any],
+    shadow: dict[str, Any],
+    gates: dict[str, bool],
+    cases: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build the published shadow record.
+
+    This is the only place the record's shape is decided, so the checked-in
+    evidence is something the tool produces rather than something a person
+    assembled afterwards.
+    """
+    result = {
+        "kind": SHADOW_KIND,
+        "campaignId": CAMPAIGN,
+        "target": "owned-local-artifact",
+        "project": PROJECT,
+        "database": DATABASE,
+        "sourceDigestBefore": before,
+        "sourceDigestAfter": after,
+        "artifactSha256": runtime["artifactSha256"],
+        "runtime": runtime,
+        "planDigest": plan_digest,
+        "campaignDigest": campaign_digest_value,
+        "probeOutcomes": probes,
+        "observation": collector,
+        "shadow": shadow,
+        "recordingComplete": gates["recordingComplete"],
+        "stateValidation": gates["stateValidation"],
+        "cases": cases,
+        "productionExecuted": False,
+        "formalCompatibilityClaim": False,
+        "rawHttpMetricStatus": "observation hypothesis",
+        "note": PUBLICATION_NOTE,
+    }
+    result["complete"] = bool(
+        before == after
+        and runtime["runtimeInputsClean"]
+        and gates["recordingComplete"]
+        and gates["stateValidation"]
+        and collector.get("resourceAbsence") is True
+        and shadow.get("classification") != "shadow-failure"
+    )
+    return result
 
 
 def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -73,6 +222,9 @@ def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
       transport cap and this baseline is stale.
     - `local-boundary-not-enforced` means the over-boundary Commit was accepted,
       so the transport cap was removed or raised.
+    - `local-untyped-transport-refusal` means something refused the Commit
+      without Firestore's typed envelope. The boundary question stays
+      unanswered and recovery stays read-only.
 
     Anything else is a shadow failure and is reported as such.
     """
@@ -99,6 +251,17 @@ def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
             "The local runtime refused the over-boundary Commit with a typed 400. "
             "The limits-layer implementation has landed and this baseline is stale."
         )
+    elif (
+        _is_untyped_refusal_failure_set(failures)
+        and refusal is None
+        and isinstance(result.get("untypedOverRefusal"), dict)
+        and absence
+    ):
+        classification = "local-untyped-transport-refusal"
+        summary = (
+            "The over-boundary Commit was refused without a typed Firestore "
+            "envelope. The refusal shape is unproven and nothing was written."
+        )
     elif failures == ["over:unexpected-success"] and refusal is None and absence:
         classification = "local-boundary-not-enforced"
         summary = (
@@ -119,11 +282,31 @@ def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
         "observedFailures": failures,
         "resourceAbsence": absence,
         "overRefusal": refusal,
+        "untypedOverRefusal": result.get("untypedOverRefusal"),
         "productionRefusalExpectation": "400 INVALID_ARGUMENT",
         "differenceMasked": False,
         "productionExecuted": False,
         "formalCompatibilityClaim": False,
     }
+
+
+def _is_untyped_refusal_failure_set(failures: list[Any]) -> bool:
+    """Recognise exactly the failures an unproven over-boundary refusal leaves.
+
+    An untyped refusal proves nothing, so the collector records the missing
+    commit proof and then refuses every version-bound delete for want of a
+    creation proof. Those 17 skips are the read-only recovery working, not extra
+    damage, but they are still failures and the run is still incomplete.
+    """
+    if not failures or failures[0] != "over:commit-proof-missing":
+        return False
+    rest = failures[1:]
+    return len(rest) == DOCUMENT_COUNT and all(
+        isinstance(entry, str)
+        and entry.startswith("recovery:")
+        and entry.endswith(":creation-and-current-version-not-proven")
+        for entry in rest
+    )
 
 
 def shadow_gates(
@@ -280,6 +463,25 @@ def _child(output: Path, nonce: str) -> None:
             "shadow": shadow,
         },
     )
+
+    # The publishable record. `broad.run` copies the artifact next to the output
+    # as `fireemu`, and the child observes the same bytes the supervisor did.
+    artifact = output / "fireemu"
+    if artifact.exists():
+        cases = json.loads((output / "cases.json").read_bytes())["cases"]
+        document = build_shadow_document(
+            before=observation_source_digest(),
+            after=observation_source_digest(),
+            runtime=runtime_binding(artifact),
+            plan_digest=result["planDigest"],
+            campaign_digest_value=campaign_digest(campaign),
+            probes=probe_outcomes(output / "collection", plan),
+            collector=result,
+            shadow=shadow,
+            gates=gates,
+            cases=cases,
+        )
+        save(output / "local-shadow.json", document)
 
 
 def run(output: Path) -> dict[str, Any]:

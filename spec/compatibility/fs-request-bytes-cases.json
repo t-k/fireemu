@@ -110,8 +110,12 @@
           }
         ],
         "untypedTransportRefusal": {
-          "handling": "The reviewed collector cannot classify a non-JSON transport refusal as a typed refusal. Such a receipt leaves the probe uncertain, recovery stays read-only, and the campaign is inconclusive on the refusal shape.",
-          "ownerAction": "If production answers with an untyped transport refusal, the collector needs an explicit untyped-refusal classification before a second run can conclude the boundary.",
+          "classification": "untyped-transport-refusal",
+          "handling": "A non-JSON refusal, such as a front-end HTML 413 or a reset, is not Firestore's answer and is never upgraded to a typed row. The collector records it as its own outcome with the HTTP status, the content type and the response bytes verbatim, and keeps the refusal shape unproven.",
+          "isRefusalProof": false,
+          "ownerAction": "Adjudicate the recorded status, content type and bytes. The primary boundary question stays open and needs a second run once the intermediary is identified.",
+          "recoveryAuthority": "read-only; it grants no cleanup ownership, so every version-bound delete is a zero-wire skip",
+          "resultKey": "untypedOverRefusal",
           "state": "commit-uncertain",
           "stillProven": "The post-state readback and the recovery absence proofs still establish that the refused request wrote nothing."
         }
@@ -192,8 +196,12 @@
       }
     ],
     "untypedTransportRefusal": {
-      "handling": "The reviewed collector cannot classify a non-JSON transport refusal as a typed refusal. Such a receipt leaves the probe uncertain, recovery stays read-only, and the campaign is inconclusive on the refusal shape.",
-      "ownerAction": "If production answers with an untyped transport refusal, the collector needs an explicit untyped-refusal classification before a second run can conclude the boundary.",
+      "classification": "untyped-transport-refusal",
+      "handling": "A non-JSON refusal, such as a front-end HTML 413 or a reset, is not Firestore's answer and is never upgraded to a typed row. The collector records it as its own outcome with the HTTP status, the content type and the response bytes verbatim, and keeps the refusal shape unproven.",
+      "isRefusalProof": false,
+      "ownerAction": "Adjudicate the recorded status, content type and bytes. The primary boundary question stays open and needs a second run once the intermediary is identified.",
+      "recoveryAuthority": "read-only; it grants no cleanup ownership, so every version-bound delete is a zero-wire skip",
+      "resultKey": "untypedOverRefusal",
       "state": "commit-uncertain",
       "stillProven": "The post-state readback and the recovery absence proofs still establish that the refused request wrote nothing."
     }

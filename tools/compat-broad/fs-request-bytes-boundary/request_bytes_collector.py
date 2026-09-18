@@ -101,6 +101,58 @@ def over_refusal_classification(receipt: Any) -> str | None:
     return "expected" if receipt["status"] == 400 else "semantic-discrepancy"
 
 
+#: Bytes of a non-typed refusal body retained inline. The full bytes are always
+#: in the run's `response-*.body` sidecar; this is the adjudication excerpt.
+UNTYPED_BODY_INLINE_BYTES = 8192
+
+
+def untyped_transport_refusal(receipt: Any) -> bool:
+    """A complete non-success response that is not Firestore's typed refusal.
+
+    A front-end HTML 413 or any other intermediary answer belongs here. It is
+    deliberately *not* a refusal proof: it grants no cleanup ownership, leaves
+    the refusal shape unproven, and keeps recovery read-only. Recording it
+    separately turns an otherwise wasted run into something an owner can
+    adjudicate, without letting an intermediary speak for Firestore.
+    """
+    if not complete(receipt) or typed_over_refusal(receipt):
+        return False
+    status = receipt.get("status")
+    return type(status) is int and 400 <= status < 600
+
+
+def untyped_refusal_observation(receipt: Any) -> dict[str, Any] | None:
+    """Record a non-typed refusal verbatim, bounded, and without any claim."""
+    if not untyped_transport_refusal(receipt):
+        return None
+    encoded = receipt.get("rawBodyBase64")
+    raw = b""
+    if isinstance(encoded, str):
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except (ValueError, base64.binascii.Error):
+            raw = b""
+    headers = receipt.get("headers")
+    content_type = ""
+    if isinstance(headers, dict):
+        value = headers.get("content-type")
+        content_type = value[:128] if isinstance(value, str) else ""
+    observation = {
+        "classification": "untyped-transport-refusal",
+        "httpStatus": receipt["status"],
+        "contentType": content_type,
+        "bodyBytes": len(raw),
+        "bodySha256": hashlib.sha256(raw).hexdigest(),
+        "bodyBase64": base64.b64encode(raw[:UNTYPED_BODY_INLINE_BYTES]).decode("ascii"),
+        "bodyTruncated": len(raw) > UNTYPED_BODY_INLINE_BYTES,
+        "refusalShapeProven": False,
+        "grantsCleanupOwnership": False,
+        "recoveryAuthority": "read-only",
+        "note": "Not a Firestore typed refusal. The boundary question stays unanswered; the post-state readback and absence proofs still stand.",
+    }
+    return observation
+
+
 def _document_fields(receipt: Any) -> dict[str, Any] | None:
     body = receipt.get("body") if isinstance(receipt, dict) else None
     fields = body.get("fields") if isinstance(body, dict) else None
@@ -314,6 +366,7 @@ def collect_local(
         commit_sent: set[str] = set()
         commit_refused: set[str] = set()
         over_refusal_observation: dict[str, Any] | None = None
+        untyped_over_refusal: dict[str, Any] | None = None
         stopped = False
         observation_stopped = False
         dispatches = 0
@@ -466,6 +519,8 @@ def collect_local(
                         }
                     else:
                         failures.append(f"{probe}:commit-proof-missing")
+                        if probe == "over":
+                            untyped_over_refusal = untyped_refusal_observation(receipt)
                 elif kind == "probe-readback":
                     expected_digest = plan["documents"][resource]["fieldsSha256"]
                     matched = (
@@ -557,6 +612,10 @@ def collect_local(
         }
         if over_refusal_observation is not None:
             result["overRefusal"] = over_refusal_observation
+        if untyped_over_refusal is not None:
+            # Deliberately a separate key. It is never a typed refusal and must
+            # not be readable as one by anything consuming `overRefusal`.
+            result["untypedOverRefusal"] = untyped_over_refusal
         _publish(output_fd, "result.json", result)
         return result
     finally:

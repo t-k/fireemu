@@ -342,3 +342,92 @@ def test_checked_in_campaign_artifact_matches_the_compiler() -> None:
     assert published["owner"]["nonceDigest"] == rebuilt["owner"]["nonceDigest"]
     assert published == rebuilt
     assert REQUEST_LIMIT == published["catalogMaximum"]
+
+
+# --- Transport deadline -------------------------------------------------------
+
+
+def test_the_budget_timeout_is_the_transport_ceiling(campaign: dict) -> None:
+    from request_bytes_remote_transport import TIMEOUT
+
+    assert campaign["budget"]["perRequestTimeoutSeconds"] == TIMEOUT
+    assert campaign["transportDeadline"]["perRequestSeconds"] == TIMEOUT
+
+
+def test_the_deadline_carries_its_derivation_and_its_consequence(
+    campaign: dict,
+) -> None:
+    deadline = campaign["transportDeadline"]
+    derivation = deadline["derivation"]
+    assert derivation["uploadBits"] == 10_485_761 * 8
+    assert deadline["perRequestSeconds"] >= derivation["derivedRequirementSeconds"]
+    assert "cannot remove" in deadline["consequenceIfMissed"]
+    assert "never silent" in deadline["detection"]
+    assert deadline["ownerAction"]
+    assert len(deadline["enforcedBy"]) == 2
+
+
+def test_the_slowest_usable_upstream_rate_is_reachable(campaign: dict) -> None:
+    deadline = campaign["transportDeadline"]
+    rate = deadline["slowestUsableUpstreamBitsPerSecond"]
+    assert rate == round(
+        10_485_761
+        * 8
+        / (deadline["perRequestSeconds"] - deadline["nonUploadReserveSeconds"])
+    )
+    assert rate < 2_000_000
+
+
+def test_the_untyped_refusal_is_never_a_refusal_proof(campaign: dict) -> None:
+    untyped = campaign["refusalExpectation"]["untypedTransportRefusal"]
+    assert untyped["classification"] == "untyped-transport-refusal"
+    assert untyped["resultKey"] == "untypedOverRefusal"
+    assert untyped["isRefusalProof"] is False
+    assert "read-only" in untyped["recoveryAuthority"]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(
+            lambda c: c["budget"].update(perRequestTimeoutSeconds=600),
+            id="budget-timeout-above-the-transport-ceiling",
+        ),
+        pytest.param(
+            lambda c: c["transportDeadline"].update(perRequestSeconds=5),
+            id="deadline-below-its-derivation",
+        ),
+        pytest.param(
+            lambda c: c["transportDeadline"]["derivation"].update(uploadBits=1),
+            id="derivation-not-at-boundary-size",
+        ),
+        pytest.param(
+            lambda c: c["transportDeadline"].update(consequenceIfMissed=""),
+            id="consequence-unstated",
+        ),
+        pytest.param(
+            lambda c: c["transportDeadline"].update(detection=""),
+            id="detection-unstated",
+        ),
+        pytest.param(
+            lambda c: c["transportDeadline"].update(enforcedBy=[]),
+            id="enforcement-unnamed",
+        ),
+        pytest.param(
+            lambda c: c["transportDeadline"].update(nonUploadReserveSeconds=0),
+            id="reserve-does-not-fit",
+        ),
+        pytest.param(
+            lambda c: c["transportDeadline"].update(
+                slowestUsableUpstreamBitsPerSecond=1
+            ),
+            id="rate-does-not-follow",
+        ),
+        pytest.param(lambda c: c.pop("transportDeadline"), id="deadline-not-published"),
+    ],
+)
+def test_validator_rejects_deadline_drift(campaign: dict, mutate) -> None:
+    mutated = copy.deepcopy(campaign)
+    mutate(mutated)
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        validate_request_bytes_campaign(mutated)

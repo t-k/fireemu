@@ -379,7 +379,8 @@ def test_a_response_the_run_did_not_receive_with_a_success_status_is_refused(tmp
 
 
 def test_a_journal_line_from_a_phase_the_receipt_does_not_record_is_refused(tmp_path):
-    """Run A recorded only its observation phase; a recovery line is unbound."""
+    """Run A recorded only its observation phase; a recovery line is refused
+    before any receipt lookup, so no record could rescue it."""
     path, evidence = record_for(tmp_path)
     journal = evidence / "responses.jsonl"
     lines = [json.loads(line) for line in journal.read_text().splitlines()]
@@ -391,11 +392,33 @@ def test_a_journal_line_from_a_phase_the_receipt_does_not_record_is_refused(tmp_
     for entry in record["observations"]:
         entry["sha256"] = sha
     path.write_text(json.dumps(record))
-    with pytest.raises(ValueError, match="live run did not produce"):
+    with pytest.raises(ValueError, match="observation phase"):
         derive(path, evidence)
 
 
-@pytest.mark.parametrize("phase", [None, "", "replay", 0], ids=str)
+def test_a_recovery_line_the_same_run_recorded_is_not_a_baseline(tmp_path):
+    """The run received the recovery response, but it is the state after."""
+    receipt = live_receipt(DEFAULT_BODIES)
+    receipt["metadata"] = receipt["metadata"] + [
+        dict(item, id="recovery:" + item["id"].split(":")[1])
+        for item in receipt["metadata"]
+    ]
+    path, evidence = record_for(tmp_path, receipt=receipt)
+    journal = evidence / "responses.jsonl"
+    lines = [json.loads(line) for line in journal.read_text().splitlines()]
+    for line in lines:
+        line["phase"] = "recovery"
+    journal.write_text("\n".join(json.dumps(line) for line in lines) + "\n")
+    record = json.loads(path.read_text())
+    sha = hashlib.sha256(journal.read_bytes()).hexdigest()
+    for entry in record["observations"]:
+        entry["sha256"] = sha
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="observation phase"):
+        derive(path, evidence)
+
+
+@pytest.mark.parametrize("phase", [None, "", "replay", "recovery", 0], ids=str)
 def test_a_journal_line_without_a_recorded_phase_is_refused(tmp_path, phase):
     path, evidence = record_for(tmp_path)
     journal = evidence / "responses.jsonl"

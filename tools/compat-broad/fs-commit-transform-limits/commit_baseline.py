@@ -76,15 +76,16 @@ ROUTES = {
     ),
 }
 # The metadata action each privileged route is recorded under in a live run's
-# own response record, and the phases that record can name. A journal line is
-# only evidence when the receipt's record for that phase and action holds the
-# same response digest.
+# own response record. A journal line is only evidence when the receipt's
+# observation-phase record for that action holds the same response digest: a
+# baseline is the state before the campaign acted, and a recovery-phase
+# response, although the same run received it, describes the state after.
 ROUTE_ACTIONS = {
     ROUTES["projectIdentity"]: "project",
     ROUTES["database"]: "database",
     ROUTES["authConfig"]: "auth",
 }
-METADATA_PHASES = ("observation", "recovery")
+BASELINE_PHASE = "observation"
 BASELINE_FIELDS = (
     "projectIdentity",
     "databaseProjection",
@@ -225,7 +226,7 @@ def _journal_line(evidence_root, entry, *, production_roots):
     if recorded.get("route") != entry.get("route"):
         raise ValueError("named observation route differs")
     phase, action = recorded.get("phase"), ROUTE_ACTIONS.get(entry.get("route"))
-    if action is None or phase not in METADATA_PHASES:
+    if action is None or phase != BASELINE_PHASE:
         raise ValueError("named observation phase required")
     _produced_by(
         receipt,

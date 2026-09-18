@@ -163,7 +163,10 @@ the permission and transport bindings.
 
 The collector ran the full catalog against an owned local `fireemu` instance
 started by `fireemu exec` with the Firestore and Auth emulators on OS-assigned
-ports. All twelve cases agreed with their expected local results, every listener
+ports. The runtime was built from this worktree with `cargo build -p fireemu`,
+never taken from another checkout: a prebuilt binary elsewhere can predate
+branch-only fixes and describe a different commit. The receipt therefore names
+the binary it ran, its SHA-256 and the commit it was built from. All twelve cases agreed with their expected local results, every listener
 closed, no invariant was violated, and cleanup proved absence for every owned
 path. Three consecutive runs produced the same result, and a fourth with a four
 second deadline produced an honest incomplete receipt with cleanup still
@@ -176,8 +179,12 @@ recomputes the source digests, the catalog digest and every case comparison.
 Reproduce it with:
 
 ```sh
+cargo build -p fireemu
 npm install --prefix <scratch> firebase@12.18.0
 O6_FIREBASE_MODULE_DIR=<scratch> O6_REPO_ROOT="$PWD" GOOGLE_CLOUD_PROJECT=demo-o6 \
+  O6_LISTEN_FIREEMU_BINARY="$PWD/target/debug/fireemu" \
+  O6_LISTEN_FIREEMU_COMMIT="$(git rev-parse HEAD)" \
+  O6_LISTEN_SOURCE_COMMIT="$(git rev-parse HEAD)" \
   target/debug/fireemu exec \
   --firebase-json tools/compat-broad/fs-listen-resume/fs-listen-sdk.firebase.json \
   --project demo-o6 --only firestore,auth \
@@ -185,6 +192,7 @@ O6_FIREBASE_MODULE_DIR=<scratch> O6_REPO_ROOT="$PWD" GOOGLE_CLOUD_PROJECT=demo-o
   --log-verbosity silent -- \
   node tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs > receipt.json
 node tools/compat-broad/fs-listen-resume/local_shadow_check.mjs receipt.json
+rm -rf target
 ```
 
 This is local evidence only. It shows that the catalog is executable, finite and

@@ -38,8 +38,15 @@ NONCE = "a32e23a844ac11484405c005bb1a9e27"
 SPEC = HERE.parents[2] / "spec/compatibility/fs-request-bytes-campaign.json"
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def campaign() -> dict:
+    """Compiled once for the module.
+
+    Compiling builds the three 10 MiB bodies, so a per-test fixture dominated
+    the suite. Every test that changes the artifact deep-copies it first, so
+    sharing the compiled value is safe; a test that mutated it directly would
+    leak into its neighbours, which is what the deep copies are for.
+    """
     return compile_request_bytes_campaign(PROJECT, DATABASE, NONCE)
 
 
@@ -856,3 +863,60 @@ def test_the_campaign_digest_ignores_key_order_but_not_value() -> None:
     assert campaign_digest(reordered) == campaign_digest(published)
     changed = {**published, "catalogMaximum": 1}
     assert campaign_digest(changed) != campaign_digest(published)
+
+
+# --- The Gate constants this module still copies are bound to its behaviour ---
+#
+# GATE_INTERVAL_FLOOR_SECONDS and GATE_WALL_CAP_SECONDS are local copies of two
+# inline literals in shared_gate.create. Importing named constants is the better
+# fix and is with shared_gate's owner; until then these pin the copies to what
+# the Gate actually does, so a change there fails here rather than silently
+# admitting a plan the Gate refuses.
+
+
+def _minimal_allocation(campaign: dict, **overrides) -> dict:
+    plan = compile_request_bytes_plan(PROJECT, DATABASE, NONCE)
+    allocation = dict(gate_charging_plan(plan))
+    allocation.update(
+        contract="shared-local-v2",
+        wallSeconds=campaign["budget"]["maxDurationSeconds"],
+        recoverySeconds=campaign["budget"]["recoveryWindow"]["reserveSeconds"],
+        costMicrousd=int(campaign["cost"]["maximumCostUsd"] * 1_000_000) + 1,
+        observationRequests=campaign["budget"]["maxHttpRequests"],
+        requestCostMicrousd=1,
+    )
+    allocation.update(overrides)
+    return allocation
+
+
+def test_the_gate_really_refuses_an_interval_below_our_floor(
+    campaign: dict, tmp_path
+) -> None:
+    import shared_gate
+    from request_bytes_campaign import GATE_INTERVAL_FLOOR_SECONDS
+
+    below = GATE_INTERVAL_FLOOR_SECONDS / 2
+    with pytest.raises(ValueError):
+        shared_gate.create(
+            tmp_path / "below", _minimal_allocation(campaign, intervalSeconds=below)
+        )
+    # And accepts the floor itself, so the copy is neither too high nor too low.
+    shared_gate.create(
+        tmp_path / "at-floor",
+        _minimal_allocation(campaign, intervalSeconds=GATE_INTERVAL_FLOOR_SECONDS),
+    )
+
+
+def test_the_gate_really_refuses_a_wall_above_our_cap(campaign: dict, tmp_path) -> None:
+    import shared_gate
+    from request_bytes_campaign import GATE_WALL_CAP_SECONDS
+
+    with pytest.raises(ValueError):
+        shared_gate.create(
+            tmp_path / "above",
+            _minimal_allocation(campaign, wallSeconds=GATE_WALL_CAP_SECONDS + 1),
+        )
+    shared_gate.create(
+        tmp_path / "at-cap",
+        _minimal_allocation(campaign, wallSeconds=GATE_WALL_CAP_SECONDS),
+    )

@@ -39,10 +39,30 @@ pub const API_REQUEST_BYTES: usize = 10 * 1024 * 1024;
 pub const MAX_REST_BODY_BYTES: usize = API_REQUEST_BYTES;
 
 /// Maximum accepted gRPC message (`FS-LIMIT-API-REQUEST-BYTES`), applied by tonic before the
-/// protobuf is decoded.
+/// protobuf is decoded. This is the request direction only.
 pub const MAX_GRPC_MESSAGE_BYTES: usize = API_REQUEST_BYTES;
+
+/// Maximum gRPC message this runtime will encode in a response.
+///
+/// **This is not a catalog limit.** `FS-LIMIT-API-REQUEST-BYTES` bounds a request; production
+/// publishes no equivalent bound on a response, and nothing here claims one. It is a local
+/// memory guard, kept at the request figure only because that is the number it has always
+/// had. Changing it changes nothing about `FS-LIMIT-API-REQUEST-BYTES`, and a response
+/// refused by it is a local failure rather than a modelled production refusal, which is why
+/// `normalize_transport_status` reshapes only the decode direction.
+pub const MAX_GRPC_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
 /// Maximum Firestore REST requests that may retain bodies while waiting for synchronous work.
 pub const MAX_BLOCKING_REST_REQUESTS: usize = 64;
+
+/// How long a request body may take to arrive once a permit has been taken for it.
+///
+/// The permit is taken before the read so that peak body memory stays bounded, which means a
+/// client that opens a request and then trickles its body would otherwise hold a permit for
+/// as long as it liked; enough of them would stall every write surface. Loopback transfers of
+/// the largest accepted body finish in milliseconds, so this is generous by orders of
+/// magnitude and only ever fires on a stalled or malicious sender.
+pub const BODY_READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The refusal a request over [`API_REQUEST_BYTES`] gets.
 ///
@@ -177,14 +197,65 @@ fn header<'a, B>(req: &'a Request<B>, name: &str) -> Option<&'a str> {
     req.headers().get(name).and_then(|v| v.to_str().ok())
 }
 
-async fn read_body<B>(req: Request<B>, limit: usize) -> Result<Bytes, ()>
+/// Why a request body was not read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BodyRejection {
+    /// Over [`API_REQUEST_BYTES`], or the connection failed mid-body. A broken connection has
+    /// always been answered this way and keeps that answer; nothing reaches the client anyway.
+    TooLarge,
+    /// The sender held the request open past [`BODY_READ_DEADLINE`] without finishing it.
+    Deadline,
+}
+
+/// Whether a request can carry a body at all.
+///
+/// A `GET` never does, and a declared length of zero says there is nothing to read. Deciding
+/// this before admission keeps a body-less request off the pool: a `Listen` back channel is a
+/// bare `GET`, and refusing one because writers are busy would be a load-caused refusal
+/// neither production nor the official emulator has.
+fn carries_a_body<B>(req: &Request<B>) -> bool {
+    req.method() != hyper::Method::GET && header(req, "content-length") != Some("0")
+}
+
+async fn read_body<B>(
+    req: Request<B>,
+    limit: usize,
+    deadline: std::time::Duration,
+) -> Result<Bytes, BodyRejection>
 where
     B: Body<Data = Bytes>,
     B::Error: Into<BoxError>,
 {
-    fireemu_adapter_support::body::collect_limited(req.into_body(), limit)
-        .await
-        .map_err(|_| ())
+    let read = fireemu_adapter_support::body::collect_limited(req.into_body(), limit);
+    match tokio::time::timeout(deadline, read).await {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(_)) => Err(BodyRejection::TooLarge),
+        Err(_) => Err(BodyRejection::Deadline),
+    }
+}
+
+/// The refusal a body that never finished arriving gets.
+///
+/// `408` is the HTTP answer for a request the client did not finish sending;
+/// `DEADLINE_EXCEEDED` is its canonical `google.rpc.Code`. Local only: production has no
+/// published behaviour here, and this fires on a stalled sender rather than on anything a
+/// well-behaved client does.
+fn body_read_deadline_exceeded() -> RestResponse {
+    RestResponse {
+        status: 408,
+        body: fireemu_adapter_support::api_error::google_rpc(
+            408,
+            "request body was not received within the deadline",
+            "DEADLINE_EXCEEDED",
+        ),
+    }
+}
+
+fn body_rejection_response(rejection: BodyRejection, enforce_limits: bool) -> RestResponse {
+    match rejection {
+        BodyRejection::TooLarge => api_request_too_large(enforce_limits),
+        BodyRejection::Deadline => body_read_deadline_exceeded(),
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -213,11 +284,14 @@ async fn rest_call(
         .iter()
         .map(|v| v.to_str().unwrap_or_default().to_owned())
         .collect();
-    let Ok(bytes) = read_body(req, MAX_REST_BODY_BYTES).await else {
-        return Ok(json_response(
-            &api_request_too_large(state.gateway.enforce_limits),
-            origin.as_deref(),
-        ));
+    let bytes = match read_body(req, MAX_REST_BODY_BYTES, BODY_READ_DEADLINE).await {
+        Ok(bytes) => bytes,
+        Err(rejection) => {
+            return Ok(json_response(
+                &body_rejection_response(rejection, state.gateway.enforce_limits),
+                origin.as_deref(),
+            ));
+        }
     };
     let body = if bytes.is_empty() {
         serde_json::Value::Object(serde_json::Map::new())
@@ -291,6 +365,7 @@ async fn channel_call<B>(
     req: Request<B>,
     enforce_limits: bool,
     limiter: &Arc<tokio::sync::Semaphore>,
+    body_deadline: std::time::Duration,
 ) -> Response<OutBody>
 where
     B: Body<Data = Bytes>,
@@ -301,13 +376,23 @@ where
     // the same pool: without this, peak body memory on this path was bounded only by how
     // fast clients connect.
     //
+    // Only a request that carries a body takes a permit. A `Listen` back channel is a bare
+    // `GET` and reads nothing, so it must never be refused because writers are busy: that
+    // would be a load-caused refusal on a surface where neither production nor the official
+    // emulator has one.
+    //
     // The permit covers reading and parsing the body and the synchronous `Hub::handle`, and
     // is released when this function returns. A streaming back channel produces its frames
     // from the body returned here, after the permit is gone, so a `Listen` client long-polling
     // for up to `LONG_POLL_MAX` never holds one -- which would otherwise let a handful of
     // idle listeners starve every write surface.
-    let Some(_permit) = try_admit_rest_work(limiter) else {
-        return json_response(&too_many_concurrent_requests(), origin.as_deref());
+    let _permit = if carries_a_body(&req) {
+        match try_admit_rest_work(limiter) {
+            Some(permit) => Some(permit),
+            None => return json_response(&too_many_concurrent_requests(), origin.as_deref()),
+        }
+    } else {
+        None
     };
     let method = req.method().as_str().to_owned();
     let params = crate::webchannel::parse_form(req.uri().query().unwrap_or(""));
@@ -320,8 +405,14 @@ where
         .iter()
         .map(|v| v.to_str().unwrap_or_default().to_owned())
         .collect();
-    let Ok(bytes) = read_body(req, crate::webchannel::MAX_FORM_BYTES).await else {
-        return json_response(&api_request_too_large(enforce_limits), origin.as_deref());
+    let bytes = match read_body(req, crate::webchannel::MAX_FORM_BYTES, body_deadline).await {
+        Ok(bytes) => bytes,
+        Err(rejection) => {
+            return json_response(
+                &body_rejection_response(rejection, enforce_limits),
+                origin.as_deref(),
+            );
+        }
     };
     let body = String::from_utf8_lossy(&bytes).into_owned();
     let response = hub.handle(&ChannelRequest {
@@ -534,6 +625,7 @@ where
                             req,
                             enforce_limits,
                             rest_work_limiter(),
+                            BODY_READ_DEADLINE,
                         )
                         .await);
                     }
@@ -638,6 +730,18 @@ mod tests {
             "Request payload size exceeds the limit: 10485760 bytes."
         );
 
+        // The encode direction is never touched. `MAX_GRPC_RESPONSE_BYTES` is a local memory
+        // guard, not `FS-LIMIT-API-REQUEST-BYTES`, so a response this runtime could not encode
+        // must not be dressed up as production refusing the client's request.
+        for enforce_limits in [true, false] {
+            let encode_side = "Error, encoded message length too large: found 10485761 bytes, the limit is: 10485760 bytes";
+            let mut encoded = headers(&Status::new(Code::OutOfRange, encode_side));
+            normalize_transport_status(&mut encoded, enforce_limits);
+            let kept = Status::from_header_map(&encoded).unwrap();
+            assert_eq!(kept.code(), Code::OutOfRange);
+            assert_eq!(kept.message(), encode_side);
+        }
+
         // An unrelated OUT_OF_RANGE is never touched, in either profile.
         for enforce_limits in [true, false] {
             let mut unrelated = headers(&Status::new(Code::OutOfRange, "cursor past the end"));
@@ -653,7 +757,7 @@ mod tests {
     /// memory on that path was bounded only by the connection rate.
     mod channel_admission {
         use super::super::{
-            channel_call, rest_work_limiter, too_many_concurrent_requests,
+            channel_call, rest_work_limiter, too_many_concurrent_requests, BODY_READ_DEADLINE,
             MAX_BLOCKING_REST_REQUESTS,
         };
         use crate::gateway::Gateway;
@@ -666,8 +770,35 @@ mod tests {
         use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
         use fireemu_core_types::time::LogicalInstant;
         use http_body_util::{BodyExt, Full};
+        use hyper::body::{Body, Frame};
         use hyper::{Request, Response};
+        use std::convert::Infallible;
+        use std::pin::Pin;
         use std::sync::{Arc, Mutex};
+        use std::task::{Context, Poll};
+
+        /// A stalled sender: one byte, then silence forever. It is never over-long and never
+        /// finishes, so only the deadline can end the read.
+        struct TricklingBody {
+            sent: bool,
+        }
+
+        impl Body for TricklingBody {
+            type Data = Bytes;
+            type Error = Infallible;
+
+            fn poll_frame(
+                mut self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
+                if self.sent {
+                    // No waker is registered: nothing will ever finish this body.
+                    return Poll::Pending;
+                }
+                self.sent = true;
+                Poll::Ready(Some(Ok(Frame::data(Bytes::from_static(b"c")))))
+            }
+        }
 
         fn hub() -> Arc<Hub> {
             let gateway = Gateway {
@@ -784,6 +915,7 @@ mod tests {
                     forward_channel_request(),
                     true,
                     &exhausted,
+                    BODY_READ_DEADLINE,
                 )
                 .await;
                 let (status, body) = body_of(response).await;
@@ -813,6 +945,7 @@ mod tests {
                     listen_handshake_request(),
                     true,
                     &one,
+                    BODY_READ_DEADLINE,
                 )
                 .await;
                 assert_eq!(handshake.status().as_u16(), 200);
@@ -830,6 +963,7 @@ mod tests {
                     backchannel_request(&session),
                     true,
                     &one,
+                    BODY_READ_DEADLINE,
                 )
                 .await;
                 assert_eq!(streaming.status().as_u16(), 200);
@@ -847,10 +981,100 @@ mod tests {
                     forward_channel_request(),
                     true,
                     &one,
+                    BODY_READ_DEADLINE,
                 )
                 .await;
                 assert_ne!(write.status().as_u16(), 503);
                 drop(streaming);
+            });
+        }
+
+        /// A back channel reads no body, so it takes no permit and can never be refused for
+        /// load. Before this it took one before looking at the method, which meant 64 writes
+        /// in flight turned every `Listen` reconnect into a 503 that neither production nor
+        /// the official emulator answers.
+        #[test]
+        fn a_body_less_back_channel_is_served_from_an_exhausted_pool() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let hub = hub();
+                let open = Arc::new(tokio::sync::Semaphore::new(1));
+                let handshake = channel_call(
+                    hub.clone(),
+                    StreamKind::Listen,
+                    listen_handshake_request(),
+                    true,
+                    &open,
+                    BODY_READ_DEADLINE,
+                )
+                .await;
+                let session = handshake
+                    .headers()
+                    .get("x-http-session-id")
+                    .and_then(|v| v.to_str().ok())
+                    .expect("the handshake names its session")
+                    .to_owned();
+
+                let exhausted = Arc::new(tokio::sync::Semaphore::new(0));
+                let streaming = channel_call(
+                    hub,
+                    StreamKind::Listen,
+                    backchannel_request(&session),
+                    true,
+                    &exhausted,
+                    BODY_READ_DEADLINE,
+                )
+                .await;
+                assert_eq!(
+                    streaming.status().as_u16(),
+                    200,
+                    "a back channel reads no body and must not need a permit"
+                );
+            });
+        }
+
+        /// A sender that opens a request and then trickles its body holds a permit for as
+        /// long as the deadline allows and no longer. Without the deadline, enough of them
+        /// would hold every permit indefinitely and stall every write surface.
+        #[test]
+        fn a_trickling_body_releases_its_permit_at_the_deadline() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let one = Arc::new(tokio::sync::Semaphore::new(1));
+                let request = Request::builder()
+                    .method("POST")
+                    .uri("/google.firestore.v1.Firestore/Write/channel?VER=8&RID=1&CI=0")
+                    .body(TricklingBody { sent: false })
+                    .expect("a well-formed stalled request");
+
+                let started = tokio::time::Instant::now();
+                let response = channel_call(
+                    hub(),
+                    StreamKind::Write,
+                    request,
+                    true,
+                    &one,
+                    std::time::Duration::from_millis(50),
+                )
+                .await;
+                let (status, body) = body_of(response).await;
+                assert_eq!(status, 408);
+                assert_eq!(body["error"]["status"], "DEADLINE_EXCEEDED");
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(5),
+                    "the read must end at the deadline, not when the sender gives up"
+                );
+                assert_eq!(
+                    one.available_permits(),
+                    1,
+                    "the permit must come back when the deadline fires"
+                );
             });
         }
 
@@ -873,6 +1097,7 @@ mod tests {
                         forward_channel_request(),
                         true,
                         &one,
+                        BODY_READ_DEADLINE,
                     )
                     .await;
                     assert_ne!(

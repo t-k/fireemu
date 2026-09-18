@@ -6174,6 +6174,102 @@ mod scope_index_tests {
         );
     }
 
+    /// `validate_value` accumulates the storage size itself instead of calling
+    /// [`crate::size::field_value_size`] at every level. That is a second implementation of
+    /// the same formula, so this pins the two together: every value's validated total is its
+    /// `field_value_size`, and the document's total is `document_size`.
+    #[test]
+    fn the_validated_size_is_the_size_model_for_every_shape() {
+        let nested = |depth: usize| {
+            let mut value = Value::String("leaf".to_owned());
+            for level in 0..depth {
+                value = Value::Map(BTreeMap::from([
+                    (format!("n{level}"), value),
+                    (format!("b{level}"), Value::Bytes(vec![7; level])),
+                ]));
+            }
+            value
+        };
+        let cases: Vec<(&str, Value)> = vec![
+            ("null", Value::Null),
+            ("boolean", Value::Boolean(true)),
+            ("integer", Value::Integer(-1)),
+            ("double", Value::Double(1.5)),
+            ("timestamp", Value::Timestamp(Timestamp::new(7, 8).unwrap())),
+            (
+                "geo point",
+                Value::GeoPoint(crate::value::GeoPoint::new(1.0, 2.0).unwrap()),
+            ),
+            ("empty string", Value::String(String::new())),
+            ("unicode string", Value::String("名前".repeat(9))),
+            ("empty bytes", Value::Bytes(Vec::new())),
+            ("bytes", Value::Bytes(vec![0; 300])),
+            (
+                "reference",
+                Value::Reference(path("other/doc").resource_name()),
+            ),
+            ("vector", Value::Vector(vec![1.0, 2.0, 3.0])),
+            ("empty array", Value::Array(Vec::new())),
+            ("empty map", Value::Map(BTreeMap::new())),
+            (
+                "array of scalars",
+                Value::Array(vec![Value::Null, Value::Integer(1), Value::Boolean(false)]),
+            ),
+            (
+                "array of maps",
+                Value::Array(vec![
+                    Value::Map(BTreeMap::from([("a".to_owned(), Value::Integer(1))])),
+                    Value::Map(BTreeMap::new()),
+                ]),
+            ),
+            (
+                "map of mixed values",
+                Value::Map(BTreeMap::from([
+                    ("s".to_owned(), Value::String("x".repeat(40))),
+                    ("a".to_owned(), Value::Array(vec![Value::Double(0.5)])),
+                    ("e".to_owned(), Value::Map(BTreeMap::new())),
+                ])),
+            ),
+            ("one deep map", nested(1)),
+            ("deeply nested maps", nested(19)),
+        ];
+
+        for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+            for (label, value) in &cases {
+                let property_path = PropertyPath::root("v");
+                let validated = validate_value(value, false, &property_path, scope)
+                    .unwrap_or_else(|e| panic!("{scope:?} {label}: {e}"));
+                assert_eq!(
+                    validated,
+                    crate::size::field_value_size(value).unwrap(),
+                    "{scope:?} {label}: validation and the size model disagree"
+                );
+            }
+
+            // The same agreement holds for a whole document, where the field names and the
+            // document name join the total.
+            let document = Document {
+                path: path("sizes/doc"),
+                fields: cases
+                    .iter()
+                    .map(|(label, value)| ((*label).to_owned(), value.clone()))
+                    .collect(),
+                create_time: LogicalInstant::UNIX_EPOCH,
+                update_time: LogicalInstant::UNIX_EPOCH,
+                version: CommitVersion::default(),
+            };
+            validate_document(&document, scope).expect("every case is inside every limit");
+            let modelled = document_size(&document.path, &document.fields)
+                .unwrap()
+                .total;
+            let summed = document_size_bytes(&document.path, &document.fields).unwrap();
+            assert_eq!(
+                modelled, summed,
+                "{scope:?}: the two document charges differ"
+            );
+        }
+    }
+
     /// `FS-LIMIT-FIELD-VALUE-BYTES` on an aggregate is measured on the way back up, reusing
     /// what each child reported. Measuring top-down instead would walk every subtree once
     /// per enclosing level, so one request bounded only by `FS-LIMIT-API-REQUEST-BYTES`

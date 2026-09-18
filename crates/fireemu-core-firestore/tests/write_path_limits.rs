@@ -477,3 +477,32 @@ fn an_indexed_value_is_truncated_at_the_boundary_and_never_refused() {
         assert!(store.get(&path("a/b")).is_some());
     }
 }
+
+/// The exact shape the review named: a field name at the `FS-LIMIT-FIELD-NAME` maximum inside
+/// an array, whose implied path is `"arr" + "." + 1500 = 1504` bytes. The name on its own is
+/// legal, so nothing before this refused it.
+#[test]
+fn the_reviewed_array_field_path_fixture_is_emulator_ok_and_strict_refused() {
+    let document = || {
+        Value::Array(vec![Value::Map(BTreeMap::from([(
+            "z".repeat(1_500),
+            Value::Integer(1),
+        )]))])
+    };
+
+    let mut store = state(LimitScope::OfficialEmulator);
+    store
+        .commit(&[set("a/b", "arr", document())], None, t(0))
+        .expect("the emulator profile may not gain a refusal");
+    assert!(store.get(&path("a/b")).is_some());
+
+    let mut store = state(LimitScope::Production);
+    let refused = store.commit(&[set("a/b", "arr", document())], None, t(0));
+    assert!(
+        matches!(refused, Err(FirestoreError::InvalidArgument(ref m))
+            if m == "field path is 1504 bytes, maximum is 1500"),
+        "{}",
+        outcome(&refused)
+    );
+    assert!(store.get(&path("a/b")).is_none());
+}

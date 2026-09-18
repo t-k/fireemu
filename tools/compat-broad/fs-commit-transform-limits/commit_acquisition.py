@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -61,6 +62,32 @@ MANIFEST_KIND = "commit-o8-manifest-v1"
 REVIEWED_ARTIFACT_PROFILE = "repaired-567565bdd"
 CAMPAIGN_SECONDS = 1200
 RECOVERY_SECONDS = 180
+ABORT_CLOSURE_SOURCES = (
+    "tools/compat-broad/shared_gate.py",
+    "tools/compat-broad/production-admission/reservations.py",
+    "tools/compat-broad/fs-commit-transform-limits/commit_reserved_adapter.py",
+    "tools/compat-broad/fs-commit-transform-limits/gate_adapter.py",
+    "tools/compat-broad/fs-commit-transform-limits/commit_acquisition.py",
+)
+# Owner provenance must be a value the owner supplied. These are the shapes an
+# agent or an unfilled template leaves behind, and admission refuses them.
+PLACEHOLDER_OWNER_IDENTITIES = frozenset(
+    {
+        "agent",
+        "ai",
+        "assistant",
+        "claude",
+        "codex",
+        "none",
+        "owner",
+        "owner-current-conversation",
+        "owner-current-session",
+        "placeholder",
+        "tbd",
+        "todo",
+        "unknown",
+    }
+)
 APPROVAL_FIELDS = frozenset(
     {
         "kind",
@@ -78,6 +105,7 @@ APPROVAL_FIELDS = frozenset(
         "artifactProfile",
         "windowStartsAt",
         "windowExpiresAt",
+        "executionHost",
     }
 )
 MAX_CAPABILITY_SCAN = 64
@@ -192,6 +220,50 @@ class ProductionWireCapability:
         )
 
 
+def execution_host():
+    """The host an approval is bound to; the campaign runs on this host only.
+
+    The worker's process supervision and `/proc` assumptions are verified on one
+    platform only, so an approval issued there must not authorize a run
+    elsewhere. Prose in the package cannot enforce that; this binding can.
+    """
+    return {"platform": platform.system().lower(), "machine": platform.machine()}
+
+
+def abort_generation(inputs):
+    """The reviewed source closure this acquisition records on its reservation.
+
+    A reservation is retired after a preflight stop by proving the closure it
+    was acquired under, so the binding must be derived from the frozen inputs of
+    this campaign rather than from a constant of an earlier generation.
+    """
+    sources = inputs["sourceInputs"]
+    if not isinstance(sources, dict) or any(
+        name not in sources for name in ABORT_CLOSURE_SOURCES
+    ):
+        raise ValueError("frozen reviewed source closure required")
+    return {
+        "sourceCommit": inputs["sourceCommit"],
+        "collectorSourceDigest": digest(sources),
+        "sourceDigests": {
+            Path(name).name: sources[name] for name in ABORT_CLOSURE_SOURCES
+        },
+    }
+
+
+def validate_owner_identity(value):
+    """Refuse an absent or placeholder-shaped owner identity."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("owner supplied execution identity required")
+    text = value.strip()
+    if (
+        text.startswith("<<")
+        or text.endswith(">>")
+        or text.casefold() in PLACEHOLDER_OWNER_IDENTITIES
+    ):
+        raise ValueError("owner supplied execution identity required")
+
+
 def _regular_file_digest(path):
     """Digest a regular file without following a replaceable symlink."""
     path = Path(path)
@@ -282,6 +354,8 @@ def validate_o7_admission(
     }
     if any(approval[key] != value for key, value in bindings.items()):
         raise ValueError("O7 approval binding differs")
+    if approval["executionHost"] != execution_host():
+        raise ValueError("O7 execution host differs")
     if (
         permission.get("wallSeconds") != CAMPAIGN_SECONDS
         or permission.get("recoverySeconds") != RECOVERY_SECONDS
@@ -502,6 +576,7 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs):
 def _approve(permission, plan, source_commit, artifact_digest, inputs):
     required = permission_bindings(plan, source_commit, artifact_digest, inputs)
     validate_owner_baseline(permission, required, time.time())
+    validate_owner_identity(permission.get("ownerIdentity"))
     credential_preparation.validate_principal(permission.get("credentialPrincipal"))
     if digest({key: permission.get(key) for key in required}) != digest(required):
         raise ValueError("typed owner permission binding differs")
@@ -709,7 +784,9 @@ def run_acquisition(
         "budget": copy.deepcopy(BUDGET),
         "durationSeconds": 1200,
     }
-    ticket = ledger.reserve(envelope, claim, projected)
+    ticket = ledger.reserve(
+        envelope, claim, projected, generation=abort_generation(inputs)
+    )
     gate = coordinator = collection = None
     failure = None
     postflight = False

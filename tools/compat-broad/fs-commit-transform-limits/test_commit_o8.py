@@ -178,6 +178,7 @@ def _approval(inputs, manifest_bytes, ledger):
         "artifactProfile": commit_o8.REVIEWED_ARTIFACT_PROFILE,
         "windowStartsAt": now - 1,
         "windowExpiresAt": now + 4 * commit_o8.CAMPAIGN_SECONDS,
+        "executionHost": commit_o8.acquisition.execution_host(),
     }
 
 

@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 import pickle
+import platform
 import sys
 import time
 from pathlib import Path
@@ -77,6 +78,7 @@ def approval_for(inputs: dict, manifest_bytes: bytes, ledger: Path) -> dict:
         "artifactProfile": acquisition.REVIEWED_ARTIFACT_PROFILE,
         "windowStartsAt": now - 1,
         "windowExpiresAt": now + 4 * acquisition.CAMPAIGN_SECONDS,
+        "executionHost": acquisition.execution_host(),
     }
 
 
@@ -212,11 +214,53 @@ def test_capability_is_issued_only_for_a_complete_o7_binding(tmp_path, monkeypat
             {"ledgerRoot": "/nonexistent/private/ledger"},
             {"windowStartsAt": time.time() + 600},
             {"windowExpiresAt": time.time() + 10},
+            {"executionHost": {"platform": "other-platform", "machine": "other-arch"}},
+            {
+                "executionHost": {
+                    **acquisition.execution_host(),
+                    "machine": "other-arch",
+                }
+            },
+            {"executionHost": {"platform": acquisition.execution_host()["platform"]}},
+            {"executionHost": None},
             {"manifest": {"kind": "other"}},
             {"manifest": {"inputsDigest": "0" * 64}},
         ):
             with pytest.raises(ValueError):
                 admission.issue(fd, sha, **override)
+
+
+def test_approval_must_bind_the_running_execution_host(tmp_path, monkeypatch):
+    """An approval issued on one host can never authorize a run on another."""
+    assert "executionHost" in acquisition.APPROVAL_FIELDS
+    assert len(acquisition.APPROVAL_FIELDS) == 16
+    host = acquisition.execution_host()
+    assert host == {
+        "platform": platform.system().lower(),
+        "machine": platform.machine(),
+    }
+    admission = Admission(tmp_path, monkeypatch)
+    archive, sha = archive_for(admission.inputs)
+    campaign = admission.inputs["plan"]["campaignId"]
+    with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
+        assert admission.issue(fd, sha).campaign_id == campaign
+    without = {
+        key: value
+        for key, value in admission.approval.items()
+        if key != "executionHost"
+    }
+    with pytest.raises(ValueError, match="approval artifact"):
+        acquisition.validate_o7_admission(
+            inputs=admission.inputs,
+            approval=without,
+            manifest=admission.manifest,
+            manifest_bytes=admission.manifest_bytes,
+            manifest_path=admission.manifest_path,
+            permission=admission.permission,
+            ledger_root=admission.ledger,
+            artifact_path=admission.artifact_path,
+            launcher_path=HERE / "commit_o8.py",
+        )
 
 
 def test_capability_requires_a_verified_archive_descriptor(tmp_path, monkeypatch):

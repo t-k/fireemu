@@ -481,3 +481,70 @@ def test_retained_comparator_evidence_comes_from_the_frozen_checkout(tmp_path):
     second.mkdir()
     with pytest.raises(ValueError, match="comparator source"):
         acquisition._copy_frozen_sources(second, checkout, drifted)
+
+
+def test_reservation_records_the_source_generation_it_was_acquired_under(
+    tmp_path, monkeypatch
+):
+    """A reservation must stay retirable by proving its own reviewed closure."""
+    inputs, ledger, _calls, kwargs = fixture(tmp_path, monkeypatch)
+    expected = acquisition.abort_generation(inputs)
+    assert expected["sourceCommit"] == inputs["sourceCommit"]
+    assert expected["collectorSourceDigest"] == digest(inputs["sourceInputs"])
+    assert set(expected["sourceDigests"]) == {
+        "shared_gate.py",
+        "reservations.py",
+        "commit_reserved_adapter.py",
+        "gate_adapter.py",
+        "commit_acquisition.py",
+    }
+    for name in acquisition.ABORT_CLOSURE_SOURCES:
+        short = Path(name).name
+        assert expected["sourceDigests"][short] == inputs["sourceInputs"][name]
+    result = acquisition.run_acquisition(tmp_path / "output", inputs, **kwargs)
+    assert result["failure"] is None
+    row = ledger.snapshot()["reservations"][result["ticket"]["reservation"]]
+    assert row["generation"] == expected
+
+
+def test_abort_generation_requires_every_reviewed_closure_source(tmp_path, monkeypatch):
+    inputs, _ledger, _calls, _kwargs = fixture(tmp_path, monkeypatch)
+    for name in acquisition.ABORT_CLOSURE_SOURCES:
+        pruned = copy.deepcopy(inputs)
+        del pruned["sourceInputs"][name]
+        with pytest.raises(ValueError, match="source closure"):
+            acquisition.abort_generation(pruned)
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        None,
+        "",
+        "   ",
+        "owner-current-conversation",
+        "  Owner-Current-Conversation  ",
+        "<<ROOT: recovery-responsible identity>>",
+        "claude",
+        "assistant",
+        "placeholder",
+        "tbd",
+    ],
+)
+def test_placeholder_owner_identity_is_refused_before_any_reservation(
+    tmp_path, monkeypatch, identity
+):
+    """Owner provenance must be an owner supplied value, not an agent's string."""
+    inputs, ledger, _calls, kwargs = fixture(tmp_path, monkeypatch)
+    permission_path = kwargs["permission_path"]
+    permission = json.loads(permission_path.read_text())
+    permission["ownerIdentity"] = identity
+    permission_path.write_text(json.dumps(permission))
+    with pytest.raises(ValueError, match="owner"):
+        acquisition.freeze_inputs(
+            permission_path,
+            inputs["plan"],
+            source_root=kwargs["source_root"],
+            artifact_path=kwargs["artifact_path"],
+        )
+    assert ledger.snapshot()["reservations"] == {}

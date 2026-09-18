@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use fireemu_adapter_logging::wire::sec_websocket_accept;
+use fireemu_adapter_logging::wire::{sec_websocket_accept, HandshakeError};
 use fireemu_adapter_logging::{serve_logging, LogBus, LogInput};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -221,8 +221,17 @@ async fn a_cross_site_page_is_refused_and_receives_no_log_frame() {
             .await
             .expect("the refused connection stayed open")
             .unwrap();
-        let body = String::from_utf8_lossy(&rest);
-        assert!(!body.contains("SECRET"), "leaked log data for {origin}");
+        // Exactly the refusal body follows the head: not one extra byte reaches the page.
+        let expected = HandshakeError::ForeignOrigin
+            .response()
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body.to_owned())
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&rest),
+            expected,
+            "unexpected bytes after the refusal for {origin}"
+        );
     }
 }
 

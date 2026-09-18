@@ -85,15 +85,17 @@ def _batch_landed(request: dict, status: Any, body: Any) -> dict[str, str]:
     return landed
 
 
-def evaluate_rows(rows: list[dict], plan: dict, *, pending: bool = False) -> list[dict]:
+def evaluate_rows(rows: list[dict], plan: dict, *, excused=()) -> list[dict]:
     """Evaluate an observation prefix against the declared local expectations.
 
-    `pending` selects which half is returned. A request whose expectation
-    carries a `pendingReason` states the documented production behaviour for
-    something the local runtime or the local shadow cannot yet show, so a
-    difference on it is evidence about the local side rather than a campaign
-    failure. Both halves are always computed; neither is discarded.
+    Every problem is returned; `excused` only labels them. A row is excused
+    because of something about the side that produced this journal, never
+    because of anything in the plan, so the caller supplies the set and a
+    production collector supplies none. The plan's own `pendingReason` is
+    documentation, not an instruction to skip a check: leaving it in the
+    compiled request would excuse a production row as readily as a local one.
     """
+    excused = set(excused)
     problems: list[dict] = []
     versions: dict[str, str] = {}
     operations = plan["localGatePlan"]["jobs"]["limits"]["observation"]
@@ -116,17 +118,21 @@ def evaluate_rows(rows: list[dict], plan: dict, *, pending: bool = False) -> lis
         ):
             continue  # Infrastructure failures are not API semantic mismatches.
         reason = _row_reason(request, plan, status, body, versions)
-        declared = request["expect"].get("pendingReason")
-        if reason and bool(declared) == pending:
-            problem = {"index": index, "basis": reason, "pending": pending}
-            if declared:
+        if reason:
+            problem = {"index": index, "basis": reason, "pending": index in excused}
+            declared = request["expect"].get("pendingReason")
+            if problem["pending"] and declared:
                 problem["reason"] = declared
             problems.append(problem)
     return problems
 
 
 def pending_rows(plan: dict) -> list[int]:
-    """Indexes whose expectation is the documented production behaviour only."""
+    """Rows a local run may excuse, because the local side cannot show them.
+
+    This is the candidate set a local caller passes as `excused`. It is never
+    consulted by the collector or by any production path.
+    """
     return [
         index
         for index, request in enumerate(
@@ -206,12 +212,13 @@ def _batch_reason(
     return None
 
 
-def writes_safe(rows: list[dict], plan: dict) -> bool:
+def writes_safe(rows: list[dict], plan: dict, *, excused=()) -> bool:
     """Only a proven-absent namespace and intact controls authorize a mutation.
 
     Unlike the limits-02 collector this gates every mutating method, because
     this campaign sends its first writes over `:batchWrite` rather than `PATCH`.
     """
+    excused = set(excused)
     preflights = preflight_count(plan)
     if len(rows) < preflights:
         return False
@@ -233,10 +240,10 @@ def writes_safe(rows: list[dict], plan: dict) -> bool:
                 return False
             continue
         request = plan["requests"][index]
-        if request["expect"].get("pendingReason"):
-            # A row the campaign has declared it cannot predict locally cannot
-            # serve as a local safety invariant. Its journal integrity is still
-            # checked above; only its API outcome is excused.
+        if index in excused:
+            # A row the caller has excused cannot serve as a safety invariant
+            # for that run. Its journal integrity is still checked above; only
+            # its API outcome is excused, and only when a caller asks.
             continue
         if request["kind"] == "batch-write":
             versions.update(_batch_landed(request, status, body))
@@ -366,7 +373,7 @@ def validate_cleanup(receipt: dict, plan: dict) -> bool:
     return True
 
 
-def validate_local_receipt(receipt: dict, plan: dict) -> bool:
+def validate_local_receipt(receipt: dict, plan: dict, *, excused=()) -> bool:
     if receipt.get("productionExecuted") is not False or any(
         receipt.get(key) is not True
         for key in (
@@ -387,7 +394,11 @@ def validate_local_receipt(receipt: dict, plan: dict) -> bool:
             and type(row.get("status")) is int
             for row in rows
         )
-        and not evaluate_rows(rows, plan)
+        and not [
+            problem
+            for problem in evaluate_rows(rows, plan, excused=excused)
+            if not problem["pending"]
+        ]
         and validate_cleanup(receipt, plan)
         and receipt.get("resourceAbsence")
         == {d["resource"]: True for d in owned_documents(plan)}

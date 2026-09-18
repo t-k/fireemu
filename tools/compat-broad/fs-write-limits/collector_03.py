@@ -20,8 +20,13 @@ from expectations_03 import MUTATING, evaluate_rows, preflight_count, writes_saf
 from shadow import digest, resolve_recovery, save, typed_absence
 
 
-def collect(gate, plan, output, wire, *, before_recovery=None):
-    """Collect through an already admitted/claimed Gate, never grant production access."""
+def collect(gate, plan, output, wire, *, before_recovery=None, excused=()):
+    """Collect through an already admitted/claimed Gate, never grant production access.
+
+    `excused` defaults to nothing, so a production collection excuses no row.
+    Only a caller that knows something about its own side, such as the local
+    shadow running under an index configuration it cannot change, passes any.
+    """
     declared = plan["localGatePlan"]["jobs"]["limits"]
     actual = gate.snapshot()["plan"]["jobs"]
     if digest(actual) != digest({"limits": declared}):
@@ -59,7 +64,9 @@ def collect(gate, plan, output, wire, *, before_recovery=None):
 
     try:
         for index, operation in enumerate(observation):
-            if operation["method"] in MUTATING and not writes_safe(rows, plan):
+            if operation["method"] in MUTATING and not writes_safe(
+                rows, plan, excused=excused
+            ):
                 break
             entry = dispatch(operation, False, index, index)
             rows.append(entry)
@@ -106,8 +113,9 @@ def collect(gate, plan, output, wire, *, before_recovery=None):
     recording = len(rows) == len(observation) and all(
         row.get("complete") is True and row.get("failure") is None for row in rows
     )
-    mismatches = evaluate_rows(rows, plan)
-    pending = evaluate_rows(rows, plan, pending=True)
+    problems = evaluate_rows(rows, plan, excused=excused)
+    mismatches = [problem for problem in problems if not problem["pending"]]
+    pending = [problem for problem in problems if problem["pending"]]
     result = {
         "recordingComplete": recording,
         "cleanupComplete": cleanup_complete,

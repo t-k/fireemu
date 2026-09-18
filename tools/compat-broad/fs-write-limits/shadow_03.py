@@ -25,7 +25,6 @@ sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
 from broad_contract import digest
 from compiler_03 import _CATALOG, CAMPAIGN, compile_limits_plan
 from expectations_03 import (
-    evaluate_rows,
     pending_rows,
     validate_cleanup,
     validate_local_receipt,
@@ -95,7 +94,12 @@ def _real_child(output: Path, nonce: str, part: str = "A") -> None:
             timeout=12,
         )
 
-    collected = collect(gate, plan, output / "collection", wire)
+    # The supervisor pins a historical index configuration and verifies its
+    # digest, so this run cannot apply the declared exemption. That is a fact
+    # about this side, which is why the excuse is supplied here and not carried
+    # in the plan a production run would share.
+    excused = pending_rows(plan)
+    collected = collect(gate, plan, output / "collection", wire, excused=excused)
     rows, cleanup = collected["rows"], collected["cleanup"]
     infrastructure = collected["infrastructureFailures"]
     after = source_inputs()
@@ -107,7 +111,7 @@ def _real_child(output: Path, nonce: str, part: str = "A") -> None:
     # Limits the catalog still declares unsupported carry the documented
     # production expectation. A difference there is recorded, never discarded,
     # but it does not fail the local campaign.
-    pending = evaluate_rows(rows, plan, pending=True)
+    pending = collected["pendingDifferences"]
     recording = collected["recordingComplete"]
     cleanup_complete = collected["cleanupComplete"]
     state_valid = recording and not mismatches
@@ -125,7 +129,7 @@ def _real_child(output: Path, nonce: str, part: str = "A") -> None:
         "resourceAbsence": collected["resourceAbsence"],
         "semanticMismatches": mismatches,
         "pendingDifferences": pending,
-        "pendingRows": pending_rows(plan),
+        "pendingRows": excused,
         "infrastructureFailures": infrastructure,
         "gate": collected["gate"],
         "planDigest": digest(plan),
@@ -136,7 +140,7 @@ def _real_child(output: Path, nonce: str, part: str = "A") -> None:
         },
     }
     result["cleanupValidated"] = validate_cleanup(result, plan)
-    result["receiptValidated"] = validate_local_receipt(result, plan)
+    result["receiptValidated"] = validate_local_receipt(result, plan, excused=excused)
     save(output / "result.json", result)
     save(
         output / "cases.json",

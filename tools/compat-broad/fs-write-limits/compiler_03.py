@@ -1109,9 +1109,12 @@ def _document_name_case(root: str) -> dict[str, Any]:
 
     An automatic index entry is charged the document name and its parent's
     name, so the smallest possible entry for a document named at 6144 bytes is
-    11040 bytes against a 7680-byte maximum: without an exemption this boundary
-    cannot be written at all, which is why it and the index-entry limits are one
-    decision. Exempting this collection group from automatic indexing removes
+    10759 bytes for a document carrying the ownership marker, against a
+    7680-byte maximum: without an exemption no document this campaign could own
+    is writable at that name, which is why it and the index-entry limits are one
+    decision. A document with no fields at all generates no entries and would be
+    writable, so the claim is scoped to marker-bearing documents rather than to
+    every document. Exempting this collection group from automatic indexing removes
     every entry the document would generate, and the name limit is then the only
     thing the write can breach.
 
@@ -1123,6 +1126,9 @@ def _document_name_case(root: str) -> dict[str, Any]:
     prefix_bytes = len(root.split("/documents/", 1)[0].encode()) + len("/documents/")
     figures = name_charge_floor(prefix_bytes, DOCUMENT_NAME_MAX)
     accept = _padded_resource(root, "name-exact", DOCUMENT_NAME_MAX, EXEMPT_COLLECTION)
+    figures["compiledDocumentEntry"] = index_usage(accept, _fields(accept, 104))[
+        "maxEntryBytes"
+    ]
     refuse = _padded_resource(
         root, "name-over", DOCUMENT_NAME_MAX + 1, EXEMPT_COLLECTION
     )

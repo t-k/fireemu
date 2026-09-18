@@ -795,6 +795,64 @@ def test_every_pending_row_states_why_it_is_pending():
     assert "index configuration" in next(iter(reasons))
 
 
+def test_a_production_collection_excuses_no_row(tmp_path):
+    """The excuse is a fact about the collecting side, never about the plan.
+
+    A pending reason lives in the compiled request as documentation. If it also
+    drove the skip, a production collection would share the plan and skip the
+    same invariants, which is the one place the campaign must not.
+    """
+    plan = plan_for("a")
+    observation = plan["localGatePlan"]["jobs"]["limits"]["observation"]
+    pending = pending_rows(plan)
+    assert pending, "part A declares rows the local side cannot show"
+    index = pending[0]
+    rows = []
+    for position in range(index + 1):
+        body = NOT_FOUND
+        status = 404
+        if position == index:
+            # Whatever the plan says, a production run must judge this row.
+            status, body = 400, _invalid("refused")
+        rows.append(
+            {
+                "index": position,
+                "request": observation[position],
+                "complete": True,
+                "failure": None,
+                "status": status,
+                "body": body,
+            }
+        )
+    # By default the row is judged; only a caller that excuses it is spared.
+    default = {p["index"]: p["pending"] for p in evaluate_rows(rows, plan)}
+    assert default[index] is False
+    local = {
+        p["index"]: p["pending"] for p in evaluate_rows(rows, plan, excused=pending)
+    }
+    assert local[index] is True
+    assert set(default) == set(local)
+    # An excuse never reaches the namespace-absence preflights: those are the
+    # proof that writing at all is safe, and no caller may wave them through.
+    observation = plan["localGatePlan"]["jobs"]["limits"]["observation"]
+    preflights = preflight_count(plan)
+    absent = [
+        {
+            "index": position,
+            "request": observation[position],
+            "complete": True,
+            "failure": None,
+            "status": 404,
+            "body": NOT_FOUND,
+        }
+        for position in range(preflights)
+    ]
+    assert writes_safe(absent, plan) is True
+    absent[2]["status"], absent[2]["body"] = 200, {"name": "x", "fields": {}}
+    assert writes_safe(absent, plan) is False
+    assert writes_safe(absent, plan, excused=range(preflights)) is False
+
+
 def test_a_pending_difference_is_recorded_but_does_not_fail_the_campaign(tmp_path):
     plan = plan_for("c")
 
@@ -814,7 +872,13 @@ def test_a_pending_difference_is_recorded_but_does_not_fail_the_campaign(tmp_pat
     create(tmp_path / "gate", plan["localGatePlan"])
     gate = Gate(tmp_path / "gate", "limits")
     gate.claim()
-    result = collect(gate, plan, tmp_path / "collection", PerItemFieldPath())
+    result = collect(
+        gate,
+        plan,
+        tmp_path / "collection",
+        PerItemFieldPath(),
+        excused=pending_rows(plan),
+    )
     assert result["expectationMismatches"] == []
     assert result["pendingDifferences"]
     assert all(problem["pending"] is True for problem in result["pendingDifferences"])

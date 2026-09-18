@@ -2,7 +2,7 @@
   "kind": "txn-expiry-owner-proposal-v1",
   "manifest": {
     "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
-    "casesDigest": "f1b3320febc65af2ea8cba068adf51dc53495f159506043436e1d5ff219e289d",
+    "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
     "kind": "txn-expiry-prepared-manifest-v1",
     "notPrepared": [
       {
@@ -33,22 +33,22 @@
         "defaultRequestTimeoutSeconds": 10,
         "maxRequestBytes": 8192,
         "maxResponseBytes": 65536,
-        "worstCaseSeconds": 910
+        "worstCaseSeconds": 960
       },
       "budget": {
         "accounts": 0,
         "concurrency": 1,
-        "costMicrousd": 15788,
+        "costMicrousd": 16688,
         "credentialRequests": 2,
-        "dataRequests": 76,
+        "dataRequests": 85,
         "metadataRequests": 8,
         "networkMicrousd": 7188,
-        "requests": 86,
+        "requests": 95,
         "resources": 5,
         "wallSeconds": 1200
       },
       "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
-      "casesDigest": "f1b3320febc65af2ea8cba068adf51dc53495f159506043436e1d5ff219e289d",
+      "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
       "contract": "txn-expiry-retry-plan-v1",
       "database": "(default)",
       "documentPrefix": "compat/o3-txn-expiry/o3expiry-reference-000000001",
@@ -67,6 +67,7 @@
           "rpc": "GetDocument",
           "slot": "preflight/absence/control",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -82,6 +83,7 @@
           "rpc": "GetDocument",
           "slot": "preflight/absence/locked-a",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -97,6 +99,7 @@
           "rpc": "GetDocument",
           "slot": "preflight/absence/locked-b",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -112,6 +115,7 @@
           "rpc": "GetDocument",
           "slot": "preflight/absence/locked-c",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -127,6 +131,7 @@
           "rpc": "GetDocument",
           "slot": "preflight/absence/locked-d",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -142,6 +147,7 @@
           "rpc": "Commit",
           "slot": "setup/create/control",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -157,6 +163,7 @@
           "rpc": "Commit",
           "slot": "setup/create/locked-a",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -172,6 +179,7 @@
           "rpc": "Commit",
           "slot": "setup/create/locked-b",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -187,6 +195,7 @@
           "rpc": "Commit",
           "slot": "setup/create/locked-c",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -202,6 +211,7 @@
           "rpc": "Commit",
           "slot": "setup/create/locked-d",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -217,6 +227,7 @@
           "rpc": "BeginTransaction",
           "slot": "idle/begin/a",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -232,6 +243,7 @@
           "rpc": "GetDocument",
           "slot": "idle/read/a",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -247,6 +259,7 @@
           "rpc": "BeginTransaction",
           "slot": "idle/begin/b",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -262,6 +275,7 @@
           "rpc": "GetDocument",
           "slot": "idle/read/b",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -277,6 +291,7 @@
           "rpc": "BeginTransaction",
           "slot": "idle/begin/c",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -292,6 +307,7 @@
           "rpc": "GetDocument",
           "slot": "idle/read/c",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -307,6 +323,7 @@
           "rpc": "BeginTransaction",
           "slot": "idle/begin/d",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -322,6 +339,7 @@
           "rpc": "GetDocument",
           "slot": "idle/read/d",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -337,6 +355,23 @@
           "rpc": "Commit",
           "slot": "idle/lock-held",
           "timeoutSeconds": 120,
+          "verifiesCase": null,
+          "waitSeconds": 0
+        },
+        {
+          "caseId": null,
+          "closesTransaction": null,
+          "detail": "post-state readback for the case immediately before it",
+          "idleOfTransaction": null,
+          "maxRequestBytes": 8192,
+          "maxResponseBytes": 65536,
+          "opensTransaction": null,
+          "phase": "readback",
+          "role": "locked-c",
+          "rpc": "GetDocument",
+          "slot": "verify/idle/lock-held",
+          "timeoutSeconds": 10,
+          "verifiesCase": "idle-expiry/lock-held-before-idle",
           "waitSeconds": 0
         },
         {
@@ -352,7 +387,24 @@
           "rpc": "Commit",
           "slot": "idle/commit-before",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 20
+        },
+        {
+          "caseId": null,
+          "closesTransaction": null,
+          "detail": "post-state readback for the case immediately before it",
+          "idleOfTransaction": null,
+          "maxRequestBytes": 8192,
+          "maxResponseBytes": 65536,
+          "opensTransaction": null,
+          "phase": "readback",
+          "role": "locked-d",
+          "rpc": "GetDocument",
+          "slot": "verify/idle/commit-before",
+          "timeoutSeconds": 10,
+          "verifiesCase": "idle-expiry/commit-before-idle",
+          "waitSeconds": 0
         },
         {
           "caseId": "idle-expiry/commit-after-idle",
@@ -367,7 +419,24 @@
           "rpc": "Commit",
           "slot": "idle/commit-after",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 70
+        },
+        {
+          "caseId": null,
+          "closesTransaction": null,
+          "detail": "post-state readback for the case immediately before it",
+          "idleOfTransaction": null,
+          "maxRequestBytes": 8192,
+          "maxResponseBytes": 65536,
+          "opensTransaction": null,
+          "phase": "readback",
+          "role": "locked-a",
+          "rpc": "GetDocument",
+          "slot": "verify/idle/commit-after",
+          "timeoutSeconds": 10,
+          "verifiesCase": "idle-expiry/commit-after-idle",
+          "waitSeconds": 0
         },
         {
           "caseId": "idle-expiry/rollback-after-idle",
@@ -382,6 +451,23 @@
           "rpc": "Rollback",
           "slot": "idle/rollback-after",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
+          "waitSeconds": 0
+        },
+        {
+          "caseId": null,
+          "closesTransaction": null,
+          "detail": "post-state readback for the case immediately before it",
+          "idleOfTransaction": null,
+          "maxRequestBytes": 8192,
+          "maxResponseBytes": 65536,
+          "opensTransaction": null,
+          "phase": "readback",
+          "role": "locked-b",
+          "rpc": "GetDocument",
+          "slot": "verify/idle/rollback-after",
+          "timeoutSeconds": 10,
+          "verifiesCase": "idle-expiry/rollback-after-idle",
           "waitSeconds": 0
         },
         {
@@ -397,6 +483,23 @@
           "rpc": "Commit",
           "slot": "idle/lock-released",
           "timeoutSeconds": 120,
+          "verifiesCase": null,
+          "waitSeconds": 0
+        },
+        {
+          "caseId": null,
+          "closesTransaction": null,
+          "detail": "post-state readback for the case immediately before it",
+          "idleOfTransaction": null,
+          "maxRequestBytes": 8192,
+          "maxResponseBytes": 65536,
+          "opensTransaction": null,
+          "phase": "readback",
+          "role": "locked-a",
+          "rpc": "GetDocument",
+          "slot": "verify/idle/lock-released",
+          "timeoutSeconds": 10,
+          "verifiesCase": "idle-expiry/lock-released-after-idle",
           "waitSeconds": 0
         },
         {
@@ -412,6 +515,7 @@
           "rpc": "Rollback",
           "slot": "idle/release/c",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -427,6 +531,7 @@
           "rpc": "BeginTransaction",
           "slot": "finished/begin/e",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -442,6 +547,7 @@
           "rpc": "Rollback",
           "slot": "finished/rollback-after-begin",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -457,6 +563,7 @@
           "rpc": "Rollback",
           "slot": "finished/rollback-after-rollback",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -472,6 +579,7 @@
           "rpc": "BeginTransaction",
           "slot": "finished/begin/f",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -487,6 +595,7 @@
           "rpc": "Commit",
           "slot": "finished/commit/f",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -502,6 +611,7 @@
           "rpc": "Rollback",
           "slot": "finished/rollback-after-commit",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -517,6 +627,7 @@
           "rpc": "BeginTransaction",
           "slot": "retry/begin/g",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -532,6 +643,7 @@
           "rpc": "Rollback",
           "slot": "retry/rollback/g",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -547,6 +659,7 @@
           "rpc": "BeginTransaction",
           "slot": "retry/rolled-back-previous",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -562,6 +675,7 @@
           "rpc": "Rollback",
           "slot": "retry/rollback/h",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -577,6 +691,7 @@
           "rpc": "BeginTransaction",
           "slot": "retry/begin/i",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -592,6 +707,7 @@
           "rpc": "Commit",
           "slot": "retry/commit/i",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -607,6 +723,7 @@
           "rpc": "BeginTransaction",
           "slot": "retry/committed-previous",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -622,6 +739,7 @@
           "rpc": "BeginTransaction",
           "slot": "retry/begin/j",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -637,6 +755,7 @@
           "rpc": "BeginTransaction",
           "slot": "retry/read-only-previous",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -652,6 +771,7 @@
           "rpc": "Rollback",
           "slot": "retry/rollback/j",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -667,6 +787,7 @@
           "rpc": "BeginTransaction",
           "slot": "retry/unissued-previous",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -682,6 +803,7 @@
           "rpc": "BeginTransaction",
           "slot": "retry/malformed-previous",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -697,6 +819,7 @@
           "rpc": "GetDocument",
           "slot": "readback/locked-a",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -712,6 +835,7 @@
           "rpc": "GetDocument",
           "slot": "readback/locked-d",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -727,6 +851,7 @@
           "rpc": "GetDocument",
           "slot": "readback/control",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -742,6 +867,7 @@
           "rpc": "GetDocument",
           "slot": "cleanup/owned-read/control",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -757,6 +883,7 @@
           "rpc": "Commit",
           "slot": "cleanup/conditional-delete/control",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -772,6 +899,7 @@
           "rpc": "GetDocument",
           "slot": "cleanup/typed-absence/control",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -787,6 +915,7 @@
           "rpc": "GetDocument",
           "slot": "cleanup/owned-read/locked-a",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -802,6 +931,7 @@
           "rpc": "Commit",
           "slot": "cleanup/conditional-delete/locked-a",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -817,6 +947,7 @@
           "rpc": "GetDocument",
           "slot": "cleanup/typed-absence/locked-a",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -832,6 +963,7 @@
           "rpc": "GetDocument",
           "slot": "cleanup/owned-read/locked-b",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -847,6 +979,7 @@
           "rpc": "Commit",
           "slot": "cleanup/conditional-delete/locked-b",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -862,6 +995,7 @@
           "rpc": "GetDocument",
           "slot": "cleanup/typed-absence/locked-b",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -877,6 +1011,7 @@
           "rpc": "GetDocument",
           "slot": "cleanup/owned-read/locked-c",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -892,6 +1027,7 @@
           "rpc": "Commit",
           "slot": "cleanup/conditional-delete/locked-c",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -907,6 +1043,7 @@
           "rpc": "GetDocument",
           "slot": "cleanup/typed-absence/locked-c",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -922,6 +1059,7 @@
           "rpc": "GetDocument",
           "slot": "cleanup/owned-read/locked-d",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -937,6 +1075,7 @@
           "rpc": "Commit",
           "slot": "cleanup/conditional-delete/locked-d",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         },
         {
@@ -952,6 +1091,7 @@
           "rpc": "GetDocument",
           "slot": "cleanup/typed-absence/locked-d",
           "timeoutSeconds": 10,
+          "verifiesCase": null,
           "waitSeconds": 0
         }
       ],
@@ -990,9 +1130,9 @@
       "networkPlanningMicrousd": 7188,
       "networkRateMicrousdPerGiB": 230000,
       "requestCostMicrousd": 100,
-      "requestPlanningMicrousd": 8600,
-      "requestSlots": 86,
-      "totalPlanningMicrousd": 15788
+      "requestPlanningMicrousd": 9500,
+      "requestSlots": 95,
+      "totalPlanningMicrousd": 16688
     },
     "resourceLocks": [
       {
@@ -1020,10 +1160,9 @@
         "mode": "READ"
       }
     ],
-    "sourceDigest": "1255dac7772a01840d31122c5a183660383060e306dcde9f251e6aa90ea01738"
+    "sourceDigest": "60305305da9cf424fb3761b9e94fdba171160f932811bce5a1e946626db2dfed"
   },
-  "manifestDigest": "6b9df10b31250d19c9ed56087bd334ad444eeea5778be952dffba914f2b43f43",
-  "nonceBinding": "The nonce and owner identity above are reference values so the plan is reviewable. Execution must recompile the plan with a fresh nonce and the real owner identity; only the case table, source digest, budget, locks and operation slots are frozen here.",
+  "manifestDigest": "50c51e26427b114bd61dd5e9e698f8a54fcbd5973dc91a0494c152a184f264fa",
   "note": "Preparation only. No credential, endpoint or production request is bound here. Execution needs a separate owner permission, a fresh nonce and admission review.",
   "ownerFieldsRequired": [
     "issuedAt",
@@ -1044,18 +1183,18 @@
     "accountUpperBound": 0,
     "allowedReobservations": 0,
     "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
-    "casesDigest": "f1b3320febc65af2ea8cba068adf51dc53495f159506043436e1d5ff219e289d",
-    "collectorSourceDigest": "1255dac7772a01840d31122c5a183660383060e306dcde9f251e6aa90ea01738",
+    "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
+    "collectorSourceDigest": "60305305da9cf424fb3761b9e94fdba171160f932811bce5a1e946626db2dfed",
     "concurrencyUpperBound": 1,
-    "costUpperMicrousd": 15788,
+    "costUpperMicrousd": 16688,
     "database": "(default)",
     "kind": "txn-expiry-required-permission-v1",
-    "manifestSha256": "6b9df10b31250d19c9ed56087bd334ad444eeea5778be952dffba914f2b43f43",
+    "manifestSha256": "50c51e26427b114bd61dd5e9e698f8a54fcbd5973dc91a0494c152a184f264fa",
     "nonce": "o3expiry-reference-000000001",
     "ownerId": "00000000000000000000000000000000",
     "project": "fireemu-35fe6",
     "projectNumber": "592603257417",
-    "requestUpperBound": 86,
+    "requestUpperBound": 95,
     "resourceLocks": [
       {
         "key": "firestore:documents:(default):compat/o3-txn-expiry/o3expiry-reference-000000001",

@@ -510,3 +510,462 @@ def test_every_release_records_the_rollback_message():
     for entry in receipt["transactionReleases"]:
         assert "message" in entry
         assert "idleSeconds" in entry
+
+
+class StatefulEndpoint:
+    """An endpoint that keeps documents and honours create-only preconditions.
+
+    The plain ``Endpoint`` above answers every write with OK, which cannot show
+    what happens when the workspace this run means to create is already
+    occupied. This one refuses a conditional create against an existing
+    document, records every write that landed on a document it did not create,
+    and remembers every delete.
+    """
+
+    def __init__(self, *, preexisting_role=None, prefix_owner=None):
+        self.calls = []
+        self.documents = {}
+        self.foreign = set()
+        self.deletes = []
+        self.issued = 0
+        self.preexisting_role = preexisting_role
+        self.prefix_owner = prefix_owner
+
+    def attach(self, collection):
+        if self.preexisting_role:
+            name = collection._name(self.preexisting_role)
+            self.documents[name] = {"external": {"stringValue": "KEEP-THIS"}}
+            self.foreign.add(name)
+
+    def writes_to(self, name):
+        """Every write this endpoint accepted or refused for one document."""
+        found = []
+        for call in self.calls:
+            for write in (call.get("body") or {}).get("writes") or []:
+                if (write.get("delete") or write.get("update", {}).get("name")) == name:
+                    found.append(write)
+        return found
+
+    def __call__(self, request):
+        self.calls.append(request)
+        rpc = request["rpc"]
+        if rpc == "BeginTransaction":
+            self.issued += 1
+            token = base64.b64encode(f"token-{self.issued}".encode()).decode()
+            return {
+                "code": 0,
+                "status": "OK",
+                "message": None,
+                "complete": True,
+                "body": {"transaction": token},
+            }
+        if rpc == "Rollback":
+            return {
+                "code": 0,
+                "status": "OK",
+                "message": None,
+                "complete": True,
+                "body": {},
+            }
+        if rpc == "GetDocument":
+            name = request["name"]
+            if name not in self.documents:
+                return {
+                    "code": 5,
+                    "status": "NOT_FOUND",
+                    "message": "not found",
+                    "complete": True,
+                }
+            return {
+                "code": 0,
+                "status": "OK",
+                "message": None,
+                "complete": True,
+                "body": {
+                    "name": name,
+                    "fields": dict(self.documents[name]),
+                    "updateTime": "2026-09-18T00:00:00.000001Z",
+                },
+            }
+        if rpc == "Commit":
+            writes = request["body"]["writes"]
+            for write in writes:
+                name = write.get("delete") or write["update"]["name"]
+                current = write.get("currentDocument") or {}
+                if current.get("exists") is False and name in self.documents:
+                    return {
+                        "code": 6,
+                        "status": "ALREADY_EXISTS",
+                        "message": "already exists",
+                        "complete": True,
+                    }
+            for write in writes:
+                if "delete" in write:
+                    self.deletes.append(write["delete"])
+                    self.documents.pop(write["delete"], None)
+                else:
+                    name = write["update"]["name"]
+                    self.documents[name] = dict(write["update"]["fields"])
+            return {
+                "code": 0,
+                "status": "OK",
+                "message": None,
+                "complete": True,
+                "body": {
+                    "writeResults": [
+                        {"updateTime": "2026-09-18T00:00:00.000001Z"} for _ in writes
+                    ]
+                },
+            }
+        raise AssertionError(f"unexpected rpc {rpc}")
+
+
+def run_against(endpoint, **overrides):
+    """Drive one collection against an endpoint that needs the plan to attach."""
+    prepared = collector.validate_collector_options(options(**overrides))
+    plan = plan_module.compile_plan(
+        prepared["nonce"],
+        prepared["ownerId"],
+        project=prepared["projectId"],
+        database=prepared["database"],
+    )
+    collection = collector.Collection(
+        options(**overrides),
+        plan,
+        endpoint,
+        advance=advances([]),
+        monotonic=lambda: 0.0,
+    )
+    endpoint.attach(collection)
+    return collection.run(), collection
+
+
+def test_a_clean_workspace_establishes_every_precondition():
+    endpoint = StatefulEndpoint()
+    receipt, _ = run_against(endpoint)
+    assert receipt["failure"] is None
+    established = {
+        entry["role"] for entry in receipt["preconditions"] if entry["created"]
+    }
+    assert established == set(cases.RESOURCE_ROLES)
+    assert receipt["complete"] is True
+
+
+def test_a_foreign_document_blocks_every_later_mutation_of_that_resource():
+    """A document this run did not create is never overwritten and never deleted."""
+    endpoint = StatefulEndpoint(preexisting_role="control")
+    receipt, collection = run_against(endpoint)
+    name = collection._name("control")
+    writes = endpoint.writes_to(name)
+    assert len(writes) == 1, writes
+    assert writes[0]["currentDocument"] == {"exists": False}
+    assert endpoint.deletes == []
+    assert endpoint.documents[name] == {"external": {"stringValue": "KEEP-THIS"}}
+    assert receipt["failure"] == "precondition-not-established"
+    assert receipt["complete"] is False
+
+
+def test_a_foreign_document_at_a_locked_role_is_preserved_too():
+    endpoint = StatefulEndpoint(preexisting_role="locked-b")
+    receipt, collection = run_against(endpoint)
+    name = collection._name("locked-b")
+    assert endpoint.documents[name] == {"external": {"stringValue": "KEEP-THIS"}}
+    assert name not in endpoint.deletes
+    assert endpoint.writes_to(name) == [
+        {
+            "update": {
+                "name": name,
+                "fields": collector._marker_fields(OWNER, "locked-b", NONCE, "created"),
+            },
+            "currentDocument": {"exists": False},
+        }
+    ]
+    assert receipt["failure"] == "precondition-not-established"
+    # Everything this run did create before it stopped is still given back.
+    recovered = {e["role"] for e in receipt["cleanup"] if e["complete"]}
+    assert recovered == {"control", "locked-a"}
+    assert receipt["unrecovered"] == []
+
+
+def test_cleanup_binds_to_this_run_s_creation_evidence_not_the_current_marker():
+    endpoint = StatefulEndpoint(preexisting_role="control")
+    receipt, _ = run_against(endpoint)
+    entries = {entry["role"]: entry for entry in receipt["cleanup"]}
+    assert entries["control"]["createdByThisRun"] is False
+    assert entries["control"]["failure"] == "not-created-by-this-run"
+    assert entries["control"]["skipped"] is True
+    assert "control" not in receipt["unrecovered"]
+
+
+def test_a_preflight_read_that_proves_nothing_stops_the_run():
+    """An OK GetDocument without a document body is not proof of anything."""
+
+    def transport(request):
+        if request["rpc"] == "GetDocument":
+            return {
+                "code": 0,
+                "status": "OK",
+                "message": None,
+                "complete": True,
+                "body": {},
+            }
+        return {
+            "code": 0,
+            "status": "OK",
+            "message": None,
+            "complete": True,
+            "body": {},
+        }
+
+    receipt = collector.collect(
+        options(), transport, advance=advances([]), monotonic=lambda: 0.0
+    )
+    assert receipt["failure"] == "incomplete-response"
+
+
+def test_a_readback_keeps_the_document_body_in_the_receipt():
+    endpoint = StatefulEndpoint()
+    receipt, _ = run_against(endpoint)
+    verified = [row for row in receipt["rows"] if row.get("verifiesCase")]
+    assert verified
+    for row in verified:
+        document = row["document"]
+        assert document["exists"] is True
+        assert document["fields"]["role"]["stringValue"] == row["role"]
+        assert isinstance(document["updateTimeOrdinal"], int)
+
+
+def test_a_recorded_body_carries_no_run_bound_identity():
+    endpoint = StatefulEndpoint()
+    receipt, _ = run_against(endpoint)
+    rendered = repr([row.get("document") for row in receipt["rows"]])
+    assert NONCE not in rendered
+    assert OWNER not in rendered
+    assert PROJECT not in rendered
+
+
+def test_the_state_a_case_left_behind_is_recorded_next_to_that_case():
+    endpoint = StatefulEndpoint()
+    receipt, _ = run_against(endpoint)
+    states = {
+        row["verifiesCase"]: row["document"]["fields"]["state"]["stringValue"]
+        for row in receipt["rows"]
+        if row.get("verifiesCase") and row["document"]["exists"]
+    }
+    assert states["idle-expiry/commit-before-idle"] == "committed-before-idle"
+    assert states["idle-expiry/lock-released-after-idle"] == "written-after-expiry"
+
+
+class UnexpectedlyIssuingEndpoint(StatefulEndpoint):
+    """An endpoint that accepts a retry the case table expects to be refused."""
+
+    def __init__(self, slot):
+        super().__init__()
+        self.slot = slot
+        self.collection = None
+        self.steps = None
+        self.issued_tokens = []
+        self.live = set()
+        self.rolled_back = []
+
+    def attach(self, collection):
+        super().attach(collection)
+        self.collection = collection
+        self.steps = [
+            step for step in collection.plan["operations"] if step["phase"] != "cleanup"
+        ]
+
+    def __call__(self, request):
+        index = len(self.collection.rows)
+        step = self.steps[index] if index < len(self.steps) else None
+        slot = step["slot"] if step else "cleanup"
+        response = super().__call__(request)
+        if request["rpc"] == "BeginTransaction" and response["code"] == 0:
+            token = response["body"]["transaction"]
+            self.live.add(token)
+            if slot == self.slot:
+                self.issued_tokens.append(token)
+        if request["rpc"] == "Rollback":
+            token = request["body"]["transaction"]
+            self.rolled_back.append(token)
+            self.live.discard(token)
+        if request["rpc"] == "Commit" and (request["body"] or {}).get("transaction"):
+            self.live.discard(request["body"]["transaction"])
+        return response
+
+
+def test_a_transaction_issued_against_expectation_is_still_tracked_and_released():
+    endpoint = UnexpectedlyIssuingEndpoint("retry/committed-previous")
+    receipt, _ = run_against(endpoint)
+    assert endpoint.issued_tokens, "the fixture must issue the unexpected token"
+    for token in endpoint.issued_tokens:
+        assert token in endpoint.rolled_back
+    assert endpoint.live == set()
+    assert receipt["openTransactions"] == []
+
+
+def test_an_unexpected_token_is_recorded_on_the_row_that_obtained_it():
+    endpoint = UnexpectedlyIssuingEndpoint("retry/unissued-previous")
+    receipt, _ = run_against(endpoint)
+    row = next(
+        row
+        for row in receipt["rows"]
+        if row["caseId"] == "retry-token/retry-with-unissued-previous"
+    )
+    assert row["acquisition"]["tokenRegistered"] is True
+    assert row["acquisition"]["expected"] is False
+    released = {entry["transaction"] for entry in receipt["transactionReleases"]}
+    assert row["acquisition"]["transaction"] in released
+
+
+def test_a_begin_that_reports_success_without_a_token_is_incomplete():
+    def transport(request):
+        if request["rpc"] == "BeginTransaction":
+            return {
+                "code": 0,
+                "status": "OK",
+                "message": None,
+                "complete": True,
+                "body": {},
+            }
+        return StatefulEndpoint()(request)
+
+    receipt = collector.collect(
+        options(), transport, advance=advances([]), monotonic=lambda: 0.0
+    )
+    assert receipt["failure"] == "incomplete-response"
+    site = receipt["failureSites"][-1]
+    assert site["reason"] == "incomplete-response"
+    assert site["incomplete"] == "begin-without-usable-token"
+
+
+def test_a_begin_that_reports_success_with_an_unusable_token_is_incomplete():
+    def transport(request):
+        if request["rpc"] == "BeginTransaction":
+            return {
+                "code": 0,
+                "status": "OK",
+                "message": None,
+                "complete": True,
+                "body": {"transaction": "not base64!"},
+            }
+        return StatefulEndpoint()(request)
+
+    receipt = collector.collect(
+        options(), transport, advance=advances([]), monotonic=lambda: 0.0
+    )
+    assert receipt["failure"] == "incomplete-response"
+    assert receipt["failureSites"][-1]["incomplete"] == "begin-without-usable-token"
+
+
+def in_cleanup(collection):
+    """True once the observation phase has produced all of its rows."""
+    observed = [
+        step for step in collection.plan["operations"] if step["phase"] != "cleanup"
+    ]
+    return len(collection.rows) >= len(observed)
+
+
+class FailingRecoveryEndpoint(StatefulEndpoint):
+    """An endpoint that breaks once recovery has started."""
+
+    def __init__(self, *, raises=None, refuses=None, every=False):
+        super().__init__()
+        self.raises = raises
+        self.refuses = refuses
+        self.every = every
+        self.collection = None
+        self.fired = False
+
+    def attach(self, collection):
+        super().attach(collection)
+        self.collection = collection
+
+    def __call__(self, request):
+        if in_cleanup(self.collection) and request["rpc"] == "GetDocument":
+            if self.raises and (self.every or not self.fired):
+                self.fired = True
+                self.calls.append(request)
+                raise self.raises("injected recoverable read failure")
+            if self.refuses:
+                self.calls.append(request)
+                return {
+                    "code": self.refuses,
+                    "status": "PERMISSION_DENIED",
+                    "message": "caller has no access",
+                    "complete": True,
+                }
+        return super().__call__(request)
+
+
+def test_one_failed_recovery_read_does_not_abandon_the_other_documents():
+    endpoint = FailingRecoveryEndpoint(raises=OSError)
+    receipt, _ = run_against(endpoint)
+    entries = {entry["role"]: entry for entry in receipt["cleanup"]}
+    failed = [entry for entry in entries.values() if entry["failure"] == "OSError"]
+    assert len(failed) == 1
+    recovered = [role for role, entry in entries.items() if entry["complete"]]
+    assert len(recovered) == len(cases.RESOURCE_ROLES) - 1
+    assert len(endpoint.deletes) == len(cases.RESOURCE_ROLES) - 1
+    assert receipt["unrecovered"] == [failed[0]["role"]]
+
+
+def test_a_receipt_is_produced_even_when_every_recovery_read_raises():
+    endpoint = FailingRecoveryEndpoint(raises=OSError, every=True)
+    receipt, _ = run_against(endpoint)
+    assert receipt["kind"] == collector.CONTRACT
+    assert sorted(receipt["unrecovered"]) == sorted(cases.RESOURCE_ROLES)
+    assert receipt["complete"] is False
+    assert receipt["failureSites"]
+    assert endpoint.deletes == []
+
+
+def test_an_authority_refusal_stops_sending_but_keeps_the_responsibility():
+    endpoint = FailingRecoveryEndpoint(refuses=collector.PERMISSION_DENIED)
+    receipt, _ = run_against(endpoint)
+    entries = {entry["role"]: entry for entry in receipt["cleanup"]}
+    refused = [
+        e for e in entries.values() if e["failure"] == "owned-read-refused-authority"
+    ]
+    assert len(refused) == 1
+    stopped = [
+        e for e in entries.values() if e["failure"] == "authority-refused-earlier"
+    ]
+    assert len(stopped) == len(cases.RESOURCE_ROLES) - 1
+    for entry in stopped:
+        assert entry["skipped"] is True
+        assert entry["createdByThisRun"] is True
+    assert sorted(receipt["unrecovered"]) == sorted(cases.RESOURCE_ROLES)
+    reads_during_cleanup = [
+        call
+        for call in endpoint.calls
+        if call["rpc"] == "GetDocument" and call["timeoutSeconds"]
+    ]
+    assert reads_during_cleanup
+    assert endpoint.deletes == []
+
+
+def test_a_failure_inside_cleanup_still_produces_a_receipt():
+    class Broken(StatefulEndpoint):
+        def __call__(self, request):
+            if request["rpc"] == "Rollback":
+                raise RuntimeError("transport is gone")
+            return super().__call__(request)
+
+    receipt, _ = run_against(Broken())
+    assert receipt["kind"] == collector.CONTRACT
+    assert receipt["openTransactions"]
+    assert receipt["complete"] is False
+
+
+def test_the_receipt_counts_every_request_it_actually_sent():
+    endpoint = StatefulEndpoint()
+    receipt, _ = run_against(endpoint)
+    assert receipt["requestCount"] == len(endpoint.calls)
+    assert receipt["requestCount"] > len(receipt["rows"])
+
+
+def test_a_request_the_collector_refused_to_send_is_not_counted():
+    endpoint = StatefulEndpoint(preexisting_role="control")
+    receipt, _ = run_against(endpoint)
+    assert receipt["requestCount"] == len(endpoint.calls)

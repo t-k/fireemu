@@ -40,9 +40,11 @@ MAX_RESPONSE_BYTES = 65_536
 MAX_REQUEST_BYTES = 8_192
 
 #: Slots reserved beyond the compiled operations. Recovery may have to roll back
-#: every transaction the plan opened before it can delete anything, so the
-#: headroom covers one rollback per opened transaction plus a small margin.
-DATA_SLOT_HEADROOM = 16
+#: every transaction the run holds before it can delete anything. That is one
+#: per BeginTransaction the plan sends, not one per transaction it expects to
+#: get: a begin the case table expects to be refused can still issue a token,
+#: and the collector takes responsibility for releasing it.
+DATA_SLOT_HEADROOM = 20
 
 #: Per-request time bound. Every request in this campaign is a small unary call.
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 10
@@ -99,12 +101,14 @@ def _op(
     idle_of=None,
     timeout=DEFAULT_REQUEST_TIMEOUT_SECONDS,
     detail=None,
+    verifies=None,
 ):
     return {
         "slot": slot,
         "phase": phase,
         "rpc": rpc,
         "caseId": case_id,
+        "verifiesCase": verifies,
         "role": role,
         "waitSeconds": wait,
         "opensTransaction": opens,
@@ -115,6 +119,33 @@ def _op(
         "maxRequestBytes": MAX_REQUEST_BYTES,
         "maxResponseBytes": MAX_RESPONSE_BYTES,
     }
+
+
+def _with_post_state_readbacks(steps):
+    """Read each observed document back before anything can overwrite it.
+
+    A case's response code says what the backend answered, not what it did. The
+    readback goes immediately after the case it verifies, so a refusal that
+    nevertheless changed the document, and a success that changed nothing, are
+    both visible. Placed any later, the next write to the same role would hide
+    the difference.
+    """
+    placed = []
+    for step in steps:
+        placed.append(step)
+        if not step["caseId"] or not step["role"]:
+            continue
+        placed.append(
+            _op(
+                f"verify/{step['slot']}",
+                "readback",
+                "GetDocument",
+                role=step["role"],
+                verifies=step["caseId"],
+                detail="post-state readback for the case immediately before it",
+            )
+        )
+    return placed
 
 
 def _operations():
@@ -327,7 +358,9 @@ def _operations():
         )
     )
 
-    # --- post-state readback -----------------------------------------------
+    steps = _with_post_state_readbacks(steps)
+
+    # --- final post-state readback ------------------------------------------
     for role in ("locked-a", "locked-d", "control"):
         steps.append(_op(f"readback/{role}", "readback", "GetDocument", role=role))
 

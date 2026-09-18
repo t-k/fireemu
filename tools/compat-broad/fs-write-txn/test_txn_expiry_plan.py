@@ -195,10 +195,13 @@ def test_timeouts_plus_waits_fit_inside_the_wall_envelope():
     assert worst <= value["budget"]["wallSeconds"]
 
 
-def test_headroom_covers_a_rollback_for_every_transaction_the_plan_opens():
+def test_headroom_covers_a_rollback_for_every_begin_the_plan_sends():
+    """Any begin can issue a token, including one the case table expects to fail."""
     value = compiled()
+    begins = len([s for s in value["operations"] if s["rpc"] == "BeginTransaction"])
     opened = len([s for s in value["operations"] if s["opensTransaction"]])
-    assert plan.DATA_SLOT_HEADROOM >= opened
+    assert begins > opened, "the campaign must exercise refused begins"
+    assert plan.DATA_SLOT_HEADROOM >= begins
 
 
 def test_every_elapsed_case_names_the_transaction_whose_idle_time_it_measures():
@@ -214,3 +217,38 @@ def test_every_elapsed_case_names_the_transaction_whose_idle_time_it_measures():
 
 def test_the_unissued_retry_token_reuses_the_published_corpus_constant():
     assert plan.unissued_retry_token("any-nonce") == bytes(8)
+
+
+def test_every_case_that_names_a_document_is_read_back_immediately():
+    """The state a case leaves behind is read before anything can overwrite it."""
+    value = compiled()
+    steps = value["operations"]
+    for index, step in enumerate(steps):
+        if not step["caseId"] or not step["role"]:
+            continue
+        following = steps[index + 1]
+        assert following["verifiesCase"] == step["caseId"], step["slot"]
+        assert following["rpc"] == "GetDocument"
+        assert following["role"] == step["role"]
+        assert following["caseId"] is None
+
+
+def test_a_readback_never_stands_behind_a_later_write_to_the_same_role():
+    value = compiled()
+    steps = value["operations"]
+    for index, step in enumerate(steps):
+        if not step.get("verifiesCase"):
+            continue
+        previous = steps[index - 1]
+        assert previous["caseId"] == step["verifiesCase"]
+        assert previous["role"] == step["role"]
+
+
+def test_every_declared_post_state_has_a_readback_that_can_prove_it():
+    value = compiled()
+    verified = {
+        step["verifiesCase"] for step in value["operations"] if step.get("verifiesCase")
+    }
+    for case in cases.CASES:
+        if case["postState"]:
+            assert case["id"] in verified, case["id"]

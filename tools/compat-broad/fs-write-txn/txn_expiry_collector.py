@@ -33,13 +33,36 @@ WALL_CLOCK = "wall-clock"
 CONTROL_CLOCK = "control-clock"
 TIMING_MODES = (WALL_CLOCK, CONTROL_CLOCK)
 
+#: Fixed stand-ins for the identities that differ between any two runs. The
+#: recorded body keeps its values and types; only the run-bound resource names
+#: and the instants are replaced, so two receipts stay comparable.
+RESOURCE_SLOT = "<fireemu:o3-txn-expiry:resource>"
+TOKEN_SLOT = "<fireemu:o3-txn-expiry:token>"
+OWNER_SLOT = "<fireemu:o3-txn-expiry:owner>"
+
+#: Document keys that carry an instant rather than a value.
+INSTANT_KEYS = ("updateTime", "createTime", "readTime")
+
 LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
 PRODUCTION_HOST = "firestore.googleapis.com"
 
 NOT_FOUND = 5
 ABORTED = 10
 INVALID_ARGUMENT = 3
+ALREADY_EXISTS = 6
+PERMISSION_DENIED = 7
+UNAUTHENTICATED = 16
 OK = 0
+
+#: A refusal that says the caller may not act at all. Sending more requests
+#: after one of these cannot help and may make things worse, so recovery stops
+#: sending, but it still records what it was responsible for.
+AUTHORITY_REFUSALS = (PERMISSION_DENIED, UNAUTHENTICATED)
+
+#: Steps whose refusal is not a precondition failure. The contention holder is
+#: released on a best-effort basis; the campaign has already observed what it
+#: needed from it by then.
+BEST_EFFORT_SLOTS = ("idle/release/c",)
 
 #: Recovery gets its own deadline so an exhausted observation budget still
 #: leaves room to give owned documents back.
@@ -101,6 +124,17 @@ def validate_collector_options(options):
 
 def _b64(raw):
     return base64.b64encode(raw).decode()
+
+
+def _decode_token(token):
+    """Decode a transaction token, or None when it cannot be used as one."""
+    if not isinstance(token, str) or not token:
+        return None
+    try:
+        decoded = base64.b64decode(token, validate=True)
+    except (ValueError, TypeError):
+        return None
+    return decoded or None
 
 
 def document_name(project, database, path):
@@ -178,6 +212,12 @@ class Collection:
         self.virtual_elapsed = 0.0
         self.checkpoints = []
         self.created = {}
+        self.established = {}
+        self.update_times = {}
+        self.preconditions = []
+        self.failure_sites = []
+        self.authority_refusal = None
+        self.request_count = 0
         self.failure = None
         self.started_at = None
         self.finished_at = None
@@ -207,6 +247,7 @@ class Collection:
             "maxRequestBytes": plan_module.MAX_REQUEST_BYTES,
             "timeoutSeconds": self.current_timeout,
         }
+        self.request_count += 1
         return self.transport(request)
 
     def _begin(self, options_body):
@@ -223,7 +264,26 @@ class Collection:
 
     def _get(self, role, token=None):
         query = {"transaction": _b64(token)} if token is not None else None
-        return self._send("GetDocument", None, role=role, query=query)
+        response = self._send("GetDocument", None, role=role, query=query)
+        if response.get("code") != OK:
+            return response
+        body = response.get("body")
+        if not isinstance(body, dict) or not body.get("name"):
+            # A successful read has to return the document. Without one the
+            # reply proves neither presence nor absence, so it is an incomplete
+            # response rather than evidence that the document exists.
+            return {**response, "complete": False, "incomplete": "get-without-document"}
+        return response
+
+    def _blocked(self, reason):
+        """A request the collector refuses to send, recorded as incomplete."""
+        return {
+            "code": None,
+            "status": None,
+            "message": None,
+            "complete": False,
+            "blocked": reason,
+        }
 
     def _write_marker(self, role, state, *, create=False):
         write = {
@@ -237,6 +297,57 @@ class Collection:
         if create:
             write["currentDocument"] = {"exists": False}
         return write
+
+    # -- observed document bodies -------------------------------------------
+
+    def _scrub(self, value):
+        """Replace this run's identities inside a recorded value."""
+        if isinstance(value, dict):
+            return {key: self._scrub(entry) for key, entry in value.items()}
+        if isinstance(value, list):
+            return [self._scrub(entry) for entry in value]
+        if not isinstance(value, str):
+            return value
+        for needle, slot in (
+            (owner_marker(self.options["ownerId"]), OWNER_SLOT),
+            (self.plan["documentPrefix"], RESOURCE_SLOT),
+            (self.options["nonce"], TOKEN_SLOT),
+            (self.options["ownerId"], OWNER_SLOT),
+            (self.options["projectId"], RESOURCE_SLOT),
+        ):
+            if needle:
+                value = value.replace(needle, slot)
+        return value
+
+    def _version_ordinal(self, role, instant):
+        """Where this instant sits in the versions observed for one document.
+
+        The instant itself is volatile, but whether it changed between two
+        readings is exactly the relation a post-state comparison needs, and an
+        ordinal carries that across two runs.
+        """
+        seen = self.update_times.setdefault(role, [])
+        if instant is None:
+            return None
+        if instant not in seen:
+            seen.append(instant)
+        return seen.index(instant)
+
+    def _observed_document(self, role, response):
+        code = response.get("code")
+        if code == NOT_FOUND:
+            return {"exists": False, "code": code}
+        if code != OK:
+            return {"exists": None, "code": code}
+        body = response.get("body") or {}
+        return {
+            "exists": True,
+            "code": code,
+            "name": RESOURCE_SLOT,
+            "updateTime": TOKEN_SLOT,
+            "updateTimeOrdinal": self._version_ordinal(role, body.get("updateTime")),
+            "fields": self._scrub(body.get("fields") or {}),
+        }
 
     # -- row recording ------------------------------------------------------
 
@@ -256,6 +367,15 @@ class Collection:
             "waited": waited,
             "detail": detail,
         }
+        for key in ("blocked", "incomplete"):
+            if response.get(key):
+                row[key] = response[key]
+        if response.get("acquisition"):
+            row["acquisition"] = response["acquisition"]
+        if step.get("verifiesCase"):
+            row["verifiesCase"] = step["verifiesCase"]
+        if step["rpc"] == "GetDocument" and step["role"]:
+            row["document"] = self._observed_document(step["role"], response)
         tag = step.get("idleOfTransaction")
         if tag is not None and tag in self.locked_at:
             row["idleSeconds"] = self._campaign_now() - self.locked_at[tag]
@@ -338,8 +458,33 @@ class Collection:
             self.failure = stop.reason
         except Exception as error:  # noqa: BLE001 - retained, never reinterpreted
             self.failure = type(error).__name__
-        cleanup, releases = self._cleanup()
+        try:
+            cleanup, releases = self._cleanup()
+        except Exception as error:  # noqa: BLE001 - a receipt is owed regardless
+            self._note_failure("cleanup", type(error).__name__)
+            cleanup, releases = self._unattempted_cleanup(type(error).__name__), []
         return self._receipt(cleanup, releases)
+
+    def _unattempted_cleanup(self, reason):
+        """Entries for a recovery that could not run at all.
+
+        The receipt still has to say which documents this run is answerable
+        for, so a caller reading only the receipt sees the same residue a
+        successful pass would have cleared.
+        """
+        return [
+            {
+                "role": resource["role"],
+                "path": self._path(resource["role"]),
+                "skipped": True,
+                "complete": False,
+                "absent": False,
+                "createdByThisRun": resource["role"] in self.established,
+                "creationEvidence": self.established.get(resource["role"]),
+                "failure": reason,
+            }
+            for resource in self.plan["resources"]
+        ]
 
     def _guard(self, deadline, needed):
         if deadline.remaining() <= needed:
@@ -362,10 +507,106 @@ class Collection:
             if step["slot"].startswith("idle/read/"):
                 self.locked_at[step["slot"].rsplit("/", 1)[1]] = self._campaign_now()
             if not row["complete"]:
+                self._note_failure(step["slot"], "incomplete-response", row)
                 raise _Stopped("incomplete-response")
+            failure = self._precondition(step, response)
+            if failure is not None:
+                row["precondition"] = failure
+                self._note_failure(step["slot"], failure, row)
+                raise _Stopped("precondition-not-established")
+
+    def _note_failure(self, site, reason, detail=None):
+        """Record where the run stopped being able to do what it promised."""
+        entry = {"site": site, "reason": reason}
+        if isinstance(detail, dict):
+            for key in ("blocked", "incomplete", "role", "caseId"):
+                if detail.get(key):
+                    entry[key] = detail[key]
+        self.failure_sites.append(entry)
+
+    def _precondition(self, step, response):
+        """Judge a setup step's own success, separately from any semantics.
+
+        Only steps without a case id are preconditions. A case's observed code
+        is the thing the campaign is here to record and is never read as a
+        failure of the run. A precondition that did not hold means the workspace
+        this run promised to own was never established, so nothing after it may
+        mutate anything.
+        """
+        if step["caseId"] is not None or step["slot"] in BEST_EFFORT_SLOTS:
+            return None
+        slot = step["slot"]
+        code = response.get("code")
+        if slot.startswith("preflight/absence/"):
+            # A preflight finding never stops the run by itself. The only write
+            # still ahead of it is the create-only commit, which cannot damage
+            # whatever is there, and whose refusal is the authoritative proof.
+            role = step["role"]
+            if code == NOT_FOUND:
+                self._record_precondition(role, absence=True)
+            elif code == OK:
+                self._record_precondition(
+                    role, absence=False, finding="document-exists"
+                )
+            else:
+                self._record_precondition(
+                    role, absence=None, finding="absence-not-proven"
+                )
+            return None
+        if slot.startswith("setup/create/"):
+            role = step["role"]
+            observed = self._record_precondition(role)
+            if code == OK:
+                if observed.get("absence") is False:
+                    # The preflight saw a document and the create-only commit
+                    # was accepted anyway. One of the two is wrong, so this run
+                    # cannot claim it owns anything here.
+                    self._record_precondition(role, created=False)
+                    return "absence-contradicted-by-accepted-create"
+                body = response.get("body") or {}
+                results = body.get("writeResults") or [{}]
+                self.established[role] = {
+                    "role": role,
+                    "slot": slot,
+                    "updateTime": (results[0] or {}).get("updateTime"),
+                }
+                self.created[role] = True
+                self._version_ordinal(role, self.established[role]["updateTime"])
+                self._record_precondition(role, created=True)
+                return None
+            self._record_precondition(role, created=False)
+            if code == ALREADY_EXISTS:
+                return "conditional-create-refused-already-exists"
+            return "conditional-create-refused"
+        if slot.startswith(("readback/", "verify/")):
+            # A readback records what it saw. An absent or unreadable document
+            # is an observation about the case before it, not a setup failure.
+            return None
+        if code == OK:
+            return None
+        return f"setup-step-refused:{slot}"
+
+    def _record_precondition(self, role, **fields):
+        for entry in self.preconditions:
+            if entry["role"] == role:
+                entry.update(fields)
+                return entry
+        entry = {"role": role, "absence": None, "created": False}
+        entry.update(fields)
+        self.preconditions.append(entry)
+        return entry
 
     def _dispatch(self, step):
         slot = step["slot"]
+        if (
+            step["rpc"] == "Commit"
+            and step["role"]
+            and not slot.startswith("setup/create/")
+            and step["role"] not in self.established
+        ):
+            # This run never proved it created this document, so it has no
+            # standing to write to it. The request is not sent at all.
+            return self._blocked("precondition-not-established")
         handler = self._HANDLERS.get(slot)
         if handler is not None:
             return handler(self, step)
@@ -373,13 +614,10 @@ class Collection:
         if slot.startswith("preflight/absence/"):
             return self._get(step["role"])
         if slot.startswith("setup/create/"):
-            response = self._commit(
+            return self._commit(
                 [self._write_marker(step["role"], "created", create=True)]
             )
-            if response.get("code") == OK:
-                self.created[step["role"]] = True
-            return response
-        if slot.startswith("readback/"):
+        if slot.startswith(("readback/", "verify/")):
             return self._get(step["role"])
         if slot.startswith("idle/begin/"):
             return self._open(step, {"readWrite": {}})
@@ -401,14 +639,44 @@ class Collection:
         raise ValueError(f"unhandled slot {prefix}: {slot}")
 
     def _open(self, step, options_body):
+        """Begin a transaction and take responsibility for whatever it issued.
+
+        A case may expect the request to be refused. Whether it was is a result
+        to record, not a reason to look away: a transaction the backend really
+        did start is live, holds whatever it holds, and has to be released
+        during recovery. So every fully successful begin is registered, and the
+        expectation only classifies the row afterwards.
+        """
         response = self._begin(options_body)
-        tag = step["opensTransaction"]
-        token = (response.get("body") or {}).get("transaction")
-        if response.get("code") == OK and token and tag:
-            decoded = base64.b64decode(token)
-            self.tokens[tag] = decoded
-            self.open_tokens[tag] = decoded
-        return response
+        if response.get("code") != OK:
+            return response
+        tag = step["opensTransaction"] or f"unplanned/{step['slot']}"
+        decoded = _decode_token((response.get("body") or {}).get("transaction"))
+        if decoded is None:
+            # A success-shaped reply without a usable token has not acquired
+            # anything, and it may still have started a transaction this run can
+            # never name. That is an incomplete response, not an acquisition.
+            return {
+                **response,
+                "complete": False,
+                "incomplete": "begin-without-usable-token",
+            }
+        self.tokens[tag] = decoded
+        self.open_tokens[tag] = decoded
+        expected = self._expected_code(step) == OK
+        return {
+            **response,
+            "acquisition": {
+                "transaction": tag,
+                "tokenRegistered": True,
+                "expected": expected,
+                "planned": bool(step["opensTransaction"]),
+            },
+        }
+
+    def _expected_code(self, step):
+        case = CASE_BY_ID.get(step["caseId"]) if step["caseId"] else None
+        return case["expectedLocal"]["code"] if case else OK
 
     # -- individual case handlers ------------------------------------------
 
@@ -449,17 +717,21 @@ class Collection:
         )
 
     def _retry_committed(self, step):
-        return self._begin({"readWrite": {"retryTransaction": _b64(self.tokens["i"])}})
+        return self._open(
+            step, {"readWrite": {"retryTransaction": _b64(self.tokens["i"])}}
+        )
 
     def _retry_read_only(self, step):
-        return self._begin({"readWrite": {"retryTransaction": _b64(self.tokens["j"])}})
+        return self._open(
+            step, {"readWrite": {"retryTransaction": _b64(self.tokens["j"])}}
+        )
 
     def _retry_unissued(self, step):
         token = plan_module.unissued_retry_token(self.options["nonce"])
-        return self._begin({"readWrite": {"retryTransaction": _b64(token)}})
+        return self._open(step, {"readWrite": {"retryTransaction": _b64(token)}})
 
     def _retry_malformed(self, step):
-        return self._begin({"readWrite": {"retryTransaction": "not base64!"}})
+        return self._open(step, {"readWrite": {"retryTransaction": "not base64!"}})
 
     _HANDLERS: ClassVar[dict] = {
         "idle/lock-held": _lock_held,
@@ -487,7 +759,25 @@ class Collection:
         results = []
         for resource in self.plan["resources"]:
             role = resource["role"]
-            results.append(self._recover_one(role, recovery))
+            try:
+                results.append(self._recover_one(role, recovery))
+            except Exception as error:  # noqa: BLE001 - one document, not the run
+                # One document failing to come back says nothing about the
+                # others, and the run still owes every one of them an attempt.
+                reason = type(error).__name__
+                self._note_failure(f"cleanup/{role}", reason)
+                results.append(
+                    {
+                        "role": role,
+                        "path": self._path(role),
+                        "skipped": False,
+                        "complete": False,
+                        "absent": False,
+                        "createdByThisRun": role in self.established,
+                        "creationEvidence": self.established.get(role),
+                        "failure": reason,
+                    }
+                )
         self.finished_at = _instant(self.wall())
         return results, releases
 
@@ -502,6 +792,11 @@ class Collection:
         releases = []
         for tag in sorted(self.open_tokens):
             entry = {"transaction": tag, "released": False, "skipped": False}
+            if self.authority_refusal is not None:
+                entry["skipped"] = True
+                entry["failure"] = "authority-refused-earlier"
+                releases.append(entry)
+                continue
             if recovery.expired():
                 entry["skipped"] = True
                 entry["failure"] = "recovery-deadline-reached"
@@ -511,9 +806,19 @@ class Collection:
                 response = self._rollback(self.open_tokens[tag])
             except Exception as error:  # noqa: BLE001 - retained, never reinterpreted
                 entry["failure"] = type(error).__name__
+                self._note_failure(f"release/{tag}", entry["failure"])
                 releases.append(entry)
                 continue
             code = response.get("code")
+            if code in AUTHORITY_REFUSALS:
+                self.authority_refusal = response.get("status") or code
+                self._note_failure(f"release/{tag}", "authority-refused")
+                entry["code"] = code
+                entry["status"] = response.get("status")
+                entry["message"] = response.get("message")
+                entry["failure"] = "rollback-refused-authority"
+                releases.append(entry)
+                continue
             entry["code"] = code
             entry["status"] = response.get("status")
             entry["message"] = response.get("message")
@@ -543,14 +848,29 @@ class Collection:
         return releases
 
     def _recover_one(self, role, recovery):
+        evidence = self.established.get(role)
         entry = {
             "role": role,
             "path": self._path(role),
             "skipped": False,
             "complete": False,
             "absent": False,
+            "createdByThisRun": evidence is not None,
+            "creationEvidence": evidence,
             "failure": None,
         }
+        if evidence is None:
+            # Recovery is bound to what this run created, not to what the
+            # document currently says. A marker can be written by a mutation
+            # this run should never have made; a creation record cannot.
+            entry.update(skipped=True, failure="not-created-by-this-run")
+            return entry
+        if self.authority_refusal is not None:
+            # The caller has already been told it may not act here. Sending
+            # more requests cannot help, but this run still created the
+            # document, so it stays on the unrecovered list.
+            entry.update(skipped=True, failure="authority-refused-earlier")
+            return entry
         if recovery.expired():
             entry.update(skipped=True, failure="recovery-deadline-reached")
             return entry
@@ -561,6 +881,11 @@ class Collection:
         }
         if read.get("code") == NOT_FOUND:
             entry.update(skipped=True, complete=True, absent=True)
+            return entry
+        if read.get("code") in AUTHORITY_REFUSALS:
+            self.authority_refusal = read.get("status") or read.get("code")
+            self._note_failure(f"cleanup/{role}", "authority-refused")
+            entry.update(skipped=True, failure="owned-read-refused-authority")
             return entry
         if read.get("code") != OK:
             entry.update(skipped=True, failure="owned-read-incomplete")
@@ -578,6 +903,11 @@ class Collection:
             ]
         )
         entry["delete"] = {"code": delete.get("code"), "status": delete.get("status")}
+        if delete.get("code") in AUTHORITY_REFUSALS:
+            self.authority_refusal = delete.get("status") or delete.get("code")
+            self._note_failure(f"cleanup/{role}", "authority-refused")
+            entry["failure"] = "conditional-delete-refused-authority"
+            return entry
         if delete.get("code") != OK:
             entry["failure"] = "conditional-delete-refused"
             return entry
@@ -594,7 +924,11 @@ class Collection:
     def _receipt(self, cleanup, releases):
         observed = {row["caseId"]: row for row in self.rows if row["caseId"]}
         missing = [case["id"] for case in cases.CASES if case["id"] not in observed]
-        unrecovered = [entry["role"] for entry in cleanup if not entry["complete"]]
+        unrecovered = [
+            entry["role"]
+            for entry in cleanup
+            if entry.get("createdByThisRun") and not entry["complete"]
+        ]
         return {
             "kind": CONTRACT,
             "campaign": cases.CAMPAIGN,
@@ -607,6 +941,7 @@ class Collection:
             "documentPrefix": self.plan["documentPrefix"],
             "nonce": self.options["nonce"],
             "rows": self.rows,
+            "preconditions": self.preconditions,
             "cleanup": cleanup,
             "transactionReleases": releases,
             "openTransactions": sorted(self.open_tokens),
@@ -615,6 +950,8 @@ class Collection:
             "finishedAt": self.finished_at,
             "unrecovered": unrecovered,
             "missingCases": missing,
+            "failureSites": self.failure_sites,
+            "authorityRefusal": self.authority_refusal,
             "failure": self.failure,
             "complete": (
                 not missing
@@ -622,12 +959,10 @@ class Collection:
                 and not self.open_tokens
                 and self.failure is None
             ),
-            "requestCount": len(self.rows)
-            + sum(
-                1 + (1 if "delete" in e else 0) + (1 if "absence" in e else 0)
-                for e in cleanup
-                if "ownedRead" in e
-            ),
+            # Counted where the requests are actually sent, so releases and
+            # any request that failed are included and a request the collector
+            # refused to send is not.
+            "requestCount": self.request_count,
         }
 
 

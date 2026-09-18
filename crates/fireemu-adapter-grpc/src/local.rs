@@ -2650,6 +2650,46 @@ impl LocalBackend {
             .collect()
     }
 
+    /// Replaces every time-to-live catalog `owned` selects, leaving the rest untouched.
+    ///
+    /// A snapshot restore and an import both install a whole configuration rather than
+    /// replaying the patches that built it, and both are scoped: a project the transition
+    /// does not own keeps its policies.
+    pub fn restore_ttl_catalogs(
+        &self,
+        owned: impl Fn(&str) -> bool,
+        catalogs: &BTreeMap<(String, String), TtlCatalog>,
+    ) {
+        let mut current = self
+            .ttl
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        current.retain(|(project, _), _| project.as_ref().is_none_or(|p| !owned(p)));
+        for ((project, database), catalog) in catalogs {
+            if catalog.is_empty() || !owned(project) {
+                continue;
+            }
+            current.insert((Some(project.clone()), database.clone()), catalog.clone());
+        }
+        drop(current);
+        // A restored policy is in force from the restore, so its sweep interval restarts
+        // here rather than carrying the schedule of the run that captured it.
+        let now = self.now();
+        let mut schedules = self
+            .ttl_sweeps
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        schedules.retain(|(project, _), _| !owned(project));
+        for (key, catalog) in catalogs {
+            if catalog.is_empty() || !owned(&key.0) {
+                continue;
+            }
+            let mut schedule = SweepSchedule::new(self.ttl_sweep_interval);
+            schedule.start(now);
+            schedules.insert(key.clone(), schedule);
+        }
+    }
+
     /// Enables a time-to-live policy on one collection group field.
     pub fn enable_ttl(
         &self,

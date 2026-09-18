@@ -61,6 +61,61 @@ impl SnapshotHook for Firestore {
     }
 }
 
+/// The session's Firestore field configuration (the time-to-live policies).
+///
+/// It is a separate part from the databases: a restore that brought documents back without
+/// their policies would report an expiry configuration the session no longer has.
+pub struct FieldConfig(pub Arc<LocalBackend>);
+
+/// One session's time-to-live catalogs, keyed by project and database.
+type TtlCatalogs =
+    std::collections::BTreeMap<(String, String), fireemu_core_firestore::ttl::TtlCatalog>;
+
+impl SnapshotHook for FieldConfig {
+    fn name(&self) -> &'static str {
+        "firestore field config"
+    }
+    fn capture(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        let captured: TtlCatalogs = self
+            .0
+            .ttl_catalogs()
+            .into_iter()
+            .filter(|((project, _), _)| scope.owns_project(project))
+            .collect();
+        Ok(Arc::new(captured))
+    }
+    fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<TtlCatalogs>()
+            .map(|_| ())
+            .ok_or_else(|| wrong_shape(self.name()))
+    }
+    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        let captured = part
+            .downcast_ref::<TtlCatalogs>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        self.0
+            .restore_ttl_catalogs(|project| scope.owns_project(project), captured);
+        Ok(())
+    }
+    fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
+        part.downcast_ref::<TtlCatalogs>().map_or(0, |catalogs| {
+            catalogs
+                .iter()
+                .map(|((project, database), catalog)| {
+                    let names = project.len() + database.len();
+                    let policies: usize = catalog
+                        .iter()
+                        .map(|(group, policy)| {
+                            group.as_str().len() + policy.field.canonical().len()
+                        })
+                        .sum();
+                    u64::try_from(names + policies).unwrap_or(u64::MAX)
+                })
+                .sum()
+        })
+    }
+}
+
 /// The session's buckets and objects.
 pub struct Storage(pub Arc<fireemu_adapter_http::storage::StorageState>);
 
@@ -502,7 +557,7 @@ mod tests {
     //! registrations of the scope and then rotates its epoch, so no token issued against the
     //! replaced state survives it (specification section 14).
 
-    use super::{AppCheck, Rules, Scope, SnapshotHook};
+    use super::{AppCheck, FieldConfig, LocalBackend, Rules, Scope, SnapshotHook};
     use crate::sessions::tests::{admits_for, gate, token_for, APP_ID};
 
     use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
@@ -511,6 +566,86 @@ mod tests {
     use std::sync::Arc;
 
     const AT: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
+
+    fn backend() -> Arc<LocalBackend> {
+        use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+
+        let gateway = fireemu_adapter_grpc::gateway::Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        Arc::new(LocalBackend::new(
+            gateway,
+            Arc::new(std::sync::Mutex::new(VirtualClock::new(AT))),
+            7,
+        ))
+    }
+
+    fn group(name: &str) -> fireemu_core_types::ids::CollectionId {
+        fireemu_core_types::ids::CollectionId::try_new(name).expect("collection")
+    }
+
+    fn field(name: &str) -> fireemu_core_firestore::field_path::FieldPath {
+        fireemu_core_firestore::field_path::FieldPath::parse(name).expect("field")
+    }
+
+    #[test]
+    fn a_restore_brings_back_the_time_to_live_policies_the_capture_held() {
+        let backend = backend();
+        backend
+            .enable_ttl(
+                "demo-app",
+                "(default)",
+                group("sessions"),
+                field("expiresAt"),
+            )
+            .expect("enable ttl");
+        let hook = FieldConfig(backend.clone());
+        let scope = Scope::AllExcept(BTreeSet::new());
+        let part = hook.capture(&scope).expect("capture");
+        assert!(hook.retained_bytes(&part) > 0);
+
+        assert!(backend.disable_ttl(
+            "demo-app",
+            "(default)",
+            &group("sessions"),
+            &field("expiresAt")
+        ));
+        assert!(backend.ttl_catalog("demo-app", "(default)").is_empty());
+
+        hook.restore(&scope, &part).expect("restore");
+        assert_eq!(
+            backend
+                .ttl_catalog("demo-app", "(default)")
+                .state(&group("sessions"), &field("expiresAt")),
+            Some(fireemu_core_firestore::ttl::TtlState::Active)
+        );
+    }
+
+    #[test]
+    fn a_restore_of_an_empty_capture_clears_the_policies_of_its_scope() {
+        let backend = backend();
+        let hook = FieldConfig(backend.clone());
+        let scope = Scope::AllExcept(BTreeSet::new());
+        let empty = hook.capture(&scope).expect("capture");
+        backend
+            .enable_ttl(
+                "demo-app",
+                "(default)",
+                group("sessions"),
+                field("expiresAt"),
+            )
+            .expect("enable ttl");
+        hook.restore(&scope, &empty).expect("restore");
+        assert!(backend.ttl_catalog("demo-app", "(default)").is_empty());
+    }
 
     #[test]
     fn named_database_rules_restore_their_own_fresh_generations() {

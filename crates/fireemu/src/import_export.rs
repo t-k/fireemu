@@ -262,6 +262,11 @@ pub struct Prepared {
     auth: Option<PreparedAuth>,
     /// The Storage objects and buckets.
     storage: Option<PreparedStorage>,
+    /// The Firestore time-to-live field configuration, from the fireemu-only sidecar. The
+    /// official export format has no equivalent section, so an artifact without the sidecar
+    /// leaves the running configuration unchanged.
+    firestore_field_config:
+        Option<BTreeMap<(String, String), fireemu_core_firestore::ttl::TtlCatalog>>,
     /// What the operator should be told before the run starts.
     pub notices: Vec<String>,
 }
@@ -402,6 +407,7 @@ pub fn prepare(dir: &Path, products: Products, project: &str) -> Result<Prepared
                     )?;
                 }
                 prepared.firestore = Some(databases);
+                prepared.firestore_field_config = read_field_config(dir)?;
             }
             Product::Auth => prepared.auth = Some(read_auth_section(dir, section, project)?),
             Product::Storage => prepared.storage = Some(read_storage_section(dir, section)?),
@@ -454,6 +460,11 @@ pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), Artifa
                     error.to_string(),
                 )
             })?;
+        if let Some(catalogs) = prepared.firestore_field_config.take() {
+            endpoints
+                .backend
+                .restore_ttl_catalogs(|_project| true, &catalogs);
+        }
     }
 
     if let Some(auth) = prepared.auth.take() {
@@ -2803,6 +2814,118 @@ fn write_export_tree(
     Ok(())
 }
 
+/// One session's Firestore time-to-live catalogs, keyed by project and database.
+type FieldConfigCatalogs = BTreeMap<(String, String), fireemu_core_firestore::ttl::TtlCatalog>;
+
+/// The fireemu-only sidecar carrying the Firestore time-to-live field configuration.
+///
+/// The official export format has no field-configuration section, so this file is additive:
+/// official tooling ignores it, and an artifact written by that tooling simply has none.
+pub const FIELD_CONFIG_FILE: &str = "fireemu-firestore-field-config.json";
+
+/// Largest field-configuration sidecar an import reads. The catalog is bounded per database
+/// by the runtime, so a larger file is a malformed artifact rather than a large session.
+const FIELD_CONFIG_BYTES_LIMIT: u64 = 1 << 20;
+
+/// Serializes one session's time-to-live catalogs.
+fn field_config_json(catalogs: &FieldConfigCatalogs) -> String {
+    let databases: Vec<serde_json::Value> = catalogs
+        .iter()
+        .filter(|(_, catalog)| !catalog.is_empty())
+        .map(|((project, database), catalog)| {
+            let ttl: Vec<serde_json::Value> = catalog
+                .iter()
+                .map(|(group, policy)| {
+                    serde_json::json!({
+                        "collectionGroup": group.as_str(),
+                        "field": policy.field.canonical(),
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "project": project,
+                "database": database,
+                "ttlFields": ttl,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "version": 1,
+        "databases": databases,
+    })
+    .to_string()
+}
+
+/// Parses the field-configuration sidecar, refusing anything it cannot install exactly.
+fn parse_field_config(text: &str) -> Result<FieldConfigCatalogs, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|error| format!("invalid JSON: {error}"))?;
+    if value["version"] != serde_json::json!(1) {
+        return Err("the field configuration sidecar declares an unknown version".to_owned());
+    }
+    let databases = value["databases"]
+        .as_array()
+        .ok_or_else(|| "databases must be an array".to_owned())?;
+    let mut catalogs = BTreeMap::new();
+    for entry in databases {
+        let project = entry["project"]
+            .as_str()
+            .ok_or_else(|| "a database entry has no project".to_owned())?;
+        let database = entry["database"]
+            .as_str()
+            .ok_or_else(|| "a database entry has no database".to_owned())?;
+        let mut catalog = fireemu_core_firestore::ttl::TtlCatalog::new();
+        let fields = entry["ttlFields"]
+            .as_array()
+            .ok_or_else(|| "ttlFields must be an array".to_owned())?;
+        for field in fields {
+            let group = field["collectionGroup"]
+                .as_str()
+                .ok_or_else(|| "a TTL entry has no collectionGroup".to_owned())?;
+            let path = field["field"]
+                .as_str()
+                .ok_or_else(|| "a TTL entry has no field".to_owned())?;
+            let group = fireemu_core_types::ids::CollectionId::try_new(group)
+                .map_err(|error| format!("collection group {group:?}: {error}"))?;
+            let path = fireemu_core_firestore::field_path::FieldPath::parse(path)
+                .map_err(|error| format!("field path {path:?}: {error}"))?;
+            catalog
+                .enable(group, path)
+                .map_err(|error| error.to_string())?;
+        }
+        catalogs.insert((project.to_owned(), database.to_owned()), catalog);
+    }
+    Ok(catalogs)
+}
+
+/// Reads the optional field-configuration sidecar from the export root.
+fn read_field_config(dir: &Path) -> Result<Option<FieldConfigCatalogs>, ArtifactError> {
+    let path = dir.join(FIELD_CONFIG_FILE);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(ArtifactError::new(
+                "firestore",
+                &path,
+                format!("cannot inspect the optional field configuration sidecar: {error}"),
+            ))
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(ArtifactError::new(
+            "firestore",
+            &path,
+            "the optional field configuration sidecar is not a regular no-symlink file",
+        ));
+    }
+    let text = read_text_inside_limited(dir, &path, FIELD_CONFIG_BYTES_LIMIT)
+        .map_err(|error| ArtifactError::new("firestore", &path, error))?;
+    parse_field_config(&text)
+        .map(Some)
+        .map_err(|error| ArtifactError::new("firestore", &path, error))
+}
+
 fn export_firestore(
     dir: &Path,
     endpoints: &Endpoints,
@@ -2885,6 +3008,14 @@ fn export_firestore(
         } else {
             manifest.set_named_database(env!("CARGO_PKG_VERSION"), database, section);
         }
+    }
+    // The field configuration is written only when there is one, so an export of a session
+    // that never configured a policy stays byte-identical to what the official CLI writes.
+    let catalogs = endpoints.backend.ttl_catalogs();
+    if catalogs.values().any(|catalog| !catalog.is_empty()) {
+        let path = dir.join(FIELD_CONFIG_FILE);
+        write_private_file(&path, field_config_json(&catalogs).as_bytes())
+            .map_err(|e| ArtifactError::new("firestore", &path, e))?;
     }
     Ok(())
 }
@@ -3712,6 +3843,7 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
 /// sections (the official names plus the deferred products' sections).
 const EXPORT_OWNED_ENTRIES: &[&str] = &[
     METADATA_FILE_NAME,
+    FIELD_CONFIG_FILE,
     "firestore_export",
     "auth_export",
     "storage_export",
@@ -3723,9 +3855,9 @@ const EXPORT_OWNED_ENTRIES: &[&str] = &[
 mod tests {
     use super::{
         civil_from_days, decode_base32, decode_base64, enforce_storage_object_count,
-        imported_instant, may_overwrite, read_inside_budgeted, read_inside_limited,
-        rfc3339_instant, rfc3339_text, scan_import_tree, tenant_config_from_settings,
-        UnmanagedCopyBudget, IMPORT_STORAGE_OBJECT_COUNT_LIMIT,
+        field_config_json, imported_instant, may_overwrite, parse_field_config,
+        read_inside_budgeted, read_inside_limited, rfc3339_instant, rfc3339_text, scan_import_tree,
+        tenant_config_from_settings, UnmanagedCopyBudget, IMPORT_STORAGE_OBJECT_COUNT_LIMIT,
     };
     use fireemu_core_auth::store::{ProjectAuthConfig, TenantMetadata};
     use fireemu_core_export::auth::{AuthConfig, AuthSettingsNamespace, AuthSettingsRecord};
@@ -5026,5 +5158,52 @@ mod tests {
             .iter()
             .all(|provider| provider.provider_id != "password"));
         assert_eq!(exported.provider_user_info[0].provider_id, "phone");
+    }
+
+    #[test]
+    fn the_field_configuration_sidecar_survives_a_round_trip() {
+        let mut catalog = fireemu_core_firestore::ttl::TtlCatalog::new();
+        catalog
+            .enable(
+                fireemu_core_types::ids::CollectionId::try_new("sessions").expect("collection"),
+                fireemu_core_firestore::field_path::FieldPath::parse("expiresAt").expect("field"),
+            )
+            .expect("enable");
+        let mut catalogs = std::collections::BTreeMap::new();
+        catalogs.insert(("demo-app".to_owned(), "(default)".to_owned()), catalog);
+
+        let parsed = parse_field_config(&field_config_json(&catalogs)).expect("parse");
+        assert_eq!(parsed, catalogs);
+    }
+
+    #[test]
+    fn an_empty_catalog_is_not_written_into_the_sidecar() {
+        let mut catalogs = std::collections::BTreeMap::new();
+        catalogs.insert(
+            ("demo-app".to_owned(), "(default)".to_owned()),
+            fireemu_core_firestore::ttl::TtlCatalog::new(),
+        );
+        let text = field_config_json(&catalogs);
+        assert_eq!(text, r#"{"databases":[],"version":1}"#);
+    }
+
+    #[test]
+    fn a_sidecar_of_an_unknown_version_is_refused() {
+        let error = parse_field_config(r#"{"version": 2, "databases": []}"#).expect_err("refusal");
+        assert!(error.contains("unknown version"), "{error}");
+    }
+
+    #[test]
+    fn a_sidecar_naming_an_invalid_field_path_is_refused() {
+        let text = r#"{"version":1,"databases":[{"project":"demo-app","database":"(default)","ttlFields":[{"collectionGroup":"sessions","field":"a..b"}]}]}"#;
+        let error = parse_field_config(text).expect_err("refusal");
+        assert!(error.contains("field path"), "{error}");
+    }
+
+    #[test]
+    fn a_sidecar_naming_two_ttl_fields_in_one_collection_group_is_refused() {
+        let text = r#"{"version":1,"databases":[{"project":"demo-app","database":"(default)","ttlFields":[{"collectionGroup":"sessions","field":"a"},{"collectionGroup":"sessions","field":"b"}]}]}"#;
+        let error = parse_field_config(text).expect_err("refusal");
+        assert!(error.contains("at most one TTL field"), "{error}");
     }
 }

@@ -506,6 +506,12 @@ pub struct StorageState {
     /// profile decides (`emulator` admits the official emulator's mock tokens, `strict`
     /// does not).
     pub token_acceptance: TokenAcceptance,
+    /// The run's control token, as [`crate::control::ControlState::control_token`] holds it.
+    /// `PUT /internal/setRules` is the one privileged route on this port, and a browser
+    /// request (one carrying `Origin` or any `Sec-Fetch-*` field) has to present it, exactly
+    /// as [`crate::control::browser_guard`] requires it of the equivalent control route.
+    /// `None` is a run with no control surface, and then no browser request may set rules.
+    pub control_token: Option<String>,
 }
 
 impl StorageState {
@@ -812,6 +818,59 @@ fn fb_denied(method: Method) -> StorageResponse {
 
 fn set_rules_error(message: &str) -> StorageResponse {
     StorageResponse::json(400, &json!({"message": message}))
+}
+
+/// The longest accepted `PUT /internal/setRules` body, the control port's limit
+/// ([`crate::server::MAX_BODY_BYTES`]): the route is the same privileged rules replacement,
+/// and a rules file is orders of magnitude smaller than the object-upload limit this port
+/// otherwise buffers.
+pub const MAX_SET_RULES_BODY_BYTES: usize = crate::server::MAX_BODY_BYTES;
+
+/// Whether a request carries a browser's request metadata (`Origin`, or any `Sec-Fetch-*`
+/// field a browser always sends and a page cannot forge).
+fn from_browser(req: &StorageRequest) -> bool {
+    req.header("origin").is_some()
+        || req
+            .headers
+            .keys()
+            .any(|name| name.starts_with("sec-fetch-"))
+}
+
+/// The browser policy of `PUT /internal/setRules`, the one privileged route on the Storage
+/// port: it replaces the authorization policy of every bucket in the run, so a browser
+/// request is held to exactly what [`crate::control::browser_guard`] holds the equivalent
+/// `PUT /v1/storage/rules` control route to -- a loopback origin and the control token. A
+/// request with neither `Origin` nor a `Sec-Fetch-*` field is not a browser request (this is
+/// the shape `@firebase/rules-unit-testing` sends from Node) and keeps its unauthenticated
+/// access, so the compatibility surface is unchanged.
+fn set_rules_browser_guard(state: &StorageState, req: &StorageRequest) -> Option<StorageResponse> {
+    if !from_browser(req) {
+        return None;
+    }
+    let forbidden = |message: &str| Some(StorageResponse::json(403, &json!({"message": message})));
+    if req
+        .header("origin")
+        .is_some_and(|origin| !crate::identity_toolkit::origin_is_local(origin))
+    {
+        return forbidden("FORBIDDEN_ORIGIN");
+    }
+    let presented = req
+        .header("authorization")
+        .and_then(|a| a.strip_prefix("Bearer "))
+        .map(str::trim);
+    // No control surface means no token can be presented, and a browser request then has no
+    // way to prove it is not a page on another loopback port: it is refused.
+    let admitted = state
+        .control_token
+        .as_deref()
+        .is_some_and(|expected| crate::control::token_matches(presented, expected));
+    if admitted {
+        None
+    } else {
+        forbidden(
+            "CONTROL_TOKEN_REQUIRED : browser requests need Authorization: Bearer <control token>",
+        )
+    }
 }
 
 fn set_rules(state: &StorageState, body: &[u8]) -> StorageResponse {
@@ -2288,6 +2347,12 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
     // client App Check, Auth and fault plans.
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
     if matches!(route, Route::SetRules) {
+        if let Some(refusal) = set_rules_browser_guard(state, &req) {
+            return refusal;
+        }
+        if req.body.len() > MAX_SET_RULES_BODY_BYTES {
+            return StorageResponse::json(413, &json!({"message": "Request body is too large"}));
+        }
         return set_rules(state, &req.body);
     }
     let dialect = match &route {

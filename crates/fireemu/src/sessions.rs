@@ -374,6 +374,7 @@ pub(crate) mod tests {
                 app_check_policy: None,
                 admin_capability: None,
                 token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+                control_token: None,
             }),
             registry: Arc::new(
                 AuthRegistry::with_project_numbers_and_lifecycle_incarnation(

@@ -335,6 +335,15 @@ async fn respond(
         .get(hyper::header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.trim().parse::<usize>().ok());
+    // The privileged rules route is bounded at the control port's limit before a byte is
+    // buffered, so a declared oversized body never reaches the object-upload budget. A body
+    // that arrives without a Content-Length is bounded again by the handler.
+    if method == "PUT"
+        && path == "/internal/setRules"
+        && declared.is_some_and(|d| d > crate::storage::MAX_SET_RULES_BODY_BYTES)
+    {
+        return Ok(body_error_response(BodyError::TooLarge, origin.as_deref()));
+    }
     // The buffer holds its budget charge until it is dropped at the end of this function,
     // so the bytes the handler works on are accounted for the whole time they exist here.
     let mut buffer = match collect_body(budget, declared, req.into_body()).await {

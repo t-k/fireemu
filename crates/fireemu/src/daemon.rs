@@ -599,6 +599,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         clock_observer,
         storage_policy,
         storage_admin_capability.clone(),
+        control_token.clone(),
     )?;
     if let Some(runtime) = &functions_runtime {
         runtime.set_faults(faults.for_project(runtime.project()));

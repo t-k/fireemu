@@ -39,6 +39,9 @@ impl AtomicStorageEventSink for RefusingStorageEvents {
     }
 }
 
+/// The control token `state` gives every fixture, as a run's control surface holds it.
+const CONTROL_TOKEN: &str = "storage-test-control-token";
+
 fn state(rules: Option<&str>) -> StorageState {
     state_with(rules, TokenAcceptance::Verified)
 }
@@ -70,6 +73,7 @@ fn state_with(rules: Option<&str>, token_acceptance: TokenAcceptance) -> Storage
         app_check_policy: None,
         admin_capability: None,
         token_acceptance,
+        control_token: Some(CONTROL_TOKEN.to_owned()),
     }
 }
 
@@ -3085,4 +3089,128 @@ async fn a_stored_object_always_answers_media_with_its_bytes() {
     );
     assert_eq!(returned_body, body, "the object bytes must come back");
     server.abort();
+}
+
+/// Rules source used by the `/internal/setRules` browser-policy tests.
+const SETR_DENY_ALL: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if false; } } }";
+const SETR_ALLOW_ALL: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if true; } } }";
+
+fn set_rules_body() -> Vec<u8> {
+    serde_json::to_vec(
+        &json!({"rules": {"files": [{"name": "storage.rules", "content": SETR_ALLOW_ALL}]}}),
+    )
+    .unwrap()
+}
+
+/// SETR-1: `PUT /internal/setRules` replaces the authorization policy of the whole run, so a
+/// page on a loopback origin must present the control token, exactly as the equivalent
+/// control route requires. A foreign origin never reaches it, and the `@firebase/rules-unit-testing`
+/// shape (no `Origin`, no `Sec-Fetch-*`) keeps working unauthenticated.
+#[test]
+fn set_rules_from_a_browser_needs_the_control_token() {
+    let update = set_rules_body();
+    let bearer = format!("Bearer {CONTROL_TOKEN}");
+
+    for (label, headers) in [
+        (
+            "loopback origin without a token",
+            vec![("origin", "http://localhost:5173")],
+        ),
+        (
+            "loopback origin with the wrong token",
+            vec![
+                ("origin", "http://localhost:5173"),
+                ("authorization", "Bearer not-the-control-token"),
+            ],
+        ),
+        ("sec-fetch-site only", vec![("sec-fetch-site", "same-site")]),
+        ("sec-fetch-mode only", vec![("sec-fetch-mode", "cors")]),
+        ("sec-fetch-dest only", vec![("sec-fetch-dest", "empty")]),
+        (
+            "foreign origin with the control token",
+            vec![
+                ("origin", "https://evil.example"),
+                ("authorization", "Bearer storage-test-control-token"),
+            ],
+        ),
+    ] {
+        let s = state(Some(SETR_DENY_ALL));
+        let mut headers = headers;
+        headers.push(("content-type", "application/json"));
+        let response = handle(&s, req("PUT", "/internal/setRules", &headers, &update));
+        assert_eq!(
+            response.status,
+            403,
+            "{label}: {}",
+            String::from_utf8_lossy(&response.body)
+        );
+        assert!(
+            json_body(&response)["message"]
+                .as_str()
+                .is_some_and(|m| !m.is_empty()),
+            "{label}"
+        );
+        assert_eq!(
+            anonymous_multipart_upload(&s, &format!("{label}.txt")).status,
+            403,
+            "{label}: the refused update must not have replaced the rules"
+        );
+    }
+
+    let s = state(Some(SETR_DENY_ALL));
+    let response = handle(
+        &s,
+        req(
+            "PUT",
+            "/internal/setRules",
+            &[
+                ("content-type", "application/json"),
+                ("origin", "http://localhost:5173"),
+                ("authorization", bearer.as_str()),
+            ],
+            &update,
+        ),
+    );
+    assert_eq!(
+        response.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&response.body)
+    );
+    assert_eq!(anonymous_multipart_upload(&s, "browser.txt").status, 200);
+
+    let s = state(Some(SETR_DENY_ALL));
+    assert_eq!(
+        handle(
+            &s,
+            req(
+                "PUT",
+                "/internal/setRules",
+                &[("content-type", "application/json")],
+                &update,
+            ),
+        )
+        .status,
+        200
+    );
+    assert_eq!(anonymous_multipart_upload(&s, "sdk.txt").status, 200);
+}
+
+/// SETR-2: the rules body is bounded like the control port's (256 KiB), before it is parsed.
+#[test]
+fn set_rules_refuses_a_body_beyond_the_control_port_limit() {
+    let s = state(Some(SETR_DENY_ALL));
+    let mut oversized = set_rules_body();
+    oversized.resize(256 * 1024 + 1, b' ');
+    let response = handle(
+        &s,
+        req(
+            "PUT",
+            "/internal/setRules",
+            &[("content-type", "application/json")],
+            &oversized,
+        ),
+    );
+    assert_eq!(response.status, 413);
+    assert_eq!(anonymous_multipart_upload(&s, "oversized.txt").status, 403);
 }

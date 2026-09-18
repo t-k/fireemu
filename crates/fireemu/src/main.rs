@@ -1783,6 +1783,7 @@ fn storage_state(
     clock_observer: Option<Arc<dyn Fn() + Send + Sync>>,
     app_check_policy: Option<Arc<fireemu_core_app_check::ServiceAdmission>>,
     admin_capability: String,
+    control_token: String,
 ) -> Result<Arc<fireemu_adapter_http::storage::StorageState>, String> {
     let parent = fireemu_adapter_grpc::decode::Parent {
         project: fireemu_core_types::ids::ProjectId::try_new(cfg.auth_project.clone())
@@ -1813,6 +1814,7 @@ fn storage_state(
         app_check_policy,
         admin_capability: Some(admin_capability),
         token_acceptance: cfg.token_acceptance,
+        control_token: Some(control_token),
     }))
 }
 

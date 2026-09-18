@@ -233,6 +233,18 @@ observation, so a hand-edited verdict fails the suite. The shadow uses its own
 per-run nonce against `demo-firestore-probe`; it is not the campaign nonce and it
 writes nothing to the oracle project.
 
+A refusal message is bounded where it is published. Production may answer with
+a message up to the 2 MiB response cap, while the run's final result is written
+under a 128 KiB limit, so the full text stays in the response sidecar and the
+result carries its length, its SHA-256, a truncation flag and the sidecar
+reference alongside a bounded excerpt. The excerpt is never published under the
+`message` key, because a reader finding that key is entitled to treat it as the
+whole text. When the message is truncated the comparison moves to the digest, so
+a message whose opening bytes match the expected one exactly is still recorded
+as a difference. Without this a long message completed every request and proved
+every resource absent, and then lost the entire run at the moment of writing the
+result.
+
 The refusal shape is compared field by field. `BASELINE_COMPARISON_FIELDS` names
 the HTTP status, the error code, the error status and the message, and a
 classification that reports a match has compared all four. The collector records

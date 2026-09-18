@@ -93,6 +93,20 @@ such as 500, 429 or 403. Those report `recordingComplete` false and
 unanswered. `shadow-failure` is not the bucket for an unfamiliar status: it is
 reached only by a result the collector could not have produced.
 
+The refusal message is bounded in the final result. The response cap is 2 MiB
+and the result is published under a 128 KiB row limit, so a long message copied
+verbatim used to complete every request, prove every resource absent and then
+lose the whole run when `result.json` could not be written. The full text stays
+in the response sidecar; the result carries `messageBytes`, `messageSha256`, a
+`messageTruncated` flag and the sidecar reference, plus either the whole
+`message` or a bounded `messageExcerpt`, never both. A partial value is never
+published under the `message` key.
+
+The comparison follows the text rather than the excerpt: when the message was
+truncated the verdict compares `messageSha256` against the digest of the
+expected message, so a message whose first bytes match exactly is still a
+difference. `refusalFieldMismatches` records which field was compared and how.
+
 The comparison is field by field. `BASELINE_COMPARISON_FIELDS` names the HTTP
 status, the error code, the error status and the message, and a verdict claiming
 a match has compared all four; the collector records the message with the

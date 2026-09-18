@@ -370,3 +370,63 @@ def test_shadow_failure_is_only_for_a_result_the_collector_cannot_produce() -> N
     verdict = classify_local_result({**BASELINE, "overRefusal": {"httpStatus": 500}})
     assert verdict["classification"] == "shadow-failure"
     assert "could have produced" in verdict["summary"]
+
+
+# --- A truncated message is compared by digest, never by prefix ---------------
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param("x" * (128 * 1024), id="128-kib-ascii"),
+        pytest.param("\n" * (64 * 1024), id="64-kib-newlines"),
+    ],
+)
+def test_a_long_wrong_message_is_still_reported_as_a_difference(tmp_path, message):
+    """The run must survive, and the difference must survive with it."""
+    from request_bytes_run_fixture import typed_400_with_message
+
+    result = run_collector(tmp_path / "run", over=typed_400_with_message(message))
+    verdict = classify_local_result(result)
+    gates = shadow_gates(result, verdict, source_bound=True)
+    assert verdict["classification"] == "local-boundary-enforced-shape-differs"
+    assert verdict["matchesBaseline"] is False
+    mismatch = verdict["refusalFieldMismatches"][0]
+    assert mismatch["field"] == "message"
+    assert mismatch["comparedBy"] == "sha256"
+    assert mismatch["observed"]["bytes"] == len(message.encode())
+    assert gates == {"recordingComplete": True, "stateValidation": True}
+
+
+def test_a_matching_prefix_is_not_a_matching_message(tmp_path) -> None:
+    """The excerpt equals the expected message exactly, and the text does not."""
+    from request_bytes_run_fixture import typed_400_with_message
+
+    message = EXPECTED_MESSAGE + "y" * (128 * 1024)
+    result = run_collector(tmp_path / "run", over=typed_400_with_message(message))
+    refusal = result["overRefusal"]
+    assert refusal["messageExcerpt"].startswith(EXPECTED_MESSAGE)
+    verdict = classify_local_result(result)
+    assert verdict["matchesBaseline"] is False
+    assert verdict["refusalFieldMismatches"][0]["comparedBy"] == "sha256"
+
+
+def test_a_truncated_message_whose_digest_agrees_is_a_match() -> None:
+    """Truncation moves the comparison, it does not weaken the verdict."""
+    import hashlib
+
+    from request_bytes_shadow import refusal_field_mismatches
+
+    expected = LOCAL_EXPECTATION["observedRefusal"]
+    refusal = {
+        "httpStatus": expected["httpStatus"],
+        "errorCode": expected["errorCode"],
+        "errorStatus": expected["errorStatus"],
+        "messageTruncated": True,
+        "messageBytes": len(expected["message"].encode()),
+        "messageSha256": hashlib.sha256(expected["message"].encode()).hexdigest(),
+        "messageExcerpt": expected["message"][:8],
+    }
+    assert refusal_field_mismatches(refusal) == []
+    wrong = {**refusal, "messageSha256": "0" * 64}
+    assert [item["field"] for item in refusal_field_mismatches(wrong)] == ["message"]

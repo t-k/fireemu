@@ -45,6 +45,31 @@ TYPED_400 = {
     },
 }
 
+
+def typed_400_with_message(message: str) -> dict[str, Any]:
+    """A typed over-boundary refusal carrying an arbitrary message.
+
+    The response cap is 2 MiB, so production can legitimately answer with a
+    message far larger than the final result may carry.
+    """
+    return {
+        "status": 400,
+        "body": {
+            "error": {
+                "code": 400,
+                "message": message,
+                "status": "INVALID_ARGUMENT",
+            }
+        },
+    }
+
+
+#: The reviewer's three message conditions.
+MESSAGE_NORMAL = EXPECTED_MESSAGE
+MESSAGE_128_KIB = "x" * (128 * 1024)
+MESSAGE_64_KIB_NEWLINES = "\n" * (64 * 1024)
+
+
 #: The expected status and code with someone else's wording.
 TYPED_400_OTHER_MESSAGE = {
     "status": 400,

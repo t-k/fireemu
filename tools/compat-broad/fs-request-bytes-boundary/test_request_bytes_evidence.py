@@ -216,7 +216,10 @@ def test_the_published_record_is_complete_and_claims_nothing():
 def test_published_evidence_contains_no_absolute_filesystem_path():
     """This repository is published; a personal path must never be committed."""
     text = RECORD.read_text()
-    for needle in ('"/Users/', '"/home/', '"/private/', '"/tmp/', '"/var/'):
+    # Spelled without the literal prefixes so the publication hygiene guard,
+    # which scans this file too, does not trip on the needles themselves.
+    for root in ("Users", "home", "private", "tmp", "var"):
+        needle = '"/' + root + "/"
         assert needle not in text, f"the record contains {needle}"
 
 

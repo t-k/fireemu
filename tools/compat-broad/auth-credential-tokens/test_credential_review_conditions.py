@@ -238,6 +238,7 @@ def _full_run(cookie_subject="same", clock=None):
     one would be.
     """
     clock = clock or _clock()
+    started = clock.monotonic()
     service = _service(clock, cookie_subject=cookie_subject)
     tracker = new_tracker("a" * 32)
     budget = shadow.shadow_budget(now=clock.monotonic())
@@ -266,6 +267,7 @@ def _full_run(cookie_subject="same", clock=None):
         problems=problems,
         tracker=tracker,
         clock=clock,
+        elapsedSeconds=clock.monotonic() - started,
     )
 
 
@@ -565,29 +567,49 @@ def test_review_a_stall_between_requests_now_stops_the_run() -> None:
     observation, and the record says which phase stopped and when.
     """
     run = _full_run(clock=_clock(stall_seconds=600))
-    elapsed = run.clock.monotonic()
-    assert elapsed > 600
+    assert run.elapsedSeconds > 600
     exceeded = run.record["receipt"]["deadlines"]["exceeded"]
-    assert set(exceeded) == {"run", "recovery"}
+    assert set(exceeded) == {"run"}
     assert exceeded["run"]["limitSeconds"] == 540
     assert exceeded["run"]["elapsedSeconds"] > 540
-    assert exceeded["recovery"]["limitSeconds"] == 600
-    assert run.record["receipt"]["deadlines"]["recoveryEnteredSeconds"] > 600
     assert run.record["failure"] is not None
     assert run.record["receipt"]["recordingComplete"] is False
     assert run.record["receipt"]["budget"]["requests"] < 33
     assert run.exitCode == 1
-    # The account created before the stall is never dropped: it is still owned, the
-    # cleanup that could not run says so, and the receipt carries both facts.
+    # The account created before the stall is never dropped, and the cleanup window the
+    # campaign declares is granted whatever the observation phase did with its own.
     assert len(run.tracker["accounts"]) == 1
-    assert run.record["receipt"]["cleanup"]["remainingAccounts"] == 1
-    assert run.problems == ["cleanup: BudgetExceeded"]
+    assert run.problems == []
+    assert run.record["receipt"]["cleanup"]["remainingAccounts"] == 0
+    assert run.record["receipt"]["cleanup"]["cleanupComplete"] is True
+    assert run.service.accounts == {}
+
+
+def test_review_a_run_stopped_past_the_nominal_total_still_cleans_up() -> None:
+    """A stall to just past 600 s: the tail is a window of its own, not what is left.
+
+    This is the condition the earlier cap got wrong. The run stops at its observation
+    deadline, and cleanup then gets the whole sixty seconds the manifest declares,
+    measured from the moment it starts.
+    """
+    run = _full_run(clock=_clock(stall_seconds=599))
+    deadlines = run.record["receipt"]["deadlines"]
+    assert 600 < run.elapsedSeconds < 660
+    assert set(deadlines["exceeded"]) == {"run"}
+    assert deadlines["recoverySeconds"] == 60
+    entered = deadlines["recoveryEnteredSeconds"]
+    assert entered > 600
+    assert deadlines["recoveryDeadlineSeconds"] == entered + 60
+    # Cleanup ran inside its own window and deleted everything the run created.
+    assert run.problems == []
+    assert run.record["receipt"]["cleanup"]["cleanupComplete"] is True
+    assert run.service.accounts == {}
 
 
 def test_review_a_stall_that_still_fits_the_observation_window_completes() -> None:
     """Control: the deadline stops a run that overran, not one that merely waited."""
     run = _full_run(clock=_clock(stall_seconds=300))
-    assert run.clock.monotonic() > 300
+    assert 300 < run.elapsedSeconds < 540
     assert run.exitCode == 0
     assert run.record["receipt"]["deadlines"]["exceeded"] == {}
     assert run.record["receipt"]["recordingComplete"] is True
@@ -599,12 +621,14 @@ def test_review_a_request_at_the_deadline_is_capped_to_the_time_that_remains() -
 
     The request returned 200 and the counter reached 603.99 against a 600 s bound. The
     transport now waits only what the phase has left, and the next request is refused
-    rather than sent, while the answer already received is still returned.
+    rather than sent, while the answer already received is still returned. The phase here
+    is the cleanup window, which is bounded in its turn.
     """
     clock = _clock()
     budget = shadow.shadow_budget(now=clock.monotonic())
-    clock.state["now"] += budget["maxWallSeconds"] - 0.01
+    clock.state["now"] += budget["maxWallSeconds"] - budget["recoveryWallSeconds"]
     enter_recovery(budget, clock.monotonic())
+    clock.state["now"] += budget["recoveryWallSeconds"] - 0.01
     timeouts: list[float] = []
 
     def sender(base, path, body, owner, timeout):

@@ -358,6 +358,12 @@ def new_budget(
     were sent. A run that stalls between two cases spends the campaign's time exactly as
     a slow response does, and summing request durations cannot see that. The clock stays
     the caller's: this module reads none, so a run and a test measure the same way.
+
+    The observation phase runs until `max_wall_seconds` less the recovery reserve. The
+    reserve is then granted absolutely, from the moment recovery starts, however the
+    observation ended: what an owner approves is a bounded observation plus a bounded
+    cleanup tail, not a single total that cleanup might not fit inside. Deleting the
+    accounts a run created is the last thing that should lose a race against a clock.
     """
     if not max_cost_usd < COST_CEILING_USD:
         raise ValueError(f"cost ceiling is US${COST_CEILING_USD}")
@@ -383,6 +389,9 @@ def new_budget(
         "startedMonotonic": started,
         "observationDeadlineMonotonic": started
         + (max_wall_seconds - recovery_wall_seconds),
+        # The total an undisturbed run fits inside: the observation deadline plus the
+        # reserve. A run that overran its observation still gets the whole reserve, so
+        # this is the nominal total rather than a second bound.
         "totalDeadlineMonotonic": started + max_wall_seconds,
         "recoveryDeadlineMonotonic": None,
         "recoveryEnteredSeconds": None,
@@ -474,15 +483,15 @@ def charge_elapsed(budget: dict[str, Any], elapsed_seconds: float) -> None:
 def enter_recovery(budget: dict[str, Any], now: float) -> None:
     """Release the reserve so cleanup can run after the run's own bound is spent.
 
-    Recovery gets the reserved seconds from the moment it starts, and never a second
-    past the campaign's total: the total is the bound the run was approved against, so a
-    run that has already spent it deletes nothing and the receipt records that instead.
+    Recovery gets its reserved seconds in full, from the moment it starts, whatever the
+    observation phase did with its own. A reserve capped at the nominal total would be
+    empty exactly when it is needed most, which is the run that stalled and stopped late:
+    the accounts are already created, and nothing else will delete them. The campaign is
+    therefore declared as a bounded observation plus a bounded cleanup tail.
     """
     budget["phase"] = RECOVERY_PHASE
     budget["recoveryEnteredSeconds"] = elapsed_seconds(budget, now)
-    budget["recoveryDeadlineMonotonic"] = min(
-        float(now) + budget["recoveryWallSeconds"], budget["totalDeadlineMonotonic"]
-    )
+    budget["recoveryDeadlineMonotonic"] = float(now) + budget["recoveryWallSeconds"]
 
 
 # --- collector binding ---------------------------------------------------------------
@@ -548,14 +557,21 @@ def budget_record(budget: dict[str, Any]) -> dict[str, Any]:
 def deadline_record(budget: dict[str, Any]) -> dict[str, Any]:
     """What the deadlines were and which phase, if any, one of them stopped.
 
-    Reaching the observation deadline and reaching the total are separate facts, and a
-    receipt that merged them would not say whether cleanup ever got its own window.
+    Reaching the observation deadline and reaching the end of the cleanup window are
+    separate facts, and a receipt that merged them would not say whether cleanup ever got
+    its own window or what it did with it.
     """
+    entered = budget["recoveryEnteredSeconds"]
     return {
         "observationSeconds": budget["maxWallSeconds"] - budget["recoveryWallSeconds"],
         "recoverySeconds": budget["recoveryWallSeconds"],
-        "totalSeconds": budget["maxWallSeconds"],
-        "recoveryEnteredSeconds": budget["recoveryEnteredSeconds"],
+        "nominalTotalSeconds": budget["maxWallSeconds"],
+        "recoveryEnteredSeconds": entered,
+        # Where cleanup's own window ends, which is the observation deadline plus the
+        # reserve for a run that finished on time and later for one that overran.
+        "recoveryDeadlineSeconds": None
+        if entered is None
+        else entered + budget["recoveryWallSeconds"],
         "exceeded": dict(budget["deadlineExceeded"]),
     }
 

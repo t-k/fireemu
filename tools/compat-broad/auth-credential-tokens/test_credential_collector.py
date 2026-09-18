@@ -313,28 +313,33 @@ def test_a_wait_past_the_deadline_stops_the_phase_without_a_request() -> None:
     assert budget["requests"] == 0
 
 
-def test_recovery_gets_its_own_deadline_inside_the_declared_total() -> None:
-    """The reserve is a window from the moment recovery starts, never past the total."""
+def test_recovery_gets_its_whole_window_from_the_moment_it_starts() -> None:
+    """A bounded observation plus a bounded tail, not one total cleanup may miss."""
     budget = _budget(max_requests=10, max_wall_seconds=100, recovery_wall_seconds=20)
     collector.enter_recovery(budget, 30.0)
     assert budget["recoveryEnteredSeconds"] == 30.0
     assert collector.remaining_seconds(budget, 30.0) == 20
+    # A run stopped by its own deadline still gets all twenty seconds, because the
+    # accounts it created are already live and nothing else will delete them.
     collector.enter_recovery(budget, 95.0)
-    # Five seconds are left of the total, not the twenty the reserve names.
-    assert collector.remaining_seconds(budget, 95.0) == 5
+    assert collector.remaining_seconds(budget, 95.0) == 20
+    assert collector.remaining_seconds(budget, 114.9) == pytest.approx(0.1)
 
 
-def test_a_total_already_spent_leaves_recovery_nothing_and_says_so() -> None:
+def test_the_cleanup_window_is_bounded_in_its_turn() -> None:
+    """Granted absolutely is not granted forever: the tail has its own deadline."""
     budget = _budget(max_requests=10, max_wall_seconds=100, recovery_wall_seconds=20)
     with pytest.raises(collector.BudgetExceeded, match="deadline"):
         collector.reserve_request(budget, 81.0)
-    collector.enter_recovery(budget, 120.0)
+    collector.enter_recovery(budget, 81.0)
+    collector.reserve_request(budget, 100.0)
     with pytest.raises(collector.BudgetExceeded, match="deadline"):
-        collector.reserve_request(budget, 120.0)
+        collector.reserve_request(budget, 101.5)
     # Both phases are recorded, because they stopped for different reasons.
     assert set(budget["deadlineExceeded"]) == {"run", "recovery"}
-    assert budget["deadlineExceeded"]["recovery"]["limitSeconds"] == 100
-    assert budget["deadlineExceeded"]["recovery"]["elapsedSeconds"] == 120.0
+    assert budget["deadlineExceeded"]["run"]["limitSeconds"] == 80
+    assert budget["deadlineExceeded"]["recovery"]["limitSeconds"] == 101.0
+    assert budget["deadlineExceeded"]["recovery"]["elapsedSeconds"] == 101.5
 
 
 def test_a_receipt_reports_the_deadlines_without_a_machine_clock_reading() -> None:
@@ -343,14 +348,19 @@ def test_a_receipt_reports_the_deadlines_without_a_machine_clock_reading() -> No
     record = collector.budget_record(budget)
     assert not [name for name in record if name.endswith("Monotonic")]
     assert "123456.75" not in json.dumps(record)
-    deadlines = collector.deadline_record(budget)
-    assert deadlines == {
+    assert collector.deadline_record(budget) == {
         "observationSeconds": 80,
         "recoverySeconds": 20,
-        "totalSeconds": 100,
+        "nominalTotalSeconds": 100,
         "recoveryEnteredSeconds": None,
+        "recoveryDeadlineSeconds": None,
         "exceeded": {},
     }
+    entered = _budget(max_requests=10, max_wall_seconds=100, recovery_wall_seconds=20)
+    collector.enter_recovery(entered, 90.0)
+    deadlines = collector.deadline_record(entered)
+    assert deadlines["recoveryEnteredSeconds"] == 90.0
+    assert deadlines["recoveryDeadlineSeconds"] == 110.0
 
 
 # --- receipt -----------------------------------------------------------------

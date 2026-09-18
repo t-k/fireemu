@@ -23,16 +23,27 @@ STATUS = "PREPARATION"
 #: collector binding that makes a receipt pair comparable.
 FROZEN_MODULES = BOUND_MODULES
 
-#: `recoveryRequests` and `recoveryWallSeconds` are held back from the totals above, not
-#: added to them. Cleanup needs three calls per owned account and the run creates at most
-#: four, so twelve requests and sixty seconds keep cleanup reachable from any stopping
-#: point while the declared bound the campaign is approved against stays sixty requests.
+#: `recoveryRequests` is held back from `maxRequests`, not added to it: sixty requests is
+#: the bound the campaign is approved against, and twelve of them are reserved so cleanup
+#: is reachable from any stopping point. Cleanup needs three calls per owned account and
+#: the run creates at most four.
+#:
+#: Time is declared differently, because a clock cannot be held back the way a counter
+#: can. The observation phase gets `maxWallSeconds` less `recoveryWallSeconds`, and the
+#: cleanup tail gets `recoveryWallSeconds` from the moment it starts, granted absolutely.
+#: An undisturbed run therefore fits inside `maxWallSeconds`, and a run that overran its
+#: observation still gets its full cleanup window rather than none: what the owner
+#: approves is a bounded observation plus a bounded tail. `worstCaseWallSeconds` is what
+#: that costs when the observation phase is stopped by its own deadline.
 BUDGET = {
     "maxRequests": 60,
     "maxWallSeconds": 600,
     "maxCostUsd": 0.05,
     "recoveryRequests": 12,
     "recoveryWallSeconds": 60,
+    "observationWallSeconds": 540,
+    "recoveryGrantedAbsolutely": True,
+    "worstCaseWallSeconds": 600,
     "enforced": True,
 }
 
@@ -74,6 +85,8 @@ PERMISSION_ENVELOPE = {
 
 CLEANUP_CONTRACT = (
     "Every account the run creates is registered before it is used, so a crash leaves a record of what to remove.",
+    "The campaign is approved as 540 seconds of observation plus up to 60 seconds of cleanup. The cleanup window is granted absolutely, from the moment cleanup starts, however the observation phase ended; a run stopped by its observation deadline still gets the whole window, so the accounts it created are still deleted.",
+    "Cleanup is bounded in turn: it may spend 12 requests and its 60 seconds and no more, so the tail cannot become an unbounded run of its own.",
     "Cleanup deletes each owned account and reads back both its UID and its address as absent; a delete without a readback is not cleanup.",
     "A cleanup failure is recorded and fails the run; it can never be downgraded to a warning or skipped by a later step.",
     "The run changes no project or tenant configuration, so there is nothing to restore.",

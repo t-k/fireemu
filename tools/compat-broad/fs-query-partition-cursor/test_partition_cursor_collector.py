@@ -6,120 +6,9 @@ import hashlib
 import json
 
 import pytest
-from partition_cursor_case import OBSERVATION_COUNT, RECOVERY_COUNT, compile_plan
+from partition_cursor_case import OBSERVATION_COUNT, RECOVERY_COUNT
 from partition_cursor_collector import LOOPBACK_ORIGINS, collect_local
-
-NONCE = "a" * 32
-TIME = "2026-09-18T00:00:00.000001Z"
-
-
-def plan() -> dict:
-    return compile_plan("demo-project", "(default)", NONCE)
-
-
-def _document(name: str, ordinal: int) -> dict:
-    return {
-        "name": name,
-        "fields": {
-            "n": {"integerValue": str(ordinal)},
-            "g": {"stringValue": "a" if ordinal % 2 == 0 else "b"},
-        },
-        "createTime": TIME,
-        "updateTime": TIME,
-    }
-
-
-def _cursor(name: str) -> dict:
-    return {"values": [{"referenceValue": name}], "before": True}
-
-
-class Transport:
-    """An offline transport that answers the compiled plan as production would."""
-
-    def __init__(
-        self, value: dict, *, partitions: int = 0, page_token: str = ""
-    ) -> None:
-        self.plan = value
-        self.partitions = partitions
-        self.page_token = page_token
-        self.sent: list[dict] = []
-        self.raw = True
-        self.fail_at: int | None = None
-        self.create_status = 200
-        self.write_results: int | None = None
-
-    def _seeded(self) -> list[str]:
-        return self.plan["ownedResources"][1:]
-
-    def _partition_cursors(self) -> list[dict]:
-        return [_cursor(name) for name in self._seeded()[1 : 1 + self.partitions]]
-
-    def _body(self, request: dict) -> tuple[int, dict]:
-        kind = request["kind"]
-        if kind == "preflight-typed-absence" or kind == "cleanup-verify-root-absence":
-            return 404, {"error": {"status": "NOT_FOUND", "code": 404}}
-        if kind == "create-only-patch":
-            if self.create_status != 200:
-                return self.create_status, {"error": {"status": "ALREADY_EXISTS"}}
-            return 200, {
-                "name": self.plan["ownedScope"],
-                "fields": {"marker": {"stringValue": self.plan["campaignId"]}},
-                "createTime": TIME,
-                "updateTime": TIME,
-            }
-        if kind in ("seed-commit", "cleanup-seed-delete"):
-            count = (
-                self.write_results
-                if self.write_results is not None
-                else len(request["body"]["writes"])
-            )
-            return 200, {
-                "writeResults": [{"updateTime": TIME} for _ in range(count)],
-                "commitTime": TIME,
-            }
-        if kind in ("cleanup-ownership-read",):
-            return 200, {
-                "name": self.plan["ownedScope"],
-                "fields": {"marker": {"stringValue": self.plan["campaignId"]}},
-                "createTime": TIME,
-                "updateTime": TIME,
-            }
-        if kind == "cleanup-root-delete":
-            return 200, {}
-        expect = self.plan[request["phase"]][request["index"]]["expect"]
-        if expect.get("outcome") == "refused":
-            return 400, {"error": {"status": "INVALID_ARGUMENT", "code": 400}}
-        if request["path"].endswith(":partitionQuery"):
-            body: dict = {"partitions": self._partition_cursors()}
-            if self.page_token and "pageToken" not in request["body"]:
-                body["nextPageToken"] = self.page_token
-            return 200, body
-        documents = expect.get("documents", [])
-        return 200, [
-            {
-                "document": _document(
-                    item["name"], int(item["fields"]["n"]["integerValue"])
-                )
-            }
-            for item in documents
-        ] or [{"readTime": TIME}]
-
-    def __call__(self, request: dict) -> dict:
-        self.sent.append(request)
-        if self.fail_at is not None and len(self.sent) - 1 == self.fail_at:
-            raise ConnectionError("offline transport failure")
-        status, body = self._body(request)
-        encoded = json.dumps(body).encode()
-        receipt = {
-            "status": status,
-            "body": body,
-            "complete": True,
-            "contentType": "application/json; charset=UTF-8",
-            "byteCount": len(encoded),
-        }
-        if self.raw:
-            receipt["rawBody"] = encoded
-        return receipt
+from partition_cursor_offline_fixture import TIME, Transport, partition_cursor, plan
 
 
 def run(
@@ -227,7 +116,7 @@ def test_one_partition_binds_both_reconstruction_ranges(tmp_path) -> None:
     transport = Transport(value, partitions=1)
     result = collect_local(value, transport, tmp_path / "out")
     first, second = result["rows"][15], result["rows"][16]
-    cursor = _cursor(value["ownedResources"][2])
+    cursor = partition_cursor(value["ownedResources"][2])
     assert first["request"]["body"]["structuredQuery"]["endAt"] == cursor
     assert "startAt" not in first["request"]["body"]["structuredQuery"]
     assert second["request"]["body"]["structuredQuery"]["startAt"] == cursor

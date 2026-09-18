@@ -17,8 +17,11 @@ use std::collections::BTreeMap;
 
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::index::{IndexFieldMode, IndexQueryScope, IndexSet};
-use fireemu_core_firestore::ttl::{TtlError, TtlState};
+use fireemu_core_firestore::ttl::{
+    format_expiration_offset, parse_expiration_offset, TtlError, TtlPolicy,
+};
 use fireemu_core_types::ids::CollectionId;
+use fireemu_core_types::time::LogicalDuration;
 use serde_json::{json, Value};
 use tonic::Status;
 
@@ -316,17 +319,25 @@ impl RestState {
             "name": selector.resource_name(),
             "indexConfig": index_config_json(selector, &indexes),
         });
-        if let Some(state) = self.ttl_state(selector) {
-            resource["ttlConfig"] = json!({ "state": state.as_str() });
+        if let Some(policy) = self.ttl_policy(selector) {
+            let mut config = json!({ "state": policy.state.as_str() });
+            // An unset `expirationOffset` is absent from the resource rather than reported
+            // as zero, so a readback repeats what the patch asked for.
+            if let Some(offset) = policy.expiration_offset {
+                config["expirationOffset"] = json!(format_expiration_offset(offset));
+            }
+            resource["ttlConfig"] = config;
         }
         resource
     }
 
-    fn ttl_state(&self, selector: &FieldSelector) -> Option<TtlState> {
+    fn ttl_policy(&self, selector: &FieldSelector) -> Option<TtlPolicy> {
         let field = selector.field.as_ref()?;
         self.local
             .ttl_catalog(&selector.project, &selector.database)
-            .state(&selector.collection_group, field)
+            .policy(&selector.collection_group)
+            .filter(|policy| &policy.field == field)
+            .cloned()
     }
 
     fn patch_field(
@@ -371,8 +382,11 @@ impl RestState {
                 "updateMask must name ttlConfig or indexConfig",
             ));
         }
-        let requested = !body["ttlConfig"].is_null();
-        if requested {
+        // Everything that can refuse this patch is decided before the first state change, so
+        // a refused request leaves the catalog, the readback and the operation record exactly
+        // as it found them.
+        let requested = parse_ttl_config(&body["ttlConfig"])?;
+        if let Some(offset) = requested {
             let Some(field) = selector.field.clone() else {
                 return Err(Status::invalid_argument(
                     "the wildcard field names a collection group's default settings and \
@@ -380,11 +394,12 @@ impl RestState {
                 ));
             };
             self.local
-                .enable_ttl(
+                .enable_ttl_with_offset(
                     &selector.project,
                     &selector.database,
                     selector.collection_group.clone(),
                     field,
+                    offset,
                 )
                 .map_err(|error| match error {
                     TtlError::ConflictingField { .. } => {
@@ -575,6 +590,48 @@ impl RestState {
             _ => Ok(not_found_text()),
         }
     }
+}
+
+/// Reads the `ttlConfig` a patch carries, before anything it names is applied.
+///
+/// `Ok(None)` is the documented disable: the mask names `ttlConfig` and the body leaves it
+/// absent or null. `Ok(Some(offset))` enables the policy with the `expirationOffset` the
+/// configuration names, which is absent for the bare `{}`. Anything else is a caller error:
+/// `google.firestore.admin.v1.Field.TtlConfig` is a message, so a boolean, a number, a string
+/// and an array are all refused rather than read as a request to enable.
+fn parse_ttl_config(value: &Value) -> Result<Option<Option<LogicalDuration>>, Status> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(config) = value.as_object() else {
+        return Err(Status::invalid_argument(
+            "ttlConfig must be a TtlConfig object; an empty object enables the policy and a \
+             null or absent value disables it",
+        ));
+    };
+    for key in config.keys() {
+        // `state` is output-only: a caller may echo back the resource it read, and the value
+        // it carries is ignored rather than installed. Any other key names nothing the
+        // message defines.
+        if !matches!(key.as_str(), "state" | "expirationOffset") {
+            return Err(Status::invalid_argument(format!(
+                "ttlConfig has no field named {key}"
+            )));
+        }
+    }
+    let offset = match config.get("expirationOffset") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(text)) => Some(
+            parse_expiration_offset(text)
+                .map_err(|error| Status::invalid_argument(error.to_string()))?,
+        ),
+        Some(_) => {
+            return Err(Status::invalid_argument(
+                "ttlConfig.expirationOffset must be a duration in seconds, such as \"604800s\"",
+            ))
+        }
+    };
+    Ok(Some(offset))
 }
 
 /// The `google.longrunning.Operation` of one completed field configuration.

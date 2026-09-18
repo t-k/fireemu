@@ -2731,13 +2731,28 @@ impl LocalBackend {
         collection_group: CollectionId,
         field: FieldPath,
     ) -> Result<TtlState, TtlError> {
+        self.enable_ttl_with_offset(project, database, collection_group, field, None)
+    }
+
+    /// Enables a time-to-live policy carrying the `expirationOffset` the patch named.
+    ///
+    /// The expiration time of a document is the stored timestamp plus this offset, so the
+    /// sweep that follows honours it without any further bookkeeping.
+    pub fn enable_ttl_with_offset(
+        &self,
+        project: &str,
+        database: &str,
+        collection_group: CollectionId,
+        field: FieldPath,
+        expiration_offset: Option<fireemu_core_types::time::LogicalDuration>,
+    ) -> Result<TtlState, TtlError> {
         let key = (Some(project.to_owned()), database.to_owned());
         let mut catalogs = self
             .ttl
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let catalog = catalogs.entry(key).or_default();
-        let state = catalog.enable(collection_group, field)?;
+        let state = catalog.enable_with_offset(collection_group, field, expiration_offset)?;
         drop(catalogs);
         // The policy takes effect now, so the sweep interval is measured from now: a
         // document that was already expired when the policy was created still survives one

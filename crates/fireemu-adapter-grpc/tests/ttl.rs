@@ -283,6 +283,48 @@ fn an_expired_document_left_alone_during_the_sweep_is_still_deleted() {
 }
 
 #[test]
+fn the_expiration_offset_moves_the_instant_the_sweep_deletes_a_document() {
+    let week = 604_800;
+    let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
+    write_document(&backend, "sessions/s1", Some(timestamp(1_100)));
+    backend
+        .enable_ttl_with_offset(
+            PROJECT,
+            DATABASE,
+            group("sessions"),
+            field("expiresAt"),
+            Some(LogicalDuration::from_seconds(week)),
+        )
+        .expect("enable ttl");
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
+
+    // The expiration time is the stored timestamp plus the offset, so the document that a
+    // zero offset would have deleted at 1101 survives until one week later.
+    assert_eq!(
+        backend
+            .sweep_expired_documents_now(&everything(), LogicalInstant::from_unix_seconds(1_101)),
+        0
+    );
+    assert!(exists(&backend, "sessions/s1"));
+    assert_eq!(
+        backend.sweep_expired_documents_now(
+            &everything(),
+            LogicalInstant::from_unix_seconds(1_100 + week)
+        ),
+        0
+    );
+    assert!(exists(&backend, "sessions/s1"));
+    assert_eq!(
+        backend.sweep_expired_documents_now(
+            &everything(),
+            LogicalInstant::from_unix_seconds(1_100 + week + 1)
+        ),
+        1
+    );
+    assert!(!exists(&backend, "sessions/s1"));
+}
+
+#[test]
 fn an_unexpired_document_survives_a_sweep() {
     let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
     write_document(&backend, "sessions/future", Some(timestamp(9_000_000)));

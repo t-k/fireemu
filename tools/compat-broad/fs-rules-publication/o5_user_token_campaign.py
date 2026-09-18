@@ -1,0 +1,174 @@
+"""Campaign manifest for the FS-RULES user-token observation matrix.
+
+The manifest freezes the inputs an execution would have to reproduce, states a
+budget estimate and a permission envelope, and lists the owner preconditions
+that this repository cannot satisfy. It grants no authority: ``admit`` always
+raises, and the status never leaves ``PREPARATION_ONLY``.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+from typing import Any
+
+from o5_user_token_case import CAMPAIGN, compile_case, digest
+
+CAMPAIGN_CONTRACT = "fs-rules-user-token-campaign-v1"
+
+_SOURCE_FILES = (
+    "o5_user_token_case.py",
+    "o5_user_token_collector.py",
+    "o5_user_token_campaign.py",
+    "o5_user_token_comparator.py",
+    "o5_user_token_shadow.py",
+)
+
+# Unit prices are the public Firestore Standard edition list prices used only to
+# show that the campaign is small. They are an estimate, not a quoted tariff,
+# and the owner accepts the real bill.
+_PRICE_PER_DOCUMENT_READ_USD = 0.06 / 100_000
+_PRICE_PER_DOCUMENT_WRITE_USD = 0.18 / 100_000
+
+OWNER_PRECONDITIONS = (
+    "project and database identity confirmed by the owner",
+    "a fresh nonce reserved for this campaign only",
+    "an execution window with a named owner present for the whole window",
+    "an administrator credential for fixture setup, custom-claim minting and cleanup",
+    "Identity Platform multi-tenancy enabled with the named tenant already created",
+    "the two Rulesets already released by the owner, or an owner-held publication "
+    "lock plus the captured bytes and version of the preexisting release",
+    "a recovery owner who restores the preexisting release if the window ends early",
+    "accepted cost ceiling and data-retention decision for the run directory",
+)
+
+PERMISSION_ENVELOPE = {
+    "services": ["identitytoolkit.googleapis.com", "firestore.googleapis.com"],
+    "firestoreScope": "the campaign nonce subtree only",
+    "authScope": "four throwaway accounts created by this campaign only",
+    "rulesScope": "read the active release; publish only the two campaign Rulesets",
+    "forbidden": [
+        "any document outside the nonce subtree",
+        "any preexisting Auth account",
+        "database, index, TTL or backup configuration changes",
+        "concurrent execution with any other campaign in the same database",
+    ],
+    "concurrency": 1,
+    "networkEgress": "the two listed Google APIs only",
+}
+
+
+def _source_digests() -> dict[str, str]:
+    here = Path(__file__).resolve().parent
+    digests = {}
+    for name in _SOURCE_FILES:
+        path = here / name
+        digests[name] = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else ""
+    return digests
+
+
+def budget(plan: dict[str, Any]) -> dict[str, Any]:
+    observation = len(plan["observation"])
+    resources = len(plan["ownedResources"])
+    fixtures = len(plan["fixtures"])
+    principals = len([row for row in plan["principals"] if row["kind"] != "absent"])
+    # Auth: create, optional claim mint and sign-in per usable principal.
+    auth_requests = 3 * principals
+    # Rules: read the active release, publish two Rulesets, release each, read
+    # back each release, restore the preexisting release and read it back.
+    rules_requests = 8
+    recovery_requests = 3 * resources + 2 * principals
+    total = observation + fixtures + auth_requests + rules_requests + recovery_requests
+    reads = observation + resources + principals
+    writes = fixtures + resources + 4
+    cost = reads * _PRICE_PER_DOCUMENT_READ_USD + writes * _PRICE_PER_DOCUMENT_WRITE_USD
+    return {
+        "observationRequests": observation,
+        "fixtureRequests": fixtures,
+        "authRequests": auth_requests,
+        "rulesRequests": rules_requests,
+        "recoveryRequests": recovery_requests,
+        "requestUpperBound": total,
+        "concurrencyUpperBound": 1,
+        "perRequestTimeoutSeconds": 12.0,
+        "wallClockDeadlineSeconds": 600.0,
+        "billedDocumentReads": reads,
+        "billedDocumentWrites": writes,
+        "estimatedCostUsd": round(cost, 6),
+        "costCeilingUsd": 1.0,
+        "estimateBasis": "public Firestore Standard list prices; not a quoted tariff",
+    }
+
+
+def manifest(
+    project: str, database: str, nonce: str, tenant: str = "o5-user-token-tenant"
+) -> dict[str, Any]:
+    plan = compile_case(project, database, nonce, tenant)
+    value = {
+        "contract": CAMPAIGN_CONTRACT,
+        "schemaVersion": 1,
+        "campaignId": CAMPAIGN,
+        "status": "PREPARATION_ONLY",
+        "productionExecuted": False,
+        "productionReady": False,
+        "frozenInputs": {
+            "caseDigest": plan["planDigest"],
+            "sources": _source_digests(),
+            "rulesetDigests": {
+                label: digest(body["source"]) for label, body in plan["rulesets"].items()
+            },
+        },
+        "budget": budget(plan),
+        "permissionEnvelope": PERMISSION_ENVELOPE,
+        "ownerPreconditions": list(OWNER_PRECONDITIONS),
+        "blockers": [
+            "owner-permission",
+            "nonce-reservation",
+            "ruleset-release-authority",
+            "tenant-provisioning",
+            "cost-and-retention",
+        ],
+        "observationCase": plan,
+    }
+    value["manifestDigest"] = digest(
+        {key: value[key] for key in value if key != "manifestDigest"}
+    )
+    return value
+
+
+def validate_manifest(value: Any) -> None:
+    if not isinstance(value, dict) or value.get("contract") != CAMPAIGN_CONTRACT:
+        raise ValueError("manifest contract drift")
+    if value.get("status") != "PREPARATION_ONLY":
+        raise ValueError("manifest status drift")
+    if value.get("productionExecuted") is not False or value.get("productionReady") is not False:
+        raise ValueError("manifest cannot claim production authority")
+    case = value.get("observationCase")
+    if not isinstance(case, dict):
+        raise ValueError("invalid observation case")
+    identity = [case.get(key) for key in ("project", "database", "nonce", "tenant")]
+    if not all(isinstance(part, str) for part in identity):
+        raise ValueError("invalid case identity")
+    expected = manifest(*identity)
+    if value != expected:
+        raise ValueError("manifest preparation drift")
+
+
+def admission(value: dict[str, Any]) -> dict[str, Any]:
+    """Describe why execution is closed, without offering a way to open it."""
+    validate_manifest(value)
+
+    def admit() -> None:
+        raise PermissionError(
+            "no owner permission exists for "
+            + CAMPAIGN
+            + "; this repository cannot grant one"
+        )
+
+    return {
+        "campaignId": CAMPAIGN,
+        "productionReady": False,
+        "blockers": list(value["blockers"]),
+        "ownerPreconditions": list(value["ownerPreconditions"]),
+        "admit": admit,
+    }

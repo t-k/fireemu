@@ -988,8 +988,12 @@ async fn serve_suite(
             serve_multiplexed(
                 listener,
                 FirestoreServer::new(firestore_service)
-                    .max_decoding_message_size(10 * 1024 * 1024)
-                    .max_encoding_message_size(10 * 1024 * 1024),
+                    .max_decoding_message_size(fireemu_adapter_grpc::serve::MAX_GRPC_MESSAGE_BYTES,)
+                    // Not a catalog limit: the request bound is FS-LIMIT-API-REQUEST-BYTES,
+                    // the response bound is a local memory guard.
+                    .max_encoding_message_size(
+                        fireemu_adapter_grpc::serve::MAX_GRPC_RESPONSE_BYTES,
+                    ),
                 rest.clone(),
             )
         );

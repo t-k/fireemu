@@ -580,6 +580,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "proptest",
+ "prost",
  "prost-types",
  "serde_json",
  "tokio",

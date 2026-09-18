@@ -24,14 +24,14 @@ use fireemu_core_types::hash::Sha256;
 use fireemu_core_types::ids::{CollectionId, DocumentId};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
-use crate::field_path::FieldPath;
+use crate::field_path::{FieldPath, MAX_FIELD_PATH_BYTES};
 use crate::limits;
 use crate::path::DocumentPath;
 use crate::query::{
     Cursor, Direction, DistanceMeasure, FieldOp, FilterExpr, OrderClause, Query, QueryScope,
     UnaryOp,
 };
-use crate::size::{document_size, document_size_bytes};
+use crate::size::{document_size, document_size_bytes, field_value_size};
 use crate::value::{normalize_fields_for_storage, stored_fields_eq, Timestamp, Value, ValueKind};
 
 /// How far back a snapshot selector may reach: the documented Firestore `read_time` window
@@ -1990,7 +1990,7 @@ impl FirestoreState {
                 update_time: imported.update_time.unwrap_or(commit_time),
                 version: next_version,
             };
-            validate_document(&document)?;
+            validate_document(&document, self.limit_scope)?;
             self.index_catalog
                 .document_index_usage(&document.path, &document.fields)?;
             staged.insert(imported.path, document);
@@ -3333,7 +3333,7 @@ impl FirestoreState {
             check_precondition(write.precondition.as_ref(), current, &path)?;
             let (next, mut result) = apply_write(write, current, commit_time, next_version)?;
             if let Some(Cow::Owned(doc)) = &next {
-                validate_document(doc)?;
+                validate_document(doc, self.limit_scope)?;
                 self.index_catalog
                     .document_index_usage(&doc.path, &doc.fields)?;
             }
@@ -4957,7 +4957,7 @@ fn validate_stored_field_name(name: &str) -> Result<(), FirestoreError> {
         .map_err(|e| FirestoreError::InvalidArgument(format!("field name {name:?}: {e}")))
 }
 
-fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
+fn validate_document(doc: &Document, scope: LimitScope) -> Result<(), FirestoreError> {
     for (name, value) in &doc.fields {
         validate_stored_field_name(name)?;
         check_limit(
@@ -4967,37 +4967,67 @@ fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
     }
     for (name, value) in &doc.fields {
         let property_path = PropertyPath::root(name);
-        validate_value(value, false, &property_path)?;
+        validate_value(value, false, &property_path, scope)?;
     }
     let size = document_size(&doc.path, &doc.fields)
         .map_err(|e| FirestoreError::InvalidArgument(e.to_string()))?;
     check_limit(limits::DOCUMENT_BYTES, size.total)?;
+    // After the document charge, so that an oversized document still reports its size the
+    // way it did before this check existed and the way production was observed reporting it.
+    if scope == LimitScope::Production {
+        for (name, value) in &doc.fields {
+            check_stored_field_paths(value, &PropertyPath::root(name))?;
+        }
+    }
     Ok(())
 }
 
 #[derive(Debug, Clone)]
-struct PropertyPath {
-    segments: Vec<String>,
+struct PropertyPath<'a> {
+    /// The path this one extends, borrowed from the caller's stack frame. Descending costs
+    /// one pointer rather than a copy of every name above it: a document is walked once per
+    /// nested value, so copying would make the walk quadratic in its own nesting depth
+    /// before `FS-LIMIT-DOCUMENT-BYTES` ever refused it.
+    parent: Option<&'a PropertyPath<'a>>,
+    /// This path's last segment.
+    name: &'a str,
+    /// Canonical path bytes: the raw segment bytes plus one `.` per separator, the same
+    /// quantity [`FieldPath::from_segments`] bounds (`FS-LIMIT-FIELD-PATH-BYTES`). Backtick
+    /// quoting is a client-side notation and does not count toward the limit.
+    bytes: usize,
 }
 
-impl PropertyPath {
-    fn root(name: &str) -> Self {
+impl<'a> PropertyPath<'a> {
+    fn root(name: &'a str) -> Self {
         Self {
-            segments: vec![name.to_owned()],
+            parent: None,
+            name,
+            bytes: name.len(),
         }
     }
 
-    fn child(&self, name: &str) -> Self {
-        let mut segments = self.segments.clone();
-        segments.push(name.to_owned());
-        Self { segments }
+    fn child(&'a self, name: &'a str) -> Self {
+        Self {
+            parent: Some(self),
+            name,
+            bytes: self.bytes.saturating_add(1).saturating_add(name.len()),
+        }
     }
 
+    /// The dotted canonical form. Only a refusal renders one, so walking back up to the root
+    /// here costs nothing on the path every accepted write takes.
     fn canonical(&self) -> String {
-        self.segments
-            .iter()
+        let mut segments = Vec::new();
+        let mut current = Some(self);
+        while let Some(path) = current {
+            segments.push(path.name);
+            current = path.parent;
+        }
+        segments.reverse();
+        segments
+            .into_iter()
             .map(|segment| {
-                FieldPath::from_segments([segment.as_str()])
+                FieldPath::from_segments([segment])
                     .expect("stored field names are validated before rendering")
                     .canonical()
             })
@@ -5015,37 +5045,131 @@ fn validate_value(
     value: &Value,
     inside_array: bool,
     property_path: &PropertyPath,
-) -> Result<(), FirestoreError> {
-    // Production counts the payload, not storage accounting's trailing string byte.
+    scope: LimitScope,
+) -> Result<u64, FirestoreError> {
+    // Production counts the payload, not storage accounting's trailing string byte. This
+    // boundary was observed against production on 2026-09-07 (`conformance/
+    // firestore-production-matrix.json`, `errors/rest-shapes` /
+    // `document-over-one-mebibyte`), so it is refused under either scope.
     let payload_bytes = match value {
         Value::String(value) => value.len(),
         Value::Bytes(value) => value.len(),
         _ => 0,
     };
     if payload_bytes > limits::MAX_FIELD_PAYLOAD_BYTES {
-        return Err(FirestoreError::InvalidArgument(format!(
-            "The value of property \"{}\" is longer than 1048487 bytes.",
-            property_path.canonical()
-        )));
+        return Err(field_value_too_long(property_path));
     }
-    match value {
+    // Each value is measured once, on the way back up, and a parent reuses what its children
+    // reported: walking the subtree again at every level would let one 10 MiB request cost
+    // the nesting depth times its own size before any limit refused it.
+    let size = match value {
         Value::Array(items) => {
             if inside_array {
                 return Err(FirestoreError::InvalidArgument(
                     "Nested arrays are not allowed".into(),
                 ));
             }
-            items
-                .iter()
-                .try_for_each(|v| validate_value(v, true, property_path))
+            let mut total = 0u64;
+            for item in items {
+                total = add_size(total, validate_value(item, true, property_path, scope)?)?;
+            }
+            total
         }
+        Value::Map(fields) => {
+            let mut total = 32u64;
+            for (name, value) in fields {
+                validate_stored_field_name(name)?;
+                let nested_path = property_path.child(name);
+                total = add_size(total, string_size(name)?)?;
+                total = add_size(total, validate_value(value, false, &nested_path, scope)?)?;
+            }
+            total
+        }
+        Value::Reference(name) => {
+            validate_reference(name)?;
+            scalar_size(value)?
+        }
+        Value::Vector(dimensions) => {
+            validate_vector(dimensions)?;
+            scalar_size(value)?
+        }
+        _ => scalar_size(value)?,
+    };
+    // `FS-LIMIT-FIELD-VALUE-BYTES` on an aggregate. The catalog's unit is logical bytes, so
+    // a map or an array is measured with the official storage-size formula; a string or a
+    // bytes payload keeps the raw-payload metric observed above. Production has not been
+    // observed on an aggregate value, so only the strict profile refuses one: the
+    // compatibility contract forbids adding a refusal to the `emulator` profile. The check
+    // runs after the recursion so that the innermost violation is the one reported.
+    if scope == LimitScope::Production
+        && matches!(value, Value::Array(_) | Value::Map(_))
+        && size > limits::MAX_FIELD_PAYLOAD_BYTES as u64
+    {
+        return Err(field_value_too_long(property_path));
+    }
+    Ok(size)
+}
+
+fn add_size(a: u64, b: u64) -> Result<u64, FirestoreError> {
+    a.checked_add(b)
+        .ok_or_else(|| FirestoreError::InvalidArgument("size calculation overflow".into()))
+}
+
+fn string_size(s: &str) -> Result<u64, FirestoreError> {
+    add_size(
+        u64::try_from(s.len())
+            .map_err(|_| FirestoreError::InvalidArgument("size calculation overflow".into()))?,
+        1,
+    )
+}
+
+/// The storage size of a value that has no children, deferred to the one size model.
+fn scalar_size(value: &Value) -> Result<u64, FirestoreError> {
+    debug_assert!(!matches!(value, Value::Array(_) | Value::Map(_)));
+    field_value_size(value).map_err(|e| FirestoreError::InvalidArgument(e.to_string()))
+}
+
+/// The production wording for a field value over `FS-LIMIT-FIELD-VALUE-BYTES`.
+fn field_value_too_long(property_path: &PropertyPath) -> FirestoreError {
+    FirestoreError::InvalidArgument(format!(
+        "The value of property \"{}\" is longer than {} bytes.",
+        property_path.canonical(),
+        limits::MAX_FIELD_PAYLOAD_BYTES
+    ))
+}
+
+/// `FS-LIMIT-FIELD-PATH-BYTES` on every path a document implies by nesting.
+///
+/// A path a client names -- an update mask, a field transform, an order or a filter -- is
+/// bounded by [`FieldPath::from_segments`] when it is parsed. A path that exists only
+/// because a document nests values is bounded here, with the same wording.
+///
+/// This is strict-profile only. Automatic index accounting already refused the same path at
+/// the same boundary, but only where it walks: `automatic_usage` recurses into a map held
+/// directly by a field and never into the elements of an array
+/// (`crate::index_usage::IndexSet::automatic_usage`). A map inside an array therefore had an
+/// unbounded implied path, and bounding it under `OfficialEmulator` would add a refusal the
+/// compatibility contract does not allow.
+fn check_stored_field_paths(
+    value: &Value,
+    property_path: &PropertyPath,
+) -> Result<(), FirestoreError> {
+    if property_path.bytes > MAX_FIELD_PATH_BYTES {
+        return Err(FirestoreError::InvalidArgument(
+            crate::field_path::FieldPathError::PathTooLong {
+                bytes: property_path.bytes,
+                maximum: MAX_FIELD_PATH_BYTES,
+            }
+            .to_string(),
+        ));
+    }
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .try_for_each(|item| check_stored_field_paths(item, property_path)),
         Value::Map(fields) => fields.iter().try_for_each(|(name, value)| {
-            validate_stored_field_name(name)?;
-            let nested_path = property_path.child(name);
-            validate_value(value, false, &nested_path)
+            check_stored_field_paths(value, &property_path.child(name))
         }),
-        Value::Reference(name) => validate_reference(name),
-        Value::Vector(dimensions) => validate_vector(dimensions),
         _ => Ok(()),
     }
 }
@@ -6063,6 +6187,138 @@ mod scope_index_tests {
             FirestoreState::with_limit_scope(LimitScope::OfficialEmulator).limit_scope(),
             LimitScope::OfficialEmulator
         );
+    }
+
+    /// `validate_value` accumulates the storage size itself instead of calling
+    /// [`crate::size::field_value_size`] at every level. That is a second implementation of
+    /// the same formula, so this pins the two together: every value's validated total is its
+    /// `field_value_size`, and the document's total is `document_size`.
+    #[test]
+    fn the_validated_size_is_the_size_model_for_every_shape() {
+        let nested = |depth: usize| {
+            let mut value = Value::String("leaf".to_owned());
+            for level in 0..depth {
+                value = Value::Map(BTreeMap::from([
+                    (format!("n{level}"), value),
+                    (format!("b{level}"), Value::Bytes(vec![7; level])),
+                ]));
+            }
+            value
+        };
+        let cases: Vec<(&str, Value)> = vec![
+            ("null", Value::Null),
+            ("boolean", Value::Boolean(true)),
+            ("integer", Value::Integer(-1)),
+            ("double", Value::Double(1.5)),
+            ("timestamp", Value::Timestamp(Timestamp::new(7, 8).unwrap())),
+            (
+                "geo point",
+                Value::GeoPoint(crate::value::GeoPoint::new(1.0, 2.0).unwrap()),
+            ),
+            ("empty string", Value::String(String::new())),
+            ("unicode string", Value::String("名前".repeat(9))),
+            ("empty bytes", Value::Bytes(Vec::new())),
+            ("bytes", Value::Bytes(vec![0; 300])),
+            (
+                "reference",
+                Value::Reference(path("other/doc").resource_name()),
+            ),
+            ("vector", Value::Vector(vec![1.0, 2.0, 3.0])),
+            ("empty array", Value::Array(Vec::new())),
+            ("empty map", Value::Map(BTreeMap::new())),
+            (
+                "array of scalars",
+                Value::Array(vec![Value::Null, Value::Integer(1), Value::Boolean(false)]),
+            ),
+            (
+                "array of maps",
+                Value::Array(vec![
+                    Value::Map(BTreeMap::from([("a".to_owned(), Value::Integer(1))])),
+                    Value::Map(BTreeMap::new()),
+                ]),
+            ),
+            (
+                "map of mixed values",
+                Value::Map(BTreeMap::from([
+                    ("s".to_owned(), Value::String("x".repeat(40))),
+                    ("a".to_owned(), Value::Array(vec![Value::Double(0.5)])),
+                    ("e".to_owned(), Value::Map(BTreeMap::new())),
+                ])),
+            ),
+            ("one deep map", nested(1)),
+            ("deeply nested maps", nested(19)),
+        ];
+
+        for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+            for (label, value) in &cases {
+                let property_path = PropertyPath::root("v");
+                let validated = validate_value(value, false, &property_path, scope)
+                    .unwrap_or_else(|e| panic!("{scope:?} {label}: {e}"));
+                assert_eq!(
+                    validated,
+                    crate::size::field_value_size(value).unwrap(),
+                    "{scope:?} {label}: validation and the size model disagree"
+                );
+            }
+
+            // The same agreement holds for a whole document, where the field names and the
+            // document name join the total.
+            let document = Document {
+                path: path("sizes/doc"),
+                fields: cases
+                    .iter()
+                    .map(|(label, value)| ((*label).to_owned(), value.clone()))
+                    .collect(),
+                create_time: LogicalInstant::UNIX_EPOCH,
+                update_time: LogicalInstant::UNIX_EPOCH,
+                version: CommitVersion::default(),
+            };
+            validate_document(&document, scope).expect("every case is inside every limit");
+            let modelled = document_size(&document.path, &document.fields)
+                .unwrap()
+                .total;
+            let summed = document_size_bytes(&document.path, &document.fields).unwrap();
+            assert_eq!(
+                modelled, summed,
+                "{scope:?}: the two document charges differ"
+            );
+        }
+    }
+
+    /// `FS-LIMIT-FIELD-VALUE-BYTES` on an aggregate is measured on the way back up, reusing
+    /// what each child reported. Measuring top-down instead would walk every subtree once
+    /// per enclosing level, so one request bounded only by `FS-LIMIT-API-REQUEST-BYTES`
+    /// would cost its nesting depth times its own size before any limit refused it.
+    #[test]
+    fn validating_a_deep_document_measures_each_value_a_bounded_number_of_times() {
+        // 20 nested maps, each holding one scalar besides the next level: 41 values.
+        const DEPTH: usize = 20;
+        const VALUES: usize = DEPTH * 2 + 1;
+        let mut value = Value::Integer(1);
+        for level in 0..DEPTH {
+            value = Value::Map(BTreeMap::from([
+                (format!("n{level}"), value),
+                (format!("s{level}"), Value::String("x".repeat(64))),
+            ]));
+        }
+        let document = Document {
+            path: path("deep/doc"),
+            fields: BTreeMap::from([("root".to_owned(), value)]),
+            create_time: LogicalInstant::UNIX_EPOCH,
+            update_time: LogicalInstant::UNIX_EPOCH,
+            version: CommitVersion::default(),
+        };
+        for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+            crate::size::FIELD_VALUE_SIZE_CALLS.with(|count| count.set(0));
+            validate_document(&document, scope).expect("the document is inside every limit");
+            let calls = crate::size::FIELD_VALUE_SIZE_CALLS.with(std::cell::Cell::get);
+            // One pass for the document charge plus at most one call per value from
+            // validation itself. Quadratic behaviour would need DEPTH times this.
+            assert!(
+                calls <= VALUES * 3,
+                "{scope:?}: field_value_size ran {calls} times for {VALUES} values"
+            );
+        }
     }
 
     #[test]

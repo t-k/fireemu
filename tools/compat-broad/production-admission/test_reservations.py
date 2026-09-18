@@ -761,7 +761,7 @@ def test_closing_refuses_dispatch_without_gate_ledger_lock_inversion(tmp_path):
         except Exception as error:  # noqa: BLE001 -- Preserve thread failures for assertions.
             errors.append(error)
 
-    worker = threading.Thread(target=finish)
+    worker = threading.Thread(target=finish, daemon=True)
     with gate.locked():
         worker.start()
         until = time.monotonic() + 5
@@ -821,7 +821,7 @@ def test_validate_samples_default_clock_after_waiting_for_ledger_lock(tmp_path):
             )
 
     with ledger._locked():
-        worker = threading.Thread(target=validate)
+        worker = threading.Thread(target=validate, daemon=True)
         worker.start()
         assert entered.wait(2)
         time.sleep(2.2)
@@ -852,7 +852,7 @@ def test_reserve_samples_default_clock_after_waiting_for_ledger_lock(tmp_path):
             errors.append(error)
 
     with ledger._locked():
-        worker = threading.Thread(target=reserve)
+        worker = threading.Thread(target=reserve, daemon=True)
         worker.start()
         assert entered.wait(2)
         time.sleep(3.2)

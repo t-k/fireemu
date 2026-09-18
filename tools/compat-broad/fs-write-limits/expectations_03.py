@@ -88,10 +88,10 @@ def _batch_landed(request: dict, status: Any, body: Any) -> dict[str, str]:
 def evaluate_rows(rows: list[dict], plan: dict, *, pending: bool = False) -> list[dict]:
     """Evaluate an observation prefix against the declared local expectations.
 
-    `pending` selects which half is returned. A request whose expectation is
-    marked `localImplementationPending` states the documented production
-    behaviour for a limit the catalog still declares unsupported, so a local
-    difference on it is evidence about the local runtime rather than a campaign
+    `pending` selects which half is returned. A request whose expectation
+    carries a `pendingReason` states the documented production behaviour for
+    something the local runtime or the local shadow cannot yet show, so a
+    difference on it is evidence about the local side rather than a campaign
     failure. Both halves are always computed; neither is discarded.
     """
     problems: list[dict] = []
@@ -116,11 +116,12 @@ def evaluate_rows(rows: list[dict], plan: dict, *, pending: bool = False) -> lis
         ):
             continue  # Infrastructure failures are not API semantic mismatches.
         reason = _row_reason(request, plan, status, body, versions)
-        if (
-            reason
-            and bool(request["expect"].get("localImplementationPending")) == pending
-        ):
-            problems.append({"index": index, "basis": reason, "pending": pending})
+        declared = request["expect"].get("pendingReason")
+        if reason and bool(declared) == pending:
+            problem = {"index": index, "basis": reason, "pending": pending}
+            if declared:
+                problem["reason"] = declared
+            problems.append(problem)
     return problems
 
 
@@ -133,7 +134,7 @@ def pending_rows(plan: dict) -> list[int]:
                 : len(plan["localGatePlan"]["jobs"]["limits"]["observation"])
             ]
         )
-        if request["expect"].get("localImplementationPending")
+        if request["expect"].get("pendingReason")
     ]
 
 

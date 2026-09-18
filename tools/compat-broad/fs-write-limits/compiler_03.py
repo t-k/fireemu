@@ -284,7 +284,7 @@ def _depth_resource(root: str, leaf: str, pairs: int) -> str:
     return f"{root}/{leaf}" + "/c/d" * (pairs - PREFIX_PAIRS)
 
 
-def _padded_resource(root: str, leaf: str, target: int) -> str:
+def _padded_resource(root: str, leaf: str, target: int, collection: str = "p") -> str:
     """Return a document resource whose UTF-8 byte length is exactly `target`.
 
     Padding is spread over whole (collection, document) pairs so that no single
@@ -296,7 +296,7 @@ def _padded_resource(root: str, leaf: str, target: int) -> str:
     if remaining <= 0:
         raise ValueError("document name target is below the owned prefix")
     # Each padding pair costs "/p/" plus the padded document id.
-    per_pair_overhead = 3
+    per_pair_overhead = len(collection) + 2
     widest = COLLECTION_ID_MAX - 1
     pairs = -(-remaining // (widest + per_pair_overhead))
     while True:
@@ -311,7 +311,7 @@ def _padded_resource(root: str, leaf: str, target: int) -> str:
         widths[index] += 1
     if any(not 1 <= width <= widest for width in widths):
         raise ValueError("padding segment outside identifier limits")
-    resource = base + "".join(f"/p/{'z' * width}" for width in widths)
+    resource = base + "".join(f"/{collection}/{'z' * width}" for width in widths)
     if resource_name_bytes(resource) != target:
         raise ValueError("document name padding did not reach the target")
     return resource
@@ -343,15 +343,16 @@ def _readback(resource: str, *, present: bool, kind: str) -> dict[str, Any]:
 
 
 def _create_only_patch(
-    document: dict[str, Any], *, positive: bool, pending: bool = False
+    document: dict[str, Any], *, positive: bool, pending: str | None = None
 ) -> dict[str, Any]:
     resource = document["resource"]
     expect: dict[str, Any] = {"positive": positive}
     if pending:
-        # The catalog declares this limit unsupported. The expectation states
-        # the documented production behaviour; a local difference is recorded
-        # as a pending difference rather than as a campaign failure.
-        expect["localImplementationPending"] = True
+        # The expectation states the documented production behaviour for
+        # something the local runtime or the local shadow cannot yet show. A
+        # difference is recorded as a pending difference with this reason
+        # rather than as a campaign failure.
+        expect["pendingReason"] = pending
     return {
         "kind": "create-only-patch",
         "service": "firestore",
@@ -369,8 +370,10 @@ def _conditional_create(resource: str, fields: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, Any]:
-    """Compile the six cases and their bounded ordered offline request plan."""
+def compile_limits_plan(
+    project: str, database: str, nonce: str, part: str = "A"
+) -> dict[str, Any]:
+    """Compile one admitted part of the campaign and its ordered request plan."""
     if (
         not isinstance(project, str)
         or not project
@@ -411,29 +414,33 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
         documents[label] = document
         return document
 
-    # R3: BatchWrite continuation.
-    malformed = [
-        add(f"batch-malformed-{part}", f"{root}/bw-a-{index}", None)
-        for index, part in ((0, "prefix"), (2, "suffix"))
-    ]
-    undecodable = [
-        add(f"batch-undecodable-{part}", f"{root}/bw-b-{index}", None)
-        for index, part in ((0, "prefix"), (1, "middle"), (2, "suffix"))
-    ]
-    duplicate = [
-        add(f"batch-duplicate-{part}", f"{root}/bw-c-{index}", None)
-        for index, part in ((0, "first"), (1, "second"))
-    ]
-    for index, document in enumerate(malformed + undecodable + duplicate):
-        document["fields"] = _fields(document["resource"], index)
-    undecodable[1]["fields"] = _undecodable_fields(undecodable[1]["resource"])
+    # R3: BatchWrite continuation. Part A only.
+    malformed: list[dict[str, Any]] = []
+    undecodable: list[dict[str, Any]] = []
+    duplicate: list[dict[str, Any]] = []
+    if part == "A":
+        malformed[:] = [
+            add(f"batch-malformed-{side}", f"{root}/bw-a-{index}", None)
+            for index, side in ((0, "prefix"), (2, "suffix"))
+        ]
+        undecodable[:] = [
+            add(f"batch-undecodable-{side}", f"{root}/bw-b-{index}", None)
+            for index, side in ((0, "prefix"), (1, "middle"), (2, "suffix"))
+        ]
+        duplicate[:] = [
+            add(f"batch-duplicate-{side}", f"{root}/bw-c-{index}", None)
+            for index, side in ((0, "first"), (1, "second"))
+        ]
+        for index, document in enumerate(malformed + undecodable + duplicate):
+            document["fields"] = _fields(document["resource"], index)
+        undecodable[1]["fields"] = _undecodable_fields(undecodable[1]["resource"])
 
     # R4: the write-path catalog limits. Every boundary below is derived from
     # the default single-field index configuration: ascending, descending and
     # array-membership modes at collection scope. The campaign declares no
     # composite index and no field override, so it requires no addition to
     # `conformance/firestore.indexes.json`.
-    limits = _limit_specs(root)
+    limits = _limit_specs(root, part)
     for spec in limits:
         for side in ("accept", "refuse"):
             entry = spec.get(side)
@@ -446,7 +453,7 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
                 owned=entry["owned"],
             )
             document["limitId"] = spec["id"]
-            for key in ("mask", "canonicalPathBytes"):
+            for key in ("mask", "canonicalPathBytes", "indexExempt"):
                 if key in entry:
                     document[key] = entry[key]
             document["indexUsage"] = index_usage(entry["resource"], entry["fields"])
@@ -461,97 +468,98 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
     for document in owned:
         requests.append(_preflight(document["resource"]))
 
-    # R3-1: a write with no operation between two valid create-only writes.
-    requests.append(
-        {
-            "kind": "batch-write",
-            "case": "batch-malformed-middle",
-            "service": "firestore",
-            "method": "POST",
-            "path": batch_path,
-            "body": {
-                "writes": [
-                    _conditional_create(
-                        malformed[0]["resource"], malformed[0]["fields"]
-                    ),
-                    {},
-                    _conditional_create(
-                        malformed[1]["resource"], malformed[1]["fields"]
-                    ),
-                ]
-            },
-            "expect": {
-                "status": 200,
-                "itemCodes": [0, 3, 0],
-                "landed": [malformed[0]["resource"], malformed[1]["resource"]],
-            },
-        }
-    )
-    for document in malformed:
+    if part == "A":
+        # R3-1: a write with no operation between two valid create-only writes.
         requests.append(
-            _readback(document["resource"], present=True, kind="typed-readback")
+            {
+                "kind": "batch-write",
+                "case": "batch-malformed-middle",
+                "service": "firestore",
+                "method": "POST",
+                "path": batch_path,
+                "body": {
+                    "writes": [
+                        _conditional_create(
+                            malformed[0]["resource"], malformed[0]["fields"]
+                        ),
+                        {},
+                        _conditional_create(
+                            malformed[1]["resource"], malformed[1]["fields"]
+                        ),
+                    ]
+                },
+                "expect": {
+                    "status": 200,
+                    "itemCodes": [0, 3, 0],
+                    "landed": [malformed[0]["resource"], malformed[1]["resource"]],
+                },
+            }
         )
+        for document in malformed:
+            requests.append(
+                _readback(document["resource"], present=True, kind="typed-readback")
+            )
 
-    # R3-2: a value the request decoder cannot read, in the same position.
-    requests.append(
-        {
-            "kind": "batch-write",
-            "case": "batch-undecodable-value",
-            "service": "firestore",
-            "method": "POST",
-            "path": batch_path,
-            "body": {
-                "writes": [
-                    _conditional_create(document["resource"], document["fields"])
-                    for document in undecodable
-                ]
-            },
-            "expect": {
-                "status": 400,
-                "typed": "INVALID_ARGUMENT",
-                "landed": [],
-            },
-        }
-    )
-    for document in undecodable:
+        # R3-2: a value the request decoder cannot read, in the same position.
         requests.append(
-            _readback(document["resource"], present=False, kind="typed-readback")
+            {
+                "kind": "batch-write",
+                "case": "batch-undecodable-value",
+                "service": "firestore",
+                "method": "POST",
+                "path": batch_path,
+                "body": {
+                    "writes": [
+                        _conditional_create(document["resource"], document["fields"])
+                        for document in undecodable
+                    ]
+                },
+                "expect": {
+                    "status": 400,
+                    "typed": "INVALID_ARGUMENT",
+                    "landed": [],
+                },
+            }
         )
+        for document in undecodable:
+            requests.append(
+                _readback(document["resource"], present=False, kind="typed-readback")
+            )
 
-    # R3-3: the duplicate-document control. Production is already known to
-    # answer this with a whole-request 400 and no publication.
-    requests.append(
-        {
-            "kind": "batch-write",
-            "case": "batch-duplicate-document",
-            "service": "firestore",
-            "method": "POST",
-            "path": batch_path,
-            "body": {
-                "writes": [
-                    _conditional_create(
-                        duplicate[0]["resource"], duplicate[0]["fields"]
-                    ),
-                    _conditional_create(
-                        duplicate[1]["resource"], duplicate[1]["fields"]
-                    ),
-                    _conditional_create(
-                        duplicate[0]["resource"], duplicate[0]["fields"]
-                    ),
-                ]
-            },
-            "expect": {
-                "status": 400,
-                "typed": "INVALID_ARGUMENT",
-                "landed": [],
-                "diagnosticDivergenceKnown": True,
-            },
-        }
-    )
-    for document in duplicate:
+        # R3-3: the duplicate-document control. Production is already known to
+        # answer this with a whole-request 400 and no publication.
         requests.append(
-            _readback(document["resource"], present=False, kind="typed-readback")
+            {
+                "kind": "batch-write",
+                "case": "batch-duplicate-document",
+                "service": "firestore",
+                "method": "POST",
+                "path": batch_path,
+                "body": {
+                    "writes": [
+                        _conditional_create(
+                            duplicate[0]["resource"], duplicate[0]["fields"]
+                        ),
+                        _conditional_create(
+                            duplicate[1]["resource"], duplicate[1]["fields"]
+                        ),
+                        _conditional_create(
+                            duplicate[0]["resource"], duplicate[0]["fields"]
+                        ),
+                    ]
+                },
+                "expect": {
+                    "status": 400,
+                    "typed": "INVALID_ARGUMENT",
+                    "landed": [],
+                    "diagnosticDivergenceKnown": True,
+                },
+            }
         )
+        for document in duplicate:
+            requests.append(
+                _readback(document["resource"], present=False, kind="typed-readback")
+            )
 
     for spec in limits:
         requests.extend(_limit_requests(spec, documents, batch_path))
@@ -610,9 +618,10 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
             }
         },
         # The shared Gate reserves 13 seconds plus the interval for every
-        # recovery request, so the reserve scales with the owned document count.
-        "wallSeconds": 1200,
-        "recoverySeconds": 810,
+        # recovery request inside a 1200-second ceiling, which is why the
+        # campaign runs as two admitted parts rather than one.
+        "wallSeconds": _wall_seconds(len(recovery_operations)),
+        "recoverySeconds": _recovery_seconds(len(recovery_operations)),
         "observationRequests": observation_count,
         "intervalSeconds": 0.25,
         "requestCostMicrousd": 100,
@@ -626,11 +635,12 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
         for row in requests
     ]
     return {
-        "campaignId": CAMPAIGN,
+        "campaignId": f"{CAMPAIGN}{part}",
+        "part": part,
         "catalog": catalog,
         "nonce": nonce,
         "documents": documents,
-        "cases": _case_index(limits),
+        "cases": _case_index(limits, part),
         "requests": requests,
         "localGatePlan": gate_plan,
         "budgetAccounting": {
@@ -822,6 +832,10 @@ def _indexed_value_case(root: str) -> dict[str, Any]:
         "boundary": [INDEXED_VALUE_TRUNCATION, 2 * INDEXED_VALUE_TRUNCATION],
         "measure": "indexedValueBytes",
         "catalogImplemented": "unsupported",
+        "pendingReason": (
+            "the catalog records this limit as unsupported, so the expectation is "
+            "the documented production behaviour rather than an observed local one"
+        ),
         "chargedInFullWouldBe": name_sum
         + len(field)
         + 1
@@ -864,6 +878,10 @@ def _field_path_case(root: str) -> dict[str, Any]:
         "boundary": [FIELD_PATH_BYTES_MAX, FIELD_PATH_BYTES_MAX + 1],
         "measure": "canonicalPathBytes",
         "catalogImplemented": "unsupported",
+        "pendingReason": (
+            "the catalog records this limit as unsupported, so the expectation is "
+            "the documented production behaviour rather than an observed local one"
+        ),
         **sides,
     }
 
@@ -892,6 +910,10 @@ def _field_value_case(root: str) -> dict[str, Any]:
         "boundary": [FIELD_VALUE_BYTES_MAX, FIELD_VALUE_BYTES_MAX + 1],
         "measure": "payloadBytes",
         "catalogImplemented": "unsupported",
+        "pendingReason": (
+            "the catalog records this limit as unsupported, so the expectation is "
+            "the documented production behaviour rather than an observed local one"
+        ),
         "acceptedSideUnreachable": (
             "an owned document at this value exceeds FS-LIMIT-DOCUMENT-BYTES"
         ),
@@ -907,8 +929,202 @@ def _field_value_case(root: str) -> dict[str, Any]:
     }
 
 
-def _limit_specs(root: str) -> list[dict[str, Any]]:
-    """Every write-path limit this campaign observes, in request order."""
+def _aggregate_cases(root: str) -> list[dict[str, Any]]:
+    """`FS-LIMIT-FIELD-VALUE-BYTES` applied to an aggregate value.
+
+    The runtime's aggregate check reads the same maximum two ways one byte
+    apart: a string or bytes payload is measured on its raw length, while a map
+    or an array is measured with the official storage-size formula, which adds
+    a trailing byte per string and 32 per map. These four documents make
+    production say which metric it applies.
+
+    None of the four can be accepted, because only 89 bytes separate this
+    maximum from `FS-LIMIT-DOCUMENT-BYTES` and an owned name and ownership
+    marker cost more than that. The evidence is therefore the diagnostic text:
+    a message naming the property says the value metric fired, and a message
+    about the document size says it did not.
+    """
+    cases = []
+    for label, raw in (
+        ("agg-string", FIELD_VALUE_BYTES_MAX),
+        ("agg-map", FIELD_VALUE_BYTES_MAX),
+    ):
+        sides = {}
+        for side, bump in (("accept", 0), ("refuse", 1)):
+            resource = f"{root}/{label}-{side}"
+            if label == "agg-string":
+                # Raw payload exactly at the maximum, then one over. Its logical
+                # size is one byte more than its raw size, so the two readings
+                # disagree on the first of the pair.
+                fields = {
+                    "_sharedOwner": _owner(resource),
+                    "b": {"stringValue": "x" * (raw + bump)},
+                }
+            else:
+                # Logical size exactly at the maximum, then one over. A map has
+                # no raw payload at all, so the raw reading can never refuse it.
+                inner = raw + bump - 32 - 2 - 1
+                fields = {
+                    "_sharedOwner": _owner(resource),
+                    "m": {"mapValue": {"fields": {"s": {"stringValue": "x" * inner}}}},
+                }
+            sides[side] = _owned(resource, fields)
+        cases.append(
+            {
+                "id": "FS-LIMIT-FIELD-VALUE-BYTES",
+                "label": label,
+                "emit": "refuse-pair",
+                "boundary": [FIELD_VALUE_BYTES_MAX, FIELD_VALUE_BYTES_MAX + 1],
+                "measure": "aggregateBytes",
+                "aggregateShape": "string" if label == "agg-string" else "nested-map",
+                "catalogImplemented": "unsupported",
+                "entangledWith": ["FS-LIMIT-DOCUMENT-BYTES"],
+                "entanglementReason": (
+                    "Both members exceed FS-LIMIT-DOCUMENT-BYTES, because the accepted "
+                    "side of this maximum does not fit in an owned document. The "
+                    "diagnostic text is the discriminator."
+                ),
+                "metricEvidence": {
+                    "namesTheProperty": "production applies the value metric to this shape",
+                    "namesTheDocumentSize": "production does not apply the value metric to this shape",
+                },
+                **sides,
+            }
+        )
+    return cases
+
+
+def _implied_path_cases(root: str) -> list[dict[str, Any]]:
+    """`FS-LIMIT-FIELD-PATH-BYTES` on the paths a document implies by nesting.
+
+    A path a client names in an update mask is bounded when the mask is parsed.
+    A path that exists only because a document nests values is a separate
+    surface, and it has two shapes. Automatic index accounting walks a map held
+    directly by a field, so an over-long path there is already refused; it never
+    walks the elements of an array, so a map inside an array had an unbounded
+    implied path until the write-path lane bounded it under the strict profile.
+    Both shapes are observed, because production is expected to bound both.
+    """
+    cases = []
+    for label, shape in (("implied-map", "map"), ("implied-array", "array")):
+        sides = {}
+        for side, total in (
+            ("accept", FIELD_PATH_BYTES_MAX),
+            ("refuse", FIELD_PATH_BYTES_MAX + 1),
+        ):
+            resource = f"{root}/{label}-{side}"
+            leaf = {"integerValue": "1"}
+            if shape == "map":
+                outer = "o" * (total // 2)
+                inner = "i" * (total - len(outer) - 1)
+                value = {"mapValue": {"fields": {inner: leaf}}}
+                fields = {"_sharedOwner": _owner(resource), outer: value}
+                implied = f"{outer}.{inner}"
+            else:
+                outer = "a"
+                inner = "i" * (total - len(outer) - 1)
+                value = {
+                    "arrayValue": {"values": [{"mapValue": {"fields": {inner: leaf}}}]}
+                }
+                fields = {"_sharedOwner": _owner(resource), outer: value}
+                implied = f"{outer}.{inner}"
+            entry = _owned(resource, fields)
+            entry["canonicalPathBytes"] = len(implied.encode())
+            sides[side] = entry
+        cases.append(
+            {
+                "id": "FS-LIMIT-FIELD-PATH-BYTES",
+                "label": label,
+                "emit": "create-pair",
+                "boundary": [FIELD_PATH_BYTES_MAX, FIELD_PATH_BYTES_MAX + 1],
+                "measure": "canonicalPathBytes",
+                "pathShape": shape,
+                "catalogImplemented": "unsupported",
+                "pendingReason": (
+                    "the catalog records this limit as unsupported, so the expectation "
+                    "is the documented production behaviour rather than an observed "
+                    "local one"
+                )
+                if shape == "array"
+                else None,
+                **sides,
+            }
+        )
+        if cases[-1]["pendingReason"] is None:
+            del cases[-1]["pendingReason"]
+    return cases
+
+
+# The collection group the document-name case lives under. It is exempted from
+# automatic indexing so a document named at the boundary can be created at all;
+# keeping it distinct from the padding collection the index cases use means the
+# exemption cannot reach them.
+EXEMPT_COLLECTION = "nx"
+
+
+def _document_name_case(root: str) -> dict[str, Any]:
+    """`FS-LIMIT-DOCUMENT-NAME-BYTES` observed by a create, under an exemption.
+
+    An automatic index entry is charged the document name and its parent's
+    name, so the smallest possible entry for a document named at 6144 bytes is
+    11040 bytes against a 7680-byte maximum: without an exemption this boundary
+    cannot be written at all, which is why it and the index-entry limits are one
+    decision. Exempting this collection group from automatic indexing removes
+    every entry the document would generate, and the name limit is then the only
+    thing the write can breach.
+
+    The local shadow supervisor pins the historical index configuration and
+    verifies its digest, so it cannot apply the exemption. The accepted side is
+    therefore marked pending: the shadow will show the index-entry refusal the
+    exemption exists to remove.
+    """
+    accept = _padded_resource(root, "name-exact", DOCUMENT_NAME_MAX, EXEMPT_COLLECTION)
+    refuse = _padded_resource(
+        root, "name-over", DOCUMENT_NAME_MAX + 1, EXEMPT_COLLECTION
+    )
+    return {
+        "id": "FS-LIMIT-DOCUMENT-NAME-BYTES",
+        "label": "document-name",
+        "emit": "create-pair",
+        "boundary": [DOCUMENT_NAME_MAX, DOCUMENT_NAME_MAX + 1],
+        "measure": "nameBytes",
+        "indexExemption": {
+            "collectionGroup": EXEMPT_COLLECTION,
+            "fieldPath": "*",
+            "indexes": [],
+        },
+        "indexExemptionReason": (
+            "Without it every document named at this boundary is refused for "
+            "FS-LIMIT-INDEX-ENTRY-BYTES before the name limit is reached."
+        ),
+        "pendingReason": (
+            "the local shadow supervisor pins the historical index configuration "
+            "and cannot apply the declared exemption, so the local run shows the "
+            "index-entry refusal the exemption exists to remove"
+        ),
+        "accept": {**_owned(accept, _fields(accept, 104)), "indexExempt": True},
+        "refuse": {**_probe(refuse, _fields(refuse, 105)), "indexExempt": True},
+    }
+
+
+def _limit_specs(root: str, part: str = "A") -> list[dict[str, Any]]:
+    """The write-path limits this part of the campaign observes, in request order.
+
+    The campaign runs as two admitted parts because the shared Gate reserves
+    thirteen seconds plus the interval for every recovery request inside a
+    1,200-second ceiling, which caps one allocation at about twenty-six owned
+    documents. Part A carries the identifier and index limits, part B the value
+    and path limits.
+    """
+    if part not in ("A", "B"):
+        raise ValueError("campaign part must be A or B")
+    if part == "B":
+        return [
+            *_implied_path_cases(root),
+            _field_path_case(root),
+            _field_value_case(root),
+            *_aggregate_cases(root),
+        ]
     return [
         {
             "id": "FS-LIMIT-COLLECTION-ID",
@@ -945,29 +1161,11 @@ def _limit_specs(root: str) -> list[dict[str, Any]]:
                 ),
             ),
         },
-        {
-            "id": "FS-LIMIT-DOCUMENT-NAME-BYTES",
-            "label": "document-name",
-            "emit": "name-only",
-            "boundary": [DOCUMENT_NAME_MAX, DOCUMENT_NAME_MAX + 1],
-            "measure": "nameBytes",
-            "accept": _probe(
-                _padded_resource(root, "name-exact", DOCUMENT_NAME_MAX),
-                _fields(_padded_resource(root, "name-exact", DOCUMENT_NAME_MAX), 104),
-            ),
-            "refuse": _probe(
-                _padded_resource(root, "name-over", DOCUMENT_NAME_MAX + 1),
-                _fields(
-                    _padded_resource(root, "name-over", DOCUMENT_NAME_MAX + 1), 105
-                ),
-            ),
-        },
+        _document_name_case(root),
         _entry_bytes_case(root),
         _entries_case(root),
         _entry_sum_case(root),
         _indexed_value_case(root),
-        _field_path_case(root),
-        _field_value_case(root),
     ]
 
 
@@ -977,7 +1175,7 @@ def _limit_requests(
     """The ordered observation requests for one limit."""
     accept = documents.get(f"{spec['label']}-accept")
     refuse = documents[f"{spec['label']}-refuse"]
-    pending = spec.get("catalogImplemented") == "unsupported"
+    pending = spec.get("pendingReason")
     emit = spec["emit"]
     if emit == "name-only":
         return [
@@ -993,6 +1191,13 @@ def _limit_requests(
             },
             _create_only_patch(refuse, positive=False),
             _refusal_readback(refuse["resource"]),
+        ]
+    if emit == "refuse-pair":
+        return [
+            _create_only_patch(accept, positive=False, pending=pending),
+            _readback(accept["resource"], present=False, kind="typed-readback"),
+            _create_only_patch(refuse, positive=False, pending=pending),
+            _readback(refuse["resource"], present=False, kind="typed-readback"),
         ]
     if emit == "refuse-only":
         return [
@@ -1049,7 +1254,7 @@ def _refusal_readback(resource: str) -> dict[str, Any]:
 
 
 def _masked_batch_write(
-    batch_path: str, entry: dict[str, Any], *, positive: bool, pending: bool
+    batch_path: str, entry: dict[str, Any], *, positive: bool, pending: str | None
 ) -> dict[str, Any]:
     resource = entry["resource"]
     write = _conditional_create(resource, entry["fields"])
@@ -1060,7 +1265,7 @@ def _masked_batch_write(
         else {"status": 400, "typed": "INVALID_ARGUMENT", "landed": []}
     )
     if pending:
-        expect["localImplementationPending"] = True
+        expect["pendingReason"] = pending
     return {
         "kind": "batch-write",
         "case": f"field-path-{'accept' if positive else 'refuse'}",
@@ -1072,22 +1277,49 @@ def _masked_batch_write(
     }
 
 
-def _case_index(limits: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    batch = [
-        ("batch-malformed-middle", "BatchWrite continuation past a malformed item"),
-        (
-            "batch-undecodable-value",
-            "BatchWrite continuation past an undecodable value",
-        ),
-        ("batch-duplicate-document", "BatchWrite whole-request validation control"),
-    ]
+# The shared Gate's own per-request recovery reserve and its wall-clock ceiling.
+GATE_REQUEST_SECONDS = 13
+GATE_INTERVAL_SECONDS = 0.25
+GATE_WALL_SECONDS_MAX = 1200
+OBSERVATION_WINDOW_SECONDS = 300
+
+
+def _recovery_seconds(operations: int) -> int:
+    """The reserve the Gate demands for this many recovery requests, plus slack."""
+    needed = operations * (GATE_REQUEST_SECONDS + GATE_INTERVAL_SECONDS)
+    return int(needed) + 60
+
+
+def _wall_seconds(operations: int) -> int:
+    total = _recovery_seconds(operations) + OBSERVATION_WINDOW_SECONDS
+    if total > GATE_WALL_SECONDS_MAX:
+        raise ValueError(
+            f"{operations} recovery requests do not fit the Gate's "
+            f"{GATE_WALL_SECONDS_MAX}-second ceiling; split the campaign"
+        )
+    return total
+
+
+def _case_index(limits: list[dict[str, Any]], part: str) -> list[dict[str, Any]]:
+    batch = (
+        []
+        if part == "B"
+        else [
+            ("batch-malformed-middle", "BatchWrite continuation past a malformed item"),
+            (
+                "batch-undecodable-value",
+                "BatchWrite continuation past an undecodable value",
+            ),
+            ("batch-duplicate-document", "BatchWrite whole-request validation control"),
+        ]
+    )
     cases = [
-        {"id": f"{CAMPAIGN}/{name}", "residue": "R3", "condition": condition}
+        {"id": f"{CAMPAIGN}{part}/{name}", "residue": "R3", "condition": condition}
         for name, condition in batch
     ]
     for spec in limits:
         case = {
-            "id": f"{CAMPAIGN}/{spec['label']}",
+            "id": f"{CAMPAIGN}{part}/{spec['label']}",
             "residue": "R4",
             "condition": f"{spec['id']} boundary",
             "limitId": spec["id"],
@@ -1123,6 +1355,16 @@ def _measure(spec: dict[str, Any], document: dict[str, Any]) -> int:
             for name, value in document["fields"].items()
             if name != "_sharedOwner"
         )
+    if measure == "aggregateBytes":
+        # The metric the aggregate check reads: a string or bytes value on its
+        # raw payload, a map or an array on its logical storage size.
+        return max(
+            len(value["stringValue"].encode())
+            if "stringValue" in value
+            else _field_value_bytes(value)
+            for name, value in document["fields"].items()
+            if name != "_sharedOwner"
+        )
     if measure == "payloadBytes":
         # The raw string or bytes payload, which is what the field value limit
         # is measured on.
@@ -1138,6 +1380,18 @@ def _measure(spec: dict[str, Any], document: dict[str, Any]) -> int:
     return document["indexUsage"][measure]
 
 
+def _refused_sides(spec: dict[str, Any]) -> set[str]:
+    """Which halves of a case the campaign expects the server to refuse."""
+    return {
+        "create-pair": {"refuse"},
+        "mask-pair": {"refuse"},
+        "name-only": {"refuse"},
+        "refuse-only": {"refuse"},
+        "refuse-pair": {"accept", "refuse"},
+        "truncating-pair": set(),
+    }.get(spec.get("emit"), {"refuse"})
+
+
 def _check_no_confound(documents: dict[str, Any], limits: list[dict[str, Any]]) -> None:
     """Each boundary pair must differ from its control in exactly one limit.
 
@@ -1148,15 +1402,25 @@ def _check_no_confound(documents: dict[str, Any], limits: list[dict[str, Any]]) 
     for label, document in documents.items():
         if not document["owned"]:
             continue
+        if document.get("indexExempt"):
+            continue  # The declared exemption removes every automatic entry.
         usage = document.get("indexUsage") or index_usage(
             document["resource"], document["fields"]
         )
         limit_id = document.get("limitId")
-        spec = next((s for s in limits if s["id"] == limit_id), {})
-        # A refused document may breach the limit under test, and may breach a
-        # limit the campaign has declared it cannot be separated from.
+        spec = next(
+            (
+                s
+                for s in limits
+                if f"{s['label']}-accept" == label or f"{s['label']}-refuse" == label
+            ),
+            {},
+        )
+        # A document the campaign expects to be refused may breach the limit
+        # under test, and may breach a limit the campaign has declared it
+        # cannot be separated from. A document it expects to create may not.
         allowed = set()
-        if label.endswith("-refuse"):
+        if label.rsplit("-", 1)[-1] in _refused_sides(spec):
             allowed = {limit_id, *spec.get("entangledWith", ())}
         ceilings = (
             (

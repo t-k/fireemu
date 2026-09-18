@@ -64,6 +64,57 @@ MAX_BYTES = 16 * 1024 * 1024
 MAX_RESERVATIONS = 10000
 
 
+DEFAULT_RECEIPT_KIND = "commit-acquisition-receipt-v2"
+DEFAULT_CREDENTIAL_SLOTS = ("refresh", "tokeninfo")
+
+
+def _gate_plan(gate):
+    plan = gate.get("plan") if isinstance(gate, dict) else None
+    return plan if isinstance(plan, dict) else {}
+
+
+def _management(gate):
+    """The campaign's credential and preflight management slots, in plan order.
+
+    The sequence is read from the Gate plan, which `gatePlanDigest` binds to the
+    claim and O7 binds to the approval, rather than from a literal that only
+    describes the Commit campaign. A plan that declares neither keeps the Commit
+    lane's own two credential slots, so its recorded rows read unchanged.
+    """
+    management = _gate_plan(gate).get("management")
+    management = management if isinstance(management, dict) else {}
+    declared = [
+        "observation:" + item["id"]
+        for item in management.get("observation", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    ]
+    credential_ids = management.get("credentialIds")
+    if not isinstance(credential_ids, list):
+        credential_ids = [
+            name.removeprefix("observation:") for name in CREDENTIAL_MANAGEMENT
+        ]
+    credentials = [
+        "observation:" + name for name in credential_ids if isinstance(name, str)
+    ]
+    head = [name for name in declared if name in credentials]
+    return head, [name for name in declared if name not in credentials]
+
+
+def _credential_slots(gate):
+    declared = _gate_plan(gate).get("management")
+    declared = declared.get("credentialSlots") if isinstance(declared, dict) else None
+    if not isinstance(declared, list) or not all(
+        isinstance(name, str) for name in declared
+    ):
+        return list(DEFAULT_CREDENTIAL_SLOTS)
+    return declared
+
+
+def _receipt_kind(gate):
+    declared = _gate_plan(gate).get("receiptKind")
+    return declared if isinstance(declared, str) and declared else DEFAULT_RECEIPT_KIND
+
+
 def _preflight_stop(receipt):
     """How many preflight slots a no-data attempt consumed, or None if it is not one.
 
@@ -74,14 +125,12 @@ def _preflight_stop(receipt):
     gate = receipt.get("gate")
     if not isinstance(gate, dict):
         return None
+    head, preflight = _management(gate)
     used = gate.get("managementUsed")
     observed = [item.get("id") for item in receipt.get("metadata", [])]
-    for count in range(1, len(PREFLIGHT_OBSERVATIONS) + 1):
-        expected = list(PREFLIGHT_OBSERVATIONS[:count])
-        if used == [*CREDENTIAL_MANAGEMENT, *expected] and observed in (
-            expected,
-            expected[:-1],
-        ):
+    for count in range(1, len(preflight) + 1):
+        expected = preflight[:count]
+        if used == [*head, *expected] and observed in (expected, expected[:-1]):
             return count
     return None
 
@@ -239,8 +288,17 @@ def _envelope(value):
         raise ValueError("bounded window and concurrency required")
 
 
+def _gate_job(claim):
+    """The Gate job this reservation addresses.
+
+    A claim written before a campaign could name its job carries none, and those
+    reservations are all the Commit-shaped ones whose job the lane fixed.
+    """
+    return claim.get("gateJob", "limits")
+
+
 def _claim(value):
-    if not isinstance(value, dict) or set(value) != {
+    if not isinstance(value, dict) or set(value) - {"gateJob"} != {
         "campaignId",
         "manifestDigest",
         "nonceDigest",
@@ -251,6 +309,11 @@ def _claim(value):
         "durationSeconds",
     }:
         raise ValueError("closed campaign claim required")
+    if "gateJob" in value and (
+        not isinstance(value["gateJob"], str)
+        or re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value["gateJob"]) is None
+    ):
+        raise ValueError("canonical Gate job name required")
     if (
         not isinstance(value["campaignId"], str)
         or re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", value["campaignId"]) is None
@@ -526,7 +589,9 @@ class Ledger:
         try:
             if str(Path(claim["gatePath"]).resolve()) != claim["gatePath"]:
                 raise ValueError("registered Gate path changed")
-            gate = Gate(claim["gatePath"], "limits").snapshot()
+            gate = Gate(claim["gatePath"], _gate_job(claim)).snapshot()
+            if "gateJob" in claim and claim["gateJob"] not in gate["jobs"]:
+                raise ValueError("registered Gate job is absent")
             if (
                 digest(gate["plan"]) != claim["gatePlanDigest"]
                 or gate["coordinatorInflight"]
@@ -630,7 +695,8 @@ class Ledger:
             claim = row["claim"]
             if (
                 record["planDigest"] != claim["gatePlanDigest"]
-                or receipt.get("kind") != "commit-acquisition-receipt-v2"
+                or receipt["gate"].get("planDigest") != claim["gatePlanDigest"]
+                or receipt.get("kind") != _receipt_kind(receipt.get("gate"))
                 or receipt.get("ticket") != ticket
                 or receipt.get("claimDigest") != row["claimDigest"]
                 or receipt.get("planDigest") != record["planDigest"]
@@ -643,7 +709,7 @@ class Ledger:
                 or not receipt["failure"]
                 or receipt.get("chargedCalls") != receipt.get("gate", {}).get("total")
                 or [item.get("slot") for item in receipt.get("credentialEvidence", [])]
-                != ["refresh", "tokeninfo"]
+                != _credential_slots(receipt.get("gate"))
                 or any(
                     item.get("workerReaped") is not True
                     or item.get("complete") is not True
@@ -670,7 +736,7 @@ class Ledger:
                 row["state"] = "closing"
                 row["abortRecordDigest"] = digest(record)
                 self._save(state)
-        gate = Gate(claim["gatePath"], "limits")
+        gate = Gate(claim["gatePath"], _gate_job(claim))
         stopped = gate.abort_no_data(
             record["planDigest"], record["gateDigest"], digest(record)
         )

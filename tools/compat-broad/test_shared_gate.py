@@ -517,3 +517,176 @@ def test_typed_json_admission_before_callback_or_debit(tmp_path, entry, change):
             invoke()
     assert len(calls) == (1 if change == "unchanged" else 0)
     assert gate.snapshot()["total"] == len(calls)
+
+
+def scheduled_plan(slots=3, probes=("p1", "p2", "p3")):
+    """A campaign whose probes interleave observation and recovery in one stream."""
+    op = lambda key: {
+        "service": "firestore",
+        "path": "/v1/" + key,
+        "body": None,
+        "method": "GET",
+        "privileged": True,
+        "form": False,
+    }
+    jobs = {
+        key: {
+            "resources": [key],
+            "observation": [op(key), op(key)],
+            "recovery": [op(key), op(key)],
+            "schedule": [
+                {"phase": "observation", "index": 0},
+                {"phase": "recovery", "index": 0},
+                {"phase": "observation", "index": 1},
+                {"phase": "recovery", "index": 1},
+            ],
+        }
+        for key in probes
+    }
+    return {
+        "contract": "shared-local-v1",
+        "wallSeconds": 600,
+        "recoverySeconds": 300,
+        "observationRequests": 2 * len(probes),
+        "costMicrousd": 10000,
+        "requestCostMicrousd": 100,
+        "intervalSeconds": 0.25,
+        "requestSeconds": 2,
+        "jobSlots": slots,
+        "jobs": jobs,
+    }
+
+
+def _absent():
+    return 404, {"error": {"code": 404, "status": "NOT_FOUND"}}
+
+
+def test_job_slots_bound_the_job_count_and_default_to_two(tmp_path):
+    """A campaign declares how many jobs its schedule spans; the default is today's."""
+    create(tmp_path / "two", plan())
+    assert len(Gate(tmp_path / "two", "a").snapshot()["jobs"]) == 2
+    three = plan()
+    three["jobs"]["c"] = {
+        "resources": ["c"],
+        "observation": [three["jobs"]["a"]["observation"][0]],
+        "recovery": [three["jobs"]["a"]["recovery"][0]],
+    }
+    three["jobs"]["c"]["observation"][0]["path"] = "/v1/c"
+    three["jobs"]["c"]["recovery"][0]["path"] = "/v1/c"
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "three-default", three)
+    three["jobSlots"] = 3
+    create(tmp_path / "three", three)
+    assert len(Gate(tmp_path / "three", "a").snapshot()["jobs"]) == 3
+
+
+@pytest.mark.parametrize("slots", [0, 1, 2.0, "3", None, 9])
+def test_malformed_or_exceeded_job_slots_are_refused(tmp_path, slots):
+    value = scheduled_plan(slots)
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / f"gate-{slots}", value)
+
+
+def test_a_scheduled_job_interleaves_observation_and_recovery(tmp_path):
+    """Recovery is one-way only for a campaign that did not declare a schedule."""
+    path = tmp_path / "gate"
+    create(path, scheduled_plan())
+    gate = Gate(path, "p1")
+    gate.claim()
+    operations = scheduled_plan()["jobs"]["p1"]
+    gate.dispatch(operations["observation"][0], False, _absent)
+    gate.dispatch(operations["recovery"][0], True, _absent)
+    job = gate.snapshot()["jobs"]["p1"]
+    assert job["stopped"] is False
+    assert job["scheduleDone"] == 2
+    gate.dispatch(operations["observation"][1], False, _absent)
+    gate.dispatch(operations["recovery"][1], True, _absent)
+    state = gate.snapshot()
+    assert state["jobs"]["p1"]["scheduleDone"] == 4
+    assert [event["phase"] for event in state["events"]] == [
+        "observation",
+        "recovery",
+        "observation",
+        "recovery",
+    ]
+    gate.finish()
+    assert gate.snapshot()["jobs"]["p1"]["complete"] is True
+
+
+def test_an_unscheduled_job_keeps_recovery_one_way(tmp_path):
+    """The existing campaigns must not silently gain a second observation phase."""
+    path = tmp_path / "gate"
+    create(path, plan())
+    gate = Gate(path, "a")
+    gate.claim()
+    operations = plan()["jobs"]["a"]
+    gate.dispatch(operations["recovery"][0], True, _absent)
+    assert gate.snapshot()["jobs"]["a"]["stopped"] is True
+    assert "scheduleDone" not in gate.snapshot()["jobs"]["a"]
+    with pytest.raises(ValueError, match="stopped"):
+        gate.dispatch(operations["observation"][0], False, _absent)
+
+
+def test_a_dispatch_outside_the_declared_schedule_is_refused(tmp_path):
+    path = tmp_path / "gate"
+    create(path, scheduled_plan())
+    gate = Gate(path, "p1")
+    gate.claim()
+    operations = scheduled_plan()["jobs"]["p1"]
+    with pytest.raises(ValueError, match="frozen execution schedule"):
+        gate.dispatch(operations["recovery"][0], True, _absent)
+    state = gate.snapshot()
+    assert state["events"] == []
+    assert state["jobs"]["p1"]["scheduleDone"] == 0
+    gate.dispatch(operations["observation"][0], False, _absent)
+    with pytest.raises(ValueError, match="frozen execution schedule"):
+        gate.dispatch(operations["observation"][1], False, _absent)
+    assert gate.snapshot()["jobs"]["p1"]["scheduleDone"] == 1
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        [],
+        [{"phase": "observation", "index": 0}],
+        [{"phase": "observation", "index": 0}] * 4,
+        [
+            {"phase": "observation", "index": 0},
+            {"phase": "observation", "index": 1},
+            {"phase": "recovery", "index": 0},
+            {"phase": "recovery", "index": 2},
+        ],
+        [
+            {"phase": "observation", "index": 0},
+            {"phase": "observation", "index": 1},
+            {"phase": "recovery", "index": 0},
+            {"phase": "cleanup", "index": 1},
+        ],
+        [{"phase": "observation"}, {"phase": "recovery", "index": 0}],
+    ],
+)
+def test_a_schedule_must_cover_every_slot_exactly_once(tmp_path, damage):
+    value = scheduled_plan()
+    value["jobs"]["p1"]["schedule"] = damage
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "gate", value)
+
+
+def test_the_plan_supplies_its_own_per_request_reservation(tmp_path):
+    """Thirteen seconds a request is the Commit lane's number, not every campaign's."""
+    value = scheduled_plan()
+    del value["requestSeconds"]
+    value["recoverySeconds"] = 40
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "default", value)
+    value["requestSeconds"] = 2
+    create(tmp_path / "declared", value)
+    assert Gate(tmp_path / "declared", "p1").snapshot()["plan"]["requestSeconds"] == 2
+
+
+@pytest.mark.parametrize("seconds", [0, -1, "2", None, float("inf")])
+def test_a_malformed_per_request_reservation_is_refused(tmp_path, seconds):
+    value = scheduled_plan()
+    value["requestSeconds"] = seconds
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "gate", value)

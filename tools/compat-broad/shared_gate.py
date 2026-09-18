@@ -84,6 +84,43 @@ def _valid_positive(value):
     )
 
 
+def published_allocation(plan):
+    """The wall and recovery reserve the campaign's budget artifact publishes.
+
+    `create` can prove a plan internally consistent but has no access to the
+    artifact the campaign was approved against, so the two could drift: a Gate
+    plan reserving 345 seconds of cleanup against a published 300 was admitted
+    with nothing to compare them. A campaign that names its published allocation
+    here makes that comparison part of admission.
+
+    The binding is the two numbers, not the file. The Gate never reads the
+    artifact, so this closes the drift only for a campaign that declares it; the
+    place to require the declaration is the O7 admission of the Gate plan.
+    """
+    return plan.get("publishedAllocation")
+
+
+def _valid_allocation(plan):
+    if "publishedAllocation" not in plan:
+        return True
+    declared = plan["publishedAllocation"]
+    return (
+        isinstance(declared, dict)
+        and set(declared) == {"wallSeconds", "recoverySeconds"}
+        and all(_valid_positive(value) for value in declared.values())
+    )
+
+
+def _within_published(plan):
+    declared = published_allocation(plan)
+    if declared is None:
+        return True
+    return (
+        plan["wallSeconds"] <= declared["wallSeconds"]
+        and plan["recoverySeconds"] <= declared["recoverySeconds"]
+    )
+
+
 def _valid_ceiling(plan):
     if "transportCeilingSeconds" not in plan:
         return True
@@ -302,7 +339,11 @@ def create(path, plan):
     policy = _stream_policy(plan)
     if policy:
         policy.validate_plan(plan)
-    if not _valid_request_seconds(plan, policy) or not _valid_ceiling(plan):
+    if (
+        not _valid_request_seconds(plan, policy)
+        or not _valid_ceiling(plan)
+        or not _valid_allocation(plan)
+    ):
         # Checked before they are used, so a malformed value cannot reach arithmetic.
         raise ValueError("invalid shared allocation")
     seconds = request_seconds(plan, policy)
@@ -327,6 +368,7 @@ def create(path, plan):
         or not _valid_request_seconds(plan, policy)
         or any(not _valid_schedule(job) for job in jobs.values())
         or not _ceiling_honoured(plan, seconds)
+        or not _within_published(plan)
         or _observation_time(plan, seconds)
         > plan["wallSeconds"] - plan["recoverySeconds"]
         or len(resources) != len(set(resources))

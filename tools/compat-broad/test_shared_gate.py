@@ -834,3 +834,61 @@ def test_a_malformed_creating_declaration_is_refused(tmp_path, creates):
     value["jobs"]["probe"]["schedule"][0]["creates"] = creates
     with pytest.raises(ValueError, match="invalid shared allocation"):
         create(tmp_path / "gate", value)
+
+
+def published_plan(wall=600, recovery=300, published_wall=900, published_recovery=300):
+    """A campaign that names the allocation its own budget artifact publishes."""
+    value = scheduled_plan()
+    value["wallSeconds"] = wall
+    value["recoverySeconds"] = recovery
+    value["publishedAllocation"] = {
+        "wallSeconds": published_wall,
+        "recoverySeconds": published_recovery,
+    }
+    return value
+
+
+def test_a_plan_may_not_reserve_more_than_its_artifact_publishes(tmp_path):
+    """The drift the request-byte campaign hit: a 345 second reserve against 300.
+
+    `create` proved the plan internally consistent and had no way to see the
+    published allocation, so the Gate and the budget artifact could disagree
+    without anything failing.
+    """
+    create(tmp_path / "equal", published_plan(recovery=300, published_recovery=300))
+    create(tmp_path / "under", published_plan(recovery=200, published_recovery=300))
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "over", published_plan(recovery=345, published_recovery=300))
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "wall", published_plan(wall=1000, published_wall=900))
+
+
+def test_a_plan_without_a_published_allocation_is_unchanged(tmp_path):
+    """Every campaign that never named an artifact keeps today's admission."""
+    value = scheduled_plan()
+    assert "publishedAllocation" not in value
+    create(tmp_path / "gate", value)
+    assert "publishedAllocation" not in Gate(tmp_path / "gate", "p1").snapshot()["plan"]
+
+
+@pytest.mark.parametrize(
+    "allocation",
+    [
+        {},
+        {"wallSeconds": 900},
+        {"recoverySeconds": 300},
+        {"wallSeconds": 900, "recoverySeconds": 300, "extra": 1},
+        {"wallSeconds": "900", "recoverySeconds": 300},
+        {"wallSeconds": 900, "recoverySeconds": 0},
+        {"wallSeconds": 900, "recoverySeconds": -1},
+        {"wallSeconds": float("inf"), "recoverySeconds": 300},
+        {"wallSeconds": True, "recoverySeconds": 300},
+        None,
+        [900, 300],
+    ],
+)
+def test_a_malformed_published_allocation_is_refused(tmp_path, allocation):
+    value = published_plan()
+    value["publishedAllocation"] = allocation
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "gate", value)

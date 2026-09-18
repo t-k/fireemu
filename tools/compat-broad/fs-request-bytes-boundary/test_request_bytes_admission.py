@@ -1229,3 +1229,46 @@ def test_the_launcher_has_no_injected_transport_or_preparation_mode():
     options = {action.dest for action in parser._actions}
     assert "injected_transport" not in options
     assert "transmit" not in options
+
+
+def test_the_wall_deficit_refusal_fires_under_any_published_wall(tmp_path):
+    """A refusal that a larger budget silences stops being evidence.
+
+    The existing deficit test pins the exact figures the 900 second wall
+    produces, so it will stop firing once the preparation lane publishes the
+    1100 second wall and the 500 second reserve. This one is wall independent:
+    the reservation cannot fit either wall, so the refusal stays reachable and
+    keeps naming its deficit.
+    """
+    built = Admission(tmp_path)
+    execution = campaign.execution_plan(built.plan)
+    for wall in (900, 1100):
+        with pytest.raises(ValueError, match="do not fit the campaign wall"):
+            campaign.gate_plan(
+                execution,
+                upload_seconds=60.0,
+                observation_slot_seconds=2.0,
+                recovery_slot_seconds=10.0,
+                wall_seconds=wall,
+            )
+
+
+def test_three_second_slots_fit_the_rebalanced_wall(tmp_path):
+    """What the rebalanced budget buys, stated executably rather than in prose."""
+    built = Admission(tmp_path)
+    execution = campaign.execution_plan(built.plan)
+    rebalanced = campaign.gate_plan(
+        execution,
+        upload_seconds=60.0,
+        observation_slot_seconds=3.0,
+        recovery_slot_seconds=3.0,
+        wall_seconds=1100,
+    )
+    assert rebalanced["recoverySeconds"] <= 500
+    observation = sum(
+        slot["seconds"] + campaign.GATE_INTERVAL_SECONDS
+        for job in rebalanced["jobs"].values()
+        for slot in job["schedule"]
+        if slot["phase"] == "observation"
+    )
+    assert observation <= rebalanced["wallSeconds"] - rebalanced["recoverySeconds"]

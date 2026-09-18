@@ -334,10 +334,12 @@ impl RestState {
     fn ttl_policy(&self, selector: &FieldSelector) -> Option<TtlPolicy> {
         let field = selector.field.as_ref()?;
         self.local
-            .ttl_catalog(&selector.project, &selector.database)
-            .policy(&selector.collection_group)
+            .ttl_policy(
+                &selector.project,
+                &selector.database,
+                &selector.collection_group,
+            )
             .filter(|policy| &policy.field == field)
-            .cloned()
     }
 
     fn patch_field(

@@ -2647,6 +2647,29 @@ impl LocalBackend {
             .unwrap_or_default()
     }
 
+    /// Returns the time-to-live policy in force for one collection group.
+    ///
+    /// The caller that reads a single policy copies that policy alone rather than the whole
+    /// catalog, which matters where the read happens under another lock: the expiry sweep
+    /// reads it inside the database critical section that commits the deletion.
+    #[must_use]
+    pub fn ttl_policy(
+        &self,
+        project: &str,
+        database: &str,
+        collection_group: &CollectionId,
+    ) -> Option<fireemu_core_firestore::ttl::TtlPolicy> {
+        let catalogs = self
+            .ttl
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        catalogs
+            .get(&(Some(project.to_owned()), database.to_owned()))
+            .or_else(|| catalogs.get(&(None, database.to_owned())))
+            .and_then(|catalog| catalog.policy(collection_group))
+            .cloned()
+    }
+
     /// Replaces one database's time-to-live field configuration.
     ///
     /// Used by an import and by a snapshot restore, which install a whole catalog rather
@@ -3158,11 +3181,14 @@ impl LocalBackend {
             self.with_db(parent, |db| {
                 // The catalog lock is taken under this database's lock and released before
                 // the commit. Nothing holds the catalog while acquiring a database lock, so
-                // the two never contend in the other order.
-                let policy = self
-                    .ttl_catalog(parent.project.as_str(), parent.database.as_str())
-                    .policy(collection_group)
-                    .cloned();
+                // the two never contend in the other order. One policy is copied out, not
+                // the catalog, so the work under the database lock does not grow with how
+                // many collection groups the database configured.
+                let policy = self.ttl_policy(
+                    parent.project.as_str(),
+                    parent.database.as_str(),
+                    collection_group,
+                );
                 let still_expired = policy.is_some_and(|policy| {
                     db.get(path)
                         .is_some_and(|document| policy.is_expired(&document.fields, expires_at))

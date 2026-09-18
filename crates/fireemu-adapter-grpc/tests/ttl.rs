@@ -310,6 +310,38 @@ fn a_policy_disabled_after_the_scan_deletes_nothing_it_had_already_chosen() {
 }
 
 #[test]
+fn a_policy_moved_to_another_field_after_the_scan_is_evaluated_on_the_new_field() {
+    let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
+    write_document(&backend, "sessions/s1", Some(timestamp(1_100)));
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .expect("enable ttl");
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
+
+    let deleted = sweep_with_write_between(
+        &backend,
+        LogicalInstant::from_unix_seconds(1_101),
+        // A collection group carries one policy, so moving it takes a disable and a second
+        // enable. The document carries no purgeAt, so the policy now in force expires
+        // nothing, even though the field it used to name is still an expired timestamp.
+        || {
+            assert!(backend.disable_ttl(
+                PROJECT,
+                DATABASE,
+                &group("sessions"),
+                &field("expiresAt")
+            ));
+            backend
+                .enable_ttl(PROJECT, DATABASE, group("sessions"), field("purgeAt"))
+                .expect("move the policy");
+        },
+    );
+
+    assert_eq!(deleted, 0);
+    assert!(exists(&backend, "sessions/s1"));
+}
+
+#[test]
 fn an_expiration_offset_extended_after_the_scan_keeps_the_document() {
     let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
     write_document(&backend, "sessions/s1", Some(timestamp(1_100)));

@@ -566,11 +566,14 @@
     "implemented": [
       "Firestore Admin REST GET, PATCH and LIST on projects/{project}/databases/{database}/collectionGroups/{group}/fields, and GET on the field-configuration operations the patches returned",
       "ttlConfig is persisted per project and database, reported as ACTIVE on readback, refused for __name__, for the wildcard field and for a second field of one collection group, and bounded to 64 policies per database",
-      "documents whose time-to-live field holds a timestamp earlier than the virtual clock are deleted by a sweep that runs one configurable interval after expiry (firestore.ttlSweepIntervalSeconds, default 86400, maximum 259200); the deletion is an ordinary delete that publishes to listeners and delivers triggers and evaluates no Security Rules",
+      "ttlConfig is validated before any state change: an empty object enables the policy, a null or absent value disables it, and a boolean, a number, a string, an array or an unknown setting is refused with INVALID_ARGUMENT leaving the catalog, the readback and the operation record as they were",
+      "ttlConfig.expirationOffset is read, stored and reported back by fields.get, fields.list and the operation response; the expiration time of a document is the stored timestamp plus the offset, and an offset that is negative, larger than 2147483647 seconds or more precise than a second is refused",
+      "documents whose time-to-live expiration time is earlier than the virtual clock are deleted by a sweep that runs one configurable interval after expiry (firestore.ttlSweepIntervalSeconds, default 86400, maximum 259200); the deletion is an ordinary delete that publishes to listeners and delivers triggers and evaluates no Security Rules",
       "an expired document stays readable until the sweep reaches it; a field whose value is not a timestamp is ignored rather than deleted or refused",
-      "the configuration survives export, import and a session snapshot restore",
+      "the configuration survives export, import and a session snapshot restore; the export sidecar carries the configured field alone, so an expirationOffset survives a snapshot restore but is not yet written to or read back from an export",
       "the field-configuration operations are recorded per project, bounded to 64 each, and a poll answers exactly what the patch that minted it answered",
-      "a sweep is scoped to the session that asked for it and deletes at most 1024 documents per run, leaving the rest to the next run rather than holding the clock response open"
+      "a sweep is scoped to the session that asked for it and deletes at most 1024 documents per run, leaving the rest to the next run rather than holding the clock response open",
+      "a sweep deletion is bound to the version it deletes: expiry is decided again on the document current inside the database critical section that commits the delete, so a document whose time-to-live was extended, cleared or replaced between the scan and the deletion is kept"
     ],
     "notes": [
       "local-only bounded adapter surface; it does not claim production parity, and no production observation of these methods has been made",

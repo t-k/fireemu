@@ -386,7 +386,7 @@ impl RestState {
         // a refused request leaves the catalog, the readback and the operation record exactly
         // as it found them.
         let requested = parse_ttl_config(&body["ttlConfig"])?;
-        if let Some(offset) = requested {
+        if let TtlConfigRequest::Enable { expiration_offset } = requested {
             let Some(field) = selector.field.clone() else {
                 return Err(Status::invalid_argument(
                     "the wildcard field names a collection group's default settings and \
@@ -399,7 +399,7 @@ impl RestState {
                     &selector.database,
                     selector.collection_group.clone(),
                     field,
-                    offset,
+                    expiration_offset,
                 )
                 .map_err(|error| match error {
                     TtlError::ConflictingField { .. } => {
@@ -592,16 +592,25 @@ impl RestState {
     }
 }
 
+/// What a patch's `ttlConfig` asks for, once it has been read and found well-formed.
+enum TtlConfigRequest {
+    /// The configuration is absent or null, which clears the policy.
+    Disable,
+    /// The configuration enables the policy, carrying the offset it named, if any.
+    Enable {
+        /// The `expirationOffset`, absent for the bare `{}`.
+        expiration_offset: Option<LogicalDuration>,
+    },
+}
+
 /// Reads the `ttlConfig` a patch carries, before anything it names is applied.
 ///
-/// `Ok(None)` is the documented disable: the mask names `ttlConfig` and the body leaves it
-/// absent or null. `Ok(Some(offset))` enables the policy with the `expirationOffset` the
-/// configuration names, which is absent for the bare `{}`. Anything else is a caller error:
-/// `google.firestore.admin.v1.Field.TtlConfig` is a message, so a boolean, a number, a string
-/// and an array are all refused rather than read as a request to enable.
-fn parse_ttl_config(value: &Value) -> Result<Option<Option<LogicalDuration>>, Status> {
+/// Anything that is not a `google.firestore.admin.v1.Field.TtlConfig` is a caller error: the
+/// field is a message, so a boolean, a number, a string and an array are all refused rather
+/// than read as a request to enable the policy.
+fn parse_ttl_config(value: &Value) -> Result<TtlConfigRequest, Status> {
     if value.is_null() {
-        return Ok(None);
+        return Ok(TtlConfigRequest::Disable);
     }
     let Some(config) = value.as_object() else {
         return Err(Status::invalid_argument(
@@ -619,7 +628,7 @@ fn parse_ttl_config(value: &Value) -> Result<Option<Option<LogicalDuration>>, St
             )));
         }
     }
-    let offset = match config.get("expirationOffset") {
+    let expiration_offset = match config.get("expirationOffset") {
         None | Some(Value::Null) => None,
         Some(Value::String(text)) => Some(
             parse_expiration_offset(text)
@@ -631,7 +640,7 @@ fn parse_ttl_config(value: &Value) -> Result<Option<Option<LogicalDuration>>, St
             ))
         }
     };
-    Ok(Some(offset))
+    Ok(TtlConfigRequest::Enable { expiration_offset })
 }
 
 /// The `google.longrunning.Operation` of one completed field configuration.

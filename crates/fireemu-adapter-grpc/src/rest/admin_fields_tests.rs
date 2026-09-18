@@ -819,7 +819,7 @@ fn ttl_observations(state: &RestState) -> (Value, Value, Value) {
     (field, listed, operations)
 }
 
-fn patch_ttl(state: &RestState, config: Value) -> (u16, Value) {
+fn patch_ttl(state: &RestState, config: &Value) -> (u16, Value) {
     call(
         state,
         "PATCH",
@@ -841,7 +841,7 @@ fn a_ttl_config_that_is_not_an_object_is_refused_without_changing_anything() {
         json!([]),
         json!([{}]),
     ] {
-        let (status, body) = patch_ttl(&state, config.clone());
+        let (status, body) = patch_ttl(&state, &config);
         assert_eq!(status, 400, "{config}: {body}");
         assert_eq!(
             body["error"]["status"],
@@ -856,7 +856,7 @@ fn a_ttl_config_that_is_not_an_object_is_refused_without_changing_anything() {
 fn a_ttl_config_naming_an_unknown_setting_is_refused_without_changing_anything() {
     let state = state();
     let before = ttl_observations(&state);
-    let (status, body) = patch_ttl(&state, json!({ "retention": "604800s" }));
+    let (status, body) = patch_ttl(&state, &json!({ "retention": "604800s" }));
     assert_eq!(status, 400, "{body}");
     assert_eq!(body["error"]["status"], json!("INVALID_ARGUMENT"));
     assert_eq!(ttl_observations(&state), before);
@@ -865,7 +865,7 @@ fn a_ttl_config_naming_an_unknown_setting_is_refused_without_changing_anything()
 #[test]
 fn an_empty_ttl_config_enables_the_policy_without_an_expiration_offset() {
     let state = state();
-    let (status, body) = patch_ttl(&state, json!({}));
+    let (status, body) = patch_ttl(&state, &json!({}));
     assert_eq!(status, 200, "{body}");
     let (_, field) = call(
         &state,
@@ -879,7 +879,7 @@ fn an_empty_ttl_config_enables_the_policy_without_an_expiration_offset() {
 #[test]
 fn an_echoed_output_only_state_is_ignored_rather_than_installed() {
     let state = state();
-    let (status, body) = patch_ttl(&state, json!({ "state": "NEEDS_REPAIR" }));
+    let (status, body) = patch_ttl(&state, &json!({ "state": "NEEDS_REPAIR" }));
     assert_eq!(status, 200, "{body}");
     let (_, field) = call(
         &state,
@@ -893,7 +893,7 @@ fn an_echoed_output_only_state_is_ignored_rather_than_installed() {
 #[test]
 fn an_expiration_offset_is_stored_and_read_back_by_every_surface() {
     let state = state();
-    let (status, operation) = patch_ttl(&state, json!({ "expirationOffset": "604800s" }));
+    let (status, operation) = patch_ttl(&state, &json!({ "expirationOffset": "604800s" }));
     assert_eq!(status, 200, "{operation}");
     let expected = json!({ "state": "ACTIVE", "expirationOffset": "604800s" });
     assert_eq!(operation["response"]["ttlConfig"], expected);
@@ -916,8 +916,8 @@ fn an_expiration_offset_is_stored_and_read_back_by_every_surface() {
 #[test]
 fn a_second_patch_replaces_the_expiration_offset_it_found() {
     let state = state();
-    patch_ttl(&state, json!({ "expirationOffset": "604800s" }));
-    let (status, body) = patch_ttl(&state, json!({ "expirationOffset": "60s" }));
+    patch_ttl(&state, &json!({ "expirationOffset": "604800s" }));
+    let (status, body) = patch_ttl(&state, &json!({ "expirationOffset": "60s" }));
     assert_eq!(status, 200, "{body}");
     let (_, field) = call(
         &state,
@@ -928,7 +928,7 @@ fn a_second_patch_replaces_the_expiration_offset_it_found() {
     assert_eq!(field["ttlConfig"]["expirationOffset"], json!("60s"));
 
     // A bare `{}` names no offset, so the policy carries none again.
-    let (status, body) = patch_ttl(&state, json!({}));
+    let (status, body) = patch_ttl(&state, &json!({}));
     assert_eq!(status, 200, "{body}");
     let (_, field) = call(
         &state,
@@ -943,7 +943,7 @@ fn a_second_patch_replaces_the_expiration_offset_it_found() {
 fn the_documented_expiration_offset_bounds_are_the_ones_enforced() {
     let state = state();
     for accepted in ["0s", "1s", "2147483647s", "60.000000000s"] {
-        let (status, body) = patch_ttl(&state, json!({ "expirationOffset": accepted }));
+        let (status, body) = patch_ttl(&state, &json!({ "expirationOffset": accepted }));
         assert_eq!(status, 200, "{accepted}: {body}");
     }
     let (_, field) = call(
@@ -967,7 +967,7 @@ fn the_documented_expiration_offset_bounds_are_the_ones_enforced() {
         json!([]),
         json!({}),
     ] {
-        let (status, body) = patch_ttl(&state, json!({ "expirationOffset": refused }));
+        let (status, body) = patch_ttl(&state, &json!({ "expirationOffset": refused }));
         assert_eq!(status, 400, "{refused}: {body}");
         assert_eq!(
             body["error"]["status"],
@@ -981,7 +981,7 @@ fn the_documented_expiration_offset_bounds_are_the_ones_enforced() {
 #[test]
 fn a_null_expiration_offset_is_the_unset_one() {
     let state = state();
-    let (status, body) = patch_ttl(&state, json!({ "expirationOffset": Value::Null }));
+    let (status, body) = patch_ttl(&state, &json!({ "expirationOffset": Value::Null }));
     assert_eq!(status, 200, "{body}");
     let (_, field) = call(
         &state,
@@ -995,8 +995,8 @@ fn a_null_expiration_offset_is_the_unset_one() {
 #[test]
 fn a_null_ttl_config_disables_the_policy_the_patch_found() {
     let state = state();
-    patch_ttl(&state, json!({ "expirationOffset": "604800s" }));
-    let (status, body) = patch_ttl(&state, Value::Null);
+    patch_ttl(&state, &json!({ "expirationOffset": "604800s" }));
+    let (status, body) = patch_ttl(&state, &Value::Null);
     assert_eq!(status, 200, "{body}");
     let (_, field) = call(
         &state,

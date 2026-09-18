@@ -234,7 +234,8 @@ impl TtlCatalog {
         Self::default()
     }
 
-    /// Enables a time-to-live policy, returning the state a readback reports.
+    /// Enables a time-to-live policy with no `expirationOffset`, returning the state a
+    /// readback reports.
     ///
     /// Re-enabling the field that already carries the policy is accepted and leaves the
     /// state unchanged, so a campaign may replay its own patch.

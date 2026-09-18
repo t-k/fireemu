@@ -226,7 +226,7 @@ fn a_document_whose_ttl_field_is_cleared_after_the_scan_survives_the_sweep() {
 
         let deleted =
             sweep_with_write_between(&backend, LogicalInstant::from_unix_seconds(1_101), || {
-                write_document(&backend, name, value)
+                write_document(&backend, name, value);
             });
 
         assert_eq!(deleted, 0, "{name}");
@@ -274,7 +274,7 @@ fn an_expired_document_left_alone_during_the_sweep_is_still_deleted() {
     // alone, and only the untouched one is deleted.
     let deleted =
         sweep_with_write_between(&backend, LogicalInstant::from_unix_seconds(1_101), || {
-            write_document(&backend, "sessions/s1", Some(timestamp(9_000_000)))
+            write_document(&backend, "sessions/s1", Some(timestamp(9_000_000)));
         });
 
     assert_eq!(deleted, 1);

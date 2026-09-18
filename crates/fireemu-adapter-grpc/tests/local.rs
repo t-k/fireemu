@@ -8028,3 +8028,158 @@ async fn transaction_commit_late_precondition_failure_preserves_documents_and_ve
     }
     handle.abort();
 }
+
+/// The message production answers on the data plane for a database that was never created,
+/// recorded from the oracle project in `conformance/firestore-production-matrix.json`
+/// (`emulator/routes#named-database-document`). The trailing space is production's.
+fn missing_database_message(project: &str, database: &str) -> String {
+    format!(
+        "The database {database} does not exist for project {project} Please visit \
+         https://console.cloud.google.com/datastore/setup?project={project} to add a Cloud \
+         Datastore or Cloud Firestore database. "
+    )
+}
+
+#[tokio::test]
+async fn grpc_refuses_every_data_plane_call_on_a_database_that_was_never_created() {
+    let (mut client, _clock, handle) = start().await;
+    let database = "projects/demo-app/databases/never-created";
+    let docs = format!("{database}/documents");
+    let document = format!("{docs}/c/d");
+    let expected = missing_database_message("demo-app", "never-created");
+
+    let refusal = |error: tonic::Status, surface: &str| {
+        assert_eq!(error.code(), tonic::Code::NotFound, "{surface}");
+        assert_eq!(error.message(), expected, "{surface}");
+    };
+
+    refusal(
+        client
+            .get_document(pb::GetDocumentRequest {
+                name: document.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err(),
+        "GetDocument",
+    );
+    refusal(
+        client
+            .list_documents(pb::ListDocumentsRequest {
+                parent: docs.clone(),
+                collection_id: "c".to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err(),
+        "ListDocuments",
+    );
+    refusal(
+        client
+            .batch_get_documents(pb::BatchGetDocumentsRequest {
+                database: database.to_owned(),
+                documents: vec![document.clone()],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err(),
+        "BatchGetDocuments",
+    );
+    refusal(
+        client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: database.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err(),
+        "BeginTransaction",
+    );
+    refusal(
+        client
+            .commit(pb::CommitRequest {
+                database: database.to_owned(),
+                writes: vec![pb::Write {
+                    operation: Some(pb::write::Operation::Update(pb::Document {
+                        name: document.clone(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err(),
+        "Commit",
+    );
+    refusal(
+        client
+            .batch_write(pb::BatchWriteRequest {
+                database: database.to_owned(),
+                writes: vec![pb::Write {
+                    operation: Some(pb::write::Operation::Delete(document.clone())),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err(),
+        "BatchWrite",
+    );
+    refusal(
+        client
+            .list_collection_ids(pb::ListCollectionIdsRequest {
+                parent: docs.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err(),
+        "ListCollectionIds",
+    );
+    refusal(
+        client
+            .partition_query(pb::PartitionQueryRequest {
+                parent: docs.clone(),
+                partition_count: 2,
+                query_type: Some(pb::partition_query_request::QueryType::StructuredQuery(
+                    pb::StructuredQuery {
+                        from: vec![sq::CollectionSelector {
+                            collection_id: "c".to_owned(),
+                            all_descendants: true,
+                        }],
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err(),
+        "PartitionQuery",
+    );
+
+    let query = pb::RunQueryRequest {
+        parent: docs.clone(),
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: "c".to_owned(),
+                    all_descendants: false,
+                }],
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let refused = match client.run_query(query).await {
+        Err(error) => error,
+        Ok(response) => response
+            .into_inner()
+            .next()
+            .await
+            .expect("the stream reports the refusal")
+            .unwrap_err(),
+    };
+    refusal(refused, "RunQuery");
+
+    handle.abort();
+}

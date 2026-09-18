@@ -2827,7 +2827,8 @@ fn rest_validation_codes_follow_production() {
     assert_eq!(status, 404, "{body}");
     assert_eq!(body["error"]["status"], "NOT_FOUND", "{body}");
     assert_eq!(
-        body["error"]["message"], "The database Upper does not exist for project demo-app",
+        body["error"]["message"],
+        missing_database_message("Upper"),
         "{body}"
     );
 
@@ -3630,4 +3631,87 @@ fn explain_rest_name_scans_report_production_plan_billing_and_protojson_defaults
             );
         }
     }
+}
+
+/// The message production answers on the data plane for a database that was never created.
+/// Recorded from the oracle project in `conformance/firestore-production-matrix.json`
+/// (`emulator/routes#named-database-document`), trailing space included.
+fn missing_database_message(database: &str) -> String {
+    format!(
+        "The database {database} does not exist for project demo-app Please visit \
+         https://console.cloud.google.com/datastore/setup?project=demo-app to add a Cloud \
+         Datastore or Cloud Firestore database. "
+    )
+}
+
+#[test]
+fn every_data_plane_surface_refuses_a_database_that_was_never_created() {
+    // Production refuses a request against a database `databases.create` was never called
+    // for before it considers the document; fireemu materialized it on first touch.
+    let s = state(None);
+    let docs = "/v1/projects/demo-app/databases/never-created/documents";
+    let document = "projects/demo-app/databases/never-created/documents/c/d";
+    let expected = missing_database_message("never-created");
+    let write = json!({"writes": [{"update": {"name": document, "fields": {}}}]});
+    for (method, path, body) in [
+        ("GET", format!("{docs}/c/d"), Value::Null),
+        ("GET", format!("{docs}/c"), Value::Null),
+        (
+            "POST",
+            format!("{docs}/c?documentId=x"),
+            json!({"fields": {}}),
+        ),
+        ("PATCH", format!("{docs}/c/d"), json!({"fields": {}})),
+        ("DELETE", format!("{docs}/c/d"), Value::Null),
+        ("POST", format!("{docs}:commit"), write.clone()),
+        ("POST", format!("{docs}:batchWrite"), write),
+        (
+            "POST",
+            format!("{docs}:batchGet"),
+            json!({"documents": [document]}),
+        ),
+        (
+            "POST",
+            format!("{docs}:runQuery"),
+            json!({"structuredQuery": {"from": [{"collectionId": "c"}]}}),
+        ),
+        (
+            "POST",
+            format!("{docs}:runAggregationQuery"),
+            json!({"structuredAggregationQuery": {
+                "structuredQuery": {"from": [{"collectionId": "c"}]},
+                "aggregations": [{"alias": "n", "count": {}}]
+            }}),
+        ),
+        ("POST", format!("{docs}:beginTransaction"), json!({})),
+        ("POST", format!("{docs}:listCollectionIds"), json!({})),
+    ] {
+        let (status, body) = call(&s, method, &path, body);
+        assert_eq!(status, 404, "{method} {path}: {body}");
+        assert_eq!(body["error"]["status"], "NOT_FOUND", "{method} {path}: {body}");
+        assert_eq!(
+            body["error"]["message"], expected,
+            "{method} {path}: {body}"
+        );
+    }
+}
+
+#[test]
+fn the_default_database_is_reachable_without_having_been_created() {
+    // Every project has `(default)`: the refusal is for named databases only.
+    let s = state(None);
+    let (status, body) = call(&s, "GET", &format!("{DOCS}/c/d"), Value::Null);
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "Document \"projects/demo-app/databases/(default)/documents/c/d\" not found.",
+        "{body}"
+    );
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}/c?documentId=d"),
+        json!({"fields": {}}),
+    );
+    assert_eq!(status, 200, "{body}");
 }

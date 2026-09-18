@@ -87,6 +87,16 @@ struct PushBackoff {
     resume_at: LogicalInstant,
 }
 
+/// When push delivery may resume after a failed attempt. The subscription-level push backoff and
+/// whatever the retry policy scheduled for the next message are separate waits, so the later one
+/// decides. A subscription with nothing left to deliver owes only its backoff.
+fn push_resume_after_failure(
+    backoff_resume_at: LogicalInstant,
+    next_delivery_at: Option<LogicalInstant>,
+) -> LogicalInstant {
+    next_delivery_at.map_or(backoff_resume_at, |next| next.max(backoff_resume_at))
+}
+
 #[derive(Debug, Default)]
 struct PushDispatchState {
     ready: VecDeque<PushWork>,
@@ -233,12 +243,26 @@ impl PushDispatchState {
         if self.active.get(&key).copied() == Some(work.generation) {
             self.active.remove(&key);
         }
-        if !self.shutting_down && self.generations.get(&key).copied() == Some(work.generation) {
-            if self.queued.contains(&key) {
-                return;
-            }
-            self.deferred.insert(key, (work, eligible_at));
+        if self.shutting_down || self.generations.get(&key).copied() != Some(work.generation) {
+            return;
         }
+        if let Some(resume_at) = self.backoff_resume_at(&key) {
+            // A push backoff throttles the subscription itself. Work enqueued while the failing
+            // attempt was still in flight was admitted before the failure was known, so it waits
+            // with the subscription instead of running at once.
+            self.queued.remove(&key);
+            self.ready
+                .retain(|queued| queued.subscription.to_full() != key);
+            self.deferred
+                .insert(key, (work, eligible_at.max(resume_at)));
+            return;
+        }
+        // No backoff: a publication that arrived during the attempt is deliverable now, and its
+        // queued work must not be turned back into a deferral.
+        if self.queued.contains(&key) {
+            return;
+        }
+        self.deferred.insert(key, (work, eligible_at));
     }
 
     fn promote_due(&mut self, now: LogicalInstant) {
@@ -811,21 +835,25 @@ impl PubSubHandle {
         if !self.is_current_push_generation(&key, work.generation) {
             return PushQuantumResult::Stop;
         }
+        // The gate every delivering path passes: while the subscription owes a push backoff, no
+        // request reaches its endpoint, however the work came to be claimed.
+        let now = self.now();
+        if let Some(resume_at) = self
+            .push_backoff_for_key(&key)
+            .filter(|resume| *resume > now)
+        {
+            return PushQuantumResult::Defer(push_resume_after_failure(
+                resume_at,
+                self.next_push_delivery_at(&work.subscription),
+            ));
+        }
         let received = self.pull(&work.subscription, 100).unwrap_or_default();
         if received.is_empty() {
-            let now = self.now();
-            // The retry policy schedules the next message; the push backoff throttles the whole
-            // subscription. Whichever is later decides when this subscription is looked at again.
-            let resume_at = self.push_backoff_for_key(&key);
+            // Nothing is deliverable yet. The retry policy schedules the next message; whether it
+            // or an elapsing backoff decides, the subscription is looked at again then.
             return match self.next_push_delivery_at(&work.subscription) {
-                Some(next) => {
-                    let eligible_at = resume_at.map_or(next, |resume| next.max(resume));
-                    if eligible_at > now {
-                        PushQuantumResult::Defer(eligible_at)
-                    } else {
-                        PushQuantumResult::Continue
-                    }
-                }
+                Some(next) if next > now => PushQuantumResult::Defer(next),
+                Some(_) => PushQuantumResult::Continue,
                 None => PushQuantumResult::Stop,
             };
         }
@@ -838,8 +866,14 @@ impl PubSubHandle {
                 PushQuantumResult::Continue
             }
             // The endpoint failed, so the subscription owes its push backoff before the next
-            // attempt, whatever the per-message retry policy asks for.
-            PushAttemptOutcome::Failed => PushQuantumResult::Defer(self.record_push_failure(&key)),
+            // attempt. The retry policy may ask for longer, and then it decides.
+            PushAttemptOutcome::Failed => {
+                let resume_at = self.record_push_failure(&key);
+                PushQuantumResult::Defer(push_resume_after_failure(
+                    resume_at,
+                    self.next_push_delivery_at(&work.subscription),
+                ))
+            }
             PushAttemptOutcome::Invalidated => PushQuantumResult::Stop,
         }
     }
@@ -1186,6 +1220,42 @@ mod dispatch_tests {
         );
     }
 
+    /// The wait a failed attempt owes composes the two mechanisms at the failure point itself,
+    /// rather than leaving the longer of the two to be discovered by a later empty pull.
+    #[test]
+    fn the_wait_after_a_failure_is_the_later_of_the_backoff_and_the_retry_policy() {
+        let backoff = TEST_NOW
+            .checked_add(LogicalDuration::from_millis(100))
+            .unwrap();
+        let retry_is_longer = TEST_NOW
+            .checked_add(LogicalDuration::from_seconds(30))
+            .unwrap();
+        let retry_is_shorter = TEST_NOW
+            .checked_add(LogicalDuration::from_millis(10))
+            .unwrap();
+
+        assert_eq!(
+            push_resume_after_failure(backoff, Some(retry_is_longer)),
+            retry_is_longer,
+            "a retry policy longer than the backoff decides"
+        );
+        assert_eq!(
+            push_resume_after_failure(backoff, Some(retry_is_shorter)),
+            backoff,
+            "a retry policy shorter than the backoff never shortens it"
+        );
+        assert_eq!(
+            push_resume_after_failure(backoff, Some(backoff)),
+            backoff,
+            "equal waits leave one instant"
+        );
+        assert_eq!(
+            push_resume_after_failure(backoff, None),
+            backoff,
+            "a subscription with nothing left to deliver owes only its backoff"
+        );
+    }
+
     /// Consecutive failures lengthen one subscription's wait, and a delivery the endpoint accepts
     /// puts it back to the minimum.
     #[test]
@@ -1259,6 +1329,34 @@ mod dispatch_tests {
             dispatch.deferred.get(&key).map(|(_, at)| *at),
             Some(resume_at),
             "republishing must not move the backoff"
+        );
+    }
+
+    /// A publication that arrives while a failing attempt is still in flight must not cancel the
+    /// backoff that attempt is about to record. The enqueue happens before the failure is known,
+    /// so the deferral has to win over the work it queued.
+    #[test]
+    fn a_publication_during_a_failing_attempt_does_not_reopen_the_immediate_loop() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let name = subscription(0, &topic);
+        let key = name.to_full();
+        let mut dispatch = PushDispatchState::default();
+
+        dispatch.enqueue(name.clone(), TEST_NOW);
+        let work = dispatch.claim().expect("the worker claims the work");
+        // The endpoint is still being awaited, so no failure is recorded yet.
+        dispatch.enqueue(name.clone(), TEST_NOW);
+        let resume_at = dispatch.record_push_failure(&key, TEST_NOW);
+        dispatch.defer(work, resume_at);
+
+        assert!(
+            dispatch.claim().is_none(),
+            "the subscription owes a backoff until {resume_at}, so nothing may be claimable yet"
+        );
+        dispatch.promote_due(resume_at);
+        assert!(
+            dispatch.claim().is_some(),
+            "the work returns once the backoff elapses"
         );
     }
 

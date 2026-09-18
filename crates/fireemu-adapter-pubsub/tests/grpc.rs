@@ -3411,3 +3411,68 @@ async fn a_successful_push_resets_the_backoff_streak() {
     stop.store(true, Ordering::Release);
     worker.join().unwrap();
 }
+
+/// The interleaving that reopens the immediate loop: a message is published while a failing push
+/// attempt is still awaiting its endpoint. The publication is admitted before the failure is
+/// known, so nothing may turn it into a request before the backoff the failure records elapses.
+#[tokio::test]
+async fn a_publish_during_an_in_flight_failing_push_sends_nothing_before_the_backoff_elapses() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let (endpoint, bodies, started, release, stop, worker) = barrier_push_sink_with_status(503);
+    let topic = "projects/demo-app/topics/push-backoff-inflight";
+    let subscription = "projects/demo-app/subscriptions/push-backoff-inflight";
+
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"first")],
+    })
+    .await
+    .unwrap();
+
+    // The endpoint has the first request and is holding it: the attempt has not failed yet.
+    started.await.unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"published-mid-flight")],
+    })
+    .await
+    .unwrap();
+
+    let resume_at = h
+        .clock
+        .lock()
+        .unwrap()
+        .now_for_test()
+        .checked_add(push_backoff_after(1))
+        .unwrap();
+    release.store(true, Ordering::Release);
+    await_push_backoff(&h, subscription, resume_at).await;
+
+    // The publication admitted mid-flight must not have become a request of its own.
+    assert_push_count_stays(&bodies, 1).await;
+    advance(&h, push_backoff_after(1));
+    await_push_count(&bodies, 2).await;
+
+    h.shutdown().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}

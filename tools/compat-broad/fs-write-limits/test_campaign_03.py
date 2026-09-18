@@ -20,15 +20,24 @@ from comparator_03 import compare_rows
 from compiler_03 import (
     CAMPAIGN,
     COLLECTION_ID_MAX,
+    DOCUMENT_BYTES_MAX,
     DOCUMENT_NAME_MAX,
+    FIELD_PATH_BYTES_MAX,
+    FIELD_VALUE_BYTES_MAX,
+    INDEX_ENTRIES_PER_DOCUMENT_MAX,
+    INDEX_ENTRY_BYTES_MAX,
+    INDEX_ENTRY_SUM_PER_DOCUMENT_MAX,
     SUBCOLLECTION_DEPTH_MAX,
     compile_limits_plan,
+    document_bytes,
+    index_usage,
     largest_index_entry_bytes,
     resource_name_bytes,
     subcollection_depth,
 )
 from expectations_03 import (
     evaluate_rows,
+    pending_rows,
     preflight_count,
     validate_cleanup,
     validate_local_receipt,
@@ -54,6 +63,40 @@ def _path_error(resource):
         return "subcollection depth exceeds the maximum"
     if resource_name_bytes(resource) > DOCUMENT_NAME_MAX:
         return "document name is too long"
+    return None
+
+
+def _commit_error(resource, fields):
+    """Apply the commit-stage limits, in the order the store applies them."""
+    for name, value in fields.items():
+        payload = value.get("stringValue") or value.get("bytesValue") or ""
+        if len(payload.encode()) > FIELD_VALUE_BYTES_MAX:
+            return f'The value of property "{name}" is longer than {FIELD_VALUE_BYTES_MAX} bytes.'
+    if document_bytes(resource, fields) > DOCUMENT_BYTES_MAX:
+        return "FS-LIMIT-DOCUMENT-BYTES exceeded"
+    usage = index_usage(resource, fields)
+    for identifier, value, maximum in (
+        (
+            "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
+            usage["entries"],
+            INDEX_ENTRIES_PER_DOCUMENT_MAX,
+        ),
+        ("FS-LIMIT-INDEX-ENTRY-BYTES", usage["maxEntryBytes"], INDEX_ENTRY_BYTES_MAX),
+        (
+            "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
+            usage["totalBytes"],
+            INDEX_ENTRY_SUM_PER_DOCUMENT_MAX,
+        ),
+    ):
+        if value > maximum:
+            return f"{identifier}: {value} exceeds {maximum}"
+    return None
+
+
+def _mask_error(mask):
+    for path in mask or ():
+        if len(path.encode()) > FIELD_PATH_BYTES_MAX:
+            return f"invalid field path: field path is {len(path.encode())} bytes, maximum is {FIELD_PATH_BYTES_MAX}"
     return None
 
 
@@ -113,11 +156,15 @@ class Responder:
         error = _path_error(resource)
         if error:
             return 400, _invalid(error)
-        if _undecodable(operation["body"]["fields"]):
+        fields = operation["body"]["fields"]
+        if _undecodable(fields):
             return 400, _invalid("cannot decode value")
+        error = _commit_error(resource, fields)
+        if error:
+            return 400, _invalid(error)
         if resource in self.documents:
             return 409, _invalid("already exists")
-        self._create(resource, operation["body"]["fields"])
+        self._create(resource, fields)
         return 200, copy.deepcopy(self.documents[resource])
 
     def _batch_write(self, writes):
@@ -128,6 +175,12 @@ class Responder:
                 continue
             if _undecodable(update.get("fields")):
                 return 400, _invalid("cannot decode value")
+            # Production refuses a malformed mask path for the whole request;
+            # see the matrix row errors/rest-shapes#mask-with-invalid-path.
+            mask = (write.get("updateMask") or {}).get("fieldPaths")
+            error = _mask_error(mask)
+            if error:
+                return 400, _invalid(error)
             names.append(update["name"])
         if len(names) != len(set(names)):
             return 400, _invalid("the same document cannot be written more than once")
@@ -138,7 +191,9 @@ class Responder:
                 statuses.append({"code": 3, "message": "empty write operation"})
                 results.append({})
                 continue
-            error = _path_error(update["name"])
+            error = _path_error(update["name"]) or _commit_error(
+                update["name"], update["fields"]
+            )
             if error:
                 statuses.append({"code": 3, "message": error})
                 results.append({})
@@ -179,7 +234,7 @@ def test_campaign_covers_exactly_the_two_declared_residues():
     refused = [
         document for document in plan["documents"].values() if not document["owned"]
     ]
-    assert len(refused) == 4
+    assert len(refused) == 4  # only the four illegal identifier names
     assert all(
         document["resource"] not in plan["localGatePlan"]["jobs"]["limits"]["resources"]
         for document in refused
@@ -188,9 +243,15 @@ def test_campaign_covers_exactly_the_two_declared_residues():
         "FS-LIMIT-COLLECTION-ID",
         "FS-LIMIT-SUBCOLLECTION-DEPTH",
         "FS-LIMIT-DOCUMENT-NAME-BYTES",
+        "FS-LIMIT-INDEX-ENTRY-BYTES",
+        "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
+        "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
+        "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
+        "FS-LIMIT-FIELD-PATH-BYTES",
+        "FS-LIMIT-FIELD-VALUE-BYTES",
     }
-    # The index-entry limits and the unsupported limits are owner decisions.
-    assert not any("INDEX" in limit for limit in limits)
+    # FS-LIMIT-API-REQUEST-BYTES belongs to the request-byte collector.
+    assert "FS-LIMIT-API-REQUEST-BYTES" not in limits
 
 
 def test_boundary_pairs_are_exact_and_do_not_confound_each_other():
@@ -252,19 +313,19 @@ def test_plan_is_deterministic_bounded_and_nonce_isolated():
     other = plan_for("b")
     assert all("a" * 32 not in json.dumps(request) for request in other["requests"])
     accounting = first["budgetAccounting"]
-    assert accounting["observationRequests"] == 30
-    assert accounting["recoveryRequests"] == 27
-    assert accounting["ownedDocuments"] == 9
+    assert accounting["observationRequests"] == 63
+    assert accounting["recoveryRequests"] == 60
+    assert accounting["ownedDocuments"] == 20
     assert accounting["probedNames"] == 4
     assert accounting["productionReady"] is False
-    assert preflight_count(first) == 9
+    assert preflight_count(first) == 20
     kinds = [request["kind"] for request in first["requests"]]
-    assert kinds[:9] == ["preflight-typed-absence"] * 9
-    assert kinds.count("batch-write") == 3
-    assert kinds.count("create-only-patch") == 5
+    assert kinds[:20] == ["preflight-typed-absence"] * 20
+    assert kinds.count("batch-write") == 5
+    assert kinds.count("create-only-patch") == 14
     assert kinds.count("refusal-consistency-readback") == 3
     assert kinds.count("name-boundary-readback") == 1
-    assert kinds.count("cleanup-conditional-delete") == 9
+    assert kinds.count("cleanup-conditional-delete") == 20
 
 
 def test_every_batch_write_is_create_only_and_namespace_marked():
@@ -307,7 +368,7 @@ def test_unproven_namespace_cannot_authorize_any_mutation():
             "body": NOT_FOUND,
             "request": observation[index],
         }
-        for index in range(9)
+        for index in range(20)
     ]
     assert writes_safe(rows, plan) is True
     rows[7]["body"] = {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}
@@ -537,12 +598,45 @@ def test_document_name_boundary_is_probed_by_name_not_by_a_create():
     assert kinds == {"name-boundary-readback"}
 
 
-def test_a_created_document_that_would_exceed_an_index_entry_is_refused(monkeypatch):
+@pytest.mark.parametrize(
+    ("label", "field", "expected"),
+    [
+        # A long name makes the ownership marker's own entry exceed the maximum.
+        ("index-entry-bytes-refuse", {}, "FS-LIMIT-INDEX-ENTRY-BYTES"),
+        (
+            "collection-id-accept",
+            {
+                "many": {
+                    "arrayValue": {
+                        "values": [{"integerValue": str(i)} for i in range(30000)]
+                    }
+                }
+            },
+            "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
+        ),
+    ],
+)
+def test_a_created_document_that_would_breach_another_limit_is_refused(
+    label, field, expected
+):
+    """The guard is what keeps a refusal attributable to the limit under test."""
     import compiler_03
 
-    monkeypatch.setattr(compiler_03, "INDEX_ENTRY_BYTES_MAX", 1000)
-    with pytest.raises(ValueError, match="cannot be created"):
-        compiler_03.compile_limits_plan("demo-test", "(default)", "a" * 32)
+    plan = plan_for()
+    resource = plan["documents"][label]["resource"]
+    fields = {"_sharedOwner": {"referenceValue": resource}, **field}
+    document = {
+        "resource": resource,
+        "fields": fields,
+        "owned": True,
+        "nameBytes": len(resource.encode()),
+        "depth": subcollection_depth(resource),
+        "limitId": "FS-LIMIT-COLLECTION-ID",
+        "indexUsage": index_usage(resource, fields),
+        "documentBytes": document_bytes(resource, fields),
+    }
+    with pytest.raises(ValueError, match=expected):
+        compiler_03._check_no_confound({label: document}, [])
 
 
 def test_reading_the_refused_name_the_same_way_is_the_post_state_evidence(tmp_path):
@@ -564,3 +658,117 @@ def test_reading_the_refused_name_the_same_way_is_the_post_state_evidence(tmp_pa
         problem["basis"] == "a read of the refused name was not refused the same way"
         for problem in result["expectationMismatches"]
     )
+
+
+def test_every_index_boundary_holds_under_the_default_configuration():
+    plan = plan_for()
+    cases = {case["limitId"]: case for case in plan["cases"] if "limitId" in case}
+    documents = plan["documents"]
+    assert cases["FS-LIMIT-INDEX-ENTRY-BYTES"]["boundary"] == [
+        INDEX_ENTRY_BYTES_MAX,
+        INDEX_ENTRY_BYTES_MAX + 1,
+    ]
+    assert cases["FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT"]["boundary"][0] == (
+        INDEX_ENTRIES_PER_DOCUMENT_MAX
+    )
+    assert cases["FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT"]["boundary"][0] == (
+        INDEX_ENTRY_SUM_PER_DOCUMENT_MAX
+    )
+    for label, measure, maximum in (
+        ("index-entry-bytes", "maxEntryBytes", INDEX_ENTRY_BYTES_MAX),
+        ("index-entries", "entries", INDEX_ENTRIES_PER_DOCUMENT_MAX),
+        ("index-entry-sum", "totalBytes", INDEX_ENTRY_SUM_PER_DOCUMENT_MAX),
+    ):
+        accept = documents[f"{label}-accept"]
+        refuse = documents[f"{label}-refuse"]
+        assert accept["indexUsage"][measure] == maximum
+        assert refuse["indexUsage"][measure] > maximum
+        # Nothing else about the accepted document may be at a limit.
+        assert accept["documentBytes"] < DOCUMENT_BYTES_MAX
+        assert accept["nameBytes"] <= DOCUMENT_NAME_MAX
+        assert accept["depth"] <= SUBCOLLECTION_DEPTH_MAX
+
+
+def test_the_truncating_limit_is_not_written_as_a_refusal():
+    plan = plan_for()
+    case = next(
+        c
+        for c in plan["cases"]
+        if c.get("limitId") == "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES"
+    )
+    assert case["emit"] == "truncating-pair"
+    assert case["chargedInFullWouldBe"] > INDEX_ENTRY_BYTES_MAX
+    # Both documents are expected to be accepted; a refusal of the second is
+    # what would disprove the truncation the catalog records.
+    patches = [
+        request
+        for request in plan["requests"]
+        if request["kind"] == "create-only-patch"
+        and request["path"].split("?")[0].removeprefix("/v1/")
+        in (
+            plan["documents"]["indexed-value-accept"]["resource"],
+            plan["documents"]["indexed-value-refuse"]["resource"],
+        )
+    ]
+    assert len(patches) == 2
+    assert all(request["expect"]["positive"] is True for request in patches)
+
+
+def test_the_unsupported_limits_carry_the_production_expectation_as_pending():
+    plan = plan_for()
+    pending = pending_rows(plan)
+    assert pending
+    limits = {
+        case["limitId"]
+        for case in plan["cases"]
+        if case.get("catalogImplemented") == "unsupported"
+    }
+    assert limits == {
+        "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
+        "FS-LIMIT-FIELD-PATH-BYTES",
+        "FS-LIMIT-FIELD-VALUE-BYTES",
+    }
+    for index in pending:
+        assert plan["requests"][index]["expect"]["localImplementationPending"] is True
+
+
+def test_a_pending_difference_is_recorded_but_does_not_fail_the_campaign(tmp_path):
+    plan = plan_for("c")
+
+    class PerItemFieldPath(Responder):
+        """Reports an over-long mask path per item instead of whole-request."""
+
+        def _batch_write(self, writes):
+            for write in writes:
+                mask = (write.get("updateMask") or {}).get("fieldPaths")
+                if _mask_error(mask):
+                    return 200, {
+                        "status": [{"code": 3, "message": _mask_error(mask)}],
+                        "writeResults": [{}],
+                    }
+            return super()._batch_write(writes)
+
+    create(tmp_path / "gate", plan["localGatePlan"])
+    gate = Gate(tmp_path / "gate", "limits")
+    gate.claim()
+    result = collect(gate, plan, tmp_path / "collection", PerItemFieldPath())
+    assert result["expectationMismatches"] == []
+    assert result["pendingDifferences"]
+    assert all(problem["pending"] is True for problem in result["pendingDifferences"])
+    assert result["cleanupComplete"] is True
+
+
+def test_the_field_value_refusal_is_separated_from_the_document_limit_by_wording(
+    tmp_path,
+):
+    plan = plan_for("d")
+    document = plan["documents"]["field-value-refuse"]
+    # The refused document breaches the document limit too, so only the
+    # diagnostic text says which limit production enforced.
+    assert document_bytes(document["resource"], document["fields"]) > DOCUMENT_BYTES_MAX
+    case = next(
+        c for c in plan["cases"] if c.get("limitId") == "FS-LIMIT-FIELD-VALUE-BYTES"
+    )
+    assert case["acceptedSideUnreachable"]
+    result, _ = run_campaign(tmp_path, plan, "fvb")
+    assert result["expectationMismatches"] == []

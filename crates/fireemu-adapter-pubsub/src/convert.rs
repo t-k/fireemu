@@ -232,6 +232,29 @@ pub fn validate_subscription_options(sub: &pb::Subscription) -> Result<(), PubSu
     validate_push_config_options(sub.push_config.as_ref())
 }
 
+/// Topic fields declared by `google.pubsub.v1.Topic` whose value the emulator applies, plus the
+/// output-only fields it accepts and ignores on input.
+pub const SUPPORTED_TOPIC_FIELDS: [&str; 4] = ["name", "labels", "state", "satisfies_pzs"];
+
+/// Topic fields declared by `google.pubsub.v1.Topic` that the emulator cannot represent. Naming
+/// one of these is an explicit unsupported-feature refusal; a name outside both tables is an
+/// unknown field, which is an invalid argument.
+pub const UNSUPPORTED_TOPIC_FIELDS: [&str; 7] = [
+    "schema_settings",
+    "message_retention_duration",
+    "kms_key_name",
+    "message_storage_policy",
+    "ingestion_data_source_settings",
+    "message_transforms",
+    "tags",
+];
+
+/// Reports whether `field` is a topic field declared by the wire schema.
+#[must_use]
+pub fn is_declared_topic_field(field: &str) -> bool {
+    SUPPORTED_TOPIC_FIELDS.contains(&field) || UNSUPPORTED_TOPIC_FIELDS.contains(&field)
+}
+
 /// Rejects topic fields that are accepted by the wire schema but not represented by the core
 /// broker state. Output-only and reserved fields are intentionally ignored by this validator.
 pub fn validate_topic_options(topic: &pb::Topic) -> Result<(), PubSubError> {
@@ -264,24 +287,16 @@ pub fn validate_topic_options(topic: &pb::Topic) -> Result<(), PubSubError> {
 pub fn validate_topic_update_options(request: &pb::UpdateTopicRequest) -> Result<(), PubSubError> {
     if let Some(mask) = request.update_mask.as_ref() {
         for path in &mask.paths {
-            for field in [
-                "schema_settings",
-                "message_retention_duration",
-                "kms_key_name",
-                "message_storage_policy",
-                "ingestion_data_source_settings",
-                "message_transforms",
-                "tags",
-            ] {
-                if path == field
-                    || path
-                        .strip_prefix(field)
-                        .is_some_and(|rest| rest.starts_with('.'))
-                {
-                    return Err(PubSubError::unimplemented(format!(
-                        "topic.{field} is not supported by the Pub/Sub emulator"
-                    )));
-                }
+            let head = path.split_once('.').map_or(path.as_str(), |(head, _)| head);
+            if UNSUPPORTED_TOPIC_FIELDS.contains(&head) {
+                return Err(PubSubError::unimplemented(format!(
+                    "topic.{head} is not supported by the Pub/Sub emulator"
+                )));
+            }
+            if !is_declared_topic_field(head) {
+                return Err(PubSubError::invalid_argument(format!(
+                    "unknown update_mask path {path}"
+                )));
             }
         }
     } else if let Some(topic) = request.topic.as_ref() {

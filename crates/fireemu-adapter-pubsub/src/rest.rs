@@ -22,8 +22,8 @@ use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Map, Value};
 
 use crate::convert::{
-    is_declared_subscription_field, validate_subscription_update_paths, validate_topic_options,
-    SUPPORTED_SUBSCRIPTION_FIELDS,
+    is_declared_subscription_field, is_declared_topic_field, validate_subscription_update_paths,
+    validate_topic_options, SUPPORTED_SUBSCRIPTION_FIELDS,
 };
 use crate::{PubSubHandle, MAX_MESSAGE_BYTES};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
@@ -226,10 +226,7 @@ fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), 
     if update_mask.is_empty() {
         return Err(RestError::invalid("updateMask must not be empty"));
     }
-    let paths = update_mask
-        .split(',')
-        .map(topic_update_field_path)
-        .collect();
+    let paths = update_mask.split(',').map(snake_case_field).collect();
     let request = pb::UpdateTopicRequest {
         topic: Some(topic_options),
         update_mask: Some(prost_types::FieldMask { paths }),
@@ -868,24 +865,11 @@ fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestErr
         .as_object()
         .ok_or_else(|| RestError::invalid("topic must be an object"))?;
     for key in object.keys() {
-        if !matches!(
-            key.as_str(),
-            "name"
-                | "labels"
-                | "schemaSettings"
-                | "messageRetentionDuration"
-                | "kmsKeyName"
-                | "messageStoragePolicy"
-                | "ingestionDataSourceSettings"
-                | "messageTransforms"
-                | "tags"
-                | "state"
-                | "satisfiesPzs"
-        ) {
-            return Err(RestError::unimplemented(format!(
-                "topic.{key} is not supported by the Pub/Sub emulator"
-            )));
+        let field = snake_case_field(key);
+        if is_declared_topic_field(&field) {
+            continue;
         }
+        return Err(RestError::invalid(format!("unknown topic field {key}")));
     }
     if let Some(name) = object.get("name") {
         let name = name
@@ -955,26 +939,6 @@ fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestErr
         }
     }
     Ok(options)
-}
-
-fn topic_update_field_path(path: &str) -> String {
-    let (head, tail) = path
-        .split_once('.')
-        .map_or((path, None), |(head, tail)| (head, Some(tail)));
-    let normalized = match head {
-        "schemaSettings" => "schema_settings",
-        "messageRetentionDuration" => "message_retention_duration",
-        "kmsKeyName" => "kms_key_name",
-        "messageStoragePolicy" => "message_storage_policy",
-        "ingestionDataSourceSettings" => "ingestion_data_source_settings",
-        "messageTransforms" => "message_transforms",
-        "tags" => "tags",
-        _ => head,
-    };
-    tail.map_or_else(
-        || normalized.to_owned(),
-        |tail| format!("{normalized}.{tail}"),
-    )
 }
 
 /// Normalizes a JSON field name or field-mask path segment to its protobuf field name. The

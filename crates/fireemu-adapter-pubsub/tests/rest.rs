@@ -1482,3 +1482,234 @@ async fn assert_subscription_matrix(
     assert!(push.authentication_method.is_none(), "{id}");
     assert!(push.wrapper.is_none(), "{id}");
 }
+
+/// Every topic option declared by `google.pubsub.v1.Topic` that the emulator cannot represent.
+type UnsupportedTopicOption = (&'static str, &'static str, Value, fn(&mut pb::Topic));
+
+fn unsupported_topic_options() -> Vec<UnsupportedTopicOption> {
+    vec![
+        (
+            "schemaSettings",
+            "schema_settings",
+            json!({"schema": "projects/demo-app/schemas/s"}),
+            (|topic: &mut pb::Topic| {
+                topic.schema_settings = Some(pb::SchemaSettings::default());
+            }) as fn(&mut pb::Topic),
+        ),
+        (
+            "messageRetentionDuration",
+            "message_retention_duration",
+            json!("600s"),
+            |topic| {
+                topic.message_retention_duration = Some(prost_types::Duration {
+                    seconds: 600,
+                    nanos: 0,
+                });
+            },
+        ),
+        (
+            "kmsKeyName",
+            "kms_key_name",
+            json!("projects/p/locations/l/keyRings/r/cryptoKeys/k"),
+            |topic| {
+                "projects/p/locations/l/keyRings/r/cryptoKeys/k"
+                    .clone_into(&mut topic.kms_key_name);
+            },
+        ),
+        (
+            "messageStoragePolicy",
+            "message_storage_policy",
+            json!({"allowedPersistenceRegions": ["us-central1"]}),
+            |topic| {
+                topic.message_storage_policy = Some(pb::MessageStoragePolicy::default());
+            },
+        ),
+        (
+            "ingestionDataSourceSettings",
+            "ingestion_data_source_settings",
+            json!({}),
+            |topic| {
+                topic.ingestion_data_source_settings =
+                    Some(pb::IngestionDataSourceSettings::default());
+            },
+        ),
+        (
+            "messageTransforms",
+            "message_transforms",
+            json!([{"disabled": false}]),
+            |topic| topic.message_transforms = vec![pb::MessageTransform::default()],
+        ),
+        ("tags", "tags", json!({"env": "test"}), |topic| {
+            topic.tags.insert("env".to_owned(), "test".to_owned());
+        }),
+    ]
+}
+
+#[tokio::test]
+async fn both_transports_refuse_every_declared_but_unsupported_topic_option_on_create() {
+    let address = start().await;
+    let mut publisher = PublisherClient::new(grpc_channel(address).await);
+
+    for (index, (json_field, proto_field, value, set)) in
+        unsupported_topic_options().into_iter().enumerate()
+    {
+        let rest_path = format!("/v1/projects/demo-app/topics/topic-matrix-rest-{index}");
+        let (status, error) =
+            rest_request(address, "PUT", &rest_path, json!({json_field: value})).await;
+        assert_eq!(status, 501, "{json_field}: {error}");
+        assert_eq!(error["error"]["status"], "UNIMPLEMENTED", "{json_field}");
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(proto_field),
+            "{json_field}: {error}"
+        );
+        let (status, _) = rest_request(address, "GET", &rest_path, json!({})).await;
+        assert_eq!(status, 404, "{json_field} must not create a topic");
+
+        let grpc_name = format!("projects/demo-app/topics/topic-matrix-grpc-{index}");
+        let mut topic = pb::Topic {
+            name: grpc_name.clone(),
+            ..Default::default()
+        };
+        set(&mut topic);
+        let error = publisher.create_topic(topic).await.unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unimplemented, "{proto_field}");
+        assert!(
+            error.message().contains(proto_field),
+            "{proto_field}: {error}"
+        );
+        let error = publisher
+            .get_topic(pb::GetTopicRequest { topic: grpc_name })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::NotFound, "{proto_field}");
+    }
+}
+
+#[tokio::test]
+async fn rest_rejects_an_undeclared_topic_field_as_an_invalid_argument() {
+    let address = start().await;
+    // An unknown JSON name is a client mistake, not an emulator limitation.
+    let (status, error) = rest_request(
+        address,
+        "PUT",
+        "/v1/projects/demo-app/topics/topic-undeclared",
+        json!({"notAField": true}),
+    )
+    .await;
+    assert_eq!(status, 400, "{error}");
+    assert_eq!(error["error"]["status"], "INVALID_ARGUMENT");
+    let (status, _) = rest_request(
+        address,
+        "GET",
+        "/v1/projects/demo-app/topics/topic-undeclared",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 404);
+
+    let (status, _) = rest_request(
+        address,
+        "PUT",
+        "/v1/projects/demo-app/topics/topic-undeclared",
+        json!({"labels": {"owner": "test"}, "state": "ACTIVE", "satisfiesPzs": false}),
+    )
+    .await;
+    assert_eq!(status, 200, "declared and output-only fields stay accepted");
+
+    // The same split applies to an update mask: an unknown path is invalid, a declared but
+    // unsupported path is an emulator limitation.
+    for (mask, expected) in [("notAField", 400), ("kmsKeyName", 501), ("labels", 501)] {
+        let (status, error) = rest_request(
+            address,
+            "PATCH",
+            "/v1/projects/demo-app/topics/topic-undeclared",
+            json!({"topic": {}, "updateMask": mask}),
+        )
+        .await;
+        assert_eq!(status, expected, "{mask}: {error}");
+    }
+}
+
+#[tokio::test]
+async fn a_supported_topic_round_trips_through_get_and_list_on_both_transports() {
+    let address = start().await;
+    let (status, created) = rest_request(
+        address,
+        "PUT",
+        "/v1/projects/demo-app/topics/topic-roundtrip",
+        json!({"labels": {"owner": "test"}}),
+    )
+    .await;
+    assert_eq!(status, 200, "{created}");
+    assert_eq!(created["labels"]["owner"], "test");
+
+    let (status, from_get) = rest_request(
+        address,
+        "GET",
+        "/v1/projects/demo-app/topics/topic-roundtrip",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let (status, listed) =
+        rest_request(address, "GET", "/v1/projects/demo-app/topics", json!({})).await;
+    assert_eq!(status, 200);
+    let from_list = listed["topics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "projects/demo-app/topics/topic-roundtrip")
+        .unwrap_or_else(|| panic!("topic missing from the REST listing: {listed}"))
+        .clone();
+    assert_eq!(from_get, from_list);
+    for unsupported in [
+        "schemaSettings",
+        "messageRetentionDuration",
+        "kmsKeyName",
+        "messageStoragePolicy",
+        "ingestionDataSourceSettings",
+        "messageTransforms",
+        "tags",
+    ] {
+        assert!(
+            from_get.get(unsupported).is_none(),
+            "REST reported the unsupported topic field {unsupported}: {from_get}"
+        );
+    }
+
+    let mut publisher = PublisherClient::new(grpc_channel(address).await);
+    let grpc_get = publisher
+        .get_topic(pb::GetTopicRequest {
+            topic: "projects/demo-app/topics/topic-roundtrip".to_owned(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let grpc_list = publisher
+        .list_topics(pb::ListTopicsRequest {
+            project: "projects/demo-app".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .topics
+        .into_iter()
+        .find(|entry| entry.name == "projects/demo-app/topics/topic-roundtrip")
+        .expect("topic missing from the gRPC listing");
+    assert_eq!(grpc_get, grpc_list);
+    assert_eq!(
+        grpc_get.labels.get("owner").map(String::as_str),
+        Some("test")
+    );
+    assert!(grpc_get.schema_settings.is_none());
+    assert!(grpc_get.message_retention_duration.is_none());
+    assert!(grpc_get.kms_key_name.is_empty());
+    assert!(grpc_get.message_storage_policy.is_none());
+    assert!(grpc_get.ingestion_data_source_settings.is_none());
+    assert!(grpc_get.message_transforms.is_empty());
+    assert!(grpc_get.tags.is_empty());
+}

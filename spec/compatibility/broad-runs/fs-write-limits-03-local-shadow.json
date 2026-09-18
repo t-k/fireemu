@@ -28,19 +28,19 @@
         "runtimeInputCount": 410,
         "runtimeInputsDigest": "873f5d4e562db2fab3b4d7c9c7d82401300a21a30978f47e1aa5f286e866adcc",
         "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-        "sha256": "4a0b42c089b43f036baa922a30987beb90cf7f7147b2eaa4ec5ed614e017dd6f"
+        "sha256": "fbcb0a8ddbc5ae3925fb7345936e86f3f88eb96a86cf3939c5fd329a4dc5b3f3"
       },
       "campaignId": "FS-WRITE-LIMITS-03A",
       "digests": {
-        "parentManifestSha256": "d3554b938bd1cab05939931f42c7efb4638c052fa4350fda645a049ed1d7d54a",
+        "parentManifestSha256": "ee80f420c1ce6f5fa2a018362e6db244b62c686333aaf462fc9213e5890b36df",
         "sourceInputsBound": true,
-        "supervisorManifestSha256": "59a3ac5e2206e0db987b925a9b46265257ee68706dae82a106a69dfe412bb92e"
+        "supervisorManifestSha256": "65366b611a577533e5c77dc8fdb41ad19c00a4a93aaf8493b198dc04d48934fb"
       },
       "execution": {
         "allOwnedResourcesAbsentAfterRecovery": true,
         "cleanupComplete": true,
         "cleanupValidated": true,
-        "configurationDigest": "181512a3c9120722f8bcc22a7ba10e1dee9a799b26dc4605953624a3eaf07467",
+        "configurationDigest": "0511aa42f33a419c96e8e79ce1795e999e119b15e50b048317a98dbc4b532d98",
         "database": "(default)",
         "indexConfiguration": {
           "sha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
@@ -51,7 +51,7 @@
         "ownedDocuments": 18,
         "ownedProcess": {
           "listenersClosed": true,
-          "pid": 60379,
+          "pid": 78871,
           "stopped": true
         },
         "pendingDifferences": [
@@ -96,19 +96,19 @@
         "runtimeInputCount": 410,
         "runtimeInputsDigest": "873f5d4e562db2fab3b4d7c9c7d82401300a21a30978f47e1aa5f286e866adcc",
         "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-        "sha256": "a90a5d6e58c04a438574c8fe128d321d178d74b3c7d2170a1bd9d52c69e2165f"
+        "sha256": "5ac9a8a7730dca8bc5b68c207bfadb5af95f02745c02a830168a42baa5f374d7"
       },
       "campaignId": "FS-WRITE-LIMITS-03B",
       "digests": {
-        "parentManifestSha256": "ceb07476387123e8eb5e42f975817927bb9030807f465359ac342e03ef13e56a",
+        "parentManifestSha256": "66310a3172587b07d577fa93ad140ddd9537ed8937e7a6e5150610b3ad7fe24e",
         "sourceInputsBound": true,
-        "supervisorManifestSha256": "77662f6ea95cd11ec96158959c67bdd28bca21d4a4dd33ad8c7720a5051175c5"
+        "supervisorManifestSha256": "6ae3c079c77c310ef6f1502a16fdbaaff9b35a90e51be175646e85f72b23569c"
       },
       "execution": {
         "allOwnedResourcesAbsentAfterRecovery": true,
         "cleanupComplete": true,
         "cleanupValidated": true,
-        "configurationDigest": "c5bcb49d68d6940a2be58589f25aef766bd72a081c00494149ccf624c2cc1f88",
+        "configurationDigest": "94663078d75131228279934914df266069aeb57fb409b34a59bfbcfcdc7fadbb",
         "database": "(default)",
         "indexConfiguration": {
           "sha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
@@ -119,7 +119,7 @@
         "ownedDocuments": 11,
         "ownedProcess": {
           "listenersClosed": true,
-          "pid": 65332,
+          "pid": 82642,
           "stopped": true
         },
         "pendingDifferences": [],
@@ -135,6 +135,6 @@
     }
   },
   "productionExecuted": false,
-  "sourceCommit": "844e56851a7d569b47f5d18b840b69a0b4c9516c",
+  "sourceCommit": "f91a21e1d7814a07d24825e086d78c3147399198",
   "status": "completed-local-only"
 }

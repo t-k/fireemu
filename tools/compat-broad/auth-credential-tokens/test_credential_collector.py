@@ -74,6 +74,24 @@ def test_publishable_projection_drops_every_secret_value_and_digest() -> None:
     assert "sha256" not in serialized
 
 
+def test_a_boolean_or_number_under_a_secret_key_is_kept_because_it_cannot_be_a_token() -> (
+    None
+):
+    # A masked boolean would make a failed assertion indistinguishable from a held one.
+    published = collector.publishable(
+        {
+            "idTokenReturned": False,
+            "refreshTokenReturned": True,
+            "tokenCount": 2,
+            "idToken": SECRET,
+        }
+    )
+    assert published["idTokenReturned"] is False
+    assert published["refreshTokenReturned"] is True
+    assert published["tokenCount"] == 2
+    assert published["idToken"] == {"present": True, "type": "string"}
+
+
 def test_a_member_that_merely_contains_a_secret_fragment_survives() -> None:
     # "assertions" contains "assertion" but holds the case's own boolean results.
     record = {"assertions": {"authTimePreserved": True}, "assertion": "RAW_SAML_BLOB"}

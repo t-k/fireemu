@@ -88,6 +88,10 @@ def publishable(value: Any, key: str = "") -> Any:
     if key and is_secret_key(key):
         if value is None:
             return {"present": False, "type": "null"}
+        # Only a string or a container can carry credential material. Masking a boolean
+        # or a number would hide a result without protecting anything.
+        if isinstance(value, (bool, int, float)):
+            return value
         return {"present": True, "type": _json_type(value)}
     if isinstance(value, dict):
         return {name: publishable(item, name) for name, item in sorted(value.items())}

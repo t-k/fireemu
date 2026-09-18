@@ -192,12 +192,19 @@ def _child(output: Path, nonce: str) -> None:
     ):
         raise ValueError("owned artifact identity mismatch")
     local_origin(firestore)
+    auth = local_origin("http://" + os.environ["FIREBASE_AUTH_EMULATOR_HOST"])
+    # The supervisor reads argv, nonce and all three origins from this record to
+    # stop the owned process and to verify its listeners closed. Dropping any of
+    # them leaves the run incomplete even when the observation itself succeeded.
     save(
         output / "instance.json",
         {
             "parentPid": os.getppid(),
             "pid": os.getpid(),
+            "argv": sys.argv,
+            "nonce": nonce,
             "project": project,
+            "authOrigin": auth,
             "firestoreOrigin": firestore,
             "controlOrigin": control,
             "wrongTokenStatus": wrong,

@@ -174,21 +174,85 @@ def test_a_child_that_outlives_its_deadline_is_reaped_and_confirmed_gone() -> No
     import subprocess
     import sys
 
+    from mfa_local_shadow import (
+        capture_child_identity,
+        process_identity,
+        reap_owned_child,
+    )
+
+    argv = [sys.executable, "-c", "import time; time.sleep(120)"]
+    process = subprocess.Popen(argv)
+    try:
+        identity = capture_child_identity(process)
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.wait(timeout=0.2)
+        assert process_identity(process.pid) is not None
+        assert identity == process_identity(process.pid)
+        assert reap_owned_child(process, identity) == "stopped"
+        assert process_identity(process.pid) is None
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
+
+
+def test_a_child_whose_identity_is_not_the_one_that_was_started_is_never_signalled() -> (
+    None
+):
+    """This is the PID-reuse case: the PID is live but it is somebody else's process."""
+    import subprocess
+    import sys
+
     from mfa_local_shadow import process_identity, reap_owned_child
 
     argv = [sys.executable, "-c", "import time; time.sleep(120)"]
     process = subprocess.Popen(argv)
     try:
-        with pytest.raises(subprocess.TimeoutExpired):
-            process.wait(timeout=0.2)
+        stranger = ("some-other-command", "some other command --with args")
+        assert reap_owned_child(process, stranger) == "pid-reused-refusing-to-signal"
         assert process_identity(process.pid) is not None
-        # The reaper refuses to signal a process whose identity is not the one it started.
-        assert reap_owned_child(process, ["some", "other", "command"]) == (
-            "pid-reused-refusing-to-signal"
-        )
-        assert process_identity(process.pid) is not None
-        assert reap_owned_child(process, argv) == "stopped"
-        assert process_identity(process.pid) is None
+        assert process.poll() is None
+        # A child whose identity was never captured is treated the same way.
+        assert reap_owned_child(process, None) == "pid-reused-refusing-to-signal"
+        assert process.poll() is None
+    finally:
+        process.kill()
+        process.wait(timeout=10)
+
+
+def test_a_command_name_the_kernel_truncates_does_not_block_the_reaper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Linux cuts `comm` to 15 characters and drops the path; macOS keeps the full path.
+
+    The reaper must stop its own child under either reporting, so this drives it with the
+    Linux rendering of a long executable path that macOS would report in full.
+    """
+    import subprocess
+    import sys
+
+    import mfa_local_shadow
+    from mfa_local_shadow import capture_child_identity, reap_owned_child
+
+    executable = "/opt/hostedtoolcache/python/3.12.11/x64/bin/python3.12-long-name"
+    reported = mfa_local_shadow.process_identity
+    # TASK_COMM_LEN is 16 bytes, so Linux reports at most 15 characters of the base name.
+    truncated = executable.rsplit("/", 1)[1][:15]
+
+    def linux_identity(pid: int) -> tuple[str, str] | None:
+        real = reported(pid)
+        return None if real is None else (truncated, real[1])
+
+    argv = [sys.executable, "-c", "import time; time.sleep(120)"]
+    process = subprocess.Popen(argv)
+    monkeypatch.setattr(mfa_local_shadow, "process_identity", linux_identity)
+    try:
+        identity = capture_child_identity(process)
+        assert identity is not None
+        assert identity[0] == truncated and "/" not in identity[0]
+        assert not identity[1].startswith(identity[0])
+        assert reap_owned_child(process, identity) == "stopped"
+        assert process.poll() is not None
     finally:
         if process.poll() is None:
             process.kill()
@@ -199,12 +263,31 @@ def test_reaping_an_already_finished_child_is_a_no_op() -> None:
     import subprocess
     import sys
 
-    from mfa_local_shadow import reap_owned_child
+    from mfa_local_shadow import capture_child_identity, reap_owned_child
 
     argv = [sys.executable, "-c", "pass"]
     process = subprocess.Popen(argv)
+    identity = capture_child_identity(process)
     process.wait(timeout=30)
-    assert reap_owned_child(process, argv) == "stopped"
+    assert reap_owned_child(process, identity) == "stopped"
+
+
+def test_a_child_that_exits_before_it_is_waited_for_is_reported_stopped() -> None:
+    """A child nothing has waited for holds its PID and reports no argument vector."""
+    import subprocess
+    import sys
+    import time
+
+    from mfa_local_shadow import capture_child_identity, reap_owned_child
+
+    argv = [sys.executable, "-c", "pass"]
+    process = subprocess.Popen(argv)
+    identity = capture_child_identity(process)
+    time.sleep(0.5)
+    # Nothing has waited for the child, so on Linux this reaps a zombie rather than
+    # mistaking an empty argument vector for a process that survived its signals.
+    assert reap_owned_child(process, identity) == "stopped"
+    assert process.poll() is not None
 
 
 def test_the_recorder_walks_the_cases_in_their_declared_order() -> None:

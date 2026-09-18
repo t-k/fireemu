@@ -1,0 +1,327 @@
+{
+  "budgets": {
+    "campaignId": "FS-WRITE-LIMITS-03",
+    "costCapUsd": 1.0,
+    "dataCostMicrousd": 5700,
+    "envelopeCostMicrousd": 46900,
+    "envelopeCostUsd": 0.0469,
+    "fixedCostMicrousd": 40000,
+    "managementObservationRequests": 6,
+    "managementRecoveryRequests": 6,
+    "maxConcurrency": 1,
+    "maxOwnedDocuments": 9,
+    "maxProbedNames": 4,
+    "maxRequestBodyBytes": 12384,
+    "maxResponseBytes": 3735552,
+    "maxWallSeconds": 1000,
+    "observationRequests": 30,
+    "planningCostUsd": 0.02,
+    "recoveryRequests": 27,
+    "recoveryReserveSeconds": 420,
+    "requestCostMicrousd": 100,
+    "requestUpperBound": 69,
+    "tariffsConfirmed": false
+  },
+  "campaignId": "FS-WRITE-LIMITS-03",
+  "cases": [
+    {
+      "closes": "BatchWrite continuation past a malformed item",
+      "expected": [
+        "the response carries one status and one write result per write",
+        "the prefix and suffix documents exist at the acknowledged versions",
+        "no other owned resource changes"
+      ],
+      "id": "FS-WRITE-LIMITS-03/batch-malformed-middle",
+      "kind": "per-item-continuation",
+      "localBasis": "artifact shadow at 278100cdf09029c2dcb71e111b5731c2fd23bda2, observation rows 9 to 11",
+      "localExpectation": "HTTP 200 with three status slots and three write results; the middle status is code 3 and the prefix and suffix documents are readable at the versions the response acknowledged.",
+      "residue": "R3",
+      "semantics": "A BatchWrite of three create-only writes whose middle item carries no operation. The question is whether the request is evaluated per position, with the valid prefix and suffix still published, or refused whole."
+    },
+    {
+      "closes": "BatchWrite continuation past an undecodable value",
+      "expected": [
+        "the request is refused as a whole",
+        "none of the three documents exists"
+      ],
+      "id": "FS-WRITE-LIMITS-03/batch-undecodable-value",
+      "kind": "whole-request-decode",
+      "localBasis": "artifact shadow at 278100cdf09029c2dcb71e111b5731c2fd23bda2, observation rows 12 to 15",
+      "localExpectation": "HTTP 400 INVALID_ARGUMENT for the whole request, and all three documents absent afterwards.",
+      "residue": "R3",
+      "semantics": "The same three-write shape with a middle item whose value is well-formed JSON that cannot be decoded into the protobuf repeated field. This separates a decoder refusal from a per-item evaluation."
+    },
+    {
+      "closes": "BatchWrite whole-request validation control",
+      "expected": [
+        "the request is refused as a whole",
+        "neither document exists",
+        "a message-text difference is expected and is reported separately from the shape"
+      ],
+      "id": "FS-WRITE-LIMITS-03/batch-duplicate-document",
+      "kind": "control",
+      "localBasis": "artifact shadow at 278100cdf09029c2dcb71e111b5731c2fd23bda2, observation rows 16 to 18",
+      "localExpectation": "HTTP 400 INVALID_ARGUMENT for the whole request and both documents absent. The diagnostic wording is known to differ from production's: the saved matrix row writes/batch-write#non-atomic-batch records production's message and fireemu's, and that row is verdict parity only because the matrix does not compare message text.",
+      "residue": "R3",
+      "semantics": "The duplicate-document shape production is already known to answer with a whole-request 400. It is the control that establishes the validation stage the other two cases are measured against."
+    },
+    {
+      "boundary": [
+        1500,
+        1501
+      ],
+      "closes": "FS-LIMIT-COLLECTION-ID length boundary",
+      "expected": [
+        "the boundary document is created and reads back with its marker and version",
+        "the over-boundary write is refused",
+        "a read of the over-boundary name is refused the same way",
+        "the accepted control is unchanged"
+      ],
+      "id": "FS-WRITE-LIMITS-03/collection-id",
+      "kind": "boundary-pair",
+      "limitId": "FS-LIMIT-COLLECTION-ID",
+      "localBasis": "artifact shadow at 278100cdf09029c2dcb71e111b5731c2fd23bda2, observation rows 19 to 22",
+      "localExpectation": "200 and an exact readback at 1500; 400 INVALID_ARGUMENT for both the write and the read at 1501; the accepted control unchanged after the refusal.",
+      "residue": "R4",
+      "semantics": "A create-only write under a collection id of exactly 1500 UTF-8 bytes is accepted and read back; one of 1501 bytes is refused, and a read of the refused name is refused the same way."
+    },
+    {
+      "boundary": [
+        100,
+        101
+      ],
+      "closes": "FS-LIMIT-SUBCOLLECTION-DEPTH boundary",
+      "expected": [
+        "the boundary document is created and reads back with its marker and version",
+        "the over-boundary write is refused",
+        "a read of the over-boundary name is refused the same way",
+        "the accepted control is unchanged"
+      ],
+      "id": "FS-WRITE-LIMITS-03/subcollection-depth",
+      "kind": "boundary-pair",
+      "limitId": "FS-LIMIT-SUBCOLLECTION-DEPTH",
+      "localBasis": "artifact shadow at 278100cdf09029c2dcb71e111b5731c2fd23bda2, observation rows 23 to 26",
+      "localExpectation": "200 and an exact readback at depth 100; 400 INVALID_ARGUMENT for both the write and the read at depth 101; the accepted control unchanged.",
+      "residue": "R4",
+      "semantics": "The same shape at exactly 100 collection levels below the database root and at 101. Both names stay well under the document-name and collection-id limits so the refusal cannot be attributed to another limit."
+    },
+    {
+      "boundary": [
+        6144,
+        6145
+      ],
+      "closes": "FS-LIMIT-DOCUMENT-NAME-BYTES boundary",
+      "constraint": "This boundary is not observed by a create. An automatic single-field index entry is charged the document name and its parent document's name, so the smallest possible entry for a document named at 6144 bytes is 11040 bytes against the 7680-byte FS-LIMIT-INDEX-ENTRY-BYTES maximum, whatever the fields hold. The first artifact shadow observed exactly this refusal at 12543 bytes. Observing the boundary with a create needs the same index configuration decision that gates the three index-entry limits.",
+      "expected": [
+        "a read of the boundary name answers typed absence",
+        "the over-boundary write is refused",
+        "a read of the over-boundary name is refused the same way"
+      ],
+      "id": "FS-WRITE-LIMITS-03/document-name",
+      "kind": "boundary-pair-name-only",
+      "limitId": "FS-LIMIT-DOCUMENT-NAME-BYTES",
+      "localBasis": "artifact shadow at 278100cdf09029c2dcb71e111b5731c2fd23bda2, observation rows 27 to 29",
+      "localExpectation": "404 NOT_FOUND at 6144; 400 INVALID_ARGUMENT for both the write and the read at 6145.",
+      "residue": "R4",
+      "semantics": "A resource name of exactly 6144 UTF-8 bytes is a valid name, so a read of it is processed and answers typed absence; a name of 6145 bytes is refused, for both a write and a read. The name is built from short segments so no identifier approaches 1500 bytes and the depth stays at seven levels."
+    }
+  ],
+  "cleanup": {
+    "owner": "named recovery owner required",
+    "probedNames": "The four names that exceed a request-stage identifier limit are never created and are not owned resources: the API does not consider them resources, so typed absence cannot be proven and the Gate cannot release them. If production unexpectedly accepts one, the Gate's creation-proof check refuses the proof, the campaign stops with its journal preserved, and the owned document is handed to the recovery owner for manual removal.",
+    "procedure": [
+      "Read each owned resource and verify its ownership marker.",
+      "Bind the exact creation version recorded by the Gate before any delete.",
+      "Delete only owned resources with a matching updateTime precondition.",
+      "Read each owned resource and require typed NOT_FOUND.",
+      "On uncertain read, marker mismatch, binding drift or incomplete receipt, stop and preserve the journal."
+    ],
+    "recovery": "No unconditional delete; unresolved resources remain assigned to the recovery owner."
+  },
+  "collectorBinding": {
+    "differenceFromLimits02": "Every mutating method is gated by the write-safety predicate, not PATCH alone, because this campaign sends its first writes over :batchWrite. The preflight prefix length is read from the plan. collector.py is byte-for-byte unchanged, so the frozen limits-02 collector source digest still resolves.",
+    "digest": "11692dc603ad6eac01a7b8596ed2fd104680cb254b3ddbf32b35ad619d531084",
+    "path": "tools/compat-broad/fs-write-limits/collector_03.py",
+    "productionCollector": null,
+    "scope": "REST BatchWrite per-position outcome, create-only document writes, typed readbacks and request-stage name refusals, with ownership and version bound cleanup. No configuration, index, Rules or account operation.",
+    "status": "local-only",
+    "technicalBlocker": "The limits production runner in tools/compat-broad/fs-write-limits/production.py is bound to the limits-02 compiler and does not yet accept this campaign. No frozen artifact, permission envelope or nonce reservation exists."
+  },
+  "comparatorBinding": {
+    "addition": "A per-row structural field reports status, typed error code and status, the per-item BatchWrite codes and whether the document is present, with diagnostic wording removed. It is additive and never changes the classification. The duplicate-document control is expected to differ in wording, and this field keeps that from hiding the continuation answer.",
+    "contract": "The limits-02 contract: both plans are regenerated from the compiler, every ordered request including its typed body is checked, a complete response journal is required, and normalized document identity and server timestamps may differ as EXPECTED_NONDETERMINISM while everything else, message text included, is significant.",
+    "digest": "09028e8f57e2f9d7dc7dbade3ec6435d01efa466d76a4be6fb82c8fb02e9a477",
+    "path": "tools/compat-broad/fs-write-limits/comparator_03.py",
+    "productionComparator": null,
+    "status": "preparation-only"
+  },
+  "configuration": {
+    "indexes": "Read-only. The campaign must not deploy or change an index. Every created document is compiled to stay inside FS-LIMIT-INDEX-ENTRY-BYTES under the automatic single-field indexes, so no refusal under test is confounded by an index entry.",
+    "requiredReadback": [
+      "project/database identity",
+      "edition",
+      "API mode",
+      "location"
+    ],
+    "requiredValues": {
+      "apiMode": "NATIVE",
+      "edition": "STANDARD"
+    },
+    "restoration": "No configuration changes are permitted; drift stops the campaign.",
+    "writes": 0
+  },
+  "dependency": {
+    "blocks": [],
+    "overlapWith": {
+      "campaignId": "FS-DATA-WRITE-LIMITS-02",
+      "resolution": "No overlap. Limits-02 owns FS-LIMIT-DOCUMENT-BYTES and FS-LIMIT-NESTED-MAP-ARRAY-DEPTH and has executed; this campaign owns the BatchWrite continuation residue and the three configuration-independent identifier limits.",
+      "surfaces": []
+    },
+    "parallelWith": [
+      "FS-TRANSACTION-SDK-RETRY-01"
+    ],
+    "reason": "Independent owned data namespace and no shared setting mutation.",
+    "requires": []
+  },
+  "evidenceBoundary": {
+    "local": "completed artifact shadow, see the local shadow record",
+    "model": "limit catalog and compiled request plan only",
+    "officialEmulator": "unobserved",
+    "production": "unobserved",
+    "savedProductionReference": "none"
+  },
+  "excludedSurfaces": {
+    "FS-LIMIT-API-REQUEST-BYTES": "catalog declares it unsupported; owner class-B decision required",
+    "FS-LIMIT-FIELD-PATH-BYTES": "catalog declares it unsupported; owner class-B decision required",
+    "FS-LIMIT-FIELD-VALUE-BYTES": "catalog declares it unsupported; owner class-B decision required",
+    "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT": "index configuration decision is pending with the owner",
+    "FS-LIMIT-INDEX-ENTRY-BYTES": "index configuration decision is pending with the owner",
+    "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT": "index configuration decision is pending with the owner",
+    "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES": "catalog declares it unsupported; owner class-B decision required"
+  },
+  "executionMode": {
+    "exclusive": false,
+    "parallelCampaigns": true,
+    "reason": "Fresh document namespace below oracle/{freshNonce}/limits-03; no transaction, index, Rules or shared configuration mutation. It conflicts only with campaigns using the same nonce or owned prefix."
+  },
+  "gate": {
+    "executionWindow": null,
+    "owner": null,
+    "permissionReference": null,
+    "productionAuthorization": false,
+    "productionNonce": null,
+    "requiredInputs": [
+      "owner identity and explicit permission reference covering this owned-data campaign",
+      "project/database/tenant and configuration readback",
+      "fresh nonce, absent from every current, next and backlog campaign",
+      "current release artifact SHA-256",
+      "collector and comparator digests",
+      "recovery owner and tariff acceptance"
+    ],
+    "stopConditions": [
+      "binding drift",
+      "unexpected resource",
+      "an accepted write at a refused boundary",
+      "budget exhaustion",
+      "cleanup uncertainty",
+      "incomplete receipt"
+    ]
+  },
+  "kind": "firestore-write-limits-oracle-preparation-v1",
+  "localShadow": {
+    "commands": [
+      "uv run --project tools/compat-inventory --locked pytest tools/compat-broad/fs-write-limits -q",
+      "uv run --project tools/compat-inventory --locked python tools/compat-broad/fs-write-limits/shadow_03.py --output <new-private-directory>"
+    ],
+    "productionExecuted": false,
+    "record": "spec/compatibility/broad-runs/fs-write-limits-03-local-shadow.json",
+    "status": "completed"
+  },
+  "locks": [
+    {
+      "key": "firestore/(default)/documents/oracle/{freshNonce}/limits-03/*",
+      "mode": "WRITE"
+    },
+    {
+      "key": "firestore/(default)/indexes",
+      "mode": "READ"
+    },
+    {
+      "key": "firestore/(default)/ruleset",
+      "mode": "READ"
+    }
+  ],
+  "parentFeatureGroups": [
+    "FS-DATA-WRITE"
+  ],
+  "preflight": [
+    "Owner-authorized target, database and tenant are required before Gate admission.",
+    "Bind the current artifact digest after a release build; no production run may use a null artifact binding.",
+    "Verify the nonce is fresh and absent from every current, next and backlog campaign.",
+    "Reserve request, response, time and recovery budgets atomically through the shared reservation ledger.",
+    "Confirm the production index configuration equals conformance/firestore.indexes.json, read-only."
+  ],
+  "productionExecuted": false,
+  "promotion": {
+    "remaining": [
+      "connect the limits production runner to this compiler",
+      "freeze artifact, collector and comparator bindings",
+      "obtain the owner envelope fields and tariff acceptance",
+      "production observation and immutable receipt",
+      "comparison and mismatch triage",
+      "cleanup verification",
+      "independent review",
+      "final artifact regression"
+    ],
+    "state": "WAITING_ORACLE"
+  },
+  "requirementSurfaces": [
+    "FS-DATA-WRITE/batchwrite-continuation-past-a-malformed-or-undecodable-item",
+    "FS-LIMIT-COLLECTION-ID",
+    "FS-LIMIT-SUBCOLLECTION-DEPTH",
+    "FS-LIMIT-DOCUMENT-NAME-BYTES"
+  ],
+  "safetyClass": "OWNED_DATA",
+  "sourceBinding": {
+    "artifactBuild": {
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fireemu",
+        "--message-format=json"
+      ],
+      "note": "The shadow artifact is a debug build retained by the supervisor. A production execution must bind its own release artifact digest."
+    },
+    "artifactKind": "locally-built-debug-shadow-artifact",
+    "artifactSha256": "188f62f63ba1d303b9730046793f62eebbbb5c75a247a4d7d170ec30de99d9e6",
+    "campaignSourceDigests": {
+      "spec/limits/firestore-standard-2026-08-25.json": "2c29e7492fd581e236ce9f044294bf59e9a6b89f2c4dc3c48d9f74beb291d406",
+      "tools/compat-broad/fs-write-limits/collector_03.py": "11692dc603ad6eac01a7b8596ed2fd104680cb254b3ddbf32b35ad619d531084",
+      "tools/compat-broad/fs-write-limits/comparator_03.py": "09028e8f57e2f9d7dc7dbade3ec6435d01efa466d76a4be6fb82c8fb02e9a477",
+      "tools/compat-broad/fs-write-limits/compiler_03.py": "3394c125bfe4f1d9c458dd7291138d05b95af404ba6a6c3cd11e5d9782467415",
+      "tools/compat-broad/fs-write-limits/expectations_03.py": "f0d205d541bb2fc797be0a33a532e2868e51d24423af1e5fe944a00d5558b263",
+      "tools/compat-broad/fs-write-limits/shadow.py": "a340d768ad298390ea64d027cc9b798111e157e5207790c398baaefe012db712",
+      "tools/compat-broad/fs-write-limits/shadow_03.py": "e9427219e896015c06d5f39b92d119decae491e3806e9816c1b7fb9ed1a3bc4f",
+      "tools/compat-broad/shared_gate.py": "15f7006c43b3d1969d9a00c9c8f8f4a077645f8e8ae81aa6d38b372cef3b39e3"
+    },
+    "codeSourceHead": "278100cdf09029c2dcb71e111b5731c2fd23bda2",
+    "featureHead": "278100cdf09029c2dcb71e111b5731c2fd23bda2",
+    "runtimeSourceDigests": {
+      "crates/fireemu-adapter-grpc/src/local.rs": "a57de96b44b4a5595ebcf165072401817f4f5d47c70a0091d7fc90dc0bee01d7",
+      "crates/fireemu-adapter-grpc/tests/rest.rs": "a74099aa329ad837a0f006612b81a97d65004f7c094d7f44ff2830b03cd970f3",
+      "crates/fireemu-core-firestore/src/path.rs": "ebede692cd48c5c37d2e5942f12899e572559a678ad63ff9e0cc84411b44c7b0",
+      "crates/fireemu-core-firestore/src/size.rs": "fd998763fcb4b55be3a9ee31ff720cac74b8aadf9e070a47d85338df6364d69e"
+    }
+  },
+  "status": "BLOCKED_OWNER",
+  "target": {
+    "configuration": "read-only preflight; no config mutation",
+    "database": null,
+    "projectId": null,
+    "tenant": null
+  },
+  "technicalStatus": "BLOCKED_TECHNICAL",
+  "version": "v1"
+}

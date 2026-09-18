@@ -1,0 +1,69 @@
+{
+  "blockingReasons": [
+    "owner permission envelope fields are unset",
+    "no production release artifact SHA-256 is bound",
+    "the limits production runner is bound to the limits-02 compiler and cannot execute this campaign",
+    "no fresh production nonce is reserved"
+  ],
+  "campaignId": "FS-WRITE-LIMITS-03",
+  "collector": {
+    "differenceFromLimits02": "Every mutating method is gated by the write-safety predicate, not PATCH alone, because this campaign sends its first writes over :batchWrite. The preflight prefix length is read from the plan. collector.py is byte-for-byte unchanged, so the frozen limits-02 collector source digest still resolves.",
+    "digest": "11692dc603ad6eac01a7b8596ed2fd104680cb254b3ddbf32b35ad619d531084",
+    "path": "tools/compat-broad/fs-write-limits/collector_03.py",
+    "productionCollector": null,
+    "scope": "REST BatchWrite per-position outcome, create-only document writes, typed readbacks and request-stage name refusals, with ownership and version bound cleanup. No configuration, index, Rules or account operation.",
+    "status": "local-only",
+    "technicalBlocker": "The limits production runner in tools/compat-broad/fs-write-limits/production.py is bound to the limits-02 compiler and does not yet accept this campaign. No frozen artifact, permission envelope or nonce reservation exists."
+  },
+  "comparator": {
+    "addition": "A per-row structural field reports status, typed error code and status, the per-item BatchWrite codes and whether the document is present, with diagnostic wording removed. It is additive and never changes the classification. The duplicate-document control is expected to differ in wording, and this field keeps that from hiding the continuation answer.",
+    "contract": "The limits-02 contract: both plans are regenerated from the compiler, every ordered request including its typed body is checked, a complete response journal is required, and normalized document identity and server timestamps may differ as EXPECTED_NONDETERMINISM while everything else, message text included, is significant.",
+    "digest": "09028e8f57e2f9d7dc7dbade3ec6435d01efa466d76a4be6fb82c8fb02e9a477",
+    "path": "tools/compat-broad/fs-write-limits/comparator_03.py",
+    "productionComparator": null,
+    "status": "preparation-only"
+  },
+  "gateEnvelope": {
+    "executionWindow": null,
+    "owner": null,
+    "permissionReference": null,
+    "productionAuthorization": false,
+    "productionNonce": null,
+    "requiredInputs": [
+      "owner identity and explicit permission reference covering this owned-data campaign",
+      "project/database/tenant and configuration readback",
+      "fresh nonce, absent from every current, next and backlog campaign",
+      "current release artifact SHA-256",
+      "collector and comparator digests",
+      "recovery owner and tariff acceptance"
+    ],
+    "stopConditions": [
+      "binding drift",
+      "unexpected resource",
+      "an accepted write at a refused boundary",
+      "budget exhaustion",
+      "cleanup uncertainty",
+      "incomplete receipt"
+    ]
+  },
+  "kind": "firestore-write-limits-campaign-binding-v1",
+  "localShadow": {
+    "path": "spec/compatibility/broad-runs/fs-write-limits-03-local-shadow.json",
+    "productionExecuted": false,
+    "sha256": "c0359bf376cc9a66d0287b5204c43a20892c0d88aadc37fd07be8fc5b0dd2637",
+    "status": "completed"
+  },
+  "manifest": {
+    "path": "spec/compatibility/broad-runs/fs-write-limits-03.json",
+    "sha256": "e6c699030e1bf1ad8b56468a50bcdb0b652547683673c3628bbb5c6651b9cf66"
+  },
+  "productionExecuted": false,
+  "source": {
+    "codeSourceHead": "278100cdf09029c2dcb71e111b5731c2fd23bda2",
+    "commit": "278100cdf09029c2dcb71e111b5731c2fd23bda2",
+    "productionArtifactSha256": null,
+    "shadowArtifactSha256": "188f62f63ba1d303b9730046793f62eebbbb5c75a247a4d7d170ec30de99d9e6"
+  },
+  "status": "BLOCKED_OWNER",
+  "technicalStatus": "BLOCKED_TECHNICAL"
+}

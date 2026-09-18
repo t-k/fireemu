@@ -1,0 +1,66 @@
+{
+  "artifact": {
+    "buildCommand": [
+      "cargo",
+      "build",
+      "--locked",
+      "-p",
+      "fireemu",
+      "--message-format=json"
+    ],
+    "runtimeInputCount": 407,
+    "runtimeInputsDigest": "e146866b0aa7a21ef9069508ffb57820d7c6bb245f6b692298b1838aea3d5330",
+    "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+    "sha256": "188f62f63ba1d303b9730046793f62eebbbb5c75a247a4d7d170ec30de99d9e6"
+  },
+  "campaignId": "FS-WRITE-LIMITS-03",
+  "codeSourceHead": "278100cdf09029c2dcb71e111b5731c2fd23bda2",
+  "digests": {
+    "campaignSources": {
+      "spec/limits/firestore-standard-2026-08-25.json": "2c29e7492fd581e236ce9f044294bf59e9a6b89f2c4dc3c48d9f74beb291d406",
+      "tools/compat-broad/fs-write-limits/collector_03.py": "11692dc603ad6eac01a7b8596ed2fd104680cb254b3ddbf32b35ad619d531084",
+      "tools/compat-broad/fs-write-limits/comparator_03.py": "09028e8f57e2f9d7dc7dbade3ec6435d01efa466d76a4be6fb82c8fb02e9a477",
+      "tools/compat-broad/fs-write-limits/compiler_03.py": "3394c125bfe4f1d9c458dd7291138d05b95af404ba6a6c3cd11e5d9782467415",
+      "tools/compat-broad/fs-write-limits/expectations_03.py": "f0d205d541bb2fc797be0a33a532e2868e51d24423af1e5fe944a00d5558b263",
+      "tools/compat-broad/fs-write-limits/shadow.py": "a340d768ad298390ea64d027cc9b798111e157e5207790c398baaefe012db712",
+      "tools/compat-broad/fs-write-limits/shadow_03.py": "e9427219e896015c06d5f39b92d119decae491e3806e9816c1b7fb9ed1a3bc4f",
+      "tools/compat-broad/shared_gate.py": "15f7006c43b3d1969d9a00c9c8f8f4a077645f8e8ae81aa6d38b372cef3b39e3"
+    },
+    "childManifestDigest": "06c701e6d5b23f778dd1e08bbd188ff0d47d494208fddb65b7162e687f93f8a6",
+    "parentManifestSha256": "8ccf0c4bff8987b8f078097ca67c02dc6ba067caf1a1baf64f485fcd1f4a75e2",
+    "sourceInputsBound": true,
+    "supervisorManifestSha256": "5b6e7d2d2e969fa6b0945e0966e4fb1c724bb4f9f2827b98f618a3de8cbbc6b8"
+  },
+  "execution": {
+    "allOwnedResourcesAbsentAfterRecovery": true,
+    "cleanupComplete": true,
+    "cleanupValidated": true,
+    "configurationDigest": "80779a7621f945e66109eac1c576a542fee4023ad56a9dd56e84bab82a1eed29",
+    "database": "(default)",
+    "indexConfiguration": {
+      "sha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
+      "sourceCommit": "2526c61eda5fc53ac91250307786127ae3c601be"
+    },
+    "infrastructureFailures": [],
+    "observationRequests": 30,
+    "ownedDocuments": 9,
+    "ownedProcess": {
+      "listenersClosed": true,
+      "pid": 88475,
+      "stopped": true
+    },
+    "project": "demo-firestore-probe",
+    "receiptValidated": true,
+    "recordingComplete": true,
+    "recoveryRequests": 27,
+    "semanticMismatches": [],
+    "stateValidation": true,
+    "target": "owned-local-artifact-on-loopback"
+  },
+  "formalCompatibilityClaim": false,
+  "kind": "fs-write-limits-03-local-shadow-v1",
+  "note": "Local artifact evidence only. The executed nonce, the owned resource names and the retained binary live in a private output directory and are not published here. This is not a production observation and promotes nothing.",
+  "productionExecuted": false,
+  "sourceCommit": "278100cdf09029c2dcb71e111b5731c2fd23bda2",
+  "status": "completed-local-only"
+}

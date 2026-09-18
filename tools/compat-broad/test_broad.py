@@ -425,3 +425,106 @@ def test_retained_artifact_preserves_exact_bytes_and_refuses_replacement(tmp_pat
     with pytest.raises(ValueError):
         retain_artifact(source, tmp_path / "wrong", expected)
     assert destination.read_bytes() == b"first-build"
+
+
+def temporary_checkout(path):
+    """Build a committed git repository so checkout state is the only variable."""
+    import os
+    import subprocess
+
+    # Isolate from the developer's git configuration: this repository is only a
+    # fixture, and inherited identity, hooks or signing settings would make the
+    # test depend on the machine rather than on the checkout state.
+    environment = {
+        **os.environ,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_AUTHOR_NAME": "broad",
+        "GIT_AUTHOR_EMAIL": "broad@example.invalid",
+        "GIT_COMMITTER_NAME": "broad",
+        "GIT_COMMITTER_EMAIL": "broad@example.invalid",
+    }
+
+    def git(*arguments):
+        subprocess.run(
+            ["git", *arguments],
+            cwd=path,
+            env=environment,
+            check=True,
+            capture_output=True,
+        )
+
+    path.mkdir(parents=True, exist_ok=True)
+    git("init", "--quiet")
+    (path / "tracked.txt").write_text("committed\n")
+    git("add", "tracked.txt")
+    git("commit", "--quiet", "-m", "initial")
+    return path
+
+
+def test_frozen_checkout_accepts_a_committed_tree(tmp_path, monkeypatch):
+    import broad as runner
+
+    monkeypatch.setattr(runner, "ROOT", temporary_checkout(tmp_path / "clean"))
+    assert runner.require_frozen_checkout() is None
+
+
+def test_dirty_checkout_names_its_cause_and_offending_paths(tmp_path, monkeypatch):
+    import broad as runner
+
+    checkout = temporary_checkout(tmp_path / "dirty")
+    (checkout / "tracked.txt").write_text("edited\n")
+    (checkout / "untracked.txt").write_text("new\n")
+    monkeypatch.setattr(runner, "ROOT", checkout)
+    with pytest.raises(runner.DirtyCheckoutError) as raised:
+        runner.require_frozen_checkout()
+    message = str(raised.value)
+    assert "working tree is dirty" in message
+    assert "commit or discard changes before running artifact-backed tests" in message
+    assert "2 uncommitted path(s)" in message
+    # The modified path is listed first and its status columns are stripped
+    # without eating the path itself.
+    assert message.endswith("(2 uncommitted path(s): tracked.txt, untracked.txt)")
+    assert "more" not in message
+
+
+def test_dirty_checkout_lists_at_most_ten_paths(tmp_path, monkeypatch):
+    import broad as runner
+
+    checkout = temporary_checkout(tmp_path / "many")
+    for index in range(14):
+        (checkout / f"extra-{index:02d}.txt").write_text("new\n")
+    monkeypatch.setattr(runner, "ROOT", checkout)
+    with pytest.raises(runner.DirtyCheckoutError) as raised:
+        runner.require_frozen_checkout()
+    message = str(raised.value)
+    assert "14 uncommitted path(s)" in message
+    assert message.count("extra-") == runner.DIRTY_CHECKOUT_PATH_LIMIT
+    assert "and 4 more" in message
+
+
+def test_artifact_run_refuses_a_dirty_checkout_before_building(tmp_path, monkeypatch):
+    import broad as runner
+
+    checkout = temporary_checkout(tmp_path / "run")
+    (checkout / "untracked.txt").write_text("new\n")
+    monkeypatch.setattr(runner, "ROOT", checkout)
+
+    def unexpected_build():
+        raise AssertionError("a dirty checkout must be refused before the build")
+
+    monkeypatch.setattr(runner, "build_artifact", unexpected_build)
+    with pytest.raises(runner.DirtyCheckoutError):
+        runner.run(tmp_path / "output")
+    assert not (tmp_path / "output").exists()
+
+
+def test_dirty_checkout_error_remains_a_value_error(tmp_path, monkeypatch):
+    """Existing callers catch ValueError; the dedicated type stays compatible."""
+    import broad as runner
+
+    checkout = temporary_checkout(tmp_path / "compat")
+    (checkout / "untracked.txt").write_text("new\n")
+    monkeypatch.setattr(runner, "ROOT", checkout)
+    with pytest.raises(ValueError):
+        runner.require_frozen_checkout()

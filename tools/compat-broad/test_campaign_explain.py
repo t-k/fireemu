@@ -436,6 +436,60 @@ def test_malformed_envelopes_return_indeterminate_without_exception():
         )
 
 
+def skip_unless_checkout_is_frozen():
+    """Report a dirty checkout once, by cause, instead of as dozens of fixture errors.
+
+    A skip is right locally: the tree is a developer state, not a failed
+    provenance claim, and the artifact run is refused before it starts. Under CI
+    the tree is a fresh clone, so a dirty tree there is a real defect and fails.
+    """
+    import os
+
+    from broad import DirtyCheckoutError, require_frozen_checkout
+
+    try:
+        require_frozen_checkout()
+    except DirtyCheckoutError as error:
+        if os.environ.get("CI"):
+            pytest.fail(str(error))
+        pytest.skip(str(error))
+
+
+def test_frozen_checkout_lets_the_artifact_fixture_proceed(tmp_path, monkeypatch):
+    import broad as runner
+    from test_broad import temporary_checkout
+
+    monkeypatch.setattr(runner, "ROOT", temporary_checkout(tmp_path / "clean"))
+    assert skip_unless_checkout_is_frozen() is None
+
+
+def test_dirty_checkout_skips_once_with_the_real_cause(tmp_path, monkeypatch):
+    import broad as runner
+    from test_broad import temporary_checkout
+
+    checkout = temporary_checkout(tmp_path / "dirty")
+    (checkout / "untracked.txt").write_text("new\n")
+    monkeypatch.setattr(runner, "ROOT", checkout)
+    monkeypatch.delenv("CI", raising=False)
+    with pytest.raises(pytest.skip.Exception) as raised:
+        skip_unless_checkout_is_frozen()
+    assert "working tree is dirty" in str(raised.value)
+    assert "untracked.txt" in str(raised.value)
+
+
+def test_dirty_checkout_fails_instead_of_skipping_under_ci(tmp_path, monkeypatch):
+    import broad as runner
+    from test_broad import temporary_checkout
+
+    checkout = temporary_checkout(tmp_path / "ci")
+    (checkout / "untracked.txt").write_text("new\n")
+    monkeypatch.setattr(runner, "ROOT", checkout)
+    monkeypatch.setenv("CI", "true")
+    with pytest.raises(pytest.fail.Exception) as raised:
+        skip_unless_checkout_is_frozen()
+    assert "working tree is dirty" in str(raised.value)
+
+
 @pytest.fixture(scope="module")
 def real_shadow(tmp_path_factory):
     """Execute the documented command with real artifact and process ownership."""
@@ -444,6 +498,7 @@ def real_shadow(tmp_path_factory):
 
     from broad_contract import ROOT
 
+    skip_unless_checkout_is_frozen()
     output = tmp_path_factory.mktemp("campaign-cli") / "shadow"
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     command = [

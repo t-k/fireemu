@@ -111,36 +111,78 @@ REFUSAL_EXPECTATION: dict[str, Any] = {
     },
 }
 
-#: What the local fireemu runtime does today, as observed by the local shadow on
-#: 2026-09-18 rather than assumed. The limits layer does not implement this
-#: condition, but the REST transport already caps the request body at exactly
-#: 10 MiB, so the boundary is enforced and the refusal shape differs from the
-#: one expected of production. The shadow reports that difference; it does not
-#: relax the production expectation to absorb it.
+#: What the local fireemu runtime does today, as observed by the local shadow
+#: rather than assumed. The limits layer now implements this condition: every
+#: Firestore transport applies the same bound at its own decode boundary, and
+#: the strict profile answers one refusal shape everywhere.
+#:
+#: That shape agrees with what this campaign expects of production. The
+#: agreement is not confirmation: the expected production shape is itself
+#: documented rather than observed, which is exactly what the campaign exists to
+#: settle. Local agreement removes a known difference; it does not answer the
+#: question.
 LOCAL_EXPECTATION: dict[str, Any] = {
-    "localEnforcement": "transport body cap",
-    "enforcementSource": "crates/fireemu-adapter-grpc/src/serve.rs, MAX_REST_BODY_BYTES = 10 * 1024 * 1024",
-    "catalogState": "unsupported",
-    "catalogNote": "The limits catalog still records FS-LIMIT-API-REQUEST-BYTES as unsupported, and the limits layer does indeed not implement it. The boundary is nonetheless enforced, one layer earlier.",
+    "localEnforcement": "each transport's decode boundary, strict profile",
+    "enforcementSource": "crates/fireemu-adapter-grpc/src/serve.rs, API_REQUEST_BYTES = 10 * 1024 * 1024, refused by api_request_too_large()",
+    "catalogState": "implemented",
+    "catalogNote": "The limits catalog records FS-LIMIT-API-REQUEST-BYTES as implemented, enforced before the request is parsed on the REST body, the WebChannel form body and a gRPC message, unary or streamed. The refusal shape is documented, production observation pending.",
     "observedProbeOutcomes": {
         "under": "accepted",
         "exact": "accepted",
         "over": "refused",
     },
     "observedRefusal": {
-        "httpStatus": 413,
-        "errorCode": 413,
+        "httpStatus": 400,
+        "errorCode": 400,
         "errorStatus": "INVALID_ARGUMENT",
-        "message": "request body too large",
-        "classification": "semantic-discrepancy",
+        "message": "Request payload size exceeds the limit: 10485760 bytes.",
+        "classification": "expected",
     },
-    "differenceFromProductionExpectation": "The boundary byte count agrees with the catalog maximum. The refusal code does not: the local runtime answers 413, while the expected production shape is 400. Under the collector's rules 413 is a typed refusal classified as a semantic discrepancy, so this difference is recorded rather than waived.",
+    #: Per transport, because a reader comparing a future production receipt
+    #: needs the status, the code and the message separately, and because only
+    #: the REST row is observed by this campaign.
+    "observedRefusalByTransport": {
+        "rest": {
+            "transport": "REST Commit",
+            "httpStatus": 400,
+            "errorCode": 400,
+            "errorStatus": "INVALID_ARGUMENT",
+            "message": "Request payload size exceeds the limit: 10485760 bytes.",
+            "observedBy": "this campaign's local shadow",
+        },
+        "grpc": {
+            "transport": "gRPC unary, Write stream and WebChannel",
+            "httpStatus": None,
+            "errorCode": 3,
+            "errorStatus": "INVALID_ARGUMENT",
+            "message": "Request payload size exceeds the limit: 10485760 bytes.",
+            "observedBy": "the runtime's own tests, not this campaign",
+            "note": "The gRPC code follows from google.rpc.Code, where INVALID_ARGUMENT maps to HTTP 400. This campaign compiles REST bodies only, so it does not observe this row.",
+        },
+    },
+    #: The other profile's refusal. The boundary is identical under both; only
+    #: the shape differs. A strict-profile build answering this is a regression.
+    "emulatorProfileRefusal": {
+        "profile": "emulator",
+        "rest": {
+            "httpStatus": 413,
+            "errorCode": 413,
+            "errorStatus": "INVALID_ARGUMENT",
+            "message": "request body too large",
+        },
+        "grpc": {
+            "errorStatus": "OUT_OF_RANGE",
+            "message": "tonic's own wording, left unrewritten",
+        },
+        "note": "What the local runtime answered before the limits layer implemented this condition. The strict profile is what the campaign compares against.",
+    },
+    "differenceFromProductionExpectation": "None in shape or boundary. The local runtime answers the same status, code and message this campaign expects of production. That expectation is documented rather than observed, so the agreement removes a known difference and does not confirm the production shape; only a production receipt can do that.",
     "expectedCollectorFailures": [],
     "expectedCompleted": True,
     "expectedResourceAbsence": True,
-    "classification": "local-boundary-enforced-shape-differs",
-    "pendingLimitsImplementation": "A separate Rust lane is implementing this condition in the limits layer. The transport cap already refuses at the same boundary, so a limits-layer check will never be reached on the REST path unless it runs before the body cap or the cap is raised. That lane needs this observation.",
-    "note": "A local run in which the over probe is accepted would mean the transport cap was removed or raised; the shadow reports that as `local-boundary-not-enforced` rather than passing.",
+    "classification": "local-shape-matches-production-expectation",
+    "supersededBaseline": "Until the limits layer landed, the local runtime refused with HTTP 413 `request body too large` from a transport body cap, which the shadow classified as `local-boundary-enforced-shape-differs`. That classification is retained as a regression outcome: a strict-profile build answering 413 has lost the implemented shape.",
+    "note": "A local run in which the over probe is accepted means the bound was removed or raised; the shadow reports that as `local-boundary-not-enforced` rather than passing.",
 }
 
 
@@ -474,25 +516,71 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
     local = campaign.get("localExpectation")
     if not isinstance(local, dict):
         raise TypeError("missing local expectation")
-    if local.get("localEnforcement") != "transport body cap":
+    if not local.get("localEnforcement"):
         raise ValueError("the local expectation must record the observed enforcement")
     if not local.get("enforcementSource"):
         raise ValueError("the local enforcement source must be named")
-    if local.get("catalogState") != "unsupported":
-        raise ValueError("the catalog state for this condition is unsupported")
+    if local.get("catalogState") != "implemented":
+        raise ValueError("the catalog records this condition as implemented")
     observed = local.get("observedRefusal")
     if not isinstance(observed, dict):
         raise TypeError("the local expectation must record the observed refusal")
-    if observed.get("httpStatus") != 413 or observed.get("errorCode") != 413:
-        raise ValueError("the observed local refusal code drifted")
-    if observed.get("classification") != "semantic-discrepancy":
+    expected = next(
+        item
+        for item in REFUSAL_EXPECTATION["typed"]
+        if item["classification"] == "expected"
+    )
+    if (
+        observed.get("httpStatus") != expected["httpStatus"]
+        or observed.get("errorCode") != expected["errorCode"]
+        or observed.get("errorStatus") != expected["errorStatus"]
+    ):
         raise ValueError(
-            "a local refusal code unlike production is a semantic discrepancy"
+            "the observed local refusal no longer matches the expected shape"
         )
+    if observed.get("classification") != "expected":
+        raise ValueError("a local refusal equal to the expected shape is `expected`")
+    if not observed.get("message"):
+        raise ValueError("the observed refusal message must be recorded")
+
+    # Per transport, because a reader comparing a production receipt needs the
+    # status, the code and the message separately, and because this campaign
+    # observes only the REST row.
+    by_transport = local.get("observedRefusalByTransport")
+    if not isinstance(by_transport, dict) or set(by_transport) != {"rest", "grpc"}:
+        raise ValueError("the local refusal must be recorded per transport")
+    rest = by_transport["rest"]
+    if (
+        rest.get("httpStatus") != observed["httpStatus"]
+        or rest.get("errorCode") != observed["errorCode"]
+        or rest.get("errorStatus") != observed["errorStatus"]
+        or rest.get("message") != observed["message"]
+    ):
+        raise ValueError("the REST row disagrees with the observed refusal")
+    grpc = by_transport["grpc"]
+    if grpc.get("httpStatus") is not None:
+        raise ValueError("a gRPC refusal carries no HTTP status")
+    if grpc.get("errorStatus") != "INVALID_ARGUMENT" or grpc.get("errorCode") != 3:
+        raise ValueError("the gRPC refusal code drifted from google.rpc.Code")
+    if not grpc.get("message") or not grpc.get("observedBy"):
+        raise ValueError("the gRPC row must say what it says and who saw it")
+    if "not this campaign" not in grpc.get("observedBy", ""):
+        raise ValueError("this campaign observes REST only; the gRPC row must say so")
+
+    legacy = local.get("emulatorProfileRefusal")
+    if not isinstance(legacy, dict) or legacy.get("profile") != "emulator":
+        raise ValueError("the other profile's refusal must be recorded")
+    if legacy.get("rest", {}).get("httpStatus") != 413:
+        raise ValueError("the emulator profile's REST refusal drifted")
+
     if not local.get("differenceFromProductionExpectation"):
         raise ValueError("the local difference must be stated, not absorbed")
-    if not local.get("pendingLimitsImplementation"):
-        raise ValueError("the pending limits-layer implementation must be recorded")
+    if "does not confirm" not in local["differenceFromProductionExpectation"]:
+        raise ValueError(
+            "local agreement with a documented expectation is not confirmation of it"
+        )
+    if not local.get("supersededBaseline"):
+        raise ValueError("the superseded local baseline must stay on the record")
     if local.get("expectedCompleted") is not True:
         raise ValueError("the observed local run completes; say so")
     if local.get("expectedResourceAbsence") is not True:

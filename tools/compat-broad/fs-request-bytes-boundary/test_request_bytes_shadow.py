@@ -24,6 +24,13 @@ from request_bytes_run_fixture import (
 )
 from request_bytes_shadow import classify_local_result, shadow_gates
 
+REFUSAL_400 = {
+    "httpStatus": 400,
+    "errorCode": 400,
+    "errorStatus": "INVALID_ARGUMENT",
+    "classification": "expected",
+}
+
 REFUSAL_413 = {
     "httpStatus": 413,
     "errorCode": 413,
@@ -36,13 +43,13 @@ BASELINE = {
     "cleanupComplete": True,
     "resourceAbsence": True,
     "failures": [],
-    "overRefusal": REFUSAL_413,
+    "overRefusal": REFUSAL_400,
 }
 
 
-def test_observed_baseline_is_an_enforced_boundary_with_a_different_shape() -> None:
+def test_observed_baseline_matches_the_expected_production_shape() -> None:
     verdict = classify_local_result(dict(BASELINE))
-    assert verdict["classification"] == "local-boundary-enforced-shape-differs"
+    assert verdict["classification"] == "local-shape-matches-production-expectation"
     assert verdict["matchesBaseline"] is True
     assert verdict["expectedClassification"] == LOCAL_EXPECTATION["classification"]
     assert verdict["productionRefusalExpectation"] == "400 INVALID_ARGUMENT"
@@ -51,24 +58,21 @@ def test_observed_baseline_is_an_enforced_boundary_with_a_different_shape() -> N
 
 def test_the_baseline_names_the_enforcement_source() -> None:
     verdict = classify_local_result(dict(BASELINE))
-    assert "MAX_REST_BODY_BYTES" in verdict["enforcementSource"]
-    assert verdict["localEnforcement"] == "transport body cap"
+    assert "API_REQUEST_BYTES" in verdict["enforcementSource"]
+    assert "strict profile" in verdict["localEnforcement"]
 
 
-def test_a_typed_400_marks_the_baseline_stale() -> None:
-    verdict = classify_local_result(
-        {
-            **BASELINE,
-            "overRefusal": {
-                "httpStatus": 400,
-                "errorCode": 400,
-                "errorStatus": "INVALID_ARGUMENT",
-                "classification": "expected",
-            },
-        }
-    )
-    assert verdict["classification"] == "local-shape-matches-production-expectation"
+def test_agreement_with_the_documented_shape_is_not_confirmation_of_it() -> None:
+    verdict = classify_local_result(dict(BASELINE))
+    assert "not confirmation of it" in verdict["summary"]
+
+
+def test_a_legacy_413_is_now_reported_as_a_lost_shape() -> None:
+    """The emulator profile's refusal from a strict build is a regression."""
+    verdict = classify_local_result({**BASELINE, "overRefusal": REFUSAL_413})
+    assert verdict["classification"] == "local-boundary-enforced-shape-differs"
     assert verdict["matchesBaseline"] is False
+    assert "regression" in verdict["summary"]
 
 
 def test_an_accepted_over_probe_is_reported_as_an_unenforced_boundary(
@@ -92,6 +96,9 @@ def test_an_accepted_over_probe_is_reported_as_an_unenforced_boundary(
         pytest.param({**BASELINE, "overRefusal": None}, id="clean-run-without-refusal"),
         pytest.param(
             {**BASELINE, "overRefusal": {"httpStatus": 500}}, id="unexpected-code"
+        ),
+        pytest.param(
+            {**BASELINE, "overRefusal": {"httpStatus": 429}}, id="resource-exhausted"
         ),
         pytest.param({**BASELINE, "overRefusal": "413"}, id="refusal-not-an-object"),
         pytest.param(
@@ -181,23 +188,27 @@ def test_an_unenforced_boundary_validates_state_but_is_not_a_complete_recording(
 # --- Round trips against results the collector actually produced --------------
 
 
-def test_round_trip_typed_413_is_the_observed_baseline(tmp_path) -> None:
-    result = run_collector(tmp_path / "typed413", over=TYPED_413)
+def test_round_trip_typed_400_is_the_observed_baseline(tmp_path) -> None:
+    result = run_collector(tmp_path / "typed400", over=TYPED_400)
     assert result["completed"] is True
     assert result["failures"] == []
-    verdict = classify_local_result(result)
-    gates = shadow_gates(result, verdict, source_bound=True)
-    assert verdict["classification"] == "local-boundary-enforced-shape-differs"
-    assert verdict["matchesBaseline"] is True
-    assert gates == {"recordingComplete": True, "stateValidation": True}
-
-
-def test_round_trip_typed_400_marks_the_baseline_stale(tmp_path) -> None:
-    result = run_collector(tmp_path / "typed400", over=TYPED_400)
     assert result["overRefusal"]["classification"] == "expected"
     verdict = classify_local_result(result)
     gates = shadow_gates(result, verdict, source_bound=True)
     assert verdict["classification"] == "local-shape-matches-production-expectation"
+    assert verdict["matchesBaseline"] is True
+    assert gates == {"recordingComplete": True, "stateValidation": True}
+
+
+def test_round_trip_typed_413_is_a_lost_shape_not_a_pass(tmp_path) -> None:
+    result = run_collector(tmp_path / "typed413", over=TYPED_413)
+    assert result["overRefusal"]["classification"] == "semantic-discrepancy"
+    verdict = classify_local_result(result)
+    gates = shadow_gates(result, verdict, source_bound=True)
+    assert verdict["classification"] == "local-boundary-enforced-shape-differs"
+    assert verdict["matchesBaseline"] is False
+    # The run is still internally sound, so the regression is recorded rather
+    # than thrown away; it simply is not the baseline.
     assert gates == {"recordingComplete": True, "stateValidation": True}
 
 

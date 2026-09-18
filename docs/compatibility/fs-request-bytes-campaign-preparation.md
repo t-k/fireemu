@@ -6,10 +6,11 @@ local artifact shadow. No production request has been sent and no parent is
 promoted.
 
 The limits catalog `spec/limits/firestore-standard-2026-08-25.json` records this
-condition with `maximum: 10485760`, `enforcementStage: request` and
-`implemented: unsupported`. Under `ip-fs-production-compatibility.md:23` an
-unimplemented condition is not out of scope, so it needs an implementation plus
-an observation. This document prepares the observation half.
+condition with `maximum: 10485760`, `enforcementStage: request` and, since the
+write-path limits lane landed, `implemented: implemented`. Under
+`ip-fs-production-compatibility.md:23` the condition needs an implementation plus
+an observation. The implementation half is done; this document prepares the
+observation half, which is still outstanding.
 
 ## What the campaign observes
 
@@ -186,64 +187,58 @@ The shadow runs the same plan and collector against an owned local fireemu
 artifact built from this checkout, through the existing `broad.run` artifact
 builder and process supervisor.
 
-The expectation going in was that the local runtime does not enforce this limit,
-so the over-boundary Commit would be accepted. That expectation was wrong, and
-the run says so:
-
 | Probe | Request bytes | Local result |
 | --- | ---: | --- |
 | under | 10,485,759 | HTTP 200, accepted |
 | exact | 10,485,760 | HTTP 200, accepted |
-| over | 10,485,761 | HTTP 413, refused |
+| over | 10,485,761 | HTTP 400, refused |
 
 The refusal body is exactly:
 
 ```json
-{"error":{"code":413,"message":"request body too large","status":"INVALID_ARGUMENT"}}
+{"error":{"code":400,"message":"Request payload size exceeds the limit: 10485760 bytes.","status":"INVALID_ARGUMENT"}}
 ```
 
-The local runtime therefore enforces the boundary at exactly the catalog
-maximum, but one layer earlier than the limits catalog suggests and with a
-different refusal code. The enforcement is the REST transport body cap
-`MAX_REST_BODY_BYTES` in `crates/fireemu-adapter-grpc/src/serve.rs`, not the
-limits layer. The limits catalog still records the condition as `unsupported`,
-and that is accurate about the limits layer while being misleading about the
-observable behaviour.
+The local runtime enforces the boundary at exactly the catalog maximum and
+answers, in the strict profile, the same status, code and message this campaign
+expects of production. The bound is applied at each transport's decode boundary
+from `API_REQUEST_BYTES` in `crates/fireemu-adapter-grpc/src/serve.rs`, before
+the request is parsed, and the limits catalog now records the condition as
+implemented.
 
-Two consequences follow.
+**That agreement is not confirmation.** The expected production shape is
+documented rather than observed: the quotas page states the 10 MiB maximum but
+not the answer to exceeding it, and no production receipt for that refusal exists
+in this repository. Local agreement removes a known difference and leaves the
+question this campaign exists to settle exactly where it was. Only a production
+receipt can answer it.
 
-First, the difference that remains against the production expectation is the
-refusal **shape**, not the boundary. The collector accepts 413 with
-`INVALID_ARGUMENT` as a typed refusal but classifies it as a semantic
-discrepancy, which is what the shadow records. The shadow classifies this run as
-`local-boundary-enforced-shape-differs`; a typed 400 would be
-`local-shape-matches-production-expectation`, and an accepted over probe would be
-`local-boundary-not-enforced`. Nothing is absorbed into a pass.
+The shape is recorded per transport, because a reader comparing a production
+receipt needs the status, the code and the message separately:
 
-Second, the lane implementing this condition in the limits layer needs this
-observation. A limits-layer check on the REST path will never be reached, because
-the transport cap rejects the body before the request is decoded. That check has
-to run before the body cap, or the cap has to be raised, or the implementation
-will be dead code on this path while appearing to work.
+| Transport | Status | Code | Message | Observed by |
+| --- | --- | --- | --- | --- |
+| REST Commit | HTTP 400 | 400 | `Request payload size exceeds the limit: 10485760 bytes.` | this campaign's local shadow |
+| gRPC unary, Write stream, WebChannel | none | 3 | the same message | the runtime's own tests, not this campaign |
 
-The run completed all 105 observation rows and 153 recovery rows, sent 241 of the
-258 bounded requests, and proved all 51 owned resources absent afterwards. The 17
-unsent requests are the over probe's delete slots, consumed as zero-wire skips
-because a refused Commit grants no cleanup ownership. That is the intended
-behaviour and it is also the post-state evidence: the refused request wrote
-nothing.
+The gRPC code follows from `google.rpc.Code`, where `INVALID_ARGUMENT` maps to
+HTTP 400. This campaign compiles REST bodies only, so it does not observe the
+gRPC row; a gRPC boundary needs its own compiler and receipt.
 
-The recorded run is published as
-`spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, at source
-`d33518e24ec51e83f97e9604670664d3a4a83e7e`, artifact SHA-256 `d4d94fdd3141ecfb7bde4c63d5425c6989d5ef814aac815379908e69b2d384d3`, with supervisor status `completed`,
-`recordingComplete` and `stateValidation` true, the owned process stopped and all
-listeners closed. The record carries the three probe outcomes, the refusal bytes
-verbatim, the collector summary, the runtime binding and the run's own nonce, so
-a reader can recompute the plan and campaign digests rather than trust them. The
-recorded classification and the two state gates are recomputed from the recorded
-observation, so a hand-edited verdict fails the suite. The shadow uses its own
-per-run nonce against `demo-firestore-probe`; it is not the campaign nonce and it
-writes nothing to the oracle project.
+The `emulator` profile keeps the refusal the local runtime answered before the
+limits layer implemented this condition, HTTP 413 `request body too large` on
+REST and tonic's own `OUT_OF_RANGE` on gRPC. The boundary is identical under both
+profiles. That superseded baseline stays on the record, and the shadow keeps its
+classification as a **regression** outcome: a strict-profile build answering 413
+has lost the implemented shape.
+
+The shadow recognises four local outcomes and masks none of them.
+`local-shape-matches-production-expectation` is the baseline.
+`local-boundary-enforced-shape-differs` is the lost-shape regression above.
+`local-boundary-not-enforced` means the bound was removed or raised.
+`local-untyped-transport-refusal` means something refused without a typed
+envelope. Anything else is a `shadow-failure`, which drives `stateValidation`
+false and keeps the supervisor run incomplete.
 
 ## Artifacts
 

@@ -2,10 +2,10 @@
 
 The shadow runs the reviewed compiler plan and collector against an owned local
 fireemu artifact built from this checkout. The observed local behaviour is that
-the boundary is enforced at exactly 10 MiB by the REST transport body cap, not
-by the limits layer, and that the refusal is a typed 413 where production is
-expected to answer 400. The shadow records that difference explicitly instead of
-relaxing the expectation to make the run look clean.
+the boundary is enforced at exactly 10 MiB by the limits layer, and that the
+strict profile's refusal carries the same status, code and message this campaign
+expects of production. That expectation is documented rather than observed, so
+the shadow records agreement with it and never reads it as confirmation.
 
 No production request, credential or reservation is involved.
 """
@@ -239,18 +239,19 @@ def build_shadow_document(
 def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
     """Classify a collector result against the observed local baseline.
 
-    Three outcomes are recognised, and none of them relaxes the production
+    Four outcomes are recognised, and none of them relaxes the production
     expectation:
 
-    - `local-boundary-enforced-shape-differs` is the observed baseline. The
-      local transport refuses the over-boundary Commit at exactly 10 MiB with a
-      typed 413, where production is expected to answer 400. The boundary
-      agrees; the refusal shape does not.
-    - `local-shape-matches-production-expectation` means a typed 400 was
-      returned, so the limits-layer implementation has landed ahead of the
-      transport cap and this baseline is stale.
+    - `local-shape-matches-production-expectation` is the observed baseline. The
+      limits layer refuses the over-boundary Commit at exactly 10 MiB with the
+      same status, code and message this campaign expects of production. That
+      expectation is documented rather than observed, so this is agreement with
+      an expectation, not confirmation of it.
+    - `local-boundary-enforced-shape-differs` is now a regression. It means a
+      strict-profile build answered the emulator profile's legacy 413, so the
+      implemented shape was lost.
     - `local-boundary-not-enforced` means the over-boundary Commit was accepted,
-      so the transport cap was removed or raised.
+      so the bound was removed or raised.
     - `local-untyped-transport-refusal` means something refused the Commit
       without Firestore's typed envelope. The boundary question stays
       unanswered and recovery stays read-only.
@@ -266,19 +267,22 @@ def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
     refusal = result.get("overRefusal")
     completed = result.get("completed") is True
     observed = LOCAL_EXPECTATION["observedRefusal"]
+    legacy = LOCAL_EXPECTATION["emulatorProfileRefusal"]["rest"]
     clean_refusal = not failures and completed and absence and isinstance(refusal, dict)
     if clean_refusal and refusal.get("httpStatus") == observed["httpStatus"]:
-        classification = "local-boundary-enforced-shape-differs"
-        summary = (
-            "The local transport refused the over-boundary Commit at exactly the "
-            "10 MiB boundary with a typed 413. Production is expected to answer "
-            "400, so the boundary agrees and the refusal shape does not."
-        )
-    elif clean_refusal and refusal.get("httpStatus") == 400:
         classification = "local-shape-matches-production-expectation"
         summary = (
-            "The local runtime refused the over-boundary Commit with a typed 400. "
-            "The limits-layer implementation has landed and this baseline is stale."
+            "The limits layer refused the over-boundary Commit at exactly the "
+            "10 MiB boundary with the status, code and message this campaign "
+            "expects of production. That expectation is documented rather than "
+            "observed, so this is agreement with it, not confirmation of it."
+        )
+    elif clean_refusal and refusal.get("httpStatus") == legacy["httpStatus"]:
+        classification = "local-boundary-enforced-shape-differs"
+        summary = (
+            "The over-boundary Commit was refused with the emulator profile's "
+            "legacy 413. From a strict-profile build that is a regression: the "
+            "implemented refusal shape was lost. The boundary itself still holds."
         )
     elif (
         _is_untyped_refusal_failure_set(failures)
@@ -294,12 +298,12 @@ def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
     elif failures == ["over:unexpected-success"] and refusal is None and absence:
         classification = "local-boundary-not-enforced"
         summary = (
-            "The local runtime accepted the over-boundary Commit. The transport "
-            "body cap was removed or raised."
+            "The local runtime accepted the over-boundary Commit. The "
+            "request-byte bound was removed or raised."
         )
     else:
         classification = "shadow-failure"
-        summary = "The local run matched none of the three recognised local outcomes."
+        summary = "The local run matched none of the four recognised local outcomes."
     return {
         "classification": classification,
         "summary": summary,

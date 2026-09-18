@@ -137,29 +137,62 @@
   ],
   "formalCompatibilityClaim": false,
   "localExpectation": {
-    "catalogNote": "The limits catalog still records FS-LIMIT-API-REQUEST-BYTES as unsupported, and the limits layer does indeed not implement it. The boundary is nonetheless enforced, one layer earlier.",
-    "catalogState": "unsupported",
-    "classification": "local-boundary-enforced-shape-differs",
-    "differenceFromProductionExpectation": "The boundary byte count agrees with the catalog maximum. The refusal code does not: the local runtime answers 413, while the expected production shape is 400. Under the collector's rules 413 is a typed refusal classified as a semantic discrepancy, so this difference is recorded rather than waived.",
-    "enforcementSource": "crates/fireemu-adapter-grpc/src/serve.rs, MAX_REST_BODY_BYTES = 10 * 1024 * 1024",
+    "catalogNote": "The limits catalog records FS-LIMIT-API-REQUEST-BYTES as implemented, enforced before the request is parsed on the REST body, the WebChannel form body and a gRPC message, unary or streamed. The refusal shape is documented, production observation pending.",
+    "catalogState": "implemented",
+    "classification": "local-shape-matches-production-expectation",
+    "differenceFromProductionExpectation": "None in shape or boundary. The local runtime answers the same status, code and message this campaign expects of production. That expectation is documented rather than observed, so the agreement removes a known difference and does not confirm the production shape; only a production receipt can do that.",
+    "emulatorProfileRefusal": {
+      "grpc": {
+        "errorStatus": "OUT_OF_RANGE",
+        "message": "tonic's own wording, left unrewritten"
+      },
+      "note": "What the local runtime answered before the limits layer implemented this condition. The strict profile is what the campaign compares against.",
+      "profile": "emulator",
+      "rest": {
+        "errorCode": 413,
+        "errorStatus": "INVALID_ARGUMENT",
+        "httpStatus": 413,
+        "message": "request body too large"
+      }
+    },
+    "enforcementSource": "crates/fireemu-adapter-grpc/src/serve.rs, API_REQUEST_BYTES = 10 * 1024 * 1024, refused by api_request_too_large()",
     "expectedCollectorFailures": [],
     "expectedCompleted": true,
     "expectedResourceAbsence": true,
-    "localEnforcement": "transport body cap",
-    "note": "A local run in which the over probe is accepted would mean the transport cap was removed or raised; the shadow reports that as `local-boundary-not-enforced` rather than passing.",
+    "localEnforcement": "each transport's decode boundary, strict profile",
+    "note": "A local run in which the over probe is accepted means the bound was removed or raised; the shadow reports that as `local-boundary-not-enforced` rather than passing.",
     "observedProbeOutcomes": {
       "exact": "accepted",
       "over": "refused",
       "under": "accepted"
     },
     "observedRefusal": {
-      "classification": "semantic-discrepancy",
-      "errorCode": 413,
+      "classification": "expected",
+      "errorCode": 400,
       "errorStatus": "INVALID_ARGUMENT",
-      "httpStatus": 413,
-      "message": "request body too large"
+      "httpStatus": 400,
+      "message": "Request payload size exceeds the limit: 10485760 bytes."
     },
-    "pendingLimitsImplementation": "A separate Rust lane is implementing this condition in the limits layer. The transport cap already refuses at the same boundary, so a limits-layer check will never be reached on the REST path unless it runs before the body cap or the cap is raised. That lane needs this observation."
+    "observedRefusalByTransport": {
+      "grpc": {
+        "errorCode": 3,
+        "errorStatus": "INVALID_ARGUMENT",
+        "httpStatus": null,
+        "message": "Request payload size exceeds the limit: 10485760 bytes.",
+        "note": "The gRPC code follows from google.rpc.Code, where INVALID_ARGUMENT maps to HTTP 400. This campaign compiles REST bodies only, so it does not observe this row.",
+        "observedBy": "the runtime's own tests, not this campaign",
+        "transport": "gRPC unary, Write stream and WebChannel"
+      },
+      "rest": {
+        "errorCode": 400,
+        "errorStatus": "INVALID_ARGUMENT",
+        "httpStatus": 400,
+        "message": "Request payload size exceeds the limit: 10485760 bytes.",
+        "observedBy": "this campaign's local shadow",
+        "transport": "REST Commit"
+      }
+    },
+    "supersededBaseline": "Until the limits layer landed, the local runtime refused with HTTP 413 `request body too large` from a transport body cap, which the shadow classified as `local-boundary-enforced-shape-differs`. That classification is retained as a regression outcome: a strict-profile build answering 413 has lost the implemented shape."
   },
   "parent": "FS-DATA-WRITE",
   "productionExecuted": false,

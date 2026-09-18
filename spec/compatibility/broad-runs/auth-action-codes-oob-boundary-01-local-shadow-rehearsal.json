@@ -16,7 +16,7 @@
     "path": "spec/compatibility/broad-runs/auth-action-codes-oob-boundary-01.json",
     "sha256": "d2c440583ac4132e6caf0c2ab7c17f85da66fe26d613889c21f127f55b8f23aa"
   },
-  "collectorSourceCommit": "c02955212ac3456704262be44fe8506fc566a2c8",
+  "collectorSourceCommit": "be4ed3eb8ec27195bca3961ecccb1fbb0e6f83be",
   "collectorSources": {
     "action_codes_collector.py": "0d5157291da8a749024f1a03b6f3e2a3869e4228128ab80afa05c77369d536c3",
     "action_codes_comparator.py": "ce5c801eaa5318bde8bffdf446e99ef1a4687f30a2673432d6585b7dbe2e1aee",

@@ -85,7 +85,7 @@ The shadow owns the artifact it measures: it copies the binary into a private di
 
 | Item | Value |
 | --- | --- |
-| Collector source commit | `c02955212ac3456704262be44fe8506fc566a2c8` |
+| Collector source commit | `be4ed3eb8ec27195bca3961ecccb1fbb0e6f83be` |
 | Artifact SHA-256 | `bad6b9280e895f90484b5a89056c62ce7c4f3f44e8571891f5175986e99f53a6` (version 0.7.0) |
 | Artifact binding | receipt `unbound`; the file is `retained-external` and was not rebuilt from the collector source commit |
 | Campaign package SHA-256 | `d2c440583ac4132e6caf0c2ab7c17f85da66fe26d613889c21f127f55b8f23aa` |

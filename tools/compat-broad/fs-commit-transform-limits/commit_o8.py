@@ -121,6 +121,7 @@ def _validate_approval(
     ledger: Path,
     manifest_path: Path,
     artifact_path: Path,
+    launcher_path: Path,
 ) -> dict:
     """Delegate to the single shared definition of the complete O7 check set."""
     return acquisition.validate_o7_admission(
@@ -132,6 +133,7 @@ def _validate_approval(
         permission=permission,
         ledger_root=ledger,
         artifact_path=artifact_path,
+        launcher_path=launcher_path,
     )
 
 
@@ -151,6 +153,7 @@ def execute(args: argparse.Namespace) -> dict:
         ledger=args.ledger,
         manifest_path=args.manifest,
         artifact_path=args.artifact,
+        launcher_path=Path(__file__),
     )
     # Build and own the worker archive before any credential is read. The
     # writable construction handle is closed and the file unlinked before the
@@ -168,6 +171,7 @@ def execute(args: argparse.Namespace) -> dict:
             permission=permission,
             ledger_root=args.ledger,
             artifact_path=args.artifact,
+            launcher_path=Path(__file__),
             archive_fd=archive_fd,
             archive_sha256=archive_sha256,
         )

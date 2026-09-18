@@ -73,6 +73,7 @@ DATABASE = "(default)"
 TIMEOUT = 12.0
 INPUT_CAP = 4 * 1024 * 1024
 ARCHIVE_CAP = 32 * 1024 * 1024
+REAP_GRACE = 2.0
 _TOKEN = re.compile(r"[A-Za-z0-9._~+/-]{1,8192}=*")
 _VERSION = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z")
 
@@ -175,8 +176,33 @@ def _envelope(value: dict, local_origin: str | None, timeout: float) -> str:
     return encoded
 
 
+def _reap(child) -> None:
+    """End and collect a worker, escalating if it ignores termination."""
+    if child.poll() is not None:
+        child.wait()
+        return
+    try:
+        child.terminate()
+    except OSError:
+        pass
+    try:
+        child.wait(timeout=REAP_GRACE)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        child.kill()
+    except OSError:
+        pass
+    child.wait()
+
+
 def _spawn(command: list[str], encoded: str, timeout: float, pass_fds: tuple[int, ...]) -> dict:
-    """Run one bounded worker; always terminate and reap it before returning."""
+    """Run one bounded worker; always terminate and reap it before returning.
+
+    Every exit from this function reaps the child: a normal exchange, a deadline,
+    a malformed payload the parent cannot write, and an interruption alike.
+    """
     child = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -187,18 +213,24 @@ def _spawn(command: list[str], encoded: str, timeout: float, pass_fds: tuple[int
         close_fds=True,
         pass_fds=pass_fds,
     )
+    collected = False
     try:
-        out, _ = child.communicate(encoded, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        child.kill()
-        child.communicate()
-        return {"kind": "deadline-exceeded", "complete": False, "workerReaped": True}
-    if child.returncode != 0 or len(out.encode()) > MAX_CAP:
-        return {"kind": "worker-error", "complete": False, "workerReaped": True}
-    try:
-        return json.loads(out)
-    except (ValueError, UnicodeDecodeError):
-        return {"kind": "worker-error", "complete": False, "workerReaped": True}
+        try:
+            out, _ = child.communicate(encoded, timeout=timeout)
+            collected = True
+        except subprocess.TimeoutExpired:
+            _reap(child)
+            collected = True
+            return {"kind": "deadline-exceeded", "complete": False, "workerReaped": True}
+        if child.returncode != 0 or len(out.encode()) > MAX_CAP:
+            return {"kind": "worker-error", "complete": False, "workerReaped": True}
+        try:
+            return json.loads(out)
+        except (ValueError, UnicodeDecodeError):
+            return {"kind": "worker-error", "complete": False, "workerReaped": True}
+    finally:
+        if not collected:
+            _reap(child)
 
 
 def _verify_archive_fd(fd: int, expected_sha256: str) -> None:

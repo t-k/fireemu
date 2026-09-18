@@ -327,3 +327,63 @@ def test_parent_descriptor_is_not_inherited_by_an_unrelated_child(tmp_path: Path
             check=False,
         )
     assert probe.returncode == 0, probe.stdout + probe.stderr
+
+
+def _sleeper(tmp_path: Path, *, trap: bool) -> tuple[list[str], Path]:
+    """A real child that reports readiness, optionally ignoring SIGTERM."""
+    ready = tmp_path / f"ready-{'trap' if trap else 'plain'}"
+    script = "import signal, sys, time\n"
+    if trap:
+        script += "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+    script += (
+        f"open({str(ready)!r}, 'w').close()\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(30)\n"
+    )
+    return [sys.executable, "-I", "-c", script], ready
+
+
+def _await(path: Path) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"child never reported readiness at {path}")
+
+
+def test_reap_ends_a_running_worker(tmp_path: Path):
+    command, ready = _sleeper(tmp_path, trap=False)
+    child = subprocess.Popen(command, stdout=subprocess.DEVNULL)
+    try:
+        _await(ready)
+        transport._reap(child)
+    finally:
+        if child.poll() is None:  # pragma: no cover -- only on a failed reap
+            child.kill()
+            child.wait()
+    assert child.poll() is not None
+
+
+def test_reap_escalates_to_kill_when_terminate_is_ignored(tmp_path: Path):
+    command, ready = _sleeper(tmp_path, trap=True)
+    child = subprocess.Popen(command, stdout=subprocess.DEVNULL)
+    try:
+        _await(ready)
+        transport._reap(child)
+    finally:
+        if child.poll() is None:  # pragma: no cover -- only on a failed reap
+            child.kill()
+            child.wait()
+    assert child.returncode is not None
+    assert child.returncode < 0
+
+
+def test_spawn_reaps_the_worker_when_the_parent_raises(tmp_path: Path):
+    """A failure that is not a deadline must still leave no unreaped child."""
+    command, _ready = _sleeper(tmp_path, trap=False)
+    with pytest.raises((TypeError, AttributeError)):
+        # A non-text payload fails inside communicate, after the child started.
+        transport._spawn(command, 17, 5.0, ())
+    with pytest.raises(ChildProcessError):
+        os.waitpid(-1, os.WNOHANG)

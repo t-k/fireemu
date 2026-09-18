@@ -113,6 +113,7 @@ class Admission:
         inputs = overrides.pop("inputs", self.inputs)
         permission = overrides.pop("permission", self.permission)
         ledger = overrides.pop("ledger_root", self.ledger)
+        launcher = overrides.pop("launcher_path", HERE / "commit_o8.py")
         manifest = {**self.manifest, **(overrides.pop("manifest", None) or {})}
         manifest_bytes = (
             self.manifest_bytes
@@ -128,6 +129,7 @@ class Admission:
             permission=permission,
             ledger_root=ledger,
             artifact_path=self.artifact_path,
+            launcher_path=launcher,
             archive_fd=fd,
             archive_sha256=sha,
         )
@@ -463,3 +465,51 @@ def test_issuance_runs_the_same_check_set_as_the_o8_cli():
     assert "windowExpiresAt" not in source
     assert "launcherSha256" not in source
     assert "artifactProfile" not in source
+
+
+def test_admission_binds_the_running_launcher_not_a_sibling_file(
+    tmp_path, monkeypatch
+):
+    """launcherSha256 must bind the launcher that is actually running."""
+    admission = Admission(tmp_path, monkeypatch)
+    inputs = admission.inputs
+    archive, sha = archive_for(inputs)
+    modified = tmp_path / "elsewhere" / "commit_o8.py"
+    modified.parent.mkdir()
+    modified.write_bytes(
+        (HERE / "commit_o8.py").read_bytes() + b"\n# modified launcher\n"
+    )
+    real = HERE / "commit_o8.py"
+    with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
+        # The approval binds the real launcher, so a modified one is refused.
+        with pytest.raises(ValueError, match="approval binding"):
+            admission.issue(fd, sha, launcher_path=modified)
+        # And an approval bound to the modified launcher is refused for the real one.
+        modified_digest = hashlib.sha256(modified.read_bytes()).hexdigest()
+        with pytest.raises(ValueError, match="approval binding"):
+            admission.issue(fd, sha, launcherSha256=modified_digest)
+        # The self-consistent pairing is the only one accepted.
+        capability = admission.issue(
+            fd,
+            sha,
+            launcher_path=modified,
+            launcherSha256=modified_digest,
+        )
+        assert capability.campaign_id == inputs["plan"]["campaignId"]
+        acquisition.revoke_production_capability(capability)
+        assert admission.issue(fd, sha, launcher_path=real) is not None
+
+
+def test_admission_requires_an_explicit_launcher_path(tmp_path, monkeypatch):
+    admission = Admission(tmp_path, monkeypatch)
+    with pytest.raises(TypeError):
+        acquisition.validate_o7_admission(
+            inputs=admission.inputs,
+            approval=admission.approval,
+            manifest=admission.manifest,
+            manifest_bytes=admission.manifest_bytes,
+            manifest_path=admission.manifest_path,
+            permission=admission.permission,
+            ledger_root=admission.ledger,
+            artifact_path=admission.artifact_path,
+        )

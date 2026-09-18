@@ -192,6 +192,15 @@ class ProductionWireCapability:
         )
 
 
+def _regular_file_digest(path):
+    """Digest a regular file without following a replaceable symlink."""
+    path = Path(path)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("bound regular file required")
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
 def validate_frozen_inputs(inputs) -> None:
     """The frozen O7 input self-consistency check used by every admission path."""
     if not isinstance(inputs, dict) or inputs.get("kind") != "commit-frozen-inputs-v2":
@@ -233,6 +242,7 @@ def validate_o7_admission(
     permission,
     ledger_root,
     artifact_path,
+    launcher_path,
 ):
     """The complete O7 admission check set, shared by the O8 CLI and by issuance.
 
@@ -266,9 +276,9 @@ def validate_o7_admission(
         "planDigest": inputs["planDigest"],
         "nonceDigest": digest(inputs["plan"]["nonce"]),
         "ledgerRoot": resolved_ledger,
-        "launcherSha256": hashlib.sha256(
-            (HERE / "commit_o8.py").read_bytes()
-        ).hexdigest(),
+        # The launcher digest must bind the launcher that is actually running,
+        # not whichever copy happens to sit next to this module.
+        "launcherSha256": _regular_file_digest(launcher_path),
     }
     if any(approval[key] != value for key, value in bindings.items()):
         raise ValueError("O7 approval binding differs")
@@ -320,6 +330,7 @@ def issue_production_capability(
     permission,
     ledger_root,
     artifact_path,
+    launcher_path,
     archive_fd,
     archive_sha256,
 ):
@@ -341,6 +352,7 @@ def issue_production_capability(
         permission=permission,
         ledger_root=ledger_root,
         artifact_path=artifact_path,
+        launcher_path=launcher_path,
     )
     _load_bundle().verify_worker_archive_fd(
         archive_fd, archive_sha256, inputs["sourceInputs"]

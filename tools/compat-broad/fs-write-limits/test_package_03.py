@@ -12,7 +12,13 @@ import json
 import subprocess
 from pathlib import Path
 
-from compiler_03 import CAMPAIGN, compile_limits_plan
+from compiler_03 import (
+    CAMPAIGN,
+    DOCUMENT_NAME_MAX,
+    catalog_status,
+    compile_limits_plan,
+    name_charge_floor,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 PACKAGE = ROOT / "spec/compatibility/broad-runs"
@@ -270,7 +276,6 @@ def test_pending_rows_are_recorded_with_their_reasons() -> None:
     pending = manifest["pendingLocalImplementation"]
     assert pending["meaning"]
     for part in PARTS:
-        assert pending["parts"][part]["rows"]
         assert (
             pending["parts"][part]["differences"]
             == shadow["parts"][part]["execution"]["pendingDifferences"]
@@ -278,14 +283,100 @@ def test_pending_rows_are_recorded_with_their_reasons() -> None:
         for difference in pending["parts"][part]["differences"]:
             assert difference["pending"] is True
             assert difference["reason"]
-    # Every pending row must trace to a case that says why it is pending.
+    # Every pending row must trace to a case that says why it is pending, and
+    # the only reason left is one the local shadow cannot remove.
     reasons = {
         case["pendingReason"]
         for part in PARTS
         for case in manifest["parts"][part]["cases"]
         if case.get("pendingReason")
     }
-    assert reasons
+    assert len(reasons) == 1
+    assert "index configuration" in next(iter(reasons))
+
+
+def test_the_document_name_figures_are_computed_not_written_by_hand() -> None:
+    """M1: a published figure a closure will cite must come from the compiler."""
+    manifest = load(MANIFEST)
+    case = next(
+        case
+        for part in PARTS
+        for case in manifest["parts"][part]["cases"]
+        if case.get("limitId") == "FS-LIMIT-DOCUMENT-NAME-BYTES"
+    )
+    prefix = len("projects/fireemu-35fe6/databases/(default)/documents/")
+    assert case["derivedFigures"] == name_charge_floor(prefix, DOCUMENT_NAME_MAX)
+    figures = case["derivedFigures"]
+    # The floor for any indexed field, and the floor for a marker-bearing
+    # document, are different numbers and the text must use both correctly.
+    assert figures["smallestIndexedFieldEntry"] < figures["smallestMarkerBearingEntry"]
+    for value in (
+        figures["smallestNameSum"],
+        figures["smallestIndexedFieldEntry"],
+        figures["smallestMarkerBearingEntry"],
+    ):
+        assert str(value) in case["derivation"], value
+    # The claim is scoped to documents that carry the ownership marker, because
+    # a document with no fields generates no entries at all.
+    assert "marker-bearing" in case["derivation"]
+    assert "no fields" in case["derivation"]
+
+
+def test_the_shadow_index_configuration_is_cross_checked() -> None:
+    """S1: the shadow did not run under the digest the manifest declares."""
+    manifest, shadow = load(MANIFEST), load(SHADOW)
+    configuration = manifest["indexConfiguration"]
+    assert configuration["shadowDifference"]
+    for part in PARTS:
+        declared = configuration["shadowRanUnder"][part]
+        recorded = shadow["parts"][part]["execution"]["indexConfiguration"]
+        assert declared == recorded, part
+        assert declared["sha256"] != configuration["conformanceIndexesSha256Before"]
+
+
+def test_the_declared_data_cost_is_accounted_for_in_the_envelope() -> None:
+    """S2: a ceiling that omits a cost the same object declares is not a ceiling."""
+    manifest = load(MANIFEST)
+    for part in PARTS:
+        budgets = manifest["parts"][part]["budgets"]
+        assert budgets["dataCostIsIncludedInEnvelope"] is True
+        assert budgets["costNote"]
+        charged = budgets["requestUpperBound"] * budgets["requestCostMicrousd"]
+        assert budgets["dataCostMicrousd"] <= charged
+        assert budgets["envelopeCostMicrousd"] == budgets["fixedCostMicrousd"] + charged
+
+
+def test_every_boundary_says_which_unit_it_is_expressed_in() -> None:
+    """S3: the catalog's unit field and its notes disagree for the field value."""
+    for part in PARTS:
+        for case in load(MANIFEST)["parts"][part]["cases"]:
+            if "limitId" not in case:
+                continue
+            assert case["boundaryUnit"], case["id"]
+            assert case["catalogUnit"] == catalog_status(case["limitId"])["catalogUnit"]
+            assert case["catalogImplemented"] == "implemented"
+    # The field-value cases must between them cover both readings.
+    units = {
+        case["boundaryUnit"]
+        for part in PARTS
+        for case in load(MANIFEST)["parts"][part]["cases"]
+        if case.get("limitId") == "FS-LIMIT-FIELD-VALUE-BYTES"
+    }
+    assert any("raw payload" in unit for unit in units)
+    assert any("logical" in unit for unit in units)
+
+
+def test_the_duplicate_control_cites_the_receipt_it_rests_on() -> None:
+    """S4: the control's own basis must be checkable."""
+    manifest = load(MANIFEST)
+    case = next(
+        case
+        for part in PARTS
+        for case in manifest["parts"][part]["cases"]
+        if case["id"].endswith("/batch-duplicate-document")
+    )
+    assert "firestore-production-matrix.json" in case["derivation"]
+    assert "non-atomic-batch" in case["derivation"]
 
 
 def test_collector_and_comparator_bindings_name_the_new_modules() -> None:

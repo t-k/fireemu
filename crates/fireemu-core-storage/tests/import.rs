@@ -346,6 +346,20 @@ fn imported_metadata_with_a_control_character_is_refused_field_by_field() {
             "downloadTokens",
             Box::new(|o: &mut ImportedObject| o.download_tokens = vec!["tok\u{0}en".into()]),
         ),
+        // C1 (U+0080..U+009F) is a control character too. It is multi-byte in UTF-8, so a
+        // byte-wise test would miss it while the value still ends up in a header and a log.
+        (
+            "contentDisposition",
+            Box::new(|o: &mut ImportedObject| {
+                o.content_disposition = Some("attachment\u{85}name".into());
+            }),
+        ),
+        (
+            "cacheControl",
+            Box::new(|o: &mut ImportedObject| {
+                o.cache_control = Some("public\u{9b}max-age=60".into());
+            }),
+        ),
     ] {
         let mut store = StorageState::new(7);
         let bytes = b"payload".to_vec();
@@ -357,7 +371,7 @@ fn imported_metadata_with_a_control_character_is_refused_field_by_field() {
         };
         assert!(message.contains(label), "{label}: {message}");
         assert!(
-            !message.contains('\u{0}') && !message.contains('\r') && !message.contains('\u{7f}'),
+            !message.chars().any(char::is_control),
             "{label}: the refusal must not echo the value: {message:?}"
         );
         assert!(

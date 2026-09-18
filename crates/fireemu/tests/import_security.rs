@@ -182,6 +182,9 @@ fn storage_metadata_with_control_characters_is_refused_naming_the_field_only() {
     const BASE: &str = r#""name":"obj","bucket":"demo-app.appspot.com","generation":1,"metageneration":1,"size":1"#;
     let crlf = "\\r\\n";
     let nul = "\\u0000";
+    // C1 (U+0080..U+009F): a control character that is multi-byte in UTF-8, so a byte-wise
+    // test would miss it while the value still reaches a response header and a log line.
+    let c1 = "\\u0085";
     for (label, tail, field) in [
         (
             "content-type-crlf",
@@ -209,6 +212,11 @@ fn storage_metadata_with_control_characters_is_refused_naming_the_field_only() {
             "download-token-nul",
             format!(r#""contentType":"text/plain","downloadTokens":["tok{nul}marker-secret"]"#),
             "downloadTokens",
+        ),
+        (
+            "content-type-c1",
+            format!(r#""contentType":"text/plain{c1}marker-secret""#),
+            "contentType",
         ),
     ] {
         let dir = scratch(label);
@@ -254,6 +262,8 @@ fn storage_metadata_with_control_characters_is_refused_naming_the_field_only() {
 fn auth_metadata_with_control_characters_is_refused_naming_the_field_only() {
     let crlf = "\\r\\n";
     let nul = "\\u0000";
+    // C1 (U+0080..U+009F): a control character that is multi-byte in UTF-8.
+    let c1 = "\\u0085";
     for (label, account, field) in [
         (
             "federated-display-name",
@@ -310,6 +320,13 @@ fn auth_metadata_with_control_characters_is_refused_naming_the_field_only() {
                 r#"{{"localId":"u","mfaInfo":[{{"mfaEnrollmentId":"f{nul}marker-secret","phoneInfo":"+15551234567"}}]}}"#
             ),
             "mfaInfo.mfaEnrollmentId",
+        ),
+        (
+            "federated-display-name-c1",
+            format!(
+                r#"{{"localId":"u","providerUserInfo":[{{"providerId":"google.com","rawId":"g-1","displayName":"Carol{c1}marker-secret"}}]}}"#
+            ),
+            "providerUserInfo.displayName",
         ),
     ] {
         let dir = scratch(label);

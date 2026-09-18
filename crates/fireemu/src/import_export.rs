@@ -2422,16 +2422,18 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
 /// the photo URL and the phone number. The linked providers and the enrolled second factors go
 /// in unchecked, and every one of those strings is rendered back into an account response, a
 /// log line and a re-exported artifact, so the artifact boundary applies the same rule to them.
-/// The refusal names the field and never repeats the value.
+/// The classification is the one predicate both product sections of an artifact use
+/// ([`fireemu_core_storage::store::is_header_safe`]), so Auth and Storage cannot drift apart
+/// on what a control character is. The refusal names the field and never repeats the value.
 fn header_safe_account(
     record: &UserRecord,
     refuse: &impl Fn(String) -> ArtifactError,
 ) -> Result<(), ArtifactError> {
     let check = |field: &str, value: &str| -> Result<(), ArtifactError> {
-        if value.chars().any(char::is_control) {
-            Err(refuse(format!("{field} contains a control character")))
-        } else {
+        if fireemu_core_storage::store::is_header_safe(value) {
             Ok(())
+        } else {
+            Err(refuse(format!("{field} contains a control character")))
         }
     };
     for provider in &record.provider_user_info {

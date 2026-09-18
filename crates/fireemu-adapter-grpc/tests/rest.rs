@@ -3795,3 +3795,85 @@ fn the_security_rules_route_needs_the_control_token_from_a_browser() {
     let (status, body) = put(&s, None, false, None);
     assert_eq!(status, 200, "{body}");
 }
+
+/// `DELETE /emulator/v1/projects/{p}/databases/{db}/documents` is `clearFirestore()`: it drops
+/// every document of the project. It is as privileged as replacing the ruleset and this
+/// surface answers a CORS preflight for any loopback origin, so a page on another loopback
+/// port could wipe a session's data. It takes the same admission as the rules route: a browser
+/// request needs the control token, a process-issued one is unaffected.
+#[test]
+fn the_emulator_clear_route_needs_the_control_token_from_a_browser() {
+    const TOKEN: &str = "rest-test-control-token";
+    let clear =
+        |s: &RestState, origin: Option<&str>, browser: bool, authorization: Option<&str>| {
+            let r = s.handle(&RestRequest {
+                method: "DELETE".to_owned(),
+                path: format!("{EMULATOR}/databases/(default)/documents"),
+                query: String::new(),
+                authorization: authorization.map(str::to_owned),
+                origin: origin.map(str::to_owned),
+                browser_metadata: browser,
+                app_check: Vec::new(),
+                body: json!({}),
+            });
+            (r.status, r.body)
+        };
+    let seed = |s: &RestState| {
+        let (status, _) = call(
+            s,
+            "POST",
+            &format!("{DOCS}/things?documentId=kept"),
+            json!({"fields": {"a": {"stringValue": "x"}}}),
+        );
+        assert_eq!(status, 200);
+    };
+    let present =
+        |s: &RestState| call(s, "GET", &format!("{DOCS}/things/kept"), json!({})).0 == 200;
+
+    for (label, origin, browser, authorization) in [
+        (
+            "loopback origin, no token",
+            Some("http://localhost:5173"),
+            true,
+            None,
+        ),
+        (
+            "loopback origin, wrong token",
+            Some("http://localhost:5173"),
+            true,
+            Some("Bearer not-the-control-token"),
+        ),
+        ("browser metadata without an origin", None, true, None),
+        (
+            "foreign origin with the token",
+            Some("https://evil.example"),
+            true,
+            Some("Bearer rest-test-control-token"),
+        ),
+    ] {
+        let mut s = state(None);
+        s.control_token = Some(TOKEN.to_owned());
+        seed(&s);
+        let (status, body) = clear(&s, origin, browser, authorization);
+        assert_eq!(status, 403, "{label}: {body}");
+        assert!(present(&s), "{label}: the refused clear must keep the data");
+    }
+
+    // A browser that presents the control token clears, and so does a process client.
+    for (label, origin, browser, authorization) in [
+        (
+            "browser with the control token",
+            Some("http://localhost:5173"),
+            true,
+            Some("Bearer rest-test-control-token"),
+        ),
+        ("process client", None, false, None),
+    ] {
+        let mut s = state(None);
+        s.control_token = Some(TOKEN.to_owned());
+        seed(&s);
+        let (status, body) = clear(&s, origin, browser, authorization);
+        assert_eq!(status, 200, "{label}: {body}");
+        assert!(!present(&s), "{label}: the data must be gone");
+    }
+}

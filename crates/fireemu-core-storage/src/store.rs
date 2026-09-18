@@ -445,13 +445,18 @@ impl std::error::Error for StorageError {}
 
 /// Whether a metadata string may be served as an HTTP header value.
 ///
-/// C0 control characters (U+0000 included) and DEL can split a header, a log line or a
-/// re-exported artifact, and production refuses them where an object is written, so nothing
-/// may enter the store carrying one. This is the single classification every entry point
-/// uses: the HTTP upload and patch paths, and [`StorageState::insert_imported`].
+/// A Unicode control character -- C0 (U+0000 included), DEL and C1 -- can split a header, a
+/// log line or a re-exported artifact, and production refuses them where an object is written,
+/// so nothing may enter the store carrying one. C1 is tested as a character rather than as a
+/// byte on purpose: it is multi-byte in UTF-8, so a byte-wise test would pass it through while
+/// the value still reaches a response header and a log line.
+///
+/// This is the single classification every entry point uses: the HTTP upload, patch and
+/// form-upload paths, [`StorageState::insert_imported`], and the Auth and Storage sections of
+/// an import artifact.
 #[must_use]
 pub fn is_header_safe(value: &str) -> bool {
-    !value.bytes().any(|b| b < 0x20 || b == 0x7f)
+    !value.chars().any(char::is_control)
 }
 
 /// [`is_header_safe`] as a store refusal that names `field` and never repeats the value.

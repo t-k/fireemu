@@ -131,3 +131,28 @@ fn positional_cmd_script_preserves_quoted_metacharacters_and_exit_code() {
     assert_eq!(std::fs::read_to_string(&output_file).unwrap(), expected);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// WEXIT-2: a child that ends with a negative status must not be reported as success.
+///
+/// `cmd /c exit -1` sets the process exit code to 0xFFFFFFFF, which `std` reports as `-1`. The
+/// same shape covers the fatal NTSTATUS codes an access violation or a Ctrl-C produces.
+#[test]
+fn negative_child_exit_status_is_reported_as_a_failure() {
+    let dir = scratch("negative exit");
+    let batch = dir.join("negative.cmd");
+    std::fs::write(&batch, "@echo off\r\nexit /b -1\r\n").unwrap();
+
+    let output = daemon()
+        .arg(format!("\"{}\"", batch.display()))
+        .output()
+        .unwrap();
+
+    let code = output.status.code();
+    assert_ne!(
+        code,
+        Some(0),
+        "a child that ended with a negative status was reported as success"
+    );
+    assert_eq!(code, Some(1));
+    let _ = std::fs::remove_dir_all(dir);
+}

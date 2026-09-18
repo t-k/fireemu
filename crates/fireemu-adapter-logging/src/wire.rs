@@ -298,6 +298,7 @@ pub fn parse_handshake(head: &str) -> Result<Handshake, HandshakeError> {
         return Err(HandshakeError::NotGet);
     }
     let mut host: Option<&str> = None;
+    let mut hosts = 0usize;
     let mut origin: Option<&str> = None;
     let mut origins = 0usize;
     let mut upgrade = false;
@@ -319,6 +320,7 @@ pub fn parse_handshake(head: &str) -> Result<Handshake, HandshakeError> {
         let value = value.trim();
         if name.eq_ignore_ascii_case("host") {
             host = Some(value);
+            hosts += 1;
         } else if name.eq_ignore_ascii_case("origin") {
             origin = Some(value);
             origins += 1;
@@ -330,10 +332,13 @@ pub fn parse_handshake(head: &str) -> Result<Handshake, HandshakeError> {
             key = Some(value);
         }
     }
-    if !host_is_loopback(host) {
+    // A repeated Host is refused for the same reason a repeated Origin is: resolving an
+    // authority header to one of several values is what makes smuggling work. RFC 7230 §5.4
+    // requires the refusal, and no real client sends two.
+    if hosts > 1 || !host_is_loopback(host) {
         return Err(HandshakeError::ForeignHost);
     }
-    // A repeated Origin is never sent by a browser: refuse rather than pick one of the values.
+    // A repeated Origin is never sent by a browser either: refuse rather than pick a value.
     if origins > 1 || !origin_is_loopback(origin) {
         return Err(HandshakeError::ForeignOrigin);
     }
@@ -347,7 +352,8 @@ pub fn parse_handshake(head: &str) -> Result<Handshake, HandshakeError> {
 }
 
 /// Whether a `Host` header names this machine. Mirrors `hub.rs::host_is_local`: an absent Host
-/// (HTTP/1.0) is treated as local, and `127.0.0.0/8`, `localhost` and `::1` all pass.
+/// (HTTP/1.0) is treated as local, and `127.0.0.0/8`, `localhost` and `::1` all pass. A
+/// repeated Host never reaches here: [`parse_handshake`] refuses it before asking.
 #[must_use]
 pub fn host_is_loopback(host: Option<&str>) -> bool {
     host.is_none_or(authority_is_loopback)
@@ -628,6 +634,28 @@ mod tests {
                     Origin: https://attacker.example\r\nUpgrade: websocket\r\n\
                     Connection: Upgrade\r\nSec-WebSocket-Key: abc==\r\n\r\n";
         assert_eq!(parse_handshake(head), Err(HandshakeError::ForeignOrigin));
+    }
+
+    #[test]
+    fn handshake_refuses_more_than_one_host_header() {
+        // Mirrors the duplicate-Origin rule: never resolve a repeated authority header to one
+        // of its values. RFC 7230 §5.4 requires refusing this, and no real client sends it.
+        for second in ["evil.example.com", "127.0.0.1:4500"] {
+            let head = format!(
+                "GET / HTTP/1.1\r\nHost: 127.0.0.1:4500\r\nHost: {second}\r\n\
+                 Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: abc==\r\n\r\n"
+            );
+            assert_eq!(
+                parse_handshake(&head),
+                Err(HandshakeError::ForeignHost),
+                "expected a duplicate Host with {second} to be refused"
+            );
+        }
+
+        // The single-Host and absent-Host cases are unaffected.
+        let single = "GET / HTTP/1.1\r\nHost: 127.0.0.1:4500\r\nUpgrade: websocket\r\n\
+                      Connection: Upgrade\r\nSec-WebSocket-Key: abc==\r\n\r\n";
+        assert_eq!(parse_handshake(single).unwrap().key, "abc==");
     }
 
     #[test]

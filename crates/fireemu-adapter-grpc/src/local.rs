@@ -3106,7 +3106,7 @@ impl LocalBackend {
                     complete = false;
                     break;
                 }
-                if self.delete_if_still_expired(&parent, &path, policy, expires_at) {
+                if self.delete_if_still_expired(&parent, &path, collection_group, expires_at) {
                     deleted += 1;
                 }
             }
@@ -3125,15 +3125,21 @@ impl LocalBackend {
     /// The candidate was chosen by a query that ran earlier, so the version it named may no
     /// longer be the current one: a client may have extended the time-to-live field, cleared
     /// it, written a value of another type, or deleted the document and written a new one at
-    /// the same path. Expiry is therefore decided again here, on the version current inside
-    /// the database's own critical section, and the deletion is committed in that same
-    /// section. A document whose current version is not expired is kept, which is what
-    /// production's own expiry does: the latest value of the field decides.
+    /// the same path. The policy itself may also have moved: a caller may have cleared it,
+    /// changed its `expirationOffset`, or put it on another field of the same collection
+    /// group.
+    ///
+    /// Both halves of the decision are therefore taken again here, inside the database's own
+    /// critical section that then commits the deletion: the policy in force for the
+    /// collection group, and the version of the document current in that section. A document
+    /// whose collection group no longer carries a policy, or whose current version that
+    /// policy does not mark expired, is kept. That is what production's own expiry does: the
+    /// configuration and the field value in force at the moment of deletion decide.
     fn delete_if_still_expired(
         &self,
         parent: &Parent,
         path: &DocumentPath,
-        policy: &fireemu_core_firestore::ttl::TtlPolicy,
+        collection_group: &CollectionId,
         expires_at: fireemu_core_firestore::value::Timestamp,
     ) -> bool {
         if self
@@ -3150,9 +3156,17 @@ impl LocalBackend {
         self.retry_on_contention(parent, None, std::slice::from_ref(&write), || {
             let now = self.write_time();
             self.with_db(parent, |db| {
-                let still_expired = db
-                    .get(path)
-                    .is_some_and(|document| policy.is_expired(&document.fields, expires_at));
+                // The catalog lock is taken under this database's lock and released before
+                // the commit. Nothing holds the catalog while acquiring a database lock, so
+                // the two never contend in the other order.
+                let policy = self
+                    .ttl_catalog(parent.project.as_str(), parent.database.as_str())
+                    .policy(collection_group)
+                    .cloned();
+                let still_expired = policy.is_some_and(|policy| {
+                    db.get(path)
+                        .is_some_and(|document| policy.is_expired(&document.fields, expires_at))
+                });
                 if !still_expired {
                     return Ok(false);
                 }

@@ -283,6 +283,63 @@ fn an_expired_document_left_alone_during_the_sweep_is_still_deleted() {
 }
 
 #[test]
+fn a_policy_disabled_after_the_scan_deletes_nothing_it_had_already_chosen() {
+    let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
+    write_document(&backend, "sessions/s1", Some(timestamp(1_100)));
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .expect("enable ttl");
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
+
+    let deleted = sweep_with_write_between(
+        &backend,
+        LogicalInstant::from_unix_seconds(1_101),
+        // The configuration the sweep is applying is withdrawn while it holds the candidate.
+        || {
+            assert!(backend.disable_ttl(
+                PROJECT,
+                DATABASE,
+                &group("sessions"),
+                &field("expiresAt")
+            ));
+        },
+    );
+
+    assert_eq!(deleted, 0);
+    assert!(exists(&backend, "sessions/s1"));
+}
+
+#[test]
+fn an_expiration_offset_extended_after_the_scan_keeps_the_document() {
+    let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
+    write_document(&backend, "sessions/s1", Some(timestamp(1_100)));
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .expect("enable ttl");
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
+
+    let deleted = sweep_with_write_between(
+        &backend,
+        LogicalInstant::from_unix_seconds(1_101),
+        // The document is untouched; the policy now pushes its expiration time a week out.
+        || {
+            backend
+                .enable_ttl_with_offset(
+                    PROJECT,
+                    DATABASE,
+                    group("sessions"),
+                    field("expiresAt"),
+                    Some(LogicalDuration::from_seconds(604_800)),
+                )
+                .expect("extend the offset");
+        },
+    );
+
+    assert_eq!(deleted, 0);
+    assert!(exists(&backend, "sessions/s1"));
+}
+
+#[test]
 fn the_expiration_offset_moves_the_instant_the_sweep_deletes_a_document() {
     let week = 604_800;
     let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));

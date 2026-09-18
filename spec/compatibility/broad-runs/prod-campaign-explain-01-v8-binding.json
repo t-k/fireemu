@@ -1,7 +1,7 @@
 {
   "kind": "production-campaign-explain-01-comparison-v3",
-  "manifestDigest": "5c5e29cf3a2364ad7d43dbc008fbd6a9e72fde3f634ee1d3fcee332281143d52",
-  "observerSha256": "09f63bb54d8fe40edcba259a572acb995c343d27601957e2d827b10784adec29",
+  "manifestDigest": "47f0d5fc7542677aa6ef282f3ebe7ee2cba97b478a8c7c2876d3ff73ee1620a2",
+  "observerSha256": "76491016a35b58b5d2baf24cd8dad386ce553459d36e938b8d8f8a0df8043bfc",
   "normalization": "shared-campaign-typed-json-v2",
   "durationProjection": {
     "scope": "successful analyze runQuery and runAggregationQuery responses",

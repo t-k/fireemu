@@ -22,6 +22,12 @@ from broad_contract import digest
 
 REQUEST_SECONDS = 13  # 12-second wire deadline plus adapter spacing allowance.
 MAX_JOB_SLOTS = 8
+# The floor on request spacing and the ceiling on a campaign wall. Named so a
+# campaign can import them instead of keeping its own copy: a copied constant is
+# how a lane once re-derived this module's charging formula and agreed with a
+# Gate that no longer existed.
+INTERVAL_FLOOR_SECONDS = 0.25
+WALL_CAP_SECONDS = 1200
 PHASES = ("observation", "recovery")
 
 
@@ -373,10 +379,10 @@ def create(path, plan):
         > plan["wallSeconds"] - plan["recoverySeconds"]
         or len(resources) != len(set(resources))
         or not resources
-        or not 0 < plan["recoverySeconds"] < plan["wallSeconds"] <= 1200
+        or not 0 < plan["recoverySeconds"] < plan["wallSeconds"] <= WALL_CAP_SECONDS
         or plan["recoverySeconds"] < recovery_time
         or not math.isfinite(plan["intervalSeconds"])
-        or plan["intervalSeconds"] < 0.25
+        or plan["intervalSeconds"] < INTERVAL_FLOOR_SECONDS
         or type(plan["costMicrousd"]) is not int
         or type(plan["observationRequests"]) is not int
         or plan["observationRequests"] < 0

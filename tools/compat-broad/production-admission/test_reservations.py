@@ -1574,3 +1574,174 @@ def test_a_receipt_gate_plan_must_match_its_own_digest(tmp_path):
             },
         )
     assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+# An uncertain stop: a probe Commit was dispatched and its outcome is unknown.
+# Such a row is correctly refused by the no-data path, and before the escalation
+# exit existed it stayed held and active forever, holding its lock key and its
+# whole allocation even after the owner had removed the residue by hand.
+ESCALATION_KIND = "shared-owner-escalation-close-v1"
+
+
+def _typed_absence():
+    return {"status": 404, "body": {"error": {"code": 404, "status": "NOT_FOUND"}}}
+
+
+def _escalation_record(ledger, ticket, record, *, resources=None, attest=None):
+    """An owner attestation plus typed absence for every owned resource."""
+    import platform
+
+    receipt = json.loads(Path(record["receiptPath"]).read_text())
+    owned = sorted(
+        name
+        for job in receipt["gate"]["plan"]["jobs"].values()
+        for name in job["resources"]
+    )
+    claim = ledger.bound_claim(ticket)
+    now = time.time()
+    attestation = {
+        "kind": "owner-escalation-attestation-v1",
+        "status": "attested",
+        "campaignId": claim["campaignId"],
+        "nonceDigest": claim["nonceDigest"],
+        "claimDigest": ticket["claimDigest"],
+        "ledgerRoot": str(ledger.path),
+        "reservation": ticket["reservation"],
+        "receiptDigest": record["receiptDigest"],
+        "gateDigest": record["gateDigest"],
+        "ownerIdentity": "t-k",
+        "recoveryOwner": "t-k",
+        "residueRemoved": True,
+        "resourceCount": len(owned),
+        "resourcesDigest": digest(owned),
+        "attestedAt": now - 1,
+        "expiresAt": now + 3600,
+        "executionHost": {
+            "platform": platform.system().lower(),
+            "machine": platform.machine(),
+        },
+    }
+    attestation.update(attest or {})
+    return {
+        "kind": ESCALATION_KIND,
+        "ticket": ticket,
+        "gateDigest": record["gateDigest"],
+        "receiptPath": record["receiptPath"],
+        "receiptDigest": record["receiptDigest"],
+        "attestation": attestation,
+        "absence": {
+            name: _typed_absence()
+            for name in (owned if resources is None else resources)
+        },
+    }
+
+
+def test_an_escalated_stop_closes_and_stops_being_active(tmp_path):
+    """The row reaches a terminal state and releases its lock key, nothing more."""
+    ledger, gate, ticket, record = _campaign_attempt(tmp_path, dispatched=True)
+    with pytest.raises(ValueError):
+        ledger.abort_no_data(ticket, record)
+    escalation = _escalation_record(ledger, ticket, record)
+    ledger.close_after_escalation(ticket, escalation)
+    row = ledger.snapshot()["reservations"][ticket["reservation"]]
+    assert row["state"] == "closed-after-escalation"
+    assert row["escalationRecordDigest"] == digest(escalation)
+    assert row["finalGateDigest"] == digest(gate.snapshot())
+    # The allocation is never refunded, only the conflict lock is freed.
+    envelope_row = ledger.snapshot()["envelopes"][digest(envelope())]
+    assert envelope_row["allocated"] == row["claim"]["budget"]
+    reuse = claim(tmp_path, "b", row["claim"]["locks"])
+    reuse["gatePath"] = str((tmp_path / "second-gate").resolve())
+    ledger.reserve(envelope(), reuse, plan("b"), now=1110)
+    ledger.close_after_escalation(ticket, escalation)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        == "closed-after-escalation"
+    )
+
+
+def test_an_escalated_close_refuses_without_a_bound_owner_attestation(tmp_path):
+    ledger, _gate, ticket, record = _campaign_attempt(tmp_path, dispatched=True)
+    base = _escalation_record(ledger, ticket, record)
+    for damage in (
+        {"status": "pending"},
+        {"kind": "other-attestation-v1"},
+        {"campaignId": "another-campaign"},
+        {"nonceDigest": "0" * 64},
+        {"claimDigest": "0" * 64},
+        {"reservation": "0" * 64},
+        {"receiptDigest": "0" * 64},
+        {"gateDigest": "0" * 64},
+        {"ledgerRoot": "/nonexistent/ledger"},
+        {"residueRemoved": False},
+        {"resourceCount": 99},
+        {"resourcesDigest": "0" * 64},
+        {"ownerIdentity": "<<ROOT: who>>"},
+        {"recoveryOwner": ""},
+        {"attestedAt": time.time() + 600},
+        {"expiresAt": time.time() - 1},
+        {"executionHost": {"platform": "other", "machine": "other"}},
+    ):
+        with pytest.raises(ValueError):
+            ledger.close_after_escalation(
+                ticket, _escalation_record(ledger, ticket, record, attest=damage)
+            )
+        assert (
+            ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+        )
+    escalation = dict(base)
+    del escalation["attestation"]
+    with pytest.raises(ValueError, match="escalation close record"):
+        ledger.close_after_escalation(ticket, escalation)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+def test_an_escalated_close_refuses_a_resource_not_proven_absent(tmp_path):
+    """Every owned resource, not merely the ones the owner chose to read back."""
+    ledger, _gate, ticket, record = _campaign_attempt(tmp_path, dispatched=True)
+    receipt = json.loads(Path(record["receiptPath"]).read_text())
+    owned = sorted(
+        name
+        for job in receipt["gate"]["plan"]["jobs"].values()
+        for name in job["resources"]
+    )
+    with pytest.raises(ValueError, match="absent"):
+        ledger.close_after_escalation(
+            ticket, _escalation_record(ledger, ticket, record, resources=owned[:-1])
+        )
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+    escalation = _escalation_record(ledger, ticket, record)
+    escalation["absence"][owned[0]] = {"status": 200, "body": {"name": owned[0]}}
+    with pytest.raises(ValueError, match="absent"):
+        ledger.close_after_escalation(ticket, escalation)
+    escalation["absence"][owned[0]] = {"status": 404, "body": {"error": {"code": 500}}}
+    with pytest.raises(ValueError, match="absent"):
+        ledger.close_after_escalation(ticket, escalation)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+def test_the_escalation_exit_and_the_no_data_abort_are_mutually_exclusive(tmp_path):
+    """Neither path can be reached with the other's evidence."""
+    ledger, _gate, ticket, record = _campaign_attempt(tmp_path, stop=1)
+    escalation = _escalation_record(ledger, ticket, record)
+    with pytest.raises(ValueError, match="no-data"):
+        ledger.close_after_escalation(ticket, escalation)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+    ledger.abort_no_data(ticket, record)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        == "aborted-no-data"
+    )
+
+    other, _gate, other_ticket, other_record = _campaign_attempt(
+        tmp_path / "second", dispatched=True
+    )
+    with pytest.raises(ValueError, match="no-data abort record"):
+        other.abort_no_data(
+            other_ticket, _escalation_record(other, other_ticket, other_record)
+        )
+    with pytest.raises(ValueError):
+        other.close_after_escalation(other_ticket, other_record)
+    assert (
+        other.snapshot()["reservations"][other_ticket["reservation"]]["state"] == "held"
+    )

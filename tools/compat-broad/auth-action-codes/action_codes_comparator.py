@@ -89,7 +89,10 @@ def _shaped(receipt: Any, side: str) -> str | None:
         return side + " recording is incomplete"
     if receipt.get("cleanupComplete") is not True:
         return side + " cleanup is incomplete"
-    if receipt.get("remainingAccounts") != 0 or receipt.get("deleteFailures") not in (0, None):
+    if receipt.get("remainingAccounts") != 0 or receipt.get("deleteFailures") not in (
+        0,
+        None,
+    ):
         return side + " left an owned account behind"
     if not _binding_complete(receipt.get("sourceBinding")):
         return side + " source binding is incomplete"
@@ -101,9 +104,10 @@ def _shaped(receipt: Any, side: str) -> str | None:
     if side == "production":
         if receipt.get("productionExecuted") is not True:
             return "production receipt does not record an executed observation"
-        if not isinstance(receipt.get("permissionReference"), str) or not receipt[
-            "permissionReference"
-        ]:
+        if (
+            not isinstance(receipt.get("permissionReference"), str)
+            or not receipt["permissionReference"]
+        ):
             return "production receipt carries no owner permission reference"
     return None
 
@@ -171,4 +175,6 @@ if __name__ == "__main__":
     if arguments.output is not None:
         arguments.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(json.dumps({"classification": result["classification"]}))
-    raise SystemExit({"MATCH": 0, "SEMANTIC_MISMATCH": 1}.get(result["classification"], 2))
+    raise SystemExit(
+        {"MATCH": 0, "SEMANTIC_MISMATCH": 1}.get(result["classification"], 2)
+    )

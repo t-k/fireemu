@@ -6,7 +6,13 @@ import copy
 
 import pytest
 from action_codes_comparator import INFORMATIONAL_FIELDS, SEMANTIC_FIELDS, compare
-from action_codes_plan import CAMPAIGN_ID, CONTRACT, STAGE_IDS, campaign_manifest, manifest_digest
+from action_codes_plan import (
+    CAMPAIGN_ID,
+    CONTRACT,
+    STAGE_IDS,
+    campaign_manifest,
+    manifest_digest,
+)
 
 NONCE = "abcdef0123456789" * 2
 DIGEST = manifest_digest(campaign_manifest(NONCE))
@@ -20,7 +26,9 @@ def receipt(side: str) -> dict:
         "nonce": NONCE,
         "manifestDigest": DIGEST,
         "sourceBinding": {"commit": "a" * 40, "artifactSha256": "b" * 64},
-        "permissionReference": None if side == "local" else "owner-permission-2026-09-18",
+        "permissionReference": None
+        if side == "local"
+        else "owner-permission-2026-09-18",
         "recordingComplete": True,
         "cleanupComplete": True,
         "remainingAccounts": 0,
@@ -109,7 +117,9 @@ def test_message_prose_and_code_length_stay_visible_without_forcing_a_verdict() 
         ("stages", []),
     ],
 )
-def test_an_incomplete_or_unbound_production_receipt_is_indeterminate(field, value) -> None:
+def test_an_incomplete_or_unbound_production_receipt_is_indeterminate(
+    field, value
+) -> None:
     result = pair(**{field: value})
     assert result["classification"] == "INDETERMINATE"
     assert result["productionCompared"] is False

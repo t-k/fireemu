@@ -35,6 +35,31 @@ Historical normalizers erased some token/ID/time/expiry information and did not 
 
 The first run found one apparent cursor mismatch caused by omitted index configuration under strict. Its minimal query orders by g,n with a prefix cursor q, requiring a composite already present in the recorded production index file. This is a harness configuration cause, not evidence for changing the cursor runtime. Preserve the original mismatch; recompare with the pinned historical index bytes and record the changed configuration independently.
 
+## Local execution
+
+Run the wide suite with a per-test bound. Several sessions share this machine,
+and a wedged test used to sit at 0% CPU for an hour before anyone noticed:
+
+```sh
+uv run --python 3.12 --with pytest --with pytest-timeout \
+  pytest -q tools/compat-broad -p no:cacheprovider
+```
+
+`tools/compat-broad/pytest.ini` supplies the bound (300 seconds per test, the
+signal method, so one wedged test fails and the rest of the run continues).
+pytest-timeout is not a CI dependency: without it pytest prints two unknown
+config option warnings and behaves exactly as before. Add
+`--timeout-method=thread` when you need the stack of every thread rather than
+just the one that stalled.
+
+A per-test bound cannot reach a hang at interpreter shutdown, because the tests
+are over by then. `threading._shutdown` joins every non-daemon thread with no
+timeout, so one loopback HTTP server that outlives its test stops the process
+forever after the last report line. Every `serve_forever` thread in this tree
+is therefore a daemon thread, every server is stopped in a `finally`, and every
+join is bounded. Keep it that way in new lanes. Bind fixtures to port 0 and
+read `server.server_port` back; never to a port from the environment.
+
 ## Reproduction
 
 ```sh

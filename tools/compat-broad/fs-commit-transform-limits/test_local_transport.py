@@ -43,7 +43,7 @@ def local_wire():
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = Thread(target=server.serve_forever)
+    thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         yield plan, f"http://127.0.0.1:{server.server_port}", received

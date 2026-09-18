@@ -116,7 +116,7 @@ def test_real_transport_bounds_redirect_body_and_total_deadline():
                 self.wfile.write(b'{"ok":true}')
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     origin = f"http://127.0.0.1:{server.server_port}"
     try:
@@ -133,7 +133,7 @@ def test_real_transport_bounds_redirect_body_and_total_deadline():
     finally:
         server.shutdown()
         server.server_close()
-        thread.join()
+        thread.join(timeout=5)
 
 
 def test_unjournaled_resources_and_foreign_auth_selectors_fail_before_transport(
@@ -534,20 +534,22 @@ def test_privileged_http_refusal_stops_transport_and_preserves_unconfirmed_clean
             )
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     origin = f"http://127.0.0.1:{server.server_port}"
-    run = a.Adapter(
-        contract().candidate(),
-        "a" * 32,
-        tmp_path / "run",
-        local_origins={"auth": origin, "firestore": origin},
-    )
-    run.credential.accept("verified", {"expires_in": 3600}, time.monotonic())
-    name = run.compiled[0]["targets"][0]
-    run.documents.add(name)
-    run.record({"kind": "document-attempt", "name": name})
     try:
+        # Every statement that can raise stays inside the block that stops the
+        # server; a stranded loopback server used to survive the whole session.
+        run = a.Adapter(
+            contract().candidate(),
+            "a" * 32,
+            tmp_path / "run",
+            local_origins={"auth": origin, "firestore": origin},
+        )
+        run.credential.accept("verified", {"expires_in": 3600}, time.monotonic())
+        name = run.compiled[0]["targets"][0]
+        run.documents.add(name)
+        run.record({"kind": "document-attempt", "name": name})
         with pytest.raises(ValueError, match="credential rejected"):
             run.request("firestore", "/v1/" + name, method="GET", privileged=True)
         assert run.credential.failed
@@ -574,7 +576,7 @@ def test_privileged_http_refusal_stops_transport_and_preserves_unconfirmed_clean
     finally:
         server.shutdown()
         server.server_close()
-        thread.join()
+        thread.join(timeout=5)
 
 
 def test_mapping_comparator_preserves_identity_types_and_array_order():

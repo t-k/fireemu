@@ -1,6 +1,5 @@
 """Owned loopback HTTP fixtures exercise actual current-wire failure capture."""
 
-import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -40,10 +39,10 @@ def wire_server():
         def log_message(self, *_args):
             pass
 
-    server = ThreadingHTTPServer(
-        ("127.0.0.1", int(os.environ.get("PORT", "0"))), Handler
-    )
-    thread = threading.Thread(target=server.serve_forever)
+    # Always take an OS-assigned port: a fixed one collides with the other
+    # sessions that run this suite concurrently on the same machine.
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         yield "http://127.0.0.1:" + str(server.server_port), Handler

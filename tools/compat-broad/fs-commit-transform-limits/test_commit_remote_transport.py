@@ -98,14 +98,14 @@ class Handler(BaseHTTPRequestHandler):
 def test_loopback_complete_four_x_is_retained_and_secret_stays_outside_argv(tmp_path):
     Handler.received = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = Thread(target=server.serve_forever)
+    thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         value = payload()
         result = request(value, local_origin=f"http://127.0.0.1:{server.server_port}")
     finally:
         server.shutdown()
-        thread.join()
+        thread.join(timeout=5)
         server.server_close()
     assert result["complete"] is True
     assert result["status"] == 400
@@ -133,13 +133,13 @@ def test_worker_rejects_foreign_binding_without_echoing_secret():
 def test_loopback_trickle_is_hard_deadline_bounded():
     Handler.slow = True
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = Thread(target=server.serve_forever)
+    thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         result = request(payload(), local_origin=f"http://127.0.0.1:{server.server_port}", timeout=0.2)
     finally:
         server.shutdown()
-        thread.join()
+        thread.join(timeout=5)
         server.server_close()
         Handler.slow = False
     assert result["complete"] is False

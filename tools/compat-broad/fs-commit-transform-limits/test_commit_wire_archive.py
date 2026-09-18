@@ -68,7 +68,7 @@ class Loopback:
         Handler.received = []
         Handler.slow = slow
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.thread = Thread(target=self.server.serve_forever)
+        self.thread = Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
     @property
@@ -77,7 +77,7 @@ class Loopback:
 
     def close(self) -> None:
         self.server.shutdown()
-        self.thread.join()
+        self.thread.join(timeout=5)
         self.server.server_close()
         Handler.slow = False
 

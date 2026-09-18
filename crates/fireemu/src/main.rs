@@ -1016,17 +1016,25 @@ fn resolve_export_on_exit(
             })?
             .to_path_buf(),
     };
-    let absolute = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+    // The directory is made absolute here, where the working directory is still the one the
+    // user typed the flag in. A one-element relative name like `out` otherwise reaches the
+    // publication stage with the empty path as its parent, and restricting the permissions of
+    // "" fails with ENOENT at exit, after the command has already run: the export is lost and
+    // the command's own exit status hides it. `emulators:export` absolutizes for this reason
+    // too, and the official CLI resolves `--export-on-exit=out` against the working directory.
+    let absolute = std::path::absolute(&dir)
+        .map_err(|e| CliError::refused(format!("--export-on-exit {}: {e}", dir.display())))?;
+    let resolved = std::fs::canonicalize(&absolute).unwrap_or_else(|_| absolute.clone());
     if let Ok(cwd) = std::env::current_dir() {
-        if cwd.starts_with(&absolute) {
+        if cwd.starts_with(&resolved) {
             return Err(CliError::refused(format!(
                 "--export-on-exit {}: that is the working directory or one of its parents, and an export replaces what the directory holds; choose a dedicated directory",
                 dir.display()
             )));
         }
     }
-    import_export::may_overwrite(&dir).map_err(CliError::refused)?;
-    Ok(Some(dir))
+    import_export::may_overwrite(&absolute).map_err(CliError::refused)?;
+    Ok(Some(absolute))
 }
 
 /// `--inspect-functions [port]`: the bundled runner is a Node script, so the inspector is

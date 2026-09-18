@@ -2366,3 +2366,31 @@ fn document_only_import_peak_rss_is_within_one_point_two_times_the_artifact() {
         "baseline={baseline}, loaded={loaded_rss}, incremental={incremental}, artifact={artifact_bytes}"
     );
 }
+
+/// EXPREL-1: a bare relative directory name is resolved against the working directory.
+///
+/// `--export-on-exit out` used to reach the publication stage as the one-element relative path
+/// `out`, whose parent is the empty path. Restricting the permissions of "" fails with
+/// ENOENT, so the export was never written and the command still exited with the child's
+/// status, which made a seed-refresh job look successful while refreshing nothing.
+#[test]
+fn export_on_exit_accepts_a_bare_relative_directory_name() {
+    let dir = scratch("bare-relative");
+    let output = exec()
+        .current_dir(&dir)
+        .args(["--export-on-exit", "out", "--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{log}");
+    assert!(
+        !log.contains("cannot restrict export parent permissions"),
+        "{log}"
+    );
+    let metadata = dir.join("out").join("firebase-export-metadata.json");
+    assert!(
+        metadata.is_file(),
+        "the export was not written to {}: {log}",
+        metadata.display()
+    );
+}

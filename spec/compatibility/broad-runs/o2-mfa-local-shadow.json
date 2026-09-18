@@ -461,6 +461,23 @@
         "ageSeconds": null,
         "basis": "negative",
         "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaEnrollment:start",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": "SECOND_FACTOR_EXISTS",
+          "status": 400
+        },
+        "family": "interaction",
+        "id": "second-factor-limit",
+        "obligation": "Starting a second TOTP enrollment on an account that already has one is refused; fireemu refuses at start, so the step production refuses at is worth recording.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-enrollment-start"
+      },
+      {
+        "account": "totp-lifecycle",
+        "ageSeconds": null,
+        "basis": "negative",
+        "dueOffsetSeconds": null,
         "endpoint": "accounts/mfaSignIn:start",
         "expectedLocal": {
           "basis": "source-read",
@@ -610,23 +627,6 @@
         "source": "mfa-enrollment-start"
       },
       {
-        "account": "totp-lifecycle",
-        "ageSeconds": null,
-        "basis": "negative",
-        "dueOffsetSeconds": null,
-        "endpoint": "accounts/mfaEnrollment:start",
-        "expectedLocal": {
-          "basis": "source-read",
-          "errorCode": "SECOND_FACTOR_EXISTS",
-          "status": 400
-        },
-        "family": "interaction",
-        "id": "second-factor-limit",
-        "obligation": "Starting a second TOTP enrollment on an account that already has one is refused; fireemu refuses at start, so the step production refuses at is worth recording.",
-        "productionExpectation": "unobserved",
-        "source": "mfa-enrollment-start"
-      },
-      {
         "account": "project",
         "ageSeconds": null,
         "basis": "control",
@@ -666,68 +666,68 @@
       "maxWallSeconds": 2700,
       "provisioningSeconds": 420,
       "recoveryReserveSeconds": 300,
-      "serialAgingSeconds": 10830
+      "serialAgingSeconds": 4530
     },
     "owner": {
       "accounts": [
         {
-          "email": "o2-mfa-enrollment-age-300-00c42609b20244ef996167748eeadd4d@example.com",
+          "email": "o2-mfa-enrollment-age-300-1f04b9bae7d9404699aeb4b78666f4f6@example.com",
           "ownership": "created-by-this-run",
           "role": "enrollment-age-300"
         },
         {
-          "email": "o2-mfa-enrollment-age-450-00c42609b20244ef996167748eeadd4d@example.com",
+          "email": "o2-mfa-enrollment-age-450-1f04b9bae7d9404699aeb4b78666f4f6@example.com",
           "ownership": "created-by-this-run",
           "role": "enrollment-age-450"
         },
         {
-          "email": "o2-mfa-enrollment-age-600-00c42609b20244ef996167748eeadd4d@example.com",
+          "email": "o2-mfa-enrollment-age-600-1f04b9bae7d9404699aeb4b78666f4f6@example.com",
           "ownership": "created-by-this-run",
           "role": "enrollment-age-600"
         },
         {
-          "email": "o2-mfa-interaction-anonymous-00c42609b20244ef996167748eeadd4d@example.com",
+          "email": "o2-mfa-interaction-anonymous-1f04b9bae7d9404699aeb4b78666f4f6@example.com",
           "ownership": "created-by-this-run",
           "role": "interaction-anonymous"
         },
         {
-          "email": "o2-mfa-interaction-unverified-00c42609b20244ef996167748eeadd4d@example.com",
+          "email": "o2-mfa-interaction-unverified-1f04b9bae7d9404699aeb4b78666f4f6@example.com",
           "ownership": "created-by-this-run",
           "role": "interaction-unverified"
         },
         {
-          "email": "o2-mfa-pending-age-1800-00c42609b20244ef996167748eeadd4d@example.com",
+          "email": "o2-mfa-pending-age-1800-1f04b9bae7d9404699aeb4b78666f4f6@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-1800"
         },
         {
-          "email": "o2-mfa-pending-age-300-00c42609b20244ef996167748eeadd4d@example.com",
+          "email": "o2-mfa-pending-age-300-1f04b9bae7d9404699aeb4b78666f4f6@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-300"
         },
         {
-          "email": "o2-mfa-pending-age-450-00c42609b20244ef996167748eeadd4d@example.com",
+          "email": "o2-mfa-pending-age-450-1f04b9bae7d9404699aeb4b78666f4f6@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-450"
         },
         {
-          "email": "o2-mfa-pending-age-600-00c42609b20244ef996167748eeadd4d@example.com",
+          "email": "o2-mfa-pending-age-600-1f04b9bae7d9404699aeb4b78666f4f6@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-600"
         },
         {
-          "email": "o2-mfa-pending-control-00c42609b20244ef996167748eeadd4d@example.com",
+          "email": "o2-mfa-pending-control-1f04b9bae7d9404699aeb4b78666f4f6@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-control"
         },
         {
-          "email": "o2-mfa-totp-lifecycle-00c42609b20244ef996167748eeadd4d@example.com",
+          "email": "o2-mfa-totp-lifecycle-1f04b9bae7d9404699aeb4b78666f4f6@example.com",
           "ownership": "created-by-this-run",
           "role": "totp-lifecycle"
         }
       ],
-      "namespace": "o2/AUTH-MFA-AGE-TOTP-01/00c42609b20244ef996167748eeadd4d",
-      "nonceDigest": "c669af0b8a870b94fae79d45117c01c768d6864d1d1f46a5db37443d1e1d0dae"
+      "namespace": "o2/AUTH-MFA-AGE-TOTP-01/1f04b9bae7d9404699aeb4b78666f4f6",
+      "nonceDigest": "46132ce10b2f4a77dd97e3f79c7e7faf13513e9da9ec53bd9792ceb1093b4914"
     },
     "ownerPreconditions": [
       "Identity Platform (not legacy Firebase Authentication) is enabled on the project, because multi-factor configuration lives there.",
@@ -736,7 +736,7 @@
       "The SMS region policy allows the test number's region for the duration of the run.",
       "No tenant, blocking function or identity-provider change happens during the run.",
       "The executing principal may create, read, update and delete accounts it created, and may read and restore the project configuration.",
-      "A named owner approves one run, bound to this manifest digest and a fresh nonce, and acknowledges that the run creates up to twelve accounts it will delete."
+      "A named owner approves one run, bound to this manifest digest and a fresh nonce, and acknowledges that the run creates up to fourteen accounts it will delete."
     ],
     "permissionEnvelope": {
       "allowedEndpoints": [
@@ -1094,6 +1094,19 @@
       "agrees": true,
       "expected": {
         "basis": "source-read",
+        "errorCode": "SECOND_FACTOR_EXISTS",
+        "status": 400
+      },
+      "id": "second-factor-limit",
+      "observed": {
+        "errorCode": "SECOND_FACTOR_EXISTS",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
         "errorCode": "INVALID_ARGUMENT",
         "status": 400
       },
@@ -1211,19 +1224,6 @@
       "agrees": true,
       "expected": {
         "basis": "source-read",
-        "errorCode": "SECOND_FACTOR_EXISTS",
-        "status": 400
-      },
-      "id": "second-factor-limit",
-      "observed": {
-        "errorCode": "SECOND_FACTOR_EXISTS",
-        "status": 400
-      }
-    },
-    {
-      "agrees": true,
-      "expected": {
-        "basis": "source-read",
         "errorCode": null,
         "status": 200
       },
@@ -1237,14 +1237,14 @@
   "maxRequests": 400,
   "productionExecuted": false,
   "provenance": {
-    "digest": "a278f51d8262b7e2a696309e7255dbdc6c3f1aff78080fca578a959b4995a060",
+    "digest": "180d1842312c3c6a7cfede60fd6410d3acc6d6b91272ca2825473fc60926c0e4",
     "evidence": "recomputed-from-worktree",
     "paths": {
-      "tools/compat-broad/auth-totp-enroll/mfa_cases.py": "da5cfeeddb94dcf61649d299aed8d66796cc2b22fef9a337ca4265111d1e651e",
+      "tools/compat-broad/auth-totp-enroll/mfa_cases.py": "55d5a3a7c140c98eee514bf960db2f0b90701100593c683d4aafcd2a8a58cd9f",
       "tools/compat-broad/auth-totp-enroll/mfa_collector.py": "5221eadfc8409bd46e4327582074e20f579975541a1bf22b5d4968a41d1aef91",
       "tools/compat-broad/auth-totp-enroll/mfa_comparator.py": "04d3cfe6b56a3054b36f71aa60480915112dcdf64af1217172fbdda7fd0590ba",
       "tools/compat-broad/auth-totp-enroll/mfa_local_shadow.py": "0756ff96473d6156e4409bf6422d2d22c9b1634e4a454d4ee05951ad970d9891",
-      "tools/compat-broad/auth-totp-enroll/mfa_manifest.py": "24e5f40aca9397da5901c5be7ddd2908818f464807ce94ad06ea85d345bee07c",
+      "tools/compat-broad/auth-totp-enroll/mfa_manifest.py": "e98060ef42b434fb20e5b750cb9737c8d28edcd7c76456b9ed4310888b2625df",
       "tools/compat-broad/auth-totp-enroll/mfa_provenance.py": "18fa9f0d2ac5290f50a8c1892be3d9ba25601c84e5078dbc2c26422e0ce0d2be",
       "tools/compat-broad/auth-totp-enroll/mfa_totp.py": "8ad51d3366656acf7ac79bb5fa671028e7bbc023a1c777e8f88ad82b8adabf0f",
       "tools/compat-inventory/pyproject.toml": "2cd843edbfa0d2603121113cadd8c02a825c48dd11c95e54edb243507128d6a7",
@@ -1411,6 +1411,12 @@
       "status": 200
     },
     {
+      "errorCode": "SECOND_FACTOR_EXISTS",
+      "id": "second-factor-limit",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
       "errorCode": "INVALID_ARGUMENT",
       "id": "totp-signin-start",
       "outcome": "observed",
@@ -1466,12 +1472,6 @@
       "status": 400
     },
     {
-      "errorCode": "SECOND_FACTOR_EXISTS",
-      "id": "second-factor-limit",
-      "outcome": "observed",
-      "status": 400
-    },
-    {
       "errorCode": null,
       "id": "project-mfa-config-readback",
       "mfaConfigPresent": false,
@@ -1483,7 +1483,7 @@
   "side": "local",
   "worktree": {
     "clean": true,
-    "commit": "82fdf9d64a6c8a98c2572c22a22248cf97ed34c0",
+    "commit": "cc0bb602974e1a9f3d1790f3b1595be466c26238",
     "resolved": true
   }
 }

@@ -342,6 +342,7 @@ def new_budget(
     max_wall_seconds: float,
     max_cost_usd: float,
     *,
+    started_monotonic: float,
     recovery_requests: int = 0,
     recovery_wall_seconds: float = 0.0,
 ) -> dict[str, Any]:
@@ -351,6 +352,12 @@ def new_budget(
     run created and read both its UID and its address back, and a run that spent its last
     request observing a case would have nothing left to do that with. The reserve is
     carved out of the total rather than added to it, so the declared bound still holds.
+
+    Time is bounded by deadlines taken from `started_monotonic`, the caller's monotonic
+    reading when the campaign started, rather than by the durations of the requests that
+    were sent. A run that stalls between two cases spends the campaign's time exactly as
+    a slow response does, and summing request durations cannot see that. The clock stays
+    the caller's: this module reads none, so a run and a test measure the same way.
     """
     if not max_cost_usd < COST_CEILING_USD:
         raise ValueError(f"cost ceiling is US${COST_CEILING_USD}")
@@ -360,6 +367,7 @@ def new_budget(
         raise ValueError("a recovery reserve cannot be negative")
     if recovery_requests >= max_requests or recovery_wall_seconds >= max_wall_seconds:
         raise ValueError("the recovery reserve must leave the run something to spend")
+    started = float(started_monotonic)
     return {
         "maxRequests": max_requests,
         "maxWallSeconds": max_wall_seconds,
@@ -370,7 +378,58 @@ def new_budget(
         "wallSeconds": 0.0,
         "phase": RUN_PHASE,
         "enforced": True,
+        # Absolute readings, stripped from the published receipt: a monotonic origin is
+        # a property of the machine that ran, and only the relative seconds are evidence.
+        "startedMonotonic": started,
+        "observationDeadlineMonotonic": started
+        + (max_wall_seconds - recovery_wall_seconds),
+        "totalDeadlineMonotonic": started + max_wall_seconds,
+        "recoveryDeadlineMonotonic": None,
+        "recoveryEnteredSeconds": None,
+        # Every phase whose deadline stopped work, recorded separately: a run that both
+        # overran its observation and reached the total says so twice.
+        "deadlineExceeded": {},
     }
+
+
+def phase_deadline(budget: dict[str, Any]) -> float:
+    """The absolute monotonic reading this phase may not send past."""
+    if budget["phase"] == RUN_PHASE:
+        return budget["observationDeadlineMonotonic"]
+    recovery = budget["recoveryDeadlineMonotonic"]
+    return budget["totalDeadlineMonotonic"] if recovery is None else recovery
+
+
+def elapsed_seconds(budget: dict[str, Any], now: float) -> float:
+    """How long the campaign has been running, by the caller's monotonic clock."""
+    return float(now) - budget["startedMonotonic"]
+
+
+def remaining_seconds(budget: dict[str, Any], now: float) -> float:
+    """How long this phase may still spend. Never negative, so a caller cannot wait."""
+    return max(0.0, phase_deadline(budget) - float(now))
+
+
+def _note_deadline(budget: dict[str, Any], now: float) -> None:
+    """Record, once per phase, that a deadline is what stopped the work."""
+    budget["deadlineExceeded"].setdefault(
+        budget["phase"],
+        {
+            "elapsedSeconds": elapsed_seconds(budget, now),
+            "limitSeconds": phase_deadline(budget) - budget["startedMonotonic"],
+        },
+    )
+
+
+def check_deadline(budget: dict[str, Any], now: float) -> None:
+    """Fail closed once this phase's deadline has passed.
+
+    A wait between two cases spends the same campaign time a request does. Checking
+    after a wait is what keeps a stalled run from opening one more observation.
+    """
+    if remaining_seconds(budget, now) <= 0.0:
+        _note_deadline(budget, now)
+        raise BudgetExceeded("wall-clock deadline reached")
 
 
 def request_allowance(budget: dict[str, Any]) -> int:
@@ -385,17 +444,21 @@ def wall_allowance(budget: dict[str, Any]) -> float:
     return budget["maxWallSeconds"] - held_back
 
 
-def reserve_request(budget: dict[str, Any]) -> None:
-    """Reserve one request before it is sent; an exhausted bound sends nothing.
+def reserve_request(budget: dict[str, Any], now: float) -> float:
+    """Reserve one request before it is sent and return the seconds it may take.
 
     Charging after the fact would let an exhausted budget spend one more request against
-    the service, which is the one thing an enforced bound exists to prevent.
+    the service, which is the one thing an enforced bound exists to prevent. The returned
+    allowance is what is left before this phase's deadline, so a caller that caps its
+    transport to it cannot wait past the bound the campaign was approved against.
     """
     if budget["requests"] + 1 > request_allowance(budget):
         raise BudgetExceeded("request budget exhausted")
+    check_deadline(budget, now)
     if budget["wallSeconds"] >= wall_allowance(budget):
         raise BudgetExceeded("wall-clock budget exhausted")
     budget["requests"] += 1
+    return remaining_seconds(budget, now)
 
 
 def charge_elapsed(budget: dict[str, Any], elapsed_seconds: float) -> None:
@@ -408,9 +471,18 @@ def charge_elapsed(budget: dict[str, Any], elapsed_seconds: float) -> None:
     budget["wallSeconds"] += float(elapsed_seconds)
 
 
-def enter_recovery(budget: dict[str, Any]) -> None:
-    """Release the reserve so cleanup can run after the run's own bound is spent."""
+def enter_recovery(budget: dict[str, Any], now: float) -> None:
+    """Release the reserve so cleanup can run after the run's own bound is spent.
+
+    Recovery gets the reserved seconds from the moment it starts, and never a second
+    past the campaign's total: the total is the bound the run was approved against, so a
+    run that has already spent it deletes nothing and the receipt records that instead.
+    """
     budget["phase"] = RECOVERY_PHASE
+    budget["recoveryEnteredSeconds"] = elapsed_seconds(budget, now)
+    budget["recoveryDeadlineMonotonic"] = min(
+        float(now) + budget["recoveryWallSeconds"], budget["totalDeadlineMonotonic"]
+    )
 
 
 # --- collector binding ---------------------------------------------------------------
@@ -464,6 +536,30 @@ def unobserved_reason(row: Any) -> str | None:
     return None
 
 
+def budget_record(budget: dict[str, Any]) -> dict[str, Any]:
+    """The publishable projection of a budget: no absolute reading of a machine clock."""
+    return {
+        name: value
+        for name, value in budget.items()
+        if not name.endswith("Monotonic") and name != "deadlineExceeded"
+    }
+
+
+def deadline_record(budget: dict[str, Any]) -> dict[str, Any]:
+    """What the deadlines were and which phase, if any, one of them stopped.
+
+    Reaching the observation deadline and reaching the total are separate facts, and a
+    receipt that merged them would not say whether cleanup ever got its own window.
+    """
+    return {
+        "observationSeconds": budget["maxWallSeconds"] - budget["recoveryWallSeconds"],
+        "recoverySeconds": budget["recoveryWallSeconds"],
+        "totalSeconds": budget["maxWallSeconds"],
+        "recoveryEnteredSeconds": budget["recoveryEnteredSeconds"],
+        "exceeded": dict(budget["deadlineExceeded"]),
+    }
+
+
 def build_receipt(
     *,
     side: str,
@@ -497,7 +593,8 @@ def build_receipt(
         ),
         # The comparison contract requires both sides to name the same collector.
         "collectorBinding": collector_binding((source_binding or {}).get("commit")),
-        "budget": dict(budget),
+        "budget": budget_record(budget),
+        "deadlines": deadline_record(budget),
         "cleanup": cleanup,
         "rows": publishable(rows),
     }

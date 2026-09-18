@@ -15,7 +15,10 @@ Three rules carry most of the weight:
 * The boundary row means nothing unless its neighbouring controls held on each side
   independently. A refusal below and an acceptance above are what place the boundary;
   two sides that both accepted the older session agree with each other and have still
-  placed no boundary, so the row is `INDETERMINATE` however well they agreed.
+  placed no boundary, so the row is `INDETERMINATE` however well they agreed. The refusal
+  below has to be the expiry the endpoint documents: a 401, a 403, a rate limit or an
+  INVALID_ID_TOKEN refuses the call for a reason that has nothing to do with how old the
+  session is, and is compared as data without placing anything.
 """
 
 from __future__ import annotations
@@ -24,7 +27,13 @@ import copy
 import re
 from typing import Any
 
-from credential_cases import CAMPAIGN_ID, case_by_id, observation_cases
+from credential_cases import (
+    CAMPAIGN_ID,
+    REVOCATION_REFUSAL_STATUS,
+    case_by_id,
+    observation_cases,
+    revocation_refusal_codes,
+)
 from credential_collector import (
     is_module_digest,
     is_secret_key,
@@ -129,15 +138,23 @@ def _boundary_pinned(row: dict[str, Any]) -> bool:
     )
 
 
-def _control_holds(row: dict[str, Any], requires: str) -> bool:
-    """Whether one boundary control did on this side what places the boundary."""
+def _control_holds(row: dict[str, Any], requires: str, operation: str) -> bool:
+    """Whether one boundary control did on this side what places the boundary.
+
+    A refusal has to be the one the endpoint documents for an expired or revoked
+    session. Accepting any refusal at all would read INVALID_ID_TOKEN, an unauthenticated
+    caller, a denied permission or a rate limit as proof that the older session was
+    refused for being older, and two sides failing the same unrelated way would then
+    agree their way to a boundary nobody placed.
+    """
     status = row.get("status")
     if isinstance(status, bool) or not isinstance(status, int):
         return False
     if requires == "accepted":
         return status == 200 and row.get("errorCode") is None
-    # A 5xx is the service failing, not the session being refused by the rule.
-    return 400 <= status < 500 and isinstance(row.get("errorCode"), str)
+    return status == REVOCATION_REFUSAL_STATUS and row.get(
+        "errorCode"
+    ) in revocation_refusal_codes(operation)
 
 
 def _boundary_is_placed(
@@ -145,7 +162,11 @@ def _boundary_is_placed(
 ) -> bool:
     """Whether both controls held independently on every side that recorded them."""
     return all(
-        _control_holds(side[control["case"]], control["requires"])
+        _control_holds(
+            side[control["case"]],
+            control["requires"],
+            case_by_id(control["case"])["operation"],
+        )
         for side in sides
         for control in case["boundaryControls"].values()
     )

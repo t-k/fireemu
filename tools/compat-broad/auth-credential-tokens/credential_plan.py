@@ -85,6 +85,8 @@ FAILURE_REHEARSAL = (
     "cleanup-refused: a delete or its readback fails; the receipt records remaining accounts and `recordingComplete` stays false.",
     "process-killed: the collector is terminated between sign-in and cleanup; the owned-account journal is the recovery input and is written before each account is used.",
     "boundary-unpinned: the same-second boundary cannot be pinned from server-reported values; the row is classified EXPECTED_NONDETERMINISM rather than dropped.",
+    "deadline-exceeded: the run passes its absolute observation deadline, during a request or while waiting between two of them; it opens no further observation, hands what it has to recovery, and the receipt records the phase, the elapsed time and the limit.",
+    "boundary-control-unrelated: a control is refused for a reason other than the documented expiry; the refusal is recorded and compared, and the boundary row that depends on it is INDETERMINATE.",
 )
 
 UNRESOLVED = (

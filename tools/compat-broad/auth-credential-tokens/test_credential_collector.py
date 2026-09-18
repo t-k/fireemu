@@ -239,42 +239,118 @@ def test_cleanup_report_carries_no_account_identifier() -> None:
 # --- budget ------------------------------------------------------------------
 
 
+def _budget(**fields) -> dict:
+    """A budget anchored at monotonic zero, so a test states the clock it means."""
+    fields.setdefault("max_cost_usd", 0.05)
+    fields.setdefault("started_monotonic", 0.0)
+    return collector.new_budget(**fields)
+
+
 def test_budget_is_enforced_not_merely_declared() -> None:
-    budget = collector.new_budget(
-        max_requests=2, max_wall_seconds=10, max_cost_usd=0.05
-    )
+    budget = _budget(max_requests=2, max_wall_seconds=10)
     for _ in range(2):
-        collector.reserve_request(budget)
+        collector.reserve_request(budget, 0.0)
         collector.charge_elapsed(budget, 1.0)
     with pytest.raises(collector.BudgetExceeded, match="request"):
-        collector.reserve_request(budget)
+        collector.reserve_request(budget, 0.0)
     assert budget["requests"] == 2
     assert budget["enforced"] is True
 
 
 def test_wall_clock_budget_stops_the_run() -> None:
-    budget = collector.new_budget(
-        max_requests=10, max_wall_seconds=2, max_cost_usd=0.05
-    )
-    collector.reserve_request(budget)
+    budget = _budget(max_requests=10, max_wall_seconds=2)
+    collector.reserve_request(budget, 0.0)
     # Charging never raises: the request it pays for has already been answered.
     collector.charge_elapsed(budget, 3.0)
     with pytest.raises(collector.BudgetExceeded, match="wall"):
-        collector.reserve_request(budget)
+        collector.reserve_request(budget, 0.0)
 
 
 def test_a_recovery_reserve_may_not_consume_the_whole_budget() -> None:
     with pytest.raises(ValueError, match="recovery reserve"):
-        collector.new_budget(10, 60, 0.05, recovery_requests=10)
+        _budget(max_requests=10, max_wall_seconds=60, recovery_requests=10)
     with pytest.raises(ValueError, match="recovery reserve"):
-        collector.new_budget(10, 60, 0.05, recovery_wall_seconds=60)
+        _budget(max_requests=10, max_wall_seconds=60, recovery_wall_seconds=60)
     with pytest.raises(ValueError, match="recovery reserve"):
-        collector.new_budget(10, 60, 0.05, recovery_requests=-1)
+        _budget(max_requests=10, max_wall_seconds=60, recovery_requests=-1)
 
 
 def test_budget_ceiling_stays_well_under_one_dollar() -> None:
     with pytest.raises(ValueError, match="ceiling"):
-        collector.new_budget(max_requests=10, max_wall_seconds=10, max_cost_usd=1.0)
+        _budget(max_requests=10, max_wall_seconds=10, max_cost_usd=1.0)
+
+
+# --- the deadlines are absolute, so time nobody spent on a request still counts ----
+
+
+def test_time_between_requests_is_charged_against_the_observation_deadline() -> None:
+    """The defect this replaces: only request durations were ever charged.
+
+    Nothing is sent and nothing is charged to `wallSeconds`; the clock simply moves.
+    An absolute deadline is the only thing that can see a run stall between two cases.
+    """
+    budget = _budget(max_requests=10, max_wall_seconds=100, recovery_wall_seconds=20)
+    assert collector.remaining_seconds(budget, 0.0) == 80
+    collector.reserve_request(budget, 79.0)
+    assert budget["wallSeconds"] == 0.0
+    with pytest.raises(collector.BudgetExceeded, match="deadline"):
+        collector.reserve_request(budget, 81.0)
+    assert budget["requests"] == 1
+    assert budget["deadlineExceeded"]["run"]["limitSeconds"] == 80
+
+
+def test_a_reservation_returns_the_time_the_request_may_take() -> None:
+    budget = _budget(max_requests=10, max_wall_seconds=100, recovery_wall_seconds=20)
+    assert collector.reserve_request(budget, 0.0) == 80
+    assert collector.reserve_request(budget, 79.99) == pytest.approx(0.01)
+
+
+def test_a_wait_past_the_deadline_stops_the_phase_without_a_request() -> None:
+    budget = _budget(max_requests=10, max_wall_seconds=100, recovery_wall_seconds=20)
+    collector.check_deadline(budget, 79.0)
+    with pytest.raises(collector.BudgetExceeded, match="deadline"):
+        collector.check_deadline(budget, 80.0)
+    assert budget["requests"] == 0
+
+
+def test_recovery_gets_its_own_deadline_inside_the_declared_total() -> None:
+    """The reserve is a window from the moment recovery starts, never past the total."""
+    budget = _budget(max_requests=10, max_wall_seconds=100, recovery_wall_seconds=20)
+    collector.enter_recovery(budget, 30.0)
+    assert budget["recoveryEnteredSeconds"] == 30.0
+    assert collector.remaining_seconds(budget, 30.0) == 20
+    collector.enter_recovery(budget, 95.0)
+    # Five seconds are left of the total, not the twenty the reserve names.
+    assert collector.remaining_seconds(budget, 95.0) == 5
+
+
+def test_a_total_already_spent_leaves_recovery_nothing_and_says_so() -> None:
+    budget = _budget(max_requests=10, max_wall_seconds=100, recovery_wall_seconds=20)
+    with pytest.raises(collector.BudgetExceeded, match="deadline"):
+        collector.reserve_request(budget, 81.0)
+    collector.enter_recovery(budget, 120.0)
+    with pytest.raises(collector.BudgetExceeded, match="deadline"):
+        collector.reserve_request(budget, 120.0)
+    # Both phases are recorded, because they stopped for different reasons.
+    assert set(budget["deadlineExceeded"]) == {"run", "recovery"}
+    assert budget["deadlineExceeded"]["recovery"]["limitSeconds"] == 100
+    assert budget["deadlineExceeded"]["recovery"]["elapsedSeconds"] == 120.0
+
+
+def test_a_receipt_reports_the_deadlines_without_a_machine_clock_reading() -> None:
+    budget = _budget(max_requests=10, max_wall_seconds=100, recovery_wall_seconds=20)
+    budget["startedMonotonic"] = 123456.75
+    record = collector.budget_record(budget)
+    assert not [name for name in record if name.endswith("Monotonic")]
+    assert "123456.75" not in json.dumps(record)
+    deadlines = collector.deadline_record(budget)
+    assert deadlines == {
+        "observationSeconds": 80,
+        "recoverySeconds": 20,
+        "totalSeconds": 100,
+        "recoveryEnteredSeconds": None,
+        "exceeded": {},
+    }
 
 
 # --- receipt -----------------------------------------------------------------
@@ -290,7 +366,7 @@ def test_receipt_requires_every_case_and_a_complete_cleanup() -> None:
         side="local",
         rows=rows,
         tracker=tracker,
-        budget=collector.new_budget(60, 600, 0.05),
+        budget=_budget(max_requests=60, max_wall_seconds=600),
     )
     # A run that owned no account never signed anybody in, so it is not complete.
     assert receipt["recordingComplete"] is False
@@ -305,7 +381,7 @@ def test_receipt_requires_every_case_and_a_complete_cleanup() -> None:
         side="local",
         rows=rows,
         tracker=tracker,
-        budget=collector.new_budget(60, 600, 0.05),
+        budget=_budget(max_requests=60, max_wall_seconds=600),
     )
     assert complete["recordingComplete"] is True
     assert complete["cleanup"]["cleanupComplete"] is True
@@ -322,14 +398,14 @@ def test_receipt_rejects_a_missing_or_reordered_row() -> None:
             side="local",
             rows=rows[:-1],
             tracker=tracker,
-            budget=collector.new_budget(60, 600, 0.05),
+            budget=_budget(max_requests=60, max_wall_seconds=600),
         )
     with pytest.raises(ValueError, match="rows"):
         collector.build_receipt(
             side="local",
             rows=list(reversed(rows)),
             tracker=tracker,
-            budget=collector.new_budget(60, 600, 0.05),
+            budget=_budget(max_requests=60, max_wall_seconds=600),
         )
 
 
@@ -344,7 +420,7 @@ def test_receipt_side_must_be_declared() -> None:
             side="either",
             rows=rows,
             tracker=tracker,
-            budget=collector.new_budget(60, 600, 0.05),
+            budget=_budget(max_requests=60, max_wall_seconds=600),
         )
 
 
@@ -360,7 +436,7 @@ def test_receipt_binds_the_collector_bytes_so_a_pair_can_be_compared() -> None:
         side="local",
         rows=rows,
         tracker=tracker,
-        budget=collector.new_budget(60, 600, 0.05),
+        budget=_budget(max_requests=60, max_wall_seconds=600),
     )
     binding = receipt["collectorBinding"]
     assert set(binding["modules"]) == set(collector.BOUND_MODULES)

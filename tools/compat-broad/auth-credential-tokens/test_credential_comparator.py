@@ -66,7 +66,7 @@ def _receipt(side: str, *, production_executed: bool | None = None) -> dict:
         side=side,
         rows=rows,
         tracker=_cleaned_tracker("a"),
-        budget=new_budget(60, 600, 0.05),
+        budget=new_budget(60, 600, 0.05, started_monotonic=0.0),
         source_binding=dict(SOURCE_BINDING),
         production_executed=executed,
     )

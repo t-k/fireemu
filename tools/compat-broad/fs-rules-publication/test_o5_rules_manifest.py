@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 
 import pytest
-
 from o5_rules_manifest import bound_manifest, manifest, validate_manifest
 
 
@@ -18,7 +17,9 @@ def test_manifest_is_preparation_only() -> None:
     assert manifest()["status"] == "PREPARATION_ONLY"
 
 
-@pytest.mark.parametrize("replacement", [None, [], {"project": []}, {"project": "demo-project", "nonce": []}])
+@pytest.mark.parametrize(
+    "replacement", [None, [], {"project": []}, {"project": "demo-project", "nonce": []}]
+)
 def test_malformed_nested_case_rejected(replacement) -> None:
     value = bound_manifest("demo-project", "a" * 32)
     value["observationCase"] = replacement

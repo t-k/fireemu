@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 from o5_rules_case import CAMPAIGN, compile_plan, digest
@@ -39,13 +38,14 @@ def bound_manifest(project: str, nonce: str) -> dict[str, Any]:
 
 def validate_manifest(value: Any) -> None:
     if not isinstance(value, dict):
-        raise ValueError("invalid manifest")
+        # ValueError is this package's reviewed rejection type; callers catch it.
+        raise ValueError("invalid manifest")  # noqa: TRY004
     case = value.get("observationCase")
     if not isinstance(case, dict):
-        raise ValueError("invalid observation case")
+        raise ValueError("invalid observation case")  # noqa: TRY004
     project, nonce = case.get("project"), case.get("nonce")
     if not isinstance(project, str) or not isinstance(nonce, str):
-        raise ValueError("invalid case identity")
+        raise ValueError("invalid case identity")  # noqa: TRY004
     try:
         expected = bound_manifest(project, nonce)
     except (TypeError, ValueError) as error:

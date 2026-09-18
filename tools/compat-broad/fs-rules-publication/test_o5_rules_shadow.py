@@ -14,7 +14,12 @@ def test_shadow_is_only_a_preparation_case() -> None:
     assert "cleanup" not in case
     assert "credentialKind" not in case
     assert [row["expectedStatus"] for row in case["observations"]] == [
-        "success", "success", "success", "permission-denied", "success", "permission-denied"
+        "success",
+        "success",
+        "success",
+        "permission-denied",
+        "success",
+        "permission-denied",
     ]
 
 

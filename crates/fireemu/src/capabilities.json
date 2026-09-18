@@ -166,7 +166,7 @@
       "accounts:lookup",
       "accounts:update (profile, email, password, phone, deleteAttribute DISPLAY_NAME / PHOTO_URL / EMAIL / PASSWORD, deleteProvider phone / password / federated, linkProviderUserInfo; a credential change re-issues tokens in the response)",
       "accounts:delete (the session's own account)",
-      "accounts:sendOobCode / resetPassword / signInWithEmailLink (PASSWORD_RESET, VERIFY_EMAIL, EMAIL_SIGNIN, VERIFY_AND_CHANGE_EMAIL; applyActionCode through accounts:update)",
+      "accounts:sendOobCode / resetPassword / signInWithEmailLink (PASSWORD_RESET, VERIFY_EMAIL, EMAIL_SIGNIN, VERIFY_AND_CHANGE_EMAIL; applyActionCode through accounts:update); resetPassword without newPassword is checkActionCode and describes any code type with its requestType, email and newEmail without consuming it, while the reset itself stays restricted to PASSWORD_RESET",
       "accounts:sendVerificationCode / signInWithPhoneNumber",
       "the official console lines for every issued email action link and SMS code (To verify the email address ..., follow this link: ...; To enroll MFA with ..., use the code ...), printed to standard output and streamed to the Logging emulator; auth.logActionCodes = false or --log-verbosity quiet silences them",
       "accounts:createAuthUri",
@@ -181,6 +181,9 @@
     "notes": [
       "nothing is mailed or texted: codes are read from the emulator routes; normal daemon starts re-key generated credential handles from a CSPRNG lifecycle incarnation so restart or namespace recreation cannot replay them, while tests may inject a fixed incarnation for reproducibility",
       "session-cookie/custom-token coverage is local and documentation-backed, not production parity: saved auth-basic and auth-session observations cover adjacent client/refresh paths only; tools/sdk-smoke/auth.mjs exercises real Admin SDK unsigned-emulator cookie verification after password change, revocation, disable and deletion; session-rsa uses a local trust root, not Google's production certificate trust root; strict Rules accepts ID tokens only, while unsigned EmulatorMock Rules decoding is deliberately more permissive and is not cookie verification",
+      "an email-link sign-in mints firebase.sign_in_provider = password, the Rules-documented provider value, while emailLink remains the createAuthUri sign-in method and the sign-in method a blocking function sees; the production claim value is unobserved",
+      "signUp, accounts:update and linkProviderUserInfo refuse a profile string carrying a NUL or another control character, as an artifact import already does; production's refusal shape and its length bounds for this input are unobserved",
+      "an Admin password-reset link request for an unknown address keeps EMAIL_NOT_FOUND under improved email privacy, which hides the address from end-user routes only; production's answer for this pair is unobserved",
       "reCAPTCHA tokens are accepted unchecked",
       "error envelopes measured against firebase-tools 15.28.2: EMAIL_NOT_FOUND / INVALID_PASSWORD by default and INVALID_LOGIN_CREDENTIALS under improved email privacy, MISSING_EMAIL before MISSING_PASSWORD, the Not Found envelope with status NOT_FOUND for an unknown path, kind fields on every response, absent rather than null optional fields, 28-character generated local ids",
       "one route table (crates/fireemu-adapter-http/src/identity_toolkit/routes.rs) drives dispatch, the App Check bypass classification and the bounded operation labels; a route cannot be dispatched without a label",

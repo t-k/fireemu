@@ -505,6 +505,9 @@ def test_reservation_records_the_source_generation_it_was_acquired_under(
     assert result["failure"] is None
     row = ledger.snapshot()["reservations"][result["ticket"]["reservation"]]
     assert row["generation"] == expected
+    assert result["generation"] == expected
+    receipt = json.loads((tmp_path / "output/receipt.json").read_text())
+    assert receipt["generation"] == expected
 
 
 def test_abort_generation_requires_every_reviewed_closure_source(tmp_path, monkeypatch):
@@ -516,6 +519,7 @@ def test_abort_generation_requires_every_reviewed_closure_source(tmp_path, monke
             acquisition.abort_generation(pruned)
 
 
+@pytest.mark.parametrize("field", ["ownerIdentity", "recoveryOwner"])
 @pytest.mark.parametrize(
     "identity",
     [
@@ -531,14 +535,14 @@ def test_abort_generation_requires_every_reviewed_closure_source(tmp_path, monke
         "tbd",
     ],
 )
-def test_placeholder_owner_identity_is_refused_before_any_reservation(
-    tmp_path, monkeypatch, identity
+def test_placeholder_owner_provenance_is_refused_before_any_reservation(
+    tmp_path, monkeypatch, identity, field
 ):
     """Owner provenance must be an owner supplied value, not an agent's string."""
     inputs, ledger, _calls, kwargs = fixture(tmp_path, monkeypatch)
     permission_path = kwargs["permission_path"]
     permission = json.loads(permission_path.read_text())
-    permission["ownerIdentity"] = identity
+    permission[field] = identity
     permission_path.write_text(json.dumps(permission))
     with pytest.raises(ValueError, match="owner"):
         acquisition.freeze_inputs(

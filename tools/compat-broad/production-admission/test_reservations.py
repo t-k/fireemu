@@ -297,6 +297,10 @@ def _no_data_attempt(tmp_path, source_generation=None):
             },
         ],
     }
+    if source_generation is not None:
+        # A receipt written before the generation binding existed carries none,
+        # which is what the legacy branch of this helper reproduces.
+        receipt["generation"] = source_generation
     path = tmp_path / "a" / "receipt.json"
     path.write_text(json.dumps(receipt))
     record = {
@@ -375,6 +379,20 @@ def test_no_data_abort_retires_a_reservation_of_a_later_generation(tmp_path):
         ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
         == "aborted-no-data"
     )
+
+
+def test_no_data_abort_refuses_a_receipt_naming_another_generation(tmp_path):
+    """A receipt that records a closure must record the one being proven."""
+    ledger, gate, ticket, record = _no_data_attempt(tmp_path, generation())
+    receipt_path = Path(record["receiptPath"])
+    receipt = json.loads(receipt_path.read_text())
+    receipt["generation"] = generation("10")
+    receipt_path.write_text(json.dumps(receipt))
+    record = {**record, "receiptDigest": digest(receipt)}
+    with pytest.raises(ValueError, match="no-data attempt"):
+        ledger.abort_no_data(ticket, record)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+    assert gate.snapshot()["stopped"] is False
 
 
 def test_no_data_abort_refuses_a_generation_the_reservation_never_recorded(tmp_path):

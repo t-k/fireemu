@@ -62,6 +62,8 @@ MANIFEST_KIND = "commit-o8-manifest-v1"
 REVIEWED_ARTIFACT_PROFILE = "repaired-567565bdd"
 CAMPAIGN_SECONDS = 1200
 RECOVERY_SECONDS = 180
+# The source files whose digests a reservation records, so that a later abort
+# proves it runs the same closure the acquisition ran.
 ABORT_CLOSURE_SOURCES = (
     "tools/compat-broad/shared_gate.py",
     "tools/compat-broad/production-admission/reservations.py",
@@ -231,17 +233,19 @@ def execution_host():
 
 
 def abort_generation(inputs):
-    """The reviewed source closure this acquisition records on its reservation.
+    """The source closure this acquisition records on its reservation.
 
     A reservation is retired after a preflight stop by proving the closure it
     was acquired under, so the binding must be derived from the frozen inputs of
-    this campaign rather than from a constant of an earlier generation.
+    this campaign rather than from a constant of an earlier generation. Proving
+    it establishes that the aborting caller runs identical sources to the
+    acquisition, not that those sources were reviewed.
     """
     sources = inputs["sourceInputs"]
     if not isinstance(sources, dict) or any(
         name not in sources for name in ABORT_CLOSURE_SOURCES
     ):
-        raise ValueError("frozen reviewed source closure required")
+        raise ValueError("frozen acquisition source closure required")
     return {
         "sourceCommit": inputs["sourceCommit"],
         "collectorSourceDigest": digest(sources),
@@ -251,17 +255,17 @@ def abort_generation(inputs):
     }
 
 
-def validate_owner_identity(value):
-    """Refuse an absent or placeholder-shaped owner identity."""
+def validate_owner_identity(value, *, field):
+    """Refuse an absent or placeholder-shaped owner supplied identity."""
     if not isinstance(value, str) or not value.strip():
-        raise ValueError("owner supplied execution identity required")
+        raise ValueError(f"owner supplied {field} required")
     text = value.strip()
     if (
         text.startswith("<<")
         or text.endswith(">>")
         or text.casefold() in PLACEHOLDER_OWNER_IDENTITIES
     ):
-        raise ValueError("owner supplied execution identity required")
+        raise ValueError(f"owner supplied {field} required")
 
 
 def _regular_file_digest(path):
@@ -576,15 +580,13 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs):
 def _approve(permission, plan, source_commit, artifact_digest, inputs):
     required = permission_bindings(plan, source_commit, artifact_digest, inputs)
     validate_owner_baseline(permission, required, time.time())
-    validate_owner_identity(permission.get("ownerIdentity"))
+    validate_owner_identity(permission.get("ownerIdentity"), field="ownerIdentity")
     credential_preparation.validate_principal(permission.get("credentialPrincipal"))
     if digest({key: permission.get(key) for key in required}) != digest(required):
         raise ValueError("typed owner permission binding differs")
-    if (
-        not isinstance(permission.get("recoveryOwner"), str)
-        or not permission["recoveryOwner"].strip()
-    ):
-        raise ValueError("independent recovery owner required")
+    # The recovery owner carries the same provenance weight as the execution
+    # identity: it names who answers for a campaign that stops mid-flight.
+    validate_owner_identity(permission.get("recoveryOwner"), field="recoveryOwner")
 
 
 def freeze_inputs(permission_path, plan, *, source_root, artifact_path):
@@ -784,9 +786,8 @@ def run_acquisition(
         "budget": copy.deepcopy(BUDGET),
         "durationSeconds": 1200,
     }
-    ticket = ledger.reserve(
-        envelope, claim, projected, generation=abort_generation(inputs)
-    )
+    generation = abort_generation(inputs)
+    ticket = ledger.reserve(envelope, claim, projected, generation=generation)
     gate = coordinator = collection = None
     failure = None
     postflight = False
@@ -842,6 +843,9 @@ def run_acquisition(
         "credentialEvidence": coordinator.credential_evidence if coordinator else [],
         "metadata": coordinator.metadata_evidence if coordinator else [],
         "ticket": ticket,
+        # The closure this run executed under, so a receipt names the generation
+        # an abort of its reservation has to prove.
+        "generation": copy.deepcopy(generation),
         "reservationStateAtPublication": "held",
         "releaseRecord": "release.json" if ready else None,
         "chargedCalls": snapshot["total"] if snapshot else 0,

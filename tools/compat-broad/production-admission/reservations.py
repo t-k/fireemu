@@ -25,10 +25,10 @@ from shared_gate import Gate, _save, validate_absence_proofs
 DIMENSIONS = {"requests", "accounts", "resources", "costMicrousd"}
 GENERATION_FIELDS = {"sourceCommit", "collectorSourceDigest", "sourceDigests"}
 MAX_GENERATION_SOURCES = 64
-# The reviewed source closure of the reservations written before a reservation
-# recorded its own generation. Rows without a recorded generation predate that
-# binding and can only be retired by proving this closure; every new row binds
-# the generation it was acquired under instead. This is history, not a default.
+# The source closure of the reservations written before a reservation recorded
+# its own generation. Rows without a recorded generation predate that binding
+# and can only be retired by proving this closure; every new row binds the
+# generation it was acquired under instead. This is history, not a default.
 COMMIT_SOURCE_COMMIT = "09c02557e9a537208a7912f039edb23c1131b1fc"
 COMMIT_COLLECTOR_SOURCE_DIGEST = (
     "b9ae95ca922873d477fc171b08b2bc542721a699c5c0c6714ef22a4f846b54ca"
@@ -70,7 +70,11 @@ def _budget(value):
 
 
 def _generation(value):
-    """The reviewed source closure one reservation was acquired under."""
+    """The source closure one reservation was acquired under.
+
+    Proving it establishes that the abort runs sources identical to the
+    acquisition's. It is an identity binding, not evidence of review.
+    """
     if not isinstance(value, dict) or set(value) != GENERATION_FIELDS:
         raise ValueError("closed source generation required")
     if (
@@ -90,7 +94,7 @@ def _generation(value):
             for name in sources
         )
     ):
-        raise ValueError("bounded reviewed source closure required")
+        raise ValueError("bounded acquisition source closure required")
     for name in sorted(sources):
         _hash(sources[name])
 
@@ -417,7 +421,7 @@ class Ledger:
                 "deadline": decision_now + claim["durationSeconds"],
             }
             if generation is not None:
-                # Bind the retirement path to this acquisition's own reviewed
+                # Bind the retirement path to this acquisition's own source
                 # closure, so a later generation stays retirable without
                 # editing canonical state by hand.
                 row["generation"] = copy.deepcopy(generation)
@@ -541,11 +545,12 @@ class Ledger:
             raise ValueError("receipt digest changed")
         with self._locked() as state:
             row = self._row(state, ticket)
-            # A reservation is retirable only by proving the reviewed closure it
-            # was acquired under. Rows written before the generation binding
-            # existed carry none and remain bound to the legacy closure.
+            # A reservation is retirable only by proving a source closure
+            # identical to the one it was acquired under. Rows written before
+            # the generation binding existed carry none and remain bound to the
+            # legacy closure.
             if claimed_generation != row.get("generation", LEGACY_COMMIT_GENERATION):
-                raise ValueError("reviewed frozen source closure required")
+                raise ValueError("acquisition source closure required")
             if row["state"] == "aborted-no-data":
                 if row.get("abortRecordDigest") != digest(record):
                     raise ValueError("different terminal abort record")
@@ -594,6 +599,10 @@ class Ledger:
                 or receipt["gate"]["costMicrousd"] > claim["budget"]["costMicrousd"]
                 or receipt["gate"]["plan"].get("collectorSourceDigest")
                 != record["collectorSourceDigest"]
+                or (
+                    receipt.get("generation") is not None
+                    and receipt["generation"] != claimed_generation
+                )
                 or str(receipt_path.parent / "gate") != claim["gatePath"]
             ):
                 raise ValueError("receipt does not bind failed no-data attempt")

@@ -510,3 +510,214 @@ def test_every_release_records_the_rollback_message():
     for entry in receipt["transactionReleases"]:
         assert "message" in entry
         assert "idleSeconds" in entry
+
+
+class StatefulEndpoint:
+    """An endpoint that keeps documents and honours create-only preconditions.
+
+    The plain ``Endpoint`` above answers every write with OK, which cannot show
+    what happens when the workspace this run means to create is already
+    occupied. This one refuses a conditional create against an existing
+    document, records every write that landed on a document it did not create,
+    and remembers every delete.
+    """
+
+    def __init__(self, *, preexisting_role=None, prefix_owner=None):
+        self.calls = []
+        self.documents = {}
+        self.foreign = set()
+        self.deletes = []
+        self.issued = 0
+        self.preexisting_role = preexisting_role
+        self.prefix_owner = prefix_owner
+
+    def attach(self, collection):
+        if self.preexisting_role:
+            name = collection._name(self.preexisting_role)
+            self.documents[name] = {"external": {"stringValue": "KEEP-THIS"}}
+            self.foreign.add(name)
+
+    def writes_to(self, name):
+        """Every write this endpoint accepted or refused for one document."""
+        found = []
+        for call in self.calls:
+            for write in (call.get("body") or {}).get("writes") or []:
+                if (write.get("delete") or write.get("update", {}).get("name")) == name:
+                    found.append(write)
+        return found
+
+    def __call__(self, request):
+        self.calls.append(request)
+        rpc = request["rpc"]
+        if rpc == "BeginTransaction":
+            self.issued += 1
+            token = base64.b64encode(f"token-{self.issued}".encode()).decode()
+            return {
+                "code": 0,
+                "status": "OK",
+                "message": None,
+                "complete": True,
+                "body": {"transaction": token},
+            }
+        if rpc == "Rollback":
+            return {
+                "code": 0,
+                "status": "OK",
+                "message": None,
+                "complete": True,
+                "body": {},
+            }
+        if rpc == "GetDocument":
+            name = request["name"]
+            if name not in self.documents:
+                return {
+                    "code": 5,
+                    "status": "NOT_FOUND",
+                    "message": "not found",
+                    "complete": True,
+                }
+            return {
+                "code": 0,
+                "status": "OK",
+                "message": None,
+                "complete": True,
+                "body": {
+                    "name": name,
+                    "fields": dict(self.documents[name]),
+                    "updateTime": "2026-09-18T00:00:00.000001Z",
+                },
+            }
+        if rpc == "Commit":
+            writes = request["body"]["writes"]
+            for write in writes:
+                name = write.get("delete") or write["update"]["name"]
+                current = write.get("currentDocument") or {}
+                if current.get("exists") is False and name in self.documents:
+                    return {
+                        "code": 6,
+                        "status": "ALREADY_EXISTS",
+                        "message": "already exists",
+                        "complete": True,
+                    }
+            for write in writes:
+                if "delete" in write:
+                    self.deletes.append(write["delete"])
+                    self.documents.pop(write["delete"], None)
+                else:
+                    name = write["update"]["name"]
+                    self.documents[name] = dict(write["update"]["fields"])
+            return {
+                "code": 0,
+                "status": "OK",
+                "message": None,
+                "complete": True,
+                "body": {
+                    "writeResults": [
+                        {"updateTime": "2026-09-18T00:00:00.000001Z"} for _ in writes
+                    ]
+                },
+            }
+        raise AssertionError(f"unexpected rpc {rpc}")
+
+
+def run_against(endpoint, **overrides):
+    """Drive one collection against an endpoint that needs the plan to attach."""
+    prepared = collector.validate_collector_options(options(**overrides))
+    plan = plan_module.compile_plan(
+        prepared["nonce"],
+        prepared["ownerId"],
+        project=prepared["projectId"],
+        database=prepared["database"],
+    )
+    collection = collector.Collection(
+        options(**overrides),
+        plan,
+        endpoint,
+        advance=advances([]),
+        monotonic=lambda: 0.0,
+    )
+    endpoint.attach(collection)
+    return collection.run(), collection
+
+
+def test_a_clean_workspace_establishes_every_precondition():
+    endpoint = StatefulEndpoint()
+    receipt, _ = run_against(endpoint)
+    assert receipt["failure"] is None
+    established = {
+        entry["role"] for entry in receipt["preconditions"] if entry["created"]
+    }
+    assert established == set(cases.RESOURCE_ROLES)
+    assert receipt["complete"] is True
+
+
+def test_a_foreign_document_blocks_every_later_mutation_of_that_resource():
+    """A document this run did not create is never overwritten and never deleted."""
+    endpoint = StatefulEndpoint(preexisting_role="control")
+    receipt, collection = run_against(endpoint)
+    name = collection._name("control")
+    writes = endpoint.writes_to(name)
+    assert len(writes) == 1, writes
+    assert writes[0]["currentDocument"] == {"exists": False}
+    assert endpoint.deletes == []
+    assert endpoint.documents[name] == {"external": {"stringValue": "KEEP-THIS"}}
+    assert receipt["failure"] == "precondition-not-established"
+    assert receipt["complete"] is False
+
+
+def test_a_foreign_document_at_a_locked_role_is_preserved_too():
+    endpoint = StatefulEndpoint(preexisting_role="locked-b")
+    receipt, collection = run_against(endpoint)
+    name = collection._name("locked-b")
+    assert endpoint.documents[name] == {"external": {"stringValue": "KEEP-THIS"}}
+    assert name not in endpoint.deletes
+    assert endpoint.writes_to(name) == [
+        {
+            "update": {
+                "name": name,
+                "fields": collector._marker_fields(OWNER, "locked-b", NONCE, "created"),
+            },
+            "currentDocument": {"exists": False},
+        }
+    ]
+    assert receipt["failure"] == "precondition-not-established"
+    # Everything this run did create before it stopped is still given back.
+    recovered = {e["role"] for e in receipt["cleanup"] if e["complete"]}
+    assert recovered == {"control", "locked-a"}
+    assert receipt["unrecovered"] == []
+
+
+def test_cleanup_binds_to_this_run_s_creation_evidence_not_the_current_marker():
+    endpoint = StatefulEndpoint(preexisting_role="control")
+    receipt, _ = run_against(endpoint)
+    entries = {entry["role"]: entry for entry in receipt["cleanup"]}
+    assert entries["control"]["createdByThisRun"] is False
+    assert entries["control"]["failure"] == "not-created-by-this-run"
+    assert entries["control"]["skipped"] is True
+    assert "control" not in receipt["unrecovered"]
+
+
+def test_a_preflight_read_that_proves_nothing_stops_the_run():
+    """An OK GetDocument without a document body is not proof of anything."""
+
+    def transport(request):
+        if request["rpc"] == "GetDocument":
+            return {
+                "code": 0,
+                "status": "OK",
+                "message": None,
+                "complete": True,
+                "body": {},
+            }
+        return {
+            "code": 0,
+            "status": "OK",
+            "message": None,
+            "complete": True,
+            "body": {},
+        }
+
+    receipt = collector.collect(
+        options(), transport, advance=advances([]), monotonic=lambda: 0.0
+    )
+    assert receipt["failure"] == "incomplete-response"

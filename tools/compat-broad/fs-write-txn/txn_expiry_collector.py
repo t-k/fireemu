@@ -39,7 +39,20 @@ PRODUCTION_HOST = "firestore.googleapis.com"
 NOT_FOUND = 5
 ABORTED = 10
 INVALID_ARGUMENT = 3
+ALREADY_EXISTS = 6
+PERMISSION_DENIED = 7
+UNAUTHENTICATED = 16
 OK = 0
+
+#: A refusal that says the caller may not act at all. Sending more requests
+#: after one of these cannot help and may make things worse, so recovery stops
+#: sending, but it still records what it was responsible for.
+AUTHORITY_REFUSALS = (PERMISSION_DENIED, UNAUTHENTICATED)
+
+#: Steps whose refusal is not a precondition failure. The contention holder is
+#: released on a best-effort basis; the campaign has already observed what it
+#: needed from it by then.
+BEST_EFFORT_SLOTS = ("idle/release/c",)
 
 #: Recovery gets its own deadline so an exhausted observation budget still
 #: leaves room to give owned documents back.
@@ -178,6 +191,9 @@ class Collection:
         self.virtual_elapsed = 0.0
         self.checkpoints = []
         self.created = {}
+        self.established = {}
+        self.preconditions = []
+        self.failure_sites = []
         self.failure = None
         self.started_at = None
         self.finished_at = None
@@ -223,7 +239,26 @@ class Collection:
 
     def _get(self, role, token=None):
         query = {"transaction": _b64(token)} if token is not None else None
-        return self._send("GetDocument", None, role=role, query=query)
+        response = self._send("GetDocument", None, role=role, query=query)
+        if response.get("code") != OK:
+            return response
+        body = response.get("body")
+        if not isinstance(body, dict) or not body.get("name"):
+            # A successful read has to return the document. Without one the
+            # reply proves neither presence nor absence, so it is an incomplete
+            # response rather than evidence that the document exists.
+            return {**response, "complete": False, "incomplete": "get-without-document"}
+        return response
+
+    def _blocked(self, reason):
+        """A request the collector refuses to send, recorded as incomplete."""
+        return {
+            "code": None,
+            "status": None,
+            "message": None,
+            "complete": False,
+            "blocked": reason,
+        }
 
     def _write_marker(self, role, state, *, create=False):
         write = {
@@ -256,6 +291,9 @@ class Collection:
             "waited": waited,
             "detail": detail,
         }
+        for key in ("blocked", "incomplete"):
+            if response.get(key):
+                row[key] = response[key]
         tag = step.get("idleOfTransaction")
         if tag is not None and tag in self.locked_at:
             row["idleSeconds"] = self._campaign_now() - self.locked_at[tag]
@@ -362,10 +400,103 @@ class Collection:
             if step["slot"].startswith("idle/read/"):
                 self.locked_at[step["slot"].rsplit("/", 1)[1]] = self._campaign_now()
             if not row["complete"]:
+                self._note_failure(step["slot"], "incomplete-response", row)
                 raise _Stopped("incomplete-response")
+            failure = self._precondition(step, response)
+            if failure is not None:
+                row["precondition"] = failure
+                self._note_failure(step["slot"], failure, row)
+                raise _Stopped("precondition-not-established")
+
+    def _note_failure(self, site, reason, detail=None):
+        """Record where the run stopped being able to do what it promised."""
+        entry = {"site": site, "reason": reason}
+        if isinstance(detail, dict):
+            for key in ("blocked", "incomplete", "role", "caseId"):
+                if detail.get(key):
+                    entry[key] = detail[key]
+        self.failure_sites.append(entry)
+
+    def _precondition(self, step, response):
+        """Judge a setup step's own success, separately from any semantics.
+
+        Only steps without a case id are preconditions. A case's observed code
+        is the thing the campaign is here to record and is never read as a
+        failure of the run. A precondition that did not hold means the workspace
+        this run promised to own was never established, so nothing after it may
+        mutate anything.
+        """
+        if step["caseId"] is not None or step["slot"] in BEST_EFFORT_SLOTS:
+            return None
+        slot = step["slot"]
+        code = response.get("code")
+        if slot.startswith("preflight/absence/"):
+            # A preflight finding never stops the run by itself. The only write
+            # still ahead of it is the create-only commit, which cannot damage
+            # whatever is there, and whose refusal is the authoritative proof.
+            role = step["role"]
+            if code == NOT_FOUND:
+                self._record_precondition(role, absence=True)
+            elif code == OK:
+                self._record_precondition(
+                    role, absence=False, finding="document-exists"
+                )
+            else:
+                self._record_precondition(
+                    role, absence=None, finding="absence-not-proven"
+                )
+            return None
+        if slot.startswith("setup/create/"):
+            role = step["role"]
+            observed = self._record_precondition(role)
+            if code == OK:
+                if observed.get("absence") is False:
+                    # The preflight saw a document and the create-only commit
+                    # was accepted anyway. One of the two is wrong, so this run
+                    # cannot claim it owns anything here.
+                    self._record_precondition(role, created=False)
+                    return "absence-contradicted-by-accepted-create"
+                body = response.get("body") or {}
+                results = body.get("writeResults") or [{}]
+                self.established[role] = {
+                    "role": role,
+                    "createdAt": _instant(self.wall()),
+                    "updateTime": (results[0] or {}).get("updateTime"),
+                }
+                self.created[role] = True
+                self._record_precondition(role, created=True)
+                return None
+            self._record_precondition(role, created=False)
+            if code == ALREADY_EXISTS:
+                return "conditional-create-refused-already-exists"
+            return "conditional-create-refused"
+        if slot.startswith("readback/"):
+            return None
+        if code == OK:
+            return None
+        return f"setup-step-refused:{slot}"
+
+    def _record_precondition(self, role, **fields):
+        for entry in self.preconditions:
+            if entry["role"] == role:
+                entry.update(fields)
+                return entry
+        entry = {"role": role, "absence": None, "created": False}
+        entry.update(fields)
+        self.preconditions.append(entry)
+        return entry
 
     def _dispatch(self, step):
         slot = step["slot"]
+        if (
+            step["rpc"] == "Commit"
+            and step["role"]
+            and not slot.startswith("setup/create/")
+            and step["role"] not in self.established
+        ):
+            # This run never proved it created this document, so it has no
+            # standing to write to it. The request is not sent at all.
+            return self._blocked("precondition-not-established")
         handler = self._HANDLERS.get(slot)
         if handler is not None:
             return handler(self, step)
@@ -373,12 +504,9 @@ class Collection:
         if slot.startswith("preflight/absence/"):
             return self._get(step["role"])
         if slot.startswith("setup/create/"):
-            response = self._commit(
+            return self._commit(
                 [self._write_marker(step["role"], "created", create=True)]
             )
-            if response.get("code") == OK:
-                self.created[step["role"]] = True
-            return response
         if slot.startswith("readback/"):
             return self._get(step["role"])
         if slot.startswith("idle/begin/"):
@@ -543,14 +671,23 @@ class Collection:
         return releases
 
     def _recover_one(self, role, recovery):
+        evidence = self.established.get(role)
         entry = {
             "role": role,
             "path": self._path(role),
             "skipped": False,
             "complete": False,
             "absent": False,
+            "createdByThisRun": evidence is not None,
+            "creationEvidence": evidence,
             "failure": None,
         }
+        if evidence is None:
+            # Recovery is bound to what this run created, not to what the
+            # document currently says. A marker can be written by a mutation
+            # this run should never have made; a creation record cannot.
+            entry.update(skipped=True, failure="not-created-by-this-run")
+            return entry
         if recovery.expired():
             entry.update(skipped=True, failure="recovery-deadline-reached")
             return entry
@@ -594,7 +731,11 @@ class Collection:
     def _receipt(self, cleanup, releases):
         observed = {row["caseId"]: row for row in self.rows if row["caseId"]}
         missing = [case["id"] for case in cases.CASES if case["id"] not in observed]
-        unrecovered = [entry["role"] for entry in cleanup if not entry["complete"]]
+        unrecovered = [
+            entry["role"]
+            for entry in cleanup
+            if entry.get("createdByThisRun") and not entry["complete"]
+        ]
         return {
             "kind": CONTRACT,
             "campaign": cases.CAMPAIGN,
@@ -607,6 +748,7 @@ class Collection:
             "documentPrefix": self.plan["documentPrefix"],
             "nonce": self.options["nonce"],
             "rows": self.rows,
+            "preconditions": self.preconditions,
             "cleanup": cleanup,
             "transactionReleases": releases,
             "openTransactions": sorted(self.open_tokens),
@@ -615,6 +757,7 @@ class Collection:
             "finishedAt": self.finished_at,
             "unrecovered": unrecovered,
             "missingCases": missing,
+            "failureSites": self.failure_sites,
             "failure": self.failure,
             "complete": (
                 not missing

@@ -1,0 +1,143 @@
+{
+  "artifactSha256": "b43786c9a13bae62caefb7a4b1f72c5fd34f7660f31a59229ba65a1ba199661c",
+  "campaignDigest": "56dc1f7b62410e39d060a67952329b575b18a1bb8d84fde174e424c7403b6776",
+  "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
+  "cases": [
+    {
+      "basis": "Local typed state invariants and version-bound cleanup; no production comparison.",
+      "family": "firestore",
+      "id": "FS-LIMIT-API-REQUEST-BYTES-UNDER",
+      "localObserved": "accepted",
+      "productionExpectation": "accepted",
+      "requestBytes": 10485759,
+      "status": "local-only"
+    },
+    {
+      "basis": "Local typed state invariants and version-bound cleanup; no production comparison.",
+      "family": "firestore",
+      "id": "FS-LIMIT-API-REQUEST-BYTES-EXACT",
+      "localObserved": "accepted",
+      "productionExpectation": "accepted",
+      "requestBytes": 10485760,
+      "status": "local-only"
+    },
+    {
+      "basis": "Local typed state invariants and version-bound cleanup; no production comparison.",
+      "family": "firestore",
+      "id": "FS-LIMIT-API-REQUEST-BYTES-OVER",
+      "localObserved": "refused",
+      "productionExpectation": "refused",
+      "requestBytes": 10485761,
+      "status": "refusal-shape-difference"
+    }
+  ],
+  "complete": true,
+  "database": "(default)",
+  "formalCompatibilityClaim": false,
+  "kind": "fs-request-bytes-local-shadow-v1",
+  "note": "Owned local artifact shadow. No production request was sent, no credential was used and no parent group is promoted. The raw REST body byte count remains an observation hypothesis about production's enforcement metric.",
+  "observation": {
+    "canonicalRequestBytesMeasuredLocally": true,
+    "cleanupComplete": true,
+    "completed": true,
+    "failures": [],
+    "formalCompatibilityClaim": false,
+    "localOnly": true,
+    "overRefusal": {
+      "classification": "semantic-discrepancy",
+      "errorCode": 413,
+      "errorStatus": "INVALID_ARGUMENT",
+      "httpStatus": 413
+    },
+    "planDigest": "a07efc5c04a7a194361dde3192a16c0de6d421f1ae2a3c764a4424d3fca9ce4e",
+    "productionExecuted": false,
+    "rawHttpMetricStatus": "observation hypothesis",
+    "recoveryRowCount": 153,
+    "requestCount": 241,
+    "resourceAbsence": true,
+    "rowCount": 105
+  },
+  "planDigest": "a07efc5c04a7a194361dde3192a16c0de6d421f1ae2a3c764a4424d3fca9ce4e",
+  "probeOutcomes": [
+    {
+      "complete": true,
+      "errorCode": null,
+      "errorMessage": null,
+      "errorStatus": null,
+      "httpStatus": 200,
+      "probe": "under",
+      "requestBytes": 10485759,
+      "responseBody": null,
+      "responseBytes": 826,
+      "responseSha256": "aec64a0840865a1444034588b5adf12408fef39746223483eefe09fa9fdb3cd8"
+    },
+    {
+      "complete": true,
+      "errorCode": null,
+      "errorMessage": null,
+      "errorStatus": null,
+      "httpStatus": 200,
+      "probe": "exact",
+      "requestBytes": 10485760,
+      "responseBody": null,
+      "responseBytes": 826,
+      "responseSha256": "73ac49de06c094acd80e9f637e8adc7954e717e8c8c67b8757be4f4179cff109"
+    },
+    {
+      "complete": true,
+      "errorCode": 413,
+      "errorMessage": "request body too large",
+      "errorStatus": "INVALID_ARGUMENT",
+      "httpStatus": 413,
+      "probe": "over",
+      "requestBytes": 10485761,
+      "responseBody": "{\"error\":{\"code\":413,\"message\":\"request body too large\",\"status\":\"INVALID_ARGUMENT\"}}",
+      "responseBytes": 85,
+      "responseSha256": "40103e44520cdd1dd977c8c9ce8fc6e2ca1cc964e4510c2bf7fc813ec026f862"
+    }
+  ],
+  "productionExecuted": false,
+  "project": "demo-firestore-probe",
+  "rawHttpMetricStatus": "observation hypothesis",
+  "recordingComplete": true,
+  "runtime": {
+    "artifactSha256": "b43786c9a13bae62caefb7a4b1f72c5fd34f7660f31a59229ba65a1ba199661c",
+    "runtimeInputCount": 407,
+    "runtimeInputsClean": true,
+    "runtimeInputsDigest": "f61d1039be89bf7e25c322c8da9d997bfe86fe03f62e2d3afd7e75c30b56b7a1",
+    "sourceCommit": "6f1b6d46199725441a940cf8fc120cffe74262ea",
+    "sourceRoot": "repository-root"
+  },
+  "shadow": {
+    "classification": "local-boundary-enforced-shape-differs",
+    "differenceMasked": false,
+    "enforcementSource": "crates/fireemu-adapter-grpc/src/serve.rs, MAX_REST_BODY_BYTES = 10 * 1024 * 1024",
+    "expectedClassification": "local-boundary-enforced-shape-differs",
+    "expectedRefusal": {
+      "classification": "semantic-discrepancy",
+      "errorCode": 413,
+      "errorStatus": "INVALID_ARGUMENT",
+      "httpStatus": 413,
+      "message": "request body too large"
+    },
+    "formalCompatibilityClaim": false,
+    "localEnforcement": "transport body cap",
+    "matchesBaseline": true,
+    "observedFailures": [],
+    "overRefusal": {
+      "classification": "semantic-discrepancy",
+      "errorCode": 413,
+      "errorStatus": "INVALID_ARGUMENT",
+      "httpStatus": 413
+    },
+    "productionExecuted": false,
+    "productionRefusalExpectation": "400 INVALID_ARGUMENT",
+    "resourceAbsence": true,
+    "summary": "The local transport refused the over-boundary Commit at exactly the 10 MiB boundary with a typed 413. Production is expected to answer 400, so the boundary agrees and the refusal shape does not.",
+    "untypedOverRefusal": null
+  },
+  "sourceDigestAfter": "00ab1c80ee9ad9ef9403cd1a094750d180f513d34a07f2ac346fd2bb5f30e01e",
+  "sourceDigestBefore": "00ab1c80ee9ad9ef9403cd1a094750d180f513d34a07f2ac346fd2bb5f30e01e",
+  "stateValidation": true,
+  "target": "owned-local-artifact"
+}

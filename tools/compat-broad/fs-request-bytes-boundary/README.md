@@ -53,11 +53,17 @@ admission and receipt shape. gRPC remains a separate case.
 The refusal expectation is a typed Firestore error with an integer HTTP status
 of 400 (expected) or 413 (typed but a semantic discrepancy), an integer error
 code equal to that status, and `INVALID_ARGUMENT`. An untyped transport refusal,
-such as a front-end HTML 413 or a connection reset, is **not** a refusal proof
-under the reviewed collector: it leaves the probe uncertain, recovery stays
-read-only, and the campaign is inconclusive on the refusal shape. The post-state
-readback and the recovery absence proofs still establish that the refused
-request wrote nothing.
+such as a front-end HTML 413 or a connection reset, is **not** a refusal proof:
+the collector records it as `untyped-transport-refusal` under the separate result
+key `untypedOverRefusal`, with the status, content type and response bytes
+verbatim. It grants no cleanup ownership, keeps recovery read-only and leaves the
+refusal shape unproven. The post-state readback and the recovery absence proofs
+still establish that the refused request wrote nothing.
+
+Every probe runs inside one 60-second total wire deadline, derived in
+`request_bytes_campaign.TRANSPORT_DEADLINE` from the boundary upload size and
+enforced independently by the transport and the worker. A missed deadline yields
+an uncertain Commit whose residue cleanup detects but cannot remove.
 
 `request_bytes_shadow.py` runs the plan and collector against an owned local
 fireemu artifact built from this checkout, through the existing `broad.run`
@@ -80,3 +86,16 @@ Run the offline tests with:
 ```text
 uv run --offline --project tools/compat-inventory --locked pytest -q tools/compat-broad/fs-request-bytes-boundary
 ```
+
+
+## Published evidence
+
+`spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json` is the
+completed local shadow run. `build_shadow_document` is the only place its shape
+is decided, and `test_request_bytes_evidence.py` rebuilds it from its own parts,
+so a hand-edited record fails. The record is bound to the modules that produced
+it, so editing one of those means rerunning the shadow and republishing.
+
+`request_bytes_run_fixture.py` drives the real collector through its full
+258-slot schedule with an injected executor, so tests assert on results the
+collector actually produced rather than on hand-written literals.

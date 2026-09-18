@@ -61,15 +61,19 @@ incomplete or timed-out receipt, a non-JSON body such as a front-end HTML 413
 page, or a connection reset with no response.
 
 This matters because the condition's own entry in the closure audit expects the
-refusal to be **transport-level rather than a typed Firestore error**. The
-reviewed collector cannot classify an untyped transport refusal as a refusal. If
-production answers that way, the probe ends in `commit-uncertain`, recovery stays
-read-only, and the run is inconclusive on the refusal shape. It is not
-inconclusive on state: the post-state readback and the absence proofs still show
-that the refused request wrote nothing. Concluding the boundary in that case
-needs an explicit untyped-refusal classification in the collector and a second
-run. The owner accepts that risk as a precondition, or funds the collector change
-first.
+refusal to be **transport-level rather than a typed Firestore error**. An untyped
+refusal is therefore the likeliest production outcome, and it is never upgraded
+to a typed row: an intermediary does not speak for Firestore.
+
+The collector records it as its own outcome, `untyped-transport-refusal`, under
+the separate result key `untypedOverRefusal`, with the HTTP status, the content
+type and the response bytes verbatim. That outcome grants no cleanup ownership,
+so every version-bound delete becomes a zero-wire skip, recovery stays read-only,
+and the refusal shape stays unproven. The run is inconclusive on the refusal
+shape and conclusive on state: the post-state readback and the absence proofs
+still show that the refused request wrote nothing. The owner adjudicates the
+recorded status, content type and bytes, and the boundary question needs a second
+run once the intermediary is identified.
 
 ## Post state and cleanup
 
@@ -126,6 +130,42 @@ run holds a conditional-creation proof and a matching version-bound ownership
 read. It exits when all 51 owned resources return a typed `NOT_FOUND`. On
 exhaustion the run stops, records the remaining resources as unresolved and
 escalates to the owner; it never widens scope and never retries a Commit.
+
+## The transport deadline
+
+Every probe must finish inside one total wire deadline of **60 seconds**, covering
+connection setup, TLS, the upload, server processing and the bounded response
+read. The transport enforces that ceiling and the HTTPS worker re-checks it
+independently, so the campaign cannot raise it at run time.
+
+The derivation, for a 10,485,761-byte body:
+
+| Component | Seconds |
+| --- | ---: |
+| upload, 83,886,088 bits at a conservative 5 Mbit/s sustained | 16.8 |
+| DNS, TCP and TLS 1.3 setup | 1.5 |
+| server processing of one 17-document conditional-create Commit | 8.0 |
+| bounded response read | 0.5 |
+| **derived requirement** | **26.8** |
+
+The published 60 seconds is that requirement with roughly a 2x margin. Reserving
+10 seconds for everything that is not the upload leaves 50 seconds for the body,
+so the slowest link that can complete a boundary probe sustains about
+1.7 Mbit/s upstream.
+
+If the deadline is missed the receipt is incomplete, the Commit is uncertain, and
+the run holds no conditional-creation proof. The version-bound delete is then a
+zero-wire skip by design, so cleanup **detects** the residue as
+`cleanup-not-absent` but cannot remove it: up to 17 documents stay in the project
+pending manual owner action. This is detected, never silent, because an absence
+proof is only recorded on a typed `NOT_FOUND`. Run the campaign from a link that
+sustains the rate above; if a probe times out, the owner removes the residue
+under the recorded owned scope. The campaign never retries a Commit to
+compensate.
+
+The 10,485,761-byte path through the process exchange and the worker is covered
+offline by a loopback test that sends the boundary body through the same code,
+with TLS replaced by plaintext to a local server.
 
 ## Owner preconditions
 
@@ -193,18 +233,22 @@ because a refused Commit grants no cleanup ownership. That is the intended
 behaviour and it is also the post-state evidence: the refused request wrote
 nothing.
 
-The recorded run is at source `f3e2c64672d2e849e929ffa54f18b0f7e57c39fb`, artifact
-SHA-256 `e48d71416ce8841d04cdf2246a8b299a9d3ad4680253c5bdeb54e7dcc6bd4f21`, with
-supervisor status `completed`, `recordingComplete` and `stateValidation` true, the
-owned process stopped and all listeners closed. The shadow uses its own per-run
-nonce against `demo-firestore-probe`; it is not the campaign nonce and it writes
-nothing to the oracle project.
+The recorded run is published as
+`spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, at source
+`6f1b6d46199725441a940cf8fc120cffe74262ea`, artifact SHA-256 `b43786c9a13bae62caefb7a4b1f72c5fd34f7660f31a59229ba65a1ba199661c`, with supervisor status `completed`,
+`recordingComplete` and `stateValidation` true, the owned process stopped and all
+listeners closed. The record carries the three probe outcomes, the refusal bytes
+verbatim, the collector summary and the runtime binding. It is checked against
+its generator, so a hand-edited record fails the suite. The shadow uses its own
+per-run nonce against `demo-firestore-probe`; it is not the campaign nonce and it
+writes nothing to the oracle project.
 
 ## Artifacts
 
 - `spec/compatibility/fs-request-bytes-campaign.json`, the campaign artifact.
 - `spec/compatibility/fs-request-bytes-cases.json`, the case and expectation view.
 - `spec/compatibility/fs-request-bytes-budget.json`, the budget, accounting and cost view.
+- `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, the local shadow receipt.
 - `tools/compat-broad/fs-request-bytes-boundary/`, the compiler, collector,
   transports, campaign composer and local shadow.
 

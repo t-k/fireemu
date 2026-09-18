@@ -2,6 +2,7 @@
 
 import multiprocessing as mp
 import os
+from urllib.parse import quote
 
 import pytest
 from shared_gate import Gate, create
@@ -892,3 +893,229 @@ def test_a_malformed_published_allocation_is_refused(tmp_path, allocation):
     value["publishedAllocation"] = allocation
     with pytest.raises(ValueError, match="invalid shared allocation"):
         create(tmp_path / "gate", value)
+
+
+NONCE = "n" * 32
+VERSION = "2026-09-18T00:00:00.000000Z"
+
+
+def commit_plan(marker="shared", writes=2, alias=True):
+    """A campaign that creates its documents with one conditional POST :commit."""
+    scope = "projects/p/databases/(default)/documents/owned/" + NONCE
+    resources = [f"{scope}/items/doc-{index:02d}" for index in range(writes)]
+
+    def fields(name):
+        if marker == "shared":
+            return {
+                "_sharedOwner": {"referenceValue": name},
+                "blob": {"stringValue": "x"},
+            }
+        return {"_owner": {"stringValue": NONCE}, "blob": {"stringValue": "x"}}
+
+    commit = {
+        "service": "firestore",
+        "method": "POST",
+        "path": "/v1/projects/p/databases/(default)/documents:commit",
+        "body": {
+            "writes": [
+                {
+                    "update": {"name": name, "fields": fields(name)},
+                    "currentDocument": {"exists": False},
+                }
+                for name in resources
+            ]
+        },
+        "privileged": True,
+        "form": False,
+    }
+    read = lambda name: {
+        "kind": "ownership-read",
+        "resource": name,
+        "service": "firestore",
+        "method": "GET",
+        "path": "/v1/" + name,
+        "body": None,
+        "privileged": True,
+        "form": False,
+    }
+    delete = lambda name: {
+        "kind": "version-bound-delete",
+        "resource": name,
+        "service": "firestore",
+        "method": "DELETE",
+        "path": "/v1/" + name,
+        "body": None,
+        "privileged": True,
+        "form": False,
+        "versionFrom": "ownership-read" if alias else 0,
+    }
+    recovery = []
+    for name in resources:
+        recovery.extend([read(name), delete(name)])
+    value = {
+        "contract": "shared-local-v2",
+        "nonce": NONCE,
+        "wallSeconds": 600,
+        "recoverySeconds": 300,
+        "observationRequests": 1,
+        "costMicrousd": 10000,
+        "requestCostMicrousd": 1,
+        "intervalSeconds": 0.25,
+        "requestSeconds": 2,
+        "jobs": {
+            "probe": {
+                "resources": resources,
+                "observation": [commit],
+                "recovery": recovery,
+            }
+        },
+    }
+    if marker != "shared":
+        value["ownershipMarker"] = {"field": "_owner", "binding": "nonce"}
+    return value, resources
+
+
+def _commit_response(count):
+    return 200, {
+        "writeResults": [{"updateTime": VERSION} for _ in range(count)],
+        "commitTime": VERSION,
+    }
+
+
+def test_a_conditional_commit_yields_one_creation_proof_per_write(tmp_path):
+    """Seventeen conditional creates in one Commit are seventeen ownership proofs."""
+    value, resources = commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    gate.dispatch(
+        value["jobs"]["probe"]["observation"][0],
+        False,
+        lambda: _commit_response(len(resources)),
+    )
+    job = gate.snapshot()["jobs"]["probe"]
+    assert sorted(job["creationProofs"]) == sorted(resources)
+    assert sorted(job["owned"]) == sorted(resources)
+    assert all(
+        proof["updateTime"] == VERSION for proof in job["creationProofs"].values()
+    )
+
+
+def test_a_commit_acknowledgement_must_answer_every_write(tmp_path):
+    value, resources = commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    with pytest.raises(ValueError, match="acknowledgement incomplete"):
+        gate.dispatch(
+            value["jobs"]["probe"]["observation"][0],
+            False,
+            lambda: _commit_response(len(resources) - 1),
+        )
+    assert gate.snapshot()["jobs"]["probe"]["creationProofs"] == {}
+    assert gate.snapshot()["jobs"]["probe"]["stopped"] is True
+
+
+def test_a_campaign_may_declare_how_its_documents_mark_ownership(tmp_path):
+    """The v2 marker is one convention, not the only one a campaign can carry."""
+    value, resources = commit_plan(marker="nonce")
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    gate.dispatch(
+        value["jobs"]["probe"]["observation"][0],
+        False,
+        lambda: _commit_response(len(resources)),
+    )
+    assert sorted(gate.snapshot()["jobs"]["probe"]["creationProofs"]) == sorted(
+        resources
+    )
+
+
+def test_a_document_without_its_declared_marker_is_refused(tmp_path):
+    value, resources = commit_plan(marker="nonce")
+    # Declared as the nonce binding, but the documents carry the v2 shape.
+    for write in value["jobs"]["probe"]["observation"][0]["body"]["writes"]:
+        write["update"]["fields"] = {
+            "_sharedOwner": {"referenceValue": write["update"]["name"]}
+        }
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    with pytest.raises(ValueError, match="namespace marker"):
+        gate.dispatch(
+            value["jobs"]["probe"]["observation"][0],
+            False,
+            lambda: _commit_response(len(resources)),
+        )
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        {},
+        {"field": "_owner"},
+        {"binding": "nonce"},
+        {"field": "_owner", "binding": "other"},
+        {"field": "", "binding": "nonce"},
+        {"field": "_owner", "binding": "nonce", "extra": 1},
+        None,
+        "_owner",
+    ],
+)
+def test_a_malformed_ownership_marker_is_refused(tmp_path, marker):
+    value, _resources = commit_plan(marker="nonce")
+    value["ownershipMarker"] = marker
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "gate", value)
+
+
+def test_a_delete_may_name_its_ownership_read_instead_of_its_index(tmp_path):
+    """Seventeen deletes per probe should not have to hard-code seventeen indices."""
+    value, resources = commit_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    operations = value["jobs"]["probe"]
+    gate.dispatch(
+        operations["observation"][0], False, lambda: _commit_response(len(resources))
+    )
+    name = resources[0]
+    body = {
+        "name": name,
+        "fields": operations["observation"][0]["body"]["writes"][0]["update"]["fields"],
+        "updateTime": VERSION,
+    }
+    gate.dispatch(operations["recovery"][0], True, lambda: (200, body))
+    deleted = dict(operations["recovery"][1])
+    del deleted["versionFrom"]
+    deleted["path"] += "?currentDocument.updateTime=" + quote(VERSION, safe="")
+    result = gate.dispatch(deleted, True, lambda: (200, {}))
+    assert result == (200, {})
+    assert gate.snapshot()["skips"] == [] if "skips" in gate.snapshot() else True
+    assert gate.snapshot()["jobs"]["probe"]["recovery"] == 2
+
+
+def test_a_version_alias_must_resolve_to_exactly_one_slot(tmp_path):
+    value, _resources = commit_plan()
+    probe = value["jobs"]["probe"]
+    probe["recovery"][1]["versionFrom"] = "no-such-kind"
+    with pytest.raises(ValueError, match="exactly one"):
+        create(tmp_path / "missing", value)
+    value, _resources = commit_plan()
+    probe = value["jobs"]["probe"]
+    # Two reads of the same resource make the alias ambiguous.
+    probe["recovery"].insert(1, dict(probe["recovery"][0]))
+    with pytest.raises(ValueError, match="exactly one"):
+        create(tmp_path / "ambiguous", value)
+
+
+def test_a_numeric_version_source_stays_canonical(tmp_path):
+    value, _resources = commit_plan(writes=1, alias=False)
+    create(tmp_path / "gate", value)
+    assert (
+        Gate(tmp_path / "gate", "probe").snapshot()["plan"]["jobs"]["probe"][
+            "recovery"
+        ][1]["versionFrom"]
+        == 0
+    )

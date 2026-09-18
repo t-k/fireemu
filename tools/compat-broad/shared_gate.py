@@ -349,6 +349,7 @@ def create(path, plan):
         not _valid_request_seconds(plan, policy)
         or not _valid_ceiling(plan)
         or not _valid_allocation(plan)
+        or not _valid_marker(plan)
     ):
         # Checked before they are used, so a malformed value cannot reach arithmetic.
         raise ValueError("invalid shared allocation")
@@ -396,6 +397,7 @@ def create(path, plan):
         < fixed_cost + (recovery + overhead) * plan["requestCostMicrousd"]
     ):
         raise ValueError("invalid shared allocation")
+    _resolve_all_aliases(plan)
     path.mkdir(mode=0o700, parents=True, exist_ok=False)
     (path / "lock").touch(mode=0o600, exist_ok=False)
     state = {
@@ -438,6 +440,78 @@ def create(path, plan):
     _save(path, state)
 
 
+MARKER_BINDINGS = ("resource-name", "nonce")
+
+
+def ownership_marker(plan):
+    """How a created document proves it belongs to this campaign's owned namespace.
+
+    The `shared-local-v2` convention is that a document names itself in
+    `_sharedOwner`. A campaign whose documents are sized to the byte cannot add a
+    field to carry that shape, so it may declare its own marker instead: a field
+    and whether the value binds the resource name or the campaign nonce. A plan
+    that declares nothing keeps the convention its contract implies.
+
+    A nonce binding is weaker than a self-naming one: it proves the document came
+    from this campaign, not that it is the document the request named. It is
+    adequate only because the resource must also be in the job's assigned
+    resources and under the nonce-scoped path, and that is worth a reviewer's
+    attention rather than an assumption.
+    """
+    declared = plan.get("ownershipMarker")
+    if declared is None:
+        if plan["contract"] == "shared-local-v2":
+            return "_sharedOwner", "resource-name"
+        return None
+    return declared["field"], declared["binding"]
+
+
+def _valid_marker(plan):
+    if "ownershipMarker" not in plan:
+        return True
+    declared = plan["ownershipMarker"]
+    return (
+        isinstance(declared, dict)
+        and set(declared) == {"field", "binding"}
+        and isinstance(declared["field"], str)
+        and bool(declared["field"])
+        and declared["binding"] in MARKER_BINDINGS
+        and (declared["binding"] != "nonce" or isinstance(plan.get("nonce"), str))
+    )
+
+
+def resolve_version_source(operations, index, source):
+    """The capture index a recovery slot reads its version from.
+
+    A numeric `versionFrom` is canonical and names the slot directly. A named one
+    is an alias for the kind of the earlier slot that captured the version,
+    resolved within the same resource, so a campaign with one ownership read per
+    document does not hard-code an index per document. It must resolve to exactly
+    one earlier slot of that kind for that resource, or the plan is refused.
+    """
+    if source is None or type(source) is int:
+        return source
+    resource = operations[index].get("resource")
+    if not isinstance(source, str) or not source or not isinstance(resource, str):
+        raise ValueError("version source alias must name a kind and a resource")
+    matches = [
+        position
+        for position, candidate in enumerate(operations[:index])
+        if candidate.get("kind") == source and candidate.get("resource") == resource
+    ]
+    if len(matches) != 1:
+        raise ValueError("version source alias must resolve to exactly one slot")
+    return matches[0]
+
+
+def _resolve_all_aliases(plan):
+    for job in plan["jobs"].values():
+        operations = job["recovery"]
+        for index, operation in enumerate(operations):
+            if isinstance(operation, dict):
+                resolve_version_source(operations, index, operation.get("versionFrom"))
+
+
 def _creation_proofs(operation, status, body, job, plan):
     """Only exact conditional-create acknowledgements grant destructive authority."""
     if status != 200 or operation["service"] != "firestore":
@@ -454,6 +528,34 @@ def _creation_proofs(operation, status, body, job, plan):
         if digest(body.get("fields")) != digest(fields):
             raise ValueError("conditional creation fields mismatch")
         candidates.append((name, fields, body.get("updateTime")))
+    elif operation["method"] == "POST" and operation["path"].endswith(":commit"):
+        # A Commit is atomic: a 200 means every write in it applied, so there is
+        # no per-write status to read, only one update version per write.
+        writes = request.get("writes", []) if isinstance(request, dict) else []
+        conditional = [
+            write
+            for write in writes
+            if isinstance(write, dict)
+            and write.get("currentDocument") == {"exists": False}
+        ]
+        if not conditional:
+            return []
+        results = body.get("writeResults") if isinstance(body, dict) else None
+        if not isinstance(results, list) or len(results) != len(writes):
+            raise ValueError("conditional commit acknowledgement incomplete")
+        for write, result in zip(writes, results, strict=True):
+            if (
+                not isinstance(write, dict)
+                or write.get("currentDocument", {}).get("exists") is not False
+                or digest(write.get("currentDocument")) != digest({"exists": False})
+            ):
+                continue
+            update = write.get("update", {})
+            if not isinstance(update, dict) or not isinstance(result, dict):
+                raise ValueError("conditional commit creation body mismatch")  # noqa: TRY004 -- Gate admission uses ValueError.
+            candidates.append(
+                (update.get("name"), update.get("fields"), result.get("updateTime"))
+            )
     elif operation["method"] == "POST" and operation["path"].endswith(":batchWrite"):
         writes = request.get("writes", []) if isinstance(request, dict) else []
         conditional = [
@@ -503,10 +605,16 @@ def _creation_proofs(operation, status, body, job, plan):
         ):
             raise ValueError("typed conditional creation resource/version required")
         datetime.fromisoformat(version)
-        if plan["contract"] == "shared-local-v2" and fields.get("_sharedOwner") != {
-            "referenceValue": name
-        }:
-            raise ValueError("conditional creation namespace marker required")
+        marker = ownership_marker(plan)
+        if marker is not None:
+            field, binding = marker
+            expected = (
+                {"referenceValue": name}
+                if binding == "resource-name"
+                else {"stringValue": plan["nonce"]}
+            )
+            if fields.get(field) != expected:
+                raise ValueError("conditional creation namespace marker required")
         proofs.append(
             {
                 "name": name,
@@ -678,7 +786,9 @@ class Gate:
                     raise ValueError("request outside closed stream scenario")
             else:
                 expected = dict(operations[index])
-                source = expected.pop("versionFrom", None)
+                source = resolve_version_source(
+                    operations, index, expected.pop("versionFrom", None)
+                )
                 valid_version = False
                 if source is not None:
                     capture = job["captures"].get(str(source))

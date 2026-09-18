@@ -154,3 +154,25 @@ def test_one_unticketed_difference_downgrades_the_whole_run(tmp_path) -> None:
 def test_every_known_difference_names_a_compiled_case() -> None:
     kinds = {operation["kind"] for operation in plan()["observation"]}
     assert set(KNOWN_LOCAL_DIFFERENCES) <= kinds
+
+
+def test_the_artifact_binding_names_the_bytes_and_the_source_commit() -> None:
+    from pathlib import Path
+
+    from partition_cursor_shadow import artifact_binding
+
+    binding = artifact_binding(Path(__file__))
+    assert len(binding["sha256"]) == 64
+    assert len(binding["sourceCommit"]) == 40
+    assert binding["reproducible"] is False
+    assert isinstance(binding["sourceTreeClean"], bool)
+    assert not binding["path"].startswith("/")
+
+
+def test_an_artifact_outside_this_worktree_is_refused(tmp_path) -> None:
+    from partition_cursor_shadow import artifact_binding
+
+    foreign = tmp_path / "fireemu"
+    foreign.write_bytes(b"not ours")
+    with pytest.raises(ValueError):
+        artifact_binding(foreign)

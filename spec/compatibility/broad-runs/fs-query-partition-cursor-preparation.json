@@ -2759,7 +2759,7 @@
   "tools/compat-broad/fs-query-partition-cursor/partition_cursor_comparator.py": "c19451cd710a190b7040ca919d89594786279553543e85d6e31c6459979ebecb",
   "tools/compat-broad/fs-query-partition-cursor/partition_cursor_manifest.py": "21164acbfa24da2347eee2469a75669c369005f561e0aa4e3bad846d9d6c96c3",
   "tools/compat-broad/fs-query-partition-cursor/partition_cursor_offline_fixture.py": "a50741dfec8cb418a5c66fd2accd79280e7e0ffa36b647b6d9e29d2b139cbbaa",
-  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_shadow.py": "54dfa119b45dac512070f718abd1d1504340f102b44ab65d75ba1a00feca1402"
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_shadow.py": "13ad6ea2320bc56aecf3a969d9cb960de4c60ea8aa415be4fdb61002b991f7bc"
  },
  "status": "PREPARATION_ONLY",
  "unresolved": [

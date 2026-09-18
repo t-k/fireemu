@@ -10,6 +10,7 @@ declared loopback set, and every result stays preparation evidence.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import socket
@@ -358,8 +359,39 @@ def _child(output: Path, nonce: str, fail_at: int | None = None) -> int:
     )
 
 
+def artifact_binding(binary: Path) -> dict[str, Any]:
+    """Bind the artifact actually executed to its bytes and its source tree.
+
+    A debug build is not bit-reproducible, so the digest identifies this build
+    instance while the commit and the clean-tree flag identify its source. The
+    binary must live inside the checkout that the commit describes; a binary
+    from another worktree or from the shared checkout is refused.
+    """
+    binary = binary.resolve()
+    root = Path(__file__).resolve().parents[3]
+    if root not in binary.parents:
+        raise ValueError("the artifact must be built inside this worktree")
+    commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    dirty = subprocess.check_output(
+        ["git", "status", "--porcelain", "--", "crates", "Cargo.toml", "Cargo.lock"],
+        cwd=root,
+        text=True,
+    ).strip()
+    return {
+        "path": str(binary.relative_to(root)),
+        "sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+        "byteCount": binary.stat().st_size,
+        "sourceCommit": commit,
+        "sourceTreeClean": not dirty,
+        "reproducible": False,
+    }
+
+
 def run_against_artifact(binary: Path, output: Path, fail_at: int | None = None) -> int:
     """Supervise one owned local artifact and always report its final teardown."""
+    binding = artifact_binding(binary)
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     nonce = uuid.uuid4().hex
     config = {
@@ -380,6 +412,7 @@ def run_against_artifact(binary: Path, output: Path, fail_at: int | None = None)
     report: dict[str, Any] = {
         "status": "incomplete",
         "productionExecuted": False,
+        "artifact": binding,
         "command": command,
         "failAt": fail_at,
     }

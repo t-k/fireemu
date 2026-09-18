@@ -66,12 +66,20 @@ uv run --python 3.12 --with pytest pytest -q tools/compat-broad/fs-query-partiti
 
 ## Reviewed local shadow
 
-Source commit `660d57d46` was exercised against a locally built `fireemu` with
-SHA-256 `a2839d0a4d07434a2efc91f6d11d332ef5eb078d1bc73e2807dfcf98d801a94a`, template plan digest
-`496fbb0ad7661a8395b83669b97fdb831a2c24cf792d979d37d6907e69fb06b7`. All 31
-observation and 6 recovery slots were dispatched, 37 raw sidecars were published
-and verified, cleanup completed and an independent residual scan found zero owned
-documents. The owned process stopped and its listener closed.
+The runner records the artifact it executes and refuses a binary built outside
+this worktree. A debug build is not bit-reproducible, so the digest identifies
+one build instance while the commit identifies its source.
+
+| Binding | Value |
+| --- | --- |
+| Lane source commit | `846603968` |
+| Rust sources | unchanged from base `3d0e56bdf` |
+| Artifact SHA-256 | `479124dd1ee7685b0be949269f530d4bbfe134bad140bab31236d9edb79350bb` |
+| Template plan digest | `496fbb0ad7661a8395b83669b97fdb831a2c24cf792d979d37d6907e69fb06b7` |
+
+All 31 observation and 6 recovery slots were dispatched, 37 raw sidecars were
+published and verified, cleanup completed and an independent residual scan found
+zero owned documents. The owned process stopped and its listener closed.
 
 Three cursor-validation differences remain, each an open repair ticket:
 `cursor-too-many-values`, `cursor-reference-type-mismatch` and

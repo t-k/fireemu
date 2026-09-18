@@ -107,12 +107,21 @@ always refuses; `validate_permission` accepts no permission while they stand.
 
 ## Local shadow
 
-The plan was driven against a locally built artifact with SHA-256
-`a2839d0a4d07434a2efc91f6d11d332ef5eb078d1bc73e2807dfcf98d801a94a` at template plan digest
-`496fbb0ad7661a8395b83669b97fdb831a2c24cf792d979d37d6907e69fb06b7`. All 37 slots
-were dispatched, 37 raw sidecars were published and verified, cleanup completed,
-and an independent residual scan found zero owned documents. The owned process
-stopped and its listener closed.
+The plan was driven against a `fireemu` built in the lane worktree. The runner
+records that binding itself and refuses a binary from another checkout. A debug
+build is not bit-reproducible, so the digest identifies one build instance rather
+than the source.
+
+| Binding | Value |
+| --- | --- |
+| Lane source commit | `846603968` |
+| Rust sources | unchanged from base `3d0e56bdf` |
+| Artifact SHA-256 | `479124dd1ee7685b0be949269f530d4bbfe134bad140bab31236d9edb79350bb` |
+| Template plan digest | `496fbb0ad7661a8395b83669b97fdb831a2c24cf792d979d37d6907e69fb06b7` |
+
+All 37 slots were dispatched, 37 raw sidecars were published and verified,
+cleanup completed, and an independent residual scan found zero owned documents.
+The owned process stopped and its listener closed.
 
 The reconstruction check held: the two ranges derived from the single split point
 returned six and six documents whose concatenation equals the twelve-document

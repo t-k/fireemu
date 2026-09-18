@@ -38,6 +38,7 @@ from credential_collector import (
     new_tracker,
     owned_email,
     reserve_request,
+    subjects_match,
     track_account,
 )
 from credential_plan import BUDGET
@@ -552,9 +553,10 @@ def run_cases(
                     and cookie["issuer"]
                     == f"https://session.firebase.google.com/{PROJECT}"
                 ),
-                "cookieSubjectMatchesIdToken": bool(
-                    cookie and "sub" in cookie["claimNames"]
-                ),
+                # The subject itself is an account identifier and stays out of the
+                # record; a cookie minted for another account must fail here.
+                "cookieSubjectMatchesIdToken": cookie is not None
+                and subjects_match(cookie_token, body["sessionCookie"]),
                 "cookieAuthTimePreserved": bool(
                     cookie
                     and cookie["times"].get("auth_time")

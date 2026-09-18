@@ -228,6 +228,40 @@ def claim_shape(token: str, reveal: tuple[str, ...] = ()) -> dict[str, Any]:
     }
 
 
+def _subject(token: str) -> str | None:
+    """Return a token's `sub` claim when it is a non-empty string, else None.
+
+    The subject is an account identifier, so it never leaves this module: only the
+    boolean `subjects_match` derives from it may be recorded. A malformed token answers
+    None rather than raising, because an undecidable subject is not a match and an
+    assertion must stay decidable.
+    """
+    if not isinstance(token, str):
+        return None
+    segments = token.split(".")
+    if len(segments) != 3:
+        return None
+    try:
+        payload = _decode_segment(segments[1])
+    except ValueError:
+        return None
+    subject = payload.get("sub")
+    if isinstance(subject, bool) or not isinstance(subject, str) or not subject:
+        return None
+    return subject
+
+
+def subjects_match(first: str, second: str) -> bool:
+    """Whether two tokens name the same subject, publishing only the answer.
+
+    Both payloads are decoded in memory and compared here. Checking that a `sub` claim
+    merely exists would accept a session cookie minted for another account, which is the
+    one thing this assertion is for.
+    """
+    subject = _subject(first)
+    return subject is not None and subject == _subject(second)
+
+
 # --- owned resources ------------------------------------------------------------
 
 

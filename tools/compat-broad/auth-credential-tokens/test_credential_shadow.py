@@ -29,6 +29,7 @@ from credential_collector import (
     new_tracker,
     owned_email,
     reserve_request,
+    subjects_match,
     track_account,
 )
 from credential_plan import BUDGET
@@ -635,3 +636,81 @@ def test_the_shadow_holds_back_the_recovery_reserve_the_manifest_declares() -> N
     assert budget["recoveryRequests"] == BUDGET["recoveryRequests"]
     assert budget["recoveryWallSeconds"] == BUDGET["recoveryWallSeconds"]
     assert budget["recoveryRequests"] < budget["maxRequests"]
+
+
+# --- the session cookie must carry the ID token's own subject -------------------
+
+
+def _token(claims: dict) -> str:
+    return shadow.unsigned_jwt({"iat": 1, "exp": 2, **claims})
+
+
+def test_two_tokens_naming_the_same_subject_match() -> None:
+    assert subjects_match(_token({"sub": "uid-1"}), _token({"sub": "uid-1"})) is True
+
+
+def test_a_cookie_minted_for_another_account_is_not_a_subject_match() -> None:
+    assert subjects_match(_token({"sub": "uid-1"}), _token({"sub": "uid-2"})) is False
+
+
+def test_a_missing_subject_on_either_side_is_not_a_subject_match() -> None:
+    assert subjects_match(_token({"sub": "uid-1"}), _token({})) is False
+    assert subjects_match(_token({}), _token({"sub": "uid-1"})) is False
+    assert subjects_match(_token({}), _token({})) is False
+
+
+@pytest.mark.parametrize(
+    "subject", [7, 7.5, True, None, "", ["uid-1"], {"id": "uid-1"}]
+)
+def test_a_subject_that_is_not_a_non_empty_string_is_never_a_match(subject) -> None:
+    assert subjects_match(_token({"sub": subject}), _token({"sub": subject})) is False
+
+
+def test_a_malformed_token_is_not_a_subject_match_rather_than_an_error() -> None:
+    assert subjects_match("not-a-jwt", _token({"sub": "uid-1"})) is False
+    assert subjects_match(_token({"sub": "uid-1"}), "a.b.c") is False
+
+
+def test_the_subject_check_publishes_only_the_boolean() -> None:
+    source = (HERE / "credential_collector.py").read_text()
+    assert "def subjects_match" in source
+    assert "sub" not in claim_shape(_token({"sub": "uid-1"}))["claimValues"]
+
+
+# --- the declared cases run end to end against a service ------------------------
+
+
+def _run(service: dict, tracker: dict) -> dict:
+    budget = new_budget(
+        BUDGET["maxRequests"],
+        BUDGET["maxWallSeconds"],
+        0.0,
+        recovery_requests=BUDGET["recoveryRequests"],
+        recovery_wall_seconds=BUDGET["recoveryWallSeconds"],
+    )
+    rows: dict = {}
+    shadow.run_cases(
+        "http://127.0.0.1:1", budget, tracker, rows, poster=_poster(service)
+    )
+    return rows
+
+
+def test_every_declared_case_holds_against_a_service_that_behaves(
+    _instant_rest,
+) -> None:
+    rows = _run(_service(), new_tracker("c" * 32))
+    assert set(rows) == {case["id"] for case in observation_cases()}
+    assert shadow._agreement(list(rows.values()))["unexpected"] == []
+
+
+def test_a_cookie_minted_for_a_different_subject_fails_the_real_case_run(
+    _instant_rest,
+) -> None:
+    rows = _run(_service(cookie_subject="uid-impostor"), new_tracker("c" * 32))
+    composition = rows["session-cookie-claim-composition"]
+    assert composition["status"] == 200
+    assert composition["assertions"]["cookieSubjectMatchesIdToken"] is False
+    unexpected = shadow._agreement(list(rows.values()))["unexpected"]
+    assert [item["caseId"] for item in unexpected] == [
+        "session-cookie-claim-composition"
+    ]

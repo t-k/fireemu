@@ -16,7 +16,7 @@ from fs_config_lifecycle.surface_matrix import (
 )
 
 
-def test_every_management_method_of_the_pinned_discovery_is_classified_exactly_once() -> None:
+def test_every_pinned_management_method_is_classified_once() -> None:
     matrix = build_matrix()
     classified = [row["locator"] for row in matrix["methods"]]
     assert len(classified) == len(set(classified))
@@ -24,7 +24,7 @@ def test_every_management_method_of_the_pinned_discovery_is_classified_exactly_o
     assert set(classified) == management
 
 
-def test_document_data_plane_methods_are_excluded_explicitly_not_silently_dropped() -> None:
+def test_document_methods_are_excluded_explicitly() -> None:
     matrix = build_matrix()
     excluded = set(matrix["excluded"])
     management = {m for m in discovery_methods() if not m.startswith(EXCLUDED_PREFIX)}
@@ -69,7 +69,9 @@ def test_every_local_citation_resolves_to_an_existing_line_in_this_checkout() ->
             path = root / path_text
             assert path.is_file(), citation
             line = int(line_text)
-            assert 1 <= line <= len(path.read_text(encoding="utf-8").splitlines()), citation
+            assert 1 <= line <= len(path.read_text(encoding="utf-8").splitlines()), (
+                citation
+            )
             seen += 1
     assert seen >= 20
 
@@ -127,7 +129,12 @@ def test_the_matrix_claims_no_production_observation() -> None:
     for forbidden in ("compat_verified", "oracle_compared", "local_verified"):
         assert forbidden not in serialized
     statuses = {row["local"]["status"] for row in matrix["methods"]}
-    assert statuses <= {"implemented", "partial", "not-implemented", "local-extension-only"}
+    assert statuses <= {
+        "implemented",
+        "partial",
+        "not-implemented",
+        "local-extension-only",
+    }
 
 
 def test_repair_tickets_are_reproducible_and_never_presented_as_fixes() -> None:
@@ -144,7 +151,7 @@ def test_repair_tickets_are_reproducible_and_never_presented_as_fixes() -> None:
             assert int(line_text) >= 1
 
 
-def test_database_resource_fields_cover_the_pinned_schema_and_declare_any_extra() -> None:
+def test_database_fields_cover_the_pinned_schema() -> None:
     raw = json.loads((repo_root() / DISCOVERY_PATH).read_text(encoding="utf-8"))
     pinned = next(d for d in raw["definitions"] if d["id"] == "firestore-v1")
     prefix = "schemas/GoogleFirestoreAdminV1Database/properties/"
@@ -157,7 +164,9 @@ def test_database_resource_fields_cover_the_pinned_schema_and_declare_any_extra(
     matrix = build_matrix()
     classified = {row["field"] for row in matrix["databaseFields"]}
     documented = {
-        row["field"] for row in matrix["databaseFields"] if row["presentInPinnedDiscovery"]
+        row["field"]
+        for row in matrix["databaseFields"]
+        if row["presentInPinnedDiscovery"]
     }
     extra = {
         row["field"]

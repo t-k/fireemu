@@ -541,9 +541,7 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
 )
 
 # (field, class, rationale, consequence, status, citations, present in pinned discovery)
-_DATABASE_FIELDS: tuple[
-    tuple[str, str, str, str, str, tuple[str, ...], bool], ...
-] = (
+_DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], ...] = (
     _row(
         "name",
         DATA_PLANE,
@@ -932,7 +930,9 @@ def build_matrix() -> dict[str, Any]:
         for field, klass, rationale, consequence, status, citations, pinned in _DATABASE_FIELDS
     ]
     excluded = sorted(
-        locator for locator in discovery_methods() if locator.startswith(EXCLUDED_PREFIX)
+        locator
+        for locator in discovery_methods()
+        if locator.startswith(EXCLUDED_PREFIX)
     )
     summary = {
         "discoveryMethods": len(discovery_methods()),

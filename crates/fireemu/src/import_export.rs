@@ -2923,8 +2923,32 @@ pub const FIELD_CONFIG_FILE: &str = "fireemu-firestore-field-config.json";
 /// by the runtime, so a larger file is a malformed artifact rather than a large session.
 const FIELD_CONFIG_BYTES_LIMIT: u64 = 1 << 20;
 
+/// The sidecar version that carries the collection group and the field alone.
+const FIELD_CONFIG_VERSION_FIELDS_ONLY: u64 = 1;
+
+/// The sidecar version that may also carry `expirationOffset`.
+///
+/// The version is what stops an older reader from restoring a policy whose offset it cannot
+/// see: dropping the offset would sweep every document of that collection group up to one
+/// offset early, silently. A reader that knows only version 1 refuses a version-2 artifact
+/// as an unknown version, which is the loud failure that data loss is not.
+const FIELD_CONFIG_VERSION_WITH_OFFSETS: u64 = 2;
+
 /// Serializes one session's time-to-live catalogs.
+///
+/// The version is the lowest one that can carry the configuration: a session that configured
+/// no `expirationOffset` writes version 1, byte for byte what earlier fireemu versions wrote,
+/// so an artifact only declares the newer format when it actually needs it.
 fn field_config_json(catalogs: &FieldConfigCatalogs) -> String {
+    let carries_offset = catalogs
+        .values()
+        .flat_map(fireemu_core_firestore::ttl::TtlCatalog::iter)
+        .any(|(_, policy)| policy.expiration_offset.is_some());
+    let version = if carries_offset {
+        FIELD_CONFIG_VERSION_WITH_OFFSETS
+    } else {
+        FIELD_CONFIG_VERSION_FIELDS_ONLY
+    };
     let databases: Vec<serde_json::Value> = catalogs
         .iter()
         .filter(|(_, catalog)| !catalog.is_empty())
@@ -2955,7 +2979,7 @@ fn field_config_json(catalogs: &FieldConfigCatalogs) -> String {
         })
         .collect();
     serde_json::json!({
-        "version": 1,
+        "version": version,
         "databases": databases,
     })
     .to_string()
@@ -2965,9 +2989,16 @@ fn field_config_json(catalogs: &FieldConfigCatalogs) -> String {
 fn parse_field_config(text: &str) -> Result<FieldConfigCatalogs, String> {
     let value: serde_json::Value =
         serde_json::from_str(text).map_err(|error| format!("invalid JSON: {error}"))?;
-    if value["version"] != serde_json::json!(1) {
-        return Err("the field configuration sidecar declares an unknown version".to_owned());
-    }
+    // Version 1 promises that no policy carries an offset, which is what lets a reader that
+    // knows only that version install it whole. An artifact that declares 1 and carries one
+    // anyway breaks that promise, so it is refused below rather than read as version 2.
+    let carries_offsets = match value["version"].as_u64() {
+        Some(FIELD_CONFIG_VERSION_FIELDS_ONLY) => false,
+        Some(FIELD_CONFIG_VERSION_WITH_OFFSETS) => true,
+        _ => {
+            return Err("the field configuration sidecar declares an unknown version".to_owned());
+        }
+    };
     let databases = value["databases"]
         .as_array()
         .ok_or_else(|| "databases must be an array".to_owned())?;
@@ -3005,6 +3036,13 @@ fn parse_field_config(text: &str) -> Result<FieldConfigCatalogs, String> {
             // The offset goes through the same grammar a fields.patch is held to, so a
             // sidecar naming a duration the Admin surface would refuse is a malformed
             // artifact rather than a policy that sweeps at some other instant.
+            if !carries_offsets && !field["expirationOffset"].is_null() {
+                return Err(format!(
+                    "a TTL entry names an expirationOffset, which version \
+                     {FIELD_CONFIG_VERSION_FIELDS_ONLY} of the field configuration sidecar \
+                     does not carry; version {FIELD_CONFIG_VERSION_WITH_OFFSETS} does"
+                ));
+            }
             let expiration_offset = match &field["expirationOffset"] {
                 serde_json::Value::Null => None,
                 serde_json::Value::String(text) => Some(
@@ -5374,7 +5412,7 @@ mod tests {
             "7",
         ] {
             let text = format!(
-                r#"{{"version":1,"databases":[{{"project":"demo-app","database":"(default)","ttlFields":[{{"collectionGroup":"sessions","field":"expiresAt","expirationOffset":{offset}}}]}}]}}"#
+                r#"{{"version":2,"databases":[{{"project":"demo-app","database":"(default)","ttlFields":[{{"collectionGroup":"sessions","field":"expiresAt","expirationOffset":{offset}}}]}}]}}"#
             );
             let error = parse_field_config(&text).expect_err("refusal");
             assert!(error.contains("expirationOffset"), "{offset}: {error}");
@@ -5394,8 +5432,79 @@ mod tests {
 
     #[test]
     fn a_sidecar_of_an_unknown_version_is_refused() {
-        let error = parse_field_config(r#"{"version": 2, "databases": []}"#).expect_err("refusal");
-        assert!(error.contains("unknown version"), "{error}");
+        for text in [
+            r#"{"version": 3, "databases": []}"#,
+            r#"{"version": 0, "databases": []}"#,
+            r#"{"version": "2", "databases": []}"#,
+            r#"{"databases": []}"#,
+        ] {
+            let error = parse_field_config(text).expect_err("refusal");
+            assert!(error.contains("unknown version"), "{text}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_sidecar_carrying_an_offset_declares_the_version_that_carries_one() {
+        let group = fireemu_core_types::ids::CollectionId::try_new("sessions").expect("collection");
+        let field =
+            fireemu_core_firestore::field_path::FieldPath::parse("expiresAt").expect("field");
+        let mut catalog = fireemu_core_firestore::ttl::TtlCatalog::new();
+        catalog
+            .enable_with_offset(
+                group.clone(),
+                field,
+                Some(fireemu_core_types::time::LogicalDuration::from_seconds(
+                    604_800,
+                )),
+            )
+            .expect("enable");
+        let mut catalogs = std::collections::BTreeMap::new();
+        catalogs.insert(("demo-app".to_owned(), "(default)".to_owned()), catalog);
+
+        let text = field_config_json(&catalogs);
+        assert_eq!(
+            text,
+            r#"{"databases":[{"database":"(default)","project":"demo-app","ttlFields":[{"collectionGroup":"sessions","expirationOffset":"604800s","field":"expiresAt"}]}],"version":2}"#
+        );
+        // The artifact that declares the newer version still round-trips whole.
+        let parsed = parse_field_config(&text).expect("parse");
+        assert_eq!(parsed, catalogs);
+        assert_eq!(
+            parsed[&("demo-app".to_owned(), "(default)".to_owned())]
+                .policy(&group)
+                .expect("policy")
+                .expiration_offset,
+            Some(fireemu_core_types::time::LogicalDuration::from_seconds(
+                604_800
+            ))
+        );
+    }
+
+    #[test]
+    fn a_version_one_sidecar_carrying_an_offset_is_refused_rather_than_read_without_it() {
+        // An older reader would install this policy with no offset and sweep every document
+        // of the collection group up to one week early, without saying so. The version is
+        // the promise that there is nothing here to drop, so breaking it is an error.
+        let text = r#"{"version":1,"databases":[{"project":"demo-app","database":"(default)","ttlFields":[{"collectionGroup":"sessions","field":"expiresAt","expirationOffset":"604800s"}]}]}"#;
+        let error = parse_field_config(text).expect_err("refusal");
+        assert!(error.contains("expirationOffset"), "{error}");
+        assert!(error.contains("version 1"), "{error}");
+    }
+
+    #[test]
+    fn a_version_two_sidecar_that_names_no_offset_is_read_as_it_stands() {
+        let text = r#"{"version":2,"databases":[{"project":"demo-app","database":"(default)","ttlFields":[{"collectionGroup":"sessions","field":"expiresAt"}]}]}"#;
+        let parsed = parse_field_config(text).expect("parse");
+        let group = fireemu_core_types::ids::CollectionId::try_new("sessions").expect("collection");
+        assert_eq!(
+            parsed[&("demo-app".to_owned(), "(default)".to_owned())]
+                .policy(&group)
+                .expect("policy")
+                .expiration_offset,
+            None
+        );
+        // Writing it back drops to the version that can carry it.
+        assert!(field_config_json(&parsed).contains(r#""version":1"#));
     }
 
     #[test]

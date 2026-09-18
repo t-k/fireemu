@@ -15,9 +15,9 @@ and owner preconditions, and a local shadow that ran the whole catalog against
 
 ## Observation Cases
 
-Twelve cases live in `tools/compat-broad/fs-listen-resume/cases.py` and are
+Fourteen cases live in `tools/compat-broad/fs-listen-resume/cases.py` and are
 published for the Node collector as `spec/compatibility/fs-listen-sdk-cases.json`.
-Six are observation cases; each has a control or negative counterpart, so a run
+Seven are observation cases; each has a control or negative counterpart, so a run
 cannot report agreement from a listener that never delivered anything.
 
 | Case | Dimension | What it observes | Counterpart |
@@ -28,11 +28,19 @@ cannot report agreement from a listener that never delivered anything.
 | `FS-LISTEN-SDK-104` | Resume after a break | Which changes arrive after a forced stream break and reconnect | `104C` applies the same mutations with no break |
 | `FS-LISTEN-SDK-105` | Unsubscribe | Callbacks stop while a witness listener still sees the write | `105C` keeps the listener and sees the same write on both |
 | `FS-LISTEN-SDK-106` | Auth switching | Signing out mid-listen terminates a Rules-protected listener | `106N` starts the listener signed out and never reaches the server |
+| `FS-LISTEN-SDK-107` | Default subscription | A listener that does not request metadata changes raises one callback per data change | `107C` writes the same data again and expects no callback |
 
 Each case declares the fields it compares. A listener that does not treat
 metadata as a signal drops `fromCache` and `hasPendingWrites` from the compared
 projection and keeps them in the raw receipt, because their value there
 reflects delivery timing rather than a semantic difference.
+
+Most listeners subscribe with metadata changes so the collector can tell when a
+listener has reached the server, and metadata-only events are collapsed back out
+afterwards. That reconstruction is symmetric, so it cannot manufacture a match,
+but it would hide a runtime that raised or suppressed a default-mode callback
+differently. `FS-LISTEN-SDK-107` and its control therefore subscribe in the real
+default mode, skip the collapse entirely and compare the raw callback sequence.
 
 Resume is compared as an aggregate rather than event by event, because the SDK
 is free to batch deliveries differently between runs. The aggregate collapses
@@ -64,6 +72,17 @@ Bounds and ownership:
   outcomes make the receipt incomplete rather than passing.
 - Listener shutdown is tracked per case. A failed unsubscribe is a failure, not
   a silent success.
+- The cleanup reserve is bounded in wall time as well as in operations, so a
+  cleanup read that never settles cannot run past the declared budget.
+- Nothing thrown by a step, by a per-case cleanup or by the between-case hook
+  escapes the run. `runCatalog` records it, still runs the final cleanup pass
+  and still returns, so a receipt is always written. A rehearsal against a
+  deny-all ruleset, the most likely production failure, produced a receipt whose
+  every case carried `step-threw:permission-denied`, whose listeners were all
+  closed, and whose cleanup honestly reported `read-failed` rather than success.
+- Cleanup rows name the resource and bind its path by SHA-256 rather than
+  publishing the path, so a production receipt exposes neither the run nonce nor
+  the account identifier.
 
 Secrets:
 
@@ -117,9 +136,12 @@ token or password anywhere in the output.
    because the oracle project is shared with other lanes. The manifest carries
    its digest so a deployed fragment can be checked against the plan.
 
+   The run prefix is keyed by the calling principal, so a principal can reach
+   only its own runs even though the fragment names no nonce.
+
    ```
-   match /o6_listen/{runId}/docs/{docId} {
-     allow read, write: if request.auth != null;
+   match /o6_listen/{uid}/runs/{runId}/docs/{docId} {
+     allow read, write: if request.auth != null && uid == request.auth.uid;
    }
    match /o6_listen_private/{uid} {
      allow read, write: if request.auth != null && request.auth.uid == uid;
@@ -161,7 +183,8 @@ the permission and transport bindings.
 
 ## Local shadow
 
-The collector ran the full catalog against an owned local `fireemu` instance
+All fourteen cases agreed with their expected local result. The collector ran
+the full catalog against an owned local `fireemu` instance
 started by `fireemu exec` with the Firestore and Auth emulators on OS-assigned
 ports. The runtime was built from this worktree with `cargo build -p fireemu`,
 never taken from another checkout: a prebuilt binary elsewhere can predate
@@ -172,9 +195,18 @@ path. Three consecutive runs produced the same result, and a fourth with a four
 second deadline produced an honest incomplete receipt with cleanup still
 complete.
 
-The receipt is checked in at `spec/compatibility/fs-listen-sdk-local-shadow.json`
-and bound to the working tree by `test_o6_listen_sdk_local_shadow.py`, which
-recomputes the source digests, the catalog digest and every case comparison.
+The receipt is checked in at `spec/compatibility/fs-listen-sdk-local-shadow.json`,
+with the campaign it ran under at `fs-listen-sdk-local-shadow-campaign.json`. The
+campaign record publishes the run nonce because a reader cannot recompile the
+campaign, and so cannot verify the receipt, without it; a production campaign
+record stays private and only its digest is published.
+
+Two test files bind it. `test_o6_listen_sdk_local_shadow.py` recomputes the
+source digests, the catalog digest, the ruleset digest, the runtime digest and
+every case comparison. `test_o6_listen_sdk_round_trip.py` feeds the shipped
+receipt to the shipped comparator and requires admission with no errors,
+iterating the contract's required inputs rather than the receipt's own keys, so
+widening the contract without widening the collector breaks the build.
 
 Reproduce it with:
 

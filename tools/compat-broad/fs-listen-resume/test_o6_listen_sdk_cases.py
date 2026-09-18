@@ -181,6 +181,7 @@ def test_unobserved_paths_name_browser_and_both_declared_mobile_platforms():
         "browser-webchannel",
         "android-sdk",
         "apple-sdk",
+        "cross-identity-isolation",
         "raw-resume-token",
     } == paths
     for entry in catalog()["unobservedPaths"]:
@@ -208,3 +209,29 @@ def test_get_case_returns_a_copy():
     case = get_case("FS-LISTEN-SDK-101")
     case["steps"].clear()
     assert get_case("FS-LISTEN-SDK-101")["steps"]
+
+
+def test_the_cross_identity_gap_is_registered_as_unobserved():
+    entry = next(
+        item
+        for item in catalog()["unobservedPaths"]
+        if item["path"] == "cross-identity-isolation"
+    )
+    # One account is budgeted and both auth cases use the same principal, so no
+    # case observes one principal being refused another principal's document.
+    assert "one account" in entry["reason"]
+    assert "permission-denied" in entry["plan"]
+    assert all(
+        step.get("account") in (None, "throwaway")
+        for case in CASES
+        for step in case["steps"]
+    )
+
+
+def test_the_default_subscription_case_compares_snapshot_kind():
+    case = get_case("FS-LISTEN-SDK-107")
+    assert "snapshotKind" in case["comparedFields"]
+    assert [event["snapshotKind"] for event in case["expectedLocal"]] == [
+        "initial",
+        "delta",
+    ]

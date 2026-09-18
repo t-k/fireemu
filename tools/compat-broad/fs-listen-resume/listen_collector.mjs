@@ -259,14 +259,19 @@ export const planCleanup = (paths, nonce) =>
     .filter(([name]) => name !== 'run')
     .map(([name, path]) => ({ name, path, requiredMarker: ownerMarker(nonce) }));
 
+const PROVEN_CLEANUP_OUTCOMES = [
+  'deleted-and-absent',
+  'not-created',
+  'already-deleted-earlier',
+];
+
 export const classifyCleanup = rows => {
-  const complete = rows.every(
-    row => row.outcome === 'deleted-and-absent' || row.outcome === 'not-created',
-  );
+  const complete = rows.every(row => PROVEN_CLEANUP_OUTCOMES.includes(row.outcome));
   return {
     complete,
     rows,
-    unproven: rows.filter(row => !['deleted-and-absent', 'not-created'].includes(row.outcome)),
+    unproven: rows.filter(row => !PROVEN_CLEANUP_OUTCOMES.includes(row.outcome)),
+    deleted: rows.filter(row => row.outcome === 'deleted-and-absent').length,
   };
 };
 
@@ -415,17 +420,28 @@ export const runCase = async (deps, caseSpec, ctx) => {
       failures.push(charge.error);
       return;
     }
-    // A listener's initial snapshot is its first server-backed snapshot. The
-    // same snapshot served from the local cache beforehand is still the
-    // initial one, so `seenServer`, not a plain first-callback flag, decides.
+    // Where the initial snapshot ends depends on how the listener subscribed.
+    //
+    // With metadata changes, the same snapshot can be delivered from the cache
+    // and then from the server, so the initial snapshot runs until the first
+    // server-backed delivery and the cache-served prefix is part of it.
+    //
+    // Without metadata changes the SDK raises a callback only when data
+    // changes, so every delivery after the first is a change: delivery order
+    // decides, and a cache-served first callback does not make the following
+    // data change part of the initial snapshot.
+    const metadataMode = Boolean(spec.includeMetadataChanges);
     let seenServer = false;
-    const options = { includeMetadataChanges: Boolean(spec.includeMetadataChanges) };
+    let delivered = 0;
+    const options = { includeMetadataChanges: metadataMode };
     const onNext = snapshot => {
+      const isInitial = metadataMode ? !seenServer : delivered === 0;
+      delivered += 1;
+      if (snapshot.fromCache === false) seenServer = true;
       const row =
         spec.kind === 'document'
-          ? normalizeDocumentSnapshot(name, { ...snapshot, first: !seenServer }, nameOf)
-          : normalizeQuerySnapshot(name, { ...snapshot, first: !seenServer }, nameOf);
-      if (snapshot.fromCache === false) seenServer = true;
+          ? normalizeDocumentSnapshot(name, { ...snapshot, first: isInitial }, nameOf)
+          : normalizeQuerySnapshot(name, { ...snapshot, first: isInitial }, nameOf);
       record(row);
     };
     const onError = error => record(normalizeListenerError(name, error));
@@ -625,11 +641,33 @@ export const runCatalog = async (
   { catalog, contextFor, budget, cleanupBudget, paths, nonce, client, betweenCases },
 ) => {
   const caseRecords = [];
+  const cleanupPasses = [];
+  // Names this run has already deleted and proved absent, so the final pass can
+  // say "already deleted earlier" instead of "never created".
+  const deletedEarlier = new Set();
+  const recordPass = (label, result) => {
+    for (const row of result.rows) {
+      if (row.outcome === 'deleted-and-absent') deletedEarlier.add(row.name);
+      else if (row.outcome === 'not-created' && deletedEarlier.has(row.name)) {
+        row.outcome = 'already-deleted-earlier';
+      }
+    }
+    cleanupPasses.push({
+      pass: label,
+      complete: result.complete,
+      deleted: result.rows.filter(row => row.outcome === 'deleted-and-absent').length,
+      rows: result.rows,
+    });
+    return result;
+  };
   let thrown = null;
   try {
     for (const caseSpec of catalog.cases) {
       caseRecords.push(await runCase(deps, caseSpec, contextFor(caseSpec)));
-      await runCleanup(deps, { client, paths, nonce, budget: cleanupBudget });
+      recordPass(
+        caseSpec.caseId,
+        await runCleanup(deps, { client, paths, nonce, budget: cleanupBudget }),
+      );
       if (betweenCases) await betweenCases(caseSpec);
     }
   } catch (error) {
@@ -637,7 +675,10 @@ export const runCatalog = async (
   }
   let cleanup;
   try {
-    cleanup = await runCleanup(deps, { client, paths, nonce, budget: cleanupBudget });
+    cleanup = recordPass(
+      'final',
+      await runCleanup(deps, { client, paths, nonce, budget: cleanupBudget }),
+    );
   } catch (error) {
     cleanup = classifyCleanup([
       {
@@ -649,7 +690,15 @@ export const runCatalog = async (
     ]);
     thrown = thrown ?? String(error?.message ?? error);
   }
-  return { caseRecords, cleanup, thrown };
+  return {
+    caseRecords,
+    cleanup,
+    cleanupPasses,
+    // The final pass alone understates the run: most documents are deleted by
+    // the per-case pass that follows the case which created them.
+    totalDeleted: cleanupPasses.reduce((sum, pass) => sum + pass.deleted, 0),
+    thrown,
+  };
 };
 
 export const buildReceipt = ({
@@ -659,6 +708,8 @@ export const buildReceipt = ({
   environment,
   caseRecords,
   cleanup,
+  cleanupPasses,
+  totalDeleted,
   budget,
   cleanupBudget,
   thrown,
@@ -673,6 +724,8 @@ export const buildReceipt = ({
   budget: budget.snapshot(),
   cleanupBudget: cleanupBudget ? cleanupBudget.snapshot() : null,
   cleanup,
+  cleanupPasses: cleanupPasses ?? null,
+  totalDeleted: totalDeleted ?? null,
   thrown: thrown ?? null,
   cases: caseRecords,
   complete:

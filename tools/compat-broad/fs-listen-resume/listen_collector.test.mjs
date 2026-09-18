@@ -161,7 +161,10 @@ const createFake = ({ denyPrivate = false } = {}) => {
         first: true,
       };
       listeners.push(listener);
-      deliver(listener, {});
+      // Latency compensation: the real SDK serves the first document callback
+      // from the local cache before the server round trip. A default-mode
+      // listener sees only that one, because no data changed afterwards.
+      deliver(listener, { fromCache: !options.includeMetadataChanges });
       return () => {
         listener.closed = true;
       };
@@ -325,7 +328,7 @@ test('document listener case records one initial snapshot', async () => {
       changes: [],
       docs: ['alpha'],
       exists: true,
-      fromCache: false,
+      fromCache: true,
       hasPendingWrites: false,
       error: null,
     },
@@ -753,6 +756,9 @@ test('a case with no break records a connect and nothing else', async () => {
   const fake = createFake();
   const clock = nowFactory();
   const spec = caseFixture({
+    listeners: [
+      { name: 'primary', kind: 'document', target: 'alpha', includeMetadataChanges: true },
+    ],
     steps: [
       { kind: 'seed', doc: 'alpha', fields: { rank: 1 } },
       { kind: 'listen', listener: 'primary' },
@@ -830,10 +836,23 @@ test('a thrown step still runs cleanup and still yields a receipt', async () => 
   assert.equal(outcome.cleanup.complete, true);
   assert.ok(
     outcome.cleanup.rows.every(row =>
-      ['deleted-and-absent', 'not-created'].includes(row.outcome),
+      ['deleted-and-absent', 'not-created', 'already-deleted-earlier'].includes(row.outcome),
     ),
   );
   assert.equal(fake.store.size, 0);
+  // The final pass alone would understate the run: both cases created a
+  // document, and each was deleted by the pass that followed its own case.
+  assert.equal(outcome.cleanupPasses.length, 3);
+  assert.deepEqual(
+    outcome.cleanupPasses.map(pass => pass.pass),
+    ['ONE', 'TWO', 'final'],
+  );
+  assert.equal(outcome.totalDeleted, 2);
+  assert.equal(outcome.cleanup.deleted, 0);
+  assert.ok(
+    outcome.cleanup.rows.some(row => row.outcome === 'already-deleted-earlier'),
+    'the final pass labels documents an earlier pass deleted',
+  );
   // And a receipt exists, marked incomplete.
   const receipt = buildReceipt({
     campaign: { caseId: 'FS-LISTEN-SDK' },
@@ -920,4 +939,48 @@ test('cleanup stops on its own deadline instead of hanging', async () => {
   assert.equal(result.complete, false);
   assert.ok(result.rows.some(row => row.outcome === 'budget-exhausted'));
   assert.ok(cleanupBudget.snapshot().exceeded.includes('deadline'));
+});
+
+test('a default-mode listener labels its callbacks initial then delta', async () => {
+  const fake = createFake();
+  const clock = nowFactory();
+  const spec = caseFixture({
+    caseId: 'DEFAULT-MODE',
+    collapseMetadataOnly: false,
+    listeners: [
+      { name: 'primary', kind: 'document', target: 'alpha', includeMetadataChanges: false },
+    ],
+    steps: [
+      { kind: 'seed', doc: 'alpha', fields: { rank: 1, value: 'a0' } },
+      { kind: 'listen', listener: 'primary' },
+      { kind: 'await', listener: 'primary', events: 1 },
+      { kind: 'write', client: 'witness', doc: 'alpha', fields: { rank: 1, value: 'a1' } },
+      { kind: 'await', listener: 'primary', events: 2 },
+    ],
+  });
+  const ctx = contextFor(fake, clock, spec);
+  const record = await runCase({ ...clock, firestore: fake.firestore, auth: fake.auth }, spec, ctx);
+  assert.deepEqual(
+    record.observed.map(row => row.snapshotKind),
+    ['initial', 'delta'],
+  );
+});
+
+test('a metadata listener still treats a cache-served prefix as the initial snapshot', async () => {
+  const fake = createFake();
+  const clock = nowFactory();
+  const spec = caseFixture({
+    caseId: 'METADATA-MODE',
+    listeners: [
+      { name: 'primary', kind: 'document', target: 'alpha', includeMetadataChanges: true },
+    ],
+    steps: [
+      { kind: 'seed', doc: 'alpha', fields: { rank: 1 } },
+      { kind: 'listen', listener: 'primary' },
+      { kind: 'await', listener: 'primary', events: 1 },
+    ],
+  });
+  const ctx = contextFor(fake, clock, spec);
+  const record = await runCase({ ...clock, firestore: fake.firestore, auth: fake.auth }, spec, ctx);
+  assert.ok(record.observed.every(row => row.snapshotKind === 'initial'));
 });

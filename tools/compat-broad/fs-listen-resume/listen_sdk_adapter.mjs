@@ -315,6 +315,8 @@ export const main = async ({ env = process.env, argv = process.argv } = {}) => {
     },
     caseRecords,
     cleanup,
+    cleanupPasses: outcome.cleanupPasses,
+    totalDeleted: outcome.totalDeleted,
     budget,
     cleanupBudget,
     thrown: outcome.thrown,

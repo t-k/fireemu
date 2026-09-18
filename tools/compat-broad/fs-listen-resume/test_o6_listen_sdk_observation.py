@@ -261,6 +261,7 @@ def test_the_comparison_always_reports_the_paths_it_did_not_observe(prepared):
         "browser-webchannel",
         "android-sdk",
         "apple-sdk",
+        "cross-identity-isolation",
         "raw-resume-token",
     }
 

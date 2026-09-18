@@ -142,3 +142,22 @@ def test_cleanup_rows_publish_no_run_nonce_and_no_account_identifier():
     for row in _receipt()["cleanup"]["rows"]:
         assert "path" not in row
         assert len(row["pathDigest"]) == 64
+
+
+def test_the_receipt_keeps_every_cleanup_pass_not_only_the_final_one():
+    receipt = _receipt()
+    passes = receipt["cleanupPasses"]
+    assert [item["pass"] for item in passes] == [*cases.case_ids(), "final"]
+    assert all(item["complete"] is True for item in passes)
+    # The final pass alone understates the run, so the receipt carries the total.
+    assert receipt["totalDeleted"] == sum(item["deleted"] for item in passes)
+    assert receipt["totalDeleted"] > receipt["cleanup"]["deleted"]
+
+
+def test_the_final_pass_does_not_call_an_earlier_deletion_never_created():
+    final = next(
+        item for item in _receipt()["cleanupPasses"] if item["pass"] == "final"
+    )
+    outcomes = {row["outcome"] for row in final["rows"]}
+    assert "already-deleted-earlier" in outcomes
+    assert outcomes <= {"already-deleted-earlier", "not-created", "deleted-and-absent"}

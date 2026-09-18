@@ -155,6 +155,7 @@ def test_campaign_records_the_paths_it_cannot_observe():
         "browser-webchannel",
         "android-sdk",
         "apple-sdk",
+        "cross-identity-isolation",
         "raw-resume-token",
     } == paths
 

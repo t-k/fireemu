@@ -1245,6 +1245,7 @@
       "collapseMetadataOnly": false,
       "comparedFields": [
         "listener",
+        "snapshotKind",
         "changes",
         "docs",
         "exists",
@@ -1340,6 +1341,7 @@
       "collapseMetadataOnly": false,
       "comparedFields": [
         "listener",
+        "snapshotKind",
         "changes",
         "docs",
         "exists",
@@ -1420,7 +1422,7 @@
       "title": "A default-mode listener raises no callback for a write that changes no data"
     }
   ],
-  "catalogDigest": "8125ca2c220145e9344e8342da7840bb8aa4ab039a8ba01243cd5bdf0df84388",
+  "catalogDigest": "7326915491f0d03e5b6e58ee3bdacce966a1f4829e714677ee491b0e779508f6",
   "docsSubcollection": "docs",
   "privateCollection": "o6_listen_private",
   "requiredRulesDigest": "767ffbe957f1991cb17d282a9e15b1ec43d82d7fb52f8c8d5876b9f2262ea740",
@@ -1442,6 +1444,11 @@
       "path": "apple-sdk",
       "plan": "An XCTest target replaying the same case catalog and emitting the same normalized event rows.",
       "reason": "No iOS or macOS SDK harness exists in this repository."
+    },
+    {
+      "path": "cross-identity-isolation",
+      "plan": "A second throwaway account and a case in which A opens a listener on B's o6_listen_private document and on B's run prefix, expecting permission-denied in both, with a control proving B's own listener succeeds. It needs maxAccounts raised to two and a second sign-in in the adapter.",
+      "reason": "The campaign budget allows one account, and both auth cases sign the same principal out and back in. No case has user A listen to user B's document, so tenant and principal isolation under Rules is not observed and a MATCH must not be read as covering it."
     },
     {
       "path": "raw-resume-token",

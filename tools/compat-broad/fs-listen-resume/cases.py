@@ -71,11 +71,13 @@ DEFAULT_COMPARED_FIELDS = (
     "hasPendingWrites",
     "error",
 )
-# The default-mode cases compare the raw callback sequence. Snapshot kind is
-# left out because it depends on whether the first callback was cache-served,
-# which is timing-dependent; the signal is which callbacks arrived at all.
+# The default-mode cases compare the raw callback sequence, snapshot kind
+# included: in default mode the SDK raises a callback only when data changes, so
+# the first delivery is the initial snapshot and every later one is a delta
+# regardless of whether the first was cache-served.
 RAW_CALLBACK_FIELDS = (
     "listener",
+    "snapshotKind",
     "changes",
     "docs",
     "exists",
@@ -678,6 +680,20 @@ UNOBSERVED_PATHS = (
             "reason": "No iOS or macOS SDK harness exists in this repository.",
             "plan": "An XCTest target replaying the same case catalog and emitting the same "
             "normalized event rows.",
+        }
+    ),
+    MappingProxyType(
+        {
+            "path": "cross-identity-isolation",
+            "reason": "The campaign budget allows one account, and both auth cases sign the "
+            "same principal out and back in. No case has user A listen to user B's "
+            "document, so tenant and principal isolation under Rules is not "
+            "observed and a MATCH must not be read as covering it.",
+            "plan": "A second throwaway account and a case in which A opens a listener on "
+            "B's o6_listen_private document and on B's run prefix, expecting "
+            "permission-denied in both, with a control proving B's own listener "
+            "succeeds. It needs maxAccounts raised to two and a second sign-in in "
+            "the adapter.",
         }
     ),
     MappingProxyType(

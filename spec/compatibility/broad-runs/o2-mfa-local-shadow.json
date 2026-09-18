@@ -412,6 +412,7 @@
   "recordingComplete": true,
   "recovery": {
     "cleanupVerified": true,
+    "configurationMutated": false,
     "configurationRestored": true,
     "ownedAccounts": 10,
     "remainingOwnedResources": 0
@@ -617,7 +618,7 @@
   "side": "local",
   "worktree": {
     "clean": true,
-    "commit": "dc5dd93ee5839c462244bb7b068e67abecee38a0",
+    "commit": "c0872fdd02d0cadcfd28a075056aecfdbea29d59",
     "resolved": true
   }
 }

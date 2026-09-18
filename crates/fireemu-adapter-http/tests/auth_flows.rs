@@ -567,6 +567,28 @@ fn profile_strings_reject_control_characters_on_every_route_that_stores_them() {
         "INVALID_ARGUMENT : displayName must not contain control characters"
     );
 
+    // The Admin create route reaches the same guard: what cannot be imported cannot be
+    // created through a request either.
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({"email": "admin-control@example.com", "photoUrl": "https://p.example/a.png\u{0000}"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : photoUrl must not contain control characters"
+    );
+
+    // A non-string displayName keeps the sign-up route's existing lenient handling: the
+    // control-character guard adds no new type refusal.
+    let (status, numeric) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "numeric-name@example.com", "password": "hunter22", "displayName": 123}),
+    );
+    assert_eq!(status, 200, "{numeric}");
+
     // Ordinary values still pass.
     let (status, updated) = post(
         &s,

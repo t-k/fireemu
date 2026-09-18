@@ -5980,14 +5980,12 @@ fn sign_up(
     if body.get("localId").is_some_and(|v| !v.is_null()) {
         return error(400, "UNEXPECTED_PARAMETER : User ID");
     }
-    match opt_str(body, "displayName") {
-        Ok(Some(name)) => {
-            if let Err(r) = reject_control_characters(name, "displayName") {
-                return r;
-            }
+    // `str_field` ignores a non-string the way the assignment below does: this guard adds a
+    // refusal for control characters, not a new type refusal.
+    if let Some(name) = str_field(body, "displayName") {
+        if let Err(r) = reject_control_characters(name, "displayName") {
+            return r;
         }
-        Ok(None) => {}
-        Err(r) => return r,
     }
     let email = match opt_str(body, "email") {
         Ok(email) => email,
@@ -7380,6 +7378,11 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
             None | Some(Value::Null) => Vec::new(),
             Some(v) => parse_phone_factors(v)?,
         };
+        for field in ["displayName", "photoUrl"] {
+            if let Some(value) = opt_str(body, field)? {
+                reject_control_characters(value, field)?;
+            }
+        }
         Ok((
             email,
             password,

@@ -24,7 +24,12 @@ sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
 
 from broad_contract import digest
 from compiler_03 import _CATALOG, CAMPAIGN, compile_limits_plan
-from expectations_03 import validate_cleanup, validate_local_receipt
+from expectations_03 import (
+    evaluate_rows,
+    pending_rows,
+    validate_cleanup,
+    validate_local_receipt,
+)
 from shadow import save
 
 
@@ -99,6 +104,10 @@ def _real_child(output: Path, nonce: str) -> None:
             {"phase": "provenance", "failure": "source inputs changed"}
         )
     mismatches = collected["expectationMismatches"]
+    # Limits the catalog still declares unsupported carry the documented
+    # production expectation. A difference there is recorded, never discarded,
+    # but it does not fail the local campaign.
+    pending = evaluate_rows(rows, plan, pending=True)
     recording = collected["recordingComplete"]
     cleanup_complete = collected["cleanupComplete"]
     state_valid = recording and not mismatches
@@ -114,6 +123,8 @@ def _real_child(output: Path, nonce: str) -> None:
         "cleanup": cleanup,
         "resourceAbsence": collected["resourceAbsence"],
         "semanticMismatches": mismatches,
+        "pendingDifferences": pending,
+        "pendingRows": pending_rows(plan),
         "infrastructureFailures": infrastructure,
         "gate": collected["gate"],
         "planDigest": digest(plan),

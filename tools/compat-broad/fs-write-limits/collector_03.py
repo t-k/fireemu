@@ -107,11 +107,13 @@ def collect(gate, plan, output, wire, *, before_recovery=None):
         row.get("complete") is True and row.get("failure") is None for row in rows
     )
     mismatches = evaluate_rows(rows, plan)
+    pending = evaluate_rows(rows, plan, pending=True)
     result = {
         "recordingComplete": recording,
         "cleanupComplete": cleanup_complete,
         "collectionComplete": recording and cleanup_complete and not failures,
         "expectationMismatches": mismatches,
+        "pendingDifferences": pending,
         "infrastructureFailures": failures,
         "rows": rows,
         "cleanup": cleanup,

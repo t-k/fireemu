@@ -85,8 +85,15 @@ def _batch_landed(request: dict, status: Any, body: Any) -> dict[str, str]:
     return landed
 
 
-def evaluate_rows(rows: list[dict], plan: dict) -> list[dict]:
-    """Evaluate an observation prefix against the declared local expectations."""
+def evaluate_rows(rows: list[dict], plan: dict, *, pending: bool = False) -> list[dict]:
+    """Evaluate an observation prefix against the declared local expectations.
+
+    `pending` selects which half is returned. A request whose expectation is
+    marked `localImplementationPending` states the documented production
+    behaviour for a limit the catalog still declares unsupported, so a local
+    difference on it is evidence about the local runtime rather than a campaign
+    failure. Both halves are always computed; neither is discarded.
+    """
     problems: list[dict] = []
     versions: dict[str, str] = {}
     operations = plan["localGatePlan"]["jobs"]["limits"]["observation"]
@@ -109,9 +116,25 @@ def evaluate_rows(rows: list[dict], plan: dict) -> list[dict]:
         ):
             continue  # Infrastructure failures are not API semantic mismatches.
         reason = _row_reason(request, plan, status, body, versions)
-        if reason:
-            problems.append({"index": index, "basis": reason})
+        if (
+            reason
+            and bool(request["expect"].get("localImplementationPending")) == pending
+        ):
+            problems.append({"index": index, "basis": reason, "pending": pending})
     return problems
+
+
+def pending_rows(plan: dict) -> list[int]:
+    """Indexes whose expectation is the documented production behaviour only."""
+    return [
+        index
+        for index, request in enumerate(
+            plan["requests"][
+                : len(plan["localGatePlan"]["jobs"]["limits"]["observation"])
+            ]
+        )
+        if request["expect"].get("localImplementationPending")
+    ]
 
 
 def _row_reason(
@@ -211,6 +234,11 @@ def writes_safe(rows: list[dict], plan: dict) -> bool:
         request = plan["requests"][index]
         if request["kind"] == "batch-write":
             versions.update(_batch_landed(request, status, body))
+            continue
+        if request["kind"] in (
+            "name-boundary-readback",
+            "refusal-consistency-readback",
+        ):
             continue
         resource = request["path"].split("?", 1)[0].removeprefix("/v1/")
         document = _document_for(plan, resource)

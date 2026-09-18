@@ -19,7 +19,6 @@ sys.path.insert(0, str(HERE))
 
 import credential_shadow as shadow
 from credential_cases import observation_cases
-from credential_comparator import compare
 from credential_collector import (
     BudgetExceeded,
     build_receipt,
@@ -34,6 +33,7 @@ from credential_collector import (
     subjects_match,
     track_account,
 )
+from credential_comparator import compare
 from credential_plan import BUDGET
 
 
@@ -798,7 +798,7 @@ def test_a_receipt_claiming_a_complete_recording_cannot_pass_off_unrun_rows() ->
     classes = _classes(compare(local, _full_production_receipt()))
     first = observation_cases()[0]["id"]
     assert classes[first] == "MATCH"
-    assert set(value for case_id, value in classes.items() if case_id != first) == {
+    assert {value for case_id, value in classes.items() if case_id != first} == {
         "INDETERMINATE"
     }
 

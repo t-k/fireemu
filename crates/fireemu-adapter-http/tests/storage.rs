@@ -3413,3 +3413,152 @@ fn a_run_with_no_loaded_ruleset_denies_every_end_user_request() {
     );
     assert_eq!(r.status, 200);
 }
+
+/// The browser-metadata set must not hinge on one header an old or unusual browser may omit:
+/// `Referer` and `Cookie` mark a page-issued request just as `Origin` and `Sec-Fetch-*` do.
+#[test]
+fn set_rules_treats_every_browser_metadata_field_as_a_browser_request() {
+    let update = set_rules_body();
+    for field in ["referer", "cookie"] {
+        let s = state(Some(SETR_DENY_ALL));
+        let response = handle(
+            &s,
+            req(
+                "PUT",
+                "/internal/setRules",
+                &[
+                    ("content-type", "application/json"),
+                    (field, "http://localhost:5173/index.html"),
+                ],
+                &update,
+            ),
+        );
+        assert_eq!(
+            response.status,
+            403,
+            "{field}: {}",
+            String::from_utf8_lossy(&response.body)
+        );
+        assert_eq!(
+            anonymous_multipart_upload(&s, &format!("{field}.txt")).status,
+            403,
+            "{field}: the refused update must not have replaced the rules"
+        );
+    }
+}
+
+/// Defence that does not depend on reading any request header: the CORS preflight of the
+/// privileged rules route never admits `PUT`, so a compliant browser cannot issue the request
+/// at all, whichever request metadata it would have attached.
+#[tokio::test]
+async fn the_preflight_of_the_privileged_rules_route_never_admits_put() {
+    use tokio::io::AsyncWriteExt;
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shared = Arc::new(state(Some(SETR_DENY_ALL)));
+    let server = tokio::spawn(serve_storage_with_budget(listener, shared, &BUDGET));
+
+    let preflight = |path: &'static str| async move {
+        let head = format!(
+            "OPTIONS {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://localhost:5173\r\nAccess-Control-Request-Method: PUT\r\nAccess-Control-Request-Headers: authorization,content-type\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(head.as_bytes()).await.unwrap();
+        read_response(&mut stream).await
+    };
+
+    let refused = preflight("/internal/setRules").await;
+    assert!(
+        !refused.to_ascii_lowercase().contains("put"),
+        "the rules route must not be advertised to a browser: {refused}"
+    );
+
+    // Every other route keeps the official preflight, PUT included (resumable uploads use it).
+    let ordinary = preflight("/v0/b/demo-app.appspot.com/o").await;
+    assert!(
+        ordinary.to_ascii_lowercase().contains("put"),
+        "ordinary routes keep the official method list: {ordinary}"
+    );
+    server.abort();
+}
+
+/// SETR-2, streaming half: the 256 KiB bound holds for a body that declares no length. The
+/// refusal has to arrive while the body is still being written, so the Storage port never
+/// buffers a rules body up to the object limit just because the client withheld a length.
+#[tokio::test]
+async fn an_undeclared_set_rules_body_is_cut_off_at_the_control_port_limit() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    static BUDGET: BodyBudget = BodyBudget::new(32 * 1024 * 1024);
+    /// 16 KiB chunks to 8 MiB: far past the 256 KiB bound and far past any socket buffer, so
+    /// a server that read the whole body would accept every chunk.
+    const CHUNKS: usize = 512;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shared = Arc::new(state(Some(SETR_DENY_ALL)));
+    let server = tokio::spawn(serve_storage_with_budget(listener, shared.clone(), &BUDGET));
+
+    // A declared oversized body is refused cleanly, before the budget is touched.
+    let mut declared = tokio::net::TcpStream::connect(addr).await.unwrap();
+    declared
+        .write_all(
+            format!(
+                "PUT /internal/setRules HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                256 * 1024 + 1
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut refused = Vec::new();
+    let _ = declared.read_to_end(&mut refused).await;
+    let refused = String::from_utf8_lossy(&refused).into_owned();
+    assert!(
+        refused.starts_with("HTTP/1.1 413"),
+        "a declared oversized rules body must be refused: {refused}"
+    );
+
+    // An undeclared one is cut off as it streams: the server stops reading long before the
+    // 8 MiB the client is willing to send.
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(
+            b"PUT /internal/setRules HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    let chunk = vec![b' '; 16 * 1024];
+    let header = format!("{:x}\r\n", chunk.len());
+    let mut written = 0usize;
+    for _ in 0..CHUNKS {
+        if stream.write_all(header.as_bytes()).await.is_err()
+            || stream.write_all(&chunk).await.is_err()
+            || stream.write_all(b"\r\n").await.is_err()
+        {
+            break;
+        }
+        written += 1;
+    }
+    let _ = stream.write_all(b"0\r\n\r\n").await;
+    // The refusal closes the connection with the request body still arriving, so the client
+    // may see the response or a reset; what must hold is that the server stopped reading.
+    let mut answer = Vec::new();
+    let _ = stream.read_to_end(&mut answer).await;
+    let answer = String::from_utf8_lossy(&answer).into_owned();
+    assert!(
+        answer.is_empty() || answer.starts_with("HTTP/1.1 413"),
+        "an undeclared oversized rules body must be refused: {answer}"
+    );
+    assert!(
+        written < 128,
+        "the refusal must arrive while the body is still arriving, not after 8 MiB was buffered (wrote {written} of {CHUNKS} chunks)"
+    );
+    assert_eq!(
+        anonymous_multipart_upload(&shared, "chunked.txt").status,
+        403,
+        "the refused body must not have replaced the rules"
+    );
+    server.abort();
+}

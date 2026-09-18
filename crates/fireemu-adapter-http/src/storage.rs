@@ -37,6 +37,7 @@ use fireemu_core_rules::eval::{
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_rules::value::{AuthContext, RulesValue};
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_session::loopback::PrivilegedAdmission;
 use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{
     CustomMetadataPatch, MetadataPatch, NewMetadata, ObjectMetadata, Precondition, PreparedObject,
@@ -826,16 +827,6 @@ fn set_rules_error(message: &str) -> StorageResponse {
 /// otherwise buffers.
 pub const MAX_SET_RULES_BODY_BYTES: usize = crate::server::MAX_BODY_BYTES;
 
-/// Whether a request carries a browser's request metadata (`Origin`, or any `Sec-Fetch-*`
-/// field a browser always sends and a page cannot forge).
-fn from_browser(req: &StorageRequest) -> bool {
-    req.header("origin").is_some()
-        || req
-            .headers
-            .keys()
-            .any(|name| name.starts_with("sec-fetch-"))
-}
-
 /// The browser policy of `PUT /internal/setRules`, the one privileged route on the Storage
 /// port: it replaces the authorization policy of every bucket in the run, so a browser
 /// request is held to exactly what [`crate::control::browser_guard`] holds the equivalent
@@ -844,32 +835,27 @@ fn from_browser(req: &StorageRequest) -> bool {
 /// the shape `@firebase/rules-unit-testing` sends from Node) and keeps its unauthenticated
 /// access, so the compatibility surface is unchanged.
 fn set_rules_browser_guard(state: &StorageState, req: &StorageRequest) -> Option<StorageResponse> {
-    if !from_browser(req) {
-        return None;
-    }
-    let forbidden = |message: &str| Some(StorageResponse::json(403, &json!({"message": message})));
-    if req
-        .header("origin")
-        .is_some_and(|origin| !crate::identity_toolkit::origin_is_local(origin))
-    {
-        return forbidden("FORBIDDEN_ORIGIN");
-    }
     let presented = req
         .header("authorization")
         .and_then(|a| a.strip_prefix("Bearer "))
         .map(str::trim);
     // No control surface means no token can be presented, and a browser request then has no
     // way to prove it is not a page on another loopback port: it is refused.
-    let admitted = state
+    let token_ok = state
         .control_token
         .as_deref()
         .is_some_and(|expected| crate::control::token_matches(presented, expected));
-    if admitted {
-        None
-    } else {
-        forbidden(
+    let forbidden = |message: &str| Some(StorageResponse::json(403, &json!({"message": message})));
+    match fireemu_core_session::loopback::privileged_route_admission(
+        fireemu_core_session::loopback::carries_browser_metadata(|name| req.header(name)),
+        req.header("origin"),
+        token_ok,
+    ) {
+        PrivilegedAdmission::Admit => None,
+        PrivilegedAdmission::ForeignOrigin => forbidden("FORBIDDEN_ORIGIN"),
+        PrivilegedAdmission::ControlTokenRequired => forbidden(
             "CONTROL_TOKEN_REQUIRED : browser requests need Authorization: Bearer <control token>",
-        )
+        ),
     }
 }
 

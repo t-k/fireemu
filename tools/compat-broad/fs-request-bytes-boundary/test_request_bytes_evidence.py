@@ -106,6 +106,22 @@ def test_the_published_record_carries_the_observed_local_refusal():
     assert over["errorStatus"] == observed["errorStatus"]
     assert over["errorMessage"] == observed["message"]
     assert value["shadow"]["classification"] == LOCAL_EXPECTATION["classification"]
+    # The verbatim bytes, so a reader never has to trust the parsed summary.
+    assert json.loads(over["responseBody"]) == {
+        "error": {
+            "code": observed["errorCode"],
+            "message": observed["message"],
+            "status": observed["errorStatus"],
+        }
+    }
+
+
+def test_the_accepted_probes_publish_a_digest_rather_than_their_body():
+    value = record()
+    for probe in ("under", "exact"):
+        row = next(r for r in value["probeOutcomes"] if r["probe"] == probe)
+        assert row["responseBody"] is None
+        assert len(row["responseSha256"]) == 64
 
 
 def test_the_published_record_proved_every_owned_resource_absent():

@@ -62,6 +62,10 @@ OBSERVATION_MODULES = (
     "request_bytes_shadow.py",
 )
 
+#: Response bodies at or below this size are republished verbatim in the record.
+#: A successful Commit response is larger and is represented by its digest.
+RESPONSE_EXCERPT_BYTES = 4096
+
 PUBLICATION_NOTE = (
     "Owned local artifact shadow. No production request was sent, no credential "
     "was used and no parent group is promoted. The raw REST body byte count "
@@ -135,7 +139,23 @@ def probe_outcomes(collection: Path, plan: dict[str, Any]) -> list[dict[str, Any
         if row.get("kind") != "conditional-create-commit":
             continue
         receipt = row.get("receipt") or {}
-        body = receipt.get("body")
+        # Bounded rows carry no response body; the verbatim bytes live in the
+        # sidecar next to them. A refusal body is small, so it is republished
+        # here, which is the whole point of this record.
+        body: Any = None
+        sidecar = row.get("responseBodyFile")
+        raw = b""
+        if isinstance(sidecar, str):
+            candidate = collection / sidecar
+            if (
+                candidate.is_file()
+                and candidate.stat().st_size <= RESPONSE_EXCERPT_BYTES
+            ):
+                raw = candidate.read_bytes()
+                try:
+                    body = json.loads(raw)
+                except ValueError:
+                    body = None
         error = body.get("error") if isinstance(body, dict) else None
         by_probe[row["probe"]] = {
             "probe": row["probe"],
@@ -143,9 +163,13 @@ def probe_outcomes(collection: Path, plan: dict[str, Any]) -> list[dict[str, Any
             "httpStatus": receipt.get("status"),
             "complete": receipt.get("complete"),
             "responseBytes": row.get("responseBytes"),
+            "responseSha256": row.get("responseSha256"),
             "errorCode": error.get("code") if isinstance(error, dict) else None,
             "errorStatus": error.get("status") if isinstance(error, dict) else None,
             "errorMessage": error.get("message") if isinstance(error, dict) else None,
+            "responseBody": raw.decode("utf-8", errors="replace")
+            if raw and receipt.get("status") != 200
+            else None,
         }
     return [
         by_probe[probe["label"]]

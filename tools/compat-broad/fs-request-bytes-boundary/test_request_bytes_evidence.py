@@ -177,6 +177,12 @@ def test_the_recorded_source_commit_is_a_real_commit_in_this_repository():
     existence check; a commit borrowed from an unrelated branch fails ancestry.
     A shallow clone cannot answer either question, so it is skipped explicitly
     rather than passed silently.
+
+    Ancestry holds because this lane is integrated with a no-ff merge commit and
+    never squashed, which keeps the recorded commit reachable from the
+    integrated tip. If that policy ever changes, this check will fail and the
+    failure will mean the merge policy changed, not that the record was
+    tampered with.
     """
     commit = record()["runtime"]["sourceCommit"]
     assert re.fullmatch(r"[0-9a-f]{40}", commit), "source commit is not a SHA-1"

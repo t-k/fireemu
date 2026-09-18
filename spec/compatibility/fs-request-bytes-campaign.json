@@ -37,7 +37,7 @@
     "maxDeletes": 51,
     "maxDistinctResources": 51,
     "maxDocuments": 51,
-    "maxDurationSeconds": 900,
+    "maxDurationSeconds": 1100,
     "maxHttpRequests": 258,
     "maxInFlightRequests": 1,
     "maxPeakLiveDocuments": 17,
@@ -53,9 +53,25 @@
       "onExhaustion": "stop, leave the remaining resources recorded as unresolved, and escalate to the owner; never widen the scope or retry a Commit",
       "reserveDeletes": 51,
       "reserveReads": 102,
-      "reserveSeconds": 300,
+      "reserveSeconds": 500,
       "trigger": "any probe that reaches an observation failure, an uncertain Commit or an interrupted run"
-    }
+    },
+    "schedulingReservation": {
+      "basis": "Computed by calling shared_gate's own charging helpers on this campaign's schedule, so a Gate change that alters the charge fails this artifact's tests rather than the campaign's admission.",
+      "boundaryCommitSeconds": 60.0,
+      "chargedBy": "shared_gate",
+      "enforcement": "smallRequestSeconds is also the per-request timeout for a small read or delete, so a slot cannot outrun its own reservation; the boundary Commits keep the transport deadline, which the Gate's ceiling check requires them to reserve.",
+      "gateWallCapSeconds": 1200,
+      "intervalSeconds": 0.25,
+      "observationCommitSlots": 3,
+      "observationSeconds": 512.25,
+      "observationSmallSlots": 102,
+      "recoverySeconds": 497.25,
+      "recoverySlots": 153,
+      "smallRequestSeconds": 3.0,
+      "totalSeconds": 1009.5
+    },
+    "smallRequestTimeoutSeconds": 3.0
   },
   "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
   "caseIds": [

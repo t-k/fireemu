@@ -13,15 +13,18 @@ supplied artifact independently instead of rebuilding a replacement.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import sys
 from pathlib import Path
 from typing import Any
 
 HERE = Path(__file__).resolve().parent
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
+for _entry in (str(HERE), str(HERE.parent)):
+    if _entry not in sys.path:
+        sys.path.insert(0, _entry)
 
+import shared_gate
 from request_bytes_compiler import (
     CAMPAIGN,
     DOCUMENT_COUNT,
@@ -110,6 +113,20 @@ REFUSAL_EXPECTATION: dict[str, Any] = {
         "ownerAction": "Adjudicate the recorded status, content type and bytes. The primary boundary question stays open and needs a second run once the intermediary is identified.",
     },
 }
+
+#: The shared Gate's own contract, from `shared_gate.create`. It charges every
+#: slot `requestSeconds + intervalSeconds`, refuses an interval below the floor
+#: and refuses a wall above the cap. The campaign's windows have to close under
+#: that arithmetic, so it is computed here rather than assumed compatible.
+GATE_INTERVAL_FLOOR_SECONDS = 0.25
+GATE_WALL_CAP_SECONDS = 1200
+
+#: What one small read or delete may reserve, and time out at. The reservation
+#: is only a plan unless the request is also bounded by it, so this is both.
+#: Three seconds is roughly an order of magnitude over a few-hundred-millisecond
+#: round trip, which is the shape a bound should have.
+SMALL_REQUEST_SECONDS = 3.0
+
 
 #: The fields that make up a refusal shape. A classification claiming the shape
 #: matched must compare every one of them; comparing a subset while saying
@@ -328,7 +345,82 @@ def _cost(accounting: dict[str, int]) -> dict[str, Any]:
     }
 
 
-def _budget(accounting: dict[str, int]) -> dict[str, Any]:
+def gate_charging_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """Shape the compiled schedule the way the shared Gate charges it.
+
+    This is for charging only. The O8 descriptor owns the real allocation; this
+    exists so the published windows are checked against the Gate's own
+    arithmetic instead of a constant copied out of it, which is how the two came
+    to disagree. Every slot carries its own reservation: a 10 MiB upload and a
+    small cleanup read cannot share one honest bound.
+    """
+    entries = []
+    for slot in plan["executionSchedule"]:
+        operation = plan[slot["phase"]][slot["index"]]
+        carries_body = operation.get("body") is not None
+        entries.append(
+            {
+                "phase": slot["phase"],
+                "index": slot["index"],
+                "seconds": TRANSPORT_TIMEOUT_SECONDS
+                if carries_body
+                else SMALL_REQUEST_SECONDS,
+                # Only the Commit can create a document; a read or a
+                # version-bound delete cannot.
+                "creates": carries_body,
+            }
+        )
+    return {
+        "intervalSeconds": GATE_INTERVAL_FLOOR_SECONDS,
+        "transportCeilingSeconds": TRANSPORT_TIMEOUT_SECONDS,
+        "requestSeconds": SMALL_REQUEST_SECONDS,
+        "jobs": {
+            "request-bytes": {
+                "observation": plan["observation"],
+                "recovery": plan["recovery"],
+                "schedule": entries,
+                "resources": list(plan["ownedResources"]),
+            }
+        },
+    }
+
+
+def _scheduling_reservation(plan: dict[str, Any]) -> dict[str, Any]:
+    """Close the wall-clock arithmetic using the Gate's own charging helpers.
+
+    The figures below are what `shared_gate` will charge, computed by calling
+    it, not an independent derivation that happens to agree today.
+    """
+    gate = gate_charging_plan(plan)
+    seconds = shared_gate.request_seconds(gate)
+    job = gate["jobs"]["request-bytes"]
+    if not shared_gate._valid_schedule(job):
+        raise AssertionError("the charging schedule is not one the Gate accepts")
+    if not shared_gate._ceiling_honoured(gate, seconds):
+        raise AssertionError("a slot carrying a body reserves less than the ceiling")
+    observation_seconds = shared_gate._observation_time(gate, seconds)
+    recovery_seconds = shared_gate._recovery_time(gate, seconds)
+    schedule = job["schedule"]
+    commit_slots = sum(1 for entry in schedule if entry["creates"])
+    recovery_slots = sum(1 for entry in schedule if entry["phase"] == "recovery")
+    return {
+        "chargedBy": "shared_gate",
+        "intervalSeconds": gate["intervalSeconds"],
+        "smallRequestSeconds": SMALL_REQUEST_SECONDS,
+        "boundaryCommitSeconds": TRANSPORT_TIMEOUT_SECONDS,
+        "recoverySlots": recovery_slots,
+        "observationSmallSlots": len(schedule) - recovery_slots - commit_slots,
+        "observationCommitSlots": commit_slots,
+        "recoverySeconds": round(recovery_seconds, 3),
+        "observationSeconds": round(observation_seconds, 3),
+        "totalSeconds": round(recovery_seconds + observation_seconds, 3),
+        "gateWallCapSeconds": GATE_WALL_CAP_SECONDS,
+        "basis": "Computed by calling shared_gate's own charging helpers on this campaign's schedule, so a Gate change that alters the charge fails this artifact's tests rather than the campaign's admission.",
+        "enforcement": "smallRequestSeconds is also the per-request timeout for a small read or delete, so a slot cannot outrun its own reservation; the boundary Commits keep the transport deadline, which the Gate's ceiling check requires them to reserve.",
+    }
+
+
+def _budget(accounting: dict[str, int], plan: dict[str, Any]) -> dict[str, Any]:
     # Permission and reservation are sized by the maximum, never by the
     # forecast. Budgeting the expected outcome would make the campaign unable
     # to pay for the one result it exists to detect.
@@ -351,9 +443,11 @@ def _budget(accounting: dict[str, int]) -> dict[str, Any]:
         "maxRequestBytes": max(REQUEST_TARGETS),
         "maxResponseBytes": 2 * 1024 * 1024,
         "perRequestTimeoutSeconds": TRANSPORT_TIMEOUT_SECONDS,
-        "maxDurationSeconds": 900,
+        "smallRequestTimeoutSeconds": SMALL_REQUEST_SECONDS,
+        "maxDurationSeconds": 1100,
+        "schedulingReservation": _scheduling_reservation(plan),
         "recoveryWindow": {
-            "reserveSeconds": 300,
+            "reserveSeconds": 500,
             "reserveReads": len(REQUEST_TARGETS) * DOCUMENT_COUNT * 2,
             "reserveDeletes": len(REQUEST_TARGETS) * DOCUMENT_COUNT,
             "trigger": "any probe that reaches an observation failure, an uncertain Commit or an interrupted run",
@@ -480,7 +574,7 @@ def compile_request_bytes_campaign(
         "planBounds": plan["bounds"],
         "transportDeadline": TRANSPORT_DEADLINE,
         "cost": _cost(accounting),
-        "budget": _budget(accounting),
+        "budget": _budget(accounting, plan),
         "planDigest": hashlib.sha256(compact_utf8(plan)).hexdigest(),
         "boundSources": [
             "tools/compat-broad/fs-request-bytes-boundary/request_bytes_compiler.py",
@@ -829,6 +923,45 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
             raise ValueError(f"recovery window is missing {key}")
     if window["reserveSeconds"] >= budget.get("maxDurationSeconds", 0):
         raise ValueError("the recovery reserve must fit inside the run duration")
+
+    # The wall-clock arithmetic has to close under the shared Gate's own
+    # formula. This is where the published windows and the runner's reservation
+    # previously drifted: a 300-second reserve admitted at most 1.71 seconds a
+    # recovery slot, which nothing in the artifact said.
+    reservation = budget.get("schedulingReservation")
+    if reservation != _scheduling_reservation(
+        compile_request_bytes_plan(
+            campaign["owner"]["project"],
+            campaign["owner"]["database"],
+            campaign["owner"]["nonce"],
+        )
+    ):
+        raise ValueError("the scheduling reservation drifted from the Gate's charge")
+    if reservation.get("chargedBy") != "shared_gate":
+        raise ValueError("the reservation must be charged by the Gate itself")
+    if reservation["intervalSeconds"] < GATE_INTERVAL_FLOOR_SECONDS:
+        raise ValueError("the interval is below the Gate's floor")
+    if reservation["recoverySlots"] != len(REQUEST_TARGETS) * DOCUMENT_COUNT * 3:
+        raise ValueError("the recovery slot count drifted from the schedule")
+    if window["reserveSeconds"] < reservation["recoverySeconds"]:
+        raise ValueError(
+            "the recovery reserve cannot pay for its own slots at the reserved rate"
+        )
+    if reservation["totalSeconds"] > budget["maxDurationSeconds"]:
+        raise ValueError("the reserved schedule does not fit the published wall")
+    if budget["maxDurationSeconds"] > GATE_WALL_CAP_SECONDS:
+        raise ValueError("the wall exceeds the shared Gate's cap")
+    if (
+        reservation["observationSeconds"]
+        > budget["maxDurationSeconds"] - window["reserveSeconds"]
+    ):
+        raise ValueError("observation does not fit outside the recovery reserve")
+    # A reservation nothing enforces is a wish. The small-request timeout has to
+    # be the reserved figure, and within what the transport will accept.
+    if budget.get("smallRequestTimeoutSeconds") != reservation["smallRequestSeconds"]:
+        raise ValueError("a small slot's timeout must equal its reservation")
+    if budget["smallRequestTimeoutSeconds"] > TRANSPORT_TIMEOUT_SECONDS:
+        raise ValueError("the small-request timeout exceeds the transport ceiling")
     # The reserve exists for the worst legitimate outcome, so it is sized by the
     # maximum. Checking it against the forecast let reserveDeletes 34 stand
     # beside maxDeletes 51.
@@ -855,4 +988,22 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
 
 
 def campaign_digest(campaign: dict[str, Any]) -> str:
-    return hashlib.sha256(compact_utf8(campaign)).hexdigest()
+    """Digest the artifact's value, independent of key order.
+
+    `compact_utf8` preserves insertion order, and must: the compiled Commit
+    bodies are calibrated to exact byte counts that depend on it. The published
+    artifact, though, is written as sorted JSON, so hashing it in insertion
+    order gave one digest for the object this module builds and a different one
+    for the same artifact loaded back from the file. An admission record naming
+    "the campaign digest" was therefore not reproducible by a reader holding the
+    published file. This hashes the value, so both agree.
+    """
+    return hashlib.sha256(
+        json.dumps(
+            campaign,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()

@@ -146,8 +146,11 @@ def test_the_descriptor_is_complete_and_published_budget_bound():
         descriptor.artifact_profile
         == "request-bytes-" + campaign.shadow_record()["runtime"]["sourceCommit"][:9]
     )
-    assert (descriptor.campaign_seconds, descriptor.recovery_seconds) == (900, 300)
-    assert descriptor.window_seconds == 1200
+    assert (descriptor.campaign_seconds, descriptor.recovery_seconds) == (1100, 500)
+    # The permission window is the campaign wall plus its recovery reserve, so
+    # it moved with them. It is not the Gate's wall, which stays at 1100 and
+    # under the Gate's 1200 cap.
+    assert descriptor.window_seconds == 1600
 
 
 def test_the_transport_deadline_is_the_published_one_and_the_enforced_one():
@@ -522,7 +525,7 @@ def test_a_capability_is_issued_against_the_reviewed_worker_source(tmp_path):
         assert capability.binding_digest == (
             request_bytes_remote_transport._WORKER_SHA256
         )
-        assert capability.window_seconds == 1200
+        assert capability.window_seconds == 1600
     finally:
         admission.revoke_production_capability(capability)
 
@@ -700,7 +703,8 @@ def test_an_approval_one_second_short_of_the_minimum_window_is_refused(tmp_path)
     """The carried-over defect: a window sized to the wall budget alone."""
     built = Admission(tmp_path)
     assert campaign.MINIMUM_WINDOW_SECONDS == 1200
-    assert built.descriptor.window_seconds == campaign.MINIMUM_WINDOW_SECONDS
+    assert built.descriptor.window_seconds == 1600
+    assert built.descriptor.window_seconds >= campaign.MINIMUM_WINDOW_SECONDS
     now = time.time()
     short = admission.o8_admission  # the check lives in the shared core
     assert short is not None
@@ -974,30 +978,31 @@ def test_the_gate_reservations_are_owner_declared_and_must_fit(tmp_path):
         campaign.gate_plan(execution, **{**fitting, "upload_seconds": None})
 
 
-def test_a_three_second_recovery_slot_needs_a_wall_the_budget_does_not_publish(
+def test_a_three_second_recovery_slot_now_fits_the_published_wall(
     tmp_path,
 ):
-    """The reservation a production round trip deserves does not fit today.
+    """The reservation a production round trip deserves now fits.
 
-    At 2.0 seconds the recovery phase reserves 344.25 against the 345 the plan
-    declares, so a single slot slower than about 2.005 seconds makes the Gate
-    refuse mid-cleanup, which is the worst place to stop: the run holds no
-    creation proof for what it has not deleted yet. Three seconds is an order of
-    magnitude over a few hundred millisecond round trip, and it needs a wall the
-    published budget does not carry. The deficit is named rather than rounded
-    away, and the budget is the preparation lane's artifact to change.
+    It did not when this test was written: at 2.0 seconds the recovery phase
+    reserved 344.25 against a published 300, so a single slot slower than about
+    2.005 seconds made the Gate refuse mid-cleanup, which is the worst place to
+    stop because the run holds no creation proof for what it has not deleted
+    yet. The preparation lane has since raised the windows to 1100 and 500, so
+    three seconds a slot is admissible. The guard stays: a figure the published
+    wall still cannot carry is refused with its deficit named rather than
+    rounded away.
     """
     built = Admission(tmp_path)
     execution = campaign.execution_plan(built.plan)
     published = campaign.budget_document()["budget"]
-    assert published["maxDurationSeconds"] == 900
-    assert published["recoveryWindow"]["reserveSeconds"] == 300
+    assert published["maxDurationSeconds"] == 1100
+    assert published["recoveryWindow"]["reserveSeconds"] == 500
 
     fitting = campaign.gate_plan(
         execution,
         upload_seconds=60.0,
-        observation_slot_seconds=2.0,
-        recovery_slot_seconds=2.0,
+        observation_slot_seconds=3.0,
+        recovery_slot_seconds=3.0,
     )
     recovery = sum(
         slot["seconds"] + campaign.GATE_INTERVAL_SECONDS
@@ -1005,19 +1010,18 @@ def test_a_three_second_recovery_slot_needs_a_wall_the_budget_does_not_publish(
         for slot in job["schedule"]
         if slot["phase"] == "recovery"
     )
-    # Under a second of slack across the whole cleanup phase.
-    assert fitting["recoverySeconds"] - recovery < 1
-    # The published recovery reserve is already exceeded by the Gate's split.
-    assert fitting["recoverySeconds"] > published["recoveryWindow"]["reserveSeconds"]
+    # Real headroom now, rather than under a second across the whole phase.
+    assert fitting["recoverySeconds"] >= recovery
+    assert fitting["recoverySeconds"] <= published["recoveryWindow"]["reserveSeconds"]
 
-    for observation_slot, expected in ((2.0, "909 s"), (3.0, "1011 s")):
-        with pytest.raises(ValueError, match=f"need {expected} against"):
-            campaign.gate_plan(
-                execution,
-                upload_seconds=60.0,
-                observation_slot_seconds=observation_slot,
-                recovery_slot_seconds=3.0,
-            )
+    # A figure the published wall still cannot carry names its own deficit.
+    with pytest.raises(ValueError, match="need .* against"):
+        campaign.gate_plan(
+            execution,
+            upload_seconds=60.0,
+            observation_slot_seconds=8.0,
+            recovery_slot_seconds=8.0,
+        )
 
 
 def test_both_owner_fields_refuse_every_placeholder_shape(tmp_path):
@@ -1129,7 +1133,7 @@ def test_the_reservation_claim_binds_its_gate(tmp_path):
     assert claim["budget"]["accounts"] == 1
     assert claim["budget"]["costMicrousd"] == 296
     assert claim["nonceDigest"] == digest(built.plan["nonce"])
-    assert claim["durationSeconds"] == 900
+    assert claim["durationSeconds"] == 1100
     assert any(lock["mode"] == "WRITE" for lock in claim["locks"])
 
 

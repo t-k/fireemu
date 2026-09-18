@@ -1,6 +1,6 @@
 {
-  "artifactSha256": "52f7900b7164b0f0370f7ddefb433881723e6dc2316d51eedcf87b0847444bbf",
-  "campaignDigest": "8f3ba1664f81ce4898d4a107d00d728586faf62e67ba79b5cf58e389c6df7b7b",
+  "artifactSha256": "7a27efba6cd48ee3c695262a9fd1e90660848e835c96dee3a1f98a2bb975efcc",
+  "campaignDigest": "5878fc717e9916380a116cb0395a187ebd6031647966b3514ba5c59822171af1",
   "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
   "cases": [
     {
@@ -35,7 +35,7 @@
   "database": "(default)",
   "formalCompatibilityClaim": false,
   "kind": "fs-request-bytes-local-shadow-v1",
-  "nonce": "8da43475734e408891852846e3f5157e",
+  "nonce": "f07af91197ff41428def0a3ca0a7352d",
   "note": "Owned local artifact shadow. No production request was sent, no credential was used and no parent group is promoted. The raw REST body byte count remains an observation hypothesis about production's enforcement metric.",
   "observation": {
     "canonicalRequestBytesMeasuredLocally": true,
@@ -50,14 +50,10 @@
       "errorStatus": "INVALID_ARGUMENT",
       "httpStatus": 400,
       "message": "Request payload size exceeds the limit: 10485760 bytes.",
-      "messageBytes": 55,
-      "messageSha256": "8ad4dbbdf050f2000236eb21eb5ad1c4c022b4684da152e97f6d1b762cff885a",
-      "messageTruncated": false,
-      "responseBodyFile": "response-189.body",
       "responseBytes": 118,
       "responseSha256": "293bf2902042c662ca5f65c932f4fafcd9596dac70ace5460ccc5e5f015b68b9"
     },
-    "planDigest": "882d60fcf3ec7490c8963bb21bd5a2e6dca4a6b53e09ff1fdc86cad88fb3b27e",
+    "planDigest": "0a67b8c49e2445b98e0a74b42b2a9c438757dc91057a5b7fb225ce066ab51c20",
     "productionExecuted": false,
     "rawHttpMetricStatus": "observation hypothesis",
     "recoveryRowCount": 153,
@@ -65,7 +61,7 @@
     "resourceAbsence": true,
     "rowCount": 105
   },
-  "planDigest": "882d60fcf3ec7490c8963bb21bd5a2e6dca4a6b53e09ff1fdc86cad88fb3b27e",
+  "planDigest": "0a67b8c49e2445b98e0a74b42b2a9c438757dc91057a5b7fb225ce066ab51c20",
   "probeOutcomes": [
     {
       "complete": true,
@@ -77,7 +73,7 @@
       "requestBytes": 10485759,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "f7c8c8b1298729cdf3bd397f0dee3dbc41758fe6eb7c6b388cc9b451d713e656"
+      "responseSha256": "bc6869d7ee97921eac6affbdb5700ba8174ef002e072640ec9670a7bd2ceba4d"
     },
     {
       "complete": true,
@@ -89,7 +85,7 @@
       "requestBytes": 10485760,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "0e1335bfc3a191190f985e7e918016a9a3208e6c890cc531d203e0aba759e7f5"
+      "responseSha256": "bbccb00a7d84bcfbb43aad0d83cc32ed14fcfebeef87075ef7383125e16544b1"
     },
     {
       "complete": true,
@@ -109,11 +105,11 @@
   "rawHttpMetricStatus": "observation hypothesis",
   "recordingComplete": true,
   "runtime": {
-    "artifactSha256": "52f7900b7164b0f0370f7ddefb433881723e6dc2316d51eedcf87b0847444bbf",
+    "artifactSha256": "7a27efba6cd48ee3c695262a9fd1e90660848e835c96dee3a1f98a2bb975efcc",
     "runtimeInputCount": 410,
     "runtimeInputsClean": true,
     "runtimeInputsDigest": "07877b1210828d13e1977d4a979cdef3e8041f847b93ef15bcf25a7344b983a1",
-    "sourceCommit": "20aa61fe552a8d73121d10185bd0f4be58ead8e6",
+    "sourceCommit": "f9bbff4721dd634b10873c02181e39958d59200d",
     "sourceRoot": "repository-root"
   },
   "shadow": {
@@ -144,10 +140,6 @@
       "errorStatus": "INVALID_ARGUMENT",
       "httpStatus": 400,
       "message": "Request payload size exceeds the limit: 10485760 bytes.",
-      "messageBytes": 55,
-      "messageSha256": "8ad4dbbdf050f2000236eb21eb5ad1c4c022b4684da152e97f6d1b762cff885a",
-      "messageTruncated": false,
-      "responseBodyFile": "response-189.body",
       "responseBytes": 118,
       "responseSha256": "293bf2902042c662ca5f65c932f4fafcd9596dac70ace5460ccc5e5f015b68b9"
     },
@@ -162,19 +154,19 @@
     "classes": {
       "boundaryCommit": {
         "count": 3,
-        "maxSeconds": 0.028985,
-        "medianSeconds": 0.026704,
-        "p95Seconds": 0.028985,
-        "p99Seconds": 0.028985,
-        "totalSeconds": 0.058228
+        "maxSeconds": 0.032903,
+        "medianSeconds": 0.027388,
+        "p95Seconds": 0.032903,
+        "p99Seconds": 0.032903,
+        "totalSeconds": 0.062629
       },
       "smallRequest": {
         "count": 238,
-        "maxSeconds": 0.013099,
-        "medianSeconds": 0.001145,
-        "p95Seconds": 0.011912,
-        "p99Seconds": 0.012521,
-        "totalSeconds": 0.944726
+        "maxSeconds": 0.015044,
+        "medianSeconds": 0.001293,
+        "p95Seconds": 0.014023,
+        "p99Seconds": 0.014598,
+        "totalSeconds": 1.024542
       }
     },
     "disclaimer": "Loopback service time against an owned local emulator on the same machine. It excludes the network round trip, TLS and production server time, so it is a floor for a production per-slot figure and never an estimate of one. A production reservation needs a production measurement; the production transport now records elapsed time per request so one can be taken.",
@@ -182,8 +174,8 @@
     "isProductionEstimate": false,
     "measurement": "loopback-floor"
   },
-  "sourceDigestAfter": "ab49e09bb7dd45f3ca126cec7e7c470be37d0a5f1f914b87c4ad53f60082c758",
-  "sourceDigestBefore": "ab49e09bb7dd45f3ca126cec7e7c470be37d0a5f1f914b87c4ad53f60082c758",
+  "sourceDigestAfter": "28a8b4c22315da08e82fe6234b742a8b593096c644096da7af38bcad8ed333bc",
+  "sourceDigestBefore": "28a8b4c22315da08e82fe6234b742a8b593096c644096da7af38bcad8ed333bc",
   "stateValidation": true,
   "target": "owned-local-artifact"
 }

@@ -308,3 +308,85 @@ def test_cleanup_is_skipped_when_the_ownership_read_does_not_return_our_document
     assert "cleanup-root-delete" not in kinds
     assert result["cleanup"]["rows"][1]["skipReason"] == "no-current-run-ownership"
     assert result["cleanup"]["rows"][2]["skipReason"] == "no-current-run-ownership"
+
+
+def test_the_reconstruction_ranges_are_verified_against_the_baseline(tmp_path) -> None:
+    value = plan()
+    result = collect_local(value, Transport(value, partitions=1), tmp_path / "out")
+    assert result["reconstruction"]["checked"] is True
+    assert result["reconstruction"]["matches"] is True
+    assert result["reconstruction"]["ranges"] == 2
+    assert result["reconstruction"]["documents"] == 12
+
+
+def test_a_single_range_still_reconstructs_the_whole_baseline(tmp_path) -> None:
+    result, _ = run(tmp_path / "out")
+    assert result["reconstruction"] == {
+        "checked": True,
+        "matches": True,
+        "ranges": 1,
+        "documents": 12,
+        "reason": None,
+    }
+
+
+def test_ranges_that_do_not_rebuild_the_baseline_fail_the_run(tmp_path) -> None:
+    value = plan()
+
+    class Truncated(Transport):
+        def _body(self, request: dict) -> tuple[int, dict]:
+            status, body = super()._body(request)
+            if request["kind"] == "partition-reconstruction-range-0":
+                body = body[:2]
+            return status, body
+
+    result = collect_local(value, Truncated(value), tmp_path / "out")
+    assert result["reconstruction"]["matches"] is False
+    assert result["status"] == "incomplete"
+
+
+def test_no_dispatched_range_leaves_the_reconstruction_unchecked(tmp_path) -> None:
+    value = plan()
+    result = collect_local(value, Transport(value, partitions=3), tmp_path / "out")
+    assert result["reconstruction"]["checked"] is False
+    assert result["reconstruction"]["reason"] == "no-dispatched-range"
+    assert result["status"] == "incomplete"
+
+
+def test_a_404_ownership_read_does_not_authorize_the_deletes(tmp_path) -> None:
+    value = plan()
+
+    class Vanished(Transport):
+        def _body(self, request: dict) -> tuple[int, dict]:
+            if request["kind"] == "cleanup-ownership-read":
+                return 404, {"error": {"status": "NOT_FOUND", "code": 404}}
+            return super()._body(request)
+
+    transport = Vanished(value)
+    result = collect_local(value, transport, tmp_path / "out")
+    kinds = [request["kind"] for request in transport.sent]
+    assert "cleanup-seed-delete" not in kinds
+    assert "cleanup-root-delete" not in kinds
+    assert result["cleanup"]["rows"][1]["skipReason"] == "no-current-run-ownership"
+
+
+def test_an_unreadable_sidecar_still_publishes_the_receipt(tmp_path) -> None:
+    import os
+
+    directory = tmp_path / "out"
+    value = plan()
+
+    class Removing(Transport):
+        def __call__(self, request: dict) -> dict:
+            receipt = super().__call__(request)
+            target = directory / "raw" / "observation-00.raw"
+            if len(self.sent) > 3 and target.exists():
+                os.chmod(target, 0o000)
+                target.unlink()
+            return receipt
+
+    result = collect_local(value, Removing(value), directory)
+    assert (directory / "collection.json").is_file()
+    assert result["raw"]["complete"] is False
+    assert result["status"] == "incomplete"
+    assert json.loads((directory / "collection.json").read_bytes()) == result

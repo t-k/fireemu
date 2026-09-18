@@ -348,3 +348,24 @@ def test_compiled_plan_is_not_mutated_by_callers_of_a_copy() -> None:
     value["observation"][0]["expect"]["status"] = 500
     assert snapshot != value
     validate_plan(snapshot)
+
+
+def test_the_too_many_values_cursor_exceeds_the_normalized_order_length() -> None:
+    """Firestore appends __name__, so only a third value exceeds one order clause."""
+    by_kind = {operation["kind"]: operation for operation in plan()["observation"]}
+    query = by_kind["cursor-too-many-values"]["body"]["structuredQuery"]
+    values = query["startAt"]["values"]
+    assert len(query["orderBy"]) == 1
+    assert len(values) == 3
+    assert values[0] == {"integerValue": "3"}
+    assert "referenceValue" in values[1], "the __name__ position stays type correct"
+    assert values[1]["referenceValue"].endswith("/cur/c3")
+    assert values[2] == {"integerValue": "9"}
+
+
+def test_the_value_type_case_stays_distinct_from_the_cardinality_case() -> None:
+    by_kind = {operation["kind"]: operation for operation in plan()["observation"]}
+    mismatch = by_kind["cursor-reference-type-mismatch"]["body"]["structuredQuery"]
+    assert mismatch["orderBy"][0]["field"]["fieldPath"] == "__name__"
+    assert len(mismatch["startAt"]["values"]) == 1
+    assert mismatch["startAt"]["values"][0] == {"stringValue": "c3"}

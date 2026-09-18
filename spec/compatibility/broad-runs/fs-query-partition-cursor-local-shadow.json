@@ -1,0 +1,52 @@
+{
+ "artifact": {
+  "byteCount": 67942696,
+  "path": "target/debug/fireemu",
+  "reproducible": false,
+  "sha256": "5523cde837b3b0c02e873d1400101e41ffd046003eace990fadeb2c9ae0244f1",
+  "sourceCommit": "d4d92c5be06d9f7a1c54004fcf30c5d6c25ab2f4",
+  "sourceTreeClean": true
+ },
+ "campaignId": "FS-QUERY-PARTITION-CURSOR-04",
+ "differences": [
+  {
+   "kind": "cursor-reference-type-mismatch",
+   "reason": "mismatch",
+   "ticket": "O4-REPAIR-002"
+  },
+  {
+   "kind": "cursor-foreign-reference",
+   "reason": "mismatch",
+   "ticket": "O4-REPAIR-003"
+  }
+ ],
+ "kind": "fs-query-partition-cursor-local-shadow-v1",
+ "productionExecuted": false,
+ "promotionReady": false,
+ "run": {
+  "bundleStatus": "incomplete",
+  "cleanupComplete": true,
+  "observationRows": 31,
+  "ownedProcess": {
+   "listenersClosed": true,
+   "pid": 12323,
+   "stopped": true
+  },
+  "parentStatus": "pass",
+  "publicationComplete": true,
+  "rawBindings": 37,
+  "rawComplete": true,
+  "reconstruction": {
+   "checked": true,
+   "documents": 12,
+   "matches": true,
+   "ranges": 2,
+   "reason": null
+  },
+  "recoveryRows": 6,
+  "residualDocuments": 0,
+  "validation": "DIFFERENT_KNOWN"
+ },
+ "schemaVersion": 1,
+ "target": "owned-local-artifact"
+}

@@ -70,7 +70,10 @@ def _publish(directory_fd: int, filename: str, value: Any) -> None:
 
 def _publish_bytes(directory_fd: int, filename: str, payload: bytes) -> None:
     handle = os.open(
-        filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400, dir_fd=directory_fd
+        filename,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o400,
+        dir_fd=directory_fd,
     )
     try:
         os.write(handle, payload)
@@ -330,9 +333,12 @@ def _bind_recovery(
         (row for row in cleanup if row["kind"] == "cleanup-ownership-read"),
         {"status": None},
     )
-    if created["status"] != "pass" or ownership["status"] != "pass":
-        # Only a creation this run made, still readable as ours, authorizes a
-        # delete. The recorded version precondition is the second guard.
+    readable = (ownership.get("receipt") or {}).get("status") == 200
+    if created["status"] != "pass" or ownership["status"] != "pass" or not readable:
+        # Only a creation this run made, still readable as ours right now,
+        # authorizes a delete. A 404 ownership read satisfies the plan's
+        # expectation but proves no ownership, so it must not authorize one.
+        # The recorded version precondition is the second guard.
         return None, "no-current-run-ownership", None
     request = _request("recovery", index, operation)
     if operation["kind"] == "cleanup-seed-delete":
@@ -390,15 +396,56 @@ def _retain_raw(
     }
 
 
-def _verify_raw(directory: Path, bindings: list[dict[str, Any]]) -> bool:
+def _verify_raw(raw_fd: int, bindings: list[dict[str, Any]]) -> bool:
+    """Re-read every sidecar through the retained directory fd, never by path."""
     for binding in bindings:
-        payload = (directory / "raw" / binding["path"]).read_bytes()
+        handle = os.open(binding["path"], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=raw_fd)
+        try:
+            payload = b""
+            while chunk := os.read(handle, 65536):
+                payload += chunk
+        finally:
+            os.close(handle)
         if (
             len(payload) != binding["byteCount"]
             or hashlib.sha256(payload).hexdigest() != binding["sha256"]
         ):
             return False
     return True
+
+
+def _reconstruction(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Prove the partition ranges rebuild the baseline query, in order.
+
+    A range set that merely returns documents proves nothing; the campaign's
+    claim is that concatenating the ranges reproduces the unpartitioned result.
+    """
+    baseline = next(
+        (row for row in rows if row["kind"] == "baseline-group-name-order"), None
+    )
+    slots = [row for row in rows if row["kind"].startswith("partition-reconstruction")]
+    if baseline is None or baseline["status"] != "pass" or not slots:
+        return {"checked": False, "reason": "no-baseline", "matches": None}
+    dispatched = [row for row in slots if row["status"] != "skipped"]
+    if not dispatched or any(row["status"] == "failed" for row in dispatched):
+        return {"checked": False, "reason": "no-dispatched-range", "matches": None}
+    expected = _documents((baseline["receipt"] or {}).get("body"))
+    joined: list[dict[str, Any]] = []
+    for row in dispatched:
+        found = _documents((row["receipt"] or {}).get("body"))
+        if found is None:
+            return {"checked": False, "reason": "malformed-range", "matches": None}
+        joined.extend(found)
+    if expected is None:
+        return {"checked": False, "reason": "malformed-baseline", "matches": None}
+    names = [document.get("name") for document in joined]
+    return {
+        "checked": True,
+        "matches": names == [document.get("name") for document in expected],
+        "ranges": len(dispatched),
+        "documents": len(names),
+        "reason": None,
+    }
 
 
 def collect_local(
@@ -435,7 +482,7 @@ def collect_local(
         _run_recovery(
             plan, transmit, rows, cleanup, raw_fd, bindings, publication, directory_fd
         )
-        result = _result(plan, origin, rows, cleanup, bindings, publication, directory)
+        result = _result(plan, origin, rows, cleanup, bindings, publication, raw_fd)
         try:
             _publish(raw_fd, "manifest.json", {"bindings": bindings})
         except Exception as error:
@@ -443,9 +490,7 @@ def collect_local(
             publication["failures"].append(
                 {"file": "raw/manifest.json", "error": type(error).__name__}
             )
-            result = _result(
-                plan, origin, rows, cleanup, bindings, publication, directory
-            )
+            result = _result(plan, origin, rows, cleanup, bindings, publication, raw_fd)
         try:
             _publish(directory_fd, "collection.json", result)
         except Exception as error:
@@ -568,16 +613,22 @@ def _result(
     cleanup: list[dict[str, Any]],
     bindings: list[dict[str, Any]],
     publication: dict[str, Any],
-    directory: Path,
+    raw_fd: int,
 ) -> dict[str, Any]:
     dispatched = [row for row in rows + cleanup if row["status"] != "skipped"]
+    verified = False
+    try:
+        verified = bool(dispatched) and _verify_raw(raw_fd, bindings)
+    except Exception as error:
+        # An unreadable sidecar must not stop the receipt from being published.
+        publication["failures"].append({"file": "raw", "error": type(error).__name__})
     raw_complete = (
-        bool(dispatched)
+        verified
         and len(bindings) == len(dispatched)
         and all(row["raw"]["present"] for row in dispatched)
-        and _verify_raw(directory, bindings)
     )
     cleanup_complete = all(row["status"] == "pass" for row in cleanup)
+    reconstruction = _reconstruction(rows)
     healthy = (
         all(
             row["status"] == "pass"
@@ -587,6 +638,7 @@ def _result(
         and cleanup_complete
         and raw_complete
         and publication["complete"]
+        and reconstruction["matches"] is True
     )
     return {
         "schemaVersion": 1,
@@ -605,5 +657,6 @@ def _result(
         "rows": copy.deepcopy(rows),
         "cleanup": {"complete": cleanup_complete, "rows": copy.deepcopy(cleanup)},
         "raw": {"complete": raw_complete, "bindings": len(bindings)},
+        "reconstruction": reconstruction,
         "publication": copy.deepcopy(publication),
     }

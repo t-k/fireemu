@@ -29,10 +29,21 @@
   ],
   "indexFile": "conformance/firestore.indexes.json",
   "indexFileChangeRequired": false,
+  "minimalPermissions": [
+   "datastore.entities.create",
+   "datastore.entities.get",
+   "datastore.entities.list",
+   "datastore.entities.delete"
+  ],
   "notes": [
    "Partition queries order by __name__ only, which needs no index.",
    "Cursor cases use single-field orders at collection scope, which automatic single-field indexes already cover.",
    "The nonce-unique collection group must have no field override, exemption or time-to-live policy."
+  ],
+  "permissionNotes": [
+   "Every compiled operation is a data-plane read, write or delete on the owned documents; none reads or changes configuration, indexes, Rules or backups.",
+   "datastore.entities.list covers RunQuery and PartitionQuery, which need database-wide read because PartitionQuery takes a database parent.",
+   "roles/datastore.user is the smallest predefined role that grants these; a custom role limited to the four permissions is smaller and sufficient."
   ],
   "requiredCompositeIndexes": []
  },
@@ -2120,7 +2131,10 @@
          "integerValue": "3"
         },
         {
-         "stringValue": "extra"
+         "referenceValue": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3"
+        },
+        {
+         "integerValue": "9"
         }
        ]
       }
@@ -2463,7 +2477,7 @@
   ],
   "ownedScope": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
   "ownership": "conditional-create-plus-exact-fields",
-  "planDigest": "496fbb0ad7661a8395b83669b97fdb831a2c24cf792d979d37d6907e69fb06b7",
+  "planDigest": "86f02972b2a1668b09d660f9c8595fb6994879e283609207bc2cd6d301c8fbbd",
   "productionExecuted": false,
   "productionReady": false,
   "project": "template-project",
@@ -2754,12 +2768,12 @@
  "productionReady": false,
  "schemaVersion": 1,
  "sourceInputs": {
-  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_case.py": "d363a95b2051ee8c3f17d584280e39f382a8f38a53676ad15942b8d2fac7ba63",
-  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_collector.py": "5ea731f183bba36a69d4b09848b633996dca35cc72b60606a453be9f808f7f2c",
-  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_comparator.py": "c19451cd710a190b7040ca919d89594786279553543e85d6e31c6459979ebecb",
-  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_manifest.py": "21164acbfa24da2347eee2469a75669c369005f561e0aa4e3bad846d9d6c96c3",
-  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_offline_fixture.py": "a50741dfec8cb418a5c66fd2accd79280e7e0ffa36b647b6d9e29d2b139cbbaa",
-  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_shadow.py": "13ad6ea2320bc56aecf3a969d9cb960de4c60ea8aa415be4fdb61002b991f7bc"
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_case.py": "4f2dee90a4fbabcff4370baa972b014425aee524c0aaf5aca176e45e133907bc",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_collector.py": "d75e059a06922560ac874cbc620f3829f627f9aa519e76d677ab7bbba1b0360e",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_comparator.py": "6dab93bc33d2928e55a87d3bfa2011a285359d2fee54c923a7d7182385ebb128",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_manifest.py": "b157d11eb6ce86f809c651267ff5130f9234afcbd6a5433612f704ade2f18500",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_offline_fixture.py": "b015e95a172fafcaeef548a7e5b57a0c5b2ac8d8d697ca6b5612bff5132a5729",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_shadow.py": "87d13cf707a00a813cbacd1e0e77db246d23695dd321349345f88e20a2fa460e"
  },
  "status": "PREPARATION_ONLY",
  "unresolved": [

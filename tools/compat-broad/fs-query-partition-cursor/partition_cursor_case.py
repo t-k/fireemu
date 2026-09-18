@@ -2,9 +2,10 @@
 
 This module compiles a fixed observation plan. It opens no socket, reads no
 credential, mutates no index or Rules, and claims no production compatibility.
-Every wire operation stays inside one nonce-scoped owned document tree, except
-one explicitly marked database-wide PartitionQuery control that asserts only a
-typed acceptance or refusal and never asserts a document set.
+Every owned document lives in one nonce-scoped tree. Production requires a
+database parent for PartitionQuery, so the partition operations and the
+collection-group readbacks address the database and are kept owned by a
+nonce-unique collection group whose only members are this run's own documents.
 """
 
 from __future__ import annotations
@@ -493,9 +494,14 @@ def _cursor_operations(
         descending,
         refusal(
             "cursor-too-many-values",
+            # Firestore normalizes a single explicit order into [n, __name__],
+            # so two values would still fit. The first two values are type
+            # correct for those positions and only the third exceeds the
+            # normalized order length, which isolates the cardinality rule from
+            # the cursor value-type rule covered by the next case.
             _cursor_query(
                 startAt={
-                    "values": [_integer(3), {"stringValue": "extra"}],
+                    "values": [_integer(3), reference, _integer(9)],
                     "before": True,
                 }
             ),
@@ -586,7 +592,7 @@ def _recovery_operations(
 
 
 def compile_plan(project: str, database: str, nonce: str) -> dict[str, Any]:
-    """Compile exactly thirty observation and six recovery operations."""
+    """Compile exactly thirty-one observation and six recovery operations."""
     if not isinstance(project, str) or not _TARGET.fullmatch(project):
         raise ValueError("malformed project")
     if not isinstance(database, str) or (

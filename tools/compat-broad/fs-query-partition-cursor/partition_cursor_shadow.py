@@ -37,7 +37,9 @@ KNOWN_LOCAL_DIFFERENCES = {
     # Observed against the local artifact on 2026-09-18; each entry is an open
     # repair ticket, not an accepted behavior. A repair moves the shadow to
     # MATCHED, which is the regression signal for closing the ticket.
-    "cursor-too-many-values": "O4-REPAIR-001",
+    # O4-REPAIR-001 was withdrawn: once cursor-too-many-values sent three values
+    # against the normalized order length, the runtime refused it correctly, so
+    # the earlier finding was the value-type rule of O4-REPAIR-002 misattributed.
     "cursor-reference-type-mismatch": "O4-REPAIR-002",
     "cursor-foreign-reference": "O4-REPAIR-003",
 }
@@ -113,6 +115,35 @@ def _indeterminate(reason: str) -> dict[str, Any]:
     }
 
 
+def _unretained(bundle: dict[str, Any], cleanup: dict[str, Any]) -> str | None:
+    """Refuse to read any verdict out of a run that retained no wire bytes.
+
+    A dispatched row without a verified raw sidecar, an incomplete publication
+    or a binding count below the dispatched rows means the run cannot support a
+    verdict, however its individual statuses read.
+    """
+    raw, publication = bundle.get("raw"), bundle.get("publication")
+    if not isinstance(raw, dict) or not isinstance(publication, dict):
+        return "unbound-evidence"
+    dispatched = [
+        row
+        for row in bundle["rows"] + cleanup["rows"]
+        if isinstance(row, dict) and row.get("status") != "skipped"
+    ]
+    if not dispatched:
+        return "no-dispatched-row"
+    if raw.get("complete") is not True or publication.get("complete") is not True:
+        return "incomplete-retention"
+    if raw.get("bindings") != len(dispatched):
+        return "raw-bindings-below-dispatched-rows"
+    if any(
+        row.get("receipt") is None or (row.get("raw") or {}).get("present") is not True
+        for row in dispatched
+    ):
+        return "unretained-dispatched-row"
+    return None
+
+
 def _row_difference(row: Any, expected: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(row, dict) or row.get("kind") != expected["kind"]:
         return {**expected, "reason": "unbound-row", "ticket": None}
@@ -152,6 +183,9 @@ def validate_shadow(bundle: Any, plan: dict[str, Any]) -> dict[str, Any]:
         cleanup["rows"]
     ) != len(contract["recovery"]):
         return _indeterminate("row-count-drift")
+    unbound = _unretained(bundle, cleanup)
+    if unbound:
+        return _indeterminate(unbound)
     differences = []
     for row, expected in zip(bundle["rows"], contract["observation"]):
         difference = _row_difference(row, expected)
@@ -171,6 +205,10 @@ def validate_shadow(bundle: Any, plan: dict[str, Any]) -> dict[str, Any]:
                 "ticket": None,
             }
         )
+    if not differences and bundle.get("status") != "pass":
+        # Every row matching with complete retention must also be a passing
+        # bundle; anything else is an unexplained disagreement.
+        return _indeterminate("status-disagrees-with-rows")
     if not differences:
         status = "MATCHED"
     elif all(difference["ticket"] for difference in differences):
@@ -297,6 +335,10 @@ def residual_documents(
     cursor_body = cursor.get("body")
     if cursor.get("status") != 200 or not isinstance(cursor_body, list):
         return None
+    if root.get("status") not in (200, 404):
+        # Absence must be proven by an explicit 404. A failed read is unknown,
+        # never zero, because the whole rehearsal pass criterion rests on this.
+        return None
     return (
         group
         + int(root.get("status") == 200)
@@ -306,6 +348,63 @@ def residual_documents(
             if isinstance(entry, dict) and "document" in entry
         )
     )
+
+
+SHADOW_RECORD = (
+    Path(__file__).resolve().parents[3]
+    / "spec/compatibility/broad-runs/fs-query-partition-cursor-local-shadow.json"
+)
+
+
+def shadow_record(output: Path) -> dict[str, Any]:
+    """Extract the committable record of one shadow run from its retained output.
+
+    The record carries the artifact digest and source commit the run actually
+    executed, so the published claim is reproducible from the run rather than
+    copied into prose.
+    """
+    report = json.loads((output / "manifest.json").read_bytes())
+    summary = json.loads((output / "shadow.json").read_bytes())
+    bundle = json.loads((output / "bundle" / "collection.json").read_bytes())
+    return {
+        "schemaVersion": 1,
+        "kind": "fs-query-partition-cursor-local-shadow-v1",
+        "campaignId": bundle["campaignId"],
+        "productionExecuted": False,
+        "promotionReady": False,
+        "target": bundle["target"],
+        "artifact": report["artifact"],
+        "run": {
+            "parentStatus": report["status"],
+            "bundleStatus": bundle["status"],
+            "validation": summary["validation"]["status"],
+            "cleanupComplete": summary["cleanupComplete"],
+            "residualDocuments": summary["residualDocuments"],
+            "observationRows": len(bundle["rows"]),
+            "recoveryRows": len(bundle["cleanup"]["rows"]),
+            "rawBindings": bundle["raw"]["bindings"],
+            "rawComplete": bundle["raw"]["complete"],
+            "publicationComplete": bundle["publication"]["complete"],
+            "reconstruction": bundle["reconstruction"],
+            "ownedProcess": report["ownedProcess"],
+        },
+        "differences": [
+            {
+                "kind": difference["kind"],
+                "reason": difference["reason"],
+                "ticket": difference["ticket"],
+            }
+            for difference in summary["validation"]["differences"]
+        ],
+    }
+
+
+def write_shadow_record(output: Path) -> Path:
+    """Publish the committable shadow record; rerun after any lane change."""
+    SHADOW_RECORD.write_text(
+        json.dumps(shadow_record(output), indent=1, sort_keys=True) + "\n"
+    )
+    return SHADOW_RECORD
 
 
 def _socket_closed(origin: str) -> bool:
@@ -350,13 +449,18 @@ def _child(output: Path, nonce: str, fail_at: int | None = None) -> int:
         )
     )
     if fail_at is not None:
-        # A rehearsal succeeds when nothing owned is left behind, whatever the
-        # collector managed to record before the injected failure.
+        # A rehearsal succeeds only when the residual scan proved absence. An
+        # unknown residual is a failure, never a pass.
         return 0 if residual == 0 else 1
     accepted = {"MATCHED", "DIFFERENT_KNOWN"}
-    return (
-        0 if validation["status"] in accepted and result["cleanup"]["complete"] else 1
+    healthy = (
+        validation["status"] in accepted
+        and result["cleanup"]["complete"]
+        and result["raw"]["complete"]
+        and result["publication"]["complete"]
+        and residual == 0
     )
+    return 0 if healthy else 1
 
 
 def artifact_binding(binary: Path) -> dict[str, Any]:

@@ -176,3 +176,170 @@ def test_an_artifact_outside_this_worktree_is_refused(tmp_path) -> None:
     foreign.write_bytes(b"not ours")
     with pytest.raises(ValueError):
         artifact_binding(foreign)
+
+
+def test_a_bundle_with_no_retained_wire_bytes_is_never_matched(tmp_path) -> None:
+    """M1 reproduction: the offline fixture retains nothing, so no verdict holds."""
+    value = plan()
+    transport = Transport(value)
+    transport.raw = False
+    collected = collect_local(value, transport, tmp_path / "out")
+    assert collected["raw"] == {"complete": False, "bindings": 0}
+    result = validate_shadow(collected, value)
+    assert result["status"] == "INDETERMINATE"
+    assert result["reason"] == "incomplete-retention"
+
+
+def test_a_binding_count_below_the_dispatched_rows_is_indeterminate(tmp_path) -> None:
+    collected = bundle(tmp_path)
+    collected["raw"]["bindings"] -= 1
+    result = validate_shadow(collected, plan())
+    assert result["status"] == "INDETERMINATE"
+    assert result["reason"] == "raw-bindings-below-dispatched-rows"
+
+
+def test_a_dispatched_row_without_a_sidecar_is_indeterminate(tmp_path) -> None:
+    collected = bundle(tmp_path)
+    next(row for row in collected["rows"] if row["status"] != "skipped")["raw"] = {
+        "present": False,
+        "reason": "no-transport-bytes",
+    }
+    assert validate_shadow(collected, plan())["status"] == "INDETERMINATE"
+
+
+def test_an_incomplete_publication_is_indeterminate(tmp_path) -> None:
+    collected = bundle(tmp_path)
+    collected["publication"]["complete"] = False
+    result = validate_shadow(collected, plan())
+    assert result["status"] == "INDETERMINATE"
+    assert result["reason"] == "incomplete-retention"
+
+
+def test_a_passing_row_set_that_disagrees_with_the_bundle_status_is_indeterminate(
+    tmp_path,
+) -> None:
+    collected = bundle(tmp_path)
+    collected["status"] = "incomplete"
+    result = validate_shadow(collected, plan())
+    assert result["status"] == "INDETERMINATE"
+    assert result["reason"] == "status-disagrees-with-rows"
+
+
+def test_the_residual_scan_refuses_to_read_absence_from_a_failed_root_read() -> None:
+    """M2 reproduction: a 500 on the root read is unknown, never zero."""
+    from partition_cursor_shadow import residual_documents
+
+    value = plan()
+
+    def transmit(request: dict) -> dict:
+        if request["kind"] == "residual-root":
+            return {"status": 500, "body": {"error": {"status": "INTERNAL"}}}
+        return {"status": 200, "body": [{"readTime": "2026-09-18T00:00:00Z"}]}
+
+    assert residual_documents(transmit, value) is None
+
+
+def test_the_residual_scan_counts_a_present_root_and_proves_absence_with_404() -> None:
+    from partition_cursor_shadow import residual_documents
+
+    value = plan()
+
+    def present(request: dict) -> dict:
+        if request["kind"] == "residual-root":
+            return {"status": 200, "body": {"name": value["ownedScope"]}}
+        return {"status": 200, "body": [{"readTime": "2026-09-18T00:00:00Z"}]}
+
+    def absent(request: dict) -> dict:
+        if request["kind"] == "residual-root":
+            return {"status": 404, "body": {"error": {"status": "NOT_FOUND"}}}
+        return {"status": 200, "body": [{"readTime": "2026-09-18T00:00:00Z"}]}
+
+    assert residual_documents(present, value) == 1
+    assert residual_documents(absent, value) == 0
+
+
+def test_a_failed_group_or_cursor_scan_is_also_unknown() -> None:
+    from partition_cursor_shadow import residual_documents
+
+    value = plan()
+
+    def broken(request: dict) -> dict:
+        if request["kind"] == "residual-scan":
+            return {"status": 503, "body": None}
+        return {"status": 200, "body": []}
+
+    assert residual_documents(broken, value) is None
+
+
+def test_the_committed_shadow_record_binds_a_real_artifact_and_commit() -> None:
+    """M3: the published claim lives in the record, not in prose."""
+    import json
+    import re
+    import subprocess
+
+    from partition_cursor_shadow import SHADOW_RECORD
+
+    record = json.loads(SHADOW_RECORD.read_bytes())
+    artifact = record["artifact"]
+    assert re.fullmatch(r"[0-9a-f]{64}", artifact["sha256"])
+    assert re.fullmatch(r"[0-9a-f]{40}", artifact["sourceCommit"])
+    assert artifact["reproducible"] is False
+    assert artifact["sourceTreeClean"] is True
+    assert not artifact["path"].startswith("/")
+    root = SHADOW_RECORD.resolve().parents[2]
+    subprocess.run(
+        ["git", "cat-file", "-e", artifact["sourceCommit"] + "^{commit}"],
+        cwd=root,
+        check=True,
+    )
+
+
+def test_the_committed_shadow_record_agrees_with_the_compiled_plan() -> None:
+    import json
+
+    from partition_cursor_shadow import SHADOW_RECORD
+
+    record = json.loads(SHADOW_RECORD.read_bytes())
+    run = record["run"]
+    assert record["productionExecuted"] is False
+    assert record["promotionReady"] is False
+    assert record["target"] == "owned-local-artifact"
+    assert run["observationRows"] == OBSERVATION_COUNT
+    assert run["recoveryRows"] == RECOVERY_COUNT
+    assert run["rawBindings"] == OBSERVATION_COUNT + RECOVERY_COUNT
+    assert run["rawComplete"] is True
+    assert run["publicationComplete"] is True
+    assert run["cleanupComplete"] is True
+    assert run["residualDocuments"] == 0
+    assert run["reconstruction"]["matches"] is True
+    assert run["ownedProcess"]["stopped"] is True
+    assert run["ownedProcess"]["listenersClosed"] is True
+
+
+def test_the_committed_shadow_record_differences_are_exactly_the_open_tickets() -> None:
+    import json
+
+    from partition_cursor_shadow import SHADOW_RECORD
+
+    record = json.loads(SHADOW_RECORD.read_bytes())
+    assert record["run"]["validation"] == "DIFFERENT_KNOWN"
+    assert {difference["kind"] for difference in record["differences"]} == set(
+        KNOWN_LOCAL_DIFFERENCES
+    )
+    assert {difference["ticket"] for difference in record["differences"]} == set(
+        KNOWN_LOCAL_DIFFERENCES.values()
+    )
+
+
+def test_the_withdrawn_ticket_is_no_longer_claimed_anywhere() -> None:
+    """O4-REPAIR-001 was a misattribution; the corrected case now passes."""
+    import json
+
+    from partition_cursor_shadow import SHADOW_RECORD
+
+    assert "O4-REPAIR-001" not in KNOWN_LOCAL_DIFFERENCES.values()
+    assert "O4-REPAIR-001" not in SHADOW_RECORD.read_text()
+    record = json.loads(SHADOW_RECORD.read_bytes())
+    assert "cursor-too-many-values" not in {
+        difference["kind"] for difference in record["differences"]
+    }

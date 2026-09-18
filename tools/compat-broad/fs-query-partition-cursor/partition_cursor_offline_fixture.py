@@ -58,6 +58,26 @@ class Transport:
             partition_cursor(name) for name in self._seeded()[1 : 1 + self.partitions]
         ]
 
+    def _group_documents(self) -> list[str]:
+        return self._seeded()[:12]
+
+    def _range(self, request: dict) -> list:
+        """Answer a reconstruction range the way a real runtime would: the slice
+        of the ordered collection group that the supplied cursors describe."""
+        query = request["body"]["structuredQuery"]
+        names = self._group_documents()
+        start, end = 0, len(names)
+        begin = query.get("startAt")
+        finish = query.get("endAt")
+        if begin:
+            start = names.index(begin["values"][0]["referenceValue"])
+        if finish:
+            end = names.index(finish["values"][0]["referenceValue"])
+        return [
+            {"document": _document(name, index + start)}
+            for index, name in enumerate(names[start:end])
+        ] or [{"readTime": TIME}]
+
     def _body(self, request: dict) -> tuple[int, dict]:
         kind = request["kind"]
         if kind == "preflight-typed-absence" or kind == "cleanup-verify-root-absence":
@@ -90,6 +110,8 @@ class Transport:
             }
         if kind == "cleanup-root-delete":
             return 200, {}
+        if kind.startswith("partition-reconstruction"):
+            return 200, self._range(request)
         expect = self.plan[request["phase"]][request["index"]]["expect"]
         if expect.get("outcome") == "refused":
             return 400, {"error": {"status": "INVALID_ARGUMENT", "code": 400}}

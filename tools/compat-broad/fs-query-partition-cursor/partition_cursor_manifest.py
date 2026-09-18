@@ -84,6 +84,29 @@ def manifest() -> dict[str, Any]:
             "requiredCompositeIndexes": [],
             "indexFileChangeRequired": False,
             "deliberatelyUnindexed": ["partition-order-non-name"],
+            "minimalPermissions": [
+                "datastore.entities.create",
+                "datastore.entities.get",
+                "datastore.entities.list",
+                "datastore.entities.delete",
+            ],
+            "permissionNotes": [
+                (
+                    "Every compiled operation is a data-plane read, write or "
+                    "delete on the owned documents; none reads or changes "
+                    "configuration, indexes, Rules or backups."
+                ),
+                (
+                    "datastore.entities.list covers RunQuery and PartitionQuery, "
+                    "which need database-wide read because PartitionQuery takes "
+                    "a database parent."
+                ),
+                (
+                    "roles/datastore.user is the smallest predefined role that "
+                    "grants these; a custom role limited to the four "
+                    "permissions is smaller and sufficient."
+                ),
+            ],
             "notes": [
                 "Partition queries order by __name__ only, which needs no index.",
                 (

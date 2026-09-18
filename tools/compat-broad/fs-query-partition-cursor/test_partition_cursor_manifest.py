@@ -144,3 +144,18 @@ def test_the_checked_in_preparation_record_matches_the_current_lane() -> None:
 
     assert EVIDENCE.is_file(), "run partition_cursor_manifest.write_evidence()"
     assert json.loads(EVIDENCE.read_bytes()) == json.loads(json.dumps(manifest()))
+
+
+def test_the_owner_preconditions_name_a_minimal_permission_set() -> None:
+    preconditions = manifest()["ownerPreconditions"]
+    assert preconditions["minimalPermissions"] == [
+        "datastore.entities.create",
+        "datastore.entities.get",
+        "datastore.entities.list",
+        "datastore.entities.delete",
+    ]
+    assert not any(
+        permission.startswith(("datastore.indexes", "datastore.databases"))
+        for permission in preconditions["minimalPermissions"]
+    )
+    assert preconditions["permissionNotes"]

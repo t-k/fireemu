@@ -60,6 +60,7 @@ def test_the_comparator_never_promotes_or_validates_acquisition(tmp_path) -> Non
 def test_a_production_marked_side_is_reported_without_promotion(tmp_path) -> None:
     left = bundle(tmp_path, "a")
     left["productionExecuted"] = True
+    left["target"] = "production"
     result = compare_evidence(left, bundle(tmp_path, "b"))
     assert result["productionExecuted"] is True
     assert result["promotionReady"] is False
@@ -184,3 +185,53 @@ def test_matching_response_derived_skips_are_equivalent(tmp_path) -> None:
         "no-page-token"
     )
     assert compare_evidence(left, right)["classification"] == "EQUIVALENT"
+
+
+def test_a_side_with_no_retained_bytes_is_indeterminate(tmp_path) -> None:
+    value = plan()
+    transport = Transport(value)
+    transport.raw = False
+    empty = collect_local(value, transport, tmp_path / "empty")
+    result = compare_evidence(bundle(tmp_path, "a"), empty)
+    assert result["classification"] == "INDETERMINATE"
+    assert result["reason"] == "raw-bindings-below-dispatched-rows"
+
+
+def test_a_local_artifact_bundle_may_not_claim_production(tmp_path) -> None:
+    left = bundle(tmp_path, "a")
+    left["productionExecuted"] = True
+    result = compare_evidence(left, bundle(tmp_path, "b"))
+    assert result["classification"] == "INDETERMINATE"
+    assert result["reason"] == "local-artifact-claims-production"
+
+
+def test_retained_bytes_are_rebound_to_each_receipt(tmp_path) -> None:
+    left = bundle(tmp_path, "a")
+    right = bundle(tmp_path, "b")
+    result = compare_evidence(
+        left,
+        right,
+        production_directory=tmp_path / "a",
+        local_directory=tmp_path / "b",
+    )
+    assert result["classification"] == "EQUIVALENT"
+
+
+def test_a_receipt_that_the_retained_bytes_do_not_reproduce_is_indeterminate(
+    tmp_path,
+) -> None:
+    left = bundle(tmp_path, "a")
+    right = copy.deepcopy(left)
+    row_named(right, "cursor-start-at-value")["receipt"]["body"] = []
+    result = compare_evidence(left, right, local_directory=tmp_path / "a")
+    assert result["classification"] == "INDETERMINATE"
+    assert result["reason"] == "retained-bytes-disagree-with-receipt"
+
+
+def test_a_missing_sidecar_file_is_reported_by_the_verifier(tmp_path) -> None:
+    from partition_cursor_comparator import verify_retained_bytes
+
+    left = bundle(tmp_path, "a")
+    (tmp_path / "a" / "raw" / "observation-00.raw").unlink()
+    faults = verify_retained_bytes(left, tmp_path / "a")
+    assert faults == ["observation-0:unreadable"]

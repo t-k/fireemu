@@ -11,6 +11,9 @@ acquisition validated or a promotion ready.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
+from pathlib import Path
 from typing import Any
 
 from partition_cursor_case import CAMPAIGN, compile_plan
@@ -27,6 +30,64 @@ RESPONSE_DERIVED_SKIPS = frozenset(
     }
 )
 _DISPATCHED = frozenset({"pass", "mismatch"})
+
+
+def _retention_fault(bundle: dict[str, Any]) -> str | None:
+    """Refuse a side whose rows are not covered by retained wire bytes."""
+    raw = bundle.get("raw")
+    dispatched = [
+        row
+        for row in bundle["rows"] + bundle["cleanup"]["rows"]
+        if isinstance(row, dict) and row.get("status") != "skipped"
+    ]
+    if not isinstance(raw, dict) or not dispatched:
+        return "unbound-retention"
+    if raw.get("complete") is not True or raw.get("bindings") != len(dispatched):
+        return "raw-bindings-below-dispatched-rows"
+    if any((row.get("raw") or {}).get("present") is not True for row in dispatched):
+        return "unretained-dispatched-row"
+    return None
+
+
+def _production_claim_fault(bundle: dict[str, Any]) -> str | None:
+    """A bundle collected from the local artifact can never claim production."""
+    if (
+        bundle.get("productionExecuted") is True
+        and bundle.get("target") == "owned-local-artifact"
+    ):
+        return "local-artifact-claims-production"
+    return None
+
+
+def verify_retained_bytes(bundle: dict[str, Any], directory: str | Path) -> list[str]:
+    """Re-read each sidecar and bind it to the decoded body it stands for.
+
+    The original response bytes are the comparison authority, so a decoded body
+    that the retained bytes do not reproduce disqualifies its row.
+    """
+    faults = []
+    root = Path(directory) / "raw"
+    for row in bundle["rows"] + bundle["cleanup"]["rows"]:
+        binding = row.get("raw") or {}
+        if row.get("status") == "skipped" or binding.get("present") is not True:
+            continue
+        path = root / str(binding.get("path"))
+        try:
+            payload = path.read_bytes()
+        except OSError:
+            faults.append(f"{row['phase']}-{row['index']}:unreadable")
+            continue
+        if hashlib.sha256(payload).hexdigest() != binding.get("sha256"):
+            faults.append(f"{row['phase']}-{row['index']}:digest")
+            continue
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            faults.append(f"{row['phase']}-{row['index']}:undecodable")
+            continue
+        if decoded != (row.get("receipt") or {}).get("body"):
+            faults.append(f"{row['phase']}-{row['index']}:body-differs-from-bytes")
+    return faults
 
 
 def _plan_for(bundle: Any) -> dict[str, Any] | None:
@@ -146,11 +207,31 @@ def _indeterminate(reason: str) -> dict[str, Any]:
     }
 
 
-def compare_evidence(production: Any, local: Any) -> dict[str, Any]:
-    """Compare two retained bundles; the result is semantic evidence only."""
+def compare_evidence(
+    production: Any,
+    local: Any,
+    *,
+    production_directory: str | Path | None = None,
+    local_directory: str | Path | None = None,
+) -> dict[str, Any]:
+    """Compare two retained bundles; the result is semantic evidence only.
+
+    When a retained directory is supplied for a side, every dispatched row is
+    re-bound to its sidecar bytes before any row is compared.
+    """
     production_plan, local_plan = _plan_for(production), _plan_for(local)
     if production_plan is None or local_plan is None:
         return _indeterminate("unbound-bundle")
+    for side in (production, local):
+        fault = _retention_fault(side) or _production_claim_fault(side)
+        if fault:
+            return _indeterminate(fault)
+    for side, directory in (
+        (production, production_directory),
+        (local, local_directory),
+    ):
+        if directory is not None and verify_retained_bytes(side, directory):
+            return _indeterminate("retained-bytes-disagree-with-receipt")
     executed = any(
         side.get("productionExecuted") is True for side in (production, local)
     )

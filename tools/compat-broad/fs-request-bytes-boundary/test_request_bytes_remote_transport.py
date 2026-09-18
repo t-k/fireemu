@@ -22,6 +22,7 @@ from request_bytes_remote_transport import (
     ORIGIN,
     RESPONSE_BYTES,
     TIMEOUT,
+    _dispatch,
     _request_impl,
 )
 from request_bytes_remote_transport import (
@@ -782,7 +783,12 @@ def test_a_transport_failure_is_timed_too():
 
 
 def test_timing_does_not_change_a_refusal_or_the_deadline(monkeypatch):
-    """The wrapper must be additive: same receipt, one extra key."""
+    """The wrapper must be additive.
+
+    Compared against the untimed dispatch path through the same exchange, not
+    against a stripped copy of itself: the timed receipt minus its one new key
+    has to equal what the transport produced before the wrapper existed.
+    """
     plan, operation = plan_and_commit()
     body = json.dumps(
         {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}, separators=(",", ":")
@@ -792,15 +798,16 @@ def test_timing_does_not_change_a_refusal_or_the_deadline(monkeypatch):
         return 400, "application/json", body, None
 
     monkeypatch.setattr("request_bytes_remote_transport._run_process_exchange", process)
-    receipt = request(plan, "observation", 17, operation, "secret-test-credential")
-    assert receipt["status"] == 400
-    assert receipt["complete"] is True
-    assert json.loads(base64.b64decode(receipt["rawBodyBase64"])) == json.loads(body)
-    assert receipt["elapsedSeconds"] >= 0
-    # Everything except the new key is what the transport produced before.
-    without_timing = {k: v for k, v in receipt.items() if k != "elapsedSeconds"}
-    assert "elapsedSeconds" not in without_timing
-    assert set(receipt) - set(without_timing) == {"elapsedSeconds"}
+    timed = request(plan, "observation", 17, operation, "secret-test-credential")
+    untimed = _dispatch(
+        plan, "observation", 17, operation, "secret-test-credential", exchange=None
+    )
+    assert timed["status"] == 400
+    assert timed["complete"] is True
+    assert json.loads(base64.b64decode(timed["rawBodyBase64"])) == json.loads(body)
+    assert timed["elapsedSeconds"] >= 0
+    assert "elapsedSeconds" not in untimed
+    assert {k: v for k, v in timed.items() if k != "elapsedSeconds"} == untimed
 
 
 def test_a_real_loopback_request_is_timed_end_to_end(loopback_server, monkeypatch):

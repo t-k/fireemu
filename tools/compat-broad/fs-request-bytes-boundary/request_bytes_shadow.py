@@ -675,6 +675,12 @@ def _child(output: Path, nonce: str) -> None:
     artifact = output / "fireemu"
     if artifact.exists():
         cases = json.loads((output / "cases.json").read_bytes())["cases"]
+        probes = probe_outcomes(output / "collection", plan)
+        timings = slot_timings(output / "collection")
+        # Validated here, before the record is written, for the same reason the
+        # plan and the campaign are: a record that cannot be validated must not
+        # reach the tree in the first place.
+        validate_slot_timings(timings, result["requestCount"])
         document = build_shadow_document(
             before=observation_source_digest(),
             after=observation_source_digest(),
@@ -682,8 +688,8 @@ def _child(output: Path, nonce: str) -> None:
             nonce=nonce,
             plan_digest=result["planDigest"],
             campaign_digest_value=campaign_digest(campaign),
-            probes=probe_outcomes(output / "collection", plan),
-            timings=slot_timings(output / "collection"),
+            probes=probes,
+            timings=timings,
             collector=result,
             shadow=shadow,
             gates=gates,

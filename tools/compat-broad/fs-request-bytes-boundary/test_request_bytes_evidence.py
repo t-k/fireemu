@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -164,8 +166,50 @@ def test_the_published_record_describes_this_worktree_rust_source():
     )
     assert value["runtime"]["runtimeInputsClean"] is True
     assert value["runtime"]["artifactSha256"] == value["artifactSha256"]
-    assert len(value["runtime"]["sourceCommit"]) == 40
     assert value["runtime"]["sourceRoot"] == shadow_module.REPOSITORY_ROOT_MARKER
+
+
+def test_the_recorded_source_commit_is_a_real_commit_in_this_repository():
+    """A length check accepted any 40 characters, including invented ones.
+
+    The recorded commit has to exist here and be an ancestor of, or equal to,
+    what the evidence test is running against. A fabricated value fails the
+    existence check; a commit borrowed from an unrelated branch fails ancestry.
+    A shallow clone cannot answer either question, so it is skipped explicitly
+    rather than passed silently.
+    """
+    commit = record()["runtime"]["sourceCommit"]
+    assert re.fullmatch(r"[0-9a-f]{40}", commit), "source commit is not a SHA-1"
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=ROOT, capture_output=True, text=True, check=False
+        )
+
+    if git("rev-parse", "--git-dir").returncode != 0:
+        pytest.skip("not a git checkout, so the commit cannot be resolved")
+    if git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
+        pytest.skip("shallow clone: earlier commits are absent by construction")
+    kind = git("cat-file", "-t", commit)
+    assert kind.returncode == 0 and kind.stdout.strip() == "commit", (
+        f"the recorded source commit {commit} is not a commit in this repository"
+    )
+    assert git("merge-base", "--is-ancestor", commit, "HEAD").returncode == 0, (
+        f"the recorded source commit {commit} is not an ancestor of HEAD"
+    )
+
+
+def test_an_invented_source_commit_would_not_resolve():
+    """The control for the check above: a well-formed SHA that is not here."""
+    invented = "0" * 40
+    result = subprocess.run(
+        ["git", "cat-file", "-t", invented],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0 or result.stdout.strip() != "commit"
 
 
 def test_the_published_record_holds_the_three_boundary_probes():

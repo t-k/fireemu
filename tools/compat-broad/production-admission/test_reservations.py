@@ -209,12 +209,27 @@ def _stopped_pid():
     return pid
 
 
-def _no_data_attempt(tmp_path):
+def generation(label="9"):
+    """A source closure of a later generation than the recorded legacy one."""
+    return {
+        "sourceCommit": digest(f"commit-{label}")[:40],
+        "collectorSourceDigest": digest(f"collector-{label}"),
+        "sourceDigests": {
+            name: digest(f"{name}-{label}") for name in COMMIT_SOURCE_DIGESTS
+        },
+    }
+
+
+def _no_data_attempt(tmp_path, source_generation=None):
     ledger = Ledger.create(tmp_path / "ledger")
     first = claim(tmp_path, "a")
     first["gatePath"] = str((tmp_path / "a" / "gate").resolve())
     frozen = plan()
-    frozen["collectorSourceDigest"] = COMMIT_COLLECTOR_SOURCE_DIGEST
+    frozen["collectorSourceDigest"] = (
+        COMMIT_COLLECTOR_SOURCE_DIGEST
+        if source_generation is None
+        else source_generation["collectorSourceDigest"]
+    )
     frozen["observationRequests"] = 4
     frozen["management"] = {
         "observation": [
@@ -225,7 +240,9 @@ def _no_data_attempt(tmp_path):
     }
     first["gatePlanDigest"] = digest(frozen)
     first["budget"]["requests"] = 5
-    ticket = ledger.reserve(envelope(), first, frozen, now=1100)
+    ticket = ledger.reserve(
+        envelope(), first, frozen, generation=source_generation, now=1100
+    )
     create(Path(first["gatePath"]), frozen)
     gate = Gate(first["gatePath"], "limits")
     with gate.locked() as state:
@@ -280,6 +297,10 @@ def _no_data_attempt(tmp_path):
             },
         ],
     }
+    if source_generation is not None:
+        # A receipt written before the generation binding existed carries none,
+        # which is what the legacy branch of this helper reproduces.
+        receipt["generation"] = source_generation
     path = tmp_path / "a" / "receipt.json"
     path.write_text(json.dumps(receipt))
     record = {
@@ -290,8 +311,12 @@ def _no_data_attempt(tmp_path):
         "receiptPath": str(path.resolve()),
         "receiptDigest": digest(receipt),
         "collectorSourceDigest": frozen["collectorSourceDigest"],
-        "sourceCommit": COMMIT_SOURCE_COMMIT,
-        "sourceDigests": COMMIT_SOURCE_DIGESTS,
+        "sourceCommit": COMMIT_SOURCE_COMMIT
+        if source_generation is None
+        else source_generation["sourceCommit"],
+        "sourceDigests": COMMIT_SOURCE_DIGESTS
+        if source_generation is None
+        else source_generation["sourceDigests"],
     }
     return ledger, gate, ticket, record
 
@@ -336,6 +361,107 @@ def test_no_data_abort_releases_only_lock_and_keeps_budget_and_nonce(tmp_path):
     reuse["gatePath"] = str((tmp_path / "other-gate").resolve())
     with pytest.raises(ValueError, match="reuse"):
         ledger.reserve(envelope(), reuse, plan(), now=1110)
+
+
+def test_no_data_abort_retires_a_reservation_of_a_later_generation(tmp_path):
+    later = generation()
+    ledger, gate, ticket, record = _no_data_attempt(tmp_path, later)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["generation"] == (
+        later
+    )
+    ledger.abort_no_data(ticket, record)
+    row = ledger.snapshot()["reservations"][ticket["reservation"]]
+    assert row["state"] == "aborted-no-data"
+    assert row["abortRecordDigest"] == digest(record)
+    assert gate.snapshot()["stopped"] is True
+    ledger.abort_no_data(ticket, record)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        == "aborted-no-data"
+    )
+
+
+def test_no_data_abort_refuses_a_receipt_naming_another_generation(tmp_path):
+    """A receipt that records a closure must record the one being proven."""
+    ledger, gate, ticket, record = _no_data_attempt(tmp_path, generation())
+    receipt_path = Path(record["receiptPath"])
+    receipt = json.loads(receipt_path.read_text())
+    receipt["generation"] = generation("10")
+    receipt_path.write_text(json.dumps(receipt))
+    record = {**record, "receiptDigest": digest(receipt)}
+    with pytest.raises(ValueError, match="no-data attempt"):
+        ledger.abort_no_data(ticket, record)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+    assert gate.snapshot()["stopped"] is False
+
+
+def test_no_data_abort_refuses_a_generation_the_reservation_never_recorded(tmp_path):
+    ledger, gate, ticket, record = _no_data_attempt(tmp_path, generation())
+    other = generation("10")
+    for field, value in (
+        ("sourceCommit", other["sourceCommit"]),
+        ("sourceDigests", other["sourceDigests"]),
+        ("sourceCommit", COMMIT_SOURCE_COMMIT),
+        ("sourceDigests", COMMIT_SOURCE_DIGESTS),
+    ):
+        with pytest.raises(ValueError, match="source closure"):
+            ledger.abort_no_data(ticket, {**record, field: value})
+        assert (
+            ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+        )
+    assert gate.snapshot()["stopped"] is False
+
+
+def test_no_data_abort_of_a_reservation_without_a_generation_stays_on_the_legacy_one(
+    tmp_path,
+):
+    ledger, _gate, ticket, record = _no_data_attempt(tmp_path)
+    assert "generation" not in ledger.snapshot()["reservations"][ticket["reservation"]]
+    later = generation()
+    with pytest.raises(ValueError, match="source closure"):
+        ledger.abort_no_data(ticket, {**record, "sourceCommit": later["sourceCommit"]})
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+    ledger.abort_no_data(ticket, record)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        == "aborted-no-data"
+    )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        {"sourceCommit": "not-a-commit"},
+        {"sourceCommit": "A" * 40},
+        {"collectorSourceDigest": "0" * 63},
+        {"sourceDigests": {}},
+        {"sourceDigests": {"shared_gate.py": "0" * 63}},
+        {"sourceDigests": {"../shared_gate.py": "0" * 64}},
+        {"sourceDigests": ["shared_gate.py"]},
+        {"extra": "field"},
+    ],
+)
+def test_reserve_refuses_a_malformed_generation_without_mutation(tmp_path, damage):
+    ledger = Ledger.create(tmp_path / "ledger")
+    before = ledger.snapshot()
+    with pytest.raises(ValueError):
+        ledger.reserve(
+            envelope(),
+            claim(tmp_path, "a"),
+            plan(),
+            generation={**generation(), **damage},
+            now=1100,
+        )
+    assert ledger.snapshot() == before
+
+
+def test_recorded_generation_is_revalidated_when_the_ledger_is_read(tmp_path):
+    ledger, _gate, ticket, _record = _no_data_attempt(tmp_path, generation())
+    state = json.loads((ledger.path / "state.json").read_text())
+    state["reservations"][ticket["reservation"]]["generation"]["sourceCommit"] = "0"
+    (ledger.path / "state.json").write_text(json.dumps(state))
+    with pytest.raises(ValueError, match="frozen source commit"):
+        ledger.snapshot()
 
 
 @pytest.mark.parametrize(

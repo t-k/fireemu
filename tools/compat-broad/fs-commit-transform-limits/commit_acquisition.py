@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -61,6 +62,34 @@ MANIFEST_KIND = "commit-o8-manifest-v1"
 REVIEWED_ARTIFACT_PROFILE = "repaired-567565bdd"
 CAMPAIGN_SECONDS = 1200
 RECOVERY_SECONDS = 180
+# The source files whose digests a reservation records, so that a later abort
+# proves it runs the same closure the acquisition ran.
+ABORT_CLOSURE_SOURCES = (
+    "tools/compat-broad/shared_gate.py",
+    "tools/compat-broad/production-admission/reservations.py",
+    "tools/compat-broad/fs-commit-transform-limits/commit_reserved_adapter.py",
+    "tools/compat-broad/fs-commit-transform-limits/gate_adapter.py",
+    "tools/compat-broad/fs-commit-transform-limits/commit_acquisition.py",
+)
+# Owner provenance must be a value the owner supplied. These are the shapes an
+# agent or an unfilled template leaves behind, and admission refuses them.
+PLACEHOLDER_OWNER_IDENTITIES = frozenset(
+    {
+        "agent",
+        "ai",
+        "assistant",
+        "claude",
+        "codex",
+        "none",
+        "owner",
+        "owner-current-conversation",
+        "owner-current-session",
+        "placeholder",
+        "tbd",
+        "todo",
+        "unknown",
+    }
+)
 APPROVAL_FIELDS = frozenset(
     {
         "kind",
@@ -78,6 +107,7 @@ APPROVAL_FIELDS = frozenset(
         "artifactProfile",
         "windowStartsAt",
         "windowExpiresAt",
+        "executionHost",
     }
 )
 MAX_CAPABILITY_SCAN = 64
@@ -192,6 +222,52 @@ class ProductionWireCapability:
         )
 
 
+def execution_host():
+    """The host an approval is bound to; the campaign runs on this host only.
+
+    The worker's process supervision and `/proc` assumptions are verified on one
+    platform only, so an approval issued there must not authorize a run
+    elsewhere. Prose in the package cannot enforce that; this binding can.
+    """
+    return {"platform": platform.system().lower(), "machine": platform.machine()}
+
+
+def abort_generation(inputs):
+    """The source closure this acquisition records on its reservation.
+
+    A reservation is retired after a preflight stop by proving the closure it
+    was acquired under, so the binding must be derived from the frozen inputs of
+    this campaign rather than from a constant of an earlier generation. Proving
+    it establishes that the aborting caller runs identical sources to the
+    acquisition, not that those sources were reviewed.
+    """
+    sources = inputs["sourceInputs"]
+    if not isinstance(sources, dict) or any(
+        name not in sources for name in ABORT_CLOSURE_SOURCES
+    ):
+        raise ValueError("frozen acquisition source closure required")
+    return {
+        "sourceCommit": inputs["sourceCommit"],
+        "collectorSourceDigest": digest(sources),
+        "sourceDigests": {
+            Path(name).name: sources[name] for name in ABORT_CLOSURE_SOURCES
+        },
+    }
+
+
+def validate_owner_identity(value, *, field):
+    """Refuse an absent or placeholder-shaped owner supplied identity."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"owner supplied {field} required")
+    text = value.strip()
+    if (
+        text.startswith("<<")
+        or text.endswith(">>")
+        or text.casefold() in PLACEHOLDER_OWNER_IDENTITIES
+    ):
+        raise ValueError(f"owner supplied {field} required")
+
+
 def _regular_file_digest(path):
     """Digest a regular file without following a replaceable symlink."""
     path = Path(path)
@@ -282,6 +358,8 @@ def validate_o7_admission(
     }
     if any(approval[key] != value for key, value in bindings.items()):
         raise ValueError("O7 approval binding differs")
+    if approval["executionHost"] != execution_host():
+        raise ValueError("O7 execution host differs")
     if (
         permission.get("wallSeconds") != CAMPAIGN_SECONDS
         or permission.get("recoverySeconds") != RECOVERY_SECONDS
@@ -502,14 +580,13 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs):
 def _approve(permission, plan, source_commit, artifact_digest, inputs):
     required = permission_bindings(plan, source_commit, artifact_digest, inputs)
     validate_owner_baseline(permission, required, time.time())
+    validate_owner_identity(permission.get("ownerIdentity"), field="ownerIdentity")
     credential_preparation.validate_principal(permission.get("credentialPrincipal"))
     if digest({key: permission.get(key) for key in required}) != digest(required):
         raise ValueError("typed owner permission binding differs")
-    if (
-        not isinstance(permission.get("recoveryOwner"), str)
-        or not permission["recoveryOwner"].strip()
-    ):
-        raise ValueError("independent recovery owner required")
+    # The recovery owner carries the same provenance weight as the execution
+    # identity: it names who answers for a campaign that stops mid-flight.
+    validate_owner_identity(permission.get("recoveryOwner"), field="recoveryOwner")
 
 
 def freeze_inputs(permission_path, plan, *, source_root, artifact_path):
@@ -709,7 +786,8 @@ def run_acquisition(
         "budget": copy.deepcopy(BUDGET),
         "durationSeconds": 1200,
     }
-    ticket = ledger.reserve(envelope, claim, projected)
+    generation = abort_generation(inputs)
+    ticket = ledger.reserve(envelope, claim, projected, generation=generation)
     gate = coordinator = collection = None
     failure = None
     postflight = False
@@ -765,6 +843,9 @@ def run_acquisition(
         "credentialEvidence": coordinator.credential_evidence if coordinator else [],
         "metadata": coordinator.metadata_evidence if coordinator else [],
         "ticket": ticket,
+        # The closure this run executed under, so a receipt names the generation
+        # an abort of its reservation has to prove.
+        "generation": copy.deepcopy(generation),
         "reservationStateAtPublication": "held",
         "releaseRecord": "release.json" if ready else None,
         "chargedCalls": snapshot["total"] if snapshot else 0,

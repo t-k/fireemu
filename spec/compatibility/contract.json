@@ -818,7 +818,11 @@
             "tests": [],
             "integration": [
               "crates/fireemu-core-limits/tests/evaluate.rs",
-              "crates/fireemu-core-limits/tests/catalog.rs"
+              "crates/fireemu-core-limits/tests/catalog.rs",
+              "crates/fireemu-core-firestore/tests/enforced_limits.rs",
+              "crates/fireemu-core-firestore/tests/write_path_limits.rs",
+              "crates/fireemu-adapter-grpc/tests/write_path_limits.rs",
+              "crates/fireemu-adapter-grpc/tests/request_bytes.rs"
             ],
             "conformance": []
           },
@@ -829,6 +833,10 @@
             {
               "behaviour": "boundary-exact limit catalogs with a per-limit disposition and warning thresholds",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "the strict profile refuses a map or array field value whose storage size exceeds FS-LIMIT-FIELD-VALUE-BYTES (1,048,487 logical bytes). Production documents that limit but has only been observed refusing a single oversized string or bytes payload, which is measured on its raw payload and refused under both profiles. The aggregate rule is therefore a strict-profile-only refusal, published here as required: documented, production observation pending.",
+              "precision": "documented-not-observed"
             }
           ],
           "productionOnly": [

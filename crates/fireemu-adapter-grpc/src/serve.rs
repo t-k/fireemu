@@ -29,7 +29,7 @@ use crate::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
 ///
 /// The three Firestore transports each apply it at their own decode boundary:
 /// [`MAX_REST_BODY_BYTES`] on a REST body, [`crate::webchannel::MAX_FORM_BYTES`] on a
-/// WebChannel form body, and [`MAX_GRPC_MESSAGE_BYTES`] on a gRPC message. Every one is the
+/// `WebChannel` form body, and [`MAX_GRPC_MESSAGE_BYTES`] on a gRPC message. Every one is the
 /// same number, and `tests/request_bytes.rs` keeps them tied to the catalog entry.
 pub const API_REQUEST_BYTES: usize = 10 * 1024 * 1024;
 

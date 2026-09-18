@@ -3,7 +3,7 @@
 //!
 //! The limit is measured on the message payload before protocol decode, so it is refused
 //! without the request ever being parsed and without the over-long body being held whole in
-//! memory: the REST and WebChannel bodies come through a bounded stream
+//! memory: the REST and `WebChannel` bodies come through a bounded stream
 //! (`fireemu_adapter_support::body::collect_limited`) and a gRPC message is refused by tonic
 //! before prost sees it. Both profiles refuse it, because it is a transport bound rather
 //! than a document rule and it is already in force.
@@ -70,7 +70,7 @@ fn rest_commit_of(bytes: usize, scope: &str) -> String {
             .collect();
         format!(r#"{{"writes":[{}]}}"#, writes.join(","))
     };
-    let base = body(&vec![0; DOCUMENTS]).len();
+    let base = body(&[0; DOCUMENTS]).len();
     let padding = bytes
         .checked_sub(base)
         .expect("the boundary is larger than the envelope");

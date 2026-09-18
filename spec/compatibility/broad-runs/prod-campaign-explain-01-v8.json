@@ -16,7 +16,7 @@
     "database": "(default)",
     "edition": "STANDARD",
     "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
-    "observerSha256": "b91b514619fef207679f22e31b29e35e73dbd3b62f569cf36953f3132fd1bb38",
+    "observerSha256": "967f5330be2336809c7dee139948a753cff36268eb0f1a31fd8afacd35271e01",
     "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80"
   },
   "template": {
@@ -315,7 +315,7 @@
     "accounts": 0,
     "configurationChanges": 0,
     "metadataRequests": 0,
-    "observerSha256": "b91b514619fef207679f22e31b29e35e73dbd3b62f569cf36953f3132fd1bb38",
+    "observerSha256": "967f5330be2336809c7dee139948a753cff36268eb0f1a31fd8afacd35271e01",
     "transport": "shared-explicit-production-v1",
     "collector": "existing-batch-adapter-shared-v1",
     "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80",

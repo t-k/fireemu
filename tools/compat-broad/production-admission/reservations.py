@@ -19,11 +19,16 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import os
+import platform
+
 from broad_contract import digest
 from shared_gate import (
     Gate,
     _save,
+    abandoned_cleanup_complete,
     non_creating_dispatches,
+    typed_absence,
     validate_absence_proofs,
 )
 
@@ -69,6 +74,39 @@ MAX_BYTES = 16 * 1024 * 1024
 MAX_RESERVATIONS = 10000
 
 
+ABANDON_KIND = "shared-abandoned-cleanup-close-v1"
+ABANDON_FIELDS = {"kind", "ticket", "gateDigest", "receiptPath", "receiptDigest"}
+ESCALATION_KIND = "shared-owner-escalation-close-v1"
+ATTESTATION_KIND = "owner-escalation-attestation-v1"
+ESCALATION_FIELDS = {
+    "kind",
+    "ticket",
+    "gateDigest",
+    "receiptPath",
+    "receiptDigest",
+    "attestation",
+    "absence",
+}
+ATTESTATION_FIELDS = {
+    "kind",
+    "status",
+    "campaignId",
+    "nonceDigest",
+    "claimDigest",
+    "ledgerRoot",
+    "reservation",
+    "receiptDigest",
+    "gateDigest",
+    "ownerIdentity",
+    "recoveryOwner",
+    "residueRemoved",
+    "resourceCount",
+    "resourcesDigest",
+    "attestedAt",
+    "expiresAt",
+    "executionHost",
+}
+MAX_ATTESTATION_SECONDS = 86400
 DEFAULT_RECEIPT_KIND = "commit-acquisition-receipt-v2"
 DEFAULT_CREDENTIAL_SLOTS = ("refresh", "tokeninfo")
 
@@ -142,6 +180,30 @@ def _preflight_stop(receipt):
         if used == [*head, *expected] and observed in (expected, expected[:-1]):
             return count
     return None
+
+
+def _owner_value(value):
+    """An owner supplied identity: present, non-blank and not a template."""
+    return (
+        isinstance(value, str)
+        and bool(value.strip())
+        and not value.strip().startswith("<<")
+        and not value.strip().endswith(">>")
+    )
+
+
+def _owned_resources(gate):
+    plan = _gate_plan(gate)
+    jobs = plan.get("jobs")
+    if not isinstance(jobs, dict) or not jobs:
+        return None
+    names = [
+        name
+        for job in jobs.values()
+        for name in (job.get("resources") or [])
+        if isinstance(name, str)
+    ]
+    return sorted(names) if names else None
 
 
 def _gate_plan_consistent(gate):
@@ -445,6 +507,8 @@ class Ledger:
                     "closing",
                     "released",
                     "aborted-no-data",
+                    "closed-after-escalation",
+                    "closed-after-abandon",
                 }:
                     raise ValueError("reservation binding changed")
             yield state
@@ -528,7 +592,15 @@ class Ledger:
             ):
                 raise ValueError("reservation capacity or nonce/Gate reuse")
             active = [
-                r for r in rows if r["state"] not in {"released", "aborted-no-data"}
+                r
+                for r in rows
+                if r["state"]
+                not in {
+                    "released",
+                    "aborted-no-data",
+                    "closed-after-escalation",
+                    "closed-after-abandon",
+                }
             ]
             if any(
                 conflicts(a, b)
@@ -646,6 +718,233 @@ class Ledger:
                 raise ValueError("closing reservation changed")
             row["state"] = "released"
             row["finalGateDigest"] = digest(gate)
+            self._save(state)
+
+    def _attestation(self, attestation, *, ticket, claim, record, owned, now):
+        """The owner's signed statement that the residue is gone. Not a no-data claim."""
+        if (
+            not isinstance(attestation, dict)
+            or set(attestation) != ATTESTATION_FIELDS
+            or attestation["kind"] != ATTESTATION_KIND
+            or attestation["status"] != "attested"
+            or attestation["campaignId"] != claim["campaignId"]
+            or attestation["nonceDigest"] != claim["nonceDigest"]
+            or attestation["claimDigest"] != ticket["claimDigest"]
+            or attestation["ledgerRoot"] != str(self.path)
+            or attestation["reservation"] != ticket["reservation"]
+            or attestation["receiptDigest"] != record["receiptDigest"]
+            or attestation["gateDigest"] != record["gateDigest"]
+            or attestation["residueRemoved"] is not True
+            or attestation["resourceCount"] != len(owned)
+            or attestation["resourcesDigest"] != digest(owned)
+            or not _owner_value(attestation["ownerIdentity"])
+            or not _owner_value(attestation["recoveryOwner"])
+            or attestation["executionHost"]
+            != {
+                "platform": platform.system().lower(),
+                "machine": platform.machine(),
+            }
+        ):
+            raise ValueError("bound owner escalation attestation required")
+        _number(attestation["attestedAt"])
+        _number(attestation["expiresAt"])
+        if (
+            not attestation["attestedAt"] <= now < attestation["expiresAt"]
+            or attestation["expiresAt"] - attestation["attestedAt"]
+            > MAX_ATTESTATION_SECONDS
+        ):
+            raise ValueError("fresh owner escalation attestation required")
+
+    def _terminal_receipt(self, ticket, record, fields, kind, label):
+        """The receipt and Gate an abandoned or escalated close is bound to."""
+        if (
+            not isinstance(record, dict)
+            or set(record) != fields
+            or record["kind"] != kind
+            or record["ticket"] != ticket
+        ):
+            raise ValueError(f"exact {label} record required")
+        for key in ("gateDigest", "receiptDigest"):
+            _hash(record[key])
+        receipt_path = Path(record["receiptPath"])
+        if (
+            str(receipt_path.resolve()) != record["receiptPath"]
+            or receipt_path.is_symlink()
+            or receipt_path.name != "receipt.json"
+            or not receipt_path.is_file()
+        ):
+            raise ValueError("persisted canonical receipt required")
+        with receipt_path.open("rb") as source:
+            raw = source.read(MAX_BYTES + 1)
+        if len(raw) > MAX_BYTES:
+            raise ValueError("bounded receipt required")
+        receipt = json.loads(raw)
+        if digest(receipt) != record["receiptDigest"]:
+            raise ValueError("receipt digest changed")
+        gate = receipt.get("gate")
+        if not _gate_plan_consistent(gate) or digest(gate) != record["gateDigest"]:
+            raise ValueError("receipt does not bind its own Gate")
+        if _no_data_gate(gate):
+            # The exits are disjoint by evidence, not merely by record shape.
+            raise ValueError("no-data evidence must use the no-data abort")
+        return receipt, gate
+
+    def _terminal_row(self, state, ticket, gate, record, *, digest_key, final):
+        """Shared checks for a terminal close: job, state, receipt and workers."""
+        row = self._row(state, ticket)
+        claim = row["claim"]
+        if "gateJob" in claim and claim["gateJob"] not in gate.get("jobs", {}):
+            raise ValueError("registered Gate job is absent")
+        if row["state"] == final:
+            if row.get(digest_key) != digest(record):
+                raise ValueError(f"different terminal {final} record")
+            return None
+        if row["state"] not in {"held", "closing"}:
+            raise ValueError("reservation unavailable for a terminal close")
+        return row
+
+    def _terminal_binding(self, row, ticket, receipt, gate, claim):
+        if (
+            receipt.get("ticket") != ticket
+            or receipt.get("claimDigest") != row["claimDigest"]
+            or receipt.get("planDigest") != claim["gatePlanDigest"]
+            or gate.get("planDigest") != claim["gatePlanDigest"]
+            or receipt.get("reservationStateAtPublication") != "held"
+            or receipt.get("releaseEligible") is not False
+        ):
+            raise ValueError("receipt does not bind this held reservation")
+        for pid in [gate.get("coordinatorPid")] + [
+            job.get("pid") for job in gate["jobs"].values()
+        ]:
+            if type(pid) is not int or pid <= 0:
+                raise ValueError("recorded worker identity required")
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue
+            raise ValueError("worker exit not proven")
+        if str(Path(claim["gatePath"]).resolve()) != claim["gatePath"]:
+            raise ValueError("registered Gate path changed")
+        if digest(Gate(claim["gatePath"], _gate_job(claim)).snapshot()) != digest(gate):
+            raise ValueError("registered Gate moved since the receipt")
+
+    def close_after_abandon(self, ticket, record):
+        """Retire a run that stopped early and then deleted everything it created.
+
+        The Gate's own journal carries the typed absence for every document the
+        run created, so nothing is left for an owner to attest to and this exit
+        asks for no attestation. It is not a no-data claim: documents were
+        written, and the record says only that none of them remain.
+
+        A created document still present is refused here and stays with the
+        owner-attested escalation exit, and a run that proved no creation belongs
+        to the no-data abort, so the three are disjoint by evidence.
+        """
+        receipt, gate = self._terminal_receipt(
+            ticket, record, ABANDON_FIELDS, ABANDON_KIND, "abandoned cleanup close"
+        )
+        if abandoned_cleanup_complete(gate) is None:
+            raise ValueError("a complete abandoned cleanup is required")
+        with self._locked() as state:
+            row = self._terminal_row(
+                state,
+                ticket,
+                gate,
+                record,
+                digest_key="abandonRecordDigest",
+                final="closed-after-abandon",
+            )
+            if row is None:
+                return
+            self._terminal_binding(row, ticket, receipt, gate, row["claim"])
+            row["state"] = "closed-after-abandon"
+            row["abandonRecordDigest"] = digest(record)
+            row["finalGateDigest"] = record["gateDigest"]
+            self._save(state)
+
+    def close_after_escalation(self, ticket, record):
+        """Retire a reservation whose run may have written, after the owner proves it did not persist.
+
+        An uncertain stop, a Commit whose receipt was lost, can never be retired
+        as no data: it may have been applied. Holding the row while that is
+        unresolved is right, but before this there was no exit afterwards, so the
+        row stayed active forever and kept its lock key and its whole allocation
+        even once the owner had removed the residue by hand.
+
+        This is deliberately not the no-data path and shares no evidence with it.
+        A receipt whose Gate proves no data was written is refused here and must
+        use `abort_no_data`; a receipt that does not is refused there. Neither
+        can be mistaken for the other, and this transition never asserts that
+        nothing was written, only that nothing remains.
+        """
+        receipt, gate = self._terminal_receipt(
+            ticket, record, ESCALATION_FIELDS, ESCALATION_KIND, "escalation close"
+        )
+        if abandoned_cleanup_complete(gate) is not None:
+            raise ValueError("a recoverable stop must use the abandoned cleanup close")
+        owned = _owned_resources(gate)
+        absence = record["absence"]
+        if (
+            owned is None
+            or not isinstance(absence, dict)
+            or sorted(absence) != owned
+            or any(
+                not isinstance(proof, dict)
+                or set(proof) != {"status", "body"}
+                or not typed_absence(proof["status"], proof["body"])
+                for proof in absence.values()
+            )
+        ):
+            raise ValueError("every owned resource must be proven absent")
+        decision_now = time.time()
+        with self._locked() as state:
+            row = self._row(state, ticket)
+            claim = row["claim"]
+            if "gateJob" in claim and claim["gateJob"] not in gate.get("jobs", {}):
+                raise ValueError("registered Gate job is absent")
+            if row["state"] == "closed-after-escalation":
+                if row.get("escalationRecordDigest") != digest(record):
+                    raise ValueError("different terminal escalation record")
+                return
+            if row["state"] not in {"held", "closing"}:
+                raise ValueError("reservation unavailable for escalation close")
+            self._attestation(
+                record["attestation"],
+                ticket=ticket,
+                claim=claim,
+                record=record,
+                owned=owned,
+                now=decision_now,
+            )
+            if (
+                receipt.get("ticket") != ticket
+                or receipt.get("claimDigest") != row["claimDigest"]
+                or receipt.get("planDigest") != claim["gatePlanDigest"]
+                or gate.get("planDigest") != claim["gatePlanDigest"]
+                or receipt.get("reservationStateAtPublication") != "held"
+                or receipt.get("releaseEligible") is not False
+            ):
+                raise ValueError("receipt does not bind this held reservation")
+            for pid in [gate.get("coordinatorPid")] + [
+                job.get("pid") for job in gate["jobs"].values()
+            ]:
+                if type(pid) is not int or pid <= 0:
+                    raise ValueError("recorded worker identity required")
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    continue
+                raise ValueError("worker exit not proven")
+            if str(Path(claim["gatePath"]).resolve()) != claim["gatePath"]:
+                raise ValueError("registered Gate path changed")
+            if (
+                digest(Gate(claim["gatePath"], _gate_job(claim)).snapshot())
+                != record["gateDigest"]
+            ):
+                raise ValueError("registered Gate moved since the receipt")
+            row["state"] = "closed-after-escalation"
+            row["escalationRecordDigest"] = digest(record)
+            row["finalGateDigest"] = record["gateDigest"]
             self._save(state)
 
     def abort_no_data(self, ticket, record):

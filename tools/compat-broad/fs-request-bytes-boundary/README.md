@@ -33,3 +33,42 @@ hypothesis and is not a wire-level metric.
 `request_bytes_collector.py` validates the independent compiler plan before dispatch and follows `executionSchedule`. Every preflight must return a typed `NOT_FOUND` before its Commit can be sent. Cleanup DELETE requires both a successful positional Commit response from this run and a matching ownership read with the same update time; uncertain Commit responses leave the run incomplete and do not authorize a DELETE. Each probe must establish typed absence before the next probe starts.
 
 The collector writes create-only bounded per-operation rows and exact raw HTTP response bodies as separate sidecars. `result.json` is a compact summary with row counts, failure reasons, and the typed resource-absence conclusion; individual receipts are in `row-*.json`. Response byte counts and hashes derive from the captured body bytes, not reconstructed JSON. This remains a local observation hypothesis, with no production credentials or production execution. The owning runner must still account for supervisor process cleanup.
+
+## Campaign artifact and local shadow
+
+`request_bytes_campaign.py` composes the compiler plan into the bounded campaign
+artifact: the three boundary cases, the typed refusal expectation, the
+post-state readback obligation, version-bound cleanup with absence proofs, the
+owner preconditions, the request accounting, the cost estimate and a budget with
+an explicit recovery window. It performs no I/O and holds no credentials.
+`validate_request_bytes_campaign` checks a supplied artifact independently and
+never repairs it. The published artifact is `spec/compatibility/fs-request-bytes-campaign.json`,
+with its budget and case views alongside it.
+
+Scope is the REST `Commit` endpoint only. `BatchWrite` is excluded because the
+compiler emits only the Commit endpoint and the transport admits only
+`documents:commit`; a BatchWrite boundary needs its own compiler, transport
+admission and receipt shape. gRPC remains a separate case.
+
+The refusal expectation is a typed Firestore error with an integer HTTP status
+of 400 (expected) or 413 (typed but a semantic discrepancy), an integer error
+code equal to that status, and `INVALID_ARGUMENT`. An untyped transport refusal,
+such as a front-end HTML 413 or a connection reset, is **not** a refusal proof
+under the reviewed collector: it leaves the probe uncertain, recovery stays
+read-only, and the campaign is inconclusive on the refusal shape. The post-state
+readback and the recovery absence proofs still establish that the refused
+request wrote nothing.
+
+`request_bytes_shadow.py` runs the plan and collector against an owned local
+fireemu artifact built from this checkout, through the existing `broad.run`
+artifact builder and process supervisor. The local runtime does not implement
+this limit yet, so the over-boundary Commit is expected to be accepted locally.
+`classify_local_result` reports that as `expected-local-difference` rather than
+relaxing the expectation; a clean local run without a refusal is a shadow
+failure. Neither module authorizes production execution.
+
+Run the offline tests with:
+
+```text
+uv run --offline --project tools/compat-inventory --locked pytest -q tools/compat-broad/fs-request-bytes-boundary
+```

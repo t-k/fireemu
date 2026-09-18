@@ -99,3 +99,19 @@ def test_the_resume_case_is_the_one_that_broke_and_recovered():
         if entry["kind"] in {"break-requested", "resume-requested"}
     }
     assert breaking == {"FS-LISTEN-SDK-104"}
+
+
+def test_the_shadow_names_the_fireemu_binary_it_actually_ran():
+    environment = _receipt()["environment"]
+    assert environment["fireemuBinary"] == "target/debug/fireemu"
+    assert len(environment["fireemuBinaryDigest"]) == 64
+    assert environment["fireemuBinaryDigest"] != "unreadable"
+    assert len(environment["fireemuSourceCommit"]) == 40
+    # The runtime was built from the same tree that produced the collector.
+    assert environment["fireemuSourceCommit"] == environment["sourceCommit"]
+
+
+def test_the_shadow_records_no_absolute_personal_path():
+    raw = EVIDENCE.read_text(encoding="utf-8")
+    assert "/Users/" not in raw
+    assert "/home/" not in raw

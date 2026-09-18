@@ -291,7 +291,11 @@ export const main = async ({ env = process.env, argv = process.argv } = {}) => {
       // The runtime under test. A shadow is only evidence about the binary it
       // actually ran, so the receipt names that binary and the commit it was
       // built from rather than trusting whatever was on the path.
-      fireemuBinary: env.O6_LISTEN_FIREEMU_BINARY ?? null,
+      // Recorded relative to the repository root: an absolute path would put a
+      // personal directory into a receipt that ships with the repository.
+      fireemuBinary: env.O6_LISTEN_FIREEMU_BINARY
+        ? path.relative(repoRoot, env.O6_LISTEN_FIREEMU_BINARY)
+        : null,
       fireemuBinaryDigest: artifactDigest(env.O6_LISTEN_FIREEMU_BINARY),
       fireemuSourceCommit: env.O6_LISTEN_FIREEMU_COMMIT ?? null,
       projectId,

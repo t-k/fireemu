@@ -11,23 +11,17 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from pathlib import Path
 from typing import Any
 
 from credential_cases import CAMPAIGN_ID, observation_cases
+from credential_collector import BOUND_MODULES, module_digests
 from credential_comparator import CONTRACT
 
 STATUS = "PREPARATION"
 
-#: Modules whose bytes a run must bind, so a later edit cannot be read back onto an
-#: older receipt.
-FROZEN_MODULES = (
-    "credential_cases.py",
-    "credential_collector.py",
-    "credential_comparator.py",
-    "credential_plan.py",
-    "credential_shadow.py",
-)
+#: Modules whose bytes a run must bind. The collector owns this list, because it is the
+#: collector binding that makes a receipt pair comparable.
+FROZEN_MODULES = BOUND_MODULES
 
 BUDGET = {
     "maxRequests": 60,
@@ -94,19 +88,6 @@ UNRESOLVED = (
 )
 
 
-def _module_digests() -> dict[str, str]:
-    here = Path(__file__).parent
-    digests = {}
-    for name in FROZEN_MODULES:
-        path = here / name
-        digests[name] = (
-            hashlib.sha256(path.read_bytes()).hexdigest()
-            if path.is_file()
-            else "ABSENT"
-        )
-    return digests
-
-
 def cases_digest() -> str:
     """Digest the frozen case list, so a changed case cannot reuse an old receipt."""
     canonical = json.dumps(observation_cases(), sort_keys=True, separators=(",", ":"))
@@ -126,7 +107,7 @@ def campaign_manifest(nonce: str) -> dict[str, Any]:
         "nonce": nonce,
         "nonceStatus": "syntax-only; freshness and ownership unverified",
         "sourceBinding": {"commit": None, "artifactSha256": None},
-        "frozenInputs": {"casesSha256": cases_digest(), "modules": _module_digests()},
+        "frozenInputs": {"casesSha256": cases_digest(), "modules": module_digests()},
         "caseCount": len(observation_cases()),
         "budget": dict(BUDGET),
         "costBasis": list(COST_BASIS),

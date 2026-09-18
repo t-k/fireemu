@@ -28,6 +28,7 @@ from typing import Any
 
 from credential_cases import CAMPAIGN_ID, observation_cases
 from credential_collector import (
+    BudgetExceeded,
     build_receipt,
     charge_request,
     claim_shape,
@@ -37,6 +38,7 @@ from credential_collector import (
     owned_email,
     track_account,
 )
+from credential_plan import BUDGET
 
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "[::1]")
 API_KEY = "local-shadow-key"
@@ -160,8 +162,30 @@ def start_daemon(binary: Path, workdir: Path) -> tuple[subprocess.Popen[str], st
     raise ShadowError("daemon did not report an auth address")
 
 
+def _children_of(pid: int) -> list[int]:
+    found = subprocess.run(
+        ["/usr/bin/pgrep", "-P", str(pid)], capture_output=True, text=True, check=False
+    )
+    return [int(line) for line in found.stdout.split() if line.isdigit()]
+
+
+def _alive(pid: int) -> bool:
+    return (
+        subprocess.run(
+            ["/bin/ps", "-p", str(pid)], capture_output=True, text=True, check=False
+        ).returncode
+        == 0
+    )
+
+
 def stop_daemon(process: subprocess.Popen[str]) -> dict[str, Any]:
-    """Stop the owned process and report whether it and its children are gone."""
+    """Stop the owned process and report whether it and its children are gone.
+
+    The child set is taken before the signal. Asking after `wait()` has reaped the
+    process would always answer none, because a dead PID has no children and any
+    survivor has already been reparented.
+    """
+    children = _children_of(process.pid)
     if process.poll() is None:
         process.send_signal(signal.SIGTERM)
     try:
@@ -169,16 +193,12 @@ def stop_daemon(process: subprocess.Popen[str]) -> dict[str, Any]:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=20)
-    children = subprocess.run(
-        ["/usr/bin/pgrep", "-P", str(process.pid)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    remaining = [pid for pid in children if _alive(pid)]
     return {
         "exitCode": process.returncode,
         "processStopped": process.poll() is not None,
-        "remainingChildren": len(children.stdout.split()),
+        "childrenBeforeStop": len(children),
+        "remainingChildren": len(remaining),
     }
 
 
@@ -207,13 +227,20 @@ def _sleep_to_next_second() -> None:
 
 
 def run_cases(
-    base: str, budget: dict[str, Any], tracker: dict[str, Any]
+    base: str,
+    budget: dict[str, Any],
+    tracker: dict[str, Any],
+    rows: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    """Run every declared case and return rows keyed by case id."""
+    """Run every declared case, filling `rows` as it goes.
+
+    The caller owns `rows` so that a stop condition part-way through still leaves every
+    row observed so far in the caller's hands, which is what the failure rehearsal
+    promises for an exhausted budget.
+    """
     identity = f"{base}/identitytoolkit.googleapis.com/v1"
     secure = f"{base}/securetoken.googleapis.com/v1/token?key={API_KEY}"
     admin = f"{identity}/projects/{PROJECT}"
-    rows: dict[str, dict[str, Any]] = {}
 
     def signup(index: int) -> dict[str, Any]:
         email = owned_email(tracker, index)
@@ -369,7 +396,7 @@ def run_cases(
         "revocation-same-second-session",
         status,
         body,
-        {"acceptedResponse": status == 200, "authTimePreserved": pinned},
+        {"acceptedResponse": status == 200, "boundaryPinnedFromServerValues": pinned},
         boundaryPinned=pinned,
         boundarySeconds={"authTime": boundary_second, "validSince": stored},
     )
@@ -409,7 +436,9 @@ def run_cases(
     )
     if status != 200:
         raise ShadowError(f"custom-token sign-in failed: {error_code(body)}")
-    track_account(tracker, body["localId"], owned_email(tracker, 2))
+    # A custom-token sign-in creates an account with no address; recording one would
+    # imply an address readback that cannot happen.
+    track_account(tracker, body["localId"], None)
     custom_session = body
     custom_shape = claim_shape(body["idToken"], reveal=("role",))
     rows["custom-token-developer-claims-present"] = _row(
@@ -587,57 +616,102 @@ def run_cases(
     return rows
 
 
-def cleanup(base: str, budget: dict[str, Any], tracker: dict[str, Any]) -> None:
-    """Delete every owned account and read both its UID and address back as absent."""
+def cleanup(
+    base: str,
+    budget: dict[str, Any],
+    tracker: dict[str, Any],
+    poster: Any = None,
+) -> list[str]:
+    """Delete every owned account and prove both its UID and address are gone.
+
+    Absence is only established by a 200 response whose result is empty. A refused or
+    failed call carries no result member either, and reading that as absence would
+    report a live production account as deleted. Any non-200 leaves the account
+    outstanding, which keeps the receipt incomplete.
+    """
+    send = poster or post
     identity = f"{base}/identitytoolkit.googleapis.com/v1"
     admin = f"{identity}/projects/{PROJECT}"
+    problems: list[str] = []
     for uid, account in list(tracker["accounts"].items()):
-        post(budget, admin, "/accounts:delete", {"localId": uid}, owner=True)
-        _, by_uid = post(
+        deleted, _ = send(
+            budget, admin, "/accounts:delete", {"localId": uid}, owner=True
+        )
+        if deleted != 200:
+            problems.append(f"delete returned {deleted}")
+            continue
+        uid_status, by_uid = send(
             budget, admin, "/accounts:lookup", {"localId": [uid]}, owner=True
         )
-        _, by_email = post(
+        uid_absent = uid_status == 200 and not by_uid.get("users")
+        if not uid_absent:
+            problems.append(f"uid lookup returned {uid_status}")
+        # An account created by custom-token sign-in has no address, so there is no
+        # address readback to perform and none is claimed.
+        if account["email"] is None:
+            mark_deleted(tracker, uid, uid_absent=uid_absent, email_absent=True)
+            continue
+        email_status, by_email = send(
             budget, admin, "/accounts:lookup", {"email": [account["email"]]}, owner=True
         )
-        mark_deleted(
-            tracker,
-            uid,
-            uid_absent=not by_uid.get("users"),
-            email_absent=not by_email.get("users"),
-        )
+        email_absent = email_status == 200 and not by_email.get("users")
+        if not email_absent:
+            problems.append(f"address lookup returned {email_status}")
+        mark_deleted(tracker, uid, uid_absent=uid_absent, email_absent=email_absent)
+    return problems
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Run the local AUTH-CREDENTIAL shadow."
+#: Every way a run can stop part-way. Each is recorded with the rows already observed
+#: rather than raised, so an exhausted budget never discards work already paid for.
+STOP_CONDITIONS = (
+    BudgetExceeded,
+    ShadowError,
+    ValueError,
+    KeyError,
+    urllib.error.URLError,
+    OSError,
+)
+
+
+def shadow_budget() -> dict[str, Any]:
+    """The local run's budget, bound to the campaign's declared request and time bounds.
+
+    The cost ceiling is zero because a loopback run spends nothing. The request and
+    wall-clock bounds come from the manifest so the executed instance cannot exercise a
+    looser bound than the campaign declares.
+    """
+    return new_budget(
+        max_requests=BUDGET["maxRequests"],
+        max_wall_seconds=BUDGET["maxWallSeconds"],
+        max_cost_usd=0.0,
     )
-    parser.add_argument("--binary", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--nonce", default=os.urandom(16).hex())
-    parser.add_argument(
-        "--commit",
-        help="the checkout the binary was built from; recorded, never verified here",
-    )
-    args = parser.parse_args(argv)
 
-    tracker = new_tracker(args.nonce)
-    budget = new_budget(max_requests=120, max_wall_seconds=600, max_cost_usd=0.0)
-    workdir = args.output.parent
-    workdir.mkdir(parents=True, exist_ok=True)
-    process, base = start_daemon(args.binary, workdir)
-    failure = None
+
+def collect(
+    base: str,
+    budget: dict[str, Any],
+    tracker: dict[str, Any],
+    runner: Any = None,
+) -> tuple[dict[str, dict[str, Any]], str | None]:
+    """Run the cases, returning whatever was observed plus any stop condition."""
     rows: dict[str, dict[str, Any]] = {}
     try:
-        rows = run_cases(base, budget, tracker)
-    except (ShadowError, KeyError, urllib.error.URLError) as error:
-        failure = f"{type(error).__name__}: {error}"
-    finally:
-        try:
-            cleanup(base, budget, tracker)
-        except Exception as error:  # noqa: BLE001 - a cleanup failure must be recorded, never raised past here
-            failure = failure or f"cleanup: {type(error).__name__}"
-        shutdown = stop_daemon(process)
+        (runner or run_cases)(base, budget, tracker, rows)
+    except STOP_CONDITIONS as error:
+        return rows, f"{type(error).__name__}: {error}"
+    return rows, None
 
+
+def finish_record(
+    *,
+    rows: dict[str, dict[str, Any]],
+    tracker: dict[str, Any],
+    budget: dict[str, Any],
+    failure: str | None,
+    shutdown: dict[str, Any],
+    source_binding: dict[str, Any],
+) -> tuple[dict[str, Any], int]:
+    """Assemble the record from whatever was observed, marking the rest not run."""
     ordered = [
         rows.get(
             case["id"],
@@ -655,12 +729,9 @@ def main(argv: list[str] | None = None) -> int:
         rows=ordered,
         tracker=tracker,
         budget=budget,
-        source_binding={
-            "commit": args.commit,
-            "commitStatus": "operator-asserted; not verified by this run",
-            "artifactSha256": hashlib.sha256(args.binary.read_bytes()).hexdigest(),
-        },
+        source_binding=source_binding,
     )
+    agreement = _agreement(ordered)
     record = {
         "campaignId": CAMPAIGN_ID,
         "kind": "local-shadow",
@@ -668,14 +739,54 @@ def main(argv: list[str] | None = None) -> int:
         "failure": failure,
         "shutdown": shutdown,
         "receipt": receipt,
-        "expectedLocalAgreement": _agreement(ordered),
+        "expectedLocalAgreement": agreement,
     }
-    args.output.write_text(json.dumps(record, indent=2, sort_keys=True))
-    return (
-        0
-        if failure is None and record["expectedLocalAgreement"]["unexpected"] == []
-        else 1
+    return record, 0 if failure is None and agreement["unexpected"] == [] else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run the local AUTH-CREDENTIAL shadow."
     )
+    parser.add_argument("--binary", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--nonce", default=os.urandom(16).hex())
+    parser.add_argument(
+        "--commit",
+        help="the checkout the binary was built from; recorded, never verified here",
+    )
+    args = parser.parse_args(argv)
+
+    tracker = new_tracker(args.nonce)
+    budget = shadow_budget()
+    workdir = args.output.parent
+    workdir.mkdir(parents=True, exist_ok=True)
+    process, base = start_daemon(args.binary, workdir)
+    try:
+        rows, failure = collect(base, budget, tracker)
+    finally:
+        try:
+            problems = cleanup(base, budget, tracker)
+        except STOP_CONDITIONS as error:
+            problems = [f"cleanup: {type(error).__name__}"]
+        shutdown = stop_daemon(process)
+    if problems:
+        failure = failure or "cleanup: " + "; ".join(problems)
+
+    record, exit_code = finish_record(
+        rows=rows,
+        tracker=tracker,
+        budget=budget,
+        failure=failure,
+        shutdown=shutdown,
+        source_binding={
+            "commit": args.commit,
+            "commitStatus": "operator-asserted; not verified by this run",
+            "artifactSha256": hashlib.sha256(args.binary.read_bytes()).hexdigest(),
+        },
+    )
+    args.output.write_text(json.dumps(record, indent=2, sort_keys=True))
+    return exit_code
 
 
 def _agreement(rows: list[dict[str, Any]]) -> dict[str, Any]:

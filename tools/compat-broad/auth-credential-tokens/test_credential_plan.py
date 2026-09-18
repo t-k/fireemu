@@ -12,6 +12,7 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 from credential_cases import observation_cases
+from credential_collector import BOUND_MODULES
 from credential_plan import (
     BUDGET,
     FROZEN_MODULES,
@@ -129,3 +130,11 @@ def test_a_well_formed_permission_is_still_not_production_execution() -> None:
     )
     assert validate_permission(grant, manifest) == []
     assert campaign_manifest(NONCE)["productionExecuted"] is False
+
+
+def test_the_manifest_and_the_collector_bind_the_same_modules() -> None:
+    # Two lists that must agree would drift; the manifest reuses the collector's.
+    assert FROZEN_MODULES is BOUND_MODULES
+    assert set(campaign_manifest(NONCE)["frozenInputs"]["modules"]) == set(
+        BOUND_MODULES
+    )

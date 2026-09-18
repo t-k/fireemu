@@ -27,6 +27,7 @@ use fireemu_core_firestore::store::{
     FirestoreState, HistoryCapacityError, HistoryProjection, HistoryUsage, ListedDocument,
     Precondition, QueryExecutionId, QueryStats, TransactionId, Write, WriteOp,
 };
+use fireemu_core_firestore::ttl::{SweepSchedule, TtlCatalog, TtlError, TtlState};
 use fireemu_core_firestore::value::Value;
 use fireemu_core_session::barrier::AdmissionBarrier;
 use fireemu_core_session::clock::VirtualClock;
@@ -224,11 +225,42 @@ enum Admission {
     Creates,
 }
 
+/// How many completed field-configuration operations one backend keeps.
+///
+/// A campaign polls the operation its own patch returned, so only a short tail is useful;
+/// the bound is what stops a caller that patches in a loop from growing this record.
+pub const FIELD_OPERATIONS_RETAINED: usize = 64;
+
+/// One completed `collectionGroups.fields.patch` long-running operation.
+///
+/// The local runtime applies a field configuration synchronously, so every recorded
+/// operation is already done: the record exists so that the operation name the patch
+/// returned can still be polled, which is how the Admin API is used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldOperation {
+    /// `projects/{project}/databases/{database}/operations/{operation}`.
+    pub name: String,
+    /// The `Field` resource the operation configured.
+    pub field: String,
+    /// The virtual-clock instant at which the configuration was applied.
+    pub at: fireemu_core_types::time::LogicalInstant,
+}
+
 /// Local backend state.
 pub struct LocalBackend {
     gateway: Gateway,
     /// Reloadable index catalog used for every new query plan.
     indexes: RwLock<BTreeMap<(Option<String>, String), fireemu_core_firestore::index::IndexSet>>,
+    /// Time-to-live field configuration per database, keyed like [`LocalBackend::indexes`]:
+    /// a project-specific entry wins over the entry shared by every project.
+    ttl: RwLock<BTreeMap<(Option<String>, String), TtlCatalog>>,
+    /// When each attached database was last swept for expired documents.
+    ttl_sweeps: Mutex<BTreeMap<(String, String), SweepSchedule>>,
+    /// How long an expired document stays readable before a sweep deletes it.
+    ttl_sweep_interval: fireemu_core_types::time::LogicalDuration,
+    /// The most recent completed field-configuration operations, oldest first, bounded by
+    /// [`FIELD_OPERATIONS_RETAINED`] so a caller cannot grow this record without bound.
+    field_operations: Mutex<std::collections::VecDeque<FieldOperation>>,
     clock: Arc<Mutex<VirtualClock>>,
     /// When this backend's databases came into being: a `read_time` before it is refused as
     /// production refuses one before the database's creation time.
@@ -1444,6 +1476,10 @@ impl LocalBackend {
             lock_lease: DEFAULT_LOCK_LEASE,
             gateway,
             indexes,
+            ttl: RwLock::new(BTreeMap::new()),
+            ttl_sweeps: Mutex::new(BTreeMap::new()),
+            ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
+            field_operations: Mutex::new(std::collections::VecDeque::new()),
             clock,
             wall_clock_write_time: false,
             history_version_limit:
@@ -2542,6 +2578,298 @@ impl LocalBackend {
             .or_else(|| indexes.get(&(None, database.to_owned())))
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Sets how long an expired document stays readable before a sweep deletes it.
+    ///
+    /// Production deletes typically within 24 hours of expiry and within 72 hours at worst,
+    /// so the interval is what a local run varies to reproduce either end of that window.
+    #[must_use]
+    pub const fn with_ttl_sweep_interval(
+        mut self,
+        interval: fireemu_core_types::time::LogicalDuration,
+    ) -> Self {
+        self.ttl_sweep_interval = interval;
+        self
+    }
+
+    /// The interval between expiry sweeps.
+    #[must_use]
+    pub const fn ttl_sweep_interval(&self) -> fireemu_core_types::time::LogicalDuration {
+        self.ttl_sweep_interval
+    }
+
+    /// Returns one database's time-to-live field configuration, falling back to the catalog
+    /// shared by every project.
+    #[must_use]
+    pub fn ttl_catalog(&self, project: &str, database: &str) -> TtlCatalog {
+        let catalogs = self
+            .ttl
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        catalogs
+            .get(&(Some(project.to_owned()), database.to_owned()))
+            .or_else(|| catalogs.get(&(None, database.to_owned())))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Replaces one database's time-to-live field configuration.
+    ///
+    /// Used by an import and by a snapshot restore, which install a whole catalog rather
+    /// than replaying the patches that built it.
+    pub fn replace_ttl_catalog(&self, project: &str, database: &str, catalog: TtlCatalog) {
+        let mut catalogs = self
+            .ttl
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if catalog.is_empty() {
+            catalogs.remove(&(Some(project.to_owned()), database.to_owned()));
+        } else {
+            catalogs.insert((Some(project.to_owned()), database.to_owned()), catalog);
+        }
+    }
+
+    /// Every configured time-to-live catalog, keyed by project and database.
+    ///
+    /// Only the project-specific entries are reported: the shared fallback belongs to the
+    /// configuration that installed it, not to any one database's state.
+    #[must_use]
+    pub fn ttl_catalogs(&self) -> BTreeMap<(String, String), TtlCatalog> {
+        let catalogs = self
+            .ttl
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        catalogs
+            .iter()
+            .filter_map(|((project, database), catalog)| {
+                project
+                    .as_ref()
+                    .map(|project| ((project.clone(), database.clone()), catalog.clone()))
+            })
+            .collect()
+    }
+
+    /// Enables a time-to-live policy on one collection group field.
+    pub fn enable_ttl(
+        &self,
+        project: &str,
+        database: &str,
+        collection_group: CollectionId,
+        field: FieldPath,
+    ) -> Result<TtlState, TtlError> {
+        let key = (Some(project.to_owned()), database.to_owned());
+        let mut catalogs = self
+            .ttl
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let catalog = catalogs.entry(key).or_default();
+        catalog.enable(collection_group, field)
+    }
+
+    /// Removes the time-to-live policy on one collection group field, reporting whether one
+    /// was in force.
+    pub fn disable_ttl(
+        &self,
+        project: &str,
+        database: &str,
+        collection_group: &CollectionId,
+        field: &FieldPath,
+    ) -> bool {
+        let key = (Some(project.to_owned()), database.to_owned());
+        let mut catalogs = self
+            .ttl
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(catalog) = catalogs.get_mut(&key) else {
+            return false;
+        };
+        let removed = catalog.disable(collection_group, field);
+        if catalog.is_empty() {
+            catalogs.remove(&key);
+        }
+        removed
+    }
+
+    /// Records one completed field-configuration operation and returns its resource name.
+    pub fn record_field_operation(
+        &self,
+        project: &str,
+        database: &str,
+        field: &str,
+        at: fireemu_core_types::time::LogicalInstant,
+    ) -> String {
+        let mut operations = self
+            .field_operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The identifier is drawn from the record's own length and the resource it names, so
+        // two runs of the same campaign against the same seed produce the same name.
+        let ordinal = operations.len();
+        let mut digest = fireemu_core_types::hash::Sha256::new();
+        digest.update(b"fireemu:field-operation:");
+        digest.update(field.as_bytes());
+        digest.update(b":");
+        digest.update(at.as_nanos().to_string().as_bytes());
+        digest.update(b":");
+        digest.update(ordinal.to_string().as_bytes());
+        let id = fireemu_core_types::hash::hex_lower(&digest.finalize()[..12]);
+        let name = format!("projects/{project}/databases/{database}/operations/{id}");
+        operations.push_back(FieldOperation {
+            name: name.clone(),
+            field: field.to_owned(),
+            at,
+        });
+        while operations.len() > FIELD_OPERATIONS_RETAINED {
+            operations.pop_front();
+        }
+        name
+    }
+
+    /// One recorded field-configuration operation, if it is still retained.
+    #[must_use]
+    pub fn field_operation(&self, name: &str) -> Option<FieldOperation> {
+        self.field_operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find(|operation| operation.name == name)
+            .cloned()
+    }
+
+    /// Every retained field-configuration operation, oldest first.
+    #[must_use]
+    pub fn field_operations(&self) -> Vec<FieldOperation> {
+        self.field_operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Establishes the sweep baseline of every attached database that has a policy, so that
+    /// a document expiring before the first clock advance is still observable for one
+    /// interval rather than being deleted by the first sweep that runs.
+    pub fn start_ttl_sweeps(&self, now: fireemu_core_types::time::LogicalInstant) {
+        let Ok(catalog) = self.database_catalog() else {
+            return;
+        };
+        let mut schedules = self
+            .ttl_sweeps
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for ((project, database), _incarnation) in catalog {
+            schedules
+                .entry((project, database))
+                .or_insert_with(|| SweepSchedule::new(self.ttl_sweep_interval))
+                .start(now);
+        }
+    }
+
+    /// Deletes every document whose time-to-live field expired before `now`, in every
+    /// attached database whose sweep is due, and returns how many were deleted.
+    ///
+    /// A deletion is an ordinary delete: it takes the database's own lock, publishes a
+    /// change to every listener, delivers the Firestore triggers and evaluates no Security
+    /// Rules, which is what production's own expiry does.
+    pub fn sweep_expired_documents(&self, now: fireemu_core_types::time::LogicalInstant) -> usize {
+        self.sweep_ttl(now, false)
+    }
+
+    /// Runs one expiry sweep whether or not the interval has elapsed, for the control
+    /// endpoint that lets a test observe the post-expiry state without advancing a day.
+    pub fn sweep_expired_documents_now(
+        &self,
+        now: fireemu_core_types::time::LogicalInstant,
+    ) -> usize {
+        self.sweep_ttl(now, true)
+    }
+
+    fn sweep_ttl(&self, now: fireemu_core_types::time::LogicalInstant, force: bool) -> usize {
+        let Ok(catalog) = self.database_catalog() else {
+            return 0;
+        };
+        let mut deleted = 0;
+        for ((project, database), _incarnation) in catalog {
+            let policies = self.ttl_catalog(&project, &database);
+            if policies.is_empty() {
+                continue;
+            }
+            {
+                let mut schedules = self
+                    .ttl_sweeps
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let schedule = schedules
+                    .entry((project.clone(), database.clone()))
+                    .or_insert_with(|| SweepSchedule::new(self.ttl_sweep_interval));
+                if !force && !schedule.due(now) {
+                    schedule.start(now);
+                    continue;
+                }
+                schedule.mark(now);
+            }
+            deleted += self.sweep_one_database(&project, &database, &policies, now);
+        }
+        deleted
+    }
+
+    fn sweep_one_database(
+        &self,
+        project: &str,
+        database: &str,
+        policies: &TtlCatalog,
+        now: fireemu_core_types::time::LogicalInstant,
+    ) -> usize {
+        let (Ok(project_id), Ok(database_id)) = (
+            fireemu_core_types::ids::ProjectId::try_new(project),
+            DatabaseId::try_new(database),
+        ) else {
+            return 0;
+        };
+        let parent = Parent {
+            project: project_id,
+            database: database_id,
+            document: None,
+        };
+        let expires_at = fireemu_core_firestore::ttl::timestamp_at(now);
+        let mut deleted = 0;
+        for (collection_group, policy) in policies {
+            // Only the time-to-live field is projected, so a sweep never clones a document's
+            // payload to decide that the document stays.
+            let query = Query {
+                projection: Some(vec![policy.field.clone()]),
+                ..Query::new(fireemu_core_firestore::query::QueryScope::collection_group(
+                    collection_group.clone(),
+                ))
+            };
+            let Ok(documents) = self.run_query_latest(&parent, &query) else {
+                continue;
+            };
+            let expired: Vec<DocumentPath> = documents
+                .into_iter()
+                .filter(|document| {
+                    fireemu_core_firestore::ttl::is_expired(
+                        &document.fields,
+                        &policy.field,
+                        expires_at,
+                    )
+                })
+                .map(|document| document.path)
+                .collect();
+            for path in expired {
+                let request = pb::DeleteDocumentRequest {
+                    name: path.resource_name(),
+                    current_document: None,
+                    request_options: None,
+                };
+                if self.delete_document(&request).is_ok() {
+                    deleted += 1;
+                }
+            }
+        }
+        deleted
     }
 
     /// Runs an accepted query at the latest version and returns core documents.

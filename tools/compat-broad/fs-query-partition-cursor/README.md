@@ -66,7 +66,7 @@ uv run --python 3.12 --with pytest pytest -q tools/compat-broad/fs-query-partiti
 
 ## Reviewed local shadow
 
-Source commit `db95d80f0` was exercised against a locally built `fireemu` with
+Source commit `660d57d46` was exercised against a locally built `fireemu` with
 SHA-256 `a2839d0a4d07434a2efc91f6d11d332ef5eb078d1bc73e2807dfcf98d801a94a`, template plan digest
 `496fbb0ad7661a8395b83669b97fdb831a2c24cf792d979d37d6907e69fb06b7`. All 31
 observation and 6 recovery slots were dispatched, 37 raw sidecars were published

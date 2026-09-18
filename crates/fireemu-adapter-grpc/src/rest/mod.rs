@@ -21,6 +21,8 @@ use fireemu_proto_firestore::google::firestore::v1 as pb;
 use serde_json::{json, Value};
 use tonic::{Code, Status};
 
+use fireemu_core_types::time::LogicalInstant;
+
 use crate::encode::encode_instant;
 use crate::gateway::Gateway;
 use crate::local::LocalBackend;
@@ -240,20 +242,85 @@ fn first<'a>(params: &'a BTreeMap<String, Vec<String>>, key: &str) -> Option<&'a
     params.get(key).and_then(|v| v.first()).map(String::as_str)
 }
 
-fn admin_database_json(project: &str, database: &str) -> Value {
-    json!({
+/// The server-assigned unique id of one database. Production draws a UUID at creation and
+/// keeps it for the resource's life; a local database has no creation event to draw from, so
+/// the id is derived from the resource name and is therefore stable across restarts of the
+/// same project and database.
+fn database_uid(project: &str, database: &str) -> String {
+    let mut digest = fireemu_core_types::hash::Sha256::new();
+    digest.update(b"fireemu:database-uid:");
+    digest.update(project.as_bytes());
+    digest.update(b"/");
+    digest.update(database.as_bytes());
+    let bytes = digest.finalize();
+    let hex = fireemu_core_types::hash::hex_lower(&bytes[..16]);
+    // Version 4 and the RFC 4122 variant, so the value is shaped like the one production
+    // reports rather than an arbitrary 32 hexadecimal digits.
+    format!(
+        "{}-{}-4{}-a{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[13..16],
+        &hex[17..20],
+        &hex[20..32]
+    )
+}
+
+/// The opaque concurrency token of one database. Production's changes whenever the resource
+/// changes; the local projection is a function of the resource, so this is a digest of it.
+fn database_etag(resource: &Value) -> String {
+    let mut digest = fireemu_core_types::hash::Sha256::new();
+    digest.update(b"fireemu:database-etag:");
+    digest.update(resource.to_string().as_bytes());
+    fireemu_core_types::hash::base64_standard(&digest.finalize()[..18])
+}
+
+/// One database of the Admin inventory, in the shape the saved production response carries
+/// (`conformance/firestore-production-matrix.json`, `emulator/routes#get-database`).
+///
+/// `locationId` is the one field still constant: nothing in the configuration names a region,
+/// and a local database is not in one.
+fn admin_database_json(
+    project: &str,
+    database: &str,
+    edition: fireemu_core_types::edition::FirestoreEdition,
+    created: LogicalInstant,
+    now: LogicalInstant,
+) -> Value {
+    let created_json = json::timestamp_to_json(&encode_instant(created));
+    // The oldest version a read may name: the retention window, floored at creation. The
+    // bound is the one `read_time` is validated against.
+    let window = i128::from(crate::local::READ_TIME_RETENTION_SECONDS) * 1_000_000_000;
+    let earliest = std::cmp::max(created, LogicalInstant::from_nanos(now.as_nanos() - window));
+    let mut resource = json!({
         "name": format!("projects/{project}/databases/{database}"),
+        "uid": database_uid(project, database),
+        "createTime": created_json,
+        "updateTime": created_json,
         "locationId": "us-central1",
         "type": "FIRESTORE_NATIVE",
         "concurrencyMode": "PESSIMISTIC",
         "versionRetentionPeriod": "3600s",
+        "earliestVersionTime": json::timestamp_to_json(&encode_instant(earliest)),
         "appEngineIntegrationMode": "DISABLED",
         "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
         "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-        "databaseEdition": "STANDARD",
+        // The API spells the edition in upper case; the configuration spells it in lower
+        // case. Only Standard reaches here today, because the route refuses every other
+        // edition above, so this maps whatever the configuration named rather than branching
+        // on an edition that cannot arrive.
+        "databaseEdition": edition.as_config_str().to_uppercase(),
         "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
         "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED"
-    })
+    });
+    // The free tier covers the default database alone; production omits the field for the
+    // databases it does not cover rather than reporting it false.
+    if database == fireemu_core_types::ids::DatabaseId::DEFAULT {
+        resource["freeTier"] = json!(true);
+    }
+    let etag = database_etag(&resource);
+    resource["etag"] = json!(etag);
+    resource
 }
 
 fn single<'a>(
@@ -621,7 +688,22 @@ impl RestState {
         let project = segments[1];
         let barrier = self.local.barrier();
         let _admitted = barrier.admit();
-        let catalog = self.local.database_catalog()?;
+        // The inventory answers what the data plane answers: a database exists when it is
+        // `(default)`, when the configuration declares it, or when something materialized it.
+        let mut databases: std::collections::BTreeSet<String> = self
+            .local
+            .database_catalog()?
+            .into_iter()
+            .filter(|((p, _), _)| p == project)
+            .map(|((_, d), _incarnation)| d)
+            .collect();
+        databases.insert(fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned());
+        databases.extend(self.local.declared_databases());
+        let created = self.local.created_at();
+        let now = self.local.now();
+        let edition = self.gateway.ctx.edition;
+        let resource =
+            |database: &str| admin_database_json(project, database, edition, created, now);
         match (req.method.as_str(), segments.as_slice()) {
             ("GET", ["projects", project_name, "databases"]) if *project_name == project => {
                 match single(params, "showDeleted")? {
@@ -637,24 +719,21 @@ impl RestState {
                         "pageSize and pageToken are not supported",
                     ));
                 }
-                let databases: Vec<Value> = catalog
-                    .into_iter()
-                    .filter(|((p, _), _)| p == project)
-                    .map(|((_, d), _incarnation)| admin_database_json(project, &d))
-                    .collect();
+                let databases: Vec<Value> = databases.iter().map(|d| resource(d)).collect();
                 Ok(ok(json!({"databases": databases, "unreachable": []})))
             }
             ("GET", ["projects", project_name, "databases", database])
                 if *project_name == project && !database.is_empty() && !database.contains('/') =>
             {
-                let Some((_, incarnation)) = catalog
-                    .into_iter()
-                    .find(|((p, d), _)| p == project && d == database)
-                else {
-                    return Err(Status::not_found("database not found"));
-                };
-                let _ = incarnation;
-                Ok(ok(admin_database_json(project, database)))
+                if !databases.contains(*database) {
+                    // Production's own message for `databases.get` on a database it does not
+                    // have (`conformance/firestore-production-matrix.json`,
+                    // `emulator/routes#get-named-database`).
+                    return Err(Status::not_found(format!(
+                        "Project '{project}' or database '{database}' does not exist."
+                    )));
+                }
+                Ok(ok(resource(database)))
             }
             _ => Ok(not_found_text()),
         }

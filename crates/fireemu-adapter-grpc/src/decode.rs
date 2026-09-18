@@ -20,11 +20,14 @@ use fireemu_proto_firestore::google::firestore::v1::structured_query as sq;
 pub enum DecodeError {
     /// Malformed resource name.
     InvalidParent(String),
-    /// A database id the project cannot have (production answers `NOT_FOUND` for it).
+    /// A database the project does not have: an id the project could never have carried, or
+    /// one `databases.create` was never called for. Production answers `NOT_FOUND` for both,
+    /// with the same message (`conformance/firestore-production-matrix.json`,
+    /// `emulator/routes#database-with-uppercase-name` and `#named-database-document`).
     UnknownDatabase {
         /// The project the request named.
         project: String,
-        /// The database id the project cannot have.
+        /// The database id the project does not have.
         database: String,
     },
     /// Malformed field path.
@@ -55,7 +58,9 @@ impl fmt::Display for DecodeError {
             Self::InvalidParent(m) => write!(f, "invalid parent: {m}"),
             Self::UnknownDatabase { project, database } => write!(
                 f,
-                "The database {database} does not exist for project {project}"
+                "The database {database} does not exist for project {project} Please visit \
+                 https://console.cloud.google.com/datastore/setup?project={project} to add a \
+                 Cloud Datastore or Cloud Firestore database. "
             ),
             Self::InvalidFieldPath(m) => write!(f, "invalid field path: {m}"),
             Self::InvalidValue(m) => write!(f, "invalid value: {m}"),

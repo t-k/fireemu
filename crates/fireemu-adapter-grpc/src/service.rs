@@ -1892,6 +1892,9 @@ mod tests {
     async fn saturated_blocking_queries_leave_runtime_and_other_databases_responsive() {
         const QUERIES: usize = 4;
         let backend = test_backend();
+        // The probe reads a second database while the first is saturated, so it is declared:
+        // a database nothing created is refused before the read reaches any lock.
+        backend.replace_declared_databases(["other".to_owned()]);
         let epoch = backend.barrier().epoch();
         let mut entered = Vec::new();
         let mut releases = Vec::new();

@@ -2624,3 +2624,70 @@ async fn a_missing_index_removes_only_its_own_target_and_the_stream_keeps_listen
     );
     handle.abort();
 }
+
+#[tokio::test]
+async fn the_streaming_surfaces_refuse_a_database_that_was_never_created() {
+    // Production answers NOT_FOUND for a database `databases.create` was never called for,
+    // before the target or the write is considered. The message is the one recorded from the
+    // oracle project in `conformance/firestore-production-matrix.json`.
+    let expected = "The database never-created does not exist for project demo-app Please \
+                    visit https://console.cloud.google.com/datastore/setup?project=demo-app \
+                    to add a Cloud Datastore or Cloud Firestore database. ";
+    let (mut client, handle) = start(false).await;
+    let database = "projects/demo-app/databases/never-created";
+
+    let (tx, rx) = mpsc::channel(8);
+    let mut listened = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut target = add_query_target(1, "open");
+    target.database = database.to_owned();
+    let Some(pb::listen_request::TargetChange::AddTarget(added)) = &mut target.target_change else {
+        panic!("the fixture adds a query target");
+    };
+    let Some(pb::target::TargetType::Query(query)) = &mut added.target_type else {
+        panic!("the fixture adds a query target");
+    };
+    query.parent = format!("{database}/documents");
+    tx.send(target).await.unwrap();
+    // The target is acknowledged before it is served, so the refusal is the next message.
+    let refused = loop {
+        match listened
+            .next()
+            .await
+            .expect("the stream reports the refusal")
+        {
+            Ok(response) => assert!(
+                matches!(
+                    response.response_type,
+                    Some(pb::listen_response::ResponseType::TargetChange(_))
+                ),
+                "no document is served from a database that does not exist: {response:?}"
+            ),
+            Err(error) => break error,
+        }
+    };
+    assert_eq!(refused.code(), tonic::Code::NotFound);
+    assert_eq!(refused.message(), expected);
+
+    let (write_tx, write_rx) = mpsc::channel(8);
+    let mut written = client
+        .write(ReceiverStream::new(write_rx))
+        .await
+        .unwrap()
+        .into_inner();
+    write_tx
+        .send(pb::WriteRequest {
+            database: database.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let refused = written.next().await.unwrap().unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::NotFound);
+    assert_eq!(refused.message(), expected);
+
+    handle.abort();
+}

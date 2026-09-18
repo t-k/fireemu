@@ -14,6 +14,10 @@ This lane prepares a bounded production observation of the `AUTH-CREDENTIAL` con
 | `credential_plan.py` | The inert campaign manifest: frozen inputs, budget, permission envelope, owner preconditions, cleanup contract and failure rehearsal. |
 | `credential_shadow.py` | The local shadow. It owns a `fireemu` process, runs every case against it and records what the local runtime does. Local evidence only. |
 
+## Signing dependence
+
+Eleven of the seventeen cases carry `requiresSigning`. Production custom tokens must be RS256-signed by a service account while local ones are unsigned, and the session-cookie group derives its cookie from the custom-token session, so it depends on signing too. A run without signing access can only cover the refresh and revocation groups.
+
 ## Two rules that carry the weight
 
 The local runtime issues unsigned emulator tokens; production issues signed ones. A trust-root difference is therefore expected and is never counted as a semantic difference, though both roots are recorded.

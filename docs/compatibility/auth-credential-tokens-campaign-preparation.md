@@ -40,7 +40,7 @@ The run creates at most four throwaway accounts, all carrying the run nonce in t
 
 Identity Platform bills monthly active users rather than requests, and these accounts are deleted inside the run, so the expected charge is zero. The US$0.05 ceiling is a guard against a runaway loop, not a forecast.
 
-Cleanup registers every account before it is used, then deletes each one and reads back both its UID and its address as absent. A delete without a readback is not cleanup, and a cleanup failure fails the run rather than becoming a warning. The campaign changes no project or tenant configuration, so there is nothing to restore.
+Cleanup registers every account before it is used, then deletes each one and proves absence from a 200 lookup whose result is empty. A refusal carries no result member either, so a non-200 status is never read as absence; any non-200 delete or lookup leaves the account outstanding and the receipt incomplete. An account created by custom-token sign-in has no address, so no address readback is claimed for it. A cleanup failure fails the run rather than becoming a warning. The campaign changes no project or tenant configuration, so there is nothing to restore.
 
 Five failure modes are rehearsed in the manifest: an exhausted budget, a refused privileged call, a refused cleanup, a process killed between sign-in and cleanup, and a boundary that cannot be pinned.
 
@@ -48,7 +48,7 @@ Five failure modes are rehearsed in the manifest: an exhausted budget, a refused
 
 The campaign cannot run until an owner supplies all of these. The first is the substantial one.
 
-1. A service account in the oracle project able to mint RS256 custom tokens for it, through a key file or `iam.serviceAccounts.signBlob` on itself. Local custom tokens are unsigned, so the custom-token and claim-precedence groups cannot run without it.
+1. A service account in the oracle project able to mint RS256 custom tokens for it, through a key file or `iam.serviceAccounts.signBlob` on itself. Local custom tokens are unsigned. Eleven of the seventeen cases depend on this: the custom-token and claim-precedence groups directly, and the whole session-cookie group because it derives its cookie from the custom-token session. Each case carries a `requiresSigning` flag, so the split is mechanical rather than editorial.
 2. An OAuth access token scoped for Identity Toolkit, for the privileged account update, lookup and session-cookie calls.
 3. A Web API key for the same project, for sign-in and the secure-token exchange.
 4. Confirmation that the project's Identity Platform tier makes the budgeted requests non-billable, or an accepted charge.
@@ -59,7 +59,7 @@ An owner permission must use `kind=owner-execution-permission` and carry the cam
 
 ## Local shadow
 
-The campaign was run in full against a `fireemu` built from this checkout. All seventeen cases agreed with their declared expected local results, the owned process stopped with no surviving child, and all three owned accounts were deleted with both the UID and the address confirmed absent. The record is [`auth-credential-tokens-local-shadow-20260918.json`](../../spec/compatibility/broad-runs/auth-credential-tokens-local-shadow-20260918.json), which binds the artifact digest and the asserted source commit.
+The campaign was run in full against a `fireemu` built from this checkout. All seventeen cases agreed with their declared expected local results, and the owned process stopped with none of the children it had before the signal surviving. All three owned accounts were deleted, each proved absent by a 200 lookup with an empty result. Two of them had an address and contributed an address readback; the custom-token account has no address, so none is claimed for it. The record is [`auth-credential-tokens-local-shadow-20260918.json`](../../spec/compatibility/broad-runs/auth-credential-tokens-local-shadow-20260918.json), which binds the artifact digest and the asserted source commit.
 
 This is local evidence and nothing more. It shows the expected local results in the case list are the runtime's actual behavior rather than a reading of the source, which is what makes a future production comparison meaningful. It establishes no production behavior and promotes no group.
 

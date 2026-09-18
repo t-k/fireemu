@@ -9,7 +9,7 @@
   "campaignId": "FS-WRITE-LIMITS-03",
   "collector": {
     "differenceFromLimits02": "Every mutating method is gated by the write-safety predicate, not PATCH alone, because this campaign sends writes over :batchWrite. The preflight prefix length is read from the plan. A row the campaign has declared it cannot predict locally is excused from the safety predicate, though its journal integrity is still checked. collector.py is byte-for-byte unchanged, so the frozen limits-02 collector source digest still resolves.",
-    "digest": "5c69fa9d316392dfc9d7a09e5db5e2cd2e5faa42ba4c0e9bfc763615d326f4de",
+    "digest": "185f13258c5b14d7b4d462ea065f7f3782e10503a793fc35d2ae411cf1bc6288",
     "path": "tools/compat-broad/fs-write-limits/collector_03.py",
     "productionCollector": null,
     "scope": "REST BatchWrite per-position outcome, create-only document writes, typed readbacks and request-stage name refusals, with ownership and version bound cleanup. No configuration, index, Rules or account operation.",
@@ -52,12 +52,12 @@
   "localShadow": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03-local-shadow.json",
     "productionExecuted": false,
-    "sha256": "091165c74aa396f6e630f02ab9407103a634b9b217bda47291f6da9ff87e6b60",
+    "sha256": "ba566575f8c0b5dd29db83affa53b5279a930d19eeb607a4afdd2e5422b161d5",
     "status": "completed"
   },
   "manifest": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03.json",
-    "sha256": "8fc71c1224ab45e4c7ec69244fdb2865564e6403755b7a14e385fb1a8b5fd40a"
+    "sha256": "46a14f6973427eb0a103517d54a16593582ab50989a4329439d3ce2338edcecf"
   },
   "parts": [
     "FS-WRITE-LIMITS-03A",
@@ -65,12 +65,12 @@
   ],
   "productionExecuted": false,
   "source": {
-    "codeSourceHead": "f91a21e1d7814a07d24825e086d78c3147399198",
-    "commit": "f91a21e1d7814a07d24825e086d78c3147399198",
+    "codeSourceHead": "02ddda51e0abd716c7b084db09e2a685e48d1e8c",
+    "commit": "02ddda51e0abd716c7b084db09e2a685e48d1e8c",
     "productionArtifactSha256": null,
     "shadowArtifactSha256": {
-      "A": "fbcb0a8ddbc5ae3925fb7345936e86f3f88eb96a86cf3939c5fd329a4dc5b3f3",
-      "B": "5ac9a8a7730dca8bc5b68c207bfadb5af95f02745c02a830168a42baa5f374d7"
+      "A": "d9c09fc65f099fb9da42a0fa737b3f687b7e9f5312d2520a24fbd014bc4a5f16",
+      "B": "854840a0fa26bb282012aa8637270534d2a0ddfed9ec563e92a778a078a5a880"
     }
   },
   "status": "BLOCKED_OWNER",

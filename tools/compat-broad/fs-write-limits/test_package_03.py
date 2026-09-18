@@ -305,8 +305,11 @@ def test_the_document_name_figures_are_computed_not_written_by_hand() -> None:
         if case.get("limitId") == "FS-LIMIT-DOCUMENT-NAME-BYTES"
     )
     prefix = len("projects/fireemu-35fe6/databases/(default)/documents/")
-    assert case["derivedFigures"] == name_charge_floor(prefix, DOCUMENT_NAME_MAX)
     figures = case["derivedFigures"]
+    assert figures | name_charge_floor(prefix, DOCUMENT_NAME_MAX) == figures
+    # The compiled document's own entry is published beside the two floors, so a
+    # reader can see that this plan sits above both.
+    assert figures["compiledDocumentEntry"] > figures["smallestMarkerBearingEntry"]
     # The floor for any indexed field, and the floor for a marker-bearing
     # document, are different numbers and the text must use both correctly.
     assert figures["smallestIndexedFieldEntry"] < figures["smallestMarkerBearingEntry"]
@@ -316,6 +319,8 @@ def test_the_document_name_figures_are_computed_not_written_by_hand() -> None:
         figures["smallestMarkerBearingEntry"],
     ):
         assert str(value) in case["derivation"], value
+    # No superseded figure may survive anywhere in the published package.
+    assert "11040" not in MANIFEST.read_text()
     # The claim is scoped to documents that carry the ownership marker, because
     # a document with no fields generates no entries at all.
     assert "marker-bearing" in case["derivation"]

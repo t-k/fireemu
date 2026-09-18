@@ -980,6 +980,7 @@ fn core_err(e: StorageError) -> (u16, String, &'static str) {
         StorageError::InvalidImportedIdentity(m) => {
             (400, format!("invalid imported identity: {m}"), "invalid")
         }
+        StorageError::InvalidMetadata(m) => (400, m, "invalid"),
         StorageError::IdentityExhausted => (
             507,
             "storage identity space exhausted".to_owned(),
@@ -1328,10 +1329,11 @@ fn coerce_custom_value(v: &Value) -> Option<String> {
 /// object name is already held to the same rule (`name.rs`), so this closes the gap for
 /// metadata.
 fn header_safe(field: &str, value: &str) -> Result<(), String> {
-    if value.bytes().any(|b| b < 0x20 || b == 0x7f) {
-        return Err(format!("{field} contains a control character"));
+    if fireemu_core_storage::store::is_header_safe(value) {
+        Ok(())
+    } else {
+        Err(format!("{field} contains a control character"))
     }
-    Ok(())
 }
 
 /// Custom metadata whose keys and values are all control-character-free.

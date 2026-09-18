@@ -2647,6 +2647,7 @@ fn enforce_storage_object_count(count: usize, path: &Path) -> Result<(), Artifac
 
 fn imported_object(meta: &ExportedObject, path: &Path) -> Result<ImportedObject, ArtifactError> {
     let refuse = |message: String| ArtifactError::new("storage", path, message);
+    header_safe_metadata(meta, &refuse)?;
     let bucket = BucketName::try_new(meta.bucket.clone())
         .map_err(|e| refuse(format!("bucket {:?}: {e}", meta.bucket)))?;
     let name = ObjectName::try_new(meta.name.clone())
@@ -2684,6 +2685,45 @@ fn imported_object(meta: &ExportedObject, path: &Path) -> Result<ImportedObject,
         crc32c: meta.crc32c.as_deref().and_then(|c| c.parse().ok()),
         size: Some(meta.size),
     })
+}
+
+/// Refuses, before any object is installed, the metadata strings an artifact may carry that
+/// would be served as HTTP header values.
+///
+/// The store applies the same check, but it does so one object at a time after the previous
+/// state has been cleared; refusing here keeps a crafted artifact from clearing the store and
+/// installing a prefix of its objects. The refusal names the field and never repeats the
+/// value, which is by definition untrusted and carries control characters.
+fn header_safe_metadata(
+    meta: &ExportedObject,
+    refuse: &impl Fn(String) -> ArtifactError,
+) -> Result<(), ArtifactError> {
+    let check = |field: &str, value: &str| -> Result<(), ArtifactError> {
+        if fireemu_core_storage::store::is_header_safe(value) {
+            Ok(())
+        } else {
+            Err(refuse(format!("{field} contains a control character")))
+        }
+    };
+    for (field, value) in [
+        ("contentType", &meta.content_type),
+        ("contentDisposition", &meta.content_disposition),
+        ("contentEncoding", &meta.content_encoding),
+        ("contentLanguage", &meta.content_language),
+        ("cacheControl", &meta.cache_control),
+    ] {
+        if let Some(value) = value {
+            check(field, value)?;
+        }
+    }
+    for (key, value) in &meta.custom_metadata {
+        check("metadata key", key)?;
+        check(&format!("metadata.{key}"), value)?;
+    }
+    for token in &meta.download_tokens {
+        check("downloadTokens", token)?;
+    }
+    Ok(())
 }
 
 fn imported_instant(

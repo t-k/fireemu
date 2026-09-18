@@ -397,6 +397,9 @@ pub enum StorageError {
     ChecksumMismatch(String),
     /// An imported live object used a reserved generation identity.
     InvalidImportedIdentity(String),
+    /// A metadata string that is served as an HTTP header carries a control character. The
+    /// message names the field and never repeats the value.
+    InvalidMetadata(String),
     /// No further losslessly persisted generation identity can be allocated.
     IdentityExhausted,
     /// A coupled logical event batch could not be reserved before publication.
@@ -423,6 +426,7 @@ impl fmt::Display for StorageError {
             Self::UploadCapacityExceeded => f.write_str("resumable upload byte budget exhausted"),
             Self::ChecksumMismatch(m) => write!(f, "checksum mismatch: {m}"),
             Self::InvalidImportedIdentity(m) => write!(f, "invalid imported identity: {m}"),
+            Self::InvalidMetadata(m) => write!(f, "invalid metadata: {m}"),
             Self::IdentityExhausted => f.write_str("storage identity space exhausted"),
             Self::EventAdmission(error) => write!(f, "event admission failed: {error}"),
             Self::NotModified(m) => write!(f, "not modified: {m}"),
@@ -431,6 +435,51 @@ impl fmt::Display for StorageError {
 }
 
 impl std::error::Error for StorageError {}
+
+/// Whether a metadata string may be served as an HTTP header value.
+///
+/// C0 control characters (U+0000 included) and DEL can split a header, a log line or a
+/// re-exported artifact, and production refuses them where an object is written, so nothing
+/// may enter the store carrying one. This is the single classification every entry point
+/// uses: the HTTP upload and patch paths, and [`StorageState::insert_imported`].
+#[must_use]
+pub fn is_header_safe(value: &str) -> bool {
+    !value.bytes().any(|b| b < 0x20 || b == 0x7f)
+}
+
+/// [`is_header_safe`] as a store refusal that names `field` and never repeats the value.
+fn header_safe(field: &str, value: &str) -> Result<(), StorageError> {
+    if is_header_safe(value) {
+        Ok(())
+    } else {
+        Err(StorageError::InvalidMetadata(format!(
+            "{field} contains a control character"
+        )))
+    }
+}
+
+/// Every metadata string of an imported object that leaves the store as an HTTP header.
+fn imported_metadata_is_header_safe(object: &ImportedObject) -> Result<(), StorageError> {
+    header_safe("contentType", &object.content_type)?;
+    for (field, value) in [
+        ("contentDisposition", &object.content_disposition),
+        ("contentEncoding", &object.content_encoding),
+        ("contentLanguage", &object.content_language),
+        ("cacheControl", &object.cache_control),
+    ] {
+        if let Some(value) = value {
+            header_safe(field, value)?;
+        }
+    }
+    for (key, value) in &object.custom {
+        header_safe("metadata key", key)?;
+        header_safe(&format!("metadata.{key}"), value)?;
+    }
+    for token in &object.download_tokens {
+        header_safe("downloadTokens", token)?;
+    }
+    Ok(())
+}
 
 /// Storage events (spec 9.7), appended for the outbox.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1474,6 +1523,10 @@ impl StorageState {
         if custom_metadata_size(&object.custom) > MAX_CUSTOM_METADATA_BYTES {
             return Err(StorageError::MetadataTooLarge);
         }
+        // The import boundary is an input boundary like an upload: a control character here
+        // would make every later download and metadata update fail while the response is
+        // built, and would travel back out through re-export and the Rules `resource`.
+        imported_metadata_is_header_safe(&object)?;
         if object.generation == 0
             || object.generation > MAX_PERSISTED_IDENTITY
             || object.metageneration == 0

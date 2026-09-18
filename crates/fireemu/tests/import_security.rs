@@ -173,3 +173,74 @@ fn duplicate_storage_object_identities_are_refused_instead_of_replacing_bytes() 
     assert!(stderr.contains("duplicate storage object"), "{stderr}");
     let _ = std::fs::remove_dir_all(export.parent().unwrap());
 }
+
+/// SIMP-1: object metadata from an artifact reaches response headers, re-export and the
+/// Rules `resource`, so the import boundary refuses the control characters an upload
+/// refuses. The refusal names the field and never echoes the value.
+#[test]
+fn storage_metadata_with_control_characters_is_refused_naming_the_field_only() {
+    const BASE: &str = r#""name":"obj","bucket":"demo-app.appspot.com","generation":1,"metageneration":1,"size":1"#;
+    let crlf = "\\r\\n";
+    let nul = "\\u0000";
+    for (label, tail, field) in [
+        (
+            "content-type-crlf",
+            format!(r#""contentType":"text/plain{crlf}X-Injected: marker-secret""#),
+            "contentType",
+        ),
+        (
+            "cache-control-nul",
+            format!(r#""contentType":"text/plain","cacheControl":"public{nul}marker-secret""#),
+            "cacheControl",
+        ),
+        (
+            "custom-key-nul",
+            format!(r#""contentType":"text/plain","customMetadata":{{"k{nul}marker-secret":"v"}}"#),
+            "metadata key",
+        ),
+        (
+            "custom-value-crlf",
+            format!(
+                r#""contentType":"text/plain","customMetadata":{{"k":"v{crlf}marker-secret"}}"#
+            ),
+            "metadata",
+        ),
+        (
+            "download-token-nul",
+            format!(r#""contentType":"text/plain","downloadTokens":["tok{nul}marker-secret"]"#),
+            "downloadTokens",
+        ),
+    ] {
+        let dir = scratch(label);
+        let export = dir.join("export");
+        std::fs::create_dir_all(export.join("storage_export/blobs")).unwrap();
+        std::fs::create_dir_all(export.join("storage_export/metadata")).unwrap();
+        std::fs::write(
+            export.join("firebase-export-metadata.json"),
+            r#"{"version":"15.28.2","storage":{"version":"15.28.2","path":"storage_export"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            export.join("storage_export/buckets.json"),
+            r#"{"buckets":[{"id":"demo-app.appspot.com"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            export.join("storage_export/metadata/obj.json"),
+            format!("{{{BASE},{tail}}}"),
+        )
+        .unwrap();
+        std::fs::write(export.join("storage_export/blobs/obj"), b"x").unwrap();
+
+        let output = import(&export);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{label}: {stderr}");
+        assert!(stderr.contains(field), "{label}: {stderr}");
+        assert!(stderr.contains("control character"), "{label}: {stderr}");
+        assert!(
+            !stderr.contains("marker-secret"),
+            "{label}: the refusal must not echo the value: {stderr}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

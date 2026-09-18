@@ -8,7 +8,9 @@
 use std::time::Duration;
 
 use fireemu_adapter_logging::wire::{sec_websocket_accept, HandshakeError};
-use fireemu_adapter_logging::{serve_logging, LogBus, LogInput};
+use fireemu_adapter_logging::{
+    serve_logging, serve_logging_with_limits, HandshakeLimits, LogBus, LogInput,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -249,4 +251,96 @@ async fn a_loopback_page_still_receives_the_stream() {
         .await
         .expect("no frame arrived");
     assert!(frame.contains("from history"));
+}
+
+/// Binds the emulator with non-default handshake limits, so the deadline and the header-size
+/// cap can be exercised without a test that waits for the production values.
+async fn start_with_limits(limits: HandshakeLimits) -> (LogBus, std::net::SocketAddr) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let bus = LogBus::with_capacity(16);
+    let served = bus.clone();
+    tokio::spawn(async move { serve_logging_with_limits(listener, served, limits).await });
+    (bus, addr)
+}
+
+#[tokio::test]
+async fn a_client_that_stalls_mid_handshake_is_disconnected() {
+    let limits = HandshakeLimits {
+        read_timeout: Duration::from_millis(200),
+        ..HandshakeLimits::default()
+    };
+    let (bus, addr) = start_with_limits(limits).await;
+    bus.publish(&LogInput::plain("info", "history line", 1));
+
+    // A slow-loris client: the request line, then silence. It never completes the head.
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
+
+    let mut rest = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut rest))
+        .await
+        .expect("the stalled connection was never closed")
+        .unwrap();
+    let text = String::from_utf8_lossy(&rest);
+    assert!(
+        text.starts_with("HTTP/1.1 408"),
+        "expected 408, got: {text}"
+    );
+    assert!(
+        !text.contains("history line"),
+        "leaked log data to a stalled client"
+    );
+}
+
+#[tokio::test]
+async fn an_oversized_header_block_is_refused() {
+    let limits = HandshakeLimits {
+        max_head_bytes: 1024,
+        ..HandshakeLimits::default()
+    };
+    let (bus, addr) = start_with_limits(limits).await;
+    bus.publish(&LogInput::plain("info", "history line", 1));
+
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let padding = "x".repeat(4096);
+    let request = format!(
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Padding: {padding}\r\nUpgrade: websocket\r\n\
+         Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+    );
+    // The peer may close mid-write once the cap trips; that is the refusal, not a test failure.
+    let _ = stream.write_all(request.as_bytes()).await;
+
+    let mut rest = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut rest))
+        .await
+        .expect("the oversized handshake was never answered")
+        .unwrap();
+    let text = String::from_utf8_lossy(&rest);
+    assert!(
+        text.starts_with("HTTP/1.1 431"),
+        "expected 431, got: {text}"
+    );
+    assert!(
+        !text.contains("history line"),
+        "leaked log data to an oversized handshake"
+    );
+}
+
+#[tokio::test]
+async fn a_normal_client_completes_well_inside_the_deadline() {
+    // The guards must not cost a real client anything: a short deadline and the default cap
+    // still admit an ordinary firebase-tools-shaped handshake with no Origin.
+    let limits = HandshakeLimits {
+        read_timeout: Duration::from_millis(500),
+        ..HandshakeLimits::default()
+    };
+    let (bus, addr) = start_with_limits(limits).await;
+    bus.publish(&LogInput::plain("info", "history line", 1).for_emulator("functions"));
+
+    let mut stream = handshake(addr, "127.0.0.1").await;
+    let frame = tokio::time::timeout(Duration::from_secs(5), read_text_frame(&mut stream))
+        .await
+        .expect("no frame arrived");
+    assert!(frame.contains("history line"));
 }

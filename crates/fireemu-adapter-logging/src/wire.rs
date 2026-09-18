@@ -218,8 +218,12 @@ pub enum HandshakeError {
     ForeignHost,
     /// The browser `Origin` header is not a loopback origin (cross-site hijacking guard).
     ForeignOrigin,
-    /// The request line/headers were malformed or too large.
+    /// The request line/headers were malformed.
     Malformed,
+    /// The peer did not send a complete request head inside the handshake deadline.
+    Timeout,
+    /// The request head exceeded the accepted size.
+    TooLarge,
 }
 
 impl HandshakeError {
@@ -242,6 +246,14 @@ impl HandshakeError {
                 "the Logging emulator answers loopback Origins only",
             ),
             Self::Malformed => ("400 Bad Request", "malformed handshake"),
+            Self::Timeout => (
+                "408 Request Timeout",
+                "the handshake was not completed in time",
+            ),
+            Self::TooLarge => (
+                "431 Request Header Fields Too Large",
+                "the handshake head is too large",
+            ),
         };
         format!(
             "HTTP/1.1 {status}\r\n\
@@ -662,6 +674,24 @@ mod tests {
         assert!(!response
             .to_ascii_lowercase()
             .contains("sec-websocket-accept"));
+    }
+
+    #[test]
+    fn the_resource_refusals_carry_a_status_and_no_frame_data() {
+        for (error, status) in [
+            (HandshakeError::Timeout, "408 Request Timeout"),
+            (
+                HandshakeError::TooLarge,
+                "431 Request Header Fields Too Large",
+            ),
+        ] {
+            let response = error.response();
+            assert!(response.starts_with(&format!("HTTP/1.1 {status}\r\n")));
+            assert!(response.contains("Connection: close"));
+            assert!(!response
+                .to_ascii_lowercase()
+                .contains("sec-websocket-accept"));
+        }
     }
 
     #[test]

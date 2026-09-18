@@ -102,9 +102,9 @@ def test_the_published_record_carries_no_account_identifier() -> None:
     record = shadow()
     assert unredacted_identifiers(record) == []
     owners = [
-        row["observed"]["fields"]["ownerUid"]
+        fields["ownerUid"]
         for row in record["bundle"]["rows"]
-        if (row.get("observed") or {}).get("fields", {}).get("ownerUid")
+        if (fields := ((row.get("observed") or {}).get("fields") or {})).get("ownerUid")
     ]
     assert owners
     assert all(value.startswith("principal:") for value in owners)

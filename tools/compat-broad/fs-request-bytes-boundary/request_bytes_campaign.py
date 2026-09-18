@@ -12,6 +12,7 @@ supplied artifact independently instead of rebuilding a replacement.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import re
@@ -383,6 +384,24 @@ def gate_charging_plan(plan: dict[str, Any]) -> dict[str, Any]:
             }
         },
     }
+
+
+@functools.lru_cache(maxsize=4)
+def _reservation_for(project: str, database: str, nonce: str) -> str:
+    """The reservation for one campaign identity, compiled once.
+
+    Validation needs the charge the Gate would apply, which is derived from the
+    compiled schedule. Compiling that schedule builds the three 10 MiB bodies,
+    so doing it on every validate call cost more than the rest of the suite put
+    together. The schedule is a pure function of these three inputs, so it is
+    compiled once per identity. The result is returned as canonical JSON rather
+    than a dict, so a caller cannot mutate the cached value.
+    """
+    return json.dumps(
+        _scheduling_reservation(compile_request_bytes_plan(project, database, nonce)),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _scheduling_reservation(plan: dict[str, Any]) -> dict[str, Any]:
@@ -929,13 +948,14 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
     # previously drifted: a 300-second reserve admitted at most 1.71 seconds a
     # recovery slot, which nothing in the artifact said.
     reservation = budget.get("schedulingReservation")
-    if reservation != _scheduling_reservation(
-        compile_request_bytes_plan(
+    expected_reservation = json.loads(
+        _reservation_for(
             campaign["owner"]["project"],
             campaign["owner"]["database"],
             campaign["owner"]["nonce"],
         )
-    ):
+    )
+    if reservation != expected_reservation:
         raise ValueError("the scheduling reservation drifted from the Gate's charge")
     if reservation.get("chargedBy") != "shared_gate":
         raise ValueError("the reservation must be charged by the Gate itself")

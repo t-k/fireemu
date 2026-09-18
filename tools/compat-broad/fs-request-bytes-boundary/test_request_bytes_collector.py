@@ -272,6 +272,10 @@ def test_three_probe_run_completes_with_typed_over_refusal(
         "errorCode": over_status,
         "errorStatus": "INVALID_ARGUMENT",
         "message": None,
+        "messageBytes": None,
+        "messageSha256": None,
+        "messageTruncated": False,
+        "responseBodyFile": "response-189.body",
         "responseBytes": len(refusal_raw),
         "responseSha256": hashlib.sha256(refusal_raw).hexdigest(),
         "classification": over_classification,
@@ -799,3 +803,97 @@ def test_the_refusal_message_is_recorded_and_bound_to_the_response_digest(tmp_pa
     ).encode()
     assert refusal["responseBytes"] == len(raw)
     assert refusal["responseSha256"] == hashlib.sha256(raw).hexdigest()
+
+
+# --- A long refusal message must not cost the run ----------------------------
+#
+# The response cap is 2 MiB and the final result is published under a 128 KiB
+# row limit. Copying the message verbatim meant a long one completed every
+# request, proved every resource absent, and then lost the whole run when
+# result.json could not be written.
+
+
+@pytest.mark.parametrize(
+    ("label", "message"),
+    [
+        pytest.param(
+            "normal",
+            "Request payload size exceeds the limit: 10485760 bytes.",
+            id="normal",
+        ),
+        pytest.param("ascii", "x" * (128 * 1024), id="128-kib-ascii"),
+        pytest.param(
+            "newlines", "\n" * (64 * 1024), id="64-kib-newlines-escaping-doubles"
+        ),
+    ],
+)
+def test_a_long_refusal_message_still_returns_a_final_result(tmp_path, label, message):
+    import sys as _sys
+
+    _sys.path.insert(0, "tools/compat-broad/fs-request-bytes-boundary")
+    from request_bytes_collector import MAX_ROW_BYTES
+    from request_bytes_run_fixture import run_collector, typed_400_with_message
+
+    directory = tmp_path / label
+    result = run_collector(directory, over=typed_400_with_message(message))
+    published = (directory / "result.json").read_bytes()
+    assert len(published) <= MAX_ROW_BYTES
+    assert result["resourceAbsence"] is True
+    assert result["completed"] is True
+    refusal = result["overRefusal"]
+    encoded = message.encode()
+    assert refusal["messageBytes"] == len(encoded)
+    assert refusal["messageSha256"] == hashlib.sha256(encoded).hexdigest()
+
+
+def test_a_truncated_message_is_never_presented_as_the_whole_message(tmp_path):
+    import sys as _sys
+
+    _sys.path.insert(0, "tools/compat-broad/fs-request-bytes-boundary")
+    from request_bytes_collector import MESSAGE_EXCERPT_BYTES
+    from request_bytes_run_fixture import run_collector, typed_400_with_message
+
+    message = "y" * (128 * 1024)
+    result = run_collector(tmp_path / "run", over=typed_400_with_message(message))
+    refusal = result["overRefusal"]
+    assert refusal["messageTruncated"] is True
+    # A reader that finds `message` may treat it as the whole text, so when the
+    # text is partial the key is absent rather than holding a prefix.
+    assert "message" not in refusal
+    assert len(refusal["messageExcerpt"].encode()) <= MESSAGE_EXCERPT_BYTES
+
+
+def test_the_full_message_survives_in_the_response_sidecar(tmp_path):
+    """Bounding the result must not lose the observation."""
+    import sys as _sys
+
+    _sys.path.insert(0, "tools/compat-broad/fs-request-bytes-boundary")
+    from request_bytes_run_fixture import run_collector, typed_400_with_message
+
+    message = "z" * (128 * 1024)
+    directory = tmp_path / "run"
+    result = run_collector(directory, over=typed_400_with_message(message))
+    refusal = result["overRefusal"]
+    sidecar = directory / refusal["responseBodyFile"]
+    raw = sidecar.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == refusal["responseSha256"]
+    assert json.loads(raw)["error"]["message"] == message
+
+
+def test_a_short_message_is_carried_whole(tmp_path):
+    import sys as _sys
+
+    _sys.path.insert(0, "tools/compat-broad/fs-request-bytes-boundary")
+    from request_bytes_run_fixture import (
+        EXPECTED_MESSAGE,
+        run_collector,
+        typed_400_with_message,
+    )
+
+    result = run_collector(
+        tmp_path / "run", over=typed_400_with_message(EXPECTED_MESSAGE)
+    )
+    refusal = result["overRefusal"]
+    assert refusal["messageTruncated"] is False
+    assert refusal["message"] == EXPECTED_MESSAGE
+    assert "messageExcerpt" not in refusal

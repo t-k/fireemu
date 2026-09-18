@@ -101,6 +101,50 @@ def over_refusal_classification(receipt: Any) -> str | None:
     return "expected" if receipt["status"] == 400 else "semantic-discrepancy"
 
 
+#: Bytes of a refusal message retained inline in the final result.
+#:
+#: The response cap is 2 MiB and the final result is published under the 128 KiB
+#: row limit, so a long message copied verbatim used to complete every request,
+#: prove every resource absent, and then lose the whole run when result.json
+#: could not be written. The full text stays in the response sidecar; the result
+#: carries a bounded excerpt plus the length and digest that stand in for it.
+MESSAGE_EXCERPT_BYTES = 1024
+
+
+def refusal_message_fields(message: Any, sidecar: Any) -> dict[str, Any]:
+    """Describe a refusal message without letting its size govern the result.
+
+    A truncated excerpt is never presented as the message. `messageSha256` is
+    taken over the whole text, so a comparison can still be exact when the
+    excerpt is not.
+    """
+    if not isinstance(message, str):
+        return {
+            "message": None,
+            "messageBytes": None,
+            "messageSha256": None,
+            "messageTruncated": False,
+            "responseBodyFile": sidecar,
+        }
+    encoded = message.encode("utf-8")
+    truncated = len(encoded) > MESSAGE_EXCERPT_BYTES
+    fields: dict[str, Any] = {
+        "messageBytes": len(encoded),
+        "messageSha256": hashlib.sha256(encoded).hexdigest(),
+        "messageTruncated": truncated,
+        "responseBodyFile": sidecar,
+    }
+    if truncated:
+        # No `message` key at all when it would be a partial value: a reader
+        # that finds one is entitled to treat it as the whole message.
+        fields["messageExcerpt"] = encoded[:MESSAGE_EXCERPT_BYTES].decode(
+            "utf-8", errors="replace"
+        )
+    else:
+        fields["message"] = message
+    return fields
+
+
 #: Bytes of a non-typed refusal body retained inline. The full bytes are always
 #: in the run's `response-*.body` sidecar; this is the adjudication excerpt.
 UNTYPED_BODY_INLINE_BYTES = 8192
@@ -524,7 +568,9 @@ def collect_local(
                             "httpStatus": receipt["status"],
                             "errorCode": error["code"],
                             "errorStatus": error["status"],
-                            "message": error.get("message"),
+                            **refusal_message_fields(
+                                error.get("message"), row.get("responseBodyFile")
+                            ),
                             "responseBytes": len(raw_refusal),
                             "responseSha256": hashlib.sha256(raw_refusal).hexdigest(),
                             "classification": over_refusal_classification(receipt),

@@ -478,6 +478,43 @@ def _is_untyped_refusal_failure_set(failures: list[Any]) -> bool:
     )
 
 
+def _message_comparison(
+    refusal: dict[str, Any], expected: str
+) -> dict[str, Any] | None:
+    """Compare the refusal message against the whole text, never a prefix.
+
+    When the message was too long to carry in the final result the collector
+    keeps an excerpt plus the digest of the whole thing, so the comparison moves
+    to the digest. A matching excerpt is not a matching message, and this must
+    never quietly become one.
+    """
+    if refusal.get("messageTruncated") is True:
+        digest = hashlib.sha256(expected.encode("utf-8")).hexdigest()
+        if refusal.get("messageSha256") == digest:
+            return None
+        return {
+            "field": "message",
+            "comparedBy": "sha256",
+            "observed": {
+                "sha256": refusal.get("messageSha256"),
+                "bytes": refusal.get("messageBytes"),
+                "excerpt": refusal.get("messageExcerpt"),
+                "note": "truncated in the result; the full text is in the response sidecar",
+                "responseBodyFile": refusal.get("responseBodyFile"),
+            },
+            "expected": expected,
+        }
+    observed = refusal.get("message", "<absent>")
+    if observed == expected:
+        return None
+    return {
+        "field": "message",
+        "comparedBy": "text",
+        "observed": observed,
+        "expected": expected,
+    }
+
+
 def refusal_field_mismatches(refusal: Any) -> list[dict[str, Any]]:
     """Compare every declared field of the refusal shape, not just the status.
 
@@ -492,17 +529,22 @@ def refusal_field_mismatches(refusal: Any) -> list[dict[str, Any]]:
             {"field": field, "observed": None, "expected": expected[field]}
             for field in BASELINE_COMPARISON_FIELDS
         ]
-    return [
+    mismatches = [
         {
-            "field": field,
-            # An absent field is a mismatch, never a pass. `sentinel` keeps a
+            # An absent field is a mismatch, never a pass. The sentinel keeps a
             # recorded null distinguishable from a field that is not there.
+            "field": field,
+            "comparedBy": "value",
             "observed": refusal.get(field, "<absent>"),
             "expected": expected[field],
         }
         for field in BASELINE_COMPARISON_FIELDS
-        if refusal.get(field, "<absent>") != expected[field]
+        if field != "message" and refusal.get(field, "<absent>") != expected[field]
     ]
+    message = _message_comparison(refusal, expected["message"])
+    if message is not None:
+        mismatches.append(message)
+    return mismatches
 
 
 def shadow_cases(

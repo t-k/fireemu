@@ -395,3 +395,305 @@ fn oversized_dnf_is_rejected_without_materializing() {
     assert_eq!(err.len(), 1);
     assert_eq!(err[0].limit_id, "FS-QUERY-LIMIT-DNF-DISJUNCTIONS");
 }
+
+// Cursor validation against the effective order-by (`O4-REPAIR-002`, `O4-REPAIR-003`).
+//
+// Reference, `google.firestore.v1.StructuredQuery`: a `Cursor` holds "the values that
+// represent a position, in the order they appear in the order by clause of a query", and
+// the `start_at` example starts a `SELECT * FROM k` query at `START BEFORE (2, /k/123)`,
+// which is "right before `a = 1 AND b > 2 AND __name__ > /k/123`". The value standing in
+// the `__name__` position is therefore a document reference, and it names a document of
+// the collection the query selects.
+
+use fireemu_core_firestore::path::DocumentPath;
+use fireemu_core_firestore::query::{Cursor, QueryError};
+use fireemu_core_types::ids::{DatabaseId, ProjectId};
+
+fn document(relative: &str) -> DocumentPath {
+    DocumentPath::parse(
+        &ProjectId::try_new("demo-app").unwrap(),
+        &DatabaseId::default_database(),
+        relative,
+    )
+    .unwrap()
+}
+
+fn reference(relative: &str) -> Value {
+    Value::Reference(document(relative).resource_name())
+}
+
+fn cursor_scope() -> QueryScope {
+    QueryScope::collection(
+        Some(document("root/r1")),
+        CollectionId::try_new("cur").unwrap(),
+    )
+}
+
+fn name_order() -> OrderClause {
+    OrderClause {
+        field: FieldPath::document_name(),
+        direction: Direction::Ascending,
+    }
+}
+
+fn order(path: &str) -> OrderClause {
+    OrderClause {
+        field: fp(path),
+        direction: Direction::Ascending,
+    }
+}
+
+fn starting_at(query: Query, values: Vec<Value>) -> Query {
+    Query {
+        start_at: Some(Cursor {
+            values,
+            before: true,
+        }),
+        ..query
+    }
+}
+
+fn cursor_error(query: &Query) -> QueryError {
+    query
+        .canonicalize()
+        .expect("the cursor rules are checked after canonicalization")
+        .check_production_cursor_constraints()
+        .expect_err("the query must be refused")
+}
+
+fn cursor_accepted(query: &Query) {
+    query
+        .canonicalize()
+        .expect("canonicalization accepts the query")
+        .check_production_cursor_constraints()
+        .expect("the cursor is well formed");
+}
+
+#[test]
+fn a_cursor_value_in_the_document_name_slot_must_be_a_document_reference() {
+    let query = starting_at(
+        Query::new(cursor_scope()).with_order(name_order()),
+        vec![Value::String("c3".to_owned())],
+    );
+    assert_eq!(
+        cursor_error(&query),
+        QueryError::CursorNameValue { position: 0 }
+    );
+}
+
+#[test]
+fn the_implicit_document_name_order_type_checks_its_cursor_value_too() {
+    // No explicit order: the effective order is `__name__` alone, so the single cursor
+    // value stands in the `__name__` position.
+    let query = starting_at(Query::new(cursor_scope()), vec![Value::Integer(3)]);
+    assert_eq!(
+        cursor_error(&query),
+        QueryError::CursorNameValue { position: 0 }
+    );
+}
+
+#[test]
+fn a_cursor_value_in_the_document_name_slot_must_be_a_full_resource_name() {
+    let query = starting_at(
+        Query::new(cursor_scope()).with_order(name_order()),
+        vec![Value::Reference("cur/c3".to_owned())],
+    );
+    assert_eq!(
+        cursor_error(&query),
+        QueryError::CursorNameValue { position: 0 }
+    );
+}
+
+#[test]
+fn a_cursor_reference_in_a_sibling_collection_is_refused() {
+    let query = starting_at(
+        Query::new(cursor_scope()).with_order(name_order()),
+        vec![reference("root/r1/other/absent")],
+    );
+    assert_eq!(
+        cursor_error(&query),
+        QueryError::CursorReferenceScope { position: 0 }
+    );
+}
+
+#[test]
+fn a_cursor_reference_under_another_parent_document_is_refused() {
+    let query = starting_at(
+        Query::new(cursor_scope()).with_order(name_order()),
+        vec![reference("root/r2/cur/c3")],
+    );
+    assert_eq!(
+        cursor_error(&query),
+        QueryError::CursorReferenceScope { position: 0 }
+    );
+}
+
+#[test]
+fn a_cursor_reference_in_a_deeper_collection_of_the_same_name_is_refused() {
+    // A single-collection query selects one collection, not the group.
+    let query = starting_at(
+        Query::new(cursor_scope()).with_order(name_order()),
+        vec![reference("root/r1/cur/c3/cur/c9")],
+    );
+    assert_eq!(
+        cursor_error(&query),
+        QueryError::CursorReferenceScope { position: 0 }
+    );
+}
+
+#[test]
+fn a_collection_group_cursor_must_name_a_document_of_the_group() {
+    let scope = QueryScope::collection_group_under(
+        Some(document("root/r1")),
+        CollectionId::try_new("cur").unwrap(),
+    );
+    cursor_accepted(&starting_at(
+        Query::new(scope.clone()).with_order(name_order()),
+        vec![reference("root/r1/sub/s1/cur/c3")],
+    ));
+    let foreign = starting_at(
+        Query::new(scope).with_order(name_order()),
+        vec![reference("root/r1/other/x1")],
+    );
+    assert_eq!(
+        cursor_error(&foreign),
+        QueryError::CursorReferenceScope { position: 0 }
+    );
+}
+
+#[test]
+fn a_cursor_reference_in_another_database_is_refused() {
+    let query = starting_at(
+        Query::new(cursor_scope()).with_order(name_order()),
+        vec![Value::Reference(
+            "projects/demo-app/databases/other/documents/root/r1/cur/c3".to_owned(),
+        )],
+    );
+    assert_eq!(
+        cursor_error(&query),
+        QueryError::CursorReferenceScope { position: 0 }
+    );
+}
+
+#[test]
+fn a_cursor_reference_in_another_project_is_refused() {
+    let query = starting_at(
+        Query::new(cursor_scope()).with_order(name_order()),
+        vec![Value::Reference(
+            "projects/other-app/databases/(default)/documents/root/r1/cur/c3".to_owned(),
+        )],
+    );
+    assert_eq!(
+        cursor_error(&query),
+        QueryError::CursorReferenceScope { position: 0 }
+    );
+}
+
+#[test]
+fn the_document_name_slot_is_checked_after_an_explicit_field_order() {
+    // `ORDER BY n ASC` becomes `ORDER BY n ASC, __name__ ASC`, so the second cursor value
+    // stands in the `__name__` position.
+    let query = starting_at(
+        Query::new(cursor_scope()).with_order(order("n")),
+        vec![Value::Integer(3), Value::String("c3".to_owned())],
+    );
+    assert_eq!(
+        cursor_error(&query),
+        QueryError::CursorNameValue { position: 1 }
+    );
+}
+
+#[test]
+fn an_end_cursor_is_validated_like_a_start_cursor() {
+    let query = Query {
+        end_at: Some(Cursor {
+            values: vec![reference("root/r1/other/absent")],
+            before: false,
+        }),
+        ..Query::new(cursor_scope()).with_order(name_order())
+    };
+    assert_eq!(
+        cursor_error(&query),
+        QueryError::CursorReferenceScope { position: 0 }
+    );
+}
+
+#[test]
+fn more_cursor_values_than_order_fields_stay_refused() {
+    // `ORDER BY n ASC` normalizes to two fields, so three values exceed the order.
+    let query = starting_at(
+        Query::new(cursor_scope()).with_order(order("n")),
+        vec![
+            Value::Integer(3),
+            reference("root/r1/cur/c3"),
+            Value::Integer(9),
+        ],
+    );
+    assert_eq!(
+        query.canonicalize().unwrap_err(),
+        QueryError::CursorArityMismatch {
+            cursor: 3,
+            order_by: 2
+        }
+    );
+}
+
+#[test]
+fn well_formed_document_and_value_cursors_stay_accepted() {
+    // A document cursor naming a member of the queried collection.
+    cursor_accepted(&starting_at(
+        Query::new(cursor_scope()).with_order(name_order()),
+        vec![reference("root/r1/cur/c3")],
+    ));
+    // A value cursor: position 0 is `n`, which carries no type rule. Firestore orders
+    // across types, so a string in a numeric field's slot is a position, not an error.
+    cursor_accepted(&starting_at(
+        Query::new(cursor_scope()).with_order(order("n")),
+        vec![Value::String("c3".to_owned())],
+    ));
+    // The full normalized ordering, both slots filled correctly.
+    cursor_accepted(&starting_at(
+        Query::new(cursor_scope()).with_order(order("n")),
+        vec![Value::Integer(3), reference("root/r1/cur/c3")],
+    ));
+    // The `limitToLast(3)` shape: a descending order with a document cursor.
+    let descending = Query {
+        limit: Some(3),
+        end_at: Some(Cursor {
+            values: vec![reference("root/r1/cur/c3")],
+            before: true,
+        }),
+        ..Query::new(cursor_scope()).with_order(OrderClause {
+            field: FieldPath::document_name(),
+            direction: Direction::Descending,
+        })
+    };
+    cursor_accepted(&descending);
+    // A root collection, whose scope carries no parent document.
+    cursor_accepted(&starting_at(
+        Query::new(QueryScope::collection(
+            None,
+            CollectionId::try_new("tasks").unwrap(),
+        ))
+        .with_order(name_order()),
+        vec![reference("tasks/t1")],
+    ));
+    // No cursor at all.
+    cursor_accepted(&Query::new(cursor_scope()).with_order(name_order()));
+}
+
+#[test]
+fn a_root_collection_cursor_reference_must_still_be_a_member() {
+    let query = starting_at(
+        Query::new(QueryScope::collection(
+            None,
+            CollectionId::try_new("tasks").unwrap(),
+        ))
+        .with_order(name_order()),
+        vec![reference("other/o1")],
+    );
+    assert_eq!(
+        cursor_error(&query),
+        QueryError::CursorReferenceScope { position: 0 }
+    );
+}

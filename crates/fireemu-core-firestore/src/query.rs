@@ -103,6 +103,39 @@ impl QueryScope {
     pub const fn is_kindless(&self) -> bool {
         matches!(self, Self::KindlessAllDescendants { .. })
     }
+
+    /// Whether a document at `path` belongs to the range this scope selects. Only the
+    /// `(collection, document)` pairs are compared; a caller that admits paths from more
+    /// than one project or database compares those itself.
+    #[must_use]
+    pub fn contains(&self, path: &DocumentPath) -> bool {
+        let parent_len = self.parent().map_or(0, |parent| parent.pairs().len());
+        match self {
+            Self::Collection {
+                parent,
+                collection_id,
+            } => {
+                path.pairs().len() == parent_len + 1
+                    && path.collection_id() == collection_id
+                    && parent
+                        .as_ref()
+                        .is_none_or(|prefix| path.pairs()[..parent_len] == *prefix.pairs())
+            }
+            Self::CollectionGroup {
+                parent,
+                collection_id,
+            } => {
+                path.collection_id() == collection_id
+                    && parent.as_ref().is_none_or(|prefix| {
+                        path.pairs().len() > parent_len
+                            && path.pairs()[..parent_len] == *prefix.pairs()
+                    })
+            }
+            Self::KindlessAllDescendants { parent } => parent.as_ref().is_none_or(|prefix| {
+                path.pairs().len() > parent_len && path.pairs()[..parent_len] == *prefix.pairs()
+            }),
+        }
+    }
 }
 
 /// Field comparison operators.
@@ -319,6 +352,16 @@ pub enum QueryError {
         /// Effective order-by length.
         order_by: usize,
     },
+    /// A cursor value standing in a `__name__` position is not a document reference.
+    CursorNameValue {
+        /// Zero-based position in the effective order-by.
+        position: usize,
+    },
+    /// A cursor document reference names a document the query does not select.
+    CursorReferenceScope {
+        /// Zero-based position in the effective order-by.
+        position: usize,
+    },
     /// More than one of `!=`, `not-in`, `IS_NOT_NAN` and `IS_NOT_NULL` in one query.
     MultipleNegations,
     /// The effective ordering names a field after `__name__`, which is unique, so the
@@ -361,6 +404,18 @@ impl fmt::Display for QueryError {
                 write!(
                     f,
                     "cursor has {cursor} values but the order-by has {order_by} fields"
+                )
+            }
+            Self::CursorNameValue { position } => {
+                write!(
+                    f,
+                    "cursor value at position {position} orders by __key__ and must be a Key"
+                )
+            }
+            Self::CursorReferenceScope { position } => {
+                write!(
+                    f,
+                    "cursor value at position {position} orders by __key__ and must be a Key the query selects"
                 )
             }
             Self::MultipleNegations => f.write_str(
@@ -446,6 +501,51 @@ impl Query {
             && self.filter.as_ref().is_some_and(has_key_equality)
         {
             return Err(QueryError::KeyEqualityWithOtherInequalities);
+        }
+        Ok(())
+    }
+
+    /// Validates cursor values against the effective order-by the way production Firestore
+    /// documents them. Call on a canonicalized query: the arity rule in
+    /// [`Self::canonicalize`] runs first, so nothing here looks past the order-by.
+    ///
+    /// Reference, `google.firestore.v1.StructuredQuery`: a `Cursor` carries "the values
+    /// that represent a position, in the order they appear in the order by clause of a
+    /// query", and the `start_at` example positions a `SELECT * FROM k` query with
+    /// `START BEFORE (2, /k/123)`, which is "right before `a = 1 AND b > 2 AND __name__ >
+    /// /k/123`". The value standing in a `__name__` position is therefore a document
+    /// reference, and it names a document of the collection the query selects. A value of
+    /// another type, or a reference to a document outside the query, positions nothing.
+    ///
+    /// These are production refusals, so the strict profile applies them and the
+    /// `emulator` profile does not; `spec/compatibility/contract.json` forbids the
+    /// `emulator` profile from adding a rejection. Production has not been observed for
+    /// these two shapes, so the rule rests on the reference above.
+    pub fn check_production_cursor_constraints(&self) -> Result<(), QueryError> {
+        let order = self.effective_order_by();
+        for cursor in [&self.start_at, &self.end_at].into_iter().flatten() {
+            for (position, value) in cursor.values.iter().enumerate() {
+                // Arity is refused by `canonicalize`; a longer cursor never reaches here.
+                let Some(clause) = order.get(position) else {
+                    break;
+                };
+                if !clause.field.is_document_name() {
+                    continue;
+                }
+                let Value::Reference(name) = value else {
+                    return Err(QueryError::CursorNameValue { position });
+                };
+                let path = DocumentPath::from_resource_name(name)
+                    .ok_or(QueryError::CursorNameValue { position })?;
+                // `contains` compares path pairs only; the scope's parent, when it has one,
+                // also pins the project and database the cursor may name.
+                let same_database = self.scope.parent().is_none_or(|parent| {
+                    path.project() == parent.project() && path.database() == parent.database()
+                });
+                if !same_database || !self.scope.contains(&path) {
+                    return Err(QueryError::CursorReferenceScope { position });
+                }
+            }
         }
         Ok(())
     }

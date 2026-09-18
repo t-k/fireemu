@@ -319,22 +319,58 @@ fn decode_filter(filter: &sq::Filter) -> Result<FilterExpr, DecodeError> {
 }
 
 /// A `__name__` filter may only name documents of the database the query runs in.
-fn check_name_references(filter: &FilterExpr, parent: &Parent) -> Result<(), DecodeError> {
-    let database = format!(
+/// `projects/{p}/databases/{d}` as the request named it.
+fn database_resource(parent: &Parent) -> String {
+    format!(
         "projects/{}/databases/{}",
         parent.project.as_str(),
         parent.database.as_str()
-    );
-    let check = |name: &str| -> Result<(), DecodeError> {
-        let prefix = format!("{database}/documents/");
-        if name.starts_with(&prefix) {
-            return Ok(());
+    )
+}
+
+/// The guard production applies to every document reference a query uses as a document
+/// name: a reference outside the request's database is refused rather than followed.
+fn check_reference_database(name: &str, database: &str) -> Result<(), DecodeError> {
+    let prefix = format!("{database}/documents/");
+    if name.starts_with(&prefix) {
+        return Ok(());
+    }
+    let other = name.splitn(5, '/').take(4).collect::<Vec<_>>().join("/");
+    Err(DecodeError::InvalidQuery(format!(
+        "The request was for database '{database}' but was attempting to access database '{other}'"
+    )))
+}
+
+/// A cursor value standing in a `__name__` position is a document reference, so it gets the
+/// same database guard as a `__name__` filter value. This runs on the request rather than on
+/// the query scope because a root collection and a database-wide collection group carry no
+/// parent document, and the request is then the only place the project and database are
+/// known. A reference in any other position is a value compared against stored content, not
+/// a document position, so it is left alone.
+fn check_cursor_name_references(query: &Query, parent: &Parent) -> Result<(), DecodeError> {
+    let order = query.effective_order_by();
+    let database = database_resource(parent);
+    for cursor in [&query.start_at, &query.end_at].into_iter().flatten() {
+        for (position, value) in cursor.values.iter().enumerate() {
+            let Some(clause) = order.get(position) else {
+                // A cursor longer than the order-by is refused by canonicalization.
+                break;
+            };
+            if !clause.field.is_document_name() {
+                continue;
+            }
+            if let Value::Reference(name) = value {
+                check_reference_database(name, &database)?;
+            }
         }
-        let other = name.splitn(5, '/').take(4).collect::<Vec<_>>().join("/");
-        Err(DecodeError::InvalidQuery(format!(
-            "The request was for database '{database}' but was attempting to access database '{other}'"
-        )))
-    };
+    }
+    Ok(())
+}
+
+fn check_name_references(filter: &FilterExpr, parent: &Parent) -> Result<(), DecodeError> {
+    let database = database_resource(parent);
+    let check =
+        |name: &str| -> Result<(), DecodeError> { check_reference_database(name, &database) };
     match filter {
         FilterExpr::Field { field, value, .. } if field.is_document_name() => match value {
             Value::Reference(name) => check(name),
@@ -498,6 +534,7 @@ pub fn decode_structured_query(
     if let Some(find_nearest) = &query.find_nearest {
         q.find_nearest = Some(decode_find_nearest(find_nearest)?);
     }
+    check_cursor_name_references(&q, parent)?;
     Ok(q)
 }
 
@@ -523,6 +560,158 @@ mod tests {
                 Some("items/alice".to_owned())
             );
         }
+    }
+
+    // A cursor value standing in a `__name__` position is a document reference, so it gets
+    // the same database guard the `__name__` filters get. The scope of a root collection or
+    // a database-wide collection group carries no parent document, so this request-level
+    // check is the only place such a cursor's project and database can be compared.
+    fn request_parent() -> Parent {
+        parse_parent("projects/demo-app/databases/(default)/documents")
+            .expect("the database root parses")
+    }
+
+    fn pb_reference(name: &str) -> pb::Value {
+        pb::Value {
+            value_type: Some(pb::value::ValueType::ReferenceValue(name.to_owned())),
+        }
+    }
+
+    fn name_ordered(
+        all_descendants: bool,
+        start_at: Option<pb::Cursor>,
+        end_at: Option<pb::Cursor>,
+    ) -> pb::StructuredQuery {
+        pb::StructuredQuery {
+            from: vec![pb::structured_query::CollectionSelector {
+                collection_id: "cur".to_owned(),
+                all_descendants,
+            }],
+            order_by: vec![pb::structured_query::Order {
+                field: Some(pb::structured_query::FieldReference {
+                    field_path: "__name__".to_owned(),
+                }),
+                direction: sq::Direction::Ascending as i32,
+            }],
+            start_at,
+            end_at,
+            ..Default::default()
+        }
+    }
+
+    fn cursor(name: &str) -> pb::Cursor {
+        pb::Cursor {
+            values: vec![pb_reference(name)],
+            before: true,
+        }
+    }
+
+    fn foreign_cursor_error(query: &pb::StructuredQuery) -> String {
+        let error = decode_structured_query(&request_parent(), query)
+            .expect_err("a cursor outside the request database is refused");
+        assert_eq!(error.grpc_code(), tonic::Code::InvalidArgument);
+        error.to_string()
+    }
+
+    #[test]
+    fn a_root_collection_cursor_reference_outside_the_request_database_is_refused() {
+        // The scope of a root collection carries no parent document, so the request's own
+        // `projects/{p}/databases/{d}` is the only identity available to compare against.
+        for name in [
+            "projects/other-app/databases/(default)/documents/cur/c3",
+            "projects/demo-app/databases/other/documents/cur/c3",
+        ] {
+            let message = foreign_cursor_error(&name_ordered(false, Some(cursor(name)), None));
+            assert!(
+                message.contains(
+                    "The request was for database 'projects/demo-app/databases/(default)'"
+                ),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_database_wide_collection_group_cursor_reference_outside_the_request_database_is_refused() {
+        for name in [
+            "projects/other-app/databases/(default)/documents/scope/s1/cur/c3",
+            "projects/demo-app/databases/other/documents/scope/s1/cur/c3",
+        ] {
+            let message = foreign_cursor_error(&name_ordered(true, Some(cursor(name)), None));
+            assert!(
+                message.contains("but was attempting to access database"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_end_cursor_reference_outside_the_request_database_is_refused() {
+        let query = name_ordered(
+            false,
+            None,
+            Some(cursor(
+                "projects/other-app/databases/(default)/documents/cur/c3",
+            )),
+        );
+        foreign_cursor_error(&query);
+    }
+
+    #[test]
+    fn an_implicit_document_name_cursor_reference_is_checked_against_the_request_database() {
+        // No explicit order: the effective order is `__name__` alone, so the single cursor
+        // value stands in the `__name__` position.
+        let query = pb::StructuredQuery {
+            from: vec![pb::structured_query::CollectionSelector {
+                collection_id: "cur".to_owned(),
+                all_descendants: false,
+            }],
+            start_at: Some(cursor(
+                "projects/other-app/databases/(default)/documents/cur/c3",
+            )),
+            ..Default::default()
+        };
+        foreign_cursor_error(&query);
+    }
+
+    #[test]
+    fn a_cursor_reference_inside_the_request_database_decodes() {
+        for all_descendants in [false, true] {
+            let query = name_ordered(
+                all_descendants,
+                Some(cursor(
+                    "projects/demo-app/databases/(default)/documents/cur/c3",
+                )),
+                None,
+            );
+            decode_structured_query(&request_parent(), &query)
+                .expect("a reference in the request database is a position, not an error");
+        }
+    }
+
+    #[test]
+    fn a_reference_outside_the_document_name_slot_is_left_to_value_comparison() {
+        // Position 0 is `owner`, an ordinary field: a reference there is a value compared
+        // against stored content, not a document position, so the database guard does not
+        // apply to it.
+        let query = pb::StructuredQuery {
+            from: vec![pb::structured_query::CollectionSelector {
+                collection_id: "cur".to_owned(),
+                all_descendants: false,
+            }],
+            order_by: vec![pb::structured_query::Order {
+                field: Some(pb::structured_query::FieldReference {
+                    field_path: "owner".to_owned(),
+                }),
+                direction: sq::Direction::Ascending as i32,
+            }],
+            start_at: Some(cursor(
+                "projects/other-app/databases/(default)/documents/people/p1",
+            )),
+            ..Default::default()
+        };
+        decode_structured_query(&request_parent(), &query)
+            .expect("an ordinary field cursor value is not a document position");
     }
 
     #[test]

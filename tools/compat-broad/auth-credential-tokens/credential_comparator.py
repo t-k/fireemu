@@ -32,6 +32,10 @@ CLASSIFICATIONS = ("MATCH", "DIFFERENT", "EXPECTED_NONDETERMINISM", "INDETERMINA
 #: which differs between an unsigned local runtime and signed production.
 TRUST_MEMBERS = ("trustRoot", "algorithm")
 
+#: Row members that record absolute server-reported values. Two services never agree on
+#: a wall-clock second, so these are retained for review and excluded from equality.
+DIAGNOSTIC_MEMBERS = ("diagnostics", "boundarySeconds")
+
 
 def _carries_credential_material(node: Any, key: str = "") -> bool:
     if key and is_secret_key(key) and isinstance(node, str):
@@ -91,7 +95,7 @@ def _pair_reason(local: Any, production: Any) -> str | None:
 
 def _semantic(row: dict[str, Any]) -> dict[str, Any]:
     """The part of a row that is compared: everything but trust and pinning members."""
-    dropped = {*TRUST_MEMBERS, "boundaryPinned"}
+    dropped = {*TRUST_MEMBERS, *DIAGNOSTIC_MEMBERS, "boundaryPinned"}
     return {k: v for k, v in row.items() if k not in dropped}
 
 

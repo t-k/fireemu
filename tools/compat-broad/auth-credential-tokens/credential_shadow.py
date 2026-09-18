@@ -275,6 +275,10 @@ def run_cases(
                 and refreshed["times"]["exp"] - refreshed["times"]["iat"] == 3600
             ),
         },
+        diagnostics={
+            "signIn": base_shape["times"],
+            "refreshed": refreshed["times"] if refreshed else None,
+        },
     )
     time.sleep(1)
     status, body = post(
@@ -304,6 +308,10 @@ def run_cases(
                 and refreshed
                 and second["times"]["iat"] > refreshed["times"]["iat"]
             ),
+        },
+        diagnostics={
+            "signIn": base_shape["times"],
+            "refreshed": second["times"] if second else None,
         },
     )
     status, body = post(
@@ -571,6 +579,10 @@ def run_cases(
                 == custom_shape["times"]["auth_time"]
             ),
         },
+        diagnostics={
+            "signIn": custom_shape["times"],
+            "refreshed": refreshed_custom["times"] if refreshed_custom else None,
+        },
     )
     return rows
 
@@ -602,6 +614,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--nonce", default=os.urandom(16).hex())
+    parser.add_argument(
+        "--commit",
+        help="the checkout the binary was built from; recorded, never verified here",
+    )
     args = parser.parse_args(argv)
 
     tracker = new_tracker(args.nonce)
@@ -640,7 +656,8 @@ def main(argv: list[str] | None = None) -> int:
         tracker=tracker,
         budget=budget,
         source_binding={
-            "commit": None,
+            "commit": args.commit,
+            "commitStatus": "operator-asserted; not verified by this run",
             "artifactSha256": hashlib.sha256(args.binary.read_bytes()).hexdigest(),
         },
     )

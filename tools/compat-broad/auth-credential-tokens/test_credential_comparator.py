@@ -13,7 +13,7 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 from credential_cases import SAME_SECOND_CASE_ID, case_by_id, observation_cases
-from credential_comparator import CONTRACT, compare
+from credential_comparator import CONTRACT, DIAGNOSTIC_MEMBERS, compare
 
 COLLECTOR_BINDING = {"commit": "a" * 40, "collectorSha256": "b" * 64}
 
@@ -207,3 +207,15 @@ def test_mutating_the_inputs_does_not_change_an_existing_report() -> None:
     before = copy.deepcopy(compare(local, production))
     production["rows"][0]["status"] = 500
     assert before == compare(_receipt("local"), _receipt("production"))
+
+
+def test_absolute_server_times_are_retained_but_never_compared() -> None:
+    local, production = _receipt("local"), _receipt("production")
+    local["rows"][0]["diagnostics"] = {"iat": 1_700_000_000}
+    production["rows"][0]["diagnostics"] = {"iat": 1_800_000_000}
+    for row in production["rows"]:
+        if row["caseId"] == SAME_SECOND_CASE_ID:
+            row["boundarySeconds"] = {"authTime": 5, "validSince": 5}
+    report = compare(local, production)
+    assert report["summary"]["different"] == 0
+    assert set(DIAGNOSTIC_MEMBERS) == {"diagnostics", "boundarySeconds"}

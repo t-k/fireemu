@@ -5,6 +5,7 @@ import copy
 import pytest
 from o5_user_token_case import (
     OK,
+    OWNER_FIELD,
     PERMISSION_DENIED,
     UNAUTHENTICATED,
     compile_case,
@@ -66,7 +67,7 @@ def test_principal_separation_uses_three_distinct_principals() -> None:
     assert denied == {"other-b", "anonymous-c"}
 
 
-def test_request_auth_null_is_explicit_in_both_directions() -> None:
+def test_request_auth_null_separates_anonymous_from_unauthenticated() -> None:
     plan = case()
     rows = {
         row["caseId"]: row
@@ -76,6 +77,15 @@ def test_request_auth_null_is_explicit_in_both_directions() -> None:
     assert (
         rows["a-unauthenticated-allowed-by-explicit-null-clause"]["expect"]["status"]
         == OK
+    )
+    # An implementation that wrongly treats an anonymous principal as an absent
+    # principal would allow this row, so the two are separated here.
+    assert rows["a-anonymous-denied-by-explicit-null-clause"]["principal"] == (
+        "anonymous-c"
+    )
+    assert (
+        rows["a-anonymous-denied-by-explicit-null-clause"]["expect"]["status"]
+        == PERMISSION_DENIED
     )
     assert (
         rows["a-authenticated-denied-by-explicit-null-clause"]["expect"]["status"]
@@ -115,14 +125,79 @@ def test_ruleset_transition_changes_only_the_owner_clause() -> None:
     ]
 
 
-def test_atomic_multiwrite_refusal_has_a_poststate_row() -> None:
+def test_atomic_multiwrite_refusal_proves_its_poststate() -> None:
     plan = case()
     rows = [
         row for row in plan["observation"] if row["condition"] == "atomic-multiwrite"
     ]
     assert [row["role"] for row in rows] == ["primary", "poststate"]
     assert rows[0]["expect"]["status"] == PERMISSION_DENIED
-    assert rows[1]["expect"]["status"] == OK
+    updated = next(
+        write for write in rows[0]["writes"] if write["document"] == "multiwrite-x"
+    )
+    assert updated["fields"]["generation"] == "updated"
+    # The post-state row pins the pre-commit value, so an applied half is visible.
+    assert rows[1]["expect"]["fields"]["generation"] == "initial"
+
+
+def test_getafter_control_does_not_reuse_documents_from_earlier_rows() -> None:
+    plan = case()
+    rows = [row for row in plan["observation"] if row["condition"] == "getAfter"]
+    primary, control = rows
+    primary_documents = set(primary["targets"]) | set(primary["createdDocuments"])
+    control_documents = set(control["targets"]) | set(control["createdDocuments"])
+    assert primary_documents & control_documents == set()
+    # The guard the control rule reads is never created by any row.
+    guard = "getafter-control-guard"
+    assert all(guard not in row["createdDocuments"] for row in plan["observation"])
+    assert any(entry.endswith(guard) for entry in plan["neverCreatedDocuments"])
+    assert guard in plan["rulesets"]["A"]["source"]
+
+
+def test_no_row_creates_a_document_an_earlier_row_already_created() -> None:
+    plan = case()
+    seen: set[str] = set()
+    fixtures = {entry["document"] for entry in plan["fixtures"]}
+    for row in plan["observation"]:
+        for document in row["createdDocuments"]:
+            assert document not in seen
+            assert document not in fixtures
+            seen.add(document)
+
+
+def test_every_touched_document_has_a_frozen_payload() -> None:
+    plan = case()
+    fixtures = {entry["document"]: entry["fields"] for entry in plan["fixtures"]}
+    created = {
+        write["document"]: write["fields"]
+        for row in plan["observation"]
+        for write in row["writes"]
+        if write["operation"] == "create"
+    }
+    for row in plan["observation"]:
+        for document in row["targets"]:
+            assert document in fixtures or document in created
+        for write in row["writes"]:
+            assert write["fields"]
+
+
+def test_rules_read_a_field_the_fixtures_actually_carry() -> None:
+    plan = case()
+    assert f"resource.data.{OWNER_FIELD}" in plan["rulesets"]["A"]["source"]
+    owned = next(entry for entry in plan["fixtures"] if entry["document"] == "owned-a")
+    assert OWNER_FIELD in owned["fields"]
+    assert owned["fields"][OWNER_FIELD] == {"$principal": "owner-a"}
+    assert plan["fieldResolution"]["ownerField"] == OWNER_FIELD
+
+
+def test_principal_references_resolve_to_owned_accounts() -> None:
+    plan = case()
+    accounts = {entry["ref"] for entry in plan["ownedAccounts"]}
+    assert accounts == {"owner-a", "other-b", "anonymous-c", "tenant-d"}
+    for entry in plan["fixtures"]:
+        for value in entry["fields"].values():
+            if isinstance(value, dict):
+                assert value["$principal"] in accounts
 
 
 def test_operations_never_carry_a_credential_value() -> None:
@@ -172,7 +247,7 @@ def test_malformed_identity_rejected(project, database, nonce, tenant) -> None:
 
 
 @pytest.mark.parametrize(
-    "mutation", ["status", "expect", "principal", "digest", "contract"]
+    "mutation", ["status", "expect", "principal", "digest", "contract", "payload"]
 )
 def test_case_drift_rejected(mutation) -> None:
     plan = copy.deepcopy(case())
@@ -184,6 +259,8 @@ def test_case_drift_rejected(mutation) -> None:
         plan["observation"][1]["principal"] = "owner-a"
     elif mutation == "digest":
         plan["planDigest"] = "0" * 64
+    elif mutation == "payload":
+        plan["fixtures"][0]["fields"][OWNER_FIELD] = {"$principal": "nobody"}
     else:
         plan["contract"] = "other"
     with pytest.raises(ValueError):

@@ -23,7 +23,7 @@ def test_manifest_is_preparation_only() -> None:
 def test_malformed_nested_case_rejected(replacement) -> None:
     value = bound_manifest("demo-project", "a" * 32)
     value["observationCase"] = replacement
-    with pytest.raises((TypeError, ValueError)):
+    with pytest.raises(ValueError):
         validate_manifest(value)
 
 

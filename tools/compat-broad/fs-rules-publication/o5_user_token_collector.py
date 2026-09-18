@@ -1,54 +1,84 @@
 """Bounded collector for the FS-RULES user-token observation matrix.
 
-The collector performs no I/O of its own. All traffic goes through an injected
-``execute`` callable, so a test drives the whole contract without a network, a
-credential, or a process.
+The collector performs no I/O of its own except its journal. All traffic goes
+through an injected ``execute`` callable, so a test drives the whole contract
+without a network, a credential, or a process.
 
 Redaction is structural rather than best effort. A compiled operation carries a
 credential *reference* label, never a token, so the collector never holds an ID
 token, a refresh token, an API key or a password. The transport resolves the
-label. A receipt that carries any credential-shaped key is rejected as a leak,
-the run aborts, and no later row is attempted.
+label. A receipt is scanned recursively: a credential-shaped key or a
+token-shaped value anywhere inside it aborts the run, and no later row is
+attempted. Observation and recovery receipts share the same allowlist.
 
-Budgets are enforced, not declared: a request ceiling and a monotonic deadline
-bound observation, and a separate reserve bounds recovery so that cleanup
-cannot be starved by an exhausted observation budget.
+Budgets are enforced, not declared. A request ceiling and a monotonic deadline
+bound observation; a separate reserve and a separate, longer deadline bound
+recovery, so cleanup cannot be starved by an exhausted observation budget and
+also cannot run unbounded.
+
+Owned resources are the campaign's documents *and* the throwaway accounts it
+created. Both are recovered here.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import re
 import time
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 from o5_user_token_case import digest, validate_case
 
-COLLECTOR_CONTRACT = "fs-rules-user-token-collector-v1"
+COLLECTOR_CONTRACT = "fs-rules-user-token-collector-v2"
 
 ROLE_PRODUCTION = "production-user-token"
 ROLE_LOCAL_SHADOW = "local-fireemu-shadow"
 ROLES = (ROLE_PRODUCTION, ROLE_LOCAL_SHADOW)
 
-# Any of these keys in a receipt means a credential escaped the transport.
-FORBIDDEN_RECEIPT_KEYS = frozenset(
+# A key containing any of these substrings, at any depth and in any case, means
+# a credential escaped the transport.
+FORBIDDEN_KEY_TOKENS = (
+    "apikey",
+    "assertion",
+    "authorization",
+    "bearer",
+    "cookie",
+    "credential",
+    "password",
+    "passwd",
+    "privatekey",
+    "refresh",
+    "secret",
+    "serviceaccount",
+    "token",
+)
+
+# Receipt keys the collector accepts. Anything else is a contract drift.
+OBSERVATION_RECEIPT_KEYS = frozenset(
+    {"status", "code", "httpStatus", "documentPresent", "fields", "failure", "complete"}
+)
+RECOVERY_RECEIPT_KEYS = frozenset(
     {
-        "authorization",
-        "Authorization",
-        "apiKey",
-        "customToken",
-        "headers",
-        "idToken",
-        "password",
-        "refreshToken",
-        "token",
+        "status",
+        "code",
+        "httpStatus",
+        "documentPresent",
+        "accountPresent",
+        "version",
+        "uid",
+        "failure",
+        "complete",
     }
 )
 
-_ALLOWED_RECEIPT_KEYS = frozenset(
-    {"status", "code", "httpStatus", "documentPresent", "fields", "failure", "complete"}
-)
-
 _MAX_RECEIPT_KEYS = 24
+_MAX_DEPTH = 6
+_MAX_NODES = 256
+_MAX_STRING = 4096
+_JWT_SHAPE = re.compile(r"^[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*$")
 
 
 class BudgetExhausted(RuntimeError):
@@ -64,41 +94,105 @@ def _credential_fingerprint(nonce: str, ref: str) -> str:
     return digest(["credential-ref", nonce, ref])[:16]
 
 
-def _scrub(receipt: Any) -> tuple[dict[str, Any] | None, str | None]:
+def _scan(value: Any, depth: int, budget: list[int]) -> str | None:
+    """Recursively reject credential-shaped keys and token-shaped values."""
+    budget[0] -= 1
+    if budget[0] < 0:
+        return "receipt-too-large"
+    if depth > _MAX_DEPTH:
+        return "receipt-too-deep"
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                return "non-string-receipt-key"
+            lowered = key.lower()
+            for marker in FORBIDDEN_KEY_TOKENS:
+                if marker in lowered:
+                    return f"credential-leak:{key}"
+            failure = _scan(nested, depth + 1, budget)
+            if failure is not None:
+                return failure
+        return None
+    if isinstance(value, (list, tuple)):
+        for nested in value:
+            failure = _scan(nested, depth + 1, budget)
+            if failure is not None:
+                return failure
+        return None
+    if isinstance(value, str):
+        if len(value) > _MAX_STRING:
+            return "receipt-string-too-long"
+        if any(character < " " or character == "\x7f" for character in value):
+            return "control-character-in-receipt"
+        if _JWT_SHAPE.fullmatch(value):
+            return "credential-leak:token-shaped-value"
+        return None
+    if isinstance(value, (bool, int, float)) or value is None:
+        return None
+    return "unsupported-receipt-value"
+
+
+def _accept(
+    receipt: Any, allowed: frozenset[str]
+) -> tuple[dict[str, Any] | None, str | None]:
     if not isinstance(receipt, Mapping):
         return None, "invalid-receipt"
-    leaked = sorted(set(receipt) & FORBIDDEN_RECEIPT_KEYS)
-    if leaked:
-        return None, "credential-leak:" + ",".join(leaked)
     if len(receipt) > _MAX_RECEIPT_KEYS:
         return None, "receipt-too-large"
-    unknown = sorted(key for key in receipt if key not in _ALLOWED_RECEIPT_KEYS)
+    failure = _scan(receipt, 0, [_MAX_NODES])
+    if failure is not None:
+        return None, failure
+    unknown = sorted(key for key in receipt if key not in allowed)
     if unknown:
         return None, "unknown-receipt-key:" + ",".join(unknown)
     return dict(receipt), None
 
 
-def _request(operation: Mapping[str, Any], nonce: str) -> dict[str, Any]:
-    return {
-        "caseId": operation["caseId"],
-        "index": operation["index"],
-        "ruleset": operation["ruleset"],
-        "method": operation["method"],
-        "resources": list(operation["resources"]),
-        "createdDocuments": list(operation["createdDocuments"]),
-        "credentialRef": operation["credential"]["ref"],
-        "credentialClass": operation["credential"]["class"],
-        "credentialFingerprint": _credential_fingerprint(
-            nonce, operation["credential"]["ref"]
-        ),
-    }
+class _Journal:
+    """Append-only, fsynced record of every intent and outcome.
+
+    A process that dies mid-run still leaves the list of resources it touched,
+    so an orphan document or account can be found and removed.
+    """
+
+    def __init__(self, path: str | os.PathLike[str] | None) -> None:
+        self.path = Path(path) if path is not None else None
+        if self.path is not None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._handle = self.path.open("a", encoding="utf-8")
+        else:
+            self._handle = None
+
+    def record(self, kind: str, payload: dict[str, Any]) -> None:
+        if self._handle is None:
+            return
+        line = json.dumps(
+            {"kind": kind, **payload}, sort_keys=True, separators=(",", ":")
+        )
+        self._handle.write(line + "\n")
+        self._handle.flush()
+        os.fsync(self._handle.fileno())
+
+    def close(self) -> None:
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
 
 
 class _Budget:
-    def __init__(self, *, requests: int, recovery: int, deadline: float, clock) -> None:
+    def __init__(
+        self,
+        *,
+        requests: int,
+        recovery: int,
+        deadline: float,
+        recovery_deadline: float,
+        clock: Callable[[], float],
+    ) -> None:
         self._requests = requests
         self._recovery = recovery
         self._deadline = deadline
+        self._recovery_deadline = recovery_deadline
         self._clock = clock
         self.spent = 0
         self.recovery_spent = 0
@@ -113,7 +207,26 @@ class _Budget:
     def take_recovery(self) -> None:
         if self.recovery_spent >= self._recovery:
             raise BudgetExhausted("recovery-request-ceiling")
+        if self._clock() >= self._recovery_deadline:
+            raise BudgetExhausted("recovery-deadline-exhausted")
         self.recovery_spent += 1
+
+
+def _request(operation: Mapping[str, Any], nonce: str) -> dict[str, Any]:
+    return {
+        "caseId": operation["caseId"],
+        "index": operation["index"],
+        "ruleset": operation["ruleset"],
+        "method": operation["method"],
+        "resources": list(operation["resources"]),
+        "writes": [dict(write) for write in operation["writes"]],
+        "createdDocuments": list(operation["createdDocuments"]),
+        "credentialRef": operation["credential"]["ref"],
+        "credentialClass": operation["credential"]["class"],
+        "credentialFingerprint": _credential_fingerprint(
+            nonce, operation["credential"]["ref"]
+        ),
+    }
 
 
 def collect(
@@ -123,7 +236,9 @@ def collect(
     role: str,
     run_id: str,
     deadline_seconds: float = 600.0,
+    recovery_deadline_seconds: float = 900.0,
     clock: Callable[[], float] = _now,
+    journal_path: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
     """Run the compiled matrix through ``execute`` under enforced bounds.
 
@@ -135,55 +250,79 @@ def collect(
         raise ValueError("unknown collector role")
     if not isinstance(run_id, str) or not run_id:
         raise ValueError("run identity required")
-    if (
-        not isinstance(deadline_seconds, (int, float))
-        or not 0 < deadline_seconds <= 3600
-    ):
-        raise ValueError("deadline out of range")
+    for value in (deadline_seconds, recovery_deadline_seconds):
+        if not isinstance(value, (int, float)) or not 0 < value <= 3600:
+            raise ValueError("deadline out of range")
+    if recovery_deadline_seconds < deadline_seconds:
+        raise ValueError("recovery deadline must not precede the observation deadline")
 
     nonce = plan["nonce"]
     operations = plan["observation"]
+    accounts = plan["ownedAccounts"]
+    started = clock()
     budget = _Budget(
         requests=len(operations),
-        recovery=3 * len(plan["ownedResources"]),
-        deadline=clock() + float(deadline_seconds),
+        recovery=3 * (len(plan["ownedResources"]) + len(accounts)),
+        deadline=started + float(deadline_seconds),
+        recovery_deadline=started + float(recovery_deadline_seconds),
         clock=clock,
     )
+    journal = _Journal(journal_path)
+    journal.record("run", {"runId": run_id, "role": role, "plan": plan["planDigest"]})
 
     rows: list[dict[str, Any]] = []
     attempted: list[str] = []
+    # Every account exists before the first row, so all of them are owned.
+    attempted_accounts = [entry["ref"] for entry in accounts]
+    journal.record("accounts", {"refs": attempted_accounts})
     failures: list[str] = []
     abort: str | None = None
 
-    for operation in operations:
-        request = _request(operation, nonce)
-        try:
-            budget.take_observation()
-        except BudgetExhausted as error:
-            abort = str(error)
-            break
-        for document in operation["createdDocuments"]:
-            resource = _resource_for(plan, document)
-            if resource not in attempted:
-                attempted.append(resource)
-        try:
-            raw = execute(dict(request))
-        except Exception as error:  # noqa: BLE001 - type name only, never a message
-            raw, scrub_failure = None, f"transport:{type(error).__name__}"
-        else:
-            raw, scrub_failure = _scrub(raw)
-        if scrub_failure is not None:
-            rows.append(_row(request, None, scrub_failure))
-            failures.append(f"{operation['caseId']}:{scrub_failure}")
-            abort = scrub_failure
-            break
-        rows.append(_row(request, raw, None))
-        if raw.get("complete") is not True:
-            failures.append(f"{operation['caseId']}:incomplete")
-            abort = "incomplete-receipt"
-            break
+    try:
+        for operation in operations:
+            request = _request(operation, nonce)
+            try:
+                budget.take_observation()
+            except BudgetExhausted as error:
+                abort = str(error)
+                break
+            for document in operation["createdDocuments"]:
+                resource = _resource_for(plan, document)
+                if resource not in attempted:
+                    attempted.append(resource)
+                    journal.record("attempt", {"resource": resource})
+            journal.record(
+                "request", {"caseId": request["caseId"], "index": request["index"]}
+            )
+            try:
+                raw = execute(dict(request))
+            except Exception as error:  # noqa: BLE001 - type name only, no message
+                raw, receipt_failure = None, f"transport:{type(error).__name__}"
+            else:
+                raw, receipt_failure = _accept(raw, OBSERVATION_RECEIPT_KEYS)
+            if receipt_failure is not None:
+                rows.append(_row(request, None, receipt_failure))
+                failures.append(f"{operation['caseId']}:{receipt_failure}")
+                abort = receipt_failure
+                journal.record(
+                    "outcome",
+                    {"caseId": request["caseId"], "failure": receipt_failure},
+                )
+                break
+            rows.append(_row(request, raw, None))
+            journal.record(
+                "outcome",
+                {"caseId": request["caseId"], "status": raw.get("status")},
+            )
+            if raw.get("complete") is not True:
+                failures.append(f"{operation['caseId']}:incomplete")
+                abort = "incomplete-receipt"
+                break
 
-    cleanup = _recover(plan, execute, budget, attempted)
+        cleanup = _recover(plan, execute, budget, attempted, journal)
+    finally:
+        journal.close()
+
     complete = (
         abort is None
         and len(rows) == len(operations)
@@ -202,14 +341,17 @@ def collect(
         "planDigest": plan["planDigest"],
         "rows": rows,
         "attemptedResources": attempted,
+        "attemptedAccounts": attempted_accounts,
         "cleanup": cleanup,
         "budget": {
             "observationCeiling": len(operations),
             "observationSpent": budget.spent,
-            "recoveryCeiling": 3 * len(plan["ownedResources"]),
+            "recoveryCeiling": 3 * (len(plan["ownedResources"]) + len(accounts)),
             "recoverySpent": budget.recovery_spent,
             "deadlineSeconds": float(deadline_seconds),
+            "recoveryDeadlineSeconds": float(recovery_deadline_seconds),
         },
+        "journal": str(journal.path) if journal.path is not None else None,
         "infrastructureFailures": failures,
         "abort": abort,
         "recordingComplete": complete,
@@ -256,20 +398,22 @@ def _recover(
     execute: Callable[[dict[str, Any]], Any],
     budget: _Budget,
     attempted: list[str],
+    journal: _Journal,
 ) -> dict[str, Any]:
-    """Version-bound cleanup of every resource whose creation was attempted.
+    """Version-bound cleanup of every owned document and account.
 
     Deletion is only authorized by a readback that proves the resource exists
-    with a concrete version. An absent resource is already recovered. An
-    unreadable resource stays an open responsibility and is never force
-    deleted.
+    with a concrete version, or, for an account, with a concrete uid. An absent
+    resource is already recovered. An unreadable resource stays an open
+    responsibility and is never force deleted.
     """
-    steps: list[dict[str, Any]] = []
+    document_steps: list[dict[str, Any]] = []
     outstanding: list[str] = []
-    targets = [*plan["ownedResources"]]
-    for resource in targets:
-        readback = _cleanup_step(execute, budget, "readback", resource, None)
-        steps.append(readback)
+    for resource in plan["ownedResources"]:
+        readback = _cleanup_step(
+            execute, budget, journal, "readback", resource=resource
+        )
+        document_steps.append(readback)
         observed = readback.get("observed") or {}
         if readback["failure"] is not None:
             outstanding.append(resource)
@@ -280,84 +424,115 @@ def _recover(
         if not isinstance(version, str) or not version:
             outstanding.append(resource)
             continue
-        delete = _cleanup_step(execute, budget, "delete", resource, version)
-        steps.append(delete)
-        absence = _cleanup_step(execute, budget, "absence", resource, None)
-        steps.append(absence)
+        delete = _cleanup_step(
+            execute, budget, journal, "delete", resource=resource, version=version
+        )
+        document_steps.append(delete)
+        absence = _cleanup_step(execute, budget, journal, "absence", resource=resource)
+        document_steps.append(absence)
         absent = (absence.get("observed") or {}).get("documentPresent") is False
         if delete["failure"] is not None or not absent:
             outstanding.append(resource)
+
+    account_steps: list[dict[str, Any]] = []
+    outstanding_accounts: list[str] = []
+    for entry in plan["ownedAccounts"]:
+        ref = entry["ref"]
+        readback = _cleanup_step(
+            execute, budget, journal, "account-readback", account=ref
+        )
+        account_steps.append(readback)
+        observed = readback.get("observed") or {}
+        if readback["failure"] is not None:
+            outstanding_accounts.append(ref)
+            continue
+        if observed.get("accountPresent") is False:
+            continue
+        uid = observed.get("uid")
+        if not isinstance(uid, str) or not uid:
+            outstanding_accounts.append(ref)
+            continue
+        delete = _cleanup_step(
+            execute, budget, journal, "account-delete", account=ref, uid=uid
+        )
+        account_steps.append(delete)
+        absence = _cleanup_step(
+            execute, budget, journal, "account-absence", account=ref
+        )
+        account_steps.append(absence)
+        absent = (absence.get("observed") or {}).get("accountPresent") is False
+        if delete["failure"] is not None or not absent:
+            outstanding_accounts.append(ref)
+
     unrecovered = [resource for resource in attempted if resource in outstanding]
     return {
-        "steps": steps,
+        "documentSteps": document_steps,
+        "accountSteps": account_steps,
         "outstandingResources": outstanding,
+        "outstandingAccounts": outstanding_accounts,
         "unrecoveredAttempted": unrecovered,
-        "cleanupComplete": not outstanding,
+        "cleanupComplete": not outstanding and not outstanding_accounts,
     }
 
 
 def _cleanup_step(
     execute: Callable[[dict[str, Any]], Any],
     budget: _Budget,
+    journal: _Journal,
     kind: str,
-    resource: str,
-    version: str | None,
+    *,
+    resource: str | None = None,
+    account: str | None = None,
+    version: str | None = None,
+    uid: str | None = None,
 ) -> dict[str, Any]:
-    request = {
+    subject = resource if resource is not None else account
+    request: dict[str, Any] = {
         "kind": kind,
         "phase": "recovery",
         "resource": resource,
+        "accountRef": account,
         "credentialRef": "administrator",
         "credentialClass": "administrator",
-        "precondition": {"updateTime": version} if version is not None else None,
+        "precondition": None,
     }
+    if version is not None:
+        request["precondition"] = {"updateTime": version}
+    elif uid is not None:
+        request["precondition"] = {"uid": uid}
+
+    def outcome(failure: str | None, observed: dict[str, Any] | None) -> dict[str, Any]:
+        journal.record(
+            "recovery", {"step": kind, "subject": subject, "failure": failure}
+        )
+        return {
+            "kind": kind,
+            "resource": resource,
+            "accountRef": account,
+            "observed": observed,
+            "failure": failure,
+        }
+
     try:
         budget.take_recovery()
     except BudgetExhausted as error:
-        return {
-            "kind": kind,
-            "resource": resource,
-            "observed": None,
-            "failure": str(error),
-        }
+        return outcome(str(error), None)
     try:
         raw = execute(dict(request))
     except Exception as error:  # noqa: BLE001 - type name only, never a message
-        return {
-            "kind": kind,
-            "resource": resource,
-            "observed": None,
-            "failure": f"transport:{type(error).__name__}",
-        }
-    if not isinstance(raw, Mapping):
-        return {
-            "kind": kind,
-            "resource": resource,
-            "observed": None,
-            "failure": "invalid-receipt",
-        }
-    leaked = sorted(set(raw) & FORBIDDEN_RECEIPT_KEYS)
-    if leaked:
-        return {
-            "kind": kind,
-            "resource": resource,
-            "observed": None,
-            "failure": "credential-leak:" + ",".join(leaked),
-        }
-    if raw.get("complete") is not True:
-        return {
-            "kind": kind,
-            "resource": resource,
-            "observed": None,
-            "failure": "incomplete",
-        }
-    return {
-        "kind": kind,
-        "resource": resource,
-        "observed": {
-            "documentPresent": raw.get("documentPresent"),
-            "version": raw.get("version"),
-            "status": raw.get("status"),
+        return outcome(f"transport:{type(error).__name__}", None)
+    accepted, failure = _accept(raw, RECOVERY_RECEIPT_KEYS)
+    if failure is not None:
+        return outcome(failure, None)
+    if accepted.get("complete") is not True:
+        return outcome("incomplete", None)
+    return outcome(
+        None,
+        {
+            "documentPresent": accepted.get("documentPresent"),
+            "accountPresent": accepted.get("accountPresent"),
+            "version": accepted.get("version"),
+            "uid": accepted.get("uid"),
+            "status": accepted.get("status"),
         },
-        "failure": None,
-    }
+    )

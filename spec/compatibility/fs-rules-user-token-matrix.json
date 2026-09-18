@@ -1,22 +1,23 @@
 {
   "budget": {
-    "authRequests": 21,
-    "billedDocumentReads": 45,
-    "billedDocumentWrites": 27,
+    "authRequests": 8,
+    "billedDocumentReads": 44,
+    "billedDocumentWrites": 28,
     "concurrencyUpperBound": 1,
     "costCeilingUsd": 1.0,
     "estimateBasis": "public Firestore Standard list prices; not a quoted tariff",
-    "estimatedCostUsd": 7.6e-05,
+    "estimatedCostUsd": 7.7e-05,
     "fixtureRequests": 10,
-    "observationRequests": 25,
+    "observationRequests": 26,
     "perRequestTimeoutSeconds": 12.0,
-    "recoveryRequests": 53,
-    "requestUpperBound": 117,
+    "recoveryDeadlineSeconds": 900.0,
+    "recoveryRequests": 54,
+    "requestUpperBound": 106,
     "rulesRequests": 8,
     "wallClockDeadlineSeconds": 600.0
   },
   "campaignId": "FS-RULES-USER-TOKEN-MATRIX-01",
-  "note": "Frozen template of the FS-RULES user-token observation matrix. The project, database, nonce and tenant are placeholders; a real run recompiles the matrix with owner-confirmed identities.",
+  "note": "Frozen template of the FS-RULES user-token observation matrix. The project, database, nonce and tenant are placeholders; a real run recompiles the matrix with owner-confirmed identities, and the tenant identifier in particular is assigned by Identity Platform.",
   "observationCase": {
     "campaignId": "FS-RULES-USER-TOKEN-MATRIX-01",
     "conditions": [
@@ -31,9 +32,13 @@
       "ruleset-transition",
       "tenant"
     ],
-    "contract": "fs-rules-user-token-case-v1",
+    "contract": "fs-rules-user-token-case-v2",
     "database": "(default)",
     "evidenceBoundary": "administrator-rest-evidence-cannot-substitute-for-a-user-token-rules-decision",
+    "fieldResolution": {
+      "$principal": "resolves to the uid of the account this campaign created for that principal reference",
+      "ownerField": "ownerUid"
+    },
     "fixtures": [
       {
         "createdBy": "administrator-setup",
@@ -41,7 +46,9 @@
         "fields": {
           "document": "owned-a",
           "nonce": "00000000000000000000000000000000",
-          "ownerUidRef": "owner-a"
+          "ownerUid": {
+            "$principal": "owner-a"
+          }
         },
         "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a"
       },
@@ -51,7 +58,9 @@
         "fields": {
           "document": "owned-b",
           "nonce": "00000000000000000000000000000000",
-          "ownerUidRef": "other-b"
+          "ownerUid": {
+            "$principal": "other-b"
+          }
         },
         "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-b"
       },
@@ -115,7 +124,9 @@
         "fields": {
           "document": "get-guarded",
           "nonce": "00000000000000000000000000000000",
-          "ownerUidRef": "owner-a"
+          "ownerUid": {
+            "$principal": "owner-a"
+          }
         },
         "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/get-guarded"
       },
@@ -126,10 +137,16 @@
           "document": "multiwrite-x",
           "generation": "initial",
           "nonce": "00000000000000000000000000000000",
-          "ownerUidRef": "owner-a"
+          "ownerUid": {
+            "$principal": "owner-a"
+          }
         },
         "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/multiwrite-x"
       }
+    ],
+    "neverCreatedDocuments": [
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-absent",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-control-guard"
     ],
     "nonce": "00000000000000000000000000000000",
     "observation": [
@@ -143,6 +160,13 @@
         },
         "expect": {
           "detail": "owner-uid-matches-resource-owner",
+          "fields": {
+            "document": "owned-a",
+            "nonce": "00000000000000000000000000000000",
+            "ownerUid": {
+              "$principal": "owner-a"
+            }
+          },
           "status": "OK"
         },
         "index": 0,
@@ -156,7 +180,8 @@
         "targets": [
           "owned-a"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-second-user-denied-on-foreign-document",
@@ -181,7 +206,8 @@
         "targets": [
           "owned-a"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-second-user-reads-own-document",
@@ -193,6 +219,13 @@
         },
         "expect": {
           "detail": "second-principal-is-authenticated-and-owns-its-document",
+          "fields": {
+            "document": "owned-b",
+            "nonce": "00000000000000000000000000000000",
+            "ownerUid": {
+              "$principal": "other-b"
+            }
+          },
           "status": "OK"
         },
         "index": 2,
@@ -206,7 +239,8 @@
         "targets": [
           "owned-b"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-anonymous-principal-denied-on-owned-document",
@@ -231,7 +265,8 @@
         "targets": [
           "owned-a"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-unauthenticated-denied-on-owned-document",
@@ -256,7 +291,8 @@
         "targets": [
           "owned-a"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-unauthenticated-allowed-by-explicit-null-clause",
@@ -268,6 +304,10 @@
         },
         "expect": {
           "detail": "rule-requires-request-auth-to-be-explicitly-null",
+          "fields": {
+            "document": "public-open",
+            "nonce": "00000000000000000000000000000000"
+          },
           "status": "OK"
         },
         "index": 5,
@@ -281,7 +321,34 @@
         "targets": [
           "public-open"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-anonymous-denied-by-explicit-null-clause",
+        "condition": "request-auth-null",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "anonymous-c"
+        },
+        "expect": {
+          "detail": "an-anonymous-provider-principal-is-not-an-absent-principal",
+          "status": "PERMISSION_DENIED"
+        },
+        "index": 6,
+        "method": "get",
+        "principal": "anonymous-c",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/public-open"
+        ],
+        "role": "control",
+        "ruleset": "A",
+        "targets": [
+          "public-open"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-authenticated-denied-by-explicit-null-clause",
@@ -295,7 +362,7 @@
           "detail": "an-authenticated-principal-must-not-satisfy-request-auth-null",
           "status": "PERMISSION_DENIED"
         },
-        "index": 6,
+        "index": 7,
         "method": "get",
         "principal": "owner-a",
         "resources": [
@@ -306,7 +373,8 @@
         "targets": [
           "public-open"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-custom-claim-principal-allowed",
@@ -318,9 +386,13 @@
         },
         "expect": {
           "detail": "token-carries-o5role-editor",
+          "fields": {
+            "document": "claim-gated",
+            "nonce": "00000000000000000000000000000000"
+          },
           "status": "OK"
         },
-        "index": 7,
+        "index": 8,
         "method": "get",
         "principal": "owner-a",
         "resources": [
@@ -331,7 +403,8 @@
         "targets": [
           "claim-gated"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-principal-without-custom-claim-denied",
@@ -345,7 +418,7 @@
           "detail": "claim-absent-from-token",
           "status": "PERMISSION_DENIED"
         },
-        "index": 8,
+        "index": 9,
         "method": "get",
         "principal": "other-b",
         "resources": [
@@ -356,7 +429,8 @@
         "targets": [
           "claim-gated"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-tenant-principal-allowed",
@@ -368,9 +442,13 @@
         },
         "expect": {
           "detail": "token-firebase-tenant-equals-o5-user-token-tenant",
+          "fields": {
+            "document": "tenant-gated",
+            "nonce": "00000000000000000000000000000000"
+          },
           "status": "OK"
         },
-        "index": 9,
+        "index": 10,
         "method": "get",
         "principal": "tenant-d",
         "resources": [
@@ -381,7 +459,8 @@
         "targets": [
           "tenant-gated"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-non-tenant-principal-denied",
@@ -395,7 +474,7 @@
           "detail": "project-level-principal-has-no-tenant-member",
           "status": "PERMISSION_DENIED"
         },
-        "index": 10,
+        "index": 11,
         "method": "get",
         "principal": "owner-a",
         "resources": [
@@ -406,7 +485,8 @@
         "targets": [
           "tenant-gated"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-exists-guard-present-allows-read",
@@ -418,9 +498,13 @@
         },
         "expect": {
           "detail": "guard-document-exists",
+          "fields": {
+            "document": "exists-guarded",
+            "nonce": "00000000000000000000000000000000"
+          },
           "status": "OK"
         },
-        "index": 11,
+        "index": 12,
         "method": "get",
         "principal": "owner-a",
         "resources": [
@@ -431,7 +515,8 @@
         "targets": [
           "exists-guarded"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-exists-guard-absent-denies-read",
@@ -442,10 +527,10 @@
           "ref": "owner-a"
         },
         "expect": {
-          "detail": "guard-document-does-not-exist",
+          "detail": "guard-document-exists-guard-absent-is-never-created",
           "status": "PERMISSION_DENIED"
         },
-        "index": 12,
+        "index": 13,
         "method": "get",
         "principal": "owner-a",
         "resources": [
@@ -456,7 +541,8 @@
         "targets": [
           "exists-guarded-missing"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-get-guard-matches-principal",
@@ -468,9 +554,16 @@
         },
         "expect": {
           "detail": "guard-document-owner-equals-request-auth-uid",
+          "fields": {
+            "document": "get-guarded",
+            "nonce": "00000000000000000000000000000000",
+            "ownerUid": {
+              "$principal": "owner-a"
+            }
+          },
           "status": "OK"
         },
-        "index": 13,
+        "index": 14,
         "method": "get",
         "principal": "owner-a",
         "resources": [
@@ -481,7 +574,8 @@
         "targets": [
           "get-guarded"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-get-guard-rejects-other-principal",
@@ -495,7 +589,7 @@
           "detail": "guard-document-owner-differs-from-request-auth-uid",
           "status": "PERMISSION_DENIED"
         },
-        "index": 14,
+        "index": 15,
         "method": "get",
         "principal": "other-b",
         "resources": [
@@ -506,7 +600,8 @@
         "targets": [
           "get-guarded"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-getafter-satisfied-by-same-commit-write",
@@ -523,7 +618,7 @@
           "detail": "partner-write-in-the-same-atomic-commit-satisfies-getAfter",
           "status": "OK"
         },
-        "index": 15,
+        "index": 16,
         "method": "commit",
         "principal": "owner-a",
         "resources": [
@@ -536,34 +631,71 @@
           "getafter-target",
           "getafter-guard"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": [
+          {
+            "document": "getafter-target",
+            "fields": {
+              "document": "getafter-target",
+              "nonce": "00000000000000000000000000000000",
+              "ownerUid": {
+                "$principal": "owner-a"
+              }
+            },
+            "operation": "create"
+          },
+          {
+            "document": "getafter-guard",
+            "fields": {
+              "document": "getafter-guard",
+              "nonce": "00000000000000000000000000000000",
+              "ownerUid": {
+                "$principal": "owner-a"
+              }
+            },
+            "operation": "create"
+          }
+        ]
       },
       {
         "caseId": "a-getafter-unsatisfied-without-partner-write",
         "condition": "getAfter",
         "createdDocuments": [
-          "getafter-target"
+          "getafter-control-target"
         ],
         "credential": {
           "class": "user-id-token",
           "ref": "owner-a"
         },
         "expect": {
-          "detail": "guard-document-is-absent-after-the-commit",
+          "detail": "getafter-control-guard-is-never-created-by-any-row-so-the-guard-is-absent-after-this-commit",
           "status": "PERMISSION_DENIED"
         },
-        "index": 16,
+        "index": 17,
         "method": "commit",
         "principal": "owner-a",
         "resources": [
-          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-target"
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-control-target"
         ],
         "role": "control",
         "ruleset": "A",
         "targets": [
-          "getafter-target"
+          "getafter-control-target"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": [
+          {
+            "document": "getafter-control-target",
+            "fields": {
+              "document": "getafter-control-target",
+              "nonce": "00000000000000000000000000000000",
+              "ownerUid": {
+                "$principal": "owner-a"
+              }
+            },
+            "operation": "create"
+          }
+        ]
       },
       {
         "caseId": "a-atomic-multiwrite-refused-as-a-whole",
@@ -579,7 +711,7 @@
           "detail": "one-denied-write-refuses-the-whole-commit",
           "status": "PERMISSION_DENIED"
         },
-        "index": 17,
+        "index": 18,
         "method": "commit",
         "principal": "owner-a",
         "resources": [
@@ -592,7 +724,24 @@
           "multiwrite-x",
           "multiwrite-y"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": [
+          {
+            "document": "multiwrite-x",
+            "fields": {
+              "generation": "updated"
+            },
+            "operation": "update"
+          },
+          {
+            "document": "multiwrite-y",
+            "fields": {
+              "document": "multiwrite-y",
+              "nonce": "00000000000000000000000000000000"
+            },
+            "operation": "create"
+          }
+        ]
       },
       {
         "caseId": "a-multiwrite-poststate-is-unchanged",
@@ -604,9 +753,17 @@
         },
         "expect": {
           "detail": "allowed-half-of-the-refused-commit-was-not-applied",
+          "fields": {
+            "document": "multiwrite-x",
+            "generation": "initial",
+            "nonce": "00000000000000000000000000000000",
+            "ownerUid": {
+              "$principal": "owner-a"
+            }
+          },
           "status": "OK"
         },
-        "index": 18,
+        "index": 19,
         "method": "get",
         "principal": "owner-a",
         "resources": [
@@ -617,7 +774,8 @@
         "targets": [
           "multiwrite-x"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-expired-token-is-unauthenticated",
@@ -631,7 +789,7 @@
           "detail": "authentication-refusal-precedes-rules-evaluation",
           "status": "UNAUTHENTICATED"
         },
-        "index": 19,
+        "index": 20,
         "method": "get",
         "principal": "expired-token",
         "resources": [
@@ -642,7 +800,8 @@
         "targets": [
           "owned-a"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-malformed-bearer-is-unauthenticated",
@@ -656,7 +815,7 @@
           "detail": "authentication-refusal-precedes-rules-evaluation",
           "status": "UNAUTHENTICATED"
         },
-        "index": 20,
+        "index": 21,
         "method": "get",
         "principal": "malformed-bearer",
         "resources": [
@@ -667,7 +826,8 @@
         "targets": [
           "owned-a"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "a-empty-bearer-is-unauthenticated",
@@ -681,7 +841,7 @@
           "detail": "authentication-refusal-precedes-rules-evaluation",
           "status": "UNAUTHENTICATED"
         },
-        "index": 21,
+        "index": 22,
         "method": "get",
         "principal": "empty-bearer",
         "resources": [
@@ -692,7 +852,8 @@
         "targets": [
           "owned-a"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "b-owner-denied-after-ruleset-transition",
@@ -706,7 +867,7 @@
           "detail": "same-principal-same-resource-decision-changes-with-the-ruleset",
           "status": "PERMISSION_DENIED"
         },
-        "index": 22,
+        "index": 23,
         "method": "get",
         "principal": "owner-a",
         "resources": [
@@ -717,7 +878,8 @@
         "targets": [
           "owned-a"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "b-unchanged-null-clause-still-allows-unauthenticated",
@@ -729,9 +891,13 @@
         },
         "expect": {
           "detail": "clauses-outside-the-transition-are-unaffected",
+          "fields": {
+            "document": "public-open",
+            "nonce": "00000000000000000000000000000000"
+          },
           "status": "OK"
         },
-        "index": 23,
+        "index": 24,
         "method": "get",
         "principal": "unauthenticated",
         "resources": [
@@ -742,7 +908,8 @@
         "targets": [
           "public-open"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       },
       {
         "caseId": "b-unchanged-claim-clause-still-allows-owner",
@@ -754,9 +921,13 @@
         },
         "expect": {
           "detail": "the-denied-principal-is-still-authenticated-under-ruleset-B",
+          "fields": {
+            "document": "claim-gated",
+            "nonce": "00000000000000000000000000000000"
+          },
           "status": "OK"
         },
-        "index": 24,
+        "index": 25,
         "method": "get",
         "principal": "owner-a",
         "resources": [
@@ -767,7 +938,8 @@
         "targets": [
           "claim-gated"
         ],
-        "transport": "firestore-rest-v1"
+        "transport": "firestore-rest-v1",
+        "writes": []
       }
     ],
     "observationCreatedDocuments": [
@@ -783,8 +955,45 @@
       },
       {
         "createdBy": "user-token-observation",
+        "document": "getafter-control-target",
+        "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-control-target"
+      },
+      {
+        "createdBy": "user-token-observation",
         "document": "multiwrite-y",
         "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/multiwrite-y"
+      }
+    ],
+    "ownedAccounts": [
+      {
+        "claims": {
+          "o5role": "editor"
+        },
+        "email": "o5a-00000000000000000000000000000000@o5-user-token.invalid",
+        "kind": "email-password",
+        "ref": "owner-a",
+        "tenant": null
+      },
+      {
+        "claims": {},
+        "email": "o5b-00000000000000000000000000000000@o5-user-token.invalid",
+        "kind": "email-password",
+        "ref": "other-b",
+        "tenant": null
+      },
+      {
+        "claims": {},
+        "email": null,
+        "kind": "anonymous",
+        "ref": "anonymous-c",
+        "tenant": null
+      },
+      {
+        "claims": {},
+        "email": "o5d-00000000000000000000000000000000@o5-user-token.invalid",
+        "kind": "email-password",
+        "ref": "tenant-d",
+        "tenant": "o5-user-token-tenant"
       }
     ],
     "ownedResources": [
@@ -800,74 +1009,69 @@
       "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/multiwrite-x",
       "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-target",
       "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-guard",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-control-target",
       "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/multiwrite-y"
     ],
     "ownedScope": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases",
-    "planDigest": "18b1385ad6f20c0584309e6462a29b1577d08de83ad3cc2a69d4107e962b372b",
+    "planDigest": "9f839e8393d55a71b6170615c31b0d568845eea616befcc3360147be699fcea4",
     "principals": [
       {
+        "account": true,
         "claims": {
           "o5role": "editor"
         },
         "kind": "email-password",
-        "ownedFixtures": [
-          "owned-a",
-          "get-guarded",
-          "multiwrite-x"
-        ],
         "ref": "owner-a",
-        "tenant": null,
-        "uidLabel": "o5a-00000000000000000000000000000000"
+        "tenant": null
       },
       {
+        "account": true,
         "claims": {},
         "kind": "email-password",
-        "ownedFixtures": [
-          "owned-b"
-        ],
         "ref": "other-b",
-        "tenant": null,
-        "uidLabel": "o5b-00000000000000000000000000000000"
+        "tenant": null
       },
       {
+        "account": true,
         "claims": {},
         "kind": "anonymous",
-        "ownedFixtures": [],
         "ref": "anonymous-c",
-        "tenant": null,
-        "uidLabel": "o5c-00000000000000000000000000000000"
+        "tenant": null
       },
       {
+        "account": true,
         "claims": {},
         "kind": "email-password",
-        "ownedFixtures": [],
         "ref": "tenant-d",
-        "tenant": "o5-user-token-tenant",
-        "uidLabel": "o5d-00000000000000000000000000000000"
+        "tenant": "o5-user-token-tenant"
       },
       {
+        "account": false,
         "claims": {},
         "kind": "absent",
-        "ownedFixtures": [],
-        "ref": "unauthenticated"
+        "ref": "unauthenticated",
+        "tenant": null
       },
       {
+        "account": false,
         "claims": {},
         "kind": "expired-id-token",
-        "ownedFixtures": [],
-        "ref": "expired-token"
+        "ref": "expired-token",
+        "tenant": null
       },
       {
+        "account": false,
         "claims": {},
         "kind": "malformed",
-        "ownedFixtures": [],
-        "ref": "malformed-bearer"
+        "ref": "malformed-bearer",
+        "tenant": null
       },
       {
+        "account": false,
         "claims": {},
         "kind": "empty",
-        "ownedFixtures": [],
-        "ref": "empty-bearer"
+        "ref": "empty-bearer",
+        "tenant": null
       }
     ],
     "productionExecuted": false,
@@ -877,17 +1081,18 @@
       "A": {
         "label": "A",
         "ownerClause": "allow",
-        "source": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /o5-user-token/n00000000000000000000000000000000/cases/{document} {\n      allow read, write: if false;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/owned-a {\n      allow get: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/owned-b {\n      allow get: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/public-open {\n      allow get: if request.auth == null;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/claim-gated {\n      allow get: if request.auth != null && request.auth.token.o5role == 'editor';\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/tenant-gated {\n      allow get: if request.auth != null && request.auth.token.firebase.tenant == 'o5-user-token-tenant';\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/exists-guarded {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-present);\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/exists-guarded-missing {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-absent);\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/get-guarded {\n      allow get: if request.auth != null && get(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-guard {\n      allow create: if request.auth != null && request.resource.data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/multiwrite-x {\n      allow get, update: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/multiwrite-y {\n      allow create: if false;\n    }\n  }\n}"
+        "source": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /o5-user-token/n00000000000000000000000000000000/cases/{document} {\n      allow read, write: if false;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/owned-a {\n      allow get: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/owned-b {\n      allow get: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/public-open {\n      allow get: if request.auth == null;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/claim-gated {\n      allow get: if request.auth != null && request.auth.token.o5role == 'editor';\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/tenant-gated {\n      allow get: if request.auth != null && request.auth.token.firebase.tenant == 'o5-user-token-tenant';\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/exists-guarded {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-present);\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/exists-guarded-missing {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-absent);\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/get-guarded {\n      allow get: if request.auth != null && get(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-control-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-control-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-guard {\n      allow create: if request.auth != null && request.resource.data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/multiwrite-x {\n      allow get, update: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/multiwrite-y {\n      allow create: if false;\n    }\n  }\n}"
       },
       "B": {
         "label": "B",
         "ownerClause": "deny",
-        "source": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /o5-user-token/n00000000000000000000000000000000/cases/{document} {\n      allow read, write: if false;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/owned-a {\n      allow get: if false;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/owned-b {\n      allow get: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/public-open {\n      allow get: if request.auth == null;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/claim-gated {\n      allow get: if request.auth != null && request.auth.token.o5role == 'editor';\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/tenant-gated {\n      allow get: if request.auth != null && request.auth.token.firebase.tenant == 'o5-user-token-tenant';\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/exists-guarded {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-present);\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/exists-guarded-missing {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-absent);\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/get-guarded {\n      allow get: if request.auth != null && get(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-guard {\n      allow create: if request.auth != null && request.resource.data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/multiwrite-x {\n      allow get, update: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/multiwrite-y {\n      allow create: if false;\n    }\n  }\n}"
+        "source": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /o5-user-token/n00000000000000000000000000000000/cases/{document} {\n      allow read, write: if false;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/owned-a {\n      allow get: if false;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/owned-b {\n      allow get: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/public-open {\n      allow get: if request.auth == null;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/claim-gated {\n      allow get: if request.auth != null && request.auth.token.o5role == 'editor';\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/tenant-gated {\n      allow get: if request.auth != null && request.auth.token.firebase.tenant == 'o5-user-token-tenant';\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/exists-guarded {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-present);\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/exists-guarded-missing {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-absent);\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/get-guarded {\n      allow get: if request.auth != null && get(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-control-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-control-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-guard {\n      allow create: if request.auth != null && request.resource.data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/multiwrite-x {\n      allow get, update: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/multiwrite-y {\n      allow create: if false;\n    }\n  }\n}"
       }
     },
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "status": "PREPARATION_ONLY",
-    "tenant": "o5-user-token-tenant"
+    "tenant": "o5-user-token-tenant",
+    "tenantIsPlaceholder": true
   },
   "ownerPreconditions": [
     "project and database identity confirmed by the owner",

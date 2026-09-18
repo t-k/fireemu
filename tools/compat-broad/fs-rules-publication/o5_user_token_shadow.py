@@ -34,7 +34,13 @@ FORBIDDEN_ENVIRONMENT = (
 
 
 def launch_specification(plan: Mapping[str, Any]) -> dict[str, Any]:
-    """The owned local instance this matrix needs, with OS-assigned ports."""
+    """The owned local instance this matrix needs, with OS-assigned ports.
+
+    `fireemu exec` requires a trailing command, so the driver runs *inside* the
+    instance's lifetime as the `--` child and inherits the assigned origins
+    through its environment. That is the pattern the other lanes use, and it is
+    why the argv ends with a placeholder for the driver command.
+    """
     validate_case(plan)
     return {
         "contract": SHADOW_CONTRACT,
@@ -42,8 +48,8 @@ def launch_specification(plan: Mapping[str, Any]) -> dict[str, Any]:
         "buildCommand": ["cargo", "build", "--locked", "-p", "fireemu"],
         "argv": [
             "exec",
-            "--config",
-            "<owned-config.json>",
+            "--firebase-json",
+            "<owned-firebase.json>",
             "--project",
             plan["project"],
             "--only",
@@ -60,6 +66,12 @@ def launch_specification(plan: Mapping[str, Any]) -> dict[str, Any]:
             "0",
             "--log-verbosity",
             "silent",
+            "--",
+            "<driver-command>",
+        ],
+        "driverEnvironment": [
+            "FIRESTORE_EMULATOR_HOST",
+            "FIREBASE_AUTH_EMULATOR_HOST",
         ],
         "portAssignment": "os-assigned",
         "environmentAllowlist": list(ENVIRONMENT_ALLOWLIST),
@@ -67,6 +79,9 @@ def launch_specification(plan: Mapping[str, Any]) -> dict[str, Any]:
         "rulesFiles": {
             label: body["source"] for label, body in plan["rulesets"].items()
         },
+        "rulesPublishRoute": (
+            "PUT /emulator/v1/projects/{project}:securityRules on the Firestore origin"
+        ),
         "tenant": plan["tenant"],
         "teardown": [
             "terminate the owned process",
@@ -122,12 +137,19 @@ def collect_shadow(
 
 
 def local_deviations(
-    bundle: Mapping[str, Any], plan: Mapping[str, Any]
+    bundle: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    uids: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Rows where the local runtime disagreed with the compiled expectation.
 
     A deviation is a repair ticket for the local runtime. It is never evidence
     about production behavior.
+
+    When ``uids`` is supplied, a row that froze expected fields is also checked
+    field by field, with ``{"$principal": ref}`` resolved through the map. That
+    is what turns the atomic-multiwrite post-state row into a proof that the
+    allowed half of the refused commit was not applied.
     """
     validate_case(plan)
     deviations = []
@@ -136,24 +158,51 @@ def local_deviations(
     ):
         observed = row.get("observed") or {}
         status = observed.get("status")
+        expected = operation["expect"]
         if row.get("failure") is not None:
             deviations.append(
                 {
                     "caseId": operation["caseId"],
                     "condition": operation["condition"],
-                    "expected": operation["expect"]["status"],
+                    "expected": expected["status"],
                     "observed": None,
                     "reason": row["failure"],
                 }
             )
-        elif status != operation["expect"]["status"]:
+            continue
+        if status != expected["status"]:
             deviations.append(
                 {
                     "caseId": operation["caseId"],
                     "condition": operation["condition"],
-                    "expected": operation["expect"]["status"],
+                    "expected": expected["status"],
                     "observed": status,
                     "reason": "status-deviation",
                 }
             )
+            continue
+        if uids is None or "fields" not in expected:
+            continue
+        wanted = _resolve(expected["fields"], uids)
+        seen = observed.get("fields")
+        if seen != wanted:
+            deviations.append(
+                {
+                    "caseId": operation["caseId"],
+                    "condition": operation["condition"],
+                    "expected": wanted,
+                    "observed": seen,
+                    "reason": "field-deviation",
+                }
+            )
     return deviations
+
+
+def _resolve(fields: Mapping[str, Any], uids: Mapping[str, str]) -> dict[str, Any]:
+    resolved = {}
+    for key, value in fields.items():
+        if isinstance(value, dict):
+            resolved[key] = uids[value["$principal"]]
+        else:
+            resolved[key] = value
+    return resolved

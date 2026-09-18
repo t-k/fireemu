@@ -1,19 +1,30 @@
 """Comparator contract for the FS-RULES user-token observation matrix.
 
-The comparator joins one production bundle with one local shadow bundle and
-classifies each row. It refuses to classify anything it cannot bind:
+This comparator has no positive classification. Every call returns
+``INDETERMINATE``. That is deliberate and it is the reviewed position of this
+lane: a collected pair of bundles is not evidence about production until each
+bundle binds the facts that make it an *acquisition* rather than a recording.
 
-* both bundles must come from the checked-in collector contract and the same
-  compiled case digest;
-* the production side must declare the production user-token role, so a local
-  shadow bundle with a flipped flag cannot stand in for it;
-* the two sides must be distinct runs, so a bundle cannot be compared with
-  itself;
-* neither side may claim acquisition or promotion authority.
+The unlock conditions come from the earlier O5 reduction review. A bundle must
+bind, and this comparator must verify:
 
-A ``MATCH`` here is a row-level agreement between two collected bundles. It is
-not a compatibility verdict: ``promotionReady`` is always false and promoting
-this lane is a separate review.
+* the endpoint the requests actually reached;
+* the observer identity, as a digest of the harness that produced the bundle;
+* the campaign manifest the run was admitted under;
+* the Ruleset releases that were active, with their readback;
+* an exclusive reservation of the campaign nonce;
+* sequential wire, cost and execution-window counts;
+* version-bound cleanup and final absence for every owned resource.
+
+None of those exist yet, so this module refuses every input and names what is
+missing. A self-declared role string is not an acquisition: collecting the same
+matrix twice locally and labelling one bundle ``production-user-token`` must
+never produce agreement, and it does not, because there is no path to
+agreement at all.
+
+Restoring a positive classification requires a separate review of a collector
+that produces the bindings above. Until then this module is the place where
+that decision is recorded, not bypassed.
 """
 
 from __future__ import annotations
@@ -27,113 +38,118 @@ from o5_user_token_collector import (
     ROLE_PRODUCTION,
 )
 
-COMPARATOR_CONTRACT = "fs-rules-user-token-comparator-v1"
+COMPARATOR_CONTRACT = "fs-rules-user-token-comparator-v2"
 
-MATCH = "MATCH"
-SEMANTIC_MISMATCH = "SEMANTIC_MISMATCH"
-EXPECTED_NONDETERMINISM = "EXPECTED_NONDETERMINISM"
 INDETERMINATE = "INDETERMINATE"
 
-_PRECEDENCE = (SEMANTIC_MISMATCH, INDETERMINATE, EXPECTED_NONDETERMINISM, MATCH)
+# The only classification this module can emit.
+CLASSIFICATIONS = (INDETERMINATE,)
 
-# Field values that may legitimately differ between two runs of the same case.
-_NONDETERMINISTIC_FIELDS = ("createTime", "updateTime", "readTime", "uid", "name")
+REQUIRED_ACQUISITION_BINDINGS = (
+    "endpoint",
+    "observerDigest",
+    "campaignManifestDigest",
+    "rulesetReleases",
+    "nonceReservation",
+    "wireCounts",
+    "ownerPermission",
+)
+
+UNLOCK_CONDITIONS = (
+    "a collector that records the endpoint each request reached",
+    "an observer digest bound to the harness source and artifact",
+    "the campaign manifest digest the run was admitted under",
+    "the Ruleset release identifiers with their readback",
+    "an exclusive reservation of the campaign nonce",
+    "sequential wire, cost and execution-window counts",
+    "version-bound cleanup and final absence for documents and accounts",
+    "an independent review that re-opens positive classification",
+)
 
 
-def _validate_side(
-    bundle: Any, expected_role: str, plan: dict[str, Any]
-) -> dict[str, Any]:
+def _validate_side(bundle: Any, expected_role: str, plan: dict[str, Any]) -> list[str]:
+    """Collect every reason this bundle cannot be treated as an acquisition."""
+    errors: list[str] = []
     if not isinstance(bundle, dict):
-        raise TypeError(f"{expected_role}:not-a-bundle")
+        return [f"{expected_role}:not-a-bundle"]
     if bundle.get("contract") != COLLECTOR_CONTRACT:
-        raise ValueError(f"{expected_role}:collector-contract-drift")
+        errors.append(f"{expected_role}:collector-contract-drift")
     if (
         bundle.get("productionReady") is True
         or bundle.get("acquisitionValidated") is True
     ):
-        raise ValueError(f"{expected_role}:bundle-claims-authority")
+        errors.append(f"{expected_role}:bundle-claims-authority")
     provenance = bundle.get("provenance")
     if not isinstance(provenance, dict):
-        raise TypeError(f"{expected_role}:missing-provenance")
-    if provenance.get("role") != expected_role:
-        raise ValueError(f"{expected_role}:role-mismatch")
-    if provenance.get("collectorContract") != COLLECTOR_CONTRACT:
-        raise ValueError(f"{expected_role}:provenance-contract-drift")
-    if not isinstance(provenance.get("runId"), str) or not provenance["runId"]:
-        raise ValueError(f"{expected_role}:missing-run-identity")
+        errors.append(f"{expected_role}:missing-provenance")
+    else:
+        if provenance.get("role") != expected_role:
+            errors.append(f"{expected_role}:role-mismatch")
+        if not isinstance(provenance.get("runId"), str) or not provenance["runId"]:
+            errors.append(f"{expected_role}:missing-run-identity")
     if bundle.get("planDigest") != plan["planDigest"]:
-        raise ValueError(f"{expected_role}:case-digest-drift")
+        errors.append(f"{expected_role}:case-digest-drift")
     rows = bundle.get("rows")
     if not isinstance(rows, list) or len(rows) != len(plan["observation"]):
-        raise ValueError(f"{expected_role}:row-count")
+        errors.append(f"{expected_role}:row-count")
+    else:
+        errors.extend(_row_errors(rows, plan, expected_role))
+    cleanup = bundle.get("cleanup")
+    if not isinstance(cleanup, dict) or cleanup.get("cleanupComplete") is not True:
+        errors.append(f"{expected_role}:cleanup-incomplete")
+    if bundle.get("recordingComplete") is not True:
+        errors.append(f"{expected_role}:recording-incomplete")
+    errors.extend(_missing_bindings(bundle, expected_role))
+    return errors
+
+
+def _row_errors(rows: list[Any], plan: dict[str, Any], role: str) -> list[str]:
+    errors: list[str] = []
     for row, operation in zip(rows, plan["observation"], strict=True):
         if not isinstance(row, dict):
-            raise TypeError(f"{expected_role}:row-shape")
+            errors.append(f"{role}:row-shape")
+            break
         if (
             row.get("caseId") != operation["caseId"]
             or row.get("index") != operation["index"]
         ):
-            raise ValueError(f"{expected_role}:row-identity")
+            errors.append(f"{role}:row-identity")
+            break
         if row.get("credentialRef") != operation["credential"]["ref"]:
-            raise ValueError(f"{expected_role}:principal-drift")
+            errors.append(f"{role}:principal-drift")
+            break
         if row.get("resources") != operation["resources"]:
-            raise ValueError(f"{expected_role}:target-drift")
-    cleanup = bundle.get("cleanup")
-    if not isinstance(cleanup, dict) or cleanup.get("cleanupComplete") is not True:
-        raise ValueError(f"{expected_role}:cleanup-incomplete")
-    if bundle.get("recordingComplete") is not True:
-        raise ValueError(f"{expected_role}:recording-incomplete")
-    return bundle
+            errors.append(f"{role}:target-drift")
+            break
+    return errors
 
 
-def _classify_row(
-    production: dict[str, Any], local: dict[str, Any], expected: dict[str, Any]
-) -> dict[str, Any]:
-    if production.get("failure") is not None or local.get("failure") is not None:
-        return {"classification": INDETERMINATE, "reason": "row-failure"}
-    seen_production = production.get("observed")
-    seen_local = local.get("observed")
-    if not isinstance(seen_production, dict) or not isinstance(seen_local, dict):
-        return {"classification": INDETERMINATE, "reason": "missing-observation"}
-    if seen_production.get("status") != seen_local.get("status"):
-        return {"classification": SEMANTIC_MISMATCH, "reason": "status"}
-    if seen_production.get("status") != expected["expect"]["status"]:
-        return {"classification": SEMANTIC_MISMATCH, "reason": "expected-status"}
-    if seen_production.get("documentPresent") != seen_local.get("documentPresent"):
-        return {"classification": SEMANTIC_MISMATCH, "reason": "document-presence"}
-    fields_production = seen_production.get("fields")
-    fields_local = seen_local.get("fields")
-    if fields_production == fields_local:
-        return {"classification": MATCH, "reason": "identical"}
-    if _only_nondeterministic(fields_production, fields_local):
-        return {
-            "classification": EXPECTED_NONDETERMINISM,
-            "reason": "server-assigned-values",
-        }
-    return {"classification": SEMANTIC_MISMATCH, "reason": "fields"}
-
-
-def _only_nondeterministic(production: Any, local: Any) -> bool:
-    if not isinstance(production, dict) or not isinstance(local, dict):
-        return False
-    if set(production) != set(local):
-        return False
-    for key, value in production.items():
-        if value == local[key]:
-            continue
-        if key not in _NONDETERMINISTIC_FIELDS:
-            return False
-    return True
+def _missing_bindings(bundle: dict[str, Any], role: str) -> list[str]:
+    acquisition = bundle.get("acquisition")
+    if not isinstance(acquisition, dict):
+        return [f"{role}:missing-acquisition-bindings"]
+    missing = [
+        name for name in REQUIRED_ACQUISITION_BINDINGS if not acquisition.get(name)
+    ]
+    return [f"{role}:missing-binding:{name}" for name in missing]
 
 
 def compare(production: Any, local: Any, plan: Any) -> dict[str, Any]:
-    result = {
+    """Refuse to classify, and say exactly why.
+
+    The result is always ``INDETERMINATE``. ``errors`` names what is missing so
+    a later, separately reviewed collector can close each item.
+    """
+    result: dict[str, Any] = {
         "contract": COMPARATOR_CONTRACT,
+        "status": "PREPARATION_ONLY",
         "classification": INDETERMINATE,
         "rows": [],
         "conditions": {},
         "acquisitionValidated": False,
+        "productionObserved": False,
         "promotionReady": False,
+        "unlockConditions": list(UNLOCK_CONDITIONS),
         "errors": [],
     }
     try:
@@ -141,44 +157,21 @@ def compare(production: Any, local: Any, plan: Any) -> dict[str, Any]:
     except (TypeError, ValueError) as error:
         result["errors"].append(f"plan:{error}")
         return result
-    try:
-        production_bundle = _validate_side(production, ROLE_PRODUCTION, plan)
-        local_bundle = _validate_side(local, ROLE_LOCAL_SHADOW, plan)
-    except (TypeError, ValueError) as error:
-        result["errors"].append(str(error))
-        return result
-    if production_bundle["provenance"]["runId"] == local_bundle["provenance"]["runId"]:
+    result["errors"].extend(_validate_side(production, ROLE_PRODUCTION, plan))
+    result["errors"].extend(_validate_side(local, ROLE_LOCAL_SHADOW, plan))
+    production_run = _run_id(production)
+    local_run = _run_id(local)
+    if production_run is not None and production_run == local_run:
         result["errors"].append("self-comparison")
-        return result
-
-    rows = []
-    for production_row, local_row, operation in zip(
-        production_bundle["rows"],
-        local_bundle["rows"],
-        plan["observation"],
-        strict=True,
-    ):
-        verdict = _classify_row(production_row, local_row, operation)
-        rows.append(
-            {
-                "index": operation["index"],
-                "caseId": operation["caseId"],
-                "condition": operation["condition"],
-                **verdict,
-            }
-        )
-    result["rows"] = rows
-    present = {row["classification"] for row in rows}
-    for candidate in _PRECEDENCE:
-        if candidate in present:
-            result["classification"] = candidate
-            break
-    conditions: dict[str, str] = {}
-    for row in rows:
-        current = conditions.get(row["condition"])
-        if current is None or _PRECEDENCE.index(
-            row["classification"]
-        ) < _PRECEDENCE.index(current):
-            conditions[row["condition"]] = row["classification"]
-    result["conditions"] = conditions
+    result["errors"].append("positive-classification-locked-pending-review")
     return result
+
+
+def _run_id(bundle: Any) -> str | None:
+    if not isinstance(bundle, dict):
+        return None
+    provenance = bundle.get("provenance")
+    if not isinstance(provenance, dict):
+        return None
+    run_id = provenance.get("runId")
+    return run_id if isinstance(run_id, str) else None

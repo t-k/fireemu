@@ -22,6 +22,7 @@ _SOURCE_FILES = (
     "o5_user_token_campaign.py",
     "o5_user_token_comparator.py",
     "o5_user_token_shadow.py",
+    "o5_user_token_local_run.py",
 )
 
 # Unit prices are the public Firestore Standard edition list prices used only to
@@ -76,15 +77,18 @@ def budget(plan: dict[str, Any]) -> dict[str, Any]:
     observation = len(plan["observation"])
     resources = len(plan["ownedResources"])
     fixtures = len(plan["fixtures"])
-    principals = len([row for row in plan["principals"] if row["kind"] != "absent"])
-    # Auth: create, optional claim mint and sign-in per usable principal.
-    auth_requests = 3 * principals
+    accounts = plan["ownedAccounts"]
+    # Per account: sign-up, plus a claim write and a re-sign-in when it carries
+    # a custom claim. Plus one tenant create and one tenant delete.
+    auth_requests = sum(3 if entry["claims"] else 1 for entry in accounts) + 2
     # Rules: read the active release, publish two Rulesets, release each, read
     # back each release, restore the preexisting release and read it back.
     rules_requests = 8
-    recovery_requests = 3 * resources + 2 * principals
+    # Recovery: read back, delete and verify absence for every document and
+    # every account.
+    recovery_requests = 3 * (resources + len(accounts))
     total = observation + fixtures + auth_requests + rules_requests + recovery_requests
-    reads = observation + resources + principals
+    reads = observation + resources + len(accounts)
     writes = fixtures + resources + 4
     cost = reads * _PRICE_PER_DOCUMENT_READ_USD + writes * _PRICE_PER_DOCUMENT_WRITE_USD
     return {
@@ -97,6 +101,7 @@ def budget(plan: dict[str, Any]) -> dict[str, Any]:
         "concurrencyUpperBound": 1,
         "perRequestTimeoutSeconds": 12.0,
         "wallClockDeadlineSeconds": 600.0,
+        "recoveryDeadlineSeconds": 900.0,
         "billedDocumentReads": reads,
         "billedDocumentWrites": writes,
         "estimatedCostUsd": round(cost, 6),

@@ -7,9 +7,11 @@ Parent feature groups: `FS-RULES`, `AUTH-FS-CROSS`
 Status: `WAITING_ORACLE`. Production-unobserved conditions reduced by this
 document: **0**.
 
-This document describes a prepared, credential-free, unexecuted campaign. No
-production operation was performed, no credential was acquired, no Ruleset was
-published and no account was created. Nothing here is an execution permission.
+This document describes a prepared, credential-free, unexecuted production
+campaign, together with a local shadow of it that has been executed against
+`fireemu`. No production operation was performed, no production credential was
+acquired, no production Ruleset was published and no production account was
+created.
 
 ## Why this campaign exists
 
@@ -22,119 +24,147 @@ in the repository is silent about whether production would have allowed or
 denied the same request made by an end user.
 
 The campaign therefore fixes a finite matrix in which each request is made with
-an end-user identity token: an Identity Toolkit email/password sign-in for a
-throwaway account owned by this campaign produces an ID token, and the Firestore
-request carries that token as its bearer credential. The same matrix runs
-against a locally owned `fireemu` instance so the two sides can be compared.
+an end-user identity token: an Identity Toolkit sign-in for a throwaway account
+owned by this campaign produces an ID token, and the Firestore request carries
+that token as its bearer credential.
 
 ## Prepared conditions
 
-Twenty-five observation rows cover ten conditions. Every condition carries at
-least one control, negative or post-state row, so a row that passes for the
-wrong reason is visible.
+Twenty-six observation rows cover ten conditions. Every condition carries at
+least one control, negative or post-state row.
 
 | Condition | Rows | What the rows separate |
 | --- | --- | --- |
 | `principal-separation` | 4 | Owner A allowed on its own document, second user B denied on A's document, B allowed on its own, an anonymous-provider principal denied |
-| `request-auth-null` | 3 | An unauthenticated request denied where ownership is required, allowed where the rule requires `request.auth == null`, and an authenticated principal denied by that same explicit-null clause |
+| `request-auth-null` | 4 | An unauthenticated request denied where ownership is required, allowed where the rule requires `request.auth == null`, and both an anonymous-provider principal and an authenticated principal denied by that same explicit-null clause |
 | `custom-claim` | 2 | A token carrying `o5role == 'editor'` allowed, a token without the claim denied |
 | `tenant` | 2 | A tenant member allowed by `request.auth.token.firebase.tenant`, a project-level principal denied |
-| `exists` | 2 | A rule whose `exists()` guard is present allows, the same shape with an absent guard denies |
+| `exists` | 2 | A rule whose `exists()` guard is present allows, the same shape with a guard no row ever creates denies |
 | `get` | 2 | A rule reading another document with `get()` allows the matching principal and denies the other |
-| `getAfter` | 2 | An atomic commit that also writes the partner document satisfies `getAfter()`; the same write alone is denied |
-| `atomic-multiwrite` | 2 | A commit pairing one allowed and one denied write is refused as a whole, and the allowed half is proven unapplied by a post-state read |
+| `getAfter` | 2 | An atomic commit that also writes the partner document satisfies `getAfter()`; a separate control document whose guard is never created is denied |
+| `atomic-multiwrite` | 2 | A commit pairing one allowed and one denied write is refused as a whole, and a post-state read of the pinned field value proves the allowed half was not applied |
 | `credential-refusal` | 3 | An expired token, a malformed bearer and an empty bearer are authentication refusals, not Rules denials |
 | `ruleset-transition` | 3 | Under Ruleset B the owner is denied on the same resource, while the explicit-null and custom-claim clauses still allow |
 
+The anonymous rows matter because an implementation that treats an
+anonymous-provider principal as an absent principal would pass the ownership
+denial for the wrong reason. It is separated by testing that same principal
+against the clause that only an absent principal satisfies.
+
+The `getAfter` control uses its own target document and a guard no row ever
+creates. An earlier version reused the primary row's documents, which made the
+denial an already-exists refusal rather than an unsatisfied `getAfter`.
+
 Two Rulesets differ by exactly one line. Ruleset A allows the owner to read
-`owned-a`; Ruleset B denies it. Everything else is identical, so a transition
-row that changes decision isolates the Rules change rather than any other
-variable. A regression test asserts that one-line difference.
+`owned-a`; Ruleset B denies it. A regression test asserts that one-line
+difference.
+
+### Every payload is frozen
+
+Each fixture and each write carries its field values in the compiled plan, so
+an executor never invents one. A value is either a literal or the typed
+reference `{"$principal": "<ref>"}`, which resolves to the uid of the account
+the campaign created for that reference. The Rules read `resource.data.ownerUid`
+and the fixtures carry `ownerUid`, checked by a test, so a row whose expectation
+depends on document contents is reproducible.
 
 The frozen template of the matrix is
 [`spec/compatibility/fs-rules-user-token-matrix.json`](../../spec/compatibility/fs-rules-user-token-matrix.json).
-The project, database, nonce and tenant in it are placeholders; a real run
-recompiles the matrix from owner-confirmed identities.
+The project, database, nonce and tenant in it are placeholders. The tenant in
+particular is assigned by Identity Platform, so a real run always recompiles.
 
 ## Collector, budget and cleanup
 
-The collector in `tools/compat-broad/fs-rules-publication/o5_user_token_collector.py`
-performs no I/O of its own. All traffic goes through an injected callable, so
-the whole contract is exercised by tests without a network, a credential or a
-process.
+The collector performs no I/O of its own except its journal. All traffic goes
+through an injected callable, so the whole contract is exercised by tests
+without a network, a credential or a process.
 
-Redaction is structural rather than best effort. A compiled operation carries a
-credential reference label, never a token. The collector never holds an ID
-token, a refresh token, an API key or a password; the transport resolves the
-label. A receipt containing any credential-shaped key is treated as a leak: the
-row is recorded as failed, the run aborts and no later row is attempted. A row
-is bound to its principal by a per-nonce fingerprint derived from the label.
-Nothing is passed on a command line, and transport exceptions are recorded by
-exception type only, never by message.
+Redaction is structural. A compiled operation carries a credential reference
+label, never a token. The collector never holds an ID token, a refresh token,
+an API key or a password; the transport resolves the label. Every receipt is
+scanned recursively: a credential-shaped key or a token-shaped value at any
+depth aborts the run, and observation and recovery receipts share one
+allowlist. A row is bound to its principal by a per-nonce fingerprint derived
+from the label. Nothing is passed on a command line, and transport exceptions
+are recorded by exception type only.
 
-Bounds are enforced rather than declared. Observation stops at the compiled row
-count and at a monotonic deadline checked before each request. Recovery draws
-on a separate reserve, so cleanup cannot be starved by an exhausted observation
-budget.
+An append-only, fsynced journal records the run, the owned accounts, every
+attempted create before the request is sent, every row outcome and every
+recovery step. A process that dies mid-run still leaves the list of resources
+it touched.
 
-Cleanup is version bound. Every resource is read back first; an absent resource
-is already recovered, a present one is deleted under its observed version
-precondition, and the deletion is followed by an absence check. A resource that
-cannot be read back stays an open responsibility and is never force deleted.
-Every document a row attempted to create is an owned resource from the moment
-the request was sent, including when the response was lost.
+Bounds are enforced. Observation stops at the compiled row count and at a
+monotonic deadline checked before each request. Recovery draws on a separate
+reserve and its own, longer deadline, so cleanup is neither starved nor
+unbounded.
+
+Cleanup covers documents and accounts. Every document is read back, deleted
+under its observed version precondition, then verified absent. Every throwaway
+account is looked up, deleted under its observed uid, then verified absent. A
+subject that cannot be read back stays outstanding and is never force deleted.
 
 ### Budget estimate
 
 | Quantity | Value |
 | --- | --- |
-| Observation requests | 25 |
-| Fixture, Auth and Rules requests | 39 |
-| Recovery requests | 53 |
-| Request upper bound | 117 |
+| Observation requests | 26 |
+| Fixture, Auth and Rules requests | 26 |
+| Recovery requests | 54 |
+| Request upper bound | 106 |
 | Concurrency | 1 |
-| Wall-clock deadline | 600 s |
+| Observation deadline | 600 s |
+| Recovery deadline | 900 s |
 | Estimated cost | under US$0.001 |
 | Cost ceiling | US$1.00 |
 
-The cost figure uses public Firestore Standard list prices to show the campaign
-is small. It is an estimate, not a quoted tariff.
+The cost figure uses public Firestore Standard list prices. It is an estimate,
+not a quoted tariff.
 
-## Local shadow
+## Local shadow, executed
 
-`o5_user_token_shadow.py` fixes the owned local `fireemu` instance the matrix
-needs: the `auth` and `firestore` services, operating-system-assigned ports for
-every listener, an environment allowlist that excludes every production
-credential variable, both Ruleset sources, and a teardown that terminates only
-the owned process and asserts its origins are closed.
+The shadow runs the same compiled matrix against one `fireemu` built from this
+worktree. `fireemu exec` requires a trailing command, so the driver runs as the
+`--` child inside the instance's lifetime and inherits the assigned loopback
+origins through its environment. Every listener port is operating-system
+assigned, and the environment handed to the instance is an allowlist that
+excludes every production credential variable.
 
-Wiring that specification to `tools/compat-inventory/owned_runner.py` is
-deliberately left to the next unit. An untested process launcher inside a
-preparation package would be a liability, not evidence.
+The executed record is
+[`spec/compatibility/fs-rules-user-token-local-shadow.json`](../../spec/compatibility/fs-rules-user-token-local-shadow.json).
+It binds the artifact digest, the `rustc` version and the source commit it was
+built from. In that run the local runtime produced all twenty-six expected
+decisions, including the field values of the multiwrite post-state row, with
+complete recording, complete document and account cleanup, the tenant deleted
+and both origins closed afterwards. There are no repair tickets from it.
 
-The local Auth emulator mints unsigned tokens. A local allow therefore proves a
-Rules decision and never production token verification. When a local row
-disagrees with the compiled expectation, the shadow reports it as a repair
-ticket against the local runtime, never as a statement about production.
+That is local evidence. The local Auth emulator mints unsigned tokens, so a
+local allow proves a Rules decision and never production token verification.
+Changing the compiled matrix invalidates the record, and the binding test says
+so; the shadow then has to be re-run.
 
 ## Comparator contract
 
-The comparator joins one production bundle with one local shadow bundle and
-classifies each row as `MATCH`, `EXPECTED_NONDETERMINISM`, `SEMANTIC_MISMATCH`
-or `INDETERMINATE`, and reports the worst classification per condition.
+The comparator has no positive classification. Every call returns
+`INDETERMINATE`.
 
-It refuses to classify anything it cannot bind. Both bundles must carry the
-checked-in collector contract and the same compiled case digest. The production
-side must declare the production user-token role, so a local shadow bundle with
-a flipped flag cannot stand in for it. The two sides must be distinct runs, so a
-bundle cannot be compared with itself. Neither side may claim acquisition or
-promotion authority. Incomplete recording, incomplete cleanup, drifted row
-identity and drifted principals are all refusals. Two sides that agree on a
-status the matrix did not expect are a mismatch, not a match.
+That is deliberate. A collected pair of bundles is not evidence about
+production until each bundle binds the facts that make it an acquisition rather
+than a recording: the endpoint each request reached, the observer identity, the
+campaign manifest the run was admitted under, the Ruleset releases with their
+readback, an exclusive nonce reservation, sequential wire and cost counts, and
+version-bound cleanup with final absence. The comparator names each missing
+binding, refuses a bundle that claims authority, refuses a self-comparison, and
+refuses a bundle whose declared role does not match the side it was passed as.
 
-A `MATCH` here is agreement between two collected bundles. It is not a
-compatibility verdict: `promotionReady` is always false, and promoting this lane
-is a separate review.
+A self-declared role string is not an acquisition. Collecting the same matrix
+twice locally and labelling one bundle as the production side must never produce
+agreement, and it cannot, because no path to agreement exists. Restoring a
+positive classification requires a separate review of a collector that produces
+those bindings.
+
+Expectation drift is reported by the local shadow, not by the comparator. A row
+where the local runtime disagrees with the compiled expectation is a repair
+ticket against the local runtime, never a statement about production.
 
 ## Owner preconditions
 
@@ -151,8 +181,8 @@ execution on its own.
 8. An accepted cost ceiling and a data-retention decision for the run directory.
 
 Publishing Rules changes the Rules state of the whole database. Releasing a
-fixed deny-all Ruleset is not a safe automatic recovery, and no publication,
-release or restoration step is implemented here.
+fixed deny-all Ruleset is not a safe automatic recovery, and no production
+publication, release or restoration step is implemented here.
 
 ## What remains unobserved
 
@@ -162,7 +192,4 @@ condition, and `FS-RULES` and `AUTH-FS-CROSS` remain `WAITING_ORACLE`.
 The matrix is also narrower than the parent rows. It does not cover Rules query
 proofs, rule and expression limits, Rules behavior through the gRPC Listen or
 WebChannel paths, declared client SDKs, token revocation timing, or Rules
-publication consistency during a release. Those remain separate units. The
-campaign covers one principal dimension, one claim, one tenant, the three
-document-lookup functions, one atomic multiwrite refusal and one Ruleset
-transition, which is what the `FS-RULES` blocking sentence names.
+publication consistency during a release. Those remain separate units.

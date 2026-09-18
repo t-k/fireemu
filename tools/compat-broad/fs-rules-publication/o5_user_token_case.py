@@ -1,14 +1,19 @@
 """Compile the finite FS-RULES user-token observation matrix offline.
 
-This module describes an eventual bounded production observation. It never
-obtains a credential, publishes a Ruleset, starts a process, or sends a
-request. Every value it returns is a design artifact.
+This module describes an eventual bounded observation. It never obtains a
+credential, publishes a Ruleset, starts a process, or sends a request. Every
+value it returns is a design artifact.
 
 The matrix evaluates Firestore Security Rules with end-user identity tokens.
 An administrator REST observation cannot substitute for these rows, because an
 administrator bypasses Rules evaluation entirely. The rows therefore fix the
 principal for each request and keep the credential out of the compiled plan:
 an operation carries a credential *reference* label only.
+
+Every document the matrix reads or writes carries a typed payload, so an
+executor never invents one. A field value is either a literal or the typed
+reference ``{"$principal": "<ref>"}``, which resolves to the uid of the account
+this campaign created for that principal reference.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ import re
 from typing import Any
 
 CAMPAIGN = "FS-RULES-USER-TOKEN-MATRIX-01"
-CASE_CONTRACT = "fs-rules-user-token-case-v1"
+CASE_CONTRACT = "fs-rules-user-token-case-v2"
 
 _NONCE = re.compile(r"^[0-9a-f]{32}$")
 _PROJECT = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
@@ -42,6 +47,14 @@ PRINCIPAL_EXPIRED = "expired-token"
 PRINCIPAL_MALFORMED = "malformed-bearer"
 PRINCIPAL_EMPTY = "empty-bearer"
 
+# Principals backed by an account this campaign creates and must delete again.
+ACCOUNT_PRINCIPALS = (
+    PRINCIPAL_OWNER,
+    PRINCIPAL_OTHER,
+    PRINCIPAL_ANONYMOUS,
+    PRINCIPAL_TENANT,
+)
+
 _CREDENTIAL_CLASS = {
     PRINCIPAL_OWNER: "user-id-token",
     PRINCIPAL_OTHER: "user-id-token",
@@ -53,28 +66,14 @@ _CREDENTIAL_CLASS = {
     PRINCIPAL_EMPTY: "empty",
 }
 
-# Fixture documents created by the owner's administrator credential before any
-# user-token row runs. Administrator setup is allowed; administrator evidence is
-# not allowed to stand in for a user-token authorization result.
-_FIXTURES = (
-    "owned-a",
-    "owned-b",
-    "public-open",
-    "claim-gated",
-    "tenant-gated",
-    "exists-guard-present",
-    "exists-guarded",
-    "exists-guarded-missing",
-    "get-guarded",
-    "multiwrite-x",
-)
-
-# Documents an observation row attempts to create. They are owned resources for
-# cleanup purposes from the moment the request is attempted, response or not.
-_OBSERVATION_CREATED = ("getafter-target", "getafter-guard", "multiwrite-y")
-
+OWNER_FIELD = "ownerUid"
 CLAIM_NAME = "o5role"
 CLAIM_VALUE = "editor"
+EMAIL_DOMAIN = "o5-user-token.invalid"
+
+# Guards the Rules reference but nothing ever creates. Their absence is the
+# point of the control rows that depend on them.
+_NEVER_CREATED = ("exists-guard-absent", "getafter-control-guard")
 
 
 def digest(value: Any) -> str:
@@ -83,6 +82,11 @@ def digest(value: Any) -> str:
             value, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode()
     ).hexdigest()
+
+
+def principal_reference(ref: str) -> dict[str, str]:
+    """A typed placeholder for the uid of the account created for ``ref``."""
+    return {"$principal": ref}
 
 
 def _scope_segment(nonce: str) -> str:
@@ -102,7 +106,8 @@ def _rules_source(nonce: str, tenant: str, *, owner_read: bool) -> str:
     scope = _scope_segment(nonce)
     base = f"/databases/$(database)/documents/o5-user-token/{scope}/cases"
     authed = "request.auth != null"
-    owns = "request.auth.uid == resource.data.ownerUid"
+    owns = f"request.auth.uid == resource.data.{OWNER_FIELD}"
+    writes_own = f"request.resource.data.{OWNER_FIELD} == request.auth.uid"
     owner_condition = f"{authed} && {owns}" if owner_read else "false"
     claim = f"request.auth.token.{CLAIM_NAME} == '{CLAIM_VALUE}'"
     tenant_clause = (
@@ -113,15 +118,17 @@ def _rules_source(nonce: str, tenant: str, *, owner_read: bool) -> str:
     exists_absent = f"allow get: if {authed} && exists({base}/exists-guard-absent);"
     get_clause = (
         f"allow get: if {authed}"
-        + f" && get({base}/owned-a).data.ownerUid == request.auth.uid;"
+        + f" && get({base}/owned-a).data.{OWNER_FIELD} == request.auth.uid;"
     )
     getafter_target = (
         f"allow create: if {authed}"
-        + f" && getAfter({base}/getafter-guard).data.ownerUid == request.auth.uid;"
+        + f" && getAfter({base}/getafter-guard).data.{OWNER_FIELD}"
+        + " == request.auth.uid;"
     )
-    getafter_guard = (
+    getafter_control_target = (
         f"allow create: if {authed}"
-        + " && request.resource.data.ownerUid == request.auth.uid;"
+        + f" && getAfter({base}/getafter-control-guard).data.{OWNER_FIELD}"
+        + " == request.auth.uid;"
     )
     clauses: list[tuple[str, str]] = [
         ("{document}", "allow read, write: if false;"),
@@ -134,7 +141,8 @@ def _rules_source(nonce: str, tenant: str, *, owner_read: bool) -> str:
         ("exists-guarded-missing", exists_absent),
         ("get-guarded", get_clause),
         ("getafter-target", getafter_target),
-        ("getafter-guard", getafter_guard),
+        ("getafter-control-target", getafter_control_target),
+        ("getafter-guard", f"allow create: if {authed} && {writes_own};"),
         ("multiwrite-x", f"allow get, update: if {authed} && {owns};"),
         ("multiwrite-y", "allow create: if false;"),
     ]
@@ -151,6 +159,55 @@ def _rules_source(nonce: str, tenant: str, *, owner_read: bool) -> str:
     return "\n".join(lines)
 
 
+def _fixture_fields(nonce: str, document: str) -> dict[str, Any]:
+    fields: dict[str, Any] = {"nonce": nonce, "document": document}
+    owner = {
+        "owned-a": PRINCIPAL_OWNER,
+        "get-guarded": PRINCIPAL_OWNER,
+        "multiwrite-x": PRINCIPAL_OWNER,
+        "owned-b": PRINCIPAL_OTHER,
+    }.get(document)
+    if owner is not None:
+        fields[OWNER_FIELD] = principal_reference(owner)
+    if document == "multiwrite-x":
+        fields["generation"] = "initial"
+    return fields
+
+
+# Fixture documents created by the owner's administrator credential before any
+# user-token row runs. Administrator setup is allowed; administrator evidence is
+# not allowed to stand in for a user-token authorization result.
+_FIXTURES = (
+    "owned-a",
+    "owned-b",
+    "public-open",
+    "claim-gated",
+    "tenant-gated",
+    "exists-guard-present",
+    "exists-guarded",
+    "exists-guarded-missing",
+    "get-guarded",
+    "multiwrite-x",
+)
+
+# Documents an observation row attempts to create. They are owned resources for
+# cleanup purposes from the moment the request is attempted, response or not.
+_OBSERVATION_CREATED = (
+    "getafter-target",
+    "getafter-guard",
+    "getafter-control-target",
+    "multiwrite-y",
+)
+
+
+def _owned_payload(nonce: str, document: str) -> dict[str, Any]:
+    return {
+        "nonce": nonce,
+        "document": document,
+        OWNER_FIELD: principal_reference(PRINCIPAL_OWNER),
+    }
+
+
 def _operation(
     case_id: str,
     *,
@@ -162,8 +219,12 @@ def _operation(
     condition: str,
     status: str,
     detail: str,
-    writes: tuple[str, ...] = (),
+    writes: tuple[dict[str, Any], ...] = (),
+    expect_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    expect: dict[str, Any] = {"status": status, "detail": detail}
+    if expect_fields is not None:
+        expect["fields"] = expect_fields
     return {
         "caseId": case_id,
         "role": role,
@@ -173,13 +234,16 @@ def _operation(
         "transport": "firestore-rest-v1",
         "method": method,
         "targets": list(targets),
-        "createdDocuments": list(writes),
+        "writes": [dict(write) for write in writes],
+        "createdDocuments": [
+            write["document"] for write in writes if write["operation"] == "create"
+        ],
         "condition": condition,
-        "expect": {"status": status, "detail": detail},
+        "expect": expect,
     }
 
 
-def _matrix(tenant: str) -> list[dict[str, Any]]:
+def _matrix(nonce: str, tenant: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     add = rows.append
 
@@ -195,6 +259,7 @@ def _matrix(tenant: str) -> list[dict[str, Any]]:
             condition="principal-separation",
             status=OK,
             detail="owner-uid-matches-resource-owner",
+            expect_fields=_fixture_fields(nonce, "owned-a"),
         )
     )
     add(
@@ -221,6 +286,7 @@ def _matrix(tenant: str) -> list[dict[str, Any]]:
             condition="principal-separation",
             status=OK,
             detail="second-principal-is-authenticated-and-owns-its-document",
+            expect_fields=_fixture_fields(nonce, "owned-b"),
         )
     )
     add(
@@ -237,7 +303,7 @@ def _matrix(tenant: str) -> list[dict[str, Any]]:
         )
     )
 
-    # request.auth null explicitness.
+    # request.auth null explicitness, including anonymous versus unauthenticated.
     add(
         _operation(
             "a-unauthenticated-denied-on-owned-document",
@@ -262,6 +328,20 @@ def _matrix(tenant: str) -> list[dict[str, Any]]:
             condition="request-auth-null",
             status=OK,
             detail="rule-requires-request-auth-to-be-explicitly-null",
+            expect_fields=_fixture_fields(nonce, "public-open"),
+        )
+    )
+    add(
+        _operation(
+            "a-anonymous-denied-by-explicit-null-clause",
+            role="control",
+            ruleset=RULESET_A,
+            principal=PRINCIPAL_ANONYMOUS,
+            method="get",
+            targets=("public-open",),
+            condition="request-auth-null",
+            status=PERMISSION_DENIED,
+            detail="an-anonymous-provider-principal-is-not-an-absent-principal",
         )
     )
     add(
@@ -290,6 +370,7 @@ def _matrix(tenant: str) -> list[dict[str, Any]]:
             condition="custom-claim",
             status=OK,
             detail=f"token-carries-{CLAIM_NAME}-{CLAIM_VALUE}",
+            expect_fields=_fixture_fields(nonce, "claim-gated"),
         )
     )
     add(
@@ -318,6 +399,7 @@ def _matrix(tenant: str) -> list[dict[str, Any]]:
             condition="tenant",
             status=OK,
             detail=f"token-firebase-tenant-equals-{tenant}",
+            expect_fields=_fixture_fields(nonce, "tenant-gated"),
         )
     )
     add(
@@ -346,6 +428,7 @@ def _matrix(tenant: str) -> list[dict[str, Any]]:
             condition="exists",
             status=OK,
             detail="guard-document-exists",
+            expect_fields=_fixture_fields(nonce, "exists-guarded"),
         )
     )
     add(
@@ -358,7 +441,7 @@ def _matrix(tenant: str) -> list[dict[str, Any]]:
             targets=("exists-guarded-missing",),
             condition="exists",
             status=PERMISSION_DENIED,
-            detail="guard-document-does-not-exist",
+            detail="guard-document-exists-guard-absent-is-never-created",
         )
     )
     add(
@@ -372,6 +455,7 @@ def _matrix(tenant: str) -> list[dict[str, Any]]:
             condition="get",
             status=OK,
             detail="guard-document-owner-equals-request-auth-uid",
+            expect_fields=_fixture_fields(nonce, "get-guarded"),
         )
     )
     add(
@@ -398,7 +482,18 @@ def _matrix(tenant: str) -> list[dict[str, Any]]:
             condition="getAfter",
             status=OK,
             detail="partner-write-in-the-same-atomic-commit-satisfies-getAfter",
-            writes=("getafter-target", "getafter-guard"),
+            writes=(
+                {
+                    "document": "getafter-target",
+                    "operation": "create",
+                    "fields": _owned_payload(nonce, "getafter-target"),
+                },
+                {
+                    "document": "getafter-guard",
+                    "operation": "create",
+                    "fields": _owned_payload(nonce, "getafter-guard"),
+                },
+            ),
         )
     )
     add(
@@ -408,11 +503,20 @@ def _matrix(tenant: str) -> list[dict[str, Any]]:
             ruleset=RULESET_A,
             principal=PRINCIPAL_OWNER,
             method="commit",
-            targets=("getafter-target",),
+            targets=("getafter-control-target",),
             condition="getAfter",
             status=PERMISSION_DENIED,
-            detail="guard-document-is-absent-after-the-commit",
-            writes=("getafter-target",),
+            detail=(
+                "getafter-control-guard-is-never-created-by-any-row-so-the-"
+                "guard-is-absent-after-this-commit"
+            ),
+            writes=(
+                {
+                    "document": "getafter-control-target",
+                    "operation": "create",
+                    "fields": _owned_payload(nonce, "getafter-control-target"),
+                },
+            ),
         )
     )
 
@@ -428,7 +532,18 @@ def _matrix(tenant: str) -> list[dict[str, Any]]:
             condition="atomic-multiwrite",
             status=PERMISSION_DENIED,
             detail="one-denied-write-refuses-the-whole-commit",
-            writes=("multiwrite-y",),
+            writes=(
+                {
+                    "document": "multiwrite-x",
+                    "operation": "update",
+                    "fields": {"generation": "updated"},
+                },
+                {
+                    "document": "multiwrite-y",
+                    "operation": "create",
+                    "fields": {"nonce": nonce, "document": "multiwrite-y"},
+                },
+            ),
         )
     )
     add(
@@ -442,6 +557,7 @@ def _matrix(tenant: str) -> list[dict[str, Any]]:
             condition="atomic-multiwrite",
             status=OK,
             detail="allowed-half-of-the-refused-commit-was-not-applied",
+            expect_fields=_fixture_fields(nonce, "multiwrite-x"),
         )
     )
 
@@ -491,6 +607,7 @@ def _matrix(tenant: str) -> list[dict[str, Any]]:
             condition="ruleset-transition",
             status=OK,
             detail="clauses-outside-the-transition-are-unaffected",
+            expect_fields=_fixture_fields(nonce, "public-open"),
         )
     )
     add(
@@ -504,80 +621,67 @@ def _matrix(tenant: str) -> list[dict[str, Any]]:
             condition="ruleset-transition",
             status=OK,
             detail="the-denied-principal-is-still-authenticated-under-ruleset-B",
+            expect_fields=_fixture_fields(nonce, "claim-gated"),
         )
     )
     return rows
 
 
-def _principals(nonce: str, tenant: str) -> list[dict[str, Any]]:
+def _accounts(nonce: str, tenant: str) -> list[dict[str, Any]]:
     return [
         {
             "ref": PRINCIPAL_OWNER,
             "kind": "email-password",
-            "uidLabel": f"o5a-{nonce}",
+            "email": f"o5a-{nonce}@{EMAIL_DOMAIN}",
             "tenant": None,
             "claims": {CLAIM_NAME: CLAIM_VALUE},
-            "ownedFixtures": ["owned-a", "get-guarded", "multiwrite-x"],
         },
         {
             "ref": PRINCIPAL_OTHER,
             "kind": "email-password",
-            "uidLabel": f"o5b-{nonce}",
+            "email": f"o5b-{nonce}@{EMAIL_DOMAIN}",
             "tenant": None,
             "claims": {},
-            "ownedFixtures": ["owned-b"],
         },
         {
             "ref": PRINCIPAL_ANONYMOUS,
             "kind": "anonymous",
-            "uidLabel": f"o5c-{nonce}",
+            "email": None,
             "tenant": None,
             "claims": {},
-            "ownedFixtures": [],
         },
         {
             "ref": PRINCIPAL_TENANT,
             "kind": "email-password",
-            "uidLabel": f"o5d-{nonce}",
+            "email": f"o5d-{nonce}@{EMAIL_DOMAIN}",
             "tenant": tenant,
             "claims": {},
-            "ownedFixtures": [],
         },
-        {
-            "ref": PRINCIPAL_UNAUTHENTICATED,
-            "kind": "absent",
-            "claims": {},
-            "ownedFixtures": [],
-        },
-        {
-            "ref": PRINCIPAL_EXPIRED,
-            "kind": "expired-id-token",
-            "claims": {},
-            "ownedFixtures": [],
-        },
-        {
-            "ref": PRINCIPAL_MALFORMED,
-            "kind": "malformed",
-            "claims": {},
-            "ownedFixtures": [],
-        },
-        {"ref": PRINCIPAL_EMPTY, "kind": "empty", "claims": {}, "ownedFixtures": []},
     ]
 
 
-def _fixture_fields(nonce: str, document: str) -> dict[str, Any]:
-    fields: dict[str, Any] = {"nonce": nonce, "document": document}
-    owner = {
-        "owned-a": PRINCIPAL_OWNER,
-        "get-guarded": PRINCIPAL_OWNER,
-        "multiwrite-x": PRINCIPAL_OWNER,
-        "owned-b": PRINCIPAL_OTHER,
-    }.get(document)
-    if owner is not None:
-        fields["ownerUidRef"] = owner
-    if document == "multiwrite-x":
-        fields["generation"] = "initial"
-    return fields
+def _principals(nonce: str, tenant: str) -> list[dict[str, Any]]:
+    accounts = {entry["ref"]: entry for entry in _accounts(nonce, tenant)}
+    rows = [
+        {
+            "ref": ref,
+            "kind": accounts[ref]["kind"],
+            "tenant": accounts[ref]["tenant"],
+            "claims": accounts[ref]["claims"],
+            "account": True,
+        }
+        for ref in ACCOUNT_PRINCIPALS
+    ]
+    rows.extend(
+        {"ref": ref, "kind": kind, "tenant": None, "claims": {}, "account": False}
+        for ref, kind in (
+            (PRINCIPAL_UNAUTHENTICATED, "absent"),
+            (PRINCIPAL_EXPIRED, "expired-id-token"),
+            (PRINCIPAL_MALFORMED, "malformed"),
+            (PRINCIPAL_EMPTY, "empty"),
+        )
+    )
+    return rows
 
 
 def _compile(project: str, database: str, nonce: str, tenant: str) -> dict[str, Any]:
@@ -592,14 +696,14 @@ def _compile(project: str, database: str, nonce: str, tenant: str) -> dict[str, 
     if not isinstance(tenant, str) or not _TENANT.fullmatch(tenant):
         raise ValueError("malformed tenant")
 
-    observation = _matrix(tenant)
+    observation = _matrix(nonce, tenant)
     scope = _resource(project, database, f"o5-user-token/{_scope_segment(nonce)}/cases")
     owned = [
         _resource(project, database, _document_path(nonce, document))
         for document in (*_FIXTURES, *_OBSERVATION_CREATED)
     ]
     plan = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "contract": CASE_CONTRACT,
         "campaignId": CAMPAIGN,
         "status": "PREPARATION_ONLY",
@@ -609,8 +713,21 @@ def _compile(project: str, database: str, nonce: str, tenant: str) -> dict[str, 
         "database": database,
         "nonce": nonce,
         "tenant": tenant,
+        "tenantIsPlaceholder": True,
         "ownedScope": scope,
         "ownedResources": owned,
+        "ownedAccounts": _accounts(nonce, tenant),
+        "neverCreatedDocuments": [
+            _resource(project, database, _document_path(nonce, document))
+            for document in _NEVER_CREATED
+        ],
+        "fieldResolution": {
+            "$principal": (
+                "resolves to the uid of the account this campaign created for "
+                "that principal reference"
+            ),
+            "ownerField": OWNER_FIELD,
+        },
         "fixtures": [
             {
                 "document": document,
@@ -684,6 +801,7 @@ def validate_case(plan: Any) -> None:
     if plan != expected:
         raise ValueError("compiled case drift")
     _validate_paths(plan)
+    _validate_payloads(plan)
 
 
 def _validate_paths(plan: dict[str, Any]) -> None:
@@ -698,3 +816,51 @@ def _validate_paths(plan: dict[str, Any]) -> None:
         for resource in row["resources"]:
             if resource not in plan["ownedResources"]:
                 raise ValueError("observation targets an unowned resource")
+
+
+def _validate_payloads(plan: dict[str, Any]) -> None:
+    """Every document the matrix touches must have a frozen payload.
+
+    Without this an executor would invent field names, and a compiled row whose
+    expectation depends on ``resource.data`` would not be reproducible.
+    """
+    fixtures = {entry["document"]: entry["fields"] for entry in plan["fixtures"]}
+    accounts = {entry["ref"] for entry in plan["ownedAccounts"]}
+    created: set[str] = set()
+    for row in plan["observation"]:
+        for write in row["writes"]:
+            if write["operation"] not in ("create", "update"):
+                raise ValueError("unknown write operation")
+            if not isinstance(write.get("fields"), dict) or not write["fields"]:
+                raise ValueError("write without a frozen payload")
+            if write["operation"] == "create":
+                if write["document"] in fixtures or write["document"] in created:
+                    raise ValueError("create targets an existing document")
+                created.add(write["document"])
+            elif write["document"] not in fixtures:
+                raise ValueError("update targets a document with no fixture")
+        for document in row["targets"]:
+            if document not in fixtures and document not in created:
+                raise ValueError("row targets a document with no frozen payload")
+    for entry in plan["fixtures"]:
+        _validate_references(entry["fields"], accounts)
+    for row in plan["observation"]:
+        for write in row["writes"]:
+            _validate_references(write["fields"], accounts)
+        if "fields" in row["expect"]:
+            _validate_references(row["expect"]["fields"], accounts)
+
+
+def _validate_references(fields: Any, accounts: set[str]) -> None:
+    if not isinstance(fields, dict):
+        raise ValueError("payload must be a mapping")  # noqa: TRY004
+    for value in fields.values():
+        if isinstance(value, dict):
+            if set(value) != {"$principal"}:
+                raise ValueError("unknown typed payload value")
+            if value["$principal"] not in accounts:
+                raise ValueError("payload references an unknown principal")
+        elif not isinstance(value, str):
+            raise ValueError(  # noqa: TRY004
+                "payload values must be strings or typed references"
+            )

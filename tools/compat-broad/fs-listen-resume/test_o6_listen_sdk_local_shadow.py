@@ -6,6 +6,7 @@ names have changed, if the catalog has drifted, or if any case stopped agreeing
 with its expected local result. They say nothing about production.
 """
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -115,3 +116,29 @@ def test_the_shadow_records_no_absolute_personal_path():
     raw = EVIDENCE.read_text(encoding="utf-8")
     assert "/Users/" not in raw
     assert "/home/" not in raw
+
+
+def test_the_local_ruleset_contains_the_required_fragment_verbatim():
+    rules = (
+        REPO_ROOT / "tools/compat-broad/fs-listen-resume/fs-listen-sdk.rules"
+    ).read_text(encoding="utf-8")
+    for line in cases.REQUIRED_RULES_FRAGMENT.strip().splitlines():
+        assert line.strip() in rules, line
+
+
+def test_the_shadow_names_the_ruleset_it_ran_under():
+    environment = _receipt()["environment"]
+    assert (
+        environment["rulesPath"]
+        == "tools/compat-broad/fs-listen-resume/fs-listen-sdk.rules"
+    )
+    recomputed = hashlib.sha256(
+        (REPO_ROOT / environment["rulesPath"]).read_bytes()
+    ).hexdigest()
+    assert environment["rulesDigest"] == recomputed
+
+
+def test_cleanup_rows_publish_no_run_nonce_and_no_account_identifier():
+    for row in _receipt()["cleanup"]["rows"]:
+        assert "path" not in row
+        assert len(row["pathDigest"]) == 64

@@ -11,11 +11,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from . import cases
-from .campaign import BUDGET
+from . import cases, observation
+from .campaign import BUDGET, campaign_digest, compile_campaign
 
 CASES_SPEC = "spec/compatibility/fs-listen-sdk-cases.json"
 BUDGET_SPEC = "spec/compatibility/fs-listen-sdk-budget.json"
+SHADOW_CAMPAIGN_SPEC = "spec/compatibility/fs-listen-sdk-local-shadow-campaign.json"
 
 
 def cases_document() -> dict[str, Any]:
@@ -26,10 +27,36 @@ def cases_document() -> dict[str, Any]:
 
 def budget_document() -> dict[str, Any]:
     return {
-        "schema": "o6-listen-sdk-budget-v1",
+        "schema": "o6-listen-sdk-budget-v2",
         "note": "Local shadow runs use these same bounds; production adds a permission.",
         "budget": dict(BUDGET),
+        # The collector reads this list so a widened contract cannot silently
+        # leave the collector emitting fewer digests than the comparator binds.
+        "boundSources": list(observation.BOUND_SOURCES),
     }
+
+
+def campaign_document(nonce: str) -> dict[str, Any]:
+    """Publish the compiled campaign a local shadow ran under.
+
+    The nonce is published because a reader cannot recompile the campaign, and
+    therefore cannot verify the receipt, without it. A production campaign
+    record stays private; only its digest is published.
+    """
+    campaign = compile_campaign(nonce)
+    return {
+        "schema": "o6-listen-sdk-shadow-campaign-v1",
+        "nonce": nonce,
+        "campaignDigest": campaign_digest(campaign),
+        "campaign": campaign,
+    }
+
+
+def write_campaign(repo_root: str | Path, nonce: str) -> Path:
+    target = Path(repo_root) / SHADOW_CAMPAIGN_SPEC
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(render(campaign_document(nonce)), encoding="utf-8")
+    return target
 
 
 def render(document: dict[str, Any]) -> str:

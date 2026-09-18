@@ -20,8 +20,10 @@ from .manifest import digest
 
 SCHEMA = "o6-listen-sdk-cases-v1"
 
-# Owned data lives under a single nonce-scoped run document so that the owner
-# Rules precondition can be written once without embedding a per-run nonce.
+# Owned data lives under a run document scoped first by the authenticated
+# principal and then by the run nonce, so the Rules precondition can be written
+# once without embedding a per-run nonce and still refuse one principal access
+# to another principal's runs.
 RUN_COLLECTION = "o6_listen"
 DOCS_SUBCOLLECTION = "docs"
 PRIVATE_COLLECTION = "o6_listen_private"
@@ -31,8 +33,8 @@ PRIVATE_COLLECTION = "o6_listen_private"
 # two owned prefixes. It deliberately contains no catch-all deny, because the
 # oracle project is shared with other lanes.
 REQUIRED_RULES_FRAGMENT = """\
-match /o6_listen/{runId}/docs/{docId} {
-  allow read, write: if request.auth != null;
+match /o6_listen/{uid}/runs/{runId}/docs/{docId} {
+  allow read, write: if request.auth != null && uid == request.auth.uid;
 }
 match /o6_listen_private/{uid} {
   allow read, write: if request.auth != null && request.auth.uid == uid;
@@ -67,6 +69,16 @@ DEFAULT_COMPARED_FIELDS = (
     "exists",
     "fromCache",
     "hasPendingWrites",
+    "error",
+)
+# The default-mode cases compare the raw callback sequence. Snapshot kind is
+# left out because it depends on whether the first callback was cache-served,
+# which is timing-dependent; the signal is which callbacks arrived at all.
+RAW_CALLBACK_FIELDS = (
+    "listener",
+    "changes",
+    "docs",
+    "exists",
     "error",
 )
 SEMANTIC_ONLY_FIELDS = (
@@ -123,6 +135,7 @@ def _case(
     control_for: str | None = None,
     compared_fields: list[str] | None = None,
     ignore_cached_prefix: bool = False,
+    collapse_metadata_only: bool = True,
     requires_auth: bool = True,
     requires_rules: bool = False,
     documents: list[str] | None = None,
@@ -146,11 +159,28 @@ def _case(
         "comparison": comparison,
         "comparedFields": list(compared_fields or DEFAULT_COMPARED_FIELDS),
         "ignoreCachedPrefix": ignore_cached_prefix,
+        "collapseMetadataOnly": collapse_metadata_only,
         "discriminators": discriminators,
         "invariants": list(invariants or []),
         "requiresAuth": requires_auth,
         "requiresRules": requires_rules,
         "documents": list(documents or []),
+    }
+
+
+def _default_mode_listener(name: str, doc: str) -> dict[str, Any]:
+    """A listener that subscribes exactly as an ordinary application would.
+
+    It does not request metadata changes, so the SDK raises a callback only when
+    document data changes. Nothing is collapsed afterwards: this case exists to
+    observe the default path itself rather than a reconstruction of it.
+    """
+    return {
+        "name": name,
+        "kind": "document",
+        "target": doc,
+        "includeMetadataChanges": False,
+        "metadataIsCompared": False,
     }
 
 
@@ -551,6 +581,59 @@ _CASE_106N = _case(
     documents=["private"],
 )
 
+_CASE_107 = _case(
+    "FS-LISTEN-SDK-107",
+    role=ROLE_OBSERVATION,
+    dimension="default-subscription",
+    title="A default-mode listener raises one callback per data change",
+    listeners=[_default_mode_listener("primary", "alpha")],
+    steps=[
+        _step("seed", doc="alpha", fields={"rank": 1, "value": "a0"}),
+        _step("listen", listener="primary"),
+        _step("settle", listener="primary", seconds=3),
+        _step(
+            "write", client="witness", doc="alpha", fields={"rank": 1, "value": "a1"}
+        ),
+        _step("settle", listener="primary", seconds=3),
+    ],
+    expected_local=[
+        _event("primary", "initial", docs=["alpha"], exists=True),
+        _event("primary", "delta", docs=["alpha"], exists=True),
+    ],
+    comparison=COMPARISON_ORDERED,
+    compared_fields=list(RAW_CALLBACK_FIELDS),
+    collapse_metadata_only=False,
+    discriminators=["docs", "exists"],
+    documents=["alpha"],
+)
+
+_CASE_107C = _case(
+    "FS-LISTEN-SDK-107C",
+    role=ROLE_CONTROL,
+    control_for="FS-LISTEN-SDK-107",
+    dimension="default-subscription",
+    title="A default-mode listener raises no callback for a write that changes no data",
+    listeners=[_default_mode_listener("primary", "alpha")],
+    steps=[
+        _step("seed", doc="alpha", fields={"rank": 1, "value": "a0"}),
+        _step("listen", listener="primary"),
+        _step("settle", listener="primary", seconds=3),
+        _step(
+            "write", client="witness", doc="alpha", fields={"rank": 1, "value": "a0"}
+        ),
+        _step("quiet", listener="primary", seconds=3),
+    ],
+    expected_local=[
+        _event("primary", "initial", docs=["alpha"], exists=True),
+    ],
+    comparison=COMPARISON_ORDERED,
+    compared_fields=list(RAW_CALLBACK_FIELDS),
+    collapse_metadata_only=False,
+    discriminators=["docs"],
+    invariants=["no-event-after-quiet-window"],
+    documents=["alpha"],
+)
+
 CASES: tuple[dict[str, Any], ...] = (
     _CASE_101,
     _CASE_101C,
@@ -564,6 +647,8 @@ CASES: tuple[dict[str, Any], ...] = (
     _CASE_105C,
     _CASE_106,
     _CASE_106N,
+    _CASE_107,
+    _CASE_107C,
 )
 
 # Paths the campaign explicitly cannot observe from a Node process. Each entry

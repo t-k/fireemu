@@ -11,6 +11,8 @@
 // tokens are stripped by `redact` before anything is written to a receipt or a
 // log line.
 
+import { createHash } from 'node:crypto';
+
 export const RECEIPT_SCHEMA = 'o6-listen-observation-v1';
 
 const SECRET_KEY = /(password|secret|idtoken|id_token|accesstoken|access_token|refreshtoken|refresh_token|bearer|authorization|apikey|api_key|credential|assertion)/i;
@@ -82,7 +84,7 @@ export const createBudget = ({ now, deadlineMs, limits }) => {
 export const ownedPaths = (nonce, uid) => {
   if (!/^[0-9a-f]{32}$/.test(nonce ?? '')) throw new Error('nonce must be 128-bit lowercase hex');
   if (!uid || typeof uid !== 'string') throw new Error('uid is required to bind the private path');
-  const run = `o6_listen/${nonce}`;
+  const run = `o6_listen/${uid}/runs/${nonce}`;
   const docs = `${run}/docs`;
   return {
     run,
@@ -93,6 +95,9 @@ export const ownedPaths = (nonce, uid) => {
     private: `o6_listen_private/${uid}`,
   };
 };
+
+/** Digest of an owned path, so a receipt never publishes a nonce or a uid. */
+export const pathDigest = value => createHash('sha256').update(String(value)).digest('hex');
 
 /** Marker written into every owned document so cleanup can prove ownership. */
 export const ownerMarker = nonce => `o6-listen:${nonce}`;
@@ -268,7 +273,12 @@ export const classifyCleanup = rows => {
 export const runCleanup = async (deps, { client, paths, nonce, budget }) => {
   const rows = [];
   for (const target of planCleanup(paths, nonce)) {
-    const row = { name: target.name, path: target.path, outcome: 'unattempted', detail: null };
+    const row = {
+      name: target.name,
+      pathDigest: pathDigest(target.path),
+      outcome: 'unattempted',
+      detail: null,
+    };
     rows.push(row);
     const readCharge = budget.charge('reads');
     if (!readCharge.ok) {
@@ -374,6 +384,10 @@ export const runCase = async (deps, caseSpec, ctx) => {
       counters.serverSnapshotsBeforeError += 1;
     }
     if (row.snapshotKind === 'error') errored = true;
+    if (row.snapshotKind !== 'error' && row.fromCache === false) {
+      const readCharge = budget.charge('reads', Math.max(row.docs.length, 1));
+      if (!readCharge.ok) failures.push(readCharge.error);
+    }
     if (row.snapshotKind !== 'error') {
       if (row.fromCache === false && !connected) {
         connected = true;
@@ -539,6 +553,10 @@ export const runCase = async (deps, caseSpec, ctx) => {
           failures.push(`unknown-step:${step.kind}`);
       }
     }
+  } catch (error) {
+    // A thrown step is recorded, never propagated: the caller still has to run
+    // cleanup and write a receipt.
+    failures.push(`step-threw:${String(error?.code ?? error?.message ?? error)}`);
   } finally {
     for (const [name, unsubscribe] of registered) {
       try {
@@ -558,7 +576,9 @@ export const runCase = async (deps, caseSpec, ctx) => {
     );
     compared = firstKept < 0 ? [] : compared.slice(firstKept);
   }
-  compared = collapseMetadataOnlyEvents(compared, caseSpec.comparedFields);
+  if (caseSpec.collapseMetadataOnly !== false) {
+    compared = collapseMetadataOnlyEvents(compared, caseSpec.comparedFields);
+  }
 
   // Invariants describe the compared window, not the warm-up prefix.
   counters.fromCacheTransitions = compared
@@ -591,8 +611,45 @@ export const runCase = async (deps, caseSpec, ctx) => {
     comparedFields: caseSpec.comparedFields ?? null,
     transportTimeline,
     invariantViolations: checkInvariants(caseSpec.invariants, counters),
-    listenersClosed: allListenersClosed && registered.size === 0,
+    listenersClosed: allListenersClosed,
   };
+};
+
+/**
+ * Run every case, then always run the final cleanup pass. Nothing thrown by a
+ * case, by the per-case cleanup or by the caller's between-case hook escapes:
+ * the thrown value is returned so the caller can record it on a receipt.
+ */
+export const runCatalog = async (
+  deps,
+  { catalog, contextFor, budget, cleanupBudget, paths, nonce, client, betweenCases },
+) => {
+  const caseRecords = [];
+  let thrown = null;
+  try {
+    for (const caseSpec of catalog.cases) {
+      caseRecords.push(await runCase(deps, caseSpec, contextFor(caseSpec)));
+      await runCleanup(deps, { client, paths, nonce, budget: cleanupBudget });
+      if (betweenCases) await betweenCases(caseSpec);
+    }
+  } catch (error) {
+    thrown = String(error?.stack ?? error?.message ?? error);
+  }
+  let cleanup;
+  try {
+    cleanup = await runCleanup(deps, { client, paths, nonce, budget: cleanupBudget });
+  } catch (error) {
+    cleanup = classifyCleanup([
+      {
+        name: 'final-pass',
+        pathDigest: null,
+        outcome: 'cleanup-threw',
+        detail: String(error?.message ?? error),
+      },
+    ]);
+    thrown = thrown ?? String(error?.message ?? error);
+  }
+  return { caseRecords, cleanup, thrown };
 };
 
 export const buildReceipt = ({
@@ -604,6 +661,7 @@ export const buildReceipt = ({
   cleanup,
   budget,
   cleanupBudget,
+  thrown,
   productionExecuted,
 }) => ({
   schema: RECEIPT_SCHEMA,
@@ -615,10 +673,12 @@ export const buildReceipt = ({
   budget: budget.snapshot(),
   cleanupBudget: cleanupBudget ? cleanupBudget.snapshot() : null,
   cleanup,
+  thrown: thrown ?? null,
   cases: caseRecords,
   complete:
     caseRecords.every(record => record.complete && record.listenersClosed) &&
     cleanup.complete &&
     !budget.snapshot().exhausted &&
-    !(cleanupBudget ? cleanupBudget.snapshot().exhausted : false),
+    !(cleanupBudget ? cleanupBudget.snapshot().exhausted : false) &&
+    !thrown,
 });

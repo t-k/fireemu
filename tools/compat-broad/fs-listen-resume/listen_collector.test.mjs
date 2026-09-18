@@ -19,6 +19,7 @@ import {
   planCleanup,
   redact,
   runCase,
+  runCatalog,
   runCleanup,
 } from './listen_collector.mjs';
 
@@ -297,7 +298,7 @@ test('the budget refuses a charge past its cap and past its deadline', () => {
 
 test('owned paths are nonce scoped and require a uid for the private document', () => {
   const paths = ownedPaths(NONCE, UID);
-  assert.equal(paths.run, `o6_listen/${NONCE}`);
+  assert.equal(paths.run, `o6_listen/${UID}/runs/${NONCE}`);
   assert.equal(paths.private, `o6_listen_private/${UID}`);
   assert.throws(() => ownedPaths('nope', UID), /128-bit/);
   assert.throws(() => ownedPaths(NONCE, ''), /uid/);
@@ -554,6 +555,8 @@ test('cleanup deletes only documents this run owns and proves final absence', as
     { firestore: fake.firestore },
     { client: 'primary', paths, nonce: NONCE, budget },
   );
+  assert.ok(result.rows.every(row => !('path' in row)), 'cleanup rows must not publish paths');
+  assert.ok(result.rows.every(row => /^[0-9a-f]{64}$/.test(row.pathDigest)));
   const byName = Object.fromEntries(result.rows.map(row => [row.name, row.outcome]));
   assert.equal(byName.alpha, 'deleted-and-absent');
   assert.equal(byName.beta, 'not-owned');
@@ -762,4 +765,159 @@ test('a case with no break records a connect and nothing else', async () => {
     record.transportTimeline.map(entry => entry.kind),
     ['connect'],
   );
+});
+
+test('a thrown step still runs cleanup and still yields a receipt', async () => {
+  const fake = createFake();
+  const clock = nowFactory();
+  const paths = ownedPaths(NONCE, UID);
+  const budget = createBudget({
+    now: clock.now,
+    deadlineMs: 60_000,
+    limits: { reads: 400, writes: 60, deletes: 20, snapshots: 120, listeners: 40 },
+  });
+  const cleanupBudget = createBudget({
+    now: clock.now,
+    deadlineMs: 180_000,
+    limits: { reads: 200, writes: 0, deletes: 100, snapshots: 0, listeners: 0 },
+  });
+  let writes = 0;
+  const deps = {
+    ...clock,
+    firestore: {
+      ...fake.firestore,
+      async setDoc(client, docPath, fields) {
+        writes += 1;
+        if (writes === 3) throw { code: 'permission-denied' };
+        return fake.firestore.setDoc(client, docPath, fields);
+      },
+    },
+    auth: fake.auth,
+  };
+  const catalog = {
+    cases: [
+      caseFixture({
+        caseId: 'ONE',
+        steps: [
+          { kind: 'seed', doc: 'alpha', fields: { rank: 1 } },
+          { kind: 'listen', listener: 'primary' },
+          { kind: 'await', listener: 'primary', events: 1 },
+        ],
+      }),
+      caseFixture({
+        caseId: 'TWO',
+        steps: [
+          { kind: 'seed', doc: 'beta', fields: { rank: 2 } },
+          { kind: 'seed', doc: 'gamma', fields: { rank: 3 } },
+        ],
+      }),
+    ],
+  };
+  const outcome = await runCatalog(deps, {
+    catalog,
+    budget,
+    cleanupBudget,
+    paths,
+    nonce: NONCE,
+    client: 'primary',
+    contextFor: caseSpec => contextFor(fake, clock, caseSpec, { budget }),
+  });
+  // The failing case is recorded rather than aborting the run.
+  assert.equal(outcome.caseRecords.length, 2);
+  assert.equal(outcome.caseRecords[1].complete, false);
+  assert.ok(outcome.caseRecords[1].failures.some(entry => entry.includes('permission-denied')));
+  // Cleanup still ran and proved absence for everything the run created.
+  assert.equal(outcome.cleanup.complete, true);
+  assert.ok(
+    outcome.cleanup.rows.every(row =>
+      ['deleted-and-absent', 'not-created'].includes(row.outcome),
+    ),
+  );
+  assert.equal(fake.store.size, 0);
+  // And a receipt exists, marked incomplete.
+  const receipt = buildReceipt({
+    campaign: { caseId: 'FS-LISTEN-SDK' },
+    campaignDigest: 'a'.repeat(64),
+    catalogDigest: 'b'.repeat(64),
+    environment: { node: process.versions.node },
+    caseRecords: outcome.caseRecords,
+    cleanup: outcome.cleanup,
+    budget,
+    cleanupBudget,
+    thrown: outcome.thrown,
+  });
+  assert.equal(receipt.complete, false);
+});
+
+test('an error thrown outside a case is recorded on the receipt', async () => {
+  const fake = createFake();
+  const clock = nowFactory();
+  const paths = ownedPaths(NONCE, UID);
+  const budget = createBudget({
+    now: clock.now,
+    deadlineMs: 60_000,
+    limits: { reads: 400, writes: 60, deletes: 20, snapshots: 120, listeners: 40 },
+  });
+  const cleanupBudget = createBudget({
+    now: clock.now,
+    deadlineMs: 180_000,
+    limits: { reads: 200, writes: 0, deletes: 100, snapshots: 0, listeners: 0 },
+  });
+  const outcome = await runCatalog(
+    { ...clock, firestore: fake.firestore, auth: fake.auth },
+    {
+      catalog: { cases: [caseFixture({ caseId: 'ONE', steps: [] })] },
+      budget,
+      cleanupBudget,
+      paths,
+      nonce: NONCE,
+      client: 'primary',
+      contextFor: caseSpec => contextFor(fake, clock, caseSpec, { budget }),
+      betweenCases: async () => {
+        throw new Error('sign-in lost');
+      },
+    },
+  );
+  assert.match(outcome.thrown, /sign-in lost/);
+  assert.equal(outcome.cleanup.complete, true);
+  const receipt = buildReceipt({
+    campaign: { caseId: 'FS-LISTEN-SDK' },
+    campaignDigest: 'a'.repeat(64),
+    catalogDigest: 'b'.repeat(64),
+    environment: {},
+    caseRecords: outcome.caseRecords,
+    cleanup: outcome.cleanup,
+    budget,
+    cleanupBudget,
+    thrown: outcome.thrown,
+  });
+  assert.equal(receipt.complete, false);
+  assert.match(receipt.thrown, /sign-in lost/);
+});
+
+test('cleanup stops on its own deadline instead of hanging', async () => {
+  const clock = nowFactory();
+  const paths = ownedPaths(NONCE, UID);
+  const cleanupBudget = createBudget({
+    now: clock.now,
+    deadlineMs: 1_000,
+    limits: { reads: 200, writes: 0, deletes: 100, snapshots: 0, listeners: 0 },
+  });
+  const deps = {
+    firestore: {
+      async getDoc() {
+        clock.advance(600);
+        return { exists: false, fields: null, updateTime: null };
+      },
+    },
+  };
+  const result = await runCleanup(deps, {
+    client: 'primary',
+    paths,
+    nonce: NONCE,
+    budget: cleanupBudget,
+  });
+  assert.equal(result.complete, false);
+  assert.ok(result.rows.some(row => row.outcome === 'budget-exhausted'));
+  assert.ok(cleanupBudget.snapshot().exceeded.includes('deadline'));
 });

@@ -154,7 +154,7 @@ def owned_paths(nonce: str, uid_placeholder: str = "{uid}") -> dict[str, str]:
     """Return the owned document paths for a run nonce."""
     if not isinstance(nonce, str) or not _NONCE.fullmatch(nonce):
         raise ValueError("nonce must be exactly 128-bit lowercase hexadecimal")
-    run = f"{cases.RUN_COLLECTION}/{nonce}"
+    run = f"{cases.RUN_COLLECTION}/{uid_placeholder}/runs/{nonce}"
     docs = f"{run}/{cases.DOCS_SUBCOLLECTION}"
     return {
         "run": run,
@@ -292,10 +292,14 @@ def validate_campaign(campaign: Any) -> bool:
         return False
     try:
         run = campaign["owner"]["paths"]["run"]
-        prefix = f"{cases.RUN_COLLECTION}/"
-        if not run.startswith(prefix):
+        segments = run.split("/")
+        if (
+            len(segments) != 4
+            or segments[0] != cases.RUN_COLLECTION
+            or segments[2] != "runs"
+        ):
             return False
-        nonce = run.removeprefix(prefix)
+        nonce = segments[3]
         if (
             not _NONCE.fullmatch(nonce)
             or digest(nonce) != campaign["owner"]["nonceDigest"]

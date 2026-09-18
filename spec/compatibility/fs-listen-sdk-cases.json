@@ -2,6 +2,7 @@
   "cases": [
     {
       "caseId": "FS-LISTEN-SDK-101",
+      "collapseMetadataOnly": true,
       "comparedFields": [
         "listener",
         "snapshotKind",
@@ -70,6 +71,7 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-101C",
+      "collapseMetadataOnly": true,
       "comparedFields": [
         "listener",
         "snapshotKind",
@@ -127,6 +129,7 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-102",
+      "collapseMetadataOnly": true,
       "comparedFields": [
         "listener",
         "snapshotKind",
@@ -217,6 +220,7 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-102C",
+      "collapseMetadataOnly": true,
       "comparedFields": [
         "listener",
         "snapshotKind",
@@ -295,6 +299,7 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-103",
+      "collapseMetadataOnly": true,
       "comparedFields": [
         "listener",
         "snapshotKind",
@@ -464,6 +469,7 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-103C",
+      "collapseMetadataOnly": true,
       "comparedFields": [
         "listener",
         "snapshotKind",
@@ -550,6 +556,7 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-104",
+      "collapseMetadataOnly": true,
       "comparedFields": [
         "listener",
         "snapshotKind",
@@ -694,6 +701,7 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-104C",
+      "collapseMetadataOnly": true,
       "comparedFields": [
         "listener",
         "snapshotKind",
@@ -826,6 +834,7 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-105",
+      "collapseMetadataOnly": true,
       "comparedFields": [
         "listener",
         "snapshotKind",
@@ -943,6 +952,7 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-105C",
+      "collapseMetadataOnly": true,
       "comparedFields": [
         "listener",
         "snapshotKind",
@@ -1059,6 +1069,7 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-106",
+      "collapseMetadataOnly": true,
       "comparedFields": [
         "listener",
         "snapshotKind",
@@ -1167,6 +1178,7 @@
     },
     {
       "caseId": "FS-LISTEN-SDK-106N",
+      "collapseMetadataOnly": true,
       "comparedFields": [
         "listener",
         "snapshotKind",
@@ -1227,13 +1239,192 @@
         }
       ],
       "title": "A listener started while signed out fails without ever reading the server"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-107",
+      "collapseMetadataOnly": false,
+      "comparedFields": [
+        "listener",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "comparison": "ordered-events",
+      "controlFor": null,
+      "dimension": "default-subscription",
+      "discriminators": [
+        "docs",
+        "exists"
+      ],
+      "documents": [
+        "alpha"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "error": null,
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "initial"
+        },
+        {
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "error": null,
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "delta"
+        }
+      ],
+      "ignoreCachedPrefix": false,
+      "invariants": [],
+      "listeners": [
+        {
+          "includeMetadataChanges": false,
+          "kind": "document",
+          "metadataIsCompared": false,
+          "name": "primary",
+          "target": "alpha"
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": false,
+      "role": "observation",
+      "steps": [
+        {
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a0"
+          },
+          "kind": "seed"
+        },
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "settle",
+          "listener": "primary",
+          "seconds": 3
+        },
+        {
+          "client": "witness",
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a1"
+          },
+          "kind": "write"
+        },
+        {
+          "kind": "settle",
+          "listener": "primary",
+          "seconds": 3
+        }
+      ],
+      "title": "A default-mode listener raises one callback per data change"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-107C",
+      "collapseMetadataOnly": false,
+      "comparedFields": [
+        "listener",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "comparison": "ordered-events",
+      "controlFor": "FS-LISTEN-SDK-107",
+      "dimension": "default-subscription",
+      "discriminators": [
+        "docs"
+      ],
+      "documents": [
+        "alpha"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "error": null,
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "initial"
+        }
+      ],
+      "ignoreCachedPrefix": false,
+      "invariants": [
+        "no-event-after-quiet-window"
+      ],
+      "listeners": [
+        {
+          "includeMetadataChanges": false,
+          "kind": "document",
+          "metadataIsCompared": false,
+          "name": "primary",
+          "target": "alpha"
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": false,
+      "role": "control",
+      "steps": [
+        {
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a0"
+          },
+          "kind": "seed"
+        },
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "settle",
+          "listener": "primary",
+          "seconds": 3
+        },
+        {
+          "client": "witness",
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a0"
+          },
+          "kind": "write"
+        },
+        {
+          "kind": "quiet",
+          "listener": "primary",
+          "seconds": 3
+        }
+      ],
+      "title": "A default-mode listener raises no callback for a write that changes no data"
     }
   ],
-  "catalogDigest": "84d1546aef0addc873845230aab8852aad751b44e175be4e90413115c251f462",
+  "catalogDigest": "8125ca2c220145e9344e8342da7840bb8aa4ab039a8ba01243cd5bdf0df84388",
   "docsSubcollection": "docs",
   "privateCollection": "o6_listen_private",
-  "requiredRulesDigest": "292c8321e8edad30d81972f2ddfd8314e1654d738c6a5a6a359b6d93aaffef7d",
-  "requiredRulesFragment": "match /o6_listen/{runId}/docs/{docId} {\n  allow read, write: if request.auth != null;\n}\nmatch /o6_listen_private/{uid} {\n  allow read, write: if request.auth != null && request.auth.uid == uid;\n}\n",
+  "requiredRulesDigest": "767ffbe957f1991cb17d282a9e15b1ec43d82d7fb52f8c8d5876b9f2262ea740",
+  "requiredRulesFragment": "match /o6_listen/{uid}/runs/{runId}/docs/{docId} {\n  allow read, write: if request.auth != null && uid == request.auth.uid;\n}\nmatch /o6_listen_private/{uid} {\n  allow read, write: if request.auth != null && request.auth.uid == uid;\n}\n",
   "runCollection": "o6_listen",
   "schema": "o6-listen-sdk-cases-v1",
   "unobservedPaths": [

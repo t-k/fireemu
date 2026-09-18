@@ -65,9 +65,9 @@ def test_campaign_restricts_project_and_database(project, database):
 
 def test_owned_paths_are_nonce_scoped_and_do_not_collide_with_other_lanes():
     paths = owned_paths(NONCE)
-    assert paths["run"] == f"o6_listen/{NONCE}"
+    assert paths["run"] == f"o6_listen/{{uid}}/runs/{NONCE}"
     for key in ("alpha", "beta", "gamma", "absent"):
-        assert paths[key].startswith(f"o6_listen/{NONCE}/docs/")
+        assert paths[key].startswith(f"o6_listen/{{uid}}/runs/{NONCE}/docs/")
     assert paths["private"] == "o6_listen_private/{uid}"
     assert len(set(paths.values())) == len(paths)
 

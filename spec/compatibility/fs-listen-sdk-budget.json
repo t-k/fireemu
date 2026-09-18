@@ -1,4 +1,11 @@
 {
+  "boundSources": [
+    "tools/compat-broad/fs-listen-resume/listen_collector.mjs",
+    "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs",
+    "tools/compat-broad/fs-listen-resume/cases.py",
+    "tools/compat-broad/fs-listen-resume/campaign.py",
+    "tools/compat-broad/fs-listen-resume/observation.py"
+  ],
   "budget": {
     "cleanupReserveDeletes": 100,
     "cleanupReserveReads": 200,
@@ -19,5 +26,5 @@
     "maxWrites": 60
   },
   "note": "Local shadow runs use these same bounds; production adds a permission.",
-  "schema": "o6-listen-sdk-budget-v1"
+  "schema": "o6-listen-sdk-budget-v2"
 }

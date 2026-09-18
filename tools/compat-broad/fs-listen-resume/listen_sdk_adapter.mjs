@@ -25,8 +25,7 @@ import {
   buildReceipt,
   createBudget,
   ownedPaths,
-  runCase,
-  runCleanup,
+  runCatalog,
 } from './listen_collector.mjs';
 
 export const MODE_LOCAL = 'local';
@@ -132,8 +131,11 @@ export const createDeps = (sdk, clients) => ({
     },
   },
   auth: {
-    async signIn(client) {
+    async signIn(client, account) {
       const target = clients[client];
+      if (account && account !== target.account.name) {
+        throw new Error(`unknown sign-in account: ${account}`);
+      }
       await sdk.signInWithEmailAndPassword(target.auth, target.account.email, target.account.password);
     },
     async signOut(client) {
@@ -203,7 +205,7 @@ export const main = async ({ env = process.env, argv = process.argv } = {}) => {
 
   const sdk = await resolveSdk(moduleDir);
   const password = readPasswordFromFd(env.O6_LISTEN_PASSWORD_FD) ?? randomBytes(24).toString('hex');
-  const account = { email: `o6-${nonce}@example.test`, password };
+  const account = { name: 'throwaway', email: `o6-${nonce}@example.test`, password };
 
   const clients = await buildClients(sdk, { projectId, firestoreHost, authHost, account });
   const deps = createDeps(sdk, clients);
@@ -220,7 +222,13 @@ export const main = async ({ env = process.env, argv = process.argv } = {}) => {
       'utf8',
     ),
   );
-  const { budget: limitsSpec } = JSON.parse(
+  const campaignRecord = env.O6_LISTEN_CAMPAIGN_PATH
+    ? JSON.parse(readFileSync(env.O6_LISTEN_CAMPAIGN_PATH, 'utf8'))
+    : null;
+  if (!campaignRecord) {
+    throw new Error('set O6_LISTEN_CAMPAIGN_PATH to a compiled campaign record');
+  }
+  const { budget: limitsSpec, boundSources } = JSON.parse(
     readFileSync(
       env.O6_LISTEN_BUDGET_PATH ?? path.join(repoRoot, 'spec/compatibility/fs-listen-sdk-budget.json'),
       'utf8',
@@ -246,7 +254,7 @@ export const main = async ({ env = process.env, argv = process.argv } = {}) => {
   // observation deadline must never leave an owned document behind.
   const cleanupBudget = createBudget({
     now: () => Date.now(),
-    deadlineMs: Number.MAX_SAFE_INTEGER,
+    deadlineMs: limitsSpec.cleanupReserveSeconds * 1000,
     limits: {
       reads: limitsSpec.cleanupReserveReads,
       writes: 0,
@@ -256,9 +264,14 @@ export const main = async ({ env = process.env, argv = process.argv } = {}) => {
     },
   });
 
-  const caseRecords = [];
-  for (const caseSpec of catalog.cases) {
-    const record = await runCase(deps, caseSpec, {
+  const outcome = await runCatalog(deps, {
+    catalog,
+    budget,
+    cleanupBudget,
+    paths,
+    nonce,
+    client: 'primary',
+    contextFor: () => ({
       client: 'primary',
       clients: { primary: 'primary', witness: 'witness' },
       nonce,
@@ -267,21 +280,16 @@ export const main = async ({ env = process.env, argv = process.argv } = {}) => {
       stepTimeoutMs: Number.parseInt(env.O6_LISTEN_STEP_TIMEOUT_MS ?? '15000', 10),
       pollMs: 25,
       budget,
-    });
-    caseRecords.push(record);
-    await runCleanup(deps, { client: 'primary', paths, nonce, budget: cleanupBudget });
-    await sdk.signInWithEmailAndPassword(clients.primary.auth, account.email, password);
-  }
-
-  const cleanup = await runCleanup(deps, {
-    client: 'primary',
-    paths,
-    nonce,
-    budget: cleanupBudget,
+    }),
+    // Case 106 signs out; restore the session before the next case runs.
+    betweenCases: () =>
+      sdk.signInWithEmailAndPassword(clients.primary.auth, account.email, password),
   });
+  const { caseRecords, cleanup } = outcome;
+
   const receipt = buildReceipt({
     campaign: { caseId: 'FS-LISTEN-SDK' },
-    campaignDigest: env.O6_LISTEN_CAMPAIGN_DIGEST ?? null,
+    campaignDigest: campaignRecord.campaignDigest,
     catalogDigest: catalog.catalogDigest ?? null,
     environment: {
       kind: 'local-fireemu',
@@ -298,6 +306,10 @@ export const main = async ({ env = process.env, argv = process.argv } = {}) => {
         : null,
       fireemuBinaryDigest: artifactDigest(env.O6_LISTEN_FIREEMU_BINARY),
       fireemuSourceCommit: env.O6_LISTEN_FIREEMU_COMMIT ?? null,
+      rulesPath: env.O6_LISTEN_RULES_PATH
+        ? path.relative(repoRoot, env.O6_LISTEN_RULES_PATH)
+        : null,
+      rulesDigest: artifactDigest(env.O6_LISTEN_RULES_PATH),
       projectId,
       nonceDigest: createHash('sha256').update(nonce).digest('hex'),
     },
@@ -305,17 +317,19 @@ export const main = async ({ env = process.env, argv = process.argv } = {}) => {
     cleanup,
     budget,
     cleanupBudget,
+    thrown: outcome.thrown,
     productionExecuted: false,
   });
+  receipt.permission = campaignRecord.campaign.permission ?? null;
+  receipt.sdkResolved = campaignRecord.campaign.sdk;
   receipt.transportTimeline = caseRecords
     .flatMap(record =>
       (record.transportTimeline ?? []).map(entry => ({ ...entry, caseId: record.caseId })),
     )
     .sort((left, right) => left.atMs - right.atMs);
-  receipt.sourceDigests = sourceDigests(repoRoot, [
-    'tools/compat-broad/fs-listen-resume/listen_collector.mjs',
-    'tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs',
-  ]);
+  // The bound-source list comes from the published contract, never from a
+  // literal here: widening the contract must break the collector loudly.
+  receipt.sourceDigests = sourceDigests(repoRoot, boundSources);
 
   for (const client of Object.values(clients)) {
     await sdk.terminate(client.db).catch(() => {});

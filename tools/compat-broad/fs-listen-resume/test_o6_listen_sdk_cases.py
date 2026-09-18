@@ -40,6 +40,7 @@ def test_declared_dimensions_cover_the_blocking_condition_topics():
         "resume-after-break",
         "unsubscribe",
         "auth-switch",
+        "default-subscription",
     }
 
 
@@ -129,10 +130,34 @@ def test_negative_auth_case_expects_no_snapshot_before_the_error():
     assert case["ignoreCachedPrefix"] is True
 
 
+def test_the_default_subscription_case_really_subscribes_in_default_mode():
+    case = get_case("FS-LISTEN-SDK-107")
+    assert case["listeners"][0]["includeMetadataChanges"] is False
+    assert case["collapseMetadataOnly"] is False
+    assert len(case["expectedLocal"]) == 2
+
+
+def test_the_default_subscription_control_expects_a_single_callback():
+    control = get_case("FS-LISTEN-SDK-107C")
+    assert control["listeners"][0]["includeMetadataChanges"] is False
+    assert control["collapseMetadataOnly"] is False
+    assert len(control["expectedLocal"]) == 1
+    assert "no-event-after-quiet-window" in control["invariants"]
+
+
+def test_only_the_default_subscription_cases_skip_the_collapse():
+    skipping = {c["caseId"] for c in CASES if c["collapseMetadataOnly"] is False}
+    assert skipping == {"FS-LISTEN-SDK-107", "FS-LISTEN-SDK-107C"}
+
+
 def test_required_rules_fragment_denies_unauthenticated_access():
     fragment = cases.REQUIRED_RULES_FRAGMENT
     assert "request.auth != null" in fragment
     assert "request.auth.uid == uid" in fragment
+    # The run prefix is bound to the calling principal, so a merged ruleset
+    # cannot grant one principal access to another principal's runs.
+    assert "uid == request.auth.uid" in fragment
+    assert "match /o6_listen/{uid}/runs/{runId}/docs/{docId}" in fragment
     assert "if true" not in fragment
     assert "{document=**}" not in fragment
 

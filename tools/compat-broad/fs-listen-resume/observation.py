@@ -19,6 +19,7 @@ A missing or unproven element yields `INDETERMINATE`, never `MATCH`.
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 from typing import Any
 
@@ -43,15 +44,15 @@ BOUND_SOURCES = (
     "tools/compat-broad/fs-listen-resume/observation.py",
 )
 
-# Fields a receipt must never carry, because they would name a secret.
-FORBIDDEN_FIELDS = (
-    "password",
-    "idToken",
-    "refreshToken",
-    "accessToken",
-    "apiKey",
-    "credential",
+# The same vocabulary the collector's redactor strips, so the producing and the
+# admitting side cannot disagree about what counts as a secret.
+FORBIDDEN_KEY = re.compile(
+    r"password|secret|id[_-]?token|access[_-]?token|refresh[_-]?token|bearer"
+    r"|authorization|api[_-]?key|credential|assertion",
+    re.IGNORECASE,
 )
+BEARER_VALUE = re.compile(r"^(Bearer\s|ey[A-Za-z0-9_-]{10,}\.)")
+REDACTED = "[redacted]"
 
 _LOCAL_ENVIRONMENTS = ("local-fireemu",)
 _PRODUCTION_ENVIRONMENTS = ("production-oracle",)
@@ -74,13 +75,15 @@ def compute_source_digests(base_dir: str | Path) -> dict[str, str]:
 def _contains_forbidden(value: Any) -> bool:
     if isinstance(value, dict):
         for key, item in value.items():
-            if key in FORBIDDEN_FIELDS and item not in (None, "[redacted]"):
+            if FORBIDDEN_KEY.search(str(key)) and item not in (None, REDACTED):
                 return True
             if _contains_forbidden(item):
                 return True
         return False
     if isinstance(value, list):
         return any(_contains_forbidden(item) for item in value)
+    if isinstance(value, str):
+        return bool(BEARER_VALUE.match(value))
     return False
 
 

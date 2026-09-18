@@ -224,7 +224,7 @@ def _cli_fixture(tmp_path, monkeypatch, calls, *, approval_overrides=None):
         ),
     )
     monkeypatch.setattr(
-        commit_o8,
+        commit_o8.acquisition,
         "validate_retained_artifact",
         lambda *args, **kwargs: {
             "artifactSha256": inputs["artifactSha256"],
@@ -345,3 +345,31 @@ def test_cli_refuses_a_rejected_handoff_before_any_wire_call(tmp_path, monkeypat
     monkeypatch.setattr(commit_o8, "validate_handoff", refuse)
     assert commit_o8.main(argv) == 2
     assert calls == {}
+
+
+def test_a_failed_handoff_revokes_the_issued_capability(tmp_path, monkeypatch):
+    """An admission that will not be executed must not stay issued."""
+    calls = {}
+    _inputs, argv, _secret = _cli_fixture(tmp_path, monkeypatch, calls)
+
+    def refuse(*_args):
+        raise ValueError("bound Commit credential handoff required")
+
+    monkeypatch.setattr(commit_o8, "validate_handoff", refuse)
+    before = set(commit_o8.acquisition._ISSUED)
+    assert commit_o8.main(argv) == 2
+    assert calls == {}
+    assert set(commit_o8.acquisition._ISSUED) == before
+
+
+def test_the_cli_binds_the_capability_to_its_ledger_root_and_window(
+    tmp_path, monkeypatch
+):
+    calls = {}
+    _inputs, argv, _secret = _cli_fixture(tmp_path, monkeypatch, calls)
+    ledger = Path(argv[argv.index("--ledger") + 1])
+    assert commit_o8.main(argv) == 0
+    capability = calls["capability"]
+    assert capability.ledger_root == str(ledger.resolve(strict=False))
+    assert capability.window_starts_at <= time.time()
+    assert capability.window_expires_at > time.time() + commit_o8.CAMPAIGN_SECONDS

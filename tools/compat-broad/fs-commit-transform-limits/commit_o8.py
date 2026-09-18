@@ -10,9 +10,7 @@ transport mode.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import math
 import os
 import select
 import stat
@@ -22,9 +20,10 @@ from pathlib import Path
 
 import commit_acquisition as acquisition
 import o8_bundle
-from broad_contract import digest
+from broad_contract import (
+    digest as digest,  # noqa: PLC0414 -- re-exported for callers of this boundary
+)
 from commit_reserved_adapter import validate_handoff
-from owned_transform_runner import validate_retained_artifact
 
 MAX_HANDOFF_BYTES = 16 * 1024
 CAMPAIGN_SECONDS = 1200
@@ -108,35 +107,8 @@ def _read_handoff(args: argparse.Namespace) -> dict:
 
 
 def _validate_frozen(inputs: dict) -> None:
-    if inputs.get("kind") != "commit-frozen-inputs-v2":
-        raise ValueError("O7 frozen approval binding required")
-    required = {
-        "permission",
-        "permissionDigest",
-        "plan",
-        "planDigest",
-        "sourceCommit",
-        "sourceInputs",
-        "artifactSha256",
-        "inputsDigest",
-    }
-    if (
-        not required.issubset(inputs)
-        or inputs["permission"].get("kind") != "commit-owner-execution-permission-v1"
-    ):
-        raise ValueError("O7 frozen approval binding required")
-    if (
-        inputs["inputsDigest"]
-        != digest(
-            {key: value for key, value in inputs.items() if key != "inputsDigest"}
-        )
-        or inputs["permissionDigest"] != digest(inputs["permission"])
-        or inputs["planDigest"] != digest(inputs["plan"])
-        or not isinstance(inputs["sourceInputs"], dict)
-        or not isinstance(inputs["sourceCommit"], str)
-        or not isinstance(inputs["artifactSha256"], str)
-    ):
-        raise ValueError("O7 frozen approval binding differs")
+    """Delegate to the single shared definition of the frozen O7 binding."""
+    acquisition.validate_frozen_inputs(inputs)
 
 
 def _validate_approval(
@@ -147,76 +119,29 @@ def _validate_approval(
     permission: dict,
     *,
     ledger: Path,
-) -> None:
-    expected = {
-        "kind",
-        "status",
-        "manifestSha256",
-        "inputsDigest",
-        "permissionDigest",
-        "sourceCommit",
-        "sourceInputsDigest",
-        "artifactSha256",
-        "planDigest",
-        "nonceDigest",
-        "ledgerRoot",
-        "launcherSha256",
-        "artifactProfile",
-        "windowStartsAt",
-        "windowExpiresAt",
-    }
-    if set(approval) != expected or approval["kind"] != APPROVAL_KIND:
-        raise ValueError("O7 approval artifact required")
-    if manifest.get("kind") != MANIFEST_KIND:
-        raise ValueError("O7 manifest artifact required")
-    if approval["status"] != "approved":
-        raise ValueError("O7 approval is not approved")
-    if approval["artifactProfile"] != REVIEWED_ARTIFACT_PROFILE:
-        raise ValueError("O7 artifact profile differs")
-    if hashlib.sha256(manifest_bytes).hexdigest() != approval["manifestSha256"]:
-        raise ValueError("O7 manifest digest differs")
-    bindings = {
-        "inputsDigest": inputs["inputsDigest"],
-        "permissionDigest": inputs["permissionDigest"],
-        "sourceCommit": inputs["sourceCommit"],
-        "sourceInputsDigest": digest(inputs["sourceInputs"]),
-        "artifactSha256": inputs["artifactSha256"],
-        "planDigest": inputs["planDigest"],
-        "nonceDigest": digest(inputs["plan"]["nonce"]),
-        "ledgerRoot": str(ledger.resolve(strict=False)),
-        "launcherSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-    }
-    if any(approval[key] != value for key, value in bindings.items()):
-        raise ValueError("O7 approval binding differs")
-    if (
-        permission.get("wallSeconds") != CAMPAIGN_SECONDS
-        or permission.get("recoverySeconds") != RECOVERY_SECONDS
-    ):
-        raise ValueError("O7 campaign window binding differs")
-    if manifest.get("inputsDigest") != inputs["inputsDigest"]:
-        raise ValueError("O7 manifest binding differs")
-    for key in ("windowStartsAt", "windowExpiresAt"):
-        if (
-            type(approval[key]) not in (int, float)
-            or isinstance(approval[key], bool)
-            or not math.isfinite(approval[key])
-        ):
-            raise ValueError("O7 execution window invalid")
-    now = time.time()
-    if (
-        not approval["windowStartsAt"] <= now
-        or now + CAMPAIGN_SECONDS > approval["windowExpiresAt"]
-        or approval["windowStartsAt"] + CAMPAIGN_SECONDS > approval["windowExpiresAt"]
-    ):
-        raise ValueError("O7 execution window expired")
+    manifest_path: Path,
+    artifact_path: Path,
+) -> dict:
+    """Delegate to the single shared definition of the complete O7 check set."""
+    return acquisition.validate_o7_admission(
+        inputs=inputs,
+        approval=approval,
+        manifest=manifest,
+        manifest_bytes=manifest_bytes,
+        manifest_path=manifest_path,
+        permission=permission,
+        ledger_root=ledger,
+        artifact_path=artifact_path,
+    )
 
 
 def execute(args: argparse.Namespace) -> dict:
     inputs, _ = _read_json(args.inputs)
-    _validate_frozen(inputs)
     manifest, manifest_bytes = _read_json(args.manifest, private=True)
     approval, _ = _read_json(args.approval, private=True)
     permission, _ = _read_json(args.permission)
+    # One shared check set: approval, manifest, window, Ledger root, launcher
+    # digest, artifact profile, retained artifact and permission binding.
     _validate_approval(
         approval,
         manifest_bytes,
@@ -224,19 +149,9 @@ def execute(args: argparse.Namespace) -> dict:
         inputs,
         permission,
         ledger=args.ledger,
+        manifest_path=args.manifest,
+        artifact_path=args.artifact,
     )
-    retained = validate_retained_artifact(
-        args.artifact, args.manifest, profile=REVIEWED_ARTIFACT_PROFILE
-    )
-    if (
-        retained.get("artifactSha256") != inputs["artifactSha256"]
-        or retained.get("retainedManifestSha256")
-        != hashlib.sha256(manifest_bytes).hexdigest()
-    ):
-        raise ValueError("retained v7 artifact binding differs")
-    # Validate before reservation or any possible wire operation.
-    if digest(permission) != inputs["permissionDigest"]:
-        raise ValueError("stale O7 permission binding")
     # Build and own the worker archive before any credential is read. The
     # writable construction handle is closed and the file unlinked before the
     # descriptor is admitted, so no writable alias to these bytes survives.
@@ -247,26 +162,36 @@ def execute(args: argparse.Namespace) -> dict:
         capability = acquisition.issue_production_capability(
             inputs=inputs,
             approval=approval,
+            manifest=manifest,
             manifest_bytes=manifest_bytes,
+            manifest_path=args.manifest,
+            permission=permission,
+            ledger_root=args.ledger,
+            artifact_path=args.artifact,
             archive_fd=archive_fd,
             archive_sha256=archive_sha256,
         )
-        handoff = _read_handoff(args)
-        api_key = handoff.get("apiKey")
-        if not isinstance(api_key, str):
-            raise ValueError("private credential handoff required")
-        validate_handoff(handoff, permission, api_key)
-        return acquisition.run_acquisition(
-            args.output,
-            inputs,
-            permission_path=args.permission,
-            source_root=args.source,
-            artifact_path=args.artifact,
-            ledger_root=args.ledger,
-            api_key=api_key,
-            credential_handoff=handoff,
-            capability=capability,
-        )
+        try:
+            handoff = _read_handoff(args)
+            api_key = handoff.get("apiKey")
+            if not isinstance(api_key, str):
+                raise ValueError("private credential handoff required")
+            validate_handoff(handoff, permission, api_key)
+            return acquisition.run_acquisition(
+                args.output,
+                inputs,
+                permission_path=args.permission,
+                source_root=args.source,
+                artifact_path=args.artifact,
+                ledger_root=args.ledger,
+                api_key=api_key,
+                credential_handoff=handoff,
+                capability=capability,
+            )
+        except BaseException:
+            # An admission that will not be executed must not stay issued.
+            acquisition.revoke_production_capability(capability)
+            raise
 
 
 def main(argv: list[str] | None = None) -> int:

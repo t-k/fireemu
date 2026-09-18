@@ -333,11 +333,21 @@ def test_saved_comparison_is_frozen_and_credential_free(tmp_path, monkeypatch):
     )
     kwargs["permission_path"].unlink()
     kwargs["artifact_path"].unlink()
+    with pytest.raises(ValueError, match="saved execution kind"):
+        # An injected fixture must never pass as production evidence.
+        acquisition.compare_saved(
+            output, reference, expected_inputs_digest=inputs["inputsDigest"]
+        )
     value = acquisition.compare_saved(
-        output, reference, expected_inputs_digest=inputs["inputsDigest"]
+        output,
+        reference,
+        expected_inputs_digest=inputs["inputsDigest"],
+        expected_execution_kind="injected-transport",
     )
     assert value["classification"] == "MATCH"
     assert value["acquisitionValidated"] is False
+    assert value["executionKind"] == "injected-transport"
+    assert value["productionExecuted"] is False
     receipt_path, release_path = output / "receipt.json", output / "release.json"
     original_receipt, original_release = (
         receipt_path.read_text(),
@@ -355,6 +365,7 @@ def test_saved_comparison_is_frozen_and_credential_free(tmp_path, monkeypatch):
                 output,
                 tmp_path / "reference.json",
                 expected_inputs_digest=inputs["inputsDigest"],
+                expected_execution_kind="injected-transport",
             )
     receipt_path.write_text(original_receipt)
     release_path.write_text(original_release)
@@ -363,13 +374,19 @@ def test_saved_comparison_is_frozen_and_credential_free(tmp_path, monkeypatch):
     journal_path.write_text("{}")
     with pytest.raises(ValueError):
         acquisition.compare_saved(
-            output, reference, expected_inputs_digest=inputs["inputsDigest"]
+            output,
+            reference,
+            expected_inputs_digest=inputs["inputsDigest"],
+            expected_execution_kind="injected-transport",
         )
     journal_path.write_text(original_journal)
     (output / "transform_comparator.py").write_text("raise RuntimeError('changed')")
     with pytest.raises(ValueError):
         acquisition.compare_saved(
-            output, reference, expected_inputs_digest=inputs["inputsDigest"]
+            output,
+            reference,
+            expected_inputs_digest=inputs["inputsDigest"],
+            expected_execution_kind="injected-transport",
         )
 
 
@@ -434,3 +451,33 @@ def test_bounded_oauth_failure_keeps_reservation_without_data(
         == "held"
     )
     assert result["credentialEvidence"][-1]["verified"] is False
+
+
+def test_retained_comparator_evidence_comes_from_the_frozen_checkout(tmp_path):
+    """Evidence bytes must be read from source_root, not from this module's tree."""
+    names = ("transform_comparator.py", "transform_compiler.py")
+    checkout = tmp_path / "checkout"
+    frozen = {}
+    for name in names:
+        relative = f"tools/compat-broad/fs-commit-transform-limits/{name}"
+        target = checkout / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Deliberately different from the bytes next to commit_acquisition.py.
+        data = f"# frozen checkout copy of {name}\n".encode()
+        target.write_bytes(data)
+        frozen[relative] = hashlib.sha256(data).hexdigest()
+    output = tmp_path / "evidence"
+    output.mkdir()
+    acquisition._copy_frozen_sources(output, checkout, frozen)
+    for name in names:
+        relative = f"tools/compat-broad/fs-commit-transform-limits/{name}"
+        written = (output / name).read_bytes()
+        assert written == (checkout / relative).read_bytes()
+        assert written != (acquisition.HERE / name).read_bytes()
+        assert hashlib.sha256(written).hexdigest() == frozen[relative]
+    drifted = dict(frozen)
+    drifted[f"tools/compat-broad/fs-commit-transform-limits/{names[0]}"] = "0" * 64
+    second = tmp_path / "evidence-drift"
+    second.mkdir()
+    with pytest.raises(ValueError, match="comparator source"):
+        acquisition._copy_frozen_sources(second, checkout, drifted)

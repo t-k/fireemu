@@ -7,8 +7,10 @@ bound to a locally built archive descriptor and is never executed.
 import copy
 import hashlib
 import importlib.util
+import json
 import pickle
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -30,7 +32,12 @@ _SPEC.loader.exec_module(o8_bundle)
 
 
 def frozen_inputs(campaign: str = "campaign-a") -> dict:
-    permission = {"kind": "commit-owner-execution-permission-v1", "campaign": campaign}
+    permission = {
+        "kind": "commit-owner-execution-permission-v1",
+        "campaign": campaign,
+        "wallSeconds": acquisition.CAMPAIGN_SECONDS,
+        "recoverySeconds": acquisition.RECOVERY_SECONDS,
+    }
     plan = {"campaignId": campaign, "nonce": "a" * 32}
     source_inputs = {
         name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
@@ -50,9 +57,10 @@ def frozen_inputs(campaign: str = "campaign-a") -> dict:
     return value
 
 
-def approval_for(inputs: dict, manifest_bytes: bytes) -> dict:
+def approval_for(inputs: dict, manifest_bytes: bytes, ledger: Path) -> dict:
+    now = time.time()
     return {
-        "kind": "commit-o8-approval-v1",
+        "kind": acquisition.APPROVAL_KIND,
         "status": "approved",
         "manifestSha256": hashlib.sha256(manifest_bytes).hexdigest(),
         "inputsDigest": inputs["inputsDigest"],
@@ -62,19 +70,67 @@ def approval_for(inputs: dict, manifest_bytes: bytes) -> dict:
         "artifactSha256": inputs["artifactSha256"],
         "planDigest": inputs["planDigest"],
         "nonceDigest": digest(inputs["plan"]["nonce"]),
+        "ledgerRoot": str(Path(ledger).resolve(strict=False)),
+        "launcherSha256": hashlib.sha256(
+            (HERE / "commit_o8.py").read_bytes()
+        ).hexdigest(),
+        "artifactProfile": acquisition.REVIEWED_ARTIFACT_PROFILE,
+        "windowStartsAt": now - 1,
+        "windowExpiresAt": now + 4 * acquisition.CAMPAIGN_SECONDS,
     }
 
 
-def issue(inputs: dict, fd: int, sha: str, **overrides):
-    manifest_bytes = b'{"kind": "commit-o8-manifest-v1"}'
-    approval = {**approval_for(inputs, manifest_bytes), **overrides}
-    return acquisition.issue_production_capability(
-        inputs=inputs,
-        approval=approval,
-        manifest_bytes=manifest_bytes,
-        archive_fd=fd,
-        archive_sha256=sha,
-    )
+class Admission:
+    """A complete, locally built O7 artifact set for one campaign."""
+
+    def __init__(self, tmp_path: Path, monkeypatch, campaign: str = "campaign-a"):
+        self.inputs = frozen_inputs(campaign)
+        self.ledger = tmp_path / f"ledger-{campaign}"
+        self.manifest = {
+            "kind": acquisition.MANIFEST_KIND,
+            "inputsDigest": self.inputs["inputsDigest"],
+        }
+        self.manifest_bytes = json.dumps(self.manifest).encode()
+        self.manifest_path = tmp_path / f"manifest-{campaign}.json"
+        self.manifest_path.write_bytes(self.manifest_bytes)
+        self.artifact_path = tmp_path / f"artifact-{campaign}"
+        self.artifact_path.write_bytes(b"retained artifact")
+        self.approval = approval_for(self.inputs, self.manifest_bytes, self.ledger)
+        self.permission = self.inputs["permission"]
+        monkeypatch.setattr(
+            acquisition,
+            "validate_retained_artifact",
+            lambda artifact, manifest_path, profile=None: {
+                "artifactSha256": self.inputs["artifactSha256"],
+                "retainedManifestSha256": hashlib.sha256(
+                    Path(manifest_path).read_bytes()
+                ).hexdigest(),
+            },
+        )
+
+    def issue(self, fd: int, sha: str, **overrides):
+        # Pop every non-approval override first; the rest override the approval.
+        inputs = overrides.pop("inputs", self.inputs)
+        permission = overrides.pop("permission", self.permission)
+        ledger = overrides.pop("ledger_root", self.ledger)
+        manifest = {**self.manifest, **(overrides.pop("manifest", None) or {})}
+        manifest_bytes = (
+            self.manifest_bytes
+            if manifest == self.manifest
+            else json.dumps(manifest).encode()
+        )
+        return acquisition.issue_production_capability(
+            inputs=inputs,
+            approval={**self.approval, **overrides},
+            manifest=manifest,
+            manifest_bytes=manifest_bytes,
+            manifest_path=self.manifest_path,
+            permission=permission,
+            ledger_root=ledger,
+            artifact_path=self.artifact_path,
+            archive_fd=fd,
+            archive_sha256=sha,
+        )
 
 
 def archive_for(inputs: dict):
@@ -130,11 +186,12 @@ def test_injected_transport_rejects_the_production_wire_and_its_wrappers(
         )
 
 
-def test_capability_is_issued_only_for_a_complete_o7_binding(tmp_path):
-    inputs = frozen_inputs()
+def test_capability_is_issued_only_for_a_complete_o7_binding(tmp_path, monkeypatch):
+    admission = Admission(tmp_path, monkeypatch)
+    inputs = admission.inputs
     archive, sha = archive_for(inputs)
     with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
-        capability = issue(inputs, fd, sha)
+        capability = admission.issue(fd, sha)
         assert capability.campaign_id == inputs["plan"]["campaignId"]
         assert capability.archive_sha256 == sha
         for override in (
@@ -148,13 +205,21 @@ def test_capability_is_issued_only_for_a_complete_o7_binding(tmp_path):
             {"sourceCommit": "1" * 40},
             {"sourceInputsDigest": "0" * 64},
             {"manifestSha256": "0" * 64},
+            {"launcherSha256": "0" * 64},
+            {"artifactProfile": "unreviewed"},
+            {"ledgerRoot": "/nonexistent/private/ledger"},
+            {"windowStartsAt": time.time() + 600},
+            {"windowExpiresAt": time.time() + 10},
+            {"manifest": {"kind": "other"}},
+            {"manifest": {"inputsDigest": "0" * 64}},
         ):
             with pytest.raises(ValueError):
-                issue(inputs, fd, sha, **override)
+                admission.issue(fd, sha, **override)
 
 
-def test_capability_requires_a_verified_archive_descriptor(tmp_path):
-    inputs = frozen_inputs()
+def test_capability_requires_a_verified_archive_descriptor(tmp_path, monkeypatch):
+    admission = Admission(tmp_path, monkeypatch)
+    inputs = admission.inputs
     archive, sha = archive_for(inputs)
     linked = tmp_path / "linked.pyz"
     linked.write_bytes(archive)
@@ -163,12 +228,12 @@ def test_capability_requires_a_verified_archive_descriptor(tmp_path):
     handle = os.open(linked, os.O_RDONLY)
     try:
         with pytest.raises(ValueError):
-            issue(inputs, handle, sha)
+            admission.issue(handle, sha)
     finally:
         os.close(handle)
     with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
         with pytest.raises(ValueError):
-            issue(inputs, fd, "0" * 64)
+            admission.issue(fd, "0" * 64)
         drifted = copy.deepcopy(inputs)
         first = next(iter(drifted["sourceInputs"]))
         drifted["sourceInputs"][first] = "0" * 64
@@ -176,11 +241,12 @@ def test_capability_requires_a_verified_archive_descriptor(tmp_path):
             {k: v for k, v in drifted.items() if k != "inputsDigest"}
         )
         with pytest.raises(ValueError):
-            issue(drifted, fd, sha)
+            admission.issue(fd, sha, inputs=drifted)
 
 
-def test_a_forged_capability_with_matching_attributes_is_refused(tmp_path):
-    inputs = frozen_inputs()
+def test_a_forged_capability_with_matching_attributes_is_refused(tmp_path, monkeypatch):
+    admission = Admission(tmp_path, monkeypatch)
+    inputs = admission.inputs
     archive, sha = archive_for(inputs)
 
     class Forged:
@@ -205,7 +271,7 @@ def test_a_forged_capability_with_matching_attributes_is_refused(tmp_path):
                 capability=forged,
             )
     with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
-        capability = issue(inputs, fd, sha)
+        capability = admission.issue(fd, sha)
         with pytest.raises(TypeError):
             copy.copy(capability)
         with pytest.raises(TypeError):
@@ -219,43 +285,48 @@ def test_a_forged_capability_with_matching_attributes_is_refused(tmp_path):
                 archive_sha256=sha,
                 campaign_id=capability.campaign_id,
                 inputs_digest=capability.inputs_digest,
+                ledger_root=capability.ledger_root,
+                window_starts_at=capability.window_starts_at,
+                window_expires_at=capability.window_expires_at,
+                approval_digest=capability.approval_digest,
             )
 
 
-def test_capability_is_one_shot_and_bound_to_its_own_campaign(tmp_path):
-    first = frozen_inputs("campaign-a")
+def test_capability_is_one_shot_and_bound_to_its_own_campaign(tmp_path, monkeypatch):
+    admission = Admission(tmp_path, monkeypatch)
+    first = admission.inputs
     second = frozen_inputs("campaign-b")
     archive, sha = archive_for(first)
     with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
-        capability = issue(first, fd, sha)
+        capability = admission.issue(fd, sha)
+        bound = {
+            "campaign_id": first["plan"]["campaignId"],
+            "inputs_digest": first["inputsDigest"],
+            "ledger_root": admission.ledger,
+        }
         with pytest.raises(ValueError, match="campaign"):
             capability._consume(
-                campaign_id=second["plan"]["campaignId"],
-                inputs_digest=second["inputsDigest"],
+                **{**bound, "campaign_id": second["plan"]["campaignId"]}
             )
         with pytest.raises(ValueError, match="frozen"):
-            capability._consume(
-                campaign_id=first["plan"]["campaignId"], inputs_digest="0" * 64
-            )
-        capability._consume(
-            campaign_id=first["plan"]["campaignId"],
-            inputs_digest=first["inputsDigest"],
-        )
+            capability._consume(**{**bound, "inputs_digest": "0" * 64})
+        with pytest.raises(ValueError, match="shared Ledger"):
+            capability._consume(**{**bound, "ledger_root": tmp_path / "private"})
+        capability._consume(**bound)
         with pytest.raises(ValueError, match="one-shot"):
-            capability._consume(
-                campaign_id=first["plan"]["campaignId"],
-                inputs_digest=first["inputsDigest"],
-            )
+            capability._consume(**bound)
 
 
-def test_a_consumed_capability_cannot_be_presented_again(tmp_path):
-    inputs = frozen_inputs()
+def test_a_consumed_capability_cannot_be_presented_again(tmp_path, monkeypatch):
+    admission = Admission(tmp_path, monkeypatch)
+    inputs = admission.inputs
     archive, sha = archive_for(inputs)
     with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
-        capability = issue(inputs, fd, sha)
+        capability = admission.issue(fd, sha)
         capability._consume(
             campaign_id=inputs["plan"]["campaignId"],
             inputs_digest=inputs["inputsDigest"],
+            ledger_root=admission.ledger,
         )
         with pytest.raises(ValueError, match="capability"):
             acquisition.run_acquisition(
@@ -300,3 +371,95 @@ def test_permission_gate_and_coordinator_share_one_source_digest():
     reordered = dict(reversed(list(inputs.items())))
     assert digest(reordered) == reserved.source_digest()
     assert reordered == inputs
+
+
+def test_a_private_ledger_root_cannot_run_an_admitted_campaign(tmp_path, monkeypatch):
+    """The approval binds one shared Ledger; another root cannot be substituted."""
+    admission = Admission(tmp_path, monkeypatch)
+    inputs = admission.inputs
+    archive, sha = archive_for(inputs)
+    with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
+        capability = admission.issue(fd, sha)
+        private_root = tmp_path / "private-ledger"
+        with pytest.raises(ValueError, match="shared Ledger"):
+            acquisition.run_acquisition(
+                tmp_path / "out",
+                inputs,
+                permission_path=tmp_path / "permission.json",
+                source_root=tmp_path,
+                artifact_path=admission.artifact_path,
+                ledger_root=private_root,
+                api_key="unused",
+                credential_handoff={},
+                capability=capability,
+            )
+    assert not private_root.exists()
+    assert not (tmp_path / "out").exists()
+
+
+def test_an_expired_or_future_window_cannot_be_issued_or_spent(tmp_path, monkeypatch):
+    admission = Admission(tmp_path, monkeypatch)
+    inputs = admission.inputs
+    archive, sha = archive_for(inputs)
+    with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
+        for override in (
+            {"windowStartsAt": time.time() + 3600},
+            {"windowExpiresAt": time.time() + 5},
+        ):
+            with pytest.raises(ValueError, match="window"):
+                admission.issue(fd, sha, **override)
+        capability = admission.issue(fd, sha)
+        # The window is rechecked when the admission is spent, not only at issue.
+        capability.window_expires_at = time.time() + 5
+        with pytest.raises(ValueError, match="window"):
+            capability._consume(
+                campaign_id=inputs["plan"]["campaignId"],
+                inputs_digest=inputs["inputsDigest"],
+                ledger_root=admission.ledger,
+            )
+
+
+def test_a_retained_artifact_mismatch_refuses_issuance(tmp_path, monkeypatch):
+    admission = Admission(tmp_path, monkeypatch)
+    inputs = admission.inputs
+    archive, sha = archive_for(inputs)
+    monkeypatch.setattr(
+        acquisition,
+        "validate_retained_artifact",
+        lambda artifact, manifest_path, profile=None: {
+            "artifactSha256": "0" * 64,
+            "retainedManifestSha256": hashlib.sha256(
+                Path(manifest_path).read_bytes()
+            ).hexdigest(),
+        },
+    )
+    with (
+        o8_bundle.unlinked_archive_fd(archive, sha) as fd,
+        pytest.raises(ValueError, match="retained"),
+    ):
+        admission.issue(fd, sha)
+
+
+def test_a_wrong_permission_window_refuses_issuance(tmp_path, monkeypatch):
+    admission = Admission(tmp_path, monkeypatch)
+    inputs = admission.inputs
+    archive, sha = archive_for(inputs)
+    permission = {**admission.permission, "wallSeconds": 60}
+    with (
+        o8_bundle.unlinked_archive_fd(archive, sha) as fd,
+        pytest.raises(ValueError, match="campaign window"),
+    ):
+        admission.issue(fd, sha, permission=permission)
+
+
+def test_issuance_runs_the_same_check_set_as_the_o8_cli():
+    """The CLI must not enforce anything issuance skips."""
+    import commit_o8
+
+    assert commit_o8._validate_approval.__doc__
+    source = (HERE / "commit_o8.py").read_text()
+    # The CLI delegates; it keeps no private copy of the O7 check set.
+    assert "validate_o7_admission" in source
+    assert "windowExpiresAt" not in source
+    assert "launcherSha256" not in source
+    assert "artifactProfile" not in source

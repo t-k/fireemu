@@ -205,6 +205,9 @@ enum BodyRejection {
     TooLarge,
     /// The sender held the request open past [`BODY_READ_DEADLINE`] without finishing it.
     Deadline,
+    /// The request declared no body and sent one anyway. Distinct from [`Self::TooLarge`] so
+    /// that a single stray byte is not reported as a 10 MiB overflow.
+    Undeclared,
 }
 
 /// Whether a request *declares* a body.
@@ -224,29 +227,53 @@ fn declares_a_body<B>(req: &Request<B>) -> bool {
     req.method() != hyper::Method::GET && header(req, "content-length") != Some("0")
 }
 
-/// The byte limit a request's body is read with: the transport maximum when it declared one,
-/// and zero when it did not.
-const fn body_limit_for(declares_a_body: bool, maximum: usize) -> usize {
-    if declares_a_body {
-        maximum
-    } else {
-        0
+/// How much body a request is allowed to send, and what it means to exceed it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BodyAllowance {
+    /// The request declared a body and took a permit for it; this many bytes are accepted.
+    Declared(usize),
+    /// The request declared no body, so it took no permit. An empty body satisfies this;
+    /// anything else is refused rather than buffered off the pool.
+    Undeclared,
+}
+
+impl BodyAllowance {
+    const fn limit(self) -> usize {
+        match self {
+            Self::Declared(maximum) => maximum,
+            Self::Undeclared => 0,
+        }
+    }
+
+    const fn exceeded(self) -> BodyRejection {
+        match self {
+            Self::Declared(_) => BodyRejection::TooLarge,
+            Self::Undeclared => BodyRejection::Undeclared,
+        }
+    }
+
+    const fn for_request(declared: bool, maximum: usize) -> Self {
+        if declared {
+            Self::Declared(maximum)
+        } else {
+            Self::Undeclared
+        }
     }
 }
 
 async fn read_body<B>(
     req: Request<B>,
-    limit: usize,
+    allowance: BodyAllowance,
     deadline: std::time::Duration,
 ) -> Result<Bytes, BodyRejection>
 where
     B: Body<Data = Bytes>,
     B::Error: Into<BoxError>,
 {
-    let read = fireemu_adapter_support::body::collect_limited(req.into_body(), limit);
+    let read = fireemu_adapter_support::body::collect_limited(req.into_body(), allowance.limit());
     match tokio::time::timeout(deadline, read).await {
         Ok(Ok(bytes)) => Ok(bytes),
-        Ok(Err(_)) => Err(BodyRejection::TooLarge),
+        Ok(Err(_)) => Err(allowance.exceeded()),
         Err(_) => Err(BodyRejection::Deadline),
     }
 }
@@ -268,10 +295,26 @@ fn body_read_deadline_exceeded() -> RestResponse {
     }
 }
 
+/// The refusal a request that declared no body and sent one anyway gets.
+///
+/// It is not an over-boundary answer: the request sent one byte more than the zero it
+/// declared, which says nothing about `FS-LIMIT-API-REQUEST-BYTES`. Local only.
+fn undeclared_body() -> RestResponse {
+    RestResponse {
+        status: 400,
+        body: fireemu_adapter_support::api_error::google_rpc(
+            400,
+            "request body was not declared",
+            "INVALID_ARGUMENT",
+        ),
+    }
+}
+
 fn body_rejection_response(rejection: BodyRejection, enforce_limits: bool) -> RestResponse {
     match rejection {
         BodyRejection::TooLarge => api_request_too_large(enforce_limits),
         BodyRejection::Deadline => body_read_deadline_exceeded(),
+        BodyRejection::Undeclared => undeclared_body(),
     }
 }
 
@@ -282,6 +325,9 @@ async fn rest_call(
     body_deadline: std::time::Duration,
 ) -> Result<Response<OutBody>, std::io::Error> {
     let origin = header(&req, "origin").map(str::to_owned);
+    // REST admits every request, body or not: the permit covers the `spawn_blocking`
+    // execution below as well as the body, so it bounds the blocking pool and not only
+    // memory. The channel path has no such execution and admits only a declared body.
     let Some(permit) = try_admit_rest_work(rest_work_limiter()) else {
         return Ok(json_response(
             &too_many_concurrent_requests(),
@@ -302,7 +348,13 @@ async fn rest_call(
         .iter()
         .map(|v| v.to_str().unwrap_or_default().to_owned())
         .collect();
-    let bytes = match read_body(req, MAX_REST_BODY_BYTES, body_deadline).await {
+    let bytes = match read_body(
+        req,
+        BodyAllowance::Declared(MAX_REST_BODY_BYTES),
+        body_deadline,
+    )
+    .await
+    {
         Ok(bytes) => bytes,
         Err(rejection) => {
             return Ok(json_response(
@@ -408,8 +460,8 @@ where
     // from the body returned here, after the permit is gone, so a `Listen` client long-polling
     // for up to `LONG_POLL_MAX` never holds one -- which would otherwise let a handful of
     // idle listeners starve every write surface.
-    let declares_a_body = declares_a_body(&req);
-    let _permit = if declares_a_body {
+    let declared = declares_a_body(&req);
+    let _permit = if declared {
         match try_admit_rest_work(limiter) {
             Some(permit) => Some(permit),
             None => return json_response(&too_many_concurrent_requests(), origin.as_deref()),
@@ -428,8 +480,8 @@ where
         .iter()
         .map(|v| v.to_str().unwrap_or_default().to_owned())
         .collect();
-    let limit = body_limit_for(declares_a_body, crate::webchannel::MAX_FORM_BYTES);
-    let bytes = match read_body(req, limit, body_deadline).await {
+    let allowance = BodyAllowance::for_request(declared, crate::webchannel::MAX_FORM_BYTES);
+    let bytes = match read_body(req, allowance, body_deadline).await {
         Ok(bytes) => bytes,
         Err(rejection) => {
             return json_response(
@@ -1116,16 +1168,51 @@ mod tests {
                 )
                 .await;
                 assert_ne!(status, 503, "it declared no body, so it needs no permit");
-                assert_eq!(
-                    status, 400,
-                    "the strict profile answers the over-boundary shape: {body}"
-                );
+                assert_eq!(status, 400, "{body}");
                 assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+                // Not the over-boundary wording: one stray byte past a declared zero says
+                // nothing about FS-LIMIT-API-REQUEST-BYTES.
+                assert_eq!(body["error"]["message"], "request body was not declared");
                 assert_eq!(
                     exhausted.available_permits(),
                     0,
                     "no permit was taken and none was returned"
                 );
+            });
+        }
+
+        /// A `POST` that declares an empty body declares no body, so it takes no permit and
+        /// is served from an empty pool like the back channel is.
+        #[test]
+        fn a_zero_length_post_takes_no_permit_and_is_served_from_an_exhausted_pool() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let exhausted = Arc::new(tokio::sync::Semaphore::new(0));
+                let request = Request::builder()
+                    .method("POST")
+                    .uri("/google.firestore.v1.Firestore/Write/channel?VER=8&RID=1&CI=0")
+                    .header("content-length", "0")
+                    .body(Full::new(Bytes::new()))
+                    .expect("a declared-empty forward channel request");
+
+                let (status, body) = body_of(
+                    channel_call(
+                        hub(),
+                        StreamKind::Write,
+                        request,
+                        true,
+                        &exhausted,
+                        BODY_READ_DEADLINE,
+                    )
+                    .await,
+                )
+                .await;
+                assert_ne!(status, 503, "a declared-empty body needs no permit");
+                assert_eq!(status, 200, "{body}");
+                assert_eq!(exhausted.available_permits(), 0);
             });
         }
 

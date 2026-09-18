@@ -1,6 +1,6 @@
 {
-  "artifactSha256": "10cf147139e3f450b24f07239261d0356eec3850ea70bc75151701c689164c4e",
-  "campaignDigest": "d4eaca0f522b4f5398eace4b8582e788c6b79af7ee6e7aad379d120d76d40538",
+  "artifactSha256": "ada6236ed317e21f928cd92388a3a2f2e489a128938cb66512e5510482129e52",
+  "campaignDigest": "78e6a44b9e9161a28af6791e78e4859b05705cec05d0927b9108beb47f31ce99",
   "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
   "cases": [
     {
@@ -35,7 +35,7 @@
   "database": "(default)",
   "formalCompatibilityClaim": false,
   "kind": "fs-request-bytes-local-shadow-v1",
-  "nonce": "885bcd20e1754210865e4d3c9c3e9651",
+  "nonce": "af62e3add5a7480484efec59db88ad3e",
   "note": "Owned local artifact shadow. No production request was sent, no credential was used and no parent group is promoted. The raw REST body byte count remains an observation hypothesis about production's enforcement metric.",
   "observation": {
     "canonicalRequestBytesMeasuredLocally": true,
@@ -53,7 +53,7 @@
       "responseBytes": 118,
       "responseSha256": "293bf2902042c662ca5f65c932f4fafcd9596dac70ace5460ccc5e5f015b68b9"
     },
-    "planDigest": "582ce462c021515e37d787f2c3a2909c5a76129c5d8c2e6e532722ee915c39d7",
+    "planDigest": "b2e3e6393973b472d05013b03b13cb536d4bb43a4b70fd82f0a8cee1a830bc1e",
     "productionExecuted": false,
     "rawHttpMetricStatus": "observation hypothesis",
     "recoveryRowCount": 153,
@@ -61,7 +61,7 @@
     "resourceAbsence": true,
     "rowCount": 105
   },
-  "planDigest": "582ce462c021515e37d787f2c3a2909c5a76129c5d8c2e6e532722ee915c39d7",
+  "planDigest": "b2e3e6393973b472d05013b03b13cb536d4bb43a4b70fd82f0a8cee1a830bc1e",
   "probeOutcomes": [
     {
       "complete": true,
@@ -73,7 +73,7 @@
       "requestBytes": 10485759,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "40b97ce53ec4ccb0cb64f48fa9a7e3f897373da150c62c5df2a2d475f949d143"
+      "responseSha256": "d77ef5a2baf4d7fbefff5a475a10be8d4ba5c8b7a5bbe0efa1f70e59bb490d23"
     },
     {
       "complete": true,
@@ -85,7 +85,7 @@
       "requestBytes": 10485760,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "9f2ca419e918d3c0659fb4d951b8e6544eda41b8a25444b6aa3a5016164dec35"
+      "responseSha256": "36745c61aa7318188a45bfd71ab5591fa516818dd78e21c977da8627151eb87b"
     },
     {
       "complete": true,
@@ -105,11 +105,11 @@
   "rawHttpMetricStatus": "observation hypothesis",
   "recordingComplete": true,
   "runtime": {
-    "artifactSha256": "10cf147139e3f450b24f07239261d0356eec3850ea70bc75151701c689164c4e",
+    "artifactSha256": "ada6236ed317e21f928cd92388a3a2f2e489a128938cb66512e5510482129e52",
     "runtimeInputCount": 410,
     "runtimeInputsClean": true,
     "runtimeInputsDigest": "4377b5e70d8c2540a729e208dc63340786e0cde3a34383b17bb7d702d037c1de",
-    "sourceCommit": "90ea7a064b5b5713a78925ea287184e3d968f55c",
+    "sourceCommit": "1f34e786349b4a9ce1c0cf7aa03ebd819fae2bd0",
     "sourceRoot": "repository-root"
   },
   "shadow": {
@@ -150,8 +150,8 @@
     "summary": "The limits layer refused the over-boundary Commit at exactly the 10 MiB boundary with the status, code and message this campaign expects of production. That expectation is documented rather than observed, so this is agreement with it, not confirmation of it.",
     "untypedOverRefusal": null
   },
-  "sourceDigestAfter": "c47aac15cd6185ba451db26925cea7c5bac1c0e814de62754010500d974691a2",
-  "sourceDigestBefore": "c47aac15cd6185ba451db26925cea7c5bac1c0e814de62754010500d974691a2",
+  "sourceDigestAfter": "b48ff8c4a2f763058825c18e8206a2ecb8f7d7f9d4213fc06236adff41768754",
+  "sourceDigestBefore": "b48ff8c4a2f763058825c18e8206a2ecb8f7d7f9d4213fc06236adff41768754",
   "stateValidation": true,
   "target": "owned-local-artifact"
 }

@@ -1330,6 +1330,13 @@ def _case_index(limits: list[dict[str, Any]], part: str) -> list[dict[str, Any]]
             "catalogImplemented",
             "acceptedSideUnreachable",
             "chargedInFullWouldBe",
+            "pendingReason",
+            "aggregateShape",
+            "pathShape",
+            "metricEvidence",
+            "entanglementReason",
+            "indexExemption",
+            "indexExemptionReason",
         ):
             if key in spec:
                 case[key] = spec[key]

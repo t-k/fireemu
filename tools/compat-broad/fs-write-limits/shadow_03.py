@@ -40,7 +40,7 @@ def source_inputs() -> dict[str, str]:
     }
 
 
-def _real_child(output: Path, nonce: str) -> None:
+def _real_child(output: Path, nonce: str, part: str = "A") -> None:
     from broad import local_origin
     from owned_runner import control_get, local_addresses
     from shared_gate import Gate, create
@@ -76,7 +76,7 @@ def _real_child(output: Path, nonce: str) -> None:
             "wrongTokenStatus": wrong,
         },
     )
-    plan = compile_limits_plan(project, "(default)", nonce)
+    plan = compile_limits_plan(project, "(default)", nonce, part)
     gate_plan = plan["localGatePlan"]
     create(output / "gate", gate_plan)
     gate = Gate(output / "gate", "limits")
@@ -112,7 +112,8 @@ def _real_child(output: Path, nonce: str) -> None:
     cleanup_complete = collected["cleanupComplete"]
     state_valid = recording and not mismatches
     result: dict[str, Any] = {
-        "campaignId": CAMPAIGN,
+        "campaignId": plan["campaignId"],
+        "part": part,
         "productionExecuted": False,
         "formalCompatibilityClaim": False,
         "recordingComplete": recording,
@@ -169,13 +170,17 @@ def _real_child(output: Path, nonce: str) -> None:
     )
 
 
-def run(output: Path) -> dict:
+def run(output: Path, part: str = "A") -> dict:
     import broad
 
     before = source_inputs()
     report = broad.run(
         output,
-        child_script=Path(__file__).resolve(),
+        # The supervisor launches the child with a fixed argument list and a
+        # sanitized environment, so the part is carried by the entrypoint.
+        child_script=(
+            HERE / "shadow_03b.py" if part == "B" else Path(__file__).resolve()
+        ),
         project="demo-firestore-probe",
         configuration={"daemon": {"authProjectNumbers": {}}},
         execution_timeout=900,
@@ -188,7 +193,8 @@ def run(output: Path) -> dict:
     save(
         output / "shadow-binding.json",
         {
-            "campaignId": CAMPAIGN,
+            "campaignId": f"{CAMPAIGN}{part}",
+            "part": part,
             "sourceInputsBefore": before,
             "sourceInputsAfter": after,
             "childSourceInputs": child_inputs,
@@ -209,13 +215,14 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--output", type=Path)
     mode.add_argument("--child", type=Path)
     parser.add_argument("--nonce")
+    parser.add_argument("--part", choices=("A", "B"), default="A")
     args = parser.parse_args(argv)
     if args.child is not None:
         if not args.nonce:
             parser.error("--nonce is required with --child")
-        _real_child(args.child.resolve(), args.nonce)
+        _real_child(args.child.resolve(), args.nonce, args.part)
         return 0
-    result = run(args.output.resolve())
+    result = run(args.output.resolve(), args.part)
     print(json.dumps({"status": result.get("status")}))
     return 0 if result.get("status") == "completed" else 2
 

@@ -292,12 +292,15 @@ def _recover(
             if not record["absent"]:
                 remaining += 1
         elif status != 200:
+            # A delete can be refused because a stage already removed the
+            # account. Absence, proven below, is the requirement; a refusal is
+            # recorded but does not by itself fail recovery.
             record["deleted"] = False
             delete_failures += 1
         else:
             record["deleted"] = True
         rows.append(record)
-    complete = remaining == 0 and delete_failures == 0
+    complete = remaining == 0 and not any("failure" in row for row in rows)
     return rows, complete, remaining, delete_failures
 
 

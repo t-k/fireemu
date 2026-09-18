@@ -389,3 +389,17 @@ def test_an_unbound_stage_input_is_recorded_rather_than_raised() -> None:
     assert receipt["stopReason"] == "stage-failed:reset-code-lookup"
     assert receipt["cleanupComplete"] is True
     assert service.accounts == {}
+
+
+def test_a_refused_delete_is_tolerated_when_absence_is_proven() -> None:
+    class AlreadyGone(FakeService):
+        def _delete(self, body: dict):
+            if body["localId"] not in self.accounts:
+                return 400, {"error": {"message": "USER_NOT_FOUND"}}
+            return super()._delete(body)
+
+    service = AlreadyGone()
+    _, receipt = run(service)
+    assert receipt["deleteFailures"] == 1
+    assert receipt["remainingAccounts"] == 0
+    assert receipt["cleanupComplete"] is True

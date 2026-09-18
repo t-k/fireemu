@@ -481,6 +481,15 @@
           "APPCHECK-REPLAY-1"
         ],
         "qualifier": "limitedUse: true fails closed with 501 APP_CHECK_REPLAY_UNSUPPORTED"
+      },
+      {
+        "term": "expirationOffset",
+        "status": "implemented",
+        "owners": [
+          "FS-FIELD-CONFIG-1"
+        ],
+        "qualifier": "ttlConfig.expirationOffset is read, stored, reported back and applied to the sweep condition; the expiration time is the stored timestamp plus the offset",
+        "mustAppearInClaim": true
       }
     ]
   },
@@ -644,7 +653,7 @@
         },
         {
           "id": "FS-CLAIM-FIELD-CONFIG",
-          "statement": "The Firestore Admin field-configuration surface is served for time-to-live policies, and a document whose time-to-live field has expired is deleted by a sweep on the virtual clock after a configurable delay rather than staying readable forever.",
+          "statement": "The Firestore Admin field-configuration surface is served for time-to-live policies, including the ttlConfig.expirationOffset that decides a document's expiration time, and a document whose expiration time has passed is deleted by a sweep on the virtual clock after a configurable delay rather than staying readable forever. A sweep deletion is decided under the policy and the document version current in the section that commits it, so a document whose configuration or time-to-live field moved after the sweep chose it is kept.",
           "capabilities": [
             {
               "id": "FS-FIELD-CONFIG-1",
@@ -678,13 +687,18 @@
               "reason": "The sweep runs inside the control request that moved the virtual clock, so a clock advance observes its own deletions and a test needs no quiescence wait. An unbounded sweep would hold that response open for as long as the store is large, and an unscoped one would take another session's grace period between expiry and deletion away."
             },
             {
+              "behaviour": "The export sidecar that carries the time-to-live configuration declares version 2 when at least one policy carries an expirationOffset and version 1 otherwise, and a reader refuses a version-1 artifact that carries one.",
+              "reason": "The official export format has no field-configuration section at all, so the sidecar is a fireemu addition and its versioning is fireemu's own. An older reader that silently dropped an offset would sweep every document of that collection group up to one offset early, so the version is what turns that data loss into a refusal."
+            },
+            {
               "behaviour": "Each automatic single-field index reported under indexConfig.indexes carries a name whose id is a digest over the project, database, collection group, field, query scope and mode.",
               "reason": "Production assigns an opaque server-side id to every index and a local run has no index resource to draw one from, so the name is derived rather than observed. It is stable across restarts of the same configuration and distinct for distinct indexes, which is what a caller that stores or compares the name needs; whether production's own names may be depended on is an observation this lane has not made."
             }
           ],
           "productionOnly": [
             "the real deletion latency, its backfill cost and the billing of the deletes",
-            "the server-assigned ids of the automatic single-field indexes"
+            "the server-assigned ids of the automatic single-field indexes",
+            "the observed refusal statuses and messages for an out-of-range or sub-second ttlConfig.expirationOffset; the range and precision rule is taken from the Firestore v1 discovery document and has not been compared against a production project"
           ],
           "preview": []
         },

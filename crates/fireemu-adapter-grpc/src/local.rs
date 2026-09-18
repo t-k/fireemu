@@ -3165,18 +3165,16 @@ impl LocalBackend {
         collection_group: &CollectionId,
         expires_at: fireemu_core_firestore::value::Timestamp,
     ) -> bool {
-        if self
-            .fault(parent.project.as_str(), "firestore.commit")
-            .is_err()
-        {
-            return false;
-        }
         let write = Write {
             op: WriteOp::Delete { path: path.clone() },
             precondition: None,
             transforms: vec![],
         };
         self.retry_on_contention(parent, None, std::slice::from_ref(&write), || {
+            // The fault belongs to the attempt, not to the candidate, which is where
+            // `delete_document_once` evaluates it: a configured commit fault that is spent
+            // by one attempt is spent, and the retry after contention draws the next one.
+            self.fault(parent.project.as_str(), "firestore.commit")?;
             let now = self.write_time();
             self.with_db(parent, |db| {
                 // The catalog lock is taken under this database's lock and released before

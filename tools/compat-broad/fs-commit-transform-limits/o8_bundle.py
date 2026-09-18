@@ -21,6 +21,42 @@ MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 _TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
+# The complete runtime import closure of the bounded Commit wire worker, mapped
+# from its reviewed repository path to its flat archive member name. The worker
+# imports commit_remote_transport, which loads transform_compiler and the
+# bounded transport member; the bounded transport imports broad_contract.
+WORKER_SOURCES = {
+    "tools/compat-broad/fs-commit-transform-limits/commit_remote_transport.py": (
+        "commit_remote_transport.py"
+    ),
+    "tools/compat-broad/fs-commit-transform-limits/transform_compiler.py": (
+        "transform_compiler.py"
+    ),
+    "tools/compat-broad/fs-write-limits/transport.py": "transport.py",
+    "tools/compat-broad/broad_contract.py": "broad_contract.py",
+}
+
+# The only accepted archive entry point. It takes exactly one worker mode and
+# the archive digest the parent verified, never a pathname, credential or token.
+WORKER_DISPATCHER = (
+    b'"""Fixed archive dispatcher for the bounded Commit wire worker."""\n'
+    b"\n"
+    b"import sys\n"
+    b"\n"
+    b'if len(sys.argv) != 3 or sys.argv[1] != "--worker":\n'
+    b"    raise SystemExit(2)\n"
+    b"try:\n"
+    b"    import commit_remote_transport\n"
+    b"\n"
+    b"    _code = commit_remote_transport._worker_main(sys.argv[2])\n"
+    b"except SystemExit:\n"
+    b"    raise\n"
+    b"except BaseException:\n"
+    b"    _code = 2\n"
+    b"raise SystemExit(_code)\n"
+)
+WORKER_DISPATCHER_SHA256 = hashlib.sha256(WORKER_DISPATCHER).hexdigest()
+
 
 def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -135,6 +171,66 @@ def verify_archive(
         raise ValueError("archive source digest differs")
     if _encode(sources) != archive:
         raise ValueError("noncanonical source archive")
+
+
+def read_source_bytes(root: Path, name: str) -> bytes:
+    """Read one reviewed source without following a replaceable symlink."""
+    return _source_bytes(root, name)
+
+
+def _worker_manifest(frozen: Mapping[str, str]) -> dict[str, str]:
+    """Map the reviewed worker closure onto its archive members."""
+    manifest = {"__main__.py": WORKER_DISPATCHER_SHA256}
+    for name, member in WORKER_SOURCES.items():
+        expected = frozen.get(name)
+        if type(expected) is not str:
+            raise ValueError("frozen worker source closure incomplete")
+        manifest[member] = expected
+    return manifest
+
+
+def build_worker_archive(sources: Mapping[str, bytes]) -> tuple[bytes, str]:
+    """Encode reviewed worker members plus exactly the fixed dispatcher."""
+    if "__main__.py" in sources:
+        raise ValueError("the worker dispatcher is fixed, not caller supplied")
+    members = {**sources, "__main__.py": WORKER_DISPATCHER}
+    _names({name: _digest(data) for name, data in members.items()})
+    archive = _encode(members)
+    return archive, _digest(archive)
+
+
+def build_worker_archive_from_source(
+    root: Path, frozen: Mapping[str, str]
+) -> tuple[bytes, str]:
+    """Build the worker archive from exactly the frozen O7 source digests."""
+    manifest = _worker_manifest(frozen)
+    sources = {}
+    for name, member in sorted(WORKER_SOURCES.items()):
+        data = _source_bytes(Path(root), name)
+        if _digest(data) != manifest[member]:
+            raise ValueError("frozen worker source digest differs")
+        sources[member] = data
+    archive, sha256 = build_worker_archive(sources)
+    verify_worker_archive(archive, frozen, sha256)
+    return archive, sha256
+
+
+def verify_worker_archive(
+    archive: bytes, frozen: Mapping[str, str], expected_sha256: str
+) -> None:
+    """Reject any archive that is not the frozen closure and fixed dispatcher."""
+    verify_archive(archive, _worker_manifest(frozen), expected_sha256)
+
+
+def verify_worker_archive_fd(
+    fd: int, expected_sha256: str, frozen: Mapping[str, str]
+) -> None:
+    """Check the live descriptor against the frozen worker closure bytes."""
+    manifest = _worker_manifest(frozen)
+    verify_archive_fd(fd, expected_sha256)
+    content = os.pread(fd, os.fstat(fd).st_size, 0)
+    verify_archive(content, manifest, expected_sha256)
+    verify_archive_fd(fd, expected_sha256)
 
 
 def verify_archive_fd(fd: int, expected_sha256: str) -> None:

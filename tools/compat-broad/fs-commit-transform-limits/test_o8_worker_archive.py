@@ -28,9 +28,7 @@ def test_worker_closure_names_only_reviewed_repository_sources() -> None:
         assert member.endswith(".py")
         assert "/" not in member
     assert "__main__.py" not in o8_bundle.WORKER_SOURCES.values()
-    assert len(set(o8_bundle.WORKER_SOURCES.values())) == len(
-        o8_bundle.WORKER_SOURCES
-    )
+    assert len(set(o8_bundle.WORKER_SOURCES.values())) == len(o8_bundle.WORKER_SOURCES)
 
 
 def test_worker_archive_adds_exactly_the_fixed_dispatcher(tmp_path: Path) -> None:
@@ -72,9 +70,7 @@ def test_worker_archive_from_source_refuses_a_changed_or_missing_source(
     changed[first] = "0" * 64
     with pytest.raises(ValueError):
         o8_bundle.build_worker_archive_from_source(ROOT, changed)
-    incomplete = {
-        name: value for name, value in frozen.items() if name != first
-    }
+    incomplete = {name: value for name, value in frozen.items() if name != first}
     with pytest.raises(ValueError):
         o8_bundle.build_worker_archive_from_source(ROOT, incomplete)
 
@@ -83,7 +79,7 @@ def test_verify_worker_archive_rejects_a_replaced_dispatcher(tmp_path: Path) -> 
     frozen = {
         name: digest((ROOT / name).read_bytes()) for name in o8_bundle.WORKER_SOURCES
     }
-    archive, sha = o8_bundle.build_worker_archive_from_source(ROOT, frozen)
+    archive, _sha = o8_bundle.build_worker_archive_from_source(ROOT, frozen)
     members = {}
     with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
         for info in bundle.infolist():

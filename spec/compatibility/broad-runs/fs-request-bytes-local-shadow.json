@@ -1,6 +1,6 @@
 {
-  "artifactSha256": "b43786c9a13bae62caefb7a4b1f72c5fd34f7660f31a59229ba65a1ba199661c",
-  "campaignDigest": "56dc1f7b62410e39d060a67952329b575b18a1bb8d84fde174e424c7403b6776",
+  "artifactSha256": "d4d94fdd3141ecfb7bde4c63d5425c6989d5ef814aac815379908e69b2d384d3",
+  "campaignDigest": "140c2538438220525d89c4fef0e990d1c4b5ce11b787799031294c0b9391bd90",
   "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
   "cases": [
     {
@@ -35,6 +35,7 @@
   "database": "(default)",
   "formalCompatibilityClaim": false,
   "kind": "fs-request-bytes-local-shadow-v1",
+  "nonce": "b626c4a80e73438782dc8740a0d9a059",
   "note": "Owned local artifact shadow. No production request was sent, no credential was used and no parent group is promoted. The raw REST body byte count remains an observation hypothesis about production's enforcement metric.",
   "observation": {
     "canonicalRequestBytesMeasuredLocally": true,
@@ -49,7 +50,7 @@
       "errorStatus": "INVALID_ARGUMENT",
       "httpStatus": 413
     },
-    "planDigest": "a07efc5c04a7a194361dde3192a16c0de6d421f1ae2a3c764a4424d3fca9ce4e",
+    "planDigest": "8770beebe94867717bf14bd170898caa45c9f735bdff353d2b53312f658aaedb",
     "productionExecuted": false,
     "rawHttpMetricStatus": "observation hypothesis",
     "recoveryRowCount": 153,
@@ -57,7 +58,7 @@
     "resourceAbsence": true,
     "rowCount": 105
   },
-  "planDigest": "a07efc5c04a7a194361dde3192a16c0de6d421f1ae2a3c764a4424d3fca9ce4e",
+  "planDigest": "8770beebe94867717bf14bd170898caa45c9f735bdff353d2b53312f658aaedb",
   "probeOutcomes": [
     {
       "complete": true,
@@ -69,7 +70,7 @@
       "requestBytes": 10485759,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "aec64a0840865a1444034588b5adf12408fef39746223483eefe09fa9fdb3cd8"
+      "responseSha256": "2d731b41df95423da1ae060d47997f522cd6cd4d605f72c0a774a8f30862d3d4"
     },
     {
       "complete": true,
@@ -81,7 +82,7 @@
       "requestBytes": 10485760,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "73ac49de06c094acd80e9f637e8adc7954e717e8c8c67b8757be4f4179cff109"
+      "responseSha256": "35b6a8e4dbbfd2a328eaf32055776a290bc1f79780ed70d89887e007a7b59c66"
     },
     {
       "complete": true,
@@ -101,11 +102,11 @@
   "rawHttpMetricStatus": "observation hypothesis",
   "recordingComplete": true,
   "runtime": {
-    "artifactSha256": "b43786c9a13bae62caefb7a4b1f72c5fd34f7660f31a59229ba65a1ba199661c",
+    "artifactSha256": "d4d94fdd3141ecfb7bde4c63d5425c6989d5ef814aac815379908e69b2d384d3",
     "runtimeInputCount": 407,
     "runtimeInputsClean": true,
     "runtimeInputsDigest": "f61d1039be89bf7e25c322c8da9d997bfe86fe03f62e2d3afd7e75c30b56b7a1",
-    "sourceCommit": "6f1b6d46199725441a940cf8fc120cffe74262ea",
+    "sourceCommit": "d33518e24ec51e83f97e9604670664d3a4a83e7e",
     "sourceRoot": "repository-root"
   },
   "shadow": {
@@ -136,8 +137,8 @@
     "summary": "The local transport refused the over-boundary Commit at exactly the 10 MiB boundary with a typed 413. Production is expected to answer 400, so the boundary agrees and the refusal shape does not.",
     "untypedOverRefusal": null
   },
-  "sourceDigestAfter": "00ab1c80ee9ad9ef9403cd1a094750d180f513d34a07f2ac346fd2bb5f30e01e",
-  "sourceDigestBefore": "00ab1c80ee9ad9ef9403cd1a094750d180f513d34a07f2ac346fd2bb5f30e01e",
+  "sourceDigestAfter": "9a39c82b75a146ef4cbe9901924d3a16abeb2b16f1043cff65b032f8716a6364",
+  "sourceDigestBefore": "9a39c82b75a146ef4cbe9901924d3a16abeb2b16f1043cff65b032f8716a6364",
   "stateValidation": true,
   "target": "owned-local-artifact"
 }

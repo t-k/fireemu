@@ -235,11 +235,13 @@ nothing.
 
 The recorded run is published as
 `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, at source
-`6f1b6d46199725441a940cf8fc120cffe74262ea`, artifact SHA-256 `b43786c9a13bae62caefb7a4b1f72c5fd34f7660f31a59229ba65a1ba199661c`, with supervisor status `completed`,
+`d33518e24ec51e83f97e9604670664d3a4a83e7e`, artifact SHA-256 `d4d94fdd3141ecfb7bde4c63d5425c6989d5ef814aac815379908e69b2d384d3`, with supervisor status `completed`,
 `recordingComplete` and `stateValidation` true, the owned process stopped and all
 listeners closed. The record carries the three probe outcomes, the refusal bytes
-verbatim, the collector summary and the runtime binding. It is checked against
-its generator, so a hand-edited record fails the suite. The shadow uses its own
+verbatim, the collector summary, the runtime binding and the run's own nonce, so
+a reader can recompute the plan and campaign digests rather than trust them. The
+recorded classification and the two state gates are recomputed from the recorded
+observation, so a hand-edited verdict fails the suite. The shadow uses its own
 per-run nonce against `demo-firestore-probe`; it is not the campaign nonce and it
 writes nothing to the oracle project.
 

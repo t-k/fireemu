@@ -2932,10 +2932,19 @@ fn field_config_json(catalogs: &FieldConfigCatalogs) -> String {
             let ttl: Vec<serde_json::Value> = catalog
                 .iter()
                 .map(|(group, policy)| {
-                    serde_json::json!({
+                    let mut entry = serde_json::json!({
                         "collectionGroup": group.as_str(),
                         "field": policy.field.canonical(),
-                    })
+                    });
+                    // An unset offset stays absent, so an artifact written by a session that
+                    // configured no offset is byte-identical to the one earlier fireemu
+                    // versions wrote, and an import of theirs installs the unset offset.
+                    if let Some(offset) = policy.expiration_offset {
+                        entry["expirationOffset"] = serde_json::json!(
+                            fireemu_core_firestore::ttl::format_expiration_offset(offset)
+                        );
+                    }
+                    entry
                 })
                 .collect();
             serde_json::json!({
@@ -2993,8 +3002,24 @@ fn parse_field_config(text: &str) -> Result<FieldConfigCatalogs, String> {
                 .map_err(|error| format!("collection group {group:?}: {error}"))?;
             let path = fireemu_core_firestore::field_path::FieldPath::parse(path)
                 .map_err(|error| format!("field path {path:?}: {error}"))?;
+            // The offset goes through the same grammar a fields.patch is held to, so a
+            // sidecar naming a duration the Admin surface would refuse is a malformed
+            // artifact rather than a policy that sweeps at some other instant.
+            let expiration_offset = match &field["expirationOffset"] {
+                serde_json::Value::Null => None,
+                serde_json::Value::String(text) => Some(
+                    fireemu_core_firestore::ttl::parse_expiration_offset(text).map_err(
+                        |error| format!("a TTL entry names an invalid expirationOffset: {error}"),
+                    )?,
+                ),
+                _ => {
+                    return Err(
+                        "a TTL entry's expirationOffset must be a duration in seconds".to_owned(),
+                    )
+                }
+            };
             catalog
-                .enable(group, path)
+                .enable_with_offset(group, path, expiration_offset)
                 .map_err(|error| error.to_string())?;
         }
         catalogs.insert(
@@ -5285,6 +5310,75 @@ mod tests {
 
         let parsed = parse_field_config(&field_config_json(&catalogs)).expect("parse");
         assert_eq!(parsed, catalogs);
+    }
+
+    #[test]
+    fn the_expiration_offset_of_a_policy_survives_a_round_trip() {
+        let group = fireemu_core_types::ids::CollectionId::try_new("sessions").expect("collection");
+        let field =
+            fireemu_core_firestore::field_path::FieldPath::parse("expiresAt").expect("field");
+        for offset in [
+            Some(fireemu_core_types::time::LogicalDuration::from_seconds(
+                604_800,
+            )),
+            // An offset spelled as zero is a configuration of its own, distinct from the
+            // unset one, so the artifact has to tell them apart.
+            Some(fireemu_core_types::time::LogicalDuration::from_seconds(0)),
+            None,
+        ] {
+            let mut catalog = fireemu_core_firestore::ttl::TtlCatalog::new();
+            catalog
+                .enable_with_offset(group.clone(), field.clone(), offset)
+                .expect("enable");
+            let mut catalogs = std::collections::BTreeMap::new();
+            catalogs.insert(("demo-app".to_owned(), "(default)".to_owned()), catalog);
+
+            let text = field_config_json(&catalogs);
+            let parsed = parse_field_config(&text).expect("parse");
+            assert_eq!(parsed, catalogs, "{text}");
+            assert_eq!(
+                parsed[&("demo-app".to_owned(), "(default)".to_owned())]
+                    .policy(&group)
+                    .expect("policy")
+                    .expiration_offset,
+                offset,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_policy_with_no_offset_is_written_the_way_it_always_was() {
+        let mut catalog = fireemu_core_firestore::ttl::TtlCatalog::new();
+        catalog
+            .enable(
+                fireemu_core_types::ids::CollectionId::try_new("sessions").expect("collection"),
+                fireemu_core_firestore::field_path::FieldPath::parse("expiresAt").expect("field"),
+            )
+            .expect("enable");
+        let mut catalogs = std::collections::BTreeMap::new();
+        catalogs.insert(("demo-app".to_owned(), "(default)".to_owned()), catalog);
+        assert_eq!(
+            field_config_json(&catalogs),
+            r#"{"databases":[{"database":"(default)","project":"demo-app","ttlFields":[{"collectionGroup":"sessions","field":"expiresAt"}]}],"version":1}"#
+        );
+    }
+
+    #[test]
+    fn a_sidecar_naming_an_invalid_expiration_offset_is_refused() {
+        for offset in [
+            r#""1.5s""#,
+            r#""-1s""#,
+            r#""2147483648s""#,
+            r#""604800""#,
+            "7",
+        ] {
+            let text = format!(
+                r#"{{"version":1,"databases":[{{"project":"demo-app","database":"(default)","ttlFields":[{{"collectionGroup":"sessions","field":"expiresAt","expirationOffset":{offset}}}]}}]}}"#
+            );
+            let error = parse_field_config(&text).expect_err("refusal");
+            assert!(error.contains("expirationOffset"), "{offset}: {error}");
+        }
     }
 
     #[test]

@@ -21,8 +21,8 @@ import time
 from pathlib import Path
 
 import commit_acquisition as acquisition
+import o8_bundle
 from broad_contract import digest
-from commit_remote_transport import request as remote_request
 from commit_reserved_adapter import validate_handoff
 from owned_transform_runner import validate_retained_artifact
 
@@ -120,13 +120,16 @@ def _validate_frozen(inputs: dict) -> None:
         "artifactSha256",
         "inputsDigest",
     }
-    if not required.issubset(inputs) or inputs["permission"].get(
-        "kind"
-    ) != "commit-owner-execution-permission-v1":
+    if (
+        not required.issubset(inputs)
+        or inputs["permission"].get("kind") != "commit-owner-execution-permission-v1"
+    ):
         raise ValueError("O7 frozen approval binding required")
     if (
         inputs["inputsDigest"]
-        != digest({key: value for key, value in inputs.items() if key != "inputsDigest"})
+        != digest(
+            {key: value for key, value in inputs.items() if key != "inputsDigest"}
+        )
         or inputs["permissionDigest"] != digest(inputs["permission"])
         or inputs["planDigest"] != digest(inputs["plan"])
         or not isinstance(inputs["sourceInputs"], dict)
@@ -203,8 +206,7 @@ def _validate_approval(
     if (
         not approval["windowStartsAt"] <= now
         or now + CAMPAIGN_SECONDS > approval["windowExpiresAt"]
-        or approval["windowStartsAt"] + CAMPAIGN_SECONDS
-        > approval["windowExpiresAt"]
+        or approval["windowStartsAt"] + CAMPAIGN_SECONDS > approval["windowExpiresAt"]
     ):
         raise ValueError("O7 execution window expired")
 
@@ -232,26 +234,39 @@ def execute(args: argparse.Namespace) -> dict:
         != hashlib.sha256(manifest_bytes).hexdigest()
     ):
         raise ValueError("retained v7 artifact binding differs")
-    handoff = _read_handoff(args)
-    api_key = handoff.get("apiKey")
-    if not isinstance(api_key, str):
-        raise ValueError("private credential handoff required")
     # Validate before reservation or any possible wire operation.
     if digest(permission) != inputs["permissionDigest"]:
         raise ValueError("stale O7 permission binding")
-    validate_handoff(handoff, permission, api_key)
-    result = acquisition.run_acquisition(
-        args.output,
-        inputs,
-        permission_path=args.permission,
-        source_root=args.source,
-        artifact_path=args.artifact,
-        ledger_root=args.ledger,
-        api_key=api_key,
-        credential_handoff=handoff,
-        transmit=remote_request,
+    # Build and own the worker archive before any credential is read. The
+    # writable construction handle is closed and the file unlinked before the
+    # descriptor is admitted, so no writable alias to these bytes survives.
+    archive, archive_sha256 = o8_bundle.build_worker_archive_from_source(
+        args.source, inputs["sourceInputs"]
     )
-    return result
+    with o8_bundle.unlinked_archive_fd(archive, archive_sha256) as archive_fd:
+        capability = acquisition.issue_production_capability(
+            inputs=inputs,
+            approval=approval,
+            manifest_bytes=manifest_bytes,
+            archive_fd=archive_fd,
+            archive_sha256=archive_sha256,
+        )
+        handoff = _read_handoff(args)
+        api_key = handoff.get("apiKey")
+        if not isinstance(api_key, str):
+            raise ValueError("private credential handoff required")
+        validate_handoff(handoff, permission, api_key)
+        return acquisition.run_acquisition(
+            args.output,
+            inputs,
+            permission_path=args.permission,
+            source_root=args.source,
+            artifact_path=args.artifact,
+            ledger_root=args.ledger,
+            api_key=api_key,
+            credential_handoff=handoff,
+            capability=capability,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

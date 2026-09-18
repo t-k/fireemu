@@ -17,6 +17,7 @@ SPEC.loader.exec_module(bundle)
 
 SOURCES = {
     "commit_o8": HERE / "commit_o8.py",
+    "o8_bundle": HERE / "o8_bundle.py",
     "commit_acquisition": HERE / "commit_acquisition.py",
     "commit_reserved_adapter": HERE / "commit_reserved_adapter.py",
     "commit_remote_transport": HERE / "commit_remote_transport.py",

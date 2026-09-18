@@ -31,10 +31,9 @@ def verify(fd: int, expected: str) -> None:
     data = os.pread(fd, before.st_size + 1, 0)
     if len(data) != before.st_size or hashlib.sha256(data).hexdigest() != expected:
         raise ValueError("archive digest differs")
-    with os.fdopen(os.dup(fd), "rb") as reader:
-        with zipfile.ZipFile(reader) as bundle:
-            if "__main__.py" not in bundle.namelist():
-                raise ValueError("archive main missing")
+    with os.fdopen(os.dup(fd), "rb") as reader, zipfile.ZipFile(reader) as bundle:
+        if "__main__.py" not in bundle.namelist():
+            raise ValueError("archive main missing")
     after = os.fstat(fd)
     if (
         before.st_dev,

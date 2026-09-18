@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import time
+import types
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -21,10 +22,12 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT / "tools/compat-broad"))
 sys.path.insert(0, str(ROOT / "tools/compat-broad/production-admission"))
 
+import commit_remote_transport
 from batch_contract import DATABASE_PROJECTION, NUMBER, PROJECT, validate_owner_baseline
 from broad_contract import digest
 from commit_production import _save, collect_commit
 from commit_remote_transport import request as remote_request
+from commit_remote_transport import request_bound as remote_request_bound
 from commit_reserved_adapter import (
     CommitReservedCoordinator,
     credential_preparation,
@@ -48,6 +51,195 @@ BUDGET = {
     "resources": 2,
     "costMicrousd": production_cost_model()["totalCostMicrousd"],
 }
+
+
+APPROVAL_KIND = "commit-o8-approval-v1"
+MAX_CAPABILITY_SCAN = 64
+_CAPABILITY_TOKEN = object()
+# Identity registry of live, unconsumed capabilities. Membership, never shape,
+# is the admission test: a look-alike object with the same attributes fails.
+_ISSUED: set = set()
+
+
+def _load_bundle():
+    """Load the archive builder from its exact sibling path, not from sys.path."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_commit_o8_bundle", HERE / "o8_bundle.py"
+    )
+    if spec is None or spec.loader is None:
+        raise ValueError("reviewed archive builder unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class ProductionWireCapability:
+    """One-shot, campaign-bound authority for the archive-pinned production wire.
+
+    The object carries no secret. Its authority is the unlinked, read-only
+    archive descriptor it owns; every spawn re-verifies that descriptor, so a
+    copy of the object's attributes grants nothing on its own.
+    """
+
+    __slots__ = (
+        "_archive_fd",
+        "_consumed",
+        "archive_sha256",
+        "campaign_id",
+        "inputs_digest",
+    )
+
+    def __init__(
+        self, token, *, archive_fd, archive_sha256, campaign_id, inputs_digest
+    ):
+        if token is not _CAPABILITY_TOKEN:
+            raise TypeError("the O8 production capability is not constructible")
+        self._archive_fd = archive_fd
+        self._consumed = False
+        self.archive_sha256 = archive_sha256
+        self.campaign_id = campaign_id
+        self.inputs_digest = inputs_digest
+
+    def __copy__(self):
+        raise TypeError("the O8 production capability is not copyable")
+
+    def __deepcopy__(self, memo):
+        raise TypeError("the O8 production capability is not copyable")
+
+    def __reduce__(self):
+        raise TypeError("the O8 production capability is not serializable")
+
+    def __repr__(self):
+        return f"<ProductionWireCapability campaign={self.campaign_id!r}>"
+
+    def _consume(self, *, campaign_id, inputs_digest):
+        """Bind this authority to exactly one campaign execution."""
+        if self._consumed:
+            raise ValueError("the O8 production capability is one-shot")
+        if self.campaign_id != campaign_id:
+            raise ValueError("production capability belongs to another campaign")
+        if self.inputs_digest != inputs_digest:
+            raise ValueError("production capability belongs to other frozen inputs")
+        self._consumed = True
+        _ISSUED.discard(self)
+
+    def _transmit(self, value):
+        """Run one bounded request in a worker loaded only from the bound archive."""
+        if not self._consumed:
+            raise ValueError("unconsumed O8 production capability")
+        return remote_request_bound(
+            value,
+            archive_fd=self._archive_fd,
+            archive_sha256=self.archive_sha256,
+        )
+
+
+def issue_production_capability(
+    *, inputs, approval, manifest_bytes, archive_fd, archive_sha256
+):
+    """Issue the production wire authority for one approved O7 campaign.
+
+    The caller must already hold the approved O7 approval artifact, its exact
+    retained manifest bytes, and an unlinked read-only descriptor holding the
+    worker archive built from the frozen source map. Every one of those is
+    re-verified here, independently of the caller's own checks.
+    """
+    o8_bundle = _load_bundle()
+
+    if not isinstance(inputs, dict) or not isinstance(approval, dict):
+        raise ValueError("O7 production capability binding required")  # noqa: TRY004 -- admission boundary collapses malformed input to one refusal class
+    if approval.get("kind") != APPROVAL_KIND or approval.get("status") != "approved":
+        raise ValueError("approved O7 approval artifact required")
+    if not isinstance(manifest_bytes, bytes) or hashlib.sha256(
+        manifest_bytes
+    ).hexdigest() != approval.get("manifestSha256"):
+        raise ValueError("retained O7 manifest bytes differ")
+    unsigned = {key: value for key, value in inputs.items() if key != "inputsDigest"}
+    if (
+        inputs.get("kind") != "commit-frozen-inputs-v2"
+        or inputs.get("inputsDigest") != digest(unsigned)
+        or inputs.get("permissionDigest") != digest(inputs.get("permission"))
+        or inputs.get("planDigest") != digest(inputs.get("plan"))
+    ):
+        raise ValueError("frozen O7 inputs differ")
+    bindings = {
+        "inputsDigest": inputs["inputsDigest"],
+        "permissionDigest": inputs["permissionDigest"],
+        "sourceCommit": inputs["sourceCommit"],
+        "sourceInputsDigest": digest(inputs["sourceInputs"]),
+        "artifactSha256": inputs["artifactSha256"],
+        "planDigest": inputs["planDigest"],
+        "nonceDigest": digest(inputs["plan"]["nonce"]),
+    }
+    if any(approval.get(key) != value for key, value in bindings.items()):
+        raise ValueError("O7 approval binding differs")
+    o8_bundle.verify_worker_archive_fd(
+        archive_fd, archive_sha256, inputs["sourceInputs"]
+    )
+    campaign_id = inputs["plan"].get("campaignId")
+    if not isinstance(campaign_id, str) or not campaign_id:
+        raise ValueError("frozen campaign identity required")
+    capability = ProductionWireCapability(
+        _CAPABILITY_TOKEN,
+        archive_fd=archive_fd,
+        archive_sha256=archive_sha256,
+        campaign_id=campaign_id,
+        inputs_digest=inputs["inputsDigest"],
+    )
+    _ISSUED.add(capability)
+    return capability
+
+
+def _reject_production_transport(transmit):
+    """Refuse any injected callable that reaches the fixed production wire.
+
+    The production wire is unreachable without an archive descriptor, so this is
+    defense in depth: a preparation callback must not even name that path.
+    """
+    if not callable(transmit):
+        raise ValueError("injected local transport must be callable")  # noqa: TRY004 -- admission boundary collapses malformed input to one refusal class
+    fixed = (remote_request, remote_request_bound, ProductionWireCapability._transmit)
+    seen: set = set()
+    pending = [transmit]
+    while pending and len(seen) < MAX_CAPABILITY_SCAN:
+        item = pending.pop()
+        if id(item) in seen:
+            continue
+        seen.add(id(item))
+        if any(item is entry for entry in fixed) or item is commit_remote_transport:
+            raise ValueError("injected transport must not reach the production wire")
+        if isinstance(item, ProductionWireCapability):
+            raise ValueError(  # noqa: TRY004 -- refusal class, not a type report
+                "injected transport must not reach the production wire"
+            )
+        for attribute in ("func", "__wrapped__", "__func__", "__self__"):
+            nested = getattr(item, attribute, None)
+            if nested is not None:
+                pending.append(nested)
+        for cell in getattr(item, "__closure__", None) or ():
+            try:
+                pending.append(cell.cell_contents)
+            except ValueError:
+                continue
+        pending.extend(getattr(item, "__defaults__", None) or ())
+        pending.extend((getattr(item, "__kwdefaults__", None) or {}).values())
+        code = getattr(item, "__code__", None)
+        if code is None:
+            continue
+        namespace = getattr(item, "__globals__", None) or {}
+        for name in code.co_names:
+            if name in namespace:
+                pending.append(namespace[name])
+        for value in list(pending):
+            if isinstance(value, types.ModuleType):
+                pending.extend(
+                    getattr(value, name)
+                    for name in code.co_names
+                    if hasattr(value, name)
+                )
+    return transmit
 
 
 def _read(path):
@@ -235,13 +427,25 @@ def run_acquisition(
     ledger_root,
     api_key,
     credential_handoff,
-    transmit,
+    capability=None,
+    injected_transport=None,
 ):
     """Run an admitted acquisition. There is deliberately no implicit wire/ADC call.
 
-    A production caller must explicitly bind the fixed remote_request function;
-    every other callback is labeled injected transport, never production evidence.
+    Production requires an O7-issued `ProductionWireCapability`, which only
+    `commit_o8.execute()` can obtain and which pins the worker to an archive
+    descriptor. `injected_transport` is the explicit local/preparation mode: it
+    is never production evidence and can never set `productionExecuted`.
     """
+    if (capability is None) == (injected_transport is None):
+        raise ValueError(
+            "exactly one of an O7 production capability or a local "
+            "injected transport is required"
+        )
+    if capability is None:
+        _reject_production_transport(injected_transport)
+    elif type(capability) is not ProductionWireCapability or capability not in _ISSUED:
+        raise ValueError("unissued O7 production capability")
     inputs = copy.deepcopy(inputs)
     _validate(inputs, permission_path, source_root, artifact_path)
     validate_handoff(credential_handoff, inputs["permission"], api_key)
@@ -250,6 +454,14 @@ def run_acquisition(
         copy.deepcopy(inputs["permission"]),
         copy.deepcopy(inputs["plan"]),
     )
+    if capability is None:
+        transmit = injected_transport
+    else:
+        # One authority, one campaign, one execution: consume before any I/O.
+        capability._consume(
+            campaign_id=plan["campaignId"], inputs_digest=inputs["inputsDigest"]
+        )
+        transmit = capability._transmit
     output = Path(output)
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     _save(output / "inputs.json", inputs)
@@ -343,9 +555,10 @@ def run_acquisition(
         "chargedCalls": snapshot["total"] if snapshot else 0,
         "gate": snapshot,
         "executionKind": "fixed-production-wire"
-        if transmit is remote_request
+        if capability is not None
         else "injected-transport",
-        "productionExecuted": wire_ran and transmit is remote_request,
+        "productionExecuted": bool(wire_ran and capability is not None),
+        "workerArchiveSha256": capability.archive_sha256 if capability else None,
         "acquisitionValidated": False,
         "promotionReady": False,
         "failure": failure,

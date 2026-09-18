@@ -185,7 +185,7 @@ def fixture(tmp_path, monkeypatch):
             "apiKey": "offline-key",
             "adc": adc,
         },
-        "transmit": transmit,
+        "injected_transport": transmit,
     }
     return inputs, ledger, calls, kwargs
 
@@ -261,7 +261,7 @@ def test_failures_keep_shared_responsibility_and_never_replace_receipts(
     inputs, ledger, calls, kwargs = fixture(tmp_path, monkeypatch)
     output = tmp_path / "output"
     metadata = batch_adapter.wire
-    wire = kwargs["transmit"]
+    wire = kwargs["injected_transport"]
     data_kinds = []
 
     def metadata_failure(*args, **options):
@@ -291,7 +291,7 @@ def test_failures_keep_shared_responsibility_and_never_replace_receipts(
             result["body"]["fields"]["_sharedOwner"] = {"referenceValue": "foreign"}
         return result
 
-    kwargs["transmit"] = data
+    kwargs["injected_transport"] = data
     monkeypatch.setattr(batch_adapter, "wire", metadata_failure)
     result = acquisition.run_acquisition(output, inputs, **kwargs)
     assert result["reservationReleased"] is False
@@ -374,7 +374,7 @@ def test_saved_comparison_is_frozen_and_credential_free(tmp_path, monkeypatch):
 @pytest.mark.parametrize("drift", ["permission", "artifact", "source"])
 def test_live_frozen_file_drift_blocks_the_next_wire_call(tmp_path, monkeypatch, drift):
     inputs, ledger, calls, kwargs = fixture(tmp_path, monkeypatch)
-    original = kwargs["transmit"]
+    original = kwargs["injected_transport"]
 
     def transmit(value):
         response = original(value)
@@ -393,7 +393,7 @@ def test_live_frozen_file_drift_blocks_the_next_wire_call(tmp_path, monkeypatch,
                 ).write_text("changed source")
         return response
 
-    kwargs["transmit"] = transmit
+    kwargs["injected_transport"] = transmit
     result = acquisition.run_acquisition(tmp_path / "output", inputs, **kwargs)
     assert calls.count("observation") == 1
     assert calls.count("recovery") == 0

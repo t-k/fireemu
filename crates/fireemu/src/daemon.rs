@@ -29,10 +29,11 @@ use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreS
 use super::{
     app_check_state, bind_listeners, child_environment, clock_millis, control, control_state,
     exit_code, functions, hub, hub_emulators, import_export, load_rules, load_storage_rules,
-    logical_system_time, print_banner, print_rules_status, random_secret, runtime_thread_counts,
-    service_admission, session_rsa_cache, spawn_child, start_firestore_config_reload_supervisors,
-    stop_child, storage_state, terminate_signal, ui, wait_child, BoundAddrs, ExecPlan, Exporter,
-    Listeners, Options, RedactedRuntimeConfig, RuntimeConfig, Selection, Verbosity,
+    logical_system_time, print_banner, print_rules_status, random_secret, reportable_exit_code,
+    runtime_thread_counts, service_admission, session_rsa_cache, spawn_child,
+    start_firestore_config_reload_supervisors, stop_child, storage_state, terminate_signal, ui,
+    wait_child, BoundAddrs, ExecPlan, Exporter, Listeners, Options, RedactedRuntimeConfig,
+    RuntimeConfig, Selection, Verbosity,
 };
 
 struct BoundStartup {
@@ -1540,7 +1541,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         serve_suite(ready, exec).await
     });
     match result {
-        Ok(code) => ExitCode::from(u8::try_from(code.clamp(0, 255)).unwrap_or(1)),
+        Ok(code) => ExitCode::from(reportable_exit_code(code)),
         Err(e) => {
             eprintln!("error: {e}");
             ExitCode::FAILURE

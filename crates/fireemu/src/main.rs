@@ -1426,6 +1426,22 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
     1
 }
 
+/// The process exit status fireemu reports for a child exit code.
+///
+/// A process exit status is one byte, but a child's reported code is not. Windows reports the
+/// full 32-bit value that `ExitProcess` or a fatal NTSTATUS produced, and `std` hands it over
+/// as a signed `i32`: `cmd /c exit -1` arrives as `-1`, an access violation as `-1073741819`
+/// (0xC0000005), a Ctrl-C termination as `-1073741510` (0xC000013A). Truncating any of those
+/// to a byte, or clamping them into `0..=255`, turns a crashed child into a success and lets a
+/// CI job that trusts fireemu's exit code pass.
+///
+/// So only the codes that survive the byte intact are passed through. Every code outside
+/// `0..=255` -- negative, or 256 and above -- becomes 1, the generic failure. Signal-terminated
+/// children already arrive here as `128 + signal` from [`exit_code`] and pass through.
+fn reportable_exit_code(code: i32) -> u8 {
+    u8::try_from(code).unwrap_or(1)
+}
+
 fn load_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
     match &cfg.rules_file {
         Some(path) => {
@@ -3280,5 +3296,46 @@ mod config_reload_tests {
         );
         drop(backend);
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod exit_code_tests {
+    use super::reportable_exit_code;
+
+    #[test]
+    fn codes_that_fit_a_byte_are_reported_unchanged() {
+        assert_eq!(reportable_exit_code(0), 0);
+        assert_eq!(reportable_exit_code(1), 1);
+        assert_eq!(reportable_exit_code(23), 23);
+        assert_eq!(reportable_exit_code(255), 255);
+    }
+
+    #[test]
+    fn signal_terminations_keep_their_unix_spelling() {
+        // `exit_code` maps a signal to 128 + signal; SIGKILL is 137, SIGTERM 143, SIGSEGV 139.
+        for code in [128 + 9, 128 + 15, 128 + 11] {
+            assert_eq!(reportable_exit_code(code), u8::try_from(code).unwrap());
+        }
+    }
+
+    #[test]
+    fn windows_negative_status_codes_never_report_success() {
+        // `cmd /c exit -1`, STATUS_ACCESS_VIOLATION, STATUS_CONTROL_C_EXIT, and the extreme.
+        for code in [-1, -1_073_741_819, -1_073_741_510, i32::MIN] {
+            assert_eq!(
+                reportable_exit_code(code),
+                1,
+                "a negative child status must not be reported as success"
+            );
+        }
+    }
+
+    #[test]
+    fn codes_above_a_byte_never_report_success_or_a_truncated_value() {
+        // 256 and 512 truncate to 0 under a cast; 300 truncates to 44.
+        for code in [256, 300, 512, 0x0100_0000, i32::MAX] {
+            assert_eq!(reportable_exit_code(code), 1);
+        }
     }
 }

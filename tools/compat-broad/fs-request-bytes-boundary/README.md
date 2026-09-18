@@ -33,3 +33,69 @@ hypothesis and is not a wire-level metric.
 `request_bytes_collector.py` validates the independent compiler plan before dispatch and follows `executionSchedule`. Every preflight must return a typed `NOT_FOUND` before its Commit can be sent. Cleanup DELETE requires both a successful positional Commit response from this run and a matching ownership read with the same update time; uncertain Commit responses leave the run incomplete and do not authorize a DELETE. Each probe must establish typed absence before the next probe starts.
 
 The collector writes create-only bounded per-operation rows and exact raw HTTP response bodies as separate sidecars. `result.json` is a compact summary with row counts, failure reasons, and the typed resource-absence conclusion; individual receipts are in `row-*.json`. Response byte counts and hashes derive from the captured body bytes, not reconstructed JSON. This remains a local observation hypothesis, with no production credentials or production execution. The owning runner must still account for supervisor process cleanup.
+
+## Campaign artifact and local shadow
+
+`request_bytes_campaign.py` composes the compiler plan into the bounded campaign
+artifact: the three boundary cases, the typed refusal expectation, the
+post-state readback obligation, version-bound cleanup with absence proofs, the
+owner preconditions, the request accounting, the cost estimate and a budget with
+an explicit recovery window. It performs no I/O and holds no credentials.
+`validate_request_bytes_campaign` checks a supplied artifact independently and
+never repairs it. The published artifact is `spec/compatibility/fs-request-bytes-campaign.json`,
+with its budget and case views alongside it.
+
+Scope is the REST `Commit` endpoint only. `BatchWrite` is excluded because the
+compiler emits only the Commit endpoint and the transport admits only
+`documents:commit`; a BatchWrite boundary needs its own compiler, transport
+admission and receipt shape. gRPC remains a separate case.
+
+The refusal expectation is a typed Firestore error with an integer HTTP status
+of 400 (expected) or 413 (typed but a semantic discrepancy), an integer error
+code equal to that status, and `INVALID_ARGUMENT`. An untyped transport refusal,
+such as a front-end HTML 413 or a connection reset, is **not** a refusal proof:
+the collector records it as `untyped-transport-refusal` under the separate result
+key `untypedOverRefusal`, with the status, content type and response bytes
+verbatim. It grants no cleanup ownership, keeps recovery read-only and leaves the
+refusal shape unproven. The post-state readback and the recovery absence proofs
+still establish that the refused request wrote nothing.
+
+Every probe runs inside one 60-second total wire deadline, derived in
+`request_bytes_campaign.TRANSPORT_DEADLINE` from the boundary upload size and
+enforced independently by the transport and the worker. A missed deadline yields
+an uncertain Commit whose residue cleanup detects but cannot remove.
+
+`request_bytes_shadow.py` runs the plan and collector against an owned local
+fireemu artifact built from this checkout, through the existing `broad.run`
+artifact builder and process supervisor.
+
+The observed local baseline is that the boundary **is** enforced, by the REST
+transport body cap `MAX_REST_BODY_BYTES` in
+`crates/fireemu-adapter-grpc/src/serve.rs`, not by the limits layer. The over
+probe is refused with HTTP 413 and `{"error":{"code":413,"message":"request body
+too large","status":"INVALID_ARGUMENT"}}`. `classify_local_result` reports that
+as `local-boundary-enforced-shape-differs`, because the boundary agrees with
+production while the refusal code does not. A typed 400 is
+`local-shape-matches-production-expectation` and means the limits-layer
+implementation landed; an accepted over probe is `local-boundary-not-enforced`
+and means the cap was removed or raised. Any other outcome is a shadow failure.
+Neither module authorizes production execution.
+
+Run the offline tests with:
+
+```text
+uv run --offline --project tools/compat-inventory --locked pytest -q tools/compat-broad/fs-request-bytes-boundary
+```
+
+
+## Published evidence
+
+`spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json` is the
+completed local shadow run. `build_shadow_document` is the only place its shape
+is decided, and `test_request_bytes_evidence.py` rebuilds it from its own parts,
+so a hand-edited record fails. The record is bound to the modules that produced
+it, so editing one of those means rerunning the shadow and republishing.
+
+`request_bytes_run_fixture.py` drives the real collector through its full
+258-slot schedule with an injected executor, so tests assert on results the
+collector actually produced rather than on hand-written literals.

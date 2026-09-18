@@ -1,0 +1,82 @@
+{
+  "accounting": {
+    "documentDeletes": 34,
+    "documentReads": 204,
+    "documentWrites": 34,
+    "httpRequests": 258,
+    "uploadedBytes": 31457280
+  },
+  "boundSources": [
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_compiler.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_collector.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_campaign.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_local_transport.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_remote_transport.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_https_worker.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_process_exchange.py"
+  ],
+  "budget": {
+    "maxAccounts": 1,
+    "maxConcurrency": 1,
+    "maxDeletes": 34,
+    "maxDistinctResources": 51,
+    "maxDocuments": 34,
+    "maxDurationSeconds": 900,
+    "maxHttpRequests": 258,
+    "maxInFlightRequests": 1,
+    "maxPeakLiveDocuments": 17,
+    "maxReads": 204,
+    "maxRequestBytes": 10485761,
+    "maxResponseBytes": 2097152,
+    "maxRuns": 1,
+    "maxWrites": 34,
+    "perRequestTimeoutSeconds": 60.0,
+    "recoveryWindow": {
+      "authority": "read-only unless the same run holds a conditional-creation proof and a matching version-bound ownership read",
+      "exitCondition": "typed NOT_FOUND for every one of the 51 owned resources",
+      "onExhaustion": "stop, leave the remaining resources recorded as unresolved, and escalate to the owner; never widen the scope or retry a Commit",
+      "reserveDeletes": 51,
+      "reserveReads": 102,
+      "reserveSeconds": 300,
+      "trigger": "any probe that reaches an observation failure, an uncertain Commit or an interrupted run"
+    }
+  },
+  "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
+  "cost": {
+    "basis": "Firestore Native published unit prices; a planning bound, not a billing record.",
+    "estimatedCostUsd": 0.00019,
+    "hardCostCeilingUsd": 0.5,
+    "networkCostUsd": 0.0,
+    "networkNote": "About 30 MiB is uploaded across the three Commits and under 1 MiB is returned. Ingress is not billed and the returned volume is negligible, so the network component of this campaign is zero to the published precision.",
+    "unitPricesUsd": {
+      "documentDelete": 2e-07,
+      "documentRead": 6e-07,
+      "documentWrite": 1.8e-06
+    }
+  },
+  "note": "The local shadow runs under these same bounds; production additionally requires the owner preconditions in fs-request-bytes-campaign.json.",
+  "schema": "fs-request-bytes-budget-v1",
+  "transportDeadline": {
+    "consequenceIfMissed": "The receipt is incomplete, the Commit is uncertain, and the run holds no conditional-creation proof. The version-bound delete is then a zero-wire skip by design, so cleanup detects the residue as `cleanup-not-absent` but cannot remove it: up to 17 documents stay in the project pending manual owner action.",
+    "covers": "connection setup, TLS, the request upload, server processing and the bounded response read",
+    "derivation": {
+      "assumedSustainedBitsPerSecond": 5000000,
+      "connectionSetupSeconds": 1.5,
+      "derivedRequirementSeconds": 26.8,
+      "marginNote": "The published ceiling is that requirement with roughly a 2x margin.",
+      "responseReadSeconds": 0.5,
+      "serverProcessingSeconds": 8.0,
+      "uploadBits": 83886088,
+      "uploadSeconds": 16.8
+    },
+    "detection": "Detected, never silent. The absence proofs are only recorded on a typed NOT_FOUND, so an unremovable residue fails the run rather than passing it.",
+    "enforcedBy": [
+      "request_bytes_remote_transport.TIMEOUT, rejecting any larger timeout argument",
+      "request_bytes_https_worker, re-checking the same ceiling independently"
+    ],
+    "nonUploadReserveSeconds": 10.0,
+    "ownerAction": "Run from a link that sustains the rate above. If a probe times out, the owner removes the residue under the recorded owned scope; the campaign never retries a Commit to compensate.",
+    "perRequestSeconds": 60.0,
+    "slowestUsableUpstreamBitsPerSecond": 1677722
+  }
+}

@@ -2,8 +2,11 @@ import base64
 import copy
 import hashlib
 import http.client
+import http.server
 import json
+import pathlib
 import sys
+import threading
 import time
 
 import pytest
@@ -15,14 +18,17 @@ from request_bytes_compiler import compile_request_bytes_plan
 from request_bytes_compiler import validate_request_bytes_plan as validate_plan
 from request_bytes_remote_transport import (
     MAX_REQUEST_BYTES,
+    NON_UPLOAD_RESERVE_SECONDS,
     ORIGIN,
     RESPONSE_BYTES,
+    TIMEOUT,
     _request_impl,
 )
 from request_bytes_remote_transport import (
     request as production_request,
 )
 
+HERE = pathlib.Path(__file__).resolve().parent
 NONCE = "0123456789abcdef0123456789abcdef"
 # Generous wall-clock ceiling for the one real-time deadline smoke test.
 WIRE_SMOKE_BUDGET_SECONDS = 30.0
@@ -97,6 +103,66 @@ class TrickleResponse(FakeResponse):
 
 def response(status, headers, body, *, error=None):
     return FakeResponse(status, headers, body, error=error)
+
+
+@pytest.fixture
+def loopback_server():
+    """A plaintext loopback HTTP server that counts the bytes it receives.
+
+    It exists so the boundary body can travel the real process exchange and the
+    real worker logic without TLS and without leaving this machine.
+    """
+    received = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def _consume(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            digest = hashlib.sha256()
+            remaining = length
+            while remaining > 0:
+                chunk = self.rfile.read(min(65536, remaining))
+                if not chunk:
+                    break
+                digest.update(chunk)
+                remaining -= len(chunk)
+            received["bytes"] = length - remaining
+            received["sha256"] = digest.hexdigest()
+            return length - remaining
+
+        def do_POST(self):
+            count = self._consume()
+            payload = json.dumps({"received": count}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_GET(self):
+            payload = b"{}"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args):
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[0], server.server_address[1]
+    try:
+        yield f"{host}:{port}", received
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=10)
+        assert not thread.is_alive()
 
 
 def plan_and_commit():
@@ -396,7 +462,7 @@ def test_default_exchange_uses_verified_worker_and_one_deadline(monkeypatch):
     receipt = request(plan, "observation", 17, operation, "secret-test-credential")
     assert receipt["status"] == 403
     assert receipt["complete"] is True
-    assert seen["deadline"] - time.monotonic() <= 12
+    assert seen["deadline"] - time.monotonic() <= TIMEOUT
     assert hashlib.sha256(seen["worker_source"]).hexdigest() == seen["worker_sha256"]
     assert b"secret-test-credential" in seen["request_payload"]
     assert b"secret-test-credential" not in seen["worker_source"]
@@ -491,3 +557,172 @@ def test_collector_accepts_incomplete_receipt_and_persists_bounded_sidecar(tmp_p
     assert row["receipt"]["status"] == 503
     assert row["receipt"]["failure"] == "transport-error"
     assert (tmp_path / "receipts" / row["responseBodyFile"]).read_bytes() == b"partial"
+
+
+# --- Boundary-size deadline coverage -----------------------------------------
+#
+# The production transport carries a 10,485,761-byte body through a single total
+# deadline. These tests exercise that path at boundary size: one through the
+# injected-exchange seam, one through the real process exchange and the real
+# worker logic with TLS replaced by loopback plaintext. No production request is
+# sent and no credential is used.
+
+
+def test_deadline_derivation_leaves_the_upload_a_usable_rate():
+    """The published ceiling must admit a link a real operator could have."""
+    reserve = NON_UPLOAD_RESERVE_SECONDS
+    assert TIMEOUT > reserve
+    upload_seconds = TIMEOUT - reserve
+    bits = MAX_REQUEST_BYTES * 8
+    required_bits_per_second = bits / upload_seconds
+    # Anything above a few Mbit/s would make the ceiling unreachable in practice.
+    assert required_bits_per_second < 2_000_000
+    # And the ceiling must still be short enough to bound a stuck run.
+    assert TIMEOUT <= 120
+
+
+def test_boundary_body_reaches_the_exchange_intact_within_one_deadline():
+    plan, operation = plan_and_commit()
+    seen = {}
+
+    def exchange(url, method, body, headers, timeout, response_cap):
+        seen["bytes"] = len(body)
+        seen["sha256"] = hashlib.sha256(body).hexdigest()
+        # The budget handed to the exchange is what remains of the one total
+        # deadline, so it must still cover the upload at this size.
+        seen["budget"] = timeout
+        return response(200, {"Content-Type": "application/json"}, b"{}")
+
+    receipt = request(plan, "observation", 17, operation, "token", exchange=exchange)
+    body = json.dumps(
+        operation["body"], separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    assert len(body) == 10_485_759
+    assert seen["bytes"] == len(body)
+    assert seen["sha256"] == hashlib.sha256(body).hexdigest()
+    assert receipt["requestBytes"] == len(body)
+    assert receipt["requestSha256"] == hashlib.sha256(body).hexdigest()
+    assert receipt["complete"] is True
+    assert seen["budget"] > TIMEOUT - 5
+
+
+def test_the_deadline_starts_before_the_upload_not_after_it():
+    """A slow upload must consume the deadline, not be granted a fresh one."""
+    plan, operation = plan_and_commit()
+    clock = FakeClock()
+
+    def exchange(url, method, body, headers, timeout, response_cap):
+        # Simulate an upload that eats the whole budget before any response.
+        clock.advance(TIMEOUT)
+        return response(200, {"Content-Type": "application/json"}, b"{}")
+
+    receipt = _request_impl(
+        plan,
+        "observation",
+        17,
+        operation,
+        "token",
+        exchange=exchange,
+        timeout=TIMEOUT,
+        clock=clock,
+    )
+    assert receipt["complete"] is False
+    # The remaining budget is already spent when the response is read, so the
+    # read is refused rather than granted a second full deadline.
+    assert receipt["failure"] in {"timeout", "response-timeout"}
+
+
+def _loopback_worker_source(host: str) -> bytes:
+    """The real worker with TLS swapped for a loopback plaintext origin.
+
+    Only the connection class and the fixed host literal change. The deadline
+    re-check, the request validation, the framing, the response caps and the
+    failure codes are the same bytes the production worker runs, so this
+    exercises the timing path rather than a re-implementation of it. The host is
+    substituted into the source because the process exchange launches the worker
+    with an empty environment, so it cannot be passed at run time.
+    """
+    source = (HERE / "request_bytes_https_worker.py").read_text()
+    patched = source.replace(
+        "connection = http.client.HTTPSConnection(",
+        "connection = http.client.HTTPConnection(",
+    ).replace('_HOST = "firestore.googleapis.com"', f"_HOST = {host!r}")
+    assert patched.count("HTTPConnection(") == 1
+    assert "HTTPSConnection" not in patched
+    assert "firestore.googleapis.com" not in patched
+    return patched.encode()
+
+
+def test_boundary_body_survives_the_real_process_exchange_and_worker(loopback_server):
+    """Push 10,485,761 bytes through the exchange and worker the campaign uses."""
+    from request_bytes_process_exchange import _run_process_exchange
+
+    host, received = loopback_server
+    source = _loopback_worker_source(host)
+    body = b"x" * MAX_REQUEST_BYTES
+    message = (
+        json.dumps(
+            {
+                "method": "POST",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+                "authorization": "Bearer loopback-test-token",
+                "project": "fireemu-35fe6",
+                "bodyBytes": len(body),
+                "deadline": time.monotonic() + TIMEOUT,
+            },
+            separators=(",", ":"),
+        ).encode()
+        + b"\n"
+    )
+    started = time.monotonic()
+    status, _content_type, raw, failure = _run_process_exchange(
+        worker_source=source,
+        request_payload=message + body,
+        deadline=time.monotonic() + TIMEOUT,
+        response_cap=RESPONSE_BYTES,
+        worker_sha256=hashlib.sha256(source).hexdigest(),
+    )
+    elapsed = time.monotonic() - started
+    assert failure is None, failure
+    assert status == 200
+    assert json.loads(raw) == {"received": MAX_REQUEST_BYTES}
+    # The server counted exactly the boundary body; nothing was truncated by the
+    # exchange's framing, its request cap, or the worker's own validation.
+    assert received["bytes"] == MAX_REQUEST_BYTES
+    assert received["sha256"] == hashlib.sha256(body).hexdigest()
+    assert elapsed < TIMEOUT
+
+
+def test_the_real_worker_refuses_a_deadline_above_the_published_ceiling(
+    loopback_server,
+):
+    from request_bytes_process_exchange import _run_process_exchange
+
+    host, _ = loopback_server
+    source = _loopback_worker_source(host)
+    message = (
+        json.dumps(
+            {
+                "method": "GET",
+                "path": (
+                    "/v1/projects/fireemu-35fe6/databases/(default)/documents"
+                    "/oracle/" + NONCE + "/request-bytes-01/probe-u01/items/control"
+                ),
+                "authorization": "Bearer loopback-test-token",
+                "project": "fireemu-35fe6",
+                "bodyBytes": 0,
+                "deadline": time.monotonic() + TIMEOUT + 30,
+            },
+            separators=(",", ":"),
+        ).encode()
+        + b"\n"
+    )
+    status, _content_type, _raw, failure = _run_process_exchange(
+        worker_source=source,
+        request_payload=message,
+        deadline=time.monotonic() + TIMEOUT,
+        response_cap=RESPONSE_BYTES,
+        worker_sha256=hashlib.sha256(source).hexdigest(),
+    )
+    assert status is None
+    assert failure == "worker-failure"

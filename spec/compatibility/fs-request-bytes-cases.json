@@ -1,0 +1,210 @@
+{
+  "boundary": {
+    "acceptedBytes": [
+      10485759,
+      10485760
+    ],
+    "limit": 10485760,
+    "metric": "REST raw HTTP body UTF-8 bytes",
+    "metricStatus": "observation hypothesis",
+    "refusedBytes": [
+      10485761
+    ]
+  },
+  "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
+  "caseIds": [
+    "FS-LIMIT-API-REQUEST-BYTES-UNDER",
+    "FS-LIMIT-API-REQUEST-BYTES-EXACT",
+    "FS-LIMIT-API-REQUEST-BYTES-OVER"
+  ],
+  "cases": [
+    {
+      "cleanup": {
+        "absenceProofs": 17,
+        "authority": "a version-bound DELETE requires this run's conditional-creation proof and a matching ownership read; every other path is a zero-wire skip",
+        "ownershipRead": 17,
+        "versionBoundDeletes": 17
+      },
+      "family": "firestore",
+      "id": "FS-LIMIT-API-REQUEST-BYTES-UNDER",
+      "operation": "Commit",
+      "postState": {
+        "expected": "every owned resource present with its expected field digest and the version the Commit returned",
+        "proves": "the accepted request wrote exactly its own resource set",
+        "readbackCount": 17
+      },
+      "probe": "under",
+      "productionExpectation": "accepted",
+      "refusalShape": null,
+      "relationToLimit": -1,
+      "requestBytes": 10485759
+    },
+    {
+      "cleanup": {
+        "absenceProofs": 17,
+        "authority": "a version-bound DELETE requires this run's conditional-creation proof and a matching ownership read; every other path is a zero-wire skip",
+        "ownershipRead": 17,
+        "versionBoundDeletes": 17
+      },
+      "family": "firestore",
+      "id": "FS-LIMIT-API-REQUEST-BYTES-EXACT",
+      "operation": "Commit",
+      "postState": {
+        "expected": "every owned resource present with its expected field digest and the version the Commit returned",
+        "proves": "the accepted request wrote exactly its own resource set",
+        "readbackCount": 17
+      },
+      "probe": "exact",
+      "productionExpectation": "accepted",
+      "refusalShape": null,
+      "relationToLimit": 0,
+      "requestBytes": 10485760
+    },
+    {
+      "cleanup": {
+        "absenceProofs": 17,
+        "authority": "a version-bound DELETE requires this run's conditional-creation proof and a matching ownership read; every other path is a zero-wire skip",
+        "ownershipRead": 17,
+        "versionBoundDeletes": 0
+      },
+      "family": "firestore",
+      "id": "FS-LIMIT-API-REQUEST-BYTES-OVER",
+      "operation": "Commit",
+      "postState": {
+        "expected": "every owned resource absent",
+        "proves": "the refused request wrote nothing",
+        "readbackCount": 17
+      },
+      "probe": "over",
+      "productionExpectation": "refused",
+      "refusalShape": {
+        "metric": "REST raw HTTP body UTF-8 bytes",
+        "metricStatus": "observation hypothesis",
+        "notRefusal": [
+          "HTTP 200 with or without write results",
+          "a complete receipt whose raw bytes contradict the parsed body",
+          "an incomplete or timed-out receipt",
+          "a non-JSON body, including a front-end HTML 413 page",
+          "a connection reset with no response"
+        ],
+        "requires": [
+          "complete receipt",
+          "integer HTTP status",
+          "integer error code equal to the HTTP status",
+          "raw response bytes matching the parsed body"
+        ],
+        "typed": [
+          {
+            "classification": "expected",
+            "errorCode": 400,
+            "errorStatus": "INVALID_ARGUMENT",
+            "httpStatus": 400,
+            "note": "A typed Firestore error refusing the request before any document is evaluated."
+          },
+          {
+            "classification": "semantic-discrepancy",
+            "errorCode": 413,
+            "errorStatus": "INVALID_ARGUMENT",
+            "httpStatus": 413,
+            "note": "A typed refusal, but not the catalog-expected code; it requires owner adjudication before the catalog is amended."
+          }
+        ],
+        "untypedTransportRefusal": {
+          "classification": "untyped-transport-refusal",
+          "handling": "A non-JSON refusal, such as a front-end HTML 413 or a reset, is not Firestore's answer and is never upgraded to a typed row. The collector records it as its own outcome with the HTTP status, the content type and the response bytes verbatim, and keeps the refusal shape unproven.",
+          "isRefusalProof": false,
+          "ownerAction": "Adjudicate the recorded status, content type and bytes. The primary boundary question stays open and needs a second run once the intermediary is identified.",
+          "recoveryAuthority": "read-only; it grants no cleanup ownership, so every version-bound delete is a zero-wire skip",
+          "resultKey": "untypedOverRefusal",
+          "state": "commit-uncertain",
+          "stillProven": "The post-state readback and the recovery absence proofs still establish that the refused request wrote nothing."
+        }
+      },
+      "relationToLimit": 1,
+      "requestBytes": 10485761
+    }
+  ],
+  "condition": "FS-LIMIT-API-REQUEST-BYTES",
+  "excludedOperations": [
+    {
+      "operation": "BatchWrite",
+      "reason": "The reviewed compiler emits only the Commit endpoint and the collector's transport admits only `documents:commit`. A BatchWrite boundary needs its own compiler, transport admission and receipt shape."
+    },
+    {
+      "operation": "gRPC Commit",
+      "reason": "Protobuf message encoding is a different metric and needs a separate compiler and receipt."
+    }
+  ],
+  "formalCompatibilityClaim": false,
+  "localExpectation": {
+    "catalogNote": "The limits catalog still records FS-LIMIT-API-REQUEST-BYTES as unsupported, and the limits layer does indeed not implement it. The boundary is nonetheless enforced, one layer earlier.",
+    "catalogState": "unsupported",
+    "classification": "local-boundary-enforced-shape-differs",
+    "differenceFromProductionExpectation": "The boundary byte count agrees with the catalog maximum. The refusal code does not: the local runtime answers 413, while the expected production shape is 400. Under the collector's rules 413 is a typed refusal classified as a semantic discrepancy, so this difference is recorded rather than waived.",
+    "enforcementSource": "crates/fireemu-adapter-grpc/src/serve.rs, MAX_REST_BODY_BYTES = 10 * 1024 * 1024",
+    "expectedCollectorFailures": [],
+    "expectedCompleted": true,
+    "expectedResourceAbsence": true,
+    "localEnforcement": "transport body cap",
+    "note": "A local run in which the over probe is accepted would mean the transport cap was removed or raised; the shadow reports that as `local-boundary-not-enforced` rather than passing.",
+    "observedProbeOutcomes": {
+      "exact": "accepted",
+      "over": "refused",
+      "under": "accepted"
+    },
+    "observedRefusal": {
+      "classification": "semantic-discrepancy",
+      "errorCode": 413,
+      "errorStatus": "INVALID_ARGUMENT",
+      "httpStatus": 413,
+      "message": "request body too large"
+    },
+    "pendingLimitsImplementation": "A separate Rust lane is implementing this condition in the limits layer. The transport cap already refuses at the same boundary, so a limits-layer check will never be reached on the REST path unless it runs before the body cap or the cap is raised. That lane needs this observation."
+  },
+  "parent": "FS-DATA-WRITE",
+  "productionExecuted": false,
+  "refusalExpectation": {
+    "metric": "REST raw HTTP body UTF-8 bytes",
+    "metricStatus": "observation hypothesis",
+    "notRefusal": [
+      "HTTP 200 with or without write results",
+      "a complete receipt whose raw bytes contradict the parsed body",
+      "an incomplete or timed-out receipt",
+      "a non-JSON body, including a front-end HTML 413 page",
+      "a connection reset with no response"
+    ],
+    "requires": [
+      "complete receipt",
+      "integer HTTP status",
+      "integer error code equal to the HTTP status",
+      "raw response bytes matching the parsed body"
+    ],
+    "typed": [
+      {
+        "classification": "expected",
+        "errorCode": 400,
+        "errorStatus": "INVALID_ARGUMENT",
+        "httpStatus": 400,
+        "note": "A typed Firestore error refusing the request before any document is evaluated."
+      },
+      {
+        "classification": "semantic-discrepancy",
+        "errorCode": 413,
+        "errorStatus": "INVALID_ARGUMENT",
+        "httpStatus": 413,
+        "note": "A typed refusal, but not the catalog-expected code; it requires owner adjudication before the catalog is amended."
+      }
+    ],
+    "untypedTransportRefusal": {
+      "classification": "untyped-transport-refusal",
+      "handling": "A non-JSON refusal, such as a front-end HTML 413 or a reset, is not Firestore's answer and is never upgraded to a typed row. The collector records it as its own outcome with the HTTP status, the content type and the response bytes verbatim, and keeps the refusal shape unproven.",
+      "isRefusalProof": false,
+      "ownerAction": "Adjudicate the recorded status, content type and bytes. The primary boundary question stays open and needs a second run once the intermediary is identified.",
+      "recoveryAuthority": "read-only; it grants no cleanup ownership, so every version-bound delete is a zero-wire skip",
+      "resultKey": "untypedOverRefusal",
+      "state": "commit-uncertain",
+      "stillProven": "The post-state readback and the recovery absence proofs still establish that the refused request wrote nothing."
+    }
+  },
+  "schema": "fs-request-bytes-cases-v1"
+}

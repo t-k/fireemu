@@ -136,18 +136,46 @@ network component is zero to the published precision: about 30 MiB is uploaded
 and ingress is not billed, and under 1 MiB is returned. The 30 MiB upload is the
 unusual quantity here, not the money.
 
-The recovery window reserves 300 seconds, 102 reads and 51 delete slots inside
-the 900-second run. The reserve is sized by the maximum, not the forecast: 51
+The recovery window reserves 500 seconds, 102 reads and 51 delete slots inside an
+1100-second run. The reserve is sized by the maximum, not the forecast: 51
 deletes for every document the worst outcome creates, and two reads per owned
 resource for an ownership read and an absence proof. The validator enforces
 both, and enforces that the hard ceiling clears the maximum cost rather than the
 forecast.
-It opens on any probe that reaches an observation failure, an uncertain Commit or
-an interrupted run. Its authority is read-only unless the same run holds a
-conditional-creation proof and a matching version-bound ownership read. It exits
-when all 51 owned resources return a typed `NOT_FOUND`. On exhaustion the run
-stops, records the remaining resources as unresolved and escalates to the owner;
-it never widens scope and never retries a Commit.
+
+The seconds come from the shared Gate's own formula rather than from judgement.
+`shared_gate.create` charges each slot its request time plus an interval with a
+floor of 0.25 seconds, refuses a wall above 1200 seconds, and refuses a recovery
+reservation that cannot pay for its slots. At three seconds a small request:
+
+| Phase | Slots | Reserved |
+| --- | ---: | ---: |
+| observation, small reads | 102 | 331.50 s |
+| observation, boundary Commits | 3 | 180.75 s |
+| recovery | 153 | 497.25 s |
+| **total** | **258** | **1009.50 s** |
+
+So the recovery reserve is 500 against 497.25 needed, and the wall is 1100
+against 1009.50, inside the Gate's 1200 cap. The earlier published pair, 300 and
+900, could not carry this: 300 seconds admits at most 1.71 seconds a recovery
+slot, and at two seconds the recovery phase alone needs 344.25. That figure was
+never stated in the artifact, which is how the published windows and the
+runner's reservation came to disagree. The arithmetic is now computed in
+`budget.schedulingReservation` and the validator refuses a window that cannot
+pay for its own schedule.
+
+Three seconds is roughly an order of magnitude over a few-hundred-millisecond
+round trip, which is the shape a bound should have. It is also the per-request
+timeout for a small read or delete, so a slot cannot outrun its own reservation;
+a reservation nothing enforces is a plan, not a bound. The boundary Commits keep
+the 60-second transport deadline.
+
+The window opens on any probe that reaches an observation failure, an uncertain
+Commit or an interrupted run. Its authority is read-only unless the same run
+holds a conditional-creation proof and a matching version-bound ownership read.
+It exits when all 51 owned resources return a typed `NOT_FOUND`. On exhaustion
+the run stops, records the remaining resources as unresolved and escalates to
+the owner; it never widens scope and never retries a Commit.
 
 ## Owner preconditions
 

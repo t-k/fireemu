@@ -31,6 +31,7 @@ for entry in (str(HERE), str(HERE.parent), str(ROOT / "tools/compat-inventory"))
 from request_bytes_campaign import (
     BASELINE_COMPARISON_FIELDS,
     LOCAL_EXPECTATION,
+    SMALL_REQUEST_SECONDS,
     campaign_digest,
     compile_request_bytes_campaign,
     validate_request_bytes_campaign,
@@ -563,16 +564,23 @@ def _executor(origin: str, plan: dict[str, Any]):
     caps = _commit_request_caps(plan)
 
     def execute(operation: dict[str, Any]) -> dict[str, Any]:
+        # Run under the policy the budget publishes: a small read or delete gets
+        # the reserved small-request figure, so a local run demonstrates that
+        # the reservation is generous rather than merely asserted. The local
+        # transport caps everything at its own 12 seconds, which is well above
+        # a loopback Commit.
         if operation.get("kind") == "conditional-create-commit":
             limit = caps[operation["probe"]]
+            timeout = 12.0
         else:
             limit = 1
+            timeout = SMALL_REQUEST_SECONDS
         return request(
             origin,
             operation,
             request_byte_limit=limit,
             response_byte_limit=RESPONSE_BYTES,
-            timeout=12.0,
+            timeout=timeout,
         )
 
     return execute

@@ -111,6 +111,20 @@ REFUSAL_EXPECTATION: dict[str, Any] = {
     },
 }
 
+#: The shared Gate's own contract, from `shared_gate.create`. It charges every
+#: slot `requestSeconds + intervalSeconds`, refuses an interval below the floor
+#: and refuses a wall above the cap. The campaign's windows have to close under
+#: that arithmetic, so it is computed here rather than assumed compatible.
+GATE_INTERVAL_FLOOR_SECONDS = 0.25
+GATE_WALL_CAP_SECONDS = 1200
+
+#: What one small read or delete may reserve, and time out at. The reservation
+#: is only a plan unless the request is also bounded by it, so this is both.
+#: Three seconds is roughly an order of magnitude over a few-hundred-millisecond
+#: round trip, which is the shape a bound should have.
+SMALL_REQUEST_SECONDS = 3.0
+
+
 #: The fields that make up a refusal shape. A classification claiming the shape
 #: matched must compare every one of them; comparing a subset while saying
 #: "status, code and message" is a false report, not a shortcut.
@@ -328,6 +342,37 @@ def _cost(accounting: dict[str, int]) -> dict[str, Any]:
     }
 
 
+def _scheduling_reservation() -> dict[str, Any]:
+    """Close the campaign's wall-clock arithmetic under the Gate's own formula.
+
+    Recovery is the binding phase: it is the largest block of small requests and
+    its failure mode, stopping part way through cleanup, is the worst one. The
+    numbers below are what the Gate will charge, not an estimate of what the run
+    will take.
+    """
+    probes = len(REQUEST_TARGETS)
+    recovery_slots = probes * DOCUMENT_COUNT * 3
+    observation_small = probes * (DOCUMENT_COUNT * 2)
+    per_small = SMALL_REQUEST_SECONDS + GATE_INTERVAL_FLOOR_SECONDS
+    per_commit = TRANSPORT_TIMEOUT_SECONDS + GATE_INTERVAL_FLOOR_SECONDS
+    recovery_seconds = recovery_slots * per_small
+    observation_seconds = observation_small * per_small + probes * per_commit
+    return {
+        "intervalSeconds": GATE_INTERVAL_FLOOR_SECONDS,
+        "smallRequestSeconds": SMALL_REQUEST_SECONDS,
+        "boundaryCommitSeconds": TRANSPORT_TIMEOUT_SECONDS,
+        "recoverySlots": recovery_slots,
+        "observationSmallSlots": observation_small,
+        "observationCommitSlots": probes,
+        "recoverySeconds": round(recovery_seconds, 3),
+        "observationSeconds": round(observation_seconds, 3),
+        "totalSeconds": round(recovery_seconds + observation_seconds, 3),
+        "gateWallCapSeconds": GATE_WALL_CAP_SECONDS,
+        "basis": "shared_gate.create charges each slot requestSeconds plus intervalSeconds, refuses an interval below 0.25 and a wall above 1200, and refuses a recovery reservation below the recovery slots' cost.",
+        "enforcement": "smallRequestSeconds is also the per-request timeout for a small read or delete, so a slot cannot outrun its own reservation; the boundary Commits keep the 60-second transport deadline.",
+    }
+
+
 def _budget(accounting: dict[str, int]) -> dict[str, Any]:
     # Permission and reservation are sized by the maximum, never by the
     # forecast. Budgeting the expected outcome would make the campaign unable
@@ -351,9 +396,11 @@ def _budget(accounting: dict[str, int]) -> dict[str, Any]:
         "maxRequestBytes": max(REQUEST_TARGETS),
         "maxResponseBytes": 2 * 1024 * 1024,
         "perRequestTimeoutSeconds": TRANSPORT_TIMEOUT_SECONDS,
-        "maxDurationSeconds": 900,
+        "smallRequestTimeoutSeconds": SMALL_REQUEST_SECONDS,
+        "maxDurationSeconds": 1100,
+        "schedulingReservation": _scheduling_reservation(),
         "recoveryWindow": {
-            "reserveSeconds": 300,
+            "reserveSeconds": 500,
             "reserveReads": len(REQUEST_TARGETS) * DOCUMENT_COUNT * 2,
             "reserveDeletes": len(REQUEST_TARGETS) * DOCUMENT_COUNT,
             "trigger": "any probe that reaches an observation failure, an uncertain Commit or an interrupted run",
@@ -829,6 +876,37 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
             raise ValueError(f"recovery window is missing {key}")
     if window["reserveSeconds"] >= budget.get("maxDurationSeconds", 0):
         raise ValueError("the recovery reserve must fit inside the run duration")
+
+    # The wall-clock arithmetic has to close under the shared Gate's own
+    # formula. This is where the published windows and the runner's reservation
+    # previously drifted: a 300-second reserve admitted at most 1.71 seconds a
+    # recovery slot, which nothing in the artifact said.
+    reservation = budget.get("schedulingReservation")
+    if reservation != _scheduling_reservation():
+        raise ValueError("the scheduling reservation drifted from the Gate's formula")
+    if reservation["intervalSeconds"] < GATE_INTERVAL_FLOOR_SECONDS:
+        raise ValueError("the interval is below the Gate's floor")
+    if reservation["recoverySlots"] != len(REQUEST_TARGETS) * DOCUMENT_COUNT * 3:
+        raise ValueError("the recovery slot count drifted from the schedule")
+    if window["reserveSeconds"] < reservation["recoverySeconds"]:
+        raise ValueError(
+            "the recovery reserve cannot pay for its own slots at the reserved rate"
+        )
+    if reservation["totalSeconds"] > budget["maxDurationSeconds"]:
+        raise ValueError("the reserved schedule does not fit the published wall")
+    if budget["maxDurationSeconds"] > GATE_WALL_CAP_SECONDS:
+        raise ValueError("the wall exceeds the shared Gate's cap")
+    if (
+        reservation["observationSeconds"]
+        > budget["maxDurationSeconds"] - window["reserveSeconds"]
+    ):
+        raise ValueError("observation does not fit outside the recovery reserve")
+    # A reservation nothing enforces is a wish. The small-request timeout has to
+    # be the reserved figure, and within what the transport will accept.
+    if budget.get("smallRequestTimeoutSeconds") != reservation["smallRequestSeconds"]:
+        raise ValueError("a small slot's timeout must equal its reservation")
+    if budget["smallRequestTimeoutSeconds"] > TRANSPORT_TIMEOUT_SECONDS:
+        raise ValueError("the small-request timeout exceeds the transport ceiling")
     # The reserve exists for the worst legitimate outcome, so it is sized by the
     # maximum. Checking it against the forecast let reserveDeletes 34 stand
     # beside maxDeletes 51.

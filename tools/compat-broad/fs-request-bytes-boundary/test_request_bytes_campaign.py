@@ -670,3 +670,100 @@ def test_validator_rejects_a_reserve_or_ceiling_sized_by_the_forecast(
     mutate(mutated)
     with pytest.raises((ValueError, TypeError, KeyError)):
         validate_request_bytes_campaign(mutated)
+
+
+# --- The wall-clock arithmetic closes under the shared Gate's formula ---------
+
+
+def test_the_reservation_matches_the_gate_formula(campaign: dict) -> None:
+    """shared_gate.create charges each slot its request time plus the interval."""
+    reservation = campaign["budget"]["schedulingReservation"]
+    interval = reservation["intervalSeconds"]
+    small = reservation["smallRequestSeconds"]
+    assert interval == 0.25
+    assert reservation["recoverySlots"] == 3 * DOCUMENT_COUNT * 3
+    assert reservation["recoverySeconds"] == pytest.approx(
+        reservation["recoverySlots"] * (small + interval)
+    )
+    assert reservation["observationSeconds"] == pytest.approx(
+        reservation["observationSmallSlots"] * (small + interval)
+        + reservation["observationCommitSlots"]
+        * (reservation["boundaryCommitSeconds"] + interval)
+    )
+    assert reservation["totalSeconds"] == pytest.approx(
+        reservation["recoverySeconds"] + reservation["observationSeconds"]
+    )
+
+
+def test_the_published_windows_pay_for_the_reservation(campaign: dict) -> None:
+    budget = campaign["budget"]
+    reservation = budget["schedulingReservation"]
+    window = budget["recoveryWindow"]
+    assert window["reserveSeconds"] >= reservation["recoverySeconds"]
+    assert reservation["totalSeconds"] <= budget["maxDurationSeconds"]
+    assert budget["maxDurationSeconds"] <= reservation["gateWallCapSeconds"]
+    assert (
+        reservation["observationSeconds"]
+        <= budget["maxDurationSeconds"] - window["reserveSeconds"]
+    )
+
+
+def test_a_small_slot_cannot_outrun_its_own_reservation(campaign: dict) -> None:
+    """A reservation nothing enforces is a wish."""
+    budget = campaign["budget"]
+    assert (
+        budget["smallRequestTimeoutSeconds"]
+        == budget["schedulingReservation"]["smallRequestSeconds"]
+    )
+    assert budget["smallRequestTimeoutSeconds"] <= budget["perRequestTimeoutSeconds"]
+
+
+def test_a_small_slot_reserves_far_more_than_a_round_trip(campaign: dict) -> None:
+    """The bound should be about an order of magnitude over an HTTPS round trip."""
+    assert campaign["budget"]["schedulingReservation"]["smallRequestSeconds"] >= 3.0
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(
+            lambda c: c["budget"]["recoveryWindow"].update(reserveSeconds=300),
+            id="the-old-reserve-cannot-pay-for-its-slots",
+        ),
+        pytest.param(
+            lambda c: c["budget"].update(maxDurationSeconds=900),
+            id="the-old-wall-does-not-fit-the-schedule",
+        ),
+        pytest.param(
+            lambda c: c["budget"].update(maxDurationSeconds=1300),
+            id="wall-above-the-gate-cap",
+        ),
+        pytest.param(
+            lambda c: c["budget"].update(smallRequestTimeoutSeconds=60.0),
+            id="timeout-does-not-enforce-the-reservation",
+        ),
+        pytest.param(
+            lambda c: c["budget"]["schedulingReservation"].update(intervalSeconds=0.0),
+            id="interval-below-the-gate-floor",
+        ),
+        pytest.param(
+            lambda c: c["budget"]["schedulingReservation"].update(recoverySlots=51),
+            id="recovery-slot-count-drift",
+        ),
+        pytest.param(
+            lambda c: c["budget"]["schedulingReservation"].update(recoverySeconds=1.0),
+            id="reservation-arithmetic-faked",
+        ),
+        pytest.param(
+            lambda c: c["budget"].pop("schedulingReservation"),
+            id="reservation-not-published",
+        ),
+    ],
+)
+def test_validator_rejects_windows_that_cannot_pay_for_the_schedule(
+    campaign: dict, mutate
+) -> None:
+    mutated = copy.deepcopy(campaign)
+    mutate(mutated)
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        validate_request_bytes_campaign(mutated)

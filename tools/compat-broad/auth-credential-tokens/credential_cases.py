@@ -28,6 +28,30 @@ SAME_SECOND_CASE_ID = "revocation-same-second-session"
 #: same side; two sides agreeing on the wrong answer place no boundary at all.
 CONTROL_OUTCOMES = ("accepted", "refused")
 
+#: The HTTP status Identity Toolkit and the secure-token service give a credential they
+#: reject on its own terms. A 401 or 403 is the caller not being allowed to ask, a 429 is
+#: the service declining to answer and a 5xx is the service failing; none of them says
+#: anything about the session presented.
+REVOCATION_REFUSAL_STATUS = 400
+
+#: Per operation, the error codes that prove the presented session is no longer honoured.
+#: Identity Toolkit answers `accounts:lookup` and `projects.createSessionCookie` with
+#: TOKEN_EXPIRED when the token's `auth_time` precedes the account's `validSince`, and
+#: with USER_DISABLED when the account itself was disabled; the secure-token endpoint
+#: answers a refresh the same way. Both mean the credential was refused, which is what
+#: places a boundary.
+#:
+#: Everything else is refused for a different reason and places nothing: INVALID_ID_TOKEN
+#: and INVALID_REFRESH_TOKEN say the token was never valid, USER_NOT_FOUND says the run
+#: lost the account it owned, and any other refusal is about the caller or the service.
+#: Such a response is still recorded and compared as data; it simply cannot be read as an
+#: expiry. An operation absent from this map places no boundary at all.
+REVOCATION_REFUSAL_CODES = {
+    "secure-token.refresh": ("TOKEN_EXPIRED", "USER_DISABLED"),
+    "identity.accounts-lookup": ("TOKEN_EXPIRED", "USER_DISABLED"),
+    "identity.create-session-cookie": ("TOKEN_EXPIRED", "USER_DISABLED"),
+}
+
 #: The vocabulary a receipt may use to describe an accepted response. Each name is a
 #: decidable check over decoded non-secret claim shapes, never over token bytes.
 ASSERTION_NAMES = (
@@ -313,6 +337,11 @@ def observation_cases() -> list[dict[str, Any]]:
             inputs={"developerClaimName": "role", "accountOnlyClaimName": "tier"},
         ),
     ]
+
+
+def revocation_refusal_codes(operation: str) -> tuple[str, ...]:
+    """The refusals that prove an expiry for one operation; empty when none is documented."""
+    return REVOCATION_REFUSAL_CODES.get(operation, ())
 
 
 def case_by_id(case_id: str) -> dict[str, Any]:

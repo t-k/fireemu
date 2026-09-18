@@ -91,6 +91,8 @@ def test_failure_rehearsal_covers_the_unpinnable_boundary() -> None:
         "cleanup-refused",
         "process-killed",
         "boundary-unpinned",
+        "deadline-exceeded",
+        "boundary-control-unrelated",
     }
     assert any("EXPECTED_NONDETERMINISM" in line for line in rehearsal)
 

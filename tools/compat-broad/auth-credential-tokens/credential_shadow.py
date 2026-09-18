@@ -31,12 +31,14 @@ from credential_collector import (
     BudgetExceeded,
     build_receipt,
     charge_elapsed,
+    check_deadline,
     claim_shape,
     enter_recovery,
     mark_deleted,
     new_budget,
     new_tracker,
     owned_email,
+    remaining_seconds,
     reserve_request,
     subjects_match,
     track_account,
@@ -74,9 +76,9 @@ def unsigned_jwt(payload: dict[str, Any]) -> str:
 
 
 def _send_over_http(
-    base: str, path: str, body: dict[str, Any], owner: bool
+    base: str, path: str, body: dict[str, Any], owner: bool, timeout: float
 ) -> tuple[int, bytes]:
-    """Perform one request against the owned local daemon."""
+    """Perform one request against the owned local daemon, waiting no longer than told."""
     request = urllib.request.Request(
         f"{base}{path}",
         data=json.dumps(body).encode(),
@@ -87,9 +89,7 @@ def _send_over_http(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(
-            request, timeout=REQUEST_TIMEOUT_SECONDS
-        ) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, response.read()
     except urllib.error.HTTPError as error:
         return error.code, error.read()
@@ -107,16 +107,19 @@ def post(
     """POST JSON to the owned local daemon and return the status and parsed body.
 
     The budget is reserved before anything is sent, so an exhausted bound costs nothing.
-    The wall time is charged afterwards and never raises: by then the response exists,
-    and discarding it could lose an account this run just created.
+    The transport waits no longer than the phase has left, because a request started just
+    inside the deadline must not be what carries the run past it. The wall time is
+    charged afterwards and never raises: by then the response exists, and discarding it
+    could lose an account this run just created.
     """
     host = base.split("//", 1)[-1].split(":")[0]
     if host not in LOOPBACK_HOSTS:
         raise ShadowError(f"refusing a non-loopback target: {host}")
-    reserve_request(budget)
     started = time.monotonic()
+    allowance = reserve_request(budget, started)
+    timeout = min(REQUEST_TIMEOUT_SECONDS, allowance)
     try:
-        status, raw = (sender or _send_over_http)(base, path, body, owner)
+        status, raw = (sender or _send_over_http)(base, path, body, owner, timeout)
     finally:
         charge_elapsed(budget, time.monotonic() - started)
     try:
@@ -240,13 +243,18 @@ def _row(
     }
 
 
-def _rest(seconds: float) -> None:
-    """Wait for real time to pass, named so a test can drive a run without waiting."""
-    time.sleep(max(0.0, seconds))
+def _rest(budget: dict[str, Any], seconds: float) -> None:
+    """Wait for real time to pass, named so a test can drive a run without waiting.
+
+    Waiting spends the campaign's time exactly as a request does, so the wait stops at
+    the phase's deadline and a wait that reaches it opens no further observation.
+    """
+    time.sleep(max(0.0, min(seconds, remaining_seconds(budget, time.monotonic()))))
+    check_deadline(budget, time.monotonic())
 
 
-def _sleep_to_next_second() -> None:
-    _rest(1.05 - (time.time() % 1))
+def _sleep_to_next_second(budget: dict[str, Any]) -> None:
+    _rest(budget, 1.05 - (time.time() % 1))
 
 
 def run_cases(
@@ -299,7 +307,7 @@ def run_cases(
     # --- refresh -------------------------------------------------------------
     first = signup(0)
     base_shape = claim_shape(first["idToken"])
-    _rest(2)
+    _rest(budget, 2)
     status, body = send(
         budget,
         secure,
@@ -332,7 +340,7 @@ def run_cases(
             "refreshed": refreshed["times"] if refreshed else None,
         },
     )
-    _rest(1)
+    _rest(budget, 1)
     status, body = send(
         budget,
         secure,
@@ -399,8 +407,8 @@ def run_cases(
     # Pin the boundary from server-reported values: sign in, read the token's own
     # auth_time back, set validSince to exactly that whole second and confirm the
     # readback. Without all three the row is not a boundary observation.
-    _rest(2)
-    _sleep_to_next_second()
+    _rest(budget, 2)
+    _sleep_to_next_second(budget)
     boundary = signin(revoked_email)
     boundary_shape = claim_shape(boundary["idToken"])
     boundary_second = boundary_shape["times"]["auth_time"]
@@ -426,7 +434,7 @@ def run_cases(
         boundarySeconds={"authTime": boundary_second, "validSince": stored},
     )
 
-    _rest(2)
+    _rest(budget, 2)
     later = signin(revoked_email)
     status, body = lookup(later["idToken"])
     rows["revocation-newer-session-accepted"] = _row(
@@ -599,7 +607,7 @@ def run_cases(
         },
         owner=True,
     )
-    _rest(1)
+    _rest(budget, 1)
     status, body = send(
         budget,
         secure,
@@ -699,17 +707,19 @@ STOP_CONDITIONS = (
 )
 
 
-def shadow_budget() -> dict[str, Any]:
+def shadow_budget(now: float | None = None) -> dict[str, Any]:
     """The local run's budget, bound to the campaign's declared request and time bounds.
 
     The cost ceiling is zero because a loopback run spends nothing. The request and
     wall-clock bounds come from the manifest so the executed instance cannot exercise a
-    looser bound than the campaign declares.
+    looser bound than the campaign declares. `now` is the monotonic reading the campaign
+    starts at; a caller driving a run on its own clock passes that clock's reading.
     """
     return new_budget(
         max_requests=BUDGET["maxRequests"],
         max_wall_seconds=BUDGET["maxWallSeconds"],
         max_cost_usd=0.0,
+        started_monotonic=time.monotonic() if now is None else now,
         recovery_requests=BUDGET["recoveryRequests"],
         recovery_wall_seconds=BUDGET["recoveryWallSeconds"],
     )
@@ -795,7 +805,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         # Cleanup runs on the reserve held back from the total, so a run that stopped on
         # an exhausted bound can still delete every account it created.
-        enter_recovery(budget)
+        enter_recovery(budget, time.monotonic())
         try:
             problems = cleanup(base, budget, tracker)
         except STOP_CONDITIONS as error:

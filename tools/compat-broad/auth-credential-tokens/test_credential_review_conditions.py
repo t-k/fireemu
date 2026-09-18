@@ -1,9 +1,11 @@
-"""Conditions from the independent review of this lane, with post-fix expectations.
+"""Conditions from the independent reviews of this lane, with post-fix expectations.
 
-The reviewer ran seventeen conditions against these modules as they stood at `07c9dac08`
-and recorded what each one did. Eleven recorded a defect and six were controls. All
-seventeen are reproduced here: the eleven state what the fixed code must do instead, and
-the six state what must not have changed.
+The first review ran seventeen conditions against these modules as they stood at
+`07c9dac08` and recorded what each one did. Eleven recorded a defect and six were
+controls. A second review at `9b01f635c` ran twenty-two, of which eight were new: six
+recorded a further defect and two were controls. All twenty-five are reproduced here: the
+ones that recorded a defect state what the fixed code must do instead, and the controls
+state what must not have changed.
 
 The harness intercepts `urllib.request.urlopen` and substitutes a deterministic clock, so
 the real transport, claim decoder, assertions, cleanup and receipt assembly run while no
@@ -54,11 +56,19 @@ FIXTURE_LATENCY_SECONDS = 0.01
 # --- a deterministic clock and an in-memory Identity service --------------------
 
 
-def _clock() -> SimpleNamespace:
-    """Stand in for the `time` module so a run takes no real time."""
-    state = {"now": 1_800_000_000.0}
+def _clock(stall_seconds: float = 0.0) -> SimpleNamespace:
+    """Stand in for the `time` module so a run takes no real time.
+
+    `stall_seconds` is the reviewer's stall: the first wait of a second or more also
+    advances the clock by that much, which is the machine pausing under the run rather
+    than a request taking longer. Nothing charges it to a request duration.
+    """
+    state = {"now": 1_800_000_000.0, "stalled": False}
 
     def sleep(seconds: float) -> None:
+        if stall_seconds and seconds >= 1 and not state["stalled"]:
+            state["stalled"] = True
+            state["now"] += stall_seconds
         state["now"] += seconds
 
     return SimpleNamespace(
@@ -220,15 +230,27 @@ def _driven(service, clock):
         yield
 
 
-def _full_run(cookie_subject="same"):
-    """The reviewer's cookie condition: collect, clean up and assemble the record."""
-    clock = _clock()
+def _full_run(cookie_subject="same", clock=None):
+    """The reviewer's condition: collect, clean up and assemble the record.
+
+    This mirrors `main`, including the handoff into the reserve and a cleanup that is
+    recorded rather than raised, so a run stopped by a deadline is driven the way a real
+    one would be.
+    """
+    clock = clock or _clock()
+    started = clock.monotonic()
     service = _service(clock, cookie_subject=cookie_subject)
     tracker = new_tracker("a" * 32)
-    budget = shadow.shadow_budget()
+    budget = shadow.shadow_budget(now=clock.monotonic())
     with _driven(service, clock):
         rows, failure = shadow.collect("http://127.0.0.1:8123", budget, tracker)
-        problems = shadow.cleanup("http://127.0.0.1:8123", budget, tracker)
+        enter_recovery(budget, clock.monotonic())
+        try:
+            problems = shadow.cleanup("http://127.0.0.1:8123", budget, tracker)
+        except shadow.STOP_CONDITIONS as error:
+            problems = [f"cleanup: {type(error).__name__}"]
+    if problems:
+        failure = failure or "cleanup: " + "; ".join(problems)
     record, exit_code = shadow.finish_record(
         rows=rows,
         tracker=tracker,
@@ -244,6 +266,8 @@ def _full_run(cookie_subject="same"):
         exitCode=exit_code,
         problems=problems,
         tracker=tracker,
+        clock=clock,
+        elapsedSeconds=clock.monotonic() - started,
     )
 
 
@@ -337,7 +361,7 @@ def _receipt(side: str, rows: list[dict]) -> dict:
         side=side,
         rows=rows,
         tracker=_cleaned_tracker(),
-        budget=shadow.shadow_budget(),
+        budget=shadow.shadow_budget(now=0.0),
         source_binding=dict(SOURCE_BINDING),
         production_executed=side == "production",
     )
@@ -419,6 +443,60 @@ def test_review_an_unpinned_boundary_row_stays_expected_nondeterminism() -> None
     assert _boundary_class(local, production) == "EXPECTED_NONDETERMINISM"
 
 
+# --- the five refusal-control conditions ----------------------------------------
+
+
+def _classification(local_rows: list[dict], production_rows: list[dict], case_id: str):
+    report = compare(
+        _receipt("local", local_rows), _receipt("production", production_rows)
+    )
+    row = next(row for row in report["rows"] if row["caseId"] == case_id)
+    return row["classification"], report["summary"]
+
+
+@pytest.mark.parametrize(
+    ("condition", "status", "code"),
+    [
+        ("wrong-refusal-control-400", 400, "INVALID_ID_TOKEN"),
+        ("wrong-refusal-control-401", 401, "UNAUTHENTICATED"),
+        ("wrong-refusal-control-403", 403, "PERMISSION_DENIED"),
+        ("wrong-refusal-control-429", 429, "TOO_MANY_ATTEMPTS_TRY_LATER"),
+        ("wrong-refusal-control-503", 503, "UNAVAILABLE"),
+    ],
+)
+def test_review_a_refusal_that_is_not_an_expiry_no_longer_places_the_boundary(
+    condition: str, status: int, code: str
+) -> None:
+    """Four of these reached MATCH on all seventeen rows before the fix.
+
+    The older session was refused, but for being an invalid token, an unauthenticated
+    caller, a denied permission or one call too many. None of those says the session was
+    too old, so the same-second row above them rests on nothing. The 503 was already
+    rejected and is the control that the status test was never the whole test.
+    """
+    local, production = _review_rows(), _review_rows()
+    for rows in (local, production):
+        _find(rows, BELOW_CONTROL).update(status=status, errorCode=code, assertions={})
+    classification, summary = _classification(local, production, SAME_SECOND_CASE_ID)
+    assert classification == "INDETERMINATE"
+    # The refusal is still compared as data: both sides said the same thing, so the
+    # control row itself agrees. It simply places no boundary.
+    assert _classification(local, production, BELOW_CONTROL)[0] == "MATCH"
+    assert summary["indeterminate"] == 1
+    assert summary["different"] == 0
+
+
+@pytest.mark.parametrize("code", ["TOKEN_EXPIRED", "USER_DISABLED"])
+def test_review_the_documented_expiry_refusals_still_place_the_boundary(
+    code: str,
+) -> None:
+    """Control: what the lookup endpoint answers a revoked session is what counts."""
+    local, production = _review_rows(), _review_rows()
+    for rows in (local, production):
+        _find(rows, BELOW_CONTROL).update(status=400, errorCode=code, assertions={})
+    assert _classification(local, production, SAME_SECOND_CASE_ID)[0] == "MATCH"
+
+
 # --- the three recording conditions ---------------------------------------------
 
 
@@ -427,7 +505,7 @@ def _partial_record() -> dict:
     record, exit_code = shadow.finish_record(
         rows={first["caseId"]: first},
         tracker=_cleaned_tracker(),
-        budget=shadow.shadow_budget(),
+        budget=shadow.shadow_budget(now=0.0),
         failure="BudgetExceeded: fixture stop",
         shutdown={"processStopped": True, "remainingChildren": 0},
         source_binding=dict(SOURCE_BINDING),
@@ -467,6 +545,126 @@ def test_review_an_incomplete_recording_flag_still_refuses_the_pair() -> None:
 # --- the four budget conditions -------------------------------------------------
 
 
+# --- the three deadline conditions ----------------------------------------------
+
+
+def test_review_an_unstalled_run_still_records_every_case() -> None:
+    """Control `wall-budget-normal`: an ordinary run is untouched by the deadlines."""
+    run = _full_run()
+    assert run.exitCode == 0
+    assert run.problems == []
+    assert run.record["receipt"]["recordingComplete"] is True
+    assert run.record["receipt"]["deadlines"]["exceeded"] == {}
+    assert run.record["receipt"]["budget"]["requests"] == 33
+    assert run.service.accounts == {}
+
+
+def test_review_a_stall_between_requests_now_stops_the_run() -> None:
+    """`wall-budget-600-second-pause`: 609 s of clock, 0.33 s charged, 33 requests.
+
+    The stall is time nobody spent inside a request, so no sum of request durations can
+    see it. The absolute deadline does: the wait ends past it, the run opens no further
+    observation, and the record says which phase stopped and when.
+    """
+    run = _full_run(clock=_clock(stall_seconds=600))
+    assert run.elapsedSeconds > 600
+    exceeded = run.record["receipt"]["deadlines"]["exceeded"]
+    assert set(exceeded) == {"run"}
+    assert exceeded["run"]["limitSeconds"] == 540
+    assert exceeded["run"]["elapsedSeconds"] > 540
+    assert run.record["failure"] is not None
+    assert run.record["receipt"]["recordingComplete"] is False
+    assert run.record["receipt"]["budget"]["requests"] < 33
+    assert run.exitCode == 1
+    # The account created before the stall is never dropped, and the cleanup window the
+    # campaign declares is granted whatever the observation phase did with its own.
+    assert len(run.tracker["accounts"]) == 1
+    assert run.problems == []
+    assert run.record["receipt"]["cleanup"]["remainingAccounts"] == 0
+    assert run.record["receipt"]["cleanup"]["cleanupComplete"] is True
+    assert run.service.accounts == {}
+
+
+def test_review_a_run_stopped_past_the_nominal_total_still_cleans_up() -> None:
+    """A stall to just past 600 s: the tail is a window of its own, not what is left.
+
+    This is the condition the earlier cap got wrong. The run stops at its observation
+    deadline, and cleanup then gets the whole sixty seconds the manifest declares,
+    measured from the moment it starts.
+    """
+    run = _full_run(clock=_clock(stall_seconds=599))
+    deadlines = run.record["receipt"]["deadlines"]
+    assert 600 < run.elapsedSeconds < 660
+    assert set(deadlines["exceeded"]) == {"run"}
+    assert deadlines["recoverySeconds"] == 60
+    entered = deadlines["recoveryEnteredSeconds"]
+    assert entered > 600
+    assert deadlines["recoveryDeadlineSeconds"] == entered + 60
+    # Cleanup ran inside its own window and deleted everything the run created.
+    assert run.problems == []
+    assert run.record["receipt"]["cleanup"]["cleanupComplete"] is True
+    assert run.service.accounts == {}
+
+
+def test_review_a_stall_that_still_fits_the_observation_window_completes() -> None:
+    """Control: the deadline stops a run that overran, not one that merely waited."""
+    run = _full_run(clock=_clock(stall_seconds=300))
+    assert 300 < run.elapsedSeconds < 540
+    assert run.exitCode == 0
+    assert run.record["receipt"]["deadlines"]["exceeded"] == {}
+    assert run.record["receipt"]["recordingComplete"] is True
+    assert run.service.accounts == {}
+
+
+def test_review_a_request_at_the_deadline_is_capped_to_the_time_that_remains() -> None:
+    """`recovery-over-total-wall`: a fixed five-second timeout with 0.01 s left.
+
+    The request returned 200 and the counter reached 603.99 against a 600 s bound. The
+    transport now waits only what the phase has left, and the next request is refused
+    rather than sent, while the answer already received is still returned. The phase here
+    is the cleanup window, which is bounded in its turn.
+    """
+    clock = _clock()
+    budget = shadow.shadow_budget(now=clock.monotonic())
+    clock.state["now"] += budget["maxWallSeconds"] - budget["recoveryWallSeconds"]
+    enter_recovery(budget, clock.monotonic())
+    clock.state["now"] += budget["recoveryWallSeconds"] - 0.01
+    timeouts: list[float] = []
+
+    def sender(base, path, body, owner, timeout):
+        timeouts.append(timeout)
+        clock.sleep(4.0)
+        return 200, b"{}"
+
+    with patch.object(shadow, "time", clock):
+        status, _ = shadow.post(
+            budget,
+            "http://127.0.0.1:8123",
+            "/accounts:lookup",
+            {},
+            owner=True,
+            sender=sender,
+        )
+    assert status == 200
+    assert timeouts == [pytest.approx(0.01)]
+    assert timeouts[0] < shadow.REQUEST_TIMEOUT_SECONDS
+
+    with (
+        patch.object(shadow, "time", clock),
+        pytest.raises(BudgetExceeded, match="deadline"),
+    ):
+        shadow.post(
+            budget,
+            "http://127.0.0.1:8123",
+            "/accounts:lookup",
+            {},
+            owner=True,
+            sender=sender,
+        )
+    assert len(timeouts) == 1
+    assert budget["deadlineExceeded"]["recovery"]["limitSeconds"] == 600
+
+
 def _owned_accounts(service, tracker, count: int) -> None:
     for index in range(count):
         uid = f"u{index}"
@@ -484,7 +682,7 @@ def test_review_a_budget_with_room_still_creates_tracks_and_cleans_up() -> None:
     clock = _clock()
     service = _service(clock)
     tracker = new_tracker("b" * 32)
-    budget = shadow.shadow_budget()
+    budget = shadow.shadow_budget(now=clock.monotonic())
     with _driven(service, clock):
         _, body = shadow.post(
             budget,
@@ -518,7 +716,7 @@ def test_review_an_exhausted_budget_now_sends_nothing(
     clock = _clock()
     service = _service(clock)
     tracker = new_tracker("b" * 32)
-    budget = shadow.shadow_budget()
+    budget = shadow.shadow_budget(now=clock.monotonic())
     budget[spend] = (
         budget["maxRequests"]
         if spend == "requests"
@@ -544,7 +742,7 @@ def test_review_cleanup_on_a_spent_total_deletes_nothing_rather_than_some() -> N
     clock = _clock()
     service = _service(clock)
     tracker = new_tracker("c" * 32)
-    budget = shadow.shadow_budget()
+    budget = shadow.shadow_budget(now=clock.monotonic())
     _owned_accounts(service, tracker, 3)
     budget["requests"] = budget["maxRequests"]
     with _driven(service, clock), pytest.raises(BudgetExceeded):
@@ -567,7 +765,7 @@ def test_review_cleanup_completes_on_the_reserve_after_the_run_allowance_is_spen
     clock = _clock()
     service = _service(clock)
     tracker = new_tracker("c" * 32)
-    budget = shadow.shadow_budget()
+    budget = shadow.shadow_budget(now=clock.monotonic())
     _owned_accounts(service, tracker, 3)
     budget["requests"] = request_allowance(budget)
     with _driven(service, clock), pytest.raises(BudgetExceeded):
@@ -576,7 +774,7 @@ def test_review_cleanup_completes_on_the_reserve_after_the_run_allowance_is_spen
         )
     assert service.sent == []
 
-    enter_recovery(budget)
+    enter_recovery(budget, clock.monotonic())
     with _driven(service, clock):
         problems = shadow.cleanup("http://127.0.0.1:8123", budget, tracker)
     assert problems == []

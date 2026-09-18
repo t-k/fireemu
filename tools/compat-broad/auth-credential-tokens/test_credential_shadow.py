@@ -37,12 +37,20 @@ from credential_comparator import compare
 from credential_plan import BUDGET
 
 
+def _budget(
+    max_requests: int, max_wall_seconds: float, max_cost_usd: float, **fields
+) -> dict:
+    """A budget anchored where a run anchors its own: the monotonic reading now."""
+    fields.setdefault("started_monotonic", time.monotonic())
+    return new_budget(max_requests, max_wall_seconds, max_cost_usd, **fields)
+
+
 def _classes(report: dict) -> dict:
     return {row["caseId"]: row["classification"] for row in report["rows"]}
 
 
 def test_transport_refuses_a_target_outside_the_loopback_interface() -> None:
-    budget = new_budget(10, 10, 0.0)
+    budget = _budget(10, 10, 0.0)
     for base in (
         "http://identitytoolkit.googleapis.com",
         "http://10.0.0.1:9099",
@@ -183,9 +191,7 @@ def _stub(responses: list[tuple[int, dict]]):
 def test_an_absent_account_needs_a_200_lookup_with_an_empty_result() -> None:
     tracker = _tracker_with("uid-1", owned_email(_tracker_with("uid-1", None), 0))
     poster = _stub([(200, {}), (200, {}), (200, {})])
-    shadow.cleanup(
-        "http://127.0.0.1:1", new_budget(30, 60, 0.0), tracker, poster=poster
-    )
+    shadow.cleanup("http://127.0.0.1:1", _budget(30, 60, 0.0), tracker, poster=poster)
     report = cleanup_report(tracker)
     assert report["cleanupComplete"] is True
     assert report["remainingAccounts"] == 0
@@ -198,9 +204,7 @@ def test_a_refused_lookup_is_never_read_as_a_completed_cleanup(status: int) -> N
     # A refusal body carries no `users` member; inferring absence from that would
     # report a live account as deleted.
     poster = _stub([(200, {}), (status, {"error": {"message": "PERMISSION_DENIED"}})])
-    shadow.cleanup(
-        "http://127.0.0.1:1", new_budget(30, 60, 0.0), tracker, poster=poster
-    )
+    shadow.cleanup("http://127.0.0.1:1", _budget(30, 60, 0.0), tracker, poster=poster)
     report = cleanup_report(tracker)
     assert report["cleanupComplete"] is False
     assert report["remainingAccounts"] == 1
@@ -210,9 +214,7 @@ def test_a_refused_delete_is_never_read_as_a_completed_cleanup() -> None:
     email = owned_email(new_tracker("a" * 32), 0)
     tracker = _tracker_with("uid-1", email)
     poster = _stub([(403, {"error": {"message": "PERMISSION_DENIED"}}), (200, {})])
-    shadow.cleanup(
-        "http://127.0.0.1:1", new_budget(30, 60, 0.0), tracker, poster=poster
-    )
+    shadow.cleanup("http://127.0.0.1:1", _budget(30, 60, 0.0), tracker, poster=poster)
     assert cleanup_report(tracker)["cleanupComplete"] is False
 
 
@@ -220,18 +222,14 @@ def test_a_lookup_that_still_returns_the_account_is_not_absence() -> None:
     email = owned_email(new_tracker("a" * 32), 0)
     tracker = _tracker_with("uid-1", email)
     poster = _stub([(200, {}), (200, {"users": [{"localId": "uid-1"}]})])
-    shadow.cleanup(
-        "http://127.0.0.1:1", new_budget(30, 60, 0.0), tracker, poster=poster
-    )
+    shadow.cleanup("http://127.0.0.1:1", _budget(30, 60, 0.0), tracker, poster=poster)
     assert cleanup_report(tracker)["cleanupComplete"] is False
 
 
 def test_an_addressless_account_skips_the_address_lookup_entirely() -> None:
     tracker = _tracker_with("uid-custom", None)
     poster = _stub([(200, {}), (200, {})])
-    shadow.cleanup(
-        "http://127.0.0.1:1", new_budget(30, 60, 0.0), tracker, poster=poster
-    )
+    shadow.cleanup("http://127.0.0.1:1", _budget(30, 60, 0.0), tracker, poster=poster)
     paths = [path for path, _ in poster.calls]
     assert paths == ["/accounts:delete", "/accounts:lookup"]
     assert cleanup_report(tracker)["cleanupComplete"] is True
@@ -242,15 +240,13 @@ def test_a_cleanup_failure_keeps_the_receipt_uncomparable() -> None:
     email = owned_email(new_tracker("a" * 32), 0)
     tracker = _tracker_with("uid-1", email)
     poster = _stub([(200, {}), (429, {"error": {"message": "RESOURCE_EXHAUSTED"}})])
-    shadow.cleanup(
-        "http://127.0.0.1:1", new_budget(30, 60, 0.0), tracker, poster=poster
-    )
+    shadow.cleanup("http://127.0.0.1:1", _budget(30, 60, 0.0), tracker, poster=poster)
     rows = [
         {"caseId": case["id"], "status": 200, "errorCode": None, "assertions": {}}
         for case in observation_cases()
     ]
     receipt = build_receipt(
-        side="local", rows=rows, tracker=tracker, budget=new_budget(60, 600, 0.05)
+        side="local", rows=rows, tracker=tracker, budget=_budget(60, 600, 0.05)
     )
     # The rows were observed, so the recording is complete; the cleanup is not, and that
     # alone is enough to keep the receipt out of a comparison.
@@ -276,7 +272,7 @@ def test_budget_exhaustion_keeps_the_rows_already_observed() -> None:
 
     rows, failure = shadow.collect(
         "http://127.0.0.1:1",
-        new_budget(1, 1, 0.0),
+        _budget(1, 1, 0.0),
         new_tracker("a" * 32),
         runner=runner,
     )
@@ -300,7 +296,7 @@ def test_every_stop_condition_is_recorded_rather_than_raised(error: Exception) -
 
     rows, failure = shadow.collect(
         "http://127.0.0.1:1",
-        new_budget(5, 5, 0.0),
+        _budget(5, 5, 0.0),
         new_tracker("a" * 32),
         runner=runner,
     )
@@ -319,7 +315,7 @@ def test_a_stopped_run_writes_a_record_with_the_missing_cases_marked_not_run(
     record, exit_code = shadow.finish_record(
         rows=partial,
         tracker=tracker,
-        budget=new_budget(60, 600, 0.0),
+        budget=_budget(60, 600, 0.0),
         failure="BudgetExceeded: request budget exhausted",
         shutdown={"exitCode": 0, "processStopped": True, "remainingChildren": 0},
         source_binding={"commit": None, "artifactSha256": "c" * 64},
@@ -373,6 +369,7 @@ def _service(*, cookie_subject: str | None = None) -> dict:
         "accounts": {},
         "sessions": {},
         "sent": [],
+        "timeouts": [],
     }
 
     def issue(session: dict) -> str:
@@ -518,8 +515,11 @@ def _service(*, cookie_subject: str | None = None) -> dict:
             return create_session_cookie(body)
         raise AssertionError(f"the service was asked for an unknown path: {path!r}")
 
-    def sender(base: str, path: str, body: dict, owner: bool) -> tuple[int, bytes]:
+    def sender(
+        base: str, path: str, body: dict, owner: bool, timeout: float
+    ) -> tuple[int, bytes]:
         state["sent"].append(path or "token")
+        state["timeouts"].append(timeout)
         status, parsed = respond(base, path, body)
         return status, json.dumps(parsed).encode()
 
@@ -540,7 +540,7 @@ def _poster(service: dict):
 
 @pytest.fixture
 def _instant_rest(monkeypatch) -> None:
-    monkeypatch.setattr(shadow, "_rest", lambda seconds: None)
+    monkeypatch.setattr(shadow, "_rest", lambda budget, seconds: None)
 
 
 # --- the budget is reserved before a request is sent, never charged after ------
@@ -548,7 +548,7 @@ def _instant_rest(monkeypatch) -> None:
 
 def test_no_request_is_sent_once_the_request_budget_is_exhausted() -> None:
     service = _service()
-    budget = new_budget(2, 60, 0.0)
+    budget = _budget(2, 60, 0.0)
     for _ in range(2):
         shadow.post(
             budget,
@@ -573,7 +573,7 @@ def test_a_response_already_received_is_never_discarded_by_the_wall_clock_bound(
     monkeypatch,
 ) -> None:
     service = _service()
-    budget = new_budget(10, 2, 0.0)
+    budget = _budget(10, 2, 0.0)
     ticks = iter([0.0, 5.0, 5.0])
     monkeypatch.setattr(shadow.time, "monotonic", lambda: next(ticks))
     # The request was sent and paid for, so its result must reach the caller.
@@ -603,7 +603,7 @@ def test_an_account_created_at_the_budget_edge_is_still_tracked_and_cleaned_up(
     service = _service()
     tracker = new_tracker("b" * 32)
     # One request for the whole run, three held back so cleanup can still complete.
-    budget = new_budget(4, 600, 0.0, recovery_requests=3, recovery_wall_seconds=60)
+    budget = _budget(4, 600, 0.0, recovery_requests=3, recovery_wall_seconds=60)
     rows, failure = shadow.collect(
         "http://127.0.0.1:1",
         budget,
@@ -619,7 +619,7 @@ def test_an_account_created_at_the_budget_edge_is_still_tracked_and_cleaned_up(
     assert rows == {}
     assert len(service["sent"]) == 1
 
-    enter_recovery(budget)
+    enter_recovery(budget, time.monotonic())
     assert (
         shadow.cleanup("http://127.0.0.1:1", budget, tracker, poster=_poster(service))
         == []
@@ -629,16 +629,16 @@ def test_an_account_created_at_the_budget_edge_is_still_tracked_and_cleaned_up(
 
 
 def test_the_run_phase_cannot_spend_the_reserve_cleanup_depends_on() -> None:
-    budget = new_budget(10, 60, 0.0, recovery_requests=4, recovery_wall_seconds=10)
+    budget = _budget(10, 60, 0.0, recovery_requests=4, recovery_wall_seconds=10)
     for _ in range(6):
-        reserve_request(budget)
+        reserve_request(budget, time.monotonic())
     with pytest.raises(BudgetExceeded, match="request"):
-        reserve_request(budget)
-    enter_recovery(budget)
+        reserve_request(budget, time.monotonic())
+    enter_recovery(budget, time.monotonic())
     for _ in range(4):
-        reserve_request(budget)
+        reserve_request(budget, time.monotonic())
     with pytest.raises(BudgetExceeded, match="request"):
-        reserve_request(budget)
+        reserve_request(budget, time.monotonic())
 
 
 def test_the_shadow_holds_back_the_recovery_reserve_the_manifest_declares() -> None:
@@ -691,7 +691,7 @@ def test_the_subject_check_publishes_only_the_boolean() -> None:
 
 
 def _run(service: dict, tracker: dict) -> dict:
-    budget = new_budget(
+    budget = _budget(
         BUDGET["maxRequests"],
         BUDGET["maxWallSeconds"],
         0.0,
@@ -756,7 +756,7 @@ def _stopped_local_receipt() -> dict:
     record, exit_code = shadow.finish_record(
         rows={first["id"]: _expected_row(first)},
         tracker=_cleaned_tracker(),
-        budget=new_budget(60, 600, 0.0),
+        budget=_budget(60, 600, 0.0),
         failure="BudgetExceeded: request budget exhausted",
         shutdown={"exitCode": 0, "processStopped": True, "remainingChildren": 0},
         source_binding={"commit": "a" * 40, "artifactSha256": "c" * 64},
@@ -770,7 +770,7 @@ def _full_production_receipt() -> dict:
         side="production",
         rows=[_expected_row(case, trust_root="signed") for case in observation_cases()],
         tracker=_cleaned_tracker(),
-        budget=new_budget(60, 600, 0.05),
+        budget=_budget(60, 600, 0.05),
         source_binding={"commit": "a" * 40, "artifactSha256": "d" * 64},
         production_executed=True,
     )
@@ -813,7 +813,7 @@ def test_a_complete_recording_with_a_failed_cleanup_is_refused_for_the_cleanup()
         side="local",
         rows=[_expected_row(case) for case in observation_cases()],
         tracker=tracker,
-        budget=new_budget(60, 600, 0.0),
+        budget=_budget(60, 600, 0.0),
         source_binding={"commit": "a" * 40, "artifactSha256": "c" * 64},
     )
     assert local["recordingComplete"] is True

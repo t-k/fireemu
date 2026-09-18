@@ -305,10 +305,11 @@ fn admin_database_json(
         "appEngineIntegrationMode": "DISABLED",
         "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
         "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-        "databaseEdition": match edition {
-            fireemu_core_types::edition::FirestoreEdition::Standard => "STANDARD",
-            fireemu_core_types::edition::FirestoreEdition::Enterprise => "ENTERPRISE",
-        },
+        // The API spells the edition in upper case; the configuration spells it in lower
+        // case. Only Standard reaches here today, because the route refuses every other
+        // edition above, so this maps whatever the configuration named rather than branching
+        // on an edition that cannot arrive.
+        "databaseEdition": edition.as_config_str().to_uppercase(),
         "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
         "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED"
     });

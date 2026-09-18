@@ -258,8 +258,9 @@ pub struct LocalBackend {
     declared_databases: RwLock<BTreeSet<String>>,
     /// Whether a data-plane request against a database nothing created materializes it (what
     /// the official Firestore emulator does, the `emulator` profile) or is refused with the
-    /// `NOT_FOUND` production answers until `databases.create` has run (the `strict`
-    /// profile's default).
+    /// `NOT_FOUND` production answers for a database `databases.create` was never called for
+    /// (the `strict` profile's default). There is no local counterpart of that method: a
+    /// database comes into being here through the configuration, an import or a restore.
     implicit_database_creation: bool,
     /// Allocates identities for database instances independently of delayed wipe notifications.
     database_incarnations: std::sync::atomic::AtomicU64,
@@ -1553,9 +1554,9 @@ impl LocalBackend {
     }
 
     /// Materializes an undeclared database on first touch the way the official Firestore
-    /// emulator does, instead of refusing it with the `NOT_FOUND` production answers until
-    /// `databases.create` has run. The `emulator` compatibility profile selects this; the
-    /// constructor's default is production's refusal.
+    /// emulator does, instead of refusing it with the `NOT_FOUND` production answers for a
+    /// database that was never created. The `emulator` compatibility profile selects this;
+    /// the constructor's default is production's refusal.
     #[must_use]
     pub const fn with_implicit_database_creation(mut self, implicit: bool) -> Self {
         self.implicit_database_creation = implicit;
@@ -2760,8 +2761,9 @@ impl LocalBackend {
     /// The handle of one database for a request that did not create it. Its entry is created
     /// on first touch only for a database that exists without one (`(default)`, or one the
     /// configuration declares), or when the profile materializes any database on first touch;
-    /// otherwise this is the `NOT_FOUND` production answers for a database `databases.create`
-    /// was never called for. The catalog lock is held only for this lookup.
+    /// otherwise this is the `NOT_FOUND` production answers for a database that was never
+    /// created. [`Self::ensure_database`] is the way a database comes into being locally. The
+    /// catalog lock is held only for this lookup.
     ///
     /// Operations through the returned handle take no session admission and are not
     /// coordinated with a reset beyond the handle's own detachment; request surfaces

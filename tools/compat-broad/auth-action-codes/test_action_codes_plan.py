@@ -23,7 +23,9 @@ NONCE = "0123456789abcdef" * 2
 
 def test_campaign_identity_matches_the_recorded_auth_backlog_entry() -> None:
     manifest = campaign_manifest(NONCE)
-    assert manifest["campaignId"] == CAMPAIGN_ID == "AUTH-ACTION-OOB-DELIVERY-BOUNDARY-01"
+    assert (
+        manifest["campaignId"] == CAMPAIGN_ID == "AUTH-ACTION-OOB-DELIVERY-BOUNDARY-01"
+    )
     assert manifest["contract"] == CONTRACT == "auth-action-codes-v1"
     assert manifest["productionExecutable"] is False
     assert manifest["productionExecuted"] is False
@@ -78,7 +80,10 @@ def test_matrix_covers_the_declared_finite_conditions() -> None:
     assert stages["reset-code-lookup"]["expectedLocal"]["status"] == 200
     assert stages["reset-consume"]["expectedLocal"]["status"] == 200
     assert stages["reset-reuse"]["expectedLocal"]["errorMessage"] == "INVALID_OOB_CODE"
-    assert stages["reset-wrong-code"]["expectedLocal"]["errorMessage"] == "INVALID_OOB_CODE"
+    assert (
+        stages["reset-wrong-code"]["expectedLocal"]["errorMessage"]
+        == "INVALID_OOB_CODE"
+    )
     assert stages["reset-weak-password"]["expectedLocal"]["status"] == 400
     assert stages["reset-weak-password-retry"]["expectedLocal"]["status"] == 200
     assert stages["reset-after-password-change"]["basis"] == "diagnostic"
@@ -86,17 +91,28 @@ def test_matrix_covers_the_declared_finite_conditions() -> None:
     assert stages["verify-apply"]["group"] == "verify-email"
     assert stages["email-link-signin"]["group"] == "email-link"
     assert stages["link-generate-unknown-email"]["group"] == "unknown-email"
-    controls = {stage["id"] for stage in manifest["stages"] if stage["basis"] == "control"}
-    assert {"reset-wrong-code", "verify-wrong-code", "email-link-mismatched-email"} <= controls
+    controls = {
+        stage["id"] for stage in manifest["stages"] if stage["basis"] == "control"
+    }
+    assert {
+        "reset-wrong-code",
+        "verify-wrong-code",
+        "email-link-mismatched-email",
+    } <= controls
 
 
 def test_expiry_is_declared_unobserved_instead_of_waited_for() -> None:
     manifest = campaign_manifest(NONCE)
     assert "expiry" not in {stage["group"] for stage in manifest["stages"]}
-    expiry = [row for row in manifest["unobservedConditions"] if row["id"] == "code-expiry"]
+    expiry = [
+        row for row in manifest["unobservedConditions"] if row["id"] == "code-expiry"
+    ]
     assert len(expiry) == 1
     assert expiry[0]["reason"].startswith("The published lifetime")
-    assert expiry[0]["wouldRequire"] == "an out-of-band wait outside this campaign envelope"
+    assert (
+        expiry[0]["wouldRequire"]
+        == "an out-of-band wait outside this campaign envelope"
+    )
 
 
 def test_out_of_scope_cases_are_named_and_never_admitted() -> None:
@@ -132,8 +148,12 @@ def test_budget_is_bounded_and_far_below_one_dollar() -> None:
 def test_recovery_deletes_and_then_proves_absence_of_every_owned_account() -> None:
     manifest = campaign_manifest(NONCE)
     owned = set(manifest["ownedAccounts"])
-    deleted = [row for row in manifest["recovery"] if row["operationType"] == "auth-delete"]
-    absence = [row for row in manifest["recovery"] if row["operationType"] == "auth-lookup"]
+    deleted = [
+        row for row in manifest["recovery"] if row["operationType"] == "auth-delete"
+    ]
+    absence = [
+        row for row in manifest["recovery"] if row["operationType"] == "auth-lookup"
+    ]
     assert {row["account"] for row in deleted} == owned
     assert {row["account"] for row in absence} == owned
     assert all(row["routeClass"] == "admin" for row in manifest["recovery"])

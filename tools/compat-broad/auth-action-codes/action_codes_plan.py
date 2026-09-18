@@ -327,7 +327,9 @@ def campaign_stages() -> list[dict[str, Any]]:
             route="end-user",
             method="update",
             body={"oobCode": "$binding:verifyCode"},
-            expected=_ok(["email", "emailVerified", "kind", "localId"], emailVerified=True),
+            expected=_ok(
+                ["email", "emailVerified", "kind", "localId"], emailVerified=True
+            ),
         ),
         _stage(
             "verify-reuse",
@@ -552,7 +554,10 @@ def campaign_cases() -> list[dict[str, Any]]:
     ]
     outside = [
         ("action-code/expiry", "Expiry needs an out-of-band wait; declared unobserved"),
-        ("action-code/delivered-email", "Delivery is suppressed by the link-return path"),
+        (
+            "action-code/delivered-email",
+            "Delivery is suppressed by the link-return path",
+        ),
         ("action-code/tenant", "Tenant routing is a separate campaign"),
         ("action-code/blocking-function", "Blocking functions are a separate campaign"),
         (
@@ -666,7 +671,10 @@ def validate_proposal(value: Any) -> bool:
     plan = value["planTemplate"]
     if plan["productionExecutable"] or value["productionExecuted"]:
         raise ValueError("production entry is closed")
-    if any(case.get("admission") == "accepted" and "expiry" in case["id"] for case in value["cases"]):
+    if any(
+        case.get("admission") == "accepted" and "expiry" in case["id"]
+        for case in value["cases"]
+    ):
         raise ValueError("unbounded case admitted")
     return True
 

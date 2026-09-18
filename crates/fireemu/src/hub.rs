@@ -232,14 +232,66 @@ impl Drop for Locator {
     }
 }
 
-/// The `pid` a locator file records, if it parses.
-fn existing_pid(path: &std::path::Path) -> Option<u32> {
-    if !std::fs::symlink_metadata(path).ok()?.file_type().is_file() {
-        return None;
+/// The largest locator this process reads. The document is a version, one origin and a
+/// capability; anything larger is another program's file or a decoy left in the shared
+/// temp directory.
+pub const MAX_LOCATOR_BYTES: u64 = 64 * 1024;
+
+/// Reads a Hub locator from the shared temp directory.
+///
+/// The file names an origin the CLI connects to and carries this run's control token, and the
+/// temp directory is writable by every user on the host, so the document is only believed when
+/// it is a regular file (never a symlink) that this user owns, that no one else can write, and
+/// that is small. A refusal names the file, never its contents.
+pub fn read_locator(path: &std::path::Path) -> Result<Value, String> {
+    let refusal = |what: &str| format!("{}: {what}", path.display());
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| refusal(&e.to_string()))?;
+    if !metadata.file_type().is_file() {
+        return Err(refusal("is not a regular file"));
     }
-    let text = std::fs::read_to_string(path).ok()?;
-    let json: Value = serde_json::from_str(&text).ok()?;
-    json.get("pid")
+    if metadata.len() > MAX_LOCATOR_BYTES {
+        return Err(refusal("is larger than a locator document"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.uid() != rustix::process::geteuid().as_raw() {
+            return Err(refusal("belongs to another user"));
+        }
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return Err(refusal("is writable by another user"));
+        }
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| refusal(&e.to_string()))?;
+    serde_json::from_str(&text).map_err(|e| refusal(&format!("does not parse: {e}")))
+}
+
+/// The authority (`host:port`) of a locator origin, refused unless it is loopback.
+///
+/// The locator comes from a directory anyone can write, and reaching the origin it names means
+/// presenting the control token, so an origin that is not loopback is never connected to.
+pub fn loopback_authority(origin: &str) -> Result<String, String> {
+    let rest = origin
+        .strip_prefix("http://")
+        .ok_or_else(|| format!("{origin}: an origin must start with http://"))?;
+    let authority = rest.split('/').next().unwrap_or("");
+    let (host, port) = authority
+        .rsplit_once(':')
+        .ok_or_else(|| format!("{origin}: the origin must name a port"))?;
+    if !matches!(host, "127.0.0.1" | "localhost" | "[::1]") {
+        return Err(format!("{origin}: only a loopback origin is contacted"));
+    }
+    port.parse::<u16>()
+        .map_err(|_| format!("{origin}: the port is not a number"))?;
+    Ok(authority.to_owned())
+}
+
+/// The `pid` a locator file records, if this process may believe the file.
+fn existing_pid(path: &std::path::Path) -> Option<u32> {
+    read_locator(path)
+        .ok()?
+        .get("pid")
         .and_then(Value::as_u64)
         .and_then(|p| u32::try_from(p).ok())
 }
@@ -711,6 +763,87 @@ mod tests {
             Locator::path_for("").file_name().unwrap(),
             "hub-demo-no-project.json"
         );
+    }
+
+    /// LOC-1: the locator lives in a directory every user on the host can write, so a file
+    /// that is not this user's small regular file is refused by name, and an origin that is
+    /// not loopback is never contacted with the control token.
+    #[test]
+    fn a_locator_is_believed_only_when_it_is_this_users_small_regular_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "fireemu-locator-test-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).expect("the scratch directory is created");
+
+        let good = dir.join("hub-demo-app.json");
+        std::fs::write(
+            &good,
+            br#"{"pid": 4321, "origins": ["http://127.0.0.1:4400"]}"#,
+        )
+        .expect("the locator is written");
+        assert_eq!(read_locator(&good).expect("a locator is read")["pid"], 4321);
+        assert_eq!(existing_pid(&good), Some(4321));
+
+        // A file larger than a locator document is refused without being read.
+        let huge = dir.join("hub-huge.json");
+        std::fs::write(
+            &huge,
+            vec![b' '; usize::try_from(MAX_LOCATOR_BYTES + 1).expect("the cap fits in memory")],
+        )
+        .expect("the large file is written");
+        let refusal = read_locator(&huge).expect_err("an oversized locator is refused");
+        assert!(
+            refusal.contains("larger than a locator document"),
+            "{refusal}"
+        );
+        assert_eq!(existing_pid(&huge), None);
+
+        // A symlink, even one pointing at a locator this user owns, is refused.
+        #[cfg(unix)]
+        {
+            let link = dir.join("hub-link.json");
+            std::os::unix::fs::symlink(&good, &link).expect("the symlink is created");
+            let refusal = read_locator(&link).expect_err("a symlinked locator is refused");
+            assert!(refusal.contains("is not a regular file"), "{refusal}");
+            assert_eq!(existing_pid(&link), None);
+        }
+
+        // A file this user does not own, or that another user can write, is refused.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let shared = dir.join("hub-shared.json");
+            std::fs::write(&shared, br#"{"pid": 4321}"#).expect("the shared file is written");
+            std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o666))
+                .expect("the mode is set");
+            let refusal = read_locator(&shared).expect_err("a writable locator is refused");
+            assert!(refusal.contains("writable"), "{refusal}");
+        }
+
+        // The origin a locator names is contacted only when it is loopback.
+        assert_eq!(
+            loopback_authority("http://127.0.0.1:4400").as_deref(),
+            Ok("127.0.0.1:4400")
+        );
+        assert_eq!(
+            loopback_authority("http://localhost:4400").as_deref(),
+            Ok("localhost:4400")
+        );
+        for routable in [
+            "http://attacker.example:80",
+            "http://10.0.0.1:4400",
+            "https://127.0.0.1:4400",
+            "http://127.0.0.1",
+        ] {
+            assert!(
+                loopback_authority(routable).is_err(),
+                "{routable} must not be contacted"
+            );
+        }
+
+        std::fs::remove_dir_all(&dir).expect("the scratch directory is removed");
     }
 
     #[cfg(unix)]

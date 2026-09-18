@@ -920,3 +920,33 @@ def test_the_gate_really_refuses_a_wall_above_our_cap(campaign: dict, tmp_path) 
         tmp_path / "at-cap",
         _minimal_allocation(campaign, wallSeconds=GATE_WALL_CAP_SECONDS),
     )
+
+
+def test_the_campaign_interval_is_a_choice_not_the_gate_floor(campaign: dict) -> None:
+    """Two different quantities that happen to be equal today.
+
+    The floor is the least the Gate permits anyone; the interval is what this
+    schedule declares. If they were the same name, a change to the Gate's
+    minimum would silently change this campaign's pacing.
+    """
+    from request_bytes_campaign import (
+        CAMPAIGN_INTERVAL_SECONDS,
+        GATE_INTERVAL_FLOOR_SECONDS,
+    )
+
+    declared = campaign["budget"]["schedulingReservation"]["intervalSeconds"]
+    assert declared == CAMPAIGN_INTERVAL_SECONDS
+    # The floor's only job here is to say the choice is legal.
+    assert declared >= GATE_INTERVAL_FLOOR_SECONDS
+
+
+def test_the_wall_cap_is_a_ceiling_not_this_campaigns_wall(campaign: dict) -> None:
+    from request_bytes_campaign import GATE_WALL_CAP_SECONDS
+
+    wall = campaign["budget"]["maxDurationSeconds"]
+    assert wall < GATE_WALL_CAP_SECONDS, (
+        "the campaign wall is its own figure, checked against the Gate's ceiling"
+    )
+    assert campaign["budget"]["schedulingReservation"]["gateWallCapSeconds"] == (
+        GATE_WALL_CAP_SECONDS
+    )

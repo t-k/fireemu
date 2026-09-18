@@ -244,17 +244,32 @@ profiles. That superseded baseline stays on the record, and the shadow keeps its
 classification as a **regression** outcome: a strict-profile build answering 413
 has lost the implemented shape.
 
+<!-- BEGIN generated evidence citation -->
+
 The recorded run is published as
 `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, at source
-`b97551a2d62be5f9fcf0b9096ed15fd3eeb0230c`, artifact SHA-256
-`b664566f5353c3255564ee445e5cedeac44e55d5816a2c120b0aa9af83a0c133`, nonce `85429056052e4baaa77110b7a5552f85`, with supervisor status
-`completed`, `recordingComplete` and `stateValidation` true, the owned process
-stopped and all listeners closed. It completed 105 observation rows and 153
-recovery rows, sent 241 of the 258 bounded requests, and proved all 51 owned
-resources absent afterwards. The 17 unsent requests are the over probe's delete
-slots, consumed as zero-wire skips because a refused Commit grants no cleanup
-ownership. That is also the post-state evidence: the refused request wrote
-nothing.
+`ed66c955607f2ef4d0e4da761eddd085f1f1622d`, artifact SHA-256
+`215a22fd1b1661b180bb19dd5e40ade2ac9f00fc931d1cf09ee57975031f0ccf`, nonce `c792a24e2eec4fb7aa7a13ead9fbe356`.
+
+| Property | Value |
+| --- | --- |
+| Supervisor status | `completed` |
+| Classification | `local-shape-matches-production-expectation` |
+| Recording complete | true |
+| State validation | true |
+| Observation rows | 105 |
+| Recovery rows | 153 |
+| Requests sent | 241 |
+| Every owned resource absent | true |
+| Small-request median, p99 | 0.0013 s, 0.0128 s |
+| Boundary Commit median | 0.0282 s |
+
+The timings are a loopback floor, not a production estimate; see the
+section above. This block is generated from the record, so it cannot
+describe a run that is not the published one. Regenerate it with the
+command in the lane README.
+
+<!-- END generated evidence citation -->
 
 The record carries the three probe outcomes, the refusal bytes verbatim, the
 collector summary, the runtime binding and the run's own nonce, so a reader can
@@ -313,8 +328,8 @@ zero-wire skips are excluded, since they send nothing.
 
 **The published figures are a floor and not an estimate, and the record says so
 beside them.** A local shadow runs over loopback against an emulator on the same
-machine. In the published run the small-request median is 0.0013 s with a p99 of 0.0136 s, and the
-three boundary Commits ran 0.0312 s at the median. That is service time with no
+machine. In the published run the small-request median is 0.0013 s with a p99 of 0.0141 s, and the
+three boundary Commits ran 0.0287 s at the median. That is service time with no
 network in it at all; a production small read is an HTTPS round trip and
 will be one to two orders of magnitude higher. Citing the local p99 as a
 production per-slot figure would be wrong by that margin. It bounds the

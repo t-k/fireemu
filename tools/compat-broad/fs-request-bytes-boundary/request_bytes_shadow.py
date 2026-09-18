@@ -285,6 +285,92 @@ def validate_slot_timings(timings: Any, dispatched: int) -> None:
         raise ValueError("the timings do not cover every dispatched request")
 
 
+#: The preparation document's evidence citation is generated from the published
+#: record between these markers. Everything outside them is hand-written.
+CITATION_BEGIN = "<!-- BEGIN generated evidence citation -->"
+CITATION_END = "<!-- END generated evidence citation -->"
+
+#: Named in the pairing test's failure message and in the lane README.
+REBIND_COMMAND = (
+    "uv run --offline --project tools/compat-inventory --locked python "
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_shadow.py "
+    "--output <fresh-directory> --publish"
+)
+
+PREPARATION_DOC = "docs/compatibility/fs-request-bytes-campaign-preparation.md"
+PUBLISHED_RECORD = "spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json"
+
+
+def citation_block(record: dict[str, Any]) -> str:
+    """Render the document's evidence citation from the published record.
+
+    The document and the record drifted once, because a rebind updated the
+    record and left the prose describing a run that was no longer published.
+    Generating this block from the record makes that impossible rather than
+    merely detectable.
+    """
+    observation = record["observation"]
+    timings = record["slotTimings"]["classes"]
+    small, commit = timings["smallRequest"], timings["boundaryCommit"]
+    bound = record["cases"] and observation["requestCount"]
+    return "\n".join(
+        [
+            CITATION_BEGIN,
+            "",
+            "The recorded run is published as",
+            f"`{PUBLISHED_RECORD}`, at source",
+            f"`{record['runtime']['sourceCommit']}`, artifact SHA-256",
+            f"`{record['artifactSha256']}`, nonce `{record['nonce']}`.",
+            "",
+            "| Property | Value |",
+            "| --- | --- |",
+            f"| Supervisor status | `{'completed' if record['complete'] else 'incomplete'}` |",
+            f"| Classification | `{record['shadow']['classification']}` |",
+            f"| Recording complete | {str(record['recordingComplete']).lower()} |",
+            f"| State validation | {str(record['stateValidation']).lower()} |",
+            f"| Observation rows | {observation['rowCount']} |",
+            f"| Recovery rows | {observation['recoveryRowCount']} |",
+            f"| Requests sent | {bound} |",
+            f"| Every owned resource absent | {str(observation['resourceAbsence']).lower()} |",
+            f"| Small-request median, p99 | {small['medianSeconds']:.4f} s, {small['p99Seconds']:.4f} s |",
+            f"| Boundary Commit median | {commit['medianSeconds']:.4f} s |",
+            "",
+            "The timings are a loopback floor, not a production estimate; see the",
+            "section above. This block is generated from the record, so it cannot",
+            "describe a run that is not the published one. Regenerate it with the",
+            "command in the lane README.",
+            "",
+            CITATION_END,
+        ]
+    )
+
+
+def rewrite_citation(doc: str, record: dict[str, Any]) -> str:
+    """Replace the generated block, leaving the hand-written document alone."""
+    if CITATION_BEGIN not in doc or CITATION_END not in doc:
+        raise ValueError(
+            f"the preparation document has no citation markers; expected "
+            f"{CITATION_BEGIN} and {CITATION_END}"
+        )
+    head, rest = doc.split(CITATION_BEGIN, 1)
+    _generated, tail = rest.split(CITATION_END, 1)
+    return head + citation_block(record) + tail
+
+
+def publish_run(output: Path, root: Path | None = None) -> dict[str, Any]:
+    """Publish a completed run: the record, and the document's citation.
+
+    One command, because the two drifted apart when they were two.
+    """
+    root = Path(root) if root is not None else ROOT
+    record = json.loads((Path(output) / "local-shadow.json").read_bytes())
+    target = root / PUBLISHED_RECORD
+    target.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    doc = root / PREPARATION_DOC
+    doc.write_text(rewrite_citation(doc.read_text(), record))
+    return record
+
+
 def build_shadow_document(
     *,
     before: str,
@@ -784,6 +870,12 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--output", type=Path)
     mode.add_argument("--child", type=Path)
     parser.add_argument("--nonce")
+    parser.add_argument(
+        "--publish",
+        action="store_true",
+        help="after a completed run, publish the record and regenerate the "
+        "preparation document's evidence citation from it",
+    )
     args = parser.parse_args(argv)
     if args.child is not None:
         if not args.nonce:
@@ -791,8 +883,13 @@ def main(argv: list[str] | None = None) -> int:
         _child(args.child.resolve(), args.nonce)
         return 0
     report = run(args.output.resolve())
-    print(json.dumps({"status": report.get("status")}))
-    return 0 if report.get("status") == "completed" else 2
+    status = report.get("status")
+    published = False
+    if args.publish and status == "completed":
+        publish_run(args.output.resolve())
+        published = True
+    print(json.dumps({"status": status, "published": published}))
+    return 0 if status == "completed" else 2
 
 
 if __name__ == "__main__":

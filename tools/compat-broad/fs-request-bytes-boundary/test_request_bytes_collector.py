@@ -897,3 +897,66 @@ def test_a_short_message_is_carried_whole(tmp_path):
     assert refusal["messageTruncated"] is False
     assert refusal["message"] == EXPECTED_MESSAGE
     assert "messageExcerpt" not in refusal
+
+
+# --- The final result must be publishable whatever the remote answers ---------
+
+
+def test_the_publish_guard_names_the_field_that_grew():
+    """A future inline field must fail here, not as a lost run in production."""
+    import sys as _sys
+
+    _sys.path.insert(0, "tools/compat-broad/fs-request-bytes-boundary")
+    from request_bytes_collector import MAX_ROW_BYTES, _guard_publishable
+
+    _guard_publishable({"completed": True, "failures": []})
+    oversized = {
+        "completed": True,
+        "failures": [],
+        "overRefusal": {"message": "x" * (2 * MAX_ROW_BYTES)},
+    }
+    with pytest.raises(ValueError) as raised:
+        _guard_publishable(oversized)
+    message = str(raised.value)
+    assert "overRefusal" in message, "the guard must name the field that grew"
+    assert str(MAX_ROW_BYTES) in message
+    assert "bounded where it is written" in message
+
+
+def test_the_guard_runs_before_the_result_is_published(tmp_path, monkeypatch):
+    """The guard is on the path a real run takes, not only reachable directly."""
+    import sys as _sys
+
+    _sys.path.insert(0, "tools/compat-broad/fs-request-bytes-boundary")
+    import request_bytes_collector as collector
+    from request_bytes_run_fixture import run_collector, typed_400_with_message
+
+    seen = []
+    original = collector._guard_publishable
+
+    def spy(result):
+        seen.append(sorted(result))
+        return original(result)
+
+    monkeypatch.setattr(collector, "_guard_publishable", spy)
+    run_collector(tmp_path / "run", over=typed_400_with_message("short message"))
+    assert len(seen) == 1
+    assert "overRefusal" in seen[0]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param("x" * (128 * 1024), id="128-kib-ascii"),
+        pytest.param("\n" * (64 * 1024), id="64-kib-newlines"),
+    ],
+)
+def test_the_guard_never_fires_on_a_bounded_result(tmp_path, message):
+    """Every field copied from a response is bounded, so the guard is silent."""
+    import sys as _sys
+
+    _sys.path.insert(0, "tools/compat-broad/fs-request-bytes-boundary")
+    from request_bytes_run_fixture import run_collector, typed_400_with_message
+
+    result = run_collector(tmp_path / "run", over=typed_400_with_message(message))
+    assert result["completed"] is True

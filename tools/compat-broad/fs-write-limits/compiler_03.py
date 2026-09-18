@@ -68,6 +68,50 @@ def _catalog_limits() -> dict[str, int]:
     return declared
 
 
+def _catalog_entry(identifier: str) -> dict[str, Any]:
+    catalog = json.loads(_CATALOG.read_bytes())
+    return next(entry for entry in catalog["limits"] if entry["id"] == identifier)
+
+
+def catalog_status(identifier: str) -> dict[str, str]:
+    """What the catalog currently records for a limit, read rather than restated."""
+    entry = _catalog_entry(identifier)
+    return {
+        "catalogImplemented": entry["implemented"],
+        "catalogUnit": entry["unit"],
+        "catalogBoundary": entry["boundary"],
+    }
+
+
+def name_charge_floor(prefix_bytes: int, name_bytes: int) -> dict[str, int]:
+    """Smallest index-entry charges a document of this protocol name length can have.
+
+    `storage_name_bytes` reduces to 17 plus the relative path length, so it does
+    not depend on how the name is split into segments. The document and parent
+    name charge an entry carries is therefore smallest when the last collection
+    and document identifiers are as long as the identifier limit allows.
+    """
+    relative = name_bytes - prefix_bytes
+    longest_final_pair = 2 * COLLECTION_ID_MAX + 2
+    document = 17 + relative
+    parent = 17 + relative - longest_final_pair
+    if parent <= 17:
+        raise ValueError("no parent document remains at this name length")
+    smallest_sum = document + parent
+    return {
+        "smallestNameSum": smallest_sum,
+        # One-byte field name, then the cheapest indexed value there is.
+        "smallestIndexedFieldEntry": smallest_sum + 2 + 1 + 32,
+        # The ownership marker references the document itself, so its indexed
+        # value always sits at the truncation ceiling.
+        "smallestMarkerBearingEntry": smallest_sum
+        + len("_sharedOwner")
+        + 1
+        + INDEXED_VALUE_TRUNCATION
+        + 32,
+    }
+
+
 def resource_name_bytes(resource: str) -> int:
     """UTF-8 bytes of the full protocol resource name.
 
@@ -708,12 +752,14 @@ def _entries_case(root: str) -> dict[str, Any]:
     return {
         "id": "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
         "label": "index-entries",
+        "boundaryUnit": "automatic index entries per document",
         "emit": "create-pair",
         "boundary": [
             INDEX_ENTRIES_PER_DOCUMENT_MAX,
             INDEX_ENTRIES_PER_DOCUMENT_MAX + 2,
         ],
         "measure": "entries",
+        **catalog_status("FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT"),
         "elements": elements,
         **sides,
     }
@@ -755,12 +801,14 @@ def _entry_sum_case(root: str) -> dict[str, Any]:
         return {
             "id": "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
             "label": "index-entry-sum",
+            "boundaryUnit": "summed bytes of a document's index entries",
             "emit": "create-pair",
             "boundary": [
                 INDEX_ENTRY_SUM_PER_DOCUMENT_MAX,
                 index_usage(**_as_args(sides["refuse"]))["totalBytes"],
             ],
             "measure": "totalBytes",
+            **catalog_status("FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT"),
             "elements": elements,
             "fillerNameBytes": filler,
             **sides,
@@ -795,9 +843,11 @@ def _entry_bytes_case(root: str) -> dict[str, Any]:
     return {
         "id": "FS-LIMIT-INDEX-ENTRY-BYTES",
         "label": "index-entry-bytes",
+        "boundaryUnit": "bytes of one automatic index entry",
         "emit": "create-pair",
         "boundary": [INDEX_ENTRY_BYTES_MAX, INDEX_ENTRY_BYTES_MAX + 1],
         "measure": "maxEntryBytes",
+        **catalog_status("FS-LIMIT-INDEX-ENTRY-BYTES"),
         **sides,
     }
 
@@ -828,14 +878,11 @@ def _indexed_value_case(root: str) -> dict[str, Any]:
     return {
         "id": "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
         "label": "indexed-value",
+        "boundaryUnit": "logical bytes of the indexed value before truncation",
         "emit": "truncating-pair",
         "boundary": [INDEXED_VALUE_TRUNCATION, 2 * INDEXED_VALUE_TRUNCATION],
         "measure": "indexedValueBytes",
-        "catalogImplemented": "unsupported",
-        "pendingReason": (
-            "the catalog records this limit as unsupported, so the expectation is "
-            "the documented production behaviour rather than an observed local one"
-        ),
+        **catalog_status("FS-LIMIT-INDEXED-FIELD-VALUE-BYTES"),
         "chargedInFullWouldBe": name_sum
         + len(field)
         + 1
@@ -874,14 +921,11 @@ def _field_path_case(root: str) -> dict[str, Any]:
     return {
         "id": "FS-LIMIT-FIELD-PATH-BYTES",
         "label": "field-path",
+        "boundaryUnit": "utf8-bytes of the canonical field path",
         "emit": "mask-pair",
         "boundary": [FIELD_PATH_BYTES_MAX, FIELD_PATH_BYTES_MAX + 1],
         "measure": "canonicalPathBytes",
-        "catalogImplemented": "unsupported",
-        "pendingReason": (
-            "the catalog records this limit as unsupported, so the expectation is "
-            "the documented production behaviour rather than an observed local one"
-        ),
+        **catalog_status("FS-LIMIT-FIELD-PATH-BYTES"),
         **sides,
     }
 
@@ -909,11 +953,12 @@ def _field_value_case(root: str) -> dict[str, Any]:
         "emit": "refuse-only",
         "boundary": [FIELD_VALUE_BYTES_MAX, FIELD_VALUE_BYTES_MAX + 1],
         "measure": "payloadBytes",
-        "catalogImplemented": "unsupported",
-        "pendingReason": (
-            "the catalog records this limit as unsupported, so the expectation is "
-            "the documented production behaviour rather than an observed local one"
-        ),
+        # The catalog's unit field says logical bytes while its notes say a
+        # string or bytes payload is measured on its raw length. This case takes
+        # the notes, which are the half production was observed on; the two
+        # aggregate cases observe both readings.
+        "boundaryUnit": "raw payload bytes of one string or bytes value",
+        **catalog_status("FS-LIMIT-FIELD-VALUE-BYTES"),
         "acceptedSideUnreachable": (
             "an owned document at this value exceeds FS-LIMIT-DOCUMENT-BYTES"
         ),
@@ -976,8 +1021,13 @@ def _aggregate_cases(root: str) -> list[dict[str, Any]]:
                 "emit": "refuse-pair",
                 "boundary": [FIELD_VALUE_BYTES_MAX, FIELD_VALUE_BYTES_MAX + 1],
                 "measure": "aggregateBytes",
+                "boundaryUnit": (
+                    "raw payload bytes"
+                    if label == "agg-string"
+                    else "logical bytes of the aggregate value"
+                ),
                 "aggregateShape": "string" if label == "agg-string" else "nested-map",
-                "catalogImplemented": "unsupported",
+                **catalog_status("FS-LIMIT-FIELD-VALUE-BYTES"),
                 "entangledWith": ["FS-LIMIT-DOCUMENT-BYTES"],
                 "entanglementReason": (
                     "Both members exceed FS-LIMIT-DOCUMENT-BYTES, because the accepted "
@@ -1038,20 +1088,12 @@ def _implied_path_cases(root: str) -> list[dict[str, Any]]:
                 "emit": "create-pair",
                 "boundary": [FIELD_PATH_BYTES_MAX, FIELD_PATH_BYTES_MAX + 1],
                 "measure": "canonicalPathBytes",
+                "boundaryUnit": "utf8-bytes of the canonical field path",
                 "pathShape": shape,
-                "catalogImplemented": "unsupported",
-                "pendingReason": (
-                    "the catalog records this limit as unsupported, so the expectation "
-                    "is the documented production behaviour rather than an observed "
-                    "local one"
-                )
-                if shape == "array"
-                else None,
+                **catalog_status("FS-LIMIT-FIELD-PATH-BYTES"),
                 **sides,
             }
         )
-        if cases[-1]["pendingReason"] is None:
-            del cases[-1]["pendingReason"]
     return cases
 
 
@@ -1078,6 +1120,8 @@ def _document_name_case(root: str) -> dict[str, Any]:
     therefore marked pending: the shadow will show the index-entry refusal the
     exemption exists to remove.
     """
+    prefix_bytes = len(root.split("/documents/", 1)[0].encode()) + len("/documents/")
+    figures = name_charge_floor(prefix_bytes, DOCUMENT_NAME_MAX)
     accept = _padded_resource(root, "name-exact", DOCUMENT_NAME_MAX, EXEMPT_COLLECTION)
     refuse = _padded_resource(
         root, "name-over", DOCUMENT_NAME_MAX + 1, EXEMPT_COLLECTION
@@ -1085,9 +1129,12 @@ def _document_name_case(root: str) -> dict[str, Any]:
     return {
         "id": "FS-LIMIT-DOCUMENT-NAME-BYTES",
         "label": "document-name",
+        "boundaryUnit": "utf8-bytes of the protocol resource name",
         "emit": "create-pair",
         "boundary": [DOCUMENT_NAME_MAX, DOCUMENT_NAME_MAX + 1],
         "measure": "nameBytes",
+        **catalog_status("FS-LIMIT-DOCUMENT-NAME-BYTES"),
+        "derivedFigures": figures,
         "indexExemption": {
             "collectionGroup": EXEMPT_COLLECTION,
             "fieldPath": "*",
@@ -1129,9 +1176,11 @@ def _limit_specs(root: str, part: str = "A") -> list[dict[str, Any]]:
         {
             "id": "FS-LIMIT-COLLECTION-ID",
             "label": "collection-id",
+            "boundaryUnit": "utf8-bytes of the collection identifier",
             "emit": "create-pair",
             "boundary": [COLLECTION_ID_MAX, COLLECTION_ID_MAX + 1],
             "measure": "collectionIdBytes",
+            **catalog_status("FS-LIMIT-COLLECTION-ID"),
             "accept": _owned(
                 f"{root}/cid-exact/{'i' * COLLECTION_ID_MAX}/x",
                 _fields(f"{root}/cid-exact/{'i' * COLLECTION_ID_MAX}/x", 100),
@@ -1144,9 +1193,11 @@ def _limit_specs(root: str, part: str = "A") -> list[dict[str, Any]]:
         {
             "id": "FS-LIMIT-SUBCOLLECTION-DEPTH",
             "label": "subcollection-depth",
+            "boundaryUnit": "collection levels",
             "emit": "create-pair",
             "boundary": [SUBCOLLECTION_DEPTH_MAX, SUBCOLLECTION_DEPTH_MAX + 1],
             "measure": "depth",
+            **catalog_status("FS-LIMIT-SUBCOLLECTION-DEPTH"),
             "accept": _owned(
                 _depth_resource(root, "depth-exact", SUBCOLLECTION_DEPTH_MAX),
                 _fields(
@@ -1344,6 +1395,10 @@ def _case_index(limits: list[dict[str, Any]], part: str) -> list[dict[str, Any]]
         }
         for key in (
             "catalogImplemented",
+            "catalogUnit",
+            "catalogBoundary",
+            "derivedFigures",
+            "boundaryUnit",
             "acceptedSideUnreachable",
             "chargedInFullWouldBe",
             "pendingReason",

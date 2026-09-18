@@ -142,6 +142,16 @@ export const createDeps = (sdk, clients) => ({
   },
 });
 
+/** Digest of the runtime under test, so a receipt names the binary that produced it. */
+export const artifactDigest = absolutePath => {
+  if (!absolutePath) return null;
+  try {
+    return createHash('sha256').update(readFileSync(absolutePath)).digest('hex');
+  } catch {
+    return 'unreadable';
+  }
+};
+
 export const sourceDigests = (repoRoot, relativePaths) =>
   Object.fromEntries(
     relativePaths.map(relative => {
@@ -278,6 +288,12 @@ export const main = async ({ env = process.env, argv = process.argv } = {}) => {
       node: process.versions.node,
       sourceCommit: env.O6_LISTEN_SOURCE_COMMIT ?? null,
       firebaseSdk: env.O6_LISTEN_SDK_VERSION ?? null,
+      // The runtime under test. A shadow is only evidence about the binary it
+      // actually ran, so the receipt names that binary and the commit it was
+      // built from rather than trusting whatever was on the path.
+      fireemuBinary: env.O6_LISTEN_FIREEMU_BINARY ?? null,
+      fireemuBinaryDigest: artifactDigest(env.O6_LISTEN_FIREEMU_BINARY),
+      fireemuSourceCommit: env.O6_LISTEN_FIREEMU_COMMIT ?? null,
       projectId,
       nonceDigest: createHash('sha256').update(nonce).digest('hex'),
     },

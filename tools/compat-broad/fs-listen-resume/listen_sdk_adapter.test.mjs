@@ -9,6 +9,7 @@ import path from 'node:path';
 
 import {
   MODE_LOCAL,
+  artifactDigest,
   MODE_PRODUCTION,
   admitMode,
   createDeps,
@@ -118,4 +119,20 @@ test('the auth binding never returns the password it used', async () => {
   const result = await deps.auth.signIn('primary');
   assert.equal(result, undefined);
   assert.deepEqual(calls, [['signIn', 'o6@example.test']]);
+});
+
+test('the runtime artifact digest is computed from the binary, not declared', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'o6-artifact-'));
+  const file = path.join(dir, 'fireemu');
+  writeFileSync(file, 'not really a binary');
+  try {
+    const digest = artifactDigest(file);
+    assert.match(digest, /^[0-9a-f]{64}$/);
+    writeFileSync(file, 'a different binary');
+    assert.notEqual(artifactDigest(file), digest);
+  } finally {
+    unlinkSync(file);
+  }
+  assert.equal(artifactDigest(null), null);
+  assert.equal(artifactDigest(path.join(dir, 'absent')), 'unreadable');
 });

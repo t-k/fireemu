@@ -70,12 +70,17 @@ impl Storage {
     }
 }
 
-/// The complete global or target-based Storage Rules registry.
+/// The complete global or target-based Storage Rules registry (shared: one table serves
+/// every session, like the Firestore ruleset).
 pub struct StorageRules(pub Arc<fireemu_adapter_http::storage::StorageRulesRegistry>);
 
 impl SnapshotHook for StorageRules {
     fn name(&self) -> &'static str {
         "storage rules"
+    }
+
+    fn shared(&self) -> bool {
+        true
     }
 
     fn capture(&self, _: &Scope) -> Result<SnapshotPart, TransitionFailure> {
@@ -502,7 +507,7 @@ mod tests {
     //! registrations of the scope and then rotates its epoch, so no token issued against the
     //! replaced state survives it (specification section 14).
 
-    use super::{AppCheck, Rules, Scope, SnapshotHook};
+    use super::{AppCheck, Rules, Scope, SnapshotHook, StorageRules};
     use crate::sessions::tests::{admits_for, gate, token_for, APP_ID};
 
     use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
@@ -547,6 +552,60 @@ mod tests {
         assert_eq!(
             (analytics.source.as_deref(), analytics.generation()),
             (Some(ALLOW), 2)
+        );
+    }
+
+    /// SNAPSR-1 / SNAPSR-2: the Storage Rules registry is one process-wide table, so the hook
+    /// captures and restores all of it whatever the scope. Only the default session may carry
+    /// it, or a project session's restore would roll back the rules every other session is
+    /// authorizing against.
+    #[test]
+    fn the_storage_rules_registry_is_a_shared_part_of_the_default_session_only() {
+        const DENY: &str = "service firebase.storage { match /b/{bucket}/o { match /{p=**} { allow read: if false; } } }";
+        const ALLOW: &str = "service firebase.storage { match /b/{bucket}/o { match /{p=**} { allow read: if true; } } }";
+
+        let slot = Arc::new(RulesetSlot::new(LoadedRules::from_source(DENY).unwrap()));
+        let registry = Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::global(
+            slot.clone(),
+        ));
+        let hook = StorageRules(registry.clone());
+        let source = || {
+            registry
+                .global_snapshot()
+                .expect("read the registry")
+                .expect("global rules")
+                .source
+                .clone()
+        };
+
+        assert!(
+            hook.shared(),
+            "the registry is daemon-global, so only the default session's snapshot carries it"
+        );
+
+        // SNAPSR-2: the default session's snapshot carries the registry and restores it.
+        let default = Scope::AllExcept(BTreeSet::new());
+        let part = hook.capture(&default).expect("capture the registry");
+        slot.replace_source(ALLOW).expect("change the rules");
+        assert_eq!(source().as_deref(), Some(ALLOW));
+        hook.restore(&default, &part).expect("restore the registry");
+        assert_eq!(source().as_deref(), Some(DENY));
+
+        // SNAPSR-1: the hook is scope-blind. A project session's part would be the same
+        // daemon-wide table, and restoring it would change what every other session reads.
+        let project = Scope::Project("demo-b".to_owned());
+        slot.replace_source(ALLOW).expect("change the rules again");
+        let project_part = hook
+            .capture(&project)
+            .expect("capture under a project scope");
+        slot.replace_source(DENY)
+            .expect("change the rules once more");
+        hook.restore(&project, &project_part)
+            .expect("restore under a project scope");
+        assert_eq!(
+            source().as_deref(),
+            Some(ALLOW),
+            "the hook restores the whole registry whatever the scope"
         );
     }
 

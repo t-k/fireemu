@@ -125,3 +125,74 @@ fn rules_match_the_nth_occurrence_or_every_one_and_are_counted_per_operation() {
     );
     assert!(state.decide("functions.invoke", Some("b"), None).is_empty());
 }
+
+/// FAULTH-1: a rule with no `nth` fires on every matching operation, so the history of a plan
+/// left installed under load is a bounded ring. The records that fall out are counted, and the
+/// snapshot estimate of the state stops growing with them.
+#[test]
+fn the_fired_history_is_a_bounded_ring_that_counts_what_it_drops() {
+    use fireemu_core_session::fault::MAX_FIRED_RECORDS;
+
+    let mut state = FaultState::default();
+    state.install(FaultPlan {
+        seed: 1,
+        rules: vec![rule(
+            "firestore.commit",
+            None,
+            None,
+            FaultAction::TransactionConflict,
+        )],
+    });
+    assert_eq!(state.dropped_fired(), 0);
+
+    for _ in 0..MAX_FIRED_RECORDS {
+        assert_eq!(
+            state.decide("firestore.commit", None, None),
+            vec![FaultAction::TransactionConflict]
+        );
+    }
+    assert_eq!(state.fired().len(), MAX_FIRED_RECORDS);
+    assert_eq!(state.dropped_fired(), 0);
+    assert_eq!(state.fired()[0].occurrence, 1, "the oldest record is first");
+    let bounded = state.retained_bytes();
+
+    let overflow = 9_000;
+    for _ in 0..overflow {
+        assert_eq!(
+            state.decide("firestore.commit", None, None),
+            vec![FaultAction::TransactionConflict]
+        );
+    }
+    assert_eq!(
+        state.fired().len(),
+        MAX_FIRED_RECORDS,
+        "the ring is bounded"
+    );
+    assert_eq!(state.dropped_fired(), overflow as u64);
+    let occurrences: Vec<u64> = state.fired().iter().map(|r| r.occurrence).collect();
+    assert_eq!(
+        occurrences.first().copied(),
+        Some((overflow + 1) as u64),
+        "the oldest retained record is the newest {MAX_FIRED_RECORDS} minus one"
+    );
+    assert_eq!(
+        occurrences.last().copied(),
+        Some((MAX_FIRED_RECORDS + overflow) as u64),
+        "the newest record is the last operation"
+    );
+    assert!(
+        state.retained_bytes() <= bounded.saturating_mul(2),
+        "the snapshot estimate stays bounded"
+    );
+
+    // The counters still count every occurrence: the ring bounds the history, not the plan.
+    assert_eq!(
+        state.counters()["firestore.commit"],
+        (MAX_FIRED_RECORDS + overflow) as u64
+    );
+
+    // Installing or clearing a plan forgets the history and the dropped count together.
+    state.clear();
+    assert!(state.fired().is_empty());
+    assert_eq!(state.dropped_fired(), 0);
+}

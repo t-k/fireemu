@@ -201,12 +201,6 @@ class Responder:
                 continue
             if _undecodable(update.get("fields")):
                 return 400, _invalid("cannot decode value")
-            # Production refuses a malformed mask path for the whole request;
-            # see the matrix row errors/rest-shapes#mask-with-invalid-path.
-            mask = (write.get("updateMask") or {}).get("fieldPaths")
-            error = _mask_error(mask)
-            if error:
-                return 400, _invalid(error)
             names.append(update["name"])
         if len(names) != len(set(names)):
             return 400, _invalid("the same document cannot be written more than once")
@@ -217,8 +211,12 @@ class Responder:
                 statuses.append({"code": 3, "message": "empty write operation"})
                 results.append({})
                 continue
-            error = _path_error(update["name"]) or _commit_error(
-                update["name"], update["fields"]
+            # A path the client names is parsed per write, so an over-long mask
+            # path is that write's own status, not a whole-request refusal.
+            error = (
+                _mask_error((write.get("updateMask") or {}).get("fieldPaths"))
+                or _path_error(update["name"])
+                or _commit_error(update["name"], update["fields"])
             )
             if error:
                 statuses.append({"code": 3, "message": error})

@@ -1326,10 +1326,16 @@ def _masked_batch_write(
     resource = entry["resource"]
     write = _conditional_create(resource, entry["fields"])
     write["updateMask"] = {"fieldPaths": entry["mask"]}
+    # A path a client names is parsed per write, so the local runtime reports an
+    # over-long mask path as that write's own status rather than refusing the
+    # request. Production's matrix row errors/rest-shapes#mask-with-invalid-path
+    # is a Commit, which has no per-item statuses, so it does not settle what a
+    # BatchWrite does; that is the same question the three R3 cases ask, and
+    # this row is where the campaign asks it for a field path.
     expect: dict[str, Any] = (
         {"status": 200, "itemCodes": [0], "landed": [resource]}
         if positive
-        else {"status": 400, "typed": "INVALID_ARGUMENT", "landed": []}
+        else {"status": 200, "itemCodes": [3], "landed": []}
     )
     if pending:
         expect["pendingReason"] = pending

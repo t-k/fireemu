@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import batch_adapter
 import commit_acquisition as acquisition
+import commit_baseline
 import commit_reserved_adapter as reserved
 from batch_contract import DATABASE_PROJECTION, NUMBER, PROJECT
 from broad_contract import digest
@@ -22,6 +23,61 @@ from commit_reserved_adapter import ROOT, source_inputs
 from gate_adapter import compiler_plan
 from reservations import Ledger
 from test_transform_comparator import _recovery_rows, _rows
+
+
+def baseline_fixture(tmp_path, database):
+    """A recorded observation journal and the baseline it produces."""
+    auth = {"name": f"projects/{NUMBER}/config", "mfa": {"state": "DISABLED"}}
+    bodies = [
+        (
+            commit_baseline.ROUTES["projectIdentity"],
+            {"projectId": PROJECT, "projectNumber": NUMBER},
+        ),
+        (commit_baseline.ROUTES["database"], database),
+        (commit_baseline.ROUTES["authConfig"], auth),
+    ]
+    evidence = tmp_path / "baseline-evidence"
+    evidence.mkdir()
+    journal = evidence / "responses.jsonl"
+    journal.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "service": "metadata",
+                    "route": route,
+                    "phase": "observation",
+                    "response": {
+                        "httpStatus": 200,
+                        "mediaType": "application/json",
+                        "body": body,
+                    },
+                    "digest": digest(body),
+                }
+            )
+            for route, body in bodies
+        )
+        + "\n"
+    )
+    sha = hashlib.sha256(journal.read_bytes()).hexdigest()
+    record = tmp_path / "baseline.json"
+    record.write_text(
+        json.dumps(
+            {
+                "kind": commit_baseline.RECORD_KIND,
+                "observations": [
+                    {
+                        "route": route,
+                        "path": "responses.jsonl",
+                        "sha256": sha,
+                        "index": index,
+                    }
+                    for index, (route, _body) in enumerate(bodies)
+                ],
+            }
+        )
+    )
+    baseline = commit_baseline.baseline_from_record(record, evidence_root=evidence)
+    return baseline, auth
 
 
 def fixture(tmp_path, monkeypatch):
@@ -59,6 +115,9 @@ def fixture(tmp_path, monkeypatch):
         "databaseEdition": "STANDARD",
         "locationId": "us-central1",
     }
+    # The production baseline is derived from a recorded observation journal,
+    # never typed in: an unprovenanced literal is refused at freeze time.
+    baseline, auth_body = baseline_fixture(tmp_path, database)
     adc = {
         "type": "authorized_user",
         "client_id": "offline-client",
@@ -71,6 +130,7 @@ def fixture(tmp_path, monkeypatch):
             commit,
             hashlib.sha256(artifact.read_bytes()).hexdigest(),
             source_inputs(),
+            baseline,
         ),
         "authorizedUserDigest": digest(adc),
         "apiKeyDigest": digest("offline-key"),
@@ -83,17 +143,17 @@ def fixture(tmp_path, monkeypatch):
         "ownerIdentity": "offline-fixture-not-permission",
         "permissionReference": "offline-fixture",
         "recoveryOwner": "offline-recovery",
-        "authConfigDigest": digest({"name": "fixture-auth"}),
-        "databaseProjection": database,
-        "databaseProjectionDigest": digest(database),
         "databaseProjectionContractDigest": digest(DATABASE_PROJECTION),
-        "pricingLocation": "us-central1",
         "pricingCheckedAt": "fixture-only",
     }
     permission_path = tmp_path / "permission.json"
     permission_path.write_text(json.dumps(permission))
     inputs = acquisition.freeze_inputs(
-        permission_path, plan, source_root=source, artifact_path=artifact
+        permission_path,
+        plan,
+        source_root=source,
+        artifact_path=artifact,
+        baseline=baseline,
     )
     ledger = Ledger.create(tmp_path / "shared")
     calls = []
@@ -129,7 +189,9 @@ def fixture(tmp_path, monkeypatch):
                 },
             )
         else:
-            action, response = "auth", {"name": "fixture-auth"}
+            # The same configuration body the recorded observation carries, so
+            # the preflight baseline comparison passes offline.
+            action, response = "auth", auth_body
         calls.append(action)
         return 200, response, "application/json"
 
@@ -481,6 +543,71 @@ def test_retained_comparator_evidence_comes_from_the_frozen_checkout(tmp_path):
     second.mkdir()
     with pytest.raises(ValueError, match="comparator source"):
         acquisition._copy_frozen_sources(second, checkout, drifted)
+
+
+def _refreeze(tmp_path, kwargs, plan, permission, *, baseline):
+    Path(kwargs["permission_path"]).write_text(json.dumps(permission))
+    return acquisition.freeze_inputs(
+        kwargs["permission_path"],
+        plan,
+        source_root=kwargs["source_root"],
+        artifact_path=kwargs["artifact_path"],
+        baseline=baseline,
+    )
+
+
+def test_freeze_refuses_a_baseline_no_recorded_observation_produces(
+    tmp_path, monkeypatch
+):
+    """The v10 stop: a hand-written authConfigDigest with no provenance at all."""
+    inputs, _ledger, _calls, kwargs = fixture(tmp_path, monkeypatch)
+    baseline = commit_baseline.baseline_from_record(
+        tmp_path / "baseline.json", evidence_root=tmp_path / "baseline-evidence"
+    )
+    permission = copy.deepcopy(inputs["permission"])
+    assert _refreeze(tmp_path, kwargs, inputs["plan"], permission, baseline=baseline)
+    for field, value in (
+        (
+            "authConfigDigest",
+            "3eddf9795664048f56b927705e0e36d03e2866289a302f21ac21520c96961c1c",
+        ),
+        ("pricingLocation", "europe-west1"),
+        ("databaseProjectionDigest", "0" * 64),
+    ):
+        with pytest.raises(ValueError):
+            _refreeze(
+                tmp_path,
+                kwargs,
+                inputs["plan"],
+                {**permission, field: value},
+                baseline=baseline,
+            )
+
+
+def test_freeze_refuses_a_permission_that_names_no_baseline_observation(
+    tmp_path, monkeypatch
+):
+    """Provenance survives into execution, where the journals are unavailable."""
+    inputs, _ledger, _calls, kwargs = fixture(tmp_path, monkeypatch)
+    permission = copy.deepcopy(inputs["permission"])
+    assert permission["baselineProvenance"].keys() == commit_baseline.ROUTES.keys()
+    for damage in (
+        {},
+        {"authConfig": {"route": "elsewhere", "sha256": "0" * 64}},
+        {**permission["baselineProvenance"], "authConfig": {"sha256": "0" * 64}},
+        {**permission["baselineProvenance"], "authConfig": {"route": "x", "sha256": 1}},
+    ):
+        with pytest.raises(ValueError, match="provenance"):
+            _refreeze(
+                tmp_path,
+                kwargs,
+                inputs["plan"],
+                {**permission, "baselineProvenance": damage},
+                baseline=None,
+            )
+    stripped = {k: v for k, v in permission.items() if k != "baselineProvenance"}
+    with pytest.raises(ValueError, match="provenance"):
+        _refreeze(tmp_path, kwargs, inputs["plan"], stripped, baseline=None)
 
 
 def test_reservation_records_the_source_generation_it_was_acquired_under(

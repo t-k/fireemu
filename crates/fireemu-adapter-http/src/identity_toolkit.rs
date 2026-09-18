@@ -856,6 +856,10 @@ fn auth_error(e: &AuthError) -> JsonResponse {
         AuthError::InvalidSessionInfo => error(400, "INVALID_SESSION_INFO"),
         AuthError::InvalidVerificationCode => error(400, "INVALID_CODE"),
         AuthError::FederatedUserIdAlreadyLinked => error(400, "FEDERATED_USER_ID_ALREADY_LINKED"),
+        AuthError::ControlCharacterInText(field) => error(
+            400,
+            &format!("INVALID_ARGUMENT : {field} must not contain control characters"),
+        ),
         AuthError::TooManyOutstandingCodes => error(
             400,
             "QUOTA_EXCEEDED : too many outstanding codes; consume or expire some first",
@@ -881,6 +885,10 @@ fn mfa_error(e: &MfaError) -> JsonResponse {
         MfaError::LimitExceeded(_) => error(400, "SECOND_FACTOR_EXISTS"),
         MfaError::UserDisabled => error(400, "USER_DISABLED"),
         MfaError::UserNotFound => error(400, "USER_NOT_FOUND"),
+        MfaError::ControlCharacterInText(field) => error(
+            400,
+            &format!("INVALID_ARGUMENT : {field} must not contain control characters"),
+        ),
     }
 }
 
@@ -986,7 +994,8 @@ fn issue_tokens_replacing(
         .id_token_claims(uid, second, at)
         .map_err(|e| auth_error(&e))?;
     if let Some(p) = &issue.provider {
-        p.id().clone_into(&mut claims.firebase.sign_in_provider);
+        p.sign_in_provider_claim()
+            .clone_into(&mut claims.firebase.sign_in_provider);
     }
     claims.firebase.sign_in_attributes = issue.sign_in_attributes.cloned();
     if let Some(extra) = issue.extra {
@@ -5979,6 +5988,13 @@ fn sign_up(
     if body.get("localId").is_some_and(|v| !v.is_null()) {
         return error(400, "UNEXPECTED_PARAMETER : User ID");
     }
+    // `str_field` ignores a non-string the way the assignment below does: this guard adds a
+    // refusal for control characters, not a new type refusal.
+    if let Some(name) = str_field(body, "displayName") {
+        if let Err(r) = reject_control_characters(name, "displayName") {
+            return r;
+        }
+    }
     let email = match opt_str(body, "email") {
         Ok(email) => email,
         Err(r) => return r,
@@ -6708,6 +6724,21 @@ struct UpdatePlan {
 /// being silently dropped.
 const UNSUPPORTED_UPDATE_FIELDS: &[&str] = &["mfaInfo"];
 
+/// Refuses a profile string a request states directly when it carries a NUL or another
+/// control character. [`AuthStore::import_user`] already refuses these at its own boundary,
+/// so a value that cannot be imported cannot be created through a request either.
+/// Production's refusal shape for this input is unobserved, and so are the length bounds it
+/// applies, which are therefore not imposed here.
+fn reject_control_characters(value: &str, field: &str) -> Result<(), JsonResponse> {
+    if value.chars().any(char::is_control) {
+        return Err(error(
+            400,
+            &format!("INVALID_ARGUMENT : {field} must not contain control characters"),
+        ));
+    }
+    Ok(())
+}
+
 /// `{providerId, rawId, email?, displayName?, photoUrl?}` of a link request.
 fn parse_identity(v: &Value) -> Result<FederatedIdentity, JsonResponse> {
     let provider_id = opt_str(v, "providerId")?
@@ -6722,13 +6753,19 @@ fn parse_identity(v: &Value) -> Result<FederatedIdentity, JsonResponse> {
             "INVALID_ARGUMENT : linkProviderUserInfo takes a federated providerId",
         ));
     }
-    Ok(FederatedIdentity {
+    let identity = FederatedIdentity {
         provider_id: provider_id.to_owned(),
         raw_id: raw_id.to_owned(),
         email: opt_str(v, "email")?.map(str::to_owned),
         display_name: opt_str(v, "displayName")?.map(str::to_owned),
         photo_url: opt_str(v, "photoUrl")?.map(str::to_owned),
-    })
+    };
+    // The store's `FederatedIdentity::validate` is the single truth, but it runs when the
+    // identity is linked, which is after this request's other writes. Parsing is before all
+    // of them, so the same check runs here to keep a refused request from applying half of
+    // itself.
+    identity.validate().map_err(|e| auth_error(&e))?;
+    Ok(identity)
 }
 
 /// Phone factors of `mfaInfo` / `mfa.enrollments` entries (`{phoneInfo, displayName}`).
@@ -6857,6 +6894,11 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     let change = |key: &str| -> Result<Change, JsonResponse> {
         Ok(opt_str(body, key)?.map_or(Change::Keep, |v| Change::Set(v.to_owned())))
     };
+    for field in ["displayName", "photoUrl"] {
+        if let Some(value) = opt_str(body, field)? {
+            reject_control_characters(value, field)?;
+        }
+    }
     let mut display_name = change("displayName")?;
     let mut photo_url = change("photoUrl")?;
     let mut phone_number = change("phoneNumber")?;
@@ -7345,6 +7387,11 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
             None | Some(Value::Null) => Vec::new(),
             Some(v) => parse_phone_factors(v)?,
         };
+        for field in ["displayName", "photoUrl"] {
+            if let Some(value) = opt_str(body, field)? {
+                reject_control_characters(value, field)?;
+            }
+        }
         Ok((
             email,
             password,
@@ -7610,36 +7657,10 @@ fn create_session_cookie(store: &AuthStore, body: &Value, at: LogicalInstant) ->
     }
 }
 
-/// Minimal `application/x-www-form-urlencoded` query decoding (ASCII percent escapes).
+/// `application/x-www-form-urlencoded` query decoding through the shared codec: `+` is a
+/// space and only two ASCII hexadecimal digits form an escape, so `%+f` stays literal.
 fn decode_query_component(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 2 < bytes.len() => {
-                if let Some(b) = s
-                    .get(i + 1..i + 3)
-                    .and_then(|hex| u8::from_str_radix(hex, 16).ok())
-                {
-                    out.push(b);
-                    i += 3;
-                } else {
-                    out.push(b'%');
-                    i += 1;
-                }
-            }
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
+    fireemu_core_types::codec::percent_decode(s, fireemu_core_types::codec::PlusMode::Space)
 }
 
 fn query_params(query: Option<&str>) -> BTreeMap<String, String> {
@@ -8406,8 +8427,10 @@ fn send_oob_code(
             match store.user_by_email(&email) {
                 Some(u) => (email.clone(), Some(u.local_id.clone()), None),
                 // Improved email privacy: an unknown address is answered as if a mail had
-                // been sent, and no code is created.
-                None if store.config().enable_improved_email_privacy => {
+                // been sent, and no code is created. An Admin link generator is already
+                // authenticated and can read every account, so hiding the address from it
+                // would only withhold the link it asked for: it keeps `EMAIL_NOT_FOUND`.
+                None if store.config().enable_improved_email_privacy && !return_oob_link => {
                     return JsonResponse {
                         status: 200,
                         body: json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email}),
@@ -8508,21 +8531,19 @@ fn reset_password(
     let Some(entry) = store.oob_code(code).cloned() else {
         return error(400, "INVALID_OOB_CODE");
     };
+    let new_password = match opt_str(body, "newPassword") {
+        // Check mode (`checkActionCode` / `verifyPasswordResetCode`): describe the code
+        // without consuming it, whatever its type. Only the reset itself is restricted to
+        // `PASSWORD_RESET`.
+        Ok(None) => return check_oob_code(&entry),
+        Ok(Some(new_password)) => new_password,
+        Err(r) => return r,
+    };
     if entry.request_type != OobRequestType::PasswordReset {
         return error(400, "INVALID_OOB_CODE");
     }
     let Some(uid) = entry.uid.clone() else {
         return error(400, "INVALID_OOB_CODE");
-    };
-    let new_password = match opt_str(body, "newPassword") {
-        Ok(Some(new_password)) => new_password,
-        Ok(None) => {
-            return JsonResponse {
-                status: 200,
-                body: json!({"kind": "identitytoolkit#ResetPasswordResponse", "email": entry.email, "requestType": "PASSWORD_RESET"}),
-            };
-        }
-        Err(r) => return r,
     };
     if let Err(e) = store.validate_password_for(
         fireemu_core_auth::password_policy::Operation::Reset,
@@ -8557,6 +8578,31 @@ fn reset_password(
     JsonResponse {
         status: 200,
         body: json!({"kind": "identitytoolkit#ResetPasswordResponse", "email": entry.email, "requestType": "PASSWORD_RESET"}),
+    }
+}
+
+/// The `accounts:resetPassword` answer for a code that is only being inspected. Production
+/// reports the code's own `requestType`, the address it concerns and, for a pending address
+/// change, the new address; the address is omitted for a sign-in link.
+fn check_oob_code(entry: &fireemu_core_auth::store::OobCode) -> JsonResponse {
+    let mut body = serde_json::Map::new();
+    body.insert(
+        "kind".to_owned(),
+        Value::String("identitytoolkit#ResetPasswordResponse".to_owned()),
+    );
+    body.insert(
+        "requestType".to_owned(),
+        Value::String(entry.request_type.as_str().to_owned()),
+    );
+    if entry.request_type != OobRequestType::EmailSignIn {
+        body.insert("email".to_owned(), Value::String(entry.email.clone()));
+    }
+    if let Some(new_email) = entry.new_email.clone() {
+        body.insert("newEmail".to_owned(), Value::String(new_email));
+    }
+    JsonResponse {
+        status: 200,
+        body: Value::Object(body),
     }
 }
 
@@ -8981,6 +9027,9 @@ fn sign_in_with_email_link(
         Ok(r) => r,
         Err(e) => return auth_error(&e),
     };
+    // The account and the pending credential keep `Provider::EmailLink`, which drives
+    // `providerUserInfo`, the `createAuthUri` sign-in methods and the `emailLink` sign-in
+    // method Blocking Functions see. The token claim itself is rendered as `password`.
     finish_sign_in(
         store,
         &uid,

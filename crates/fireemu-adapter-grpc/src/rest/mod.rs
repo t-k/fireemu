@@ -220,24 +220,7 @@ fn batch_write_unknown_field_response(field: &str) -> RestResponse {
 /// Parsed query parameters (repeated keys keep every value).
 fn query_params(query: &str) -> BTreeMap<String, Vec<String>> {
     fn decode(s: &str) -> String {
-        let bytes = s.as_bytes();
-        let mut out = Vec::with_capacity(bytes.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'%' && i + 2 < bytes.len() {
-                if let Some(b) = s
-                    .get(i + 1..i + 3)
-                    .and_then(|h| u8::from_str_radix(h, 16).ok())
-                {
-                    out.push(b);
-                    i += 3;
-                    continue;
-                }
-            }
-            out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
-            i += 1;
-        }
-        String::from_utf8_lossy(&out).into_owned()
+        fireemu_core_types::codec::percent_decode(s, fireemu_core_types::codec::PlusMode::Space)
     }
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for kv in query.split('&').filter(|s| !s.is_empty()) {
@@ -1540,22 +1523,16 @@ fn decode_path(path: &str) -> Result<String, Status> {
             out.push_str(segment);
             continue;
         }
-        let bytes = segment.as_bytes();
-        let mut raw = Vec::with_capacity(bytes.len());
-        let mut k = 0;
-        while k < bytes.len() {
-            if bytes[k] == b'%' {
-                let hex = segment
-                    .get(k + 1..k + 3)
-                    .and_then(|h| u8::from_str_radix(h, 16).ok())
-                    .ok_or_else(|| Status::invalid_argument("malformed percent escape in path"))?;
-                raw.push(hex);
-                k += 3;
-            } else {
-                raw.push(bytes[k]);
-                k += 1;
-            }
+        // The shared codec decides what an escape is; this surface refuses a malformed one
+        // and a sequence that is not UTF-8 instead of keeping or replacing it, so it decodes
+        // to bytes and validates them itself. `+` is a literal in a path segment.
+        if !fireemu_core_types::codec::percent_escapes_are_well_formed(segment) {
+            return Err(Status::invalid_argument("malformed percent escape in path"));
         }
+        let raw = fireemu_core_types::codec::percent_decode_bytes(
+            segment,
+            fireemu_core_types::codec::PlusMode::Literal,
+        );
         let text = String::from_utf8(raw)
             .map_err(|_| Status::invalid_argument("path segment is not UTF-8"))?;
         if text.contains('/') {

@@ -101,6 +101,60 @@ fn call_as(
     (r.status, r.body)
 }
 
+/// PCT-1. `%` followed by anything but two hexadecimal digits is not an escape. The
+/// hand-rolled decoders went through `u8::from_str_radix`, which accepts a leading sign, so
+/// `%+f` became U+000F: in a query value it silently changed the document ID, and in a path
+/// segment it slipped past the refusal a malformed escape is supposed to get.
+#[test]
+fn percent_escapes_in_the_rest_surface_take_two_hexadecimal_digits_or_none() {
+    let s = state(None);
+    let (status, created) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}/users?documentId=doc%+fid"),
+        json!({"fields": {"name": {"stringValue": "Percent"}}}),
+    );
+    assert_eq!(status, 200, "{created}");
+    // A query value keeps its form-encoded reading of `+`, unchanged by this: what the
+    // escape rule fixes is the `%`, which is now literal instead of U+000F.
+    assert_eq!(
+        created["name"],
+        "projects/demo-app/databases/(default)/documents/users/doc% fid"
+    );
+    // A path segment reads `+` literally, so the document is fetched with both characters
+    // escaped.
+    let (status, got) = call(&s, "GET", &format!("{DOCS}/users/doc%25%20fid"), json!({}));
+    assert_eq!(status, 200, "{got}");
+    assert_eq!(got["fields"]["name"]["stringValue"], "Percent");
+
+    // The same sequence in a path segment is a malformed escape, and the path decoder
+    // refuses it rather than inventing a control character.
+    let (status, refused) = call(&s, "GET", &format!("{DOCS}/users/doc%+fid"), json!({}));
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "malformed percent escape in path"
+    );
+
+    // A well-formed escape still decodes, and one that hides a separator is still refused.
+    let (status, created) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}/users?documentId=with%20space"),
+        json!({"fields": {}}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, got) = call(&s, "GET", &format!("{DOCS}/users/with%20space"), json!({}));
+    assert_eq!(status, 200, "{got}");
+    assert_eq!(
+        got["name"],
+        "projects/demo-app/databases/(default)/documents/users/with space"
+    );
+    let (status, refused) = call(&s, "GET", &format!("{DOCS}/users/a%2Fb"), json!({}));
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "encoded '/' in a path segment");
+}
+
 #[test]
 fn document_crud_over_rest() {
     let s = state(None);

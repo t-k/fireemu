@@ -429,6 +429,176 @@ fn password_reset_goes_through_an_oob_code_the_test_can_read() {
     assert_eq!(status, 200, "{refreshed}");
 }
 
+/// RPCHK-1/RPCHK-2. `accounts:resetPassword` without `newPassword` is `checkActionCode`:
+/// production describes the code without consuming it, whatever its type, and only the
+/// `newPassword` branch is restricted to `PASSWORD_RESET`
+/// (<https://cloud.google.com/identity-platform/docs/reference/rest/v1/accounts/resetPassword>).
+#[test]
+fn reset_password_check_mode_describes_every_out_of_band_code_type() {
+    let s = state();
+    let user = sign_up(&s, "check-mode@example.com");
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    for body in [
+        json!({"requestType": "VERIFY_EMAIL", "idToken": id_token}),
+        json!({"requestType": "EMAIL_SIGNIN", "email": "check-link@example.com"}),
+        json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "idToken": id_token, "newEmail": "check-new@example.com"}),
+    ] {
+        let (status, sent) = post(&s, &format!("{V1}/accounts:sendOobCode"), &body);
+        assert_eq!(status, 200, "{sent}");
+    }
+    let verify_code = issued_code(&s, "VERIFY_EMAIL");
+    let link_code = issued_code(&s, "EMAIL_SIGNIN");
+    let change_code = issued_code(&s, "VERIFY_AND_CHANGE_EMAIL");
+
+    let (status, checked) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": verify_code}),
+    );
+    assert_eq!(status, 200, "{checked}");
+    assert_eq!(checked["requestType"], "VERIFY_EMAIL");
+    assert_eq!(checked["email"], "check-mode@example.com");
+    assert!(checked.get("newEmail").is_none(), "{checked}");
+
+    // An email-link code has no account yet, and production omits the address for it.
+    let (status, checked) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": link_code}),
+    );
+    assert_eq!(status, 200, "{checked}");
+    assert_eq!(checked["requestType"], "EMAIL_SIGNIN");
+    assert!(checked.get("email").is_none(), "{checked}");
+
+    let (status, checked) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": change_code}),
+    );
+    assert_eq!(status, 200, "{checked}");
+    assert_eq!(checked["requestType"], "VERIFY_AND_CHANGE_EMAIL");
+    assert_eq!(checked["email"], "check-mode@example.com");
+    assert_eq!(checked["newEmail"], "check-new@example.com");
+
+    // RPCHK-2. The type check still guards the reset itself, and checking never consumed
+    // the codes: the verification code still applies.
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": verify_code, "newPassword": "newpassword1"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "INVALID_OOB_CODE");
+    let (status, applied) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"oobCode": verify_code}),
+    );
+    assert_eq!(status, 200, "{applied}");
+    assert_eq!(applied["emailVerified"], true);
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "check-link@example.com", "oobCode": link_code}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+}
+
+/// ITKM-2. The end-user profile routes took whatever string arrived, so a NUL or another
+/// control character reached the store and every later rendering of it. `import_user`
+/// already refuses those at its own boundary; the request boundary now agrees. Production's
+/// refusal shape for this input is unobserved, and the length bounds it applies are not
+/// recorded either, so only the control-character check is made here.
+#[test]
+fn profile_strings_reject_control_characters_on_every_route_that_stores_them() {
+    let s = state();
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "control@example.com", "password": "hunter22", "displayName": "na\u{0000}me"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : displayName must not contain control characters"
+    );
+    // The refused sign-up left no account behind.
+    let (_, methods) = post(
+        &s,
+        &format!("{V1}/accounts:createAuthUri"),
+        &json!({"identifier": "control@example.com", "continueUri": "http://localhost"}),
+    );
+    assert_eq!(methods["registered"], false);
+
+    let user = sign_up(&s, "control@example.com");
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    for (field, value) in [
+        ("displayName", "na\u{0007}me"),
+        ("photoUrl", "https://p.example/a.png\u{0000}"),
+    ] {
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": id_token, field: value}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(
+            refused["error"]["message"],
+            format!("INVALID_ARGUMENT : {field} must not contain control characters")
+        );
+    }
+
+    // The Admin link route reaches the same parser.
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({
+            "localId": user["localId"],
+            "linkProviderUserInfo": {
+                "providerId": "github.com",
+                "rawId": "gh-1",
+                "displayName": "gh\u{0001}user"
+            }
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : displayName must not contain control characters"
+    );
+
+    // The Admin create route reaches the same guard: what cannot be imported cannot be
+    // created through a request either.
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({"email": "admin-control@example.com", "photoUrl": "https://p.example/a.png\u{0000}"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : photoUrl must not contain control characters"
+    );
+
+    // A non-string displayName keeps the sign-up route's existing lenient handling: the
+    // control-character guard adds no new type refusal.
+    let (status, numeric) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "numeric-name@example.com", "password": "hunter22", "displayName": 123}),
+    );
+    assert_eq!(status, 200, "{numeric}");
+
+    // Ordinary values still pass.
+    let (status, updated) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": id_token, "displayName": "Ada Lovelace", "photoUrl": "https://p.example/a.png"}),
+    );
+    assert_eq!(status, 200, "{updated}");
+    assert_eq!(updated["displayName"], "Ada Lovelace");
+}
+
 fn password_with_utf16_units(units: usize) -> String {
     assert!(units >= 2);
     let mut password = "a".repeat(units - 2);
@@ -812,6 +982,137 @@ fn rejected_email_change_preserves_code_for_an_inactive_duplicate_owner() {
         .is_some_and(Vec::is_empty));
 }
 
+/// ELPROV-1. Email-link sign-in is a `password` sign-in as far as the token is concerned:
+/// `firebase.sign_in_provider` is one of the values Rules documents
+/// (<https://firebase.google.com/docs/rules/rules-and-auth#identifying_users>), and
+/// `emailLink` is not among them. It stays the sign-in method reported to Blocking
+/// Functions and the `createAuthUri` sign-in method.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn email_link_sign_in_issues_password_provider_tokens_through_the_second_factor() {
+    let mut s = state();
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "link-provider@example.com"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let code = issued_code(&s, "EMAIL_SIGNIN");
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "link-provider@example.com", "oobCode": code}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["isNewUser"], true);
+    assert_eq!(
+        claims(signed["idToken"].as_str().unwrap())["firebase"]["sign_in_provider"],
+        "password"
+    );
+    // The refresh session carries the same provider.
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": signed["refreshToken"]}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    assert_eq!(
+        claims(refreshed["id_token"].as_str().unwrap())["firebase"]["sign_in_provider"],
+        "password"
+    );
+    // The account is still a passwordless one for fetchSignInMethodsForEmail.
+    let (_, methods) = post(
+        &s,
+        &format!("{V1}/accounts:createAuthUri"),
+        &json!({"identifier": "link-provider@example.com", "continueUri": "http://localhost"}),
+    );
+    assert_eq!(methods["signinMethods"], json!(["emailLink"]));
+
+    // An existing account with a second factor: the pending credential and the token minted
+    // after the second factor report the same provider.
+    let user = sign_up(&s, "link-mfa@example.com");
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    verify_email(&s, user["localId"].as_str().unwrap());
+    let (status, start) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": id_token, "phoneEnrollmentInfo": {"phoneNumber": "+15559876543", "recaptchaToken": "x"}}),
+    );
+    assert_eq!(status, 200, "{start}");
+    let session = start["phoneSessionInfo"]["sessionInfo"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let sms = codes["verificationCodes"][0]["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, enrolled) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": id_token, "displayName": "my phone", "phoneVerificationInfo": {"sessionInfo": session, "code": sms}}),
+    );
+    assert_eq!(status, 200, "{enrolled}");
+    let enrollment_id = claims(enrolled["idToken"].as_str().unwrap())["firebase"]
+        ["second_factor_identifier"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    s.blocking = Some(Arc::new(FilteringIdpBlockingHook {
+        contexts: Arc::clone(&contexts),
+    }));
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "link-mfa@example.com"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let code = issued_code(&s, "EMAIL_SIGNIN");
+    let (status, pending) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "link-mfa@example.com", "oobCode": code}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(pending.get("idToken").is_none(), "{pending}");
+    let credential = pending["mfaPendingCredential"].as_str().unwrap().to_owned();
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": credential, "mfaEnrollmentId": enrollment_id, "phoneSignInInfo": {"recaptchaToken": "x"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let session = started["phoneResponseInfo"]["sessionInfo"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let sms = codes["verificationCodes"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, done) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        &json!({"mfaPendingCredential": credential, "phoneVerificationInfo": {"sessionInfo": session, "code": sms}}),
+    );
+    assert_eq!(status, 200, "{done}");
+    let c = claims(done["idToken"].as_str().unwrap());
+    assert_eq!(c["firebase"]["sign_in_provider"], "password");
+    assert_eq!(c["firebase"]["sign_in_second_factor"], "phone");
+    // Blocking Functions still see the email-link sign-in method.
+    let recorded = contexts.lock().unwrap();
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0].1.sign_in_method.as_deref(), Some("emailLink"));
+}
+
 #[test]
 fn email_link_sign_in_creates_a_verified_passwordless_user() {
     let s = state();
@@ -840,7 +1141,7 @@ fn email_link_sign_in_creates_a_verified_passwordless_user() {
     assert_eq!(signed["isNewUser"], true);
     let c = claims(signed["idToken"].as_str().unwrap());
     assert_eq!(c["email_verified"], true);
-    assert_eq!(c["firebase"]["sign_in_provider"], "emailLink");
+    assert_eq!(c["firebase"]["sign_in_provider"], "password");
     // fetchSignInMethodsForEmail sees a passwordless user.
     let (_, methods) = post(
         &s,
@@ -1426,6 +1727,420 @@ fn fixture_identity_providers_sign_in_link_and_show_up_as_provider_info() {
         .unwrap()
         .iter()
         .any(|p| p["providerId"] == "github.com"));
+}
+
+/// ITKM-2 follow-up. Control characters are refused on every path that stores a federated
+/// identity, not only on the one that states it directly: an identity-provider assertion
+/// and an import row reach the same store fields. The check lives in the store, so the three
+/// writers cannot drift. Production's refusal shape for this input is unobserved.
+#[test]
+fn federated_identities_reject_control_characters_from_every_writer() {
+    let s = state();
+    // 1. A sign-in assertion whose profile claims carry a control character.
+    let assertion = json!({
+        "sub": "ctrl-1",
+        "email": "ctrl@example.com",
+        "name": "na\u{0000}me",
+        "email_verified": true
+    });
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId=google.com&id_token={}", percent(&assertion.to_string())), "requestUri": DUMMY_URI}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : displayName must not contain control characters"
+    );
+    // Nothing was created for the refused assertion.
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"federatedUserId": [{"providerId": "google.com", "rawId": "ctrl-1"}]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert!(lookup.get("users").is_none(), "{lookup}");
+
+    // 2. The same assertion without the control character signs in, and a later assertion
+    // that carries one does not overwrite the stored profile.
+    let clean = json!({
+        "sub": "ctrl-1",
+        "email": "ctrl@example.com",
+        "name": "Ada",
+        "email_verified": true
+    });
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId=google.com&id_token={}", percent(&clean.to_string())), "requestUri": DUMMY_URI}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let local_id = signed["localId"].as_str().unwrap().to_owned();
+    let dirty = json!({
+        "sub": "ctrl-1",
+        "email": "ctrl@example.com",
+        "picture": "https://p.example/a.png\u{0007}",
+        "email_verified": true
+    });
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId=google.com&id_token={}", percent(&dirty.to_string())), "requestUri": DUMMY_URI}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : photoUrl must not contain control characters"
+    );
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [local_id]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert_eq!(lookup["users"][0]["displayName"], "Ada");
+
+    // 3. An import row carrying one is refused by index, and the neighbouring row lands.
+    let (status, imported) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:batchCreate"),
+        &json!({"users": [
+            {
+                "localId": "import-ctrl",
+                "providerUserInfo": [{"providerId": "github.com", "rawId": "gh-ctrl", "displayName": "gh\u{0001}user"}]
+            },
+            {
+                "localId": "import-clean",
+                "providerUserInfo": [{"providerId": "github.com", "rawId": "gh-clean", "displayName": "Grace"}]
+            }
+        ]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    assert_eq!(imported["error"].as_array().map(Vec::len), Some(1));
+    assert_eq!(imported["error"][0]["index"], 0);
+    let store = s.store.lock().unwrap();
+    assert!(store.user_by_id("import-ctrl").is_none());
+    assert!(store.user_by_id("import-clean").is_some());
+}
+
+/// ITKM-2 follow-up. A second factor's display name is stored text like any other, so the
+/// same rule applies at every writer: phone enrollment, the Admin enrollment list and an
+/// import row. Documented behavior; production's refusal shape for this input is unobserved.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn second_factor_display_names_reject_control_characters_from_every_writer() {
+    let s = state();
+    let user = sign_up(&s, "factor-ctrl@example.com");
+    let local_id = user["localId"].as_str().unwrap().to_owned();
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    verify_email(&s, &local_id);
+
+    // 1. Phone enrollment through the end-user route.
+    let (status, start) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": id_token, "phoneEnrollmentInfo": {"phoneNumber": "+15559876543", "recaptchaToken": "x"}}),
+    );
+    assert_eq!(status, 200, "{start}");
+    let session = start["phoneSessionInfo"]["sessionInfo"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"][0]["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, refused) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": id_token, "displayName": "my\u{0000}phone", "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : displayName must not contain control characters"
+    );
+    // Nothing was enrolled.
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [local_id.clone()]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert!(lookup["users"][0].get("mfaInfo").is_none(), "{lookup}");
+
+    // 2. The Admin enrollment list on account creation.
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({
+            "email": "factor-admin@example.com",
+            "password": "hunter22",
+            "mfaInfo": [{"phoneInfo": "+15550001111", "displayName": "wo\u{0001}rk"}]
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : displayName must not contain control characters"
+    );
+    // The refused creation left no account behind.
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"email": ["factor-admin@example.com"]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert!(lookup.get("users").is_none(), "{lookup}");
+
+    // 3. An import row, refused by index while its neighbour lands.
+    let (status, imported) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:batchCreate"),
+        &json!({"users": [
+            {
+                "localId": "factor-import-ctrl",
+                "email": "factor-import-ctrl@example.com",
+                "emailVerified": true,
+                "mfaInfo": [{"phoneInfo": "+15550002222", "displayName": "ph\u{001f}one", "mfaEnrollmentId": "e-1"}]
+            },
+            {
+                "localId": "factor-import-clean",
+                "email": "factor-import-clean@example.com",
+                "emailVerified": true,
+                "mfaInfo": [{"phoneInfo": "+15550003333", "displayName": "phone", "mfaEnrollmentId": "e-2"}]
+            }
+        ]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    assert_eq!(
+        imported["error"].as_array().map(Vec::len),
+        Some(1),
+        "{imported}"
+    );
+    assert_eq!(imported["error"][0]["index"], 0);
+    let store = s.store.lock().unwrap();
+    assert!(store.user_by_id("factor-import-ctrl").is_none());
+    assert!(store.user_by_id("factor-import-clean").is_some());
+    drop(store);
+
+    // An ordinary display name still enrolls.
+    let (status, start) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": id_token, "phoneEnrollmentInfo": {"phoneNumber": "+15559876543", "recaptchaToken": "x"}}),
+    );
+    assert_eq!(status, 200, "{start}");
+    let session = start["phoneSessionInfo"]["sessionInfo"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, enrolled) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": id_token, "displayName": "my phone", "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
+    );
+    assert_eq!(status, 200, "{enrolled}");
+}
+
+/// M-2. A refused request changes nothing. Moving the control-character check into the store
+/// put it after the earlier writes of the same request: custom claims are set before the
+/// identity is linked, and the Admin enrollment list clears the existing factors before it
+/// enrolls the new ones. Both are now validated before the first write.
+#[test]
+fn a_refused_control_character_leaves_the_rest_of_the_request_unapplied() {
+    let s = state();
+    let user = sign_up(&s, "partial@example.com");
+    let local_id = user["localId"].as_str().unwrap().to_owned();
+
+    // A claim the request must not persist when its federated identity is refused.
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({
+            "localId": local_id,
+            "customAttributes": "{\"admin\":true}",
+            "linkProviderUserInfo": {
+                "providerId": "github.com",
+                "rawId": "gh-partial",
+                "displayName": "gh\u{0001}user"
+            }
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : displayName must not contain control characters"
+    );
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [local_id.clone()]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert!(
+        lookup["users"][0].get("customAttributes").is_none(),
+        "the refused request must not have persisted the claim: {lookup}"
+    );
+    assert!(
+        !lookup["users"][0]["providerUserInfo"]
+            .as_array()
+            .is_some_and(|providers| providers
+                .iter()
+                .any(|provider| provider["providerId"] == "github.com")),
+        "{lookup}"
+    );
+
+    // An enrolled factor the request must not drop when a later entry is refused.
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({
+            "email": "partial-factors@example.com",
+            "password": "hunter22",
+            "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+15550004444", "displayName": "original"}]
+        }),
+    );
+    assert_eq!(status, 200, "{created}");
+    let factor_owner = created["localId"].as_str().unwrap().to_owned();
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({
+            "localId": factor_owner,
+            "mfa": {"enrollments": [
+                {"phoneInfo": "+15550005555", "displayName": "kept"},
+                {"phoneInfo": "+15550006666", "displayName": "dro\u{0000}pped"}
+            ]}
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "INVALID_ARGUMENT : displayName must not contain control characters"
+    );
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [factor_owner]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    let factors = lookup["users"][0]["mfaInfo"]
+        .as_array()
+        .expect("the original factor survives");
+    assert_eq!(factors.len(), 1, "{lookup}");
+    assert_eq!(factors[0]["displayName"], "original");
+    assert_eq!(factors[0]["phoneInfo"], "+15550004444");
+
+    // The same invariant for the other refusal the list can hit: a list over the per-user
+    // budget is refused before the existing factors are dropped.
+    let over_budget: Vec<Value> = (0..6)
+        .map(|n| json!({"phoneInfo": format!("+1555000{:04}", 7000 + n), "displayName": "extra"}))
+        .collect();
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": factor_owner, "mfa": {"enrollments": over_budget}}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "SECOND_FACTOR_LIMIT_EXCEEDED");
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [factor_owner]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    let factors = lookup["users"][0]["mfaInfo"]
+        .as_array()
+        .expect("the original factor survives");
+    assert_eq!(factors.len(), 1, "{lookup}");
+    assert_eq!(factors[0]["phoneInfo"], "+15550004444");
+}
+
+/// M-2 follow-up. `enroll_phone_factor` refuses a disabled account, and that refusal came
+/// after the replacement had already dropped the existing factors. Every refusal it can
+/// raise is now decided before the clear, so a rejected replacement leaves the account as it
+/// was.
+#[test]
+fn a_disabled_account_keeps_its_second_factor_when_a_replacement_is_refused() {
+    let s = state();
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({
+            "email": "disabled-factors@example.com",
+            "password": "hunter22",
+            "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+15550008888", "displayName": "original"}]
+        }),
+    );
+    assert_eq!(status, 200, "{created}");
+    let local_id = created["localId"].as_str().unwrap().to_owned();
+    let (status, disabled) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": local_id, "disableUser": true}),
+    );
+    assert_eq!(status, 200, "{disabled}");
+
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({
+            "localId": local_id,
+            "mfa": {"enrollments": [{"phoneInfo": "+15550009999", "displayName": "replacement"}]}
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "USER_DISABLED");
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [local_id]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    let factors = lookup["users"][0]["mfaInfo"]
+        .as_array()
+        .expect("the original factor survives");
+    assert_eq!(factors.len(), 1, "{lookup}");
+    assert_eq!(factors[0]["phoneInfo"], "+15550008888");
+    assert_eq!(factors[0]["displayName"], "original");
+}
+
+/// Creating a disabled account carries no enrollment list, so nothing is refused: the empty
+/// replacement is not an enrollment and must not become one.
+#[test]
+fn a_disabled_account_can_be_created_without_second_factors() {
+    let s = state();
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({
+            "email": "disabled-plain@example.com",
+            "password": "hunter22",
+            "disabled": true
+        }),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"email": ["disabled-plain@example.com"]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert_eq!(lookup["users"][0]["disabled"], true);
 }
 
 fn percent(s: &str) -> String {
@@ -4575,6 +5290,44 @@ fn a_provider_id_with_control_characters_is_refused() {
         .starts_with("INVALID_CREDENTIAL_OR_PROVIDER_ID"));
 }
 
+/// ITKM-1. The photo URL is injected into a CSS `url('...')` string, so HTML escaping alone
+/// does not contain it: the HTML parser turns `&#39;` back into `'` before the CSS parser
+/// sees the attribute, which closes the string and lets the account declare its own style.
+#[test]
+fn the_idp_widget_escapes_a_photo_url_for_its_css_string_context() {
+    use fireemu_adapter_http::identity_toolkit::widget;
+    let s = state();
+    let photo = "https://p.example/a.png'); display: none; background-image: url('x";
+    let oidc = json!({"sub": "css-1", "email": "css@example.com", "picture": photo, "email_verified": true});
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId=oidc.corp&id_token={}", percent(&oidc.to_string())), "requestUri": DUMMY_URI}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let rendered = widget::render(
+        &s,
+        "/emulator/auth/handler",
+        Some("apiKey=fake-api-key&providerId=oidc.corp"),
+    );
+    assert_eq!(rendered.status, 200);
+    // Neither a raw quote nor an HTML character reference that decodes to one survives in
+    // the style attribute: the quote is a CSS escape.
+    let style = rendered
+        .body
+        .split("style=\"background-image: url('")
+        .nth(1)
+        .expect("the account renders its photo")
+        .split("')\"")
+        .next()
+        .expect("the CSS string is closed by the template")
+        .to_owned();
+    assert!(!style.contains('\''), "{style}");
+    assert!(!style.contains("&#39;"), "{style}");
+    assert!(style.contains("\\27"), "{style}");
+    assert!(style.contains("display"), "{style}");
+}
+
 #[test]
 fn the_idp_widget_handler_lists_accounts_and_escapes_them() {
     use fireemu_adapter_http::identity_toolkit::widget;
@@ -6938,6 +7691,36 @@ fn a_verify_email_link_with_a_wrong_code_kind_is_expired_wording() {
     assert_eq!(issued_code(&s, "PASSWORD_RESET"), code);
 }
 
+/// PCT-1. `%` followed by anything but two hexadecimal digits is not an escape. The
+/// hand-rolled decoder accepted `from_str_radix` extensions, so `%+f` became U+000F and the
+/// password below was refused as a control character.
+#[test]
+fn action_link_query_decoding_rejects_non_hexadecimal_percent_escapes() {
+    let s = state();
+    sign_up(&s, "percent@example.com");
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "percent@example.com"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let code = issued_code(&s, "PASSWORD_RESET");
+    let (status, done) = follow(
+        &s,
+        &format!(
+            "http://127.0.0.1:9099/emulator/action?mode=resetPassword&oobCode={code}&apiKey=fake-api-key&newPassword=one%+ftwo%2Gthree%zz"
+        ),
+    );
+    assert_eq!(status, 200, "{done}");
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        // `+` is still a form-encoded space; `%` keeps its literal self.
+        &json!({"email": "percent@example.com", "password": "one% ftwo%2Gthree%zz"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+}
+
 #[test]
 fn the_reset_password_link_needs_a_real_new_password_and_then_sets_it() {
     let s = state();
@@ -7594,6 +8377,55 @@ fn routed_project_config_uses_selected_store_and_publishes_only_successful_write
         let routed = registry.routed_store_for(project).unwrap();
         assert_eq!(routed.lock().unwrap().password_policy().min_length, 12);
     }
+}
+
+/// ITKM-5. Email enumeration protection hides an unknown address from an anonymous caller.
+/// An Admin link generator is already authenticated and reads every account, so the silent
+/// 200 only costs it the link it asked for: it gets `EMAIL_NOT_FOUND`, as it does with the
+/// protection off. Production's answer for this pair is unobserved; this is the documented
+/// Admin SDK contract (`generatePasswordResetLink` rejects an unknown address).
+#[test]
+fn improved_email_privacy_still_reports_an_unknown_address_to_an_admin_link_generator() {
+    let s = state();
+    let enabled = handle_with(
+        &s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig",
+        &owner(),
+        &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}}),
+    );
+    assert_eq!(enabled.status, 200, "{}", enabled.body);
+
+    // The end-user route still answers as if a mail had been sent, and creates no code.
+    let (status, hidden) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "nobody@example.com"}),
+    );
+    assert_eq!(status, 200, "{hidden}");
+    assert_eq!(hidden["email"], "nobody@example.com");
+    assert!(hidden.get("oobLink").is_none(), "{hidden}");
+
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "nobody@example.com", "returnOobLink": true}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "EMAIL_NOT_FOUND");
+
+    // A known address still yields the link.
+    sign_up(&s, "known@example.com");
+    let (status, generated) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "known@example.com", "returnOobLink": true}),
+    );
+    assert_eq!(status, 200, "{generated}");
+    assert!(generated["oobLink"].as_str().is_some_and(|l| !l.is_empty()));
+    assert!(get(&s, &format!("{EMU}/oobCodes")).1["oobCodes"]
+        .as_array()
+        .is_some_and(|codes| codes.len() == 1));
 }
 
 #[test]

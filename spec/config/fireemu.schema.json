@@ -304,11 +304,11 @@
       "additionalProperties": false,
       "properties": {
         "pushMinimumRedeliveryIntervalMillis": {
-          "description": "Minimum interval kept between two push deliveries of the same message while the subscription has no retry policy. An emulator protection rather than observed production behaviour: 0 restores unthrottled redelivery, and a retry policy always decides its own backoff.",
+          "description": "Minimum interval kept between two push deliveries of the same message while the subscription has no retry policy. The default 0 follows production, which redelivers as soon as possible without a retry policy; a non-zero interval is an opt-in emulator protection against re-requesting a failing push endpoint with no interval at all. A retry policy always decides its own backoff.",
           "type": "integer",
           "minimum": 0,
           "maximum": 600000,
-          "default": 100
+          "default": 0
         }
       }
     },

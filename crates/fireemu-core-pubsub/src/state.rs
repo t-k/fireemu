@@ -2591,6 +2591,39 @@ mod tests {
         );
     }
 
+    /// An unconfigured registry redelivers a nacked push message as soon as possible, which is
+    /// what production does for a subscription without a retry policy.
+    #[test]
+    fn an_unconfigured_registry_redelivers_a_nacked_push_message_immediately() {
+        let mut state = PubSubState::new(42);
+        assert_eq!(
+            state.push_minimum_redelivery_interval(),
+            LogicalDuration::ZERO,
+            "the default must follow production"
+        );
+
+        let now = LogicalInstant::from_unix_seconds(1000);
+        state
+            .create_topic(topic("demo-app", "push"), BTreeMap::new())
+            .unwrap();
+        let mut config = sub_cfg("demo-app", "immediate", "push", Filter::always());
+        config.push_config = PushConfig {
+            push_endpoint: "http://127.0.0.1:1/push".to_owned(),
+        };
+        state.create_subscription(config).unwrap();
+        state
+            .publish(&topic("demo-app", "push"), vec![data(b"hello")], now)
+            .unwrap();
+        let subscription = SubscriptionName::new("demo-app", "immediate").unwrap();
+        let received = state.pull(&subscription, 1, now).unwrap();
+        state
+            .modify_ack_deadline(&subscription, &[received[0].ack_id.clone()], 0, now)
+            .unwrap();
+
+        assert_eq!(state.next_delivery_at(&subscription).unwrap(), Some(now));
+        assert_eq!(state.pull(&subscription, 1, now).unwrap().len(), 1);
+    }
+
     /// A negative interval is read as zero rather than moving redelivery into the past.
     #[test]
     fn a_negative_minimum_push_redelivery_interval_is_read_as_zero() {

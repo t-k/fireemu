@@ -244,8 +244,11 @@ def compile_manifest(nonce: str) -> dict[str, Any]:
             "No owner permission, nonce reservation or validity window is supplied here.",
             "Production error shapes for every negative case remain unknown.",
             (
-                "Long-running operation metadata shapes are declared from the pinned "
-                "discovery input, not from any response."
+                "Long-running operation metadata shapes are declared from the method "
+                "and schema names in the pinned Discovery input, not from any response. "
+                "That input carries locators only, with no types, descriptions or "
+                "output-only markers, so it can supply an enumeration of names but "
+                "never a message shape."
             ),
         ],
     }

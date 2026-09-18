@@ -149,3 +149,10 @@ def test_every_allocating_case_is_in_the_ledger_or_covered_by_reconciliation() -
         entry = next(e for e in cleanup["ledger"] if e["createdBy"] == case["id"])
         assert entry["revertCase"]
     assert cleanup["reconciliation"]["failsClosed"] is True
+
+
+def test_the_manifest_never_claims_a_message_shape_from_the_pinned_locators() -> None:
+    unresolved = " ".join(compile_manifest(NONCE)["unresolved"])
+    assert "locators only" in unresolved
+    assert "never a message shape" in unresolved
+    assert "shapes are declared from the pinned" not in unresolved

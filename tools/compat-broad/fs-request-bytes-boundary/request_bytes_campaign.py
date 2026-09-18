@@ -122,6 +122,14 @@ REFUSAL_EXPECTATION: dict[str, Any] = {
 GATE_INTERVAL_FLOOR_SECONDS = 0.25
 GATE_WALL_CAP_SECONDS = 1200
 
+#: The spacing this campaign runs at, which is a choice and not the Gate's
+#: floor. It equals the floor today, but the two are different quantities: the
+#: floor is the least the Gate permits anyone, while this is what this schedule
+#: declares. Reusing the floor here would mean a change to the Gate's minimum
+#: silently changed this campaign's pacing, which is the copied-constant problem
+#: wearing the opposite hat. The floor's only job is to say this choice is legal.
+CAMPAIGN_INTERVAL_SECONDS = 0.25
+
 #: What one small read or delete may reserve, and time out at. The reservation
 #: is only a plan unless the request is also bounded by it, so this is both.
 #: Three seconds is roughly an order of magnitude over a few-hundred-millisecond
@@ -372,7 +380,7 @@ def gate_charging_plan(plan: dict[str, Any]) -> dict[str, Any]:
             }
         )
     return {
-        "intervalSeconds": GATE_INTERVAL_FLOOR_SECONDS,
+        "intervalSeconds": CAMPAIGN_INTERVAL_SECONDS,
         "transportCeilingSeconds": TRANSPORT_TIMEOUT_SECONDS,
         "requestSeconds": SMALL_REQUEST_SECONDS,
         "jobs": {

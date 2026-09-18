@@ -101,13 +101,19 @@ def over_refusal_classification(receipt: Any) -> str | None:
     return "expected" if receipt["status"] == 400 else "semantic-discrepancy"
 
 
-#: Bytes of a refusal message retained inline in the final result.
+#: The invariant the two inline bounds below exist to keep:
 #:
-#: The response cap is 2 MiB and the final result is published under the 128 KiB
-#: row limit, so a long message copied verbatim used to complete every request,
-#: prove every resource absent, and then lose the whole run when result.json
-#: could not be written. The full text stays in the response sidecar; the result
-#: carries a bounded excerpt plus the length and digest that stand in for it.
+#:   **the final result must be publishable whatever the remote answers.**
+#:
+#: A response may be anything up to `MAX_RESPONSE_BYTES`, while `result.json` is
+#: published under `MAX_ROW_BYTES`, which is sixteen times smaller. Any field
+#: copied from a response into the final result therefore has to be bounded
+#: where it is written, not merely expected to be short. Getting this wrong does
+#: not fail early: the run completes every request, proves every resource
+#: absent, and is then lost at the moment of publication. `_guard_publishable`
+#: below is the tripwire for the next field that forgets.
+
+#: Bytes of a refusal message retained inline in the final result.
 MESSAGE_EXCERPT_BYTES = 1024
 
 
@@ -145,8 +151,9 @@ def refusal_message_fields(message: Any, sidecar: Any) -> dict[str, Any]:
     return fields
 
 
-#: Bytes of a non-typed refusal body retained inline. The full bytes are always
-#: in the run's `response-*.body` sidecar; this is the adjudication excerpt.
+#: Bytes of a non-typed refusal body retained inline, under the same invariant.
+#: The full bytes are always in the run's `response-*.body` sidecar; this is the
+#: adjudication excerpt.
 UNTYPED_BODY_INLINE_BYTES = 8192
 
 
@@ -319,6 +326,43 @@ def _create_output_directory(output: Path) -> int:
         raise
     finally:
         os.close(directory)
+
+
+def _guard_publishable(result: dict[str, Any]) -> None:
+    """Refuse to lose a completed run, and say which field grew.
+
+    Every field the result copies from a response is bounded where it is
+    written. This is the tripwire for the next one that is not: without it a
+    new inline field fails as an opaque `row-too-large` after the whole run has
+    succeeded, and only in a run whose remote happened to answer at length.
+    With it the same mistake names itself the first time a test drives a large
+    response through.
+    """
+
+    # Measured with the unbounded encoder on purpose: `_safe_json` raises the
+    # opaque failure this guard exists to replace, so it cannot be used to
+    # measure something already too large.
+    def size(value: Any) -> int:
+        return len(
+            json.dumps(
+                value, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode("utf-8")
+        )
+
+    total = size(result)
+    if total <= MAX_ROW_BYTES:
+        return
+    largest = max(
+        ((key, size(value)) for key, value in result.items()),
+        key=lambda item: item[1],
+        default=("<empty>", 0),
+    )
+    raise ValueError(
+        "final result is not publishable: "
+        f"{total} bytes exceeds the {MAX_ROW_BYTES}-byte limit; "
+        f"largest field is {largest[0]!r} at {largest[1]} bytes. "
+        "A field copied from a response must be bounded where it is written."
+    )
 
 
 def _row(
@@ -674,6 +718,7 @@ def collect_local(
             # Deliberately a separate key. It is never a typed refusal and must
             # not be readable as one by anything consuming `overRefusal`.
             result["untypedOverRefusal"] = untyped_over_refusal
+        _guard_publishable(result)
         _publish(output_fd, "result.json", result)
         return result
     finally:

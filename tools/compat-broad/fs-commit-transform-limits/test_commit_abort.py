@@ -8,7 +8,6 @@ real Gate directory is copied before anything is retired.
 import copy
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -24,15 +23,7 @@ sys.path.insert(0, str(HERE))
 import commit_abort
 from broad_contract import digest
 from reservations import Ledger
-
-
-def _evidence_root():
-    """Where `docs.local` lives; a linked worktree does not carry its own copy."""
-    for candidate in (ROOT, *ROOT.parents):
-        if (candidate / "docs.local").is_dir():
-            return candidate
-    return ROOT
-
+from shared_gate import _save
 
 CANONICAL_LEDGER = Path(
     os.environ.get(
@@ -40,8 +31,6 @@ CANONICAL_LEDGER = Path(
         Path.home() / ".local/state/fireemu-broad/production-admission-v1",
     )
 )
-RUN_V10 = _evidence_root() / "docs.local/logs/2026-09-18/commit500-501-o8-run-v10"
-HELD_RESERVATION = "3f1f8f1d0d80e55eeb2fb8bebecae60b06dc6bcca73d21fe48c7ed701fee3810"
 
 
 def _git(root, *args):
@@ -161,35 +150,42 @@ def test_an_abort_record_is_refused_without_a_complete_receipt(tmp_path, damage)
         commit_abort.build_abort_record(path)
 
 
-def _canonical_row():
-    state = json.loads((CANONICAL_LEDGER / "state.json").read_text())
-    row = state["reservations"][HELD_RESERVATION]
-    envelope = state["envelopes"][row["envelopeDigest"]]["envelope"]
-    return row, envelope
+FIXTURE = HERE / "fixtures/commit-v10-held-reservation.json"
 
 
-needs_real_run = pytest.mark.skipif(
-    not (CANONICAL_LEDGER / "state.json").is_file()
-    or not (RUN_V10 / "receipt.json").is_file(),
-    reason="the canonical Ledger and the v10 run directory are host local",
-)
+def held_fixture():
+    """The v10 attempt as it stood while its reservation was held.
+
+    The canonical row has since been retired and its Gate directory stopped, so
+    the live Ledger can no longer stand in for this: a retired row proves
+    nothing about whether a held one can still be retired. The snapshot carries
+    no credential material; a response journal is not part of a receipt.
+    """
+    return json.loads(FIXTURE.read_text())
 
 
-@needs_real_run
-def test_the_real_held_row_retires_on_the_closure_it_recorded(tmp_path):
-    """The v10 attempt is retirable although this source tree has moved on.
+def _write_gate(path, state):
+    """Reproduce a Gate directory from the snapshot a receipt recorded."""
+    path.mkdir(mode=0o700, parents=True)
+    (path / "lock").touch(mode=0o600)
+    _save(path, state)
+
+
+def test_the_held_v10_row_retires_on_the_closure_it_recorded(tmp_path):
+    """A held reservation is retirable although this source tree has moved on.
 
     The row records the closure of the frozen checkout `ff1211f17`, which no
-    longer matches the current sources; the fix to the evidence contract changed
+    longer matches the current sources: the fix to the evidence contract changed
     `reservations.py` itself. What retires the row is the run's own receipt,
     which carried that closure forward.
     """
-    row, envelope = _canonical_row()
+    fixture = held_fixture()
+    row, receipt = fixture["row"], fixture["receipt"]
     assert row["state"] == "held"
-    real_receipt = json.loads((RUN_V10 / "receipt.json").read_text())
-    assert real_receipt["generation"] == row["generation"]
+    assert receipt["generation"] == row["generation"]
 
-    # The generation names bytes that really are in the frozen commit.
+    # The generation names bytes that really are in the frozen commit, and that
+    # commit is not the one this branch is built from.
     verified = commit_abort.verify_generation_in_commit(
         row["generation"], source_root=ROOT
     )
@@ -204,30 +200,28 @@ def test_the_real_held_row_retires_on_the_closure_it_recorded(tmp_path):
         ).stdout.strip()
     )
 
-    # Reproduce the row in a temporary Ledger over a copy of the real Gate.
     run = tmp_path / "run"
     run.mkdir()
-    gate_state = json.loads((RUN_V10 / "gate" / "state.json").read_text())
     claim = copy.deepcopy(row["claim"])
     claim["gatePath"] = str((run / "gate").resolve())
     # Only the window moves, so the test does not expire with the permission.
     window = {"issuedAt": 1000.0, "expiresAt": 1000.0 + 86400}
     ledger = Ledger.create(tmp_path / "ledger")
     ticket = ledger.reserve(
-        {**copy.deepcopy(envelope), **window},
+        {**copy.deepcopy(fixture["envelope"]), **window},
         claim,
-        gate_state["plan"],
+        copy.deepcopy(receipt["gate"]["plan"]),
         generation=copy.deepcopy(row["generation"]),
         now=1100,
     )
-    # The Gate itself is copied only after the reservation exists, because a
-    # reservation refuses a Gate directory that is already present.
-    shutil.copytree(RUN_V10 / "gate", run / "gate")
+    # The Gate is built only after the reservation exists, because a reservation
+    # refuses a Gate directory that is already present.
+    _write_gate(run / "gate", copy.deepcopy(receipt["gate"]))
 
-    receipt = copy.deepcopy(real_receipt)
-    receipt["ticket"] = ticket
-    receipt["claimDigest"] = ticket["claimDigest"]
-    (run / "receipt.json").write_text(json.dumps(receipt))
+    spent = copy.deepcopy(receipt)
+    spent["ticket"] = ticket
+    spent["claimDigest"] = ticket["claimDigest"]
+    (run / "receipt.json").write_text(json.dumps(spent))
 
     record = commit_abort.build_abort_record(run / "receipt.json")
     assert {key: record[key] for key in commit_abort.GENERATION_FIELDS} == row[
@@ -235,7 +229,7 @@ def test_the_real_held_row_retires_on_the_closure_it_recorded(tmp_path):
     ]
     # This is the evidence shape the old contract refused: the attempt stopped
     # at the third preflight gate, so it observed project, database and auth.
-    assert [item["id"] for item in receipt["metadata"]] == [
+    assert [item["id"] for item in spent["metadata"]] == [
         "observation:project",
         "observation:database",
         "observation:auth",
@@ -247,10 +241,17 @@ def test_the_real_held_row_retires_on_the_closure_it_recorded(tmp_path):
     assert retired["generation"] == row["generation"]
     assert json.loads((run / "gate" / "state.json").read_text())["stopped"] is True
 
-    # The canonical Ledger was not touched.
-    assert (
-        json.loads((CANONICAL_LEDGER / "state.json").read_text())["reservations"][
-            HELD_RESERVATION
-        ]["state"]
-        == "held"
-    )
+
+def test_the_held_fixture_still_describes_the_canonical_reservation():
+    """A drift guard on the snapshot, independent of the row's current state."""
+    fixture = held_fixture()
+    state_path = CANONICAL_LEDGER / "state.json"
+    if not state_path.is_file():
+        pytest.skip("the canonical Ledger is host local")
+    row = json.loads(state_path.read_text())["reservations"].get(fixture["reservation"])
+    if row is None:
+        pytest.skip("the canonical Ledger does not carry this reservation")
+    assert row["claimDigest"] == fixture["row"]["claimDigest"]
+    assert row["envelopeDigest"] == fixture["row"]["envelopeDigest"]
+    assert row["generation"] == fixture["row"]["generation"]
+    assert row["claim"] == fixture["row"]["claim"]

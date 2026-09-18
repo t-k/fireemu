@@ -149,6 +149,23 @@ is itself the finding.
   stop the run, because the create-only commit cannot damage what is there and
   its refusal is the authoritative proof; a create accepted after the preflight
   saw a document is a contradiction and stops the run too.
+- Answerable for a create whose answer never came. Each owned document moves
+  through four states: no create sent, a create sent whose outcome is unknown, a
+  confirmed creation, and a confirmed absence of this run's creation. The target
+  is recorded as unknown before the create leaves the process, so a response
+  that is lost to a timeout or an exception still leaves the run answerable for
+  a document the backend may have created. The receipt carries those resources
+  on a separate responsibility list, and recovery gives each one a safe readback
+  rather than skipping it.
+
+  A readback settles the question without guessing. Absent means this run's
+  create never landed and the responsibility is discharged. A document carrying
+  this run's owner, role and nonce can only have come from that create, because
+  no other write to an unestablished role is ever sent, so it becomes the
+  creation evidence the lost response would have been and the document is
+  recovered under the usual conditional delete. Anything else is retained, never
+  deleted, and the resource stays unrecovered. A role whose preflight had
+  already seen a document is never attributed this way.
 - Recoverable. Cleanup reads each document, proves ownership from all three
   markers plus a present update time, deletes it conditional on the observed
   update time, and then checks typed absence. A document it cannot prove it owns
@@ -164,13 +181,31 @@ is itself the finding.
   from a recovery read becomes that document's result and the loop continues
   within the recovery deadline, so a receipt is always produced naming the
   documents still outstanding, the transactions still open and the sites where
-  it failed. A refusal that says the caller may not act stops further sends, but
-  every document this run created stays on the unrecovered list.
-- Verified by readback. A response code says what the backend answered, not what
-  it did. The plan places a readback immediately after every case that names a
-  document, before anything can overwrite it, and the receipt keeps the body
-  with the resource names, the instants and this run's identities replaced by
-  fixed slots. It also records where each observed version sits in the sequence
+  it failed.
+- Stopped once by an authority refusal. `PERMISSION_DENIED` and `UNAUTHENTICATED`
+  say the caller may not act at all, which is not a property of the phase that
+  met them. One latch at the single place requests leave the run holds for every
+  phase: observation, transaction release, the ownership read, the conditional
+  delete and the final absence read. The first such refusal is recorded, and
+  nothing is sent afterwards; no credential is swapped and no retry is made. The
+  receipt still names every document this run created or may have created, every
+  transaction left open and every responsibility it did not discharge. `ABORTED`
+  and a diagnostic the case table disagrees with are ordinary results and keep
+  their normal follow-up.
+- Verified by readback of the document that was asked for. A response code says
+  what the backend answered, not what it did. The plan places a readback
+  immediately after every case that names a document, before anything can
+  overwrite it, and the receipt keeps the body with the resource names, the
+  instants and this run's identities replaced by fixed slots.
+
+  The reply has to name the document the request named. Because the recorded
+  body replaces the resource name with a fixed slot, a body describing another
+  project, another database or another document would otherwise be recorded
+  exactly like the right one. A name that does not match is recorded as
+  `get-wrong-document`, an incomplete response rather than a readback: it never
+  becomes an observed document, it never stands in for a declared post state,
+  and in recovery it can never justify a delete. The comparator reports it as
+  indeterminate, not as a state anyone disagreed about. It also records where each observed version sits in the sequence
   of versions seen for that document, which is the version relation a post-state
   comparison needs and the one thing a volatile instant cannot carry across two
   runs. A commit that returns `OK` without writing, and a refusal that writes
@@ -228,7 +263,9 @@ a fresh nonce and the real owner identity.
 | Default request timeout | 10 seconds |
 | Contended request timeout | 120 seconds |
 | Worst case, timeouts plus waits | 960 seconds |
-| Wall-clock envelope | 1200 seconds |
+| Observation envelope | 1200 seconds |
+| Recovery window, after observation | 180 seconds |
+| Wall-clock envelope the permission must cover | 1380 seconds |
 | Planning ceiling | US$0.016688 |
 
 The cost is a conservative planning ceiling, not an invoice. It is 95 request
@@ -244,6 +281,12 @@ configuration and the API-key binding. No case creates or changes an index, a
 ruleset, a database, an account or any configuration, and a test enforces that.
 `allowedReobservations` is zero.
 
+The declared time bound is the two windows in sequence, not the observation
+envelope alone. Recovery runs on its own deadline precisely so that an exhausted
+observation budget still leaves room to give the owned documents back, so a run
+that spends its whole observation envelope can still occupy the project for the
+recovery window afterwards. The permission names 1380 seconds for that reason.
+
 ## Comparator contract
 
 `tools/compat-broad/fs-write-txn/txn_expiry_comparison.py` reports one of four
@@ -257,8 +300,10 @@ verdicts and never claims acquisition validity or promotion.
   differs.
 - `INDETERMINATE`: a receipt is incomplete, unbound, unrecovered, collected
   against the wrong target, produced with simulated production time, short of a
-  declared elapsed time, missing a readback for a post state a case declares, or
-  carrying credential material.
+  declared elapsed time, missing a readback for a post state a case declares,
+  holding a resource whose ownership was never confirmed, stopped by an
+  authority refusal, carrying a post-state readback that named another document,
+  or carrying credential material.
 
 Infrastructure failure is never reported as a semantic mismatch. Diagnostic
 normalization replaces only request-bound resource identities and instants; it
@@ -370,6 +415,14 @@ Cleanup behavior is exercised offline rather than assumed:
   is incomplete.
 - An incomplete transport response stops the collection with
   `incomplete-response` rather than producing a semantic row.
+- A create whose response is lost, to a timeout or to an exception, leaves the
+  resource on the responsibility list; recovery reads it back and either proves
+  it absent or recovers it, and a document it cannot attribute is retained.
+- A readback answered with another project's, another database's or another
+  document's name deletes nothing and is never recorded as that document's
+  state.
+- An authority refusal injected at each of the five send sites stops every later
+  send, while a contention `ABORTED` at the same position does not.
 
 In the real rehearsal all five documents were deleted under their observed
 update time and proved absent afterwards.

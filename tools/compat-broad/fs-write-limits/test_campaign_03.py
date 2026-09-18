@@ -254,12 +254,19 @@ def plan_for(nonce="a", project="demo-test", part="A"):
     return compile_limits_plan(project, "(default)", nonce * 32, part)
 
 
-def run_campaign(tmp_path, plan, name="run"):
+def run_campaign(tmp_path, plan, name="run", *, excused=None):
+    """Model a local run, which is the only kind that excuses a row."""
     create(tmp_path / f"gate-{name}", plan["localGatePlan"])
     gate = Gate(tmp_path / f"gate-{name}", "limits")
     gate.claim()
     responder = Responder()
-    result = collect(gate, plan, tmp_path / f"collection-{name}", responder)
+    result = collect(
+        gate,
+        plan,
+        tmp_path / f"collection-{name}",
+        responder,
+        excused=pending_rows(plan) if excused is None else excused,
+    )
     return result, responder
 
 
@@ -467,7 +474,10 @@ def test_expected_local_journal_completes_and_validates(tmp_path):
         "gate": result["gate"],
     }
     assert validate_cleanup(receipt, plan) is True
-    assert validate_local_receipt(receipt, plan) is True
+    # A local receipt is validated with the same excuse the local run used; a
+    # production receipt would be validated with none.
+    assert validate_local_receipt(receipt, plan, excused=pending_rows(plan)) is True
+    assert validate_local_receipt(receipt, plan) is False
 
 
 def test_suffix_that_does_not_land_is_an_expectation_mismatch(tmp_path):

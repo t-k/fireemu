@@ -6618,7 +6618,7 @@
    "claimDigest": "40ad71b6de15271ee535ae4dffff27e261ff1044ce225e0de63f1d05b49ec3c3",
    "envelopeDigest": "b2a7dd362e2f0bf29775fe253bd6ce534270529a7cdbfacd198fd440da659d73",
    "ledgerIdentity": "baadce1b6025c91849c6ae1db803798e2ba9ca52238ff2180fc3c2bacd61aabb",
-   "ledgerPath": "/Users/tk/.local/state/fireemu-broad/production-admission-v1",
+   "ledgerPath": "<canonical-ledger>",
    "reservation": "3f1f8f1d0d80e55eeb2fb8bebecae60b06dc6bcca73d21fe48c7ed701fee3810"
   },
   "workerArchiveSha256": "f308f3f885690ffc9ffbefbd8e6820b93f5de569abc98235b56afd7fa0fc77b7"
@@ -6634,7 +6634,7 @@
    },
    "campaignId": "FS-DATA-WRITE-COMMIT-TRANSFORMS-03",
    "durationSeconds": 1200,
-   "gatePath": "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-18/commit500-501-o8-run-v10/gate",
+   "gatePath": "<run>/gate",
    "gatePlanDigest": "2aab5c5abe61952abec1569529763df234df37cffec2005d3bb37ecd7a5939e0",
    "locks": [
     {

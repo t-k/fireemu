@@ -114,7 +114,7 @@ _OWNER_PRECONDITIONS = (
     ),
     (
         "A named owner approves one run, bound to this manifest digest and a fresh nonce, "
-        "and acknowledges that the run creates up to twelve accounts it will delete."
+        "and acknowledges that the run creates up to fourteen accounts it will delete."
     ),
 )
 

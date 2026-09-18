@@ -206,8 +206,12 @@ def test_the_serial_schedule_would_exhaust_the_wall_budget() -> None:
     by_id = {case["id"]: case for case in observation_cases()}
     for identifier in CASE_IDS:
         offset = by_id[identifier]["dueOffsetSeconds"]
-        if offset:
-            # Acquiring the resource here means its whole age elapses from this moment.
+        # Charge each aged resource once, at the row that first reads it: the serial
+        # reading acquires the resource there, so its whole age elapses from that moment.
+        if offset and (
+            identifier.endswith("-start")
+            or identifier.startswith("totp-enroll-session-age")
+        ):
             now += offset
         if next_action(state, now)["action"] != "RUN":
             break

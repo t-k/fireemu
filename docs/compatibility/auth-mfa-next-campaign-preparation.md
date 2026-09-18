@@ -18,7 +18,7 @@ The earlier TOTP package, `AUTH-MFA-TOTP-ENROLL-RETRY-01`, was reduced to a non-
 
 Google publishes no lifetime for `mfaPendingCredential` and none for the TOTP enrollment `sessionInfo` that `mfaEnrollment:start` returns. None of the eight reference sources the campaign cites states one. These ages therefore bracket an empirical boundary rather than test a documented one, and under the monotonicity assumption they can localise it to (300, 450] or (450, 600], or report that it is greater than 600.
 
-**A control for the refusal direction.** A fourth age, 1800 seconds, is carried as a control rather than as a sample, because production has already refused it. Without it, a run in which all three sampled ages are accepted cannot distinguish a lifetime longer than believed from a sampler that never aged anything. It costs no extra wall time, because every aged resource is acquired at the same origin and the ages elapse together.
+**A control for the refusal direction.** A fourth age, 1800 seconds, is carried as a control rather than as a sample, because production has already refused it. Without it, a run in which all three sampled ages are accepted cannot distinguish a lifetime longer than believed from a sampler that never aged anything. It costs no extra requests and no extra accounts beyond its own, but it is not free: it is the longest age in the run, so it raises the critical path from 630 seconds to 1830 and is the reason the wall budget is 2700 seconds rather than roughly 1400. That is the price of being able to read the other three samples at all.
 
 **TOTP.** Enrollment start returns the shared secret; the campaign computes RFC 6238 codes locally, so no device and no third-party application is involved. The lifecycle walks start, a deterministically wrong code, a correct code in the same session, a replay of the finalized session, factor readback, sign-in start, sign-in finalize, a replay of the consumed code, withdrawal, readback after withdrawal, and withdrawal of an identifier that no longer exists. A separate family ages the enrollment session itself at the same three points.
 
@@ -26,7 +26,7 @@ Google publishes no lifetime for `mfaPendingCredential` and none for the TOTP en
 
 Thirty-three cases in all: fourteen for pending age including the refusal-direction control, eleven for the TOTP lifecycle, three for enrollment-session age, and five interaction cases.
 
-**The acquisition schedule is contractual.** Every aged pending credential and every aged enrollment session is acquired at one common origin before any wait begins, and each aged row is scheduled at that origin plus its own age. The ages therefore elapse concurrently and the run's critical path is the largest age, 1800 seconds, plus one TOTP step rollover. The obvious alternative, acquiring each resource immediately before its own wait, costs the sum of the ages instead: 10830 seconds, which does not fit any sensible budget. The manifest declares the schedule and the per-case due offsets, the case list is ordered so those offsets never decrease, and a test walks the collector through both readings to show that one fits the budget and the other exhausts it.
+**The acquisition schedule is contractual.** Every aged pending credential and every aged enrollment session is acquired at one common origin before any wait begins, and each aged row is scheduled at that origin plus its own age. The ages therefore elapse concurrently and the run's critical path is the largest age, 1800 seconds, plus one TOTP step rollover. The obvious alternative, acquiring each resource immediately before its own wait, costs the sum of the ages instead: 4530 seconds, counting each aged resource once rather than once per row that reads it, which does not fit any sensible budget. The manifest declares the schedule and the per-case due offsets, the case list is ordered so those offsets never decrease, and a test walks the collector through both readings to show that one fits the budget and the other exhausts it.
 
 ## Bounded, resumable collection
 
@@ -41,7 +41,7 @@ Budgets are enforced rather than described. Exceeding the request budget or the 
 | Requests | 400 |
 | Wall clock | 2700 s |
 | Critical path | 1830 s |
-| Serial cost of the same aging | 10830 s |
+| Serial cost of the same aging | 4530 s |
 | Provisioning allowance | 420 s |
 | Recovery reserve | 300 s |
 | Owned accounts | 14 |
@@ -62,7 +62,7 @@ The envelope allows only Identity Platform account and project-configuration end
 4. The SMS region policy allows that number's region for the duration of the run.
 5. No tenant, blocking function or identity-provider change happens during the run.
 6. The executing principal may create, read, update and delete the accounts it created, and may read and restore the project configuration.
-7. A named owner approves one run, bound to the manifest digest and a fresh nonce, acknowledging that up to twelve accounts are created and deleted.
+7. A named owner approves one run, bound to the manifest digest and a fresh nonce, acknowledging that up to fourteen accounts are created and deleted.
 
 ## Provenance
 

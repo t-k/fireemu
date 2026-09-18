@@ -371,3 +371,49 @@ def test_a_differing_error_message_is_a_difference_not_nondeterminism() -> None:
     result = compare(local, production)
     assert result["classification"] == "DIFF"
     assert [row["id"] for row in result["rowDifferences"]] == [CASE_IDS[4]]
+
+
+def test_the_declared_order_is_the_order_that_yields_second_factor_exists() -> None:
+    """The factor-limit row only refuses while exactly one TOTP factor is enrolled."""
+    order = list(CASE_IDS)
+    limit = order.index("second-factor-limit")
+    enrolled = order.index("totp-enroll-retry-same-session")
+    readback = order.index("totp-enroll-factor-readback")
+    withdrawn = order.index("totp-withdraw")
+    assert enrolled < readback < limit < withdrawn
+    by_id = {case["id"]: case for case in observation_cases()}
+    assert by_id["second-factor-limit"]["expectedLocal"] == {
+        "status": 400,
+        "errorCode": "SECOND_FACTOR_EXISTS",
+        "basis": "source-read",
+    }
+    assert by_id["second-factor-limit"]["account"] == by_id["totp-withdraw"]["account"]
+
+
+def test_the_serial_cost_counts_each_aged_resource_once() -> None:
+    from mfa_cases import TOTP_STEP_ROLLOVER_SECONDS
+
+    # Three rows share one aged pending credential; the wait happens once, not three times.
+    assert serial_aging_seconds() == (
+        sum(AGED_PENDING_SAMPLES)
+        + sum(SAMPLED_AGES_SECONDS)
+        + TOTP_STEP_ROLLOVER_SECONDS
+    )
+    rows_with_offsets = [
+        case["dueOffsetSeconds"]
+        for case in observation_cases()
+        if case["dueOffsetSeconds"]
+    ]
+    assert serial_aging_seconds() < sum(rows_with_offsets)
+
+
+def test_the_refusal_direction_control_is_what_makes_the_budget_2700() -> None:
+    from mfa_cases import TOTP_STEP_ROLLOVER_SECONDS
+
+    limits = compile_campaign(NONCE)["limits"]
+    without_control = max(SAMPLED_AGES_SECONDS) + TOTP_STEP_ROLLOVER_SECONDS
+    assert without_control == 630
+    assert limits["criticalPathSeconds"] == (
+        REFUSAL_DIRECTION_CONTROL_AGE_SECONDS + TOTP_STEP_ROLLOVER_SECONDS
+    )
+    assert limits["criticalPathSeconds"] > without_control

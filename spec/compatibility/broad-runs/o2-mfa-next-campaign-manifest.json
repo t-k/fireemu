@@ -460,6 +460,23 @@
       "ageSeconds": null,
       "basis": "negative",
       "dueOffsetSeconds": null,
+      "endpoint": "accounts/mfaEnrollment:start",
+      "expectedLocal": {
+        "basis": "source-read",
+        "errorCode": "SECOND_FACTOR_EXISTS",
+        "status": 400
+      },
+      "family": "interaction",
+      "id": "second-factor-limit",
+      "obligation": "Starting a second TOTP enrollment on an account that already has one is refused; fireemu refuses at start, so the step production refuses at is worth recording.",
+      "productionExpectation": "unobserved",
+      "source": "mfa-enrollment-start"
+    },
+    {
+      "account": "totp-lifecycle",
+      "ageSeconds": null,
+      "basis": "negative",
+      "dueOffsetSeconds": null,
       "endpoint": "accounts/mfaSignIn:start",
       "expectedLocal": {
         "basis": "source-read",
@@ -609,23 +626,6 @@
       "source": "mfa-enrollment-start"
     },
     {
-      "account": "totp-lifecycle",
-      "ageSeconds": null,
-      "basis": "negative",
-      "dueOffsetSeconds": null,
-      "endpoint": "accounts/mfaEnrollment:start",
-      "expectedLocal": {
-        "basis": "source-read",
-        "errorCode": "SECOND_FACTOR_EXISTS",
-        "status": 400
-      },
-      "family": "interaction",
-      "id": "second-factor-limit",
-      "obligation": "Starting a second TOTP enrollment on an account that already has one is refused; fireemu refuses at start, so the step production refuses at is worth recording.",
-      "productionExpectation": "unobserved",
-      "source": "mfa-enrollment-start"
-    },
-    {
       "account": "project",
       "ageSeconds": null,
       "basis": "control",
@@ -666,7 +666,7 @@
     "maxWallSeconds": 2700,
     "provisioningSeconds": 420,
     "recoveryReserveSeconds": 300,
-    "serialAgingSeconds": 10830
+    "serialAgingSeconds": 4530
   },
   "owner": {
     "accounts": [
@@ -736,7 +736,7 @@
     "The SMS region policy allows the test number's region for the duration of the run.",
     "No tenant, blocking function or identity-provider change happens during the run.",
     "The executing principal may create, read, update and delete accounts it created, and may read and restore the project configuration.",
-    "A named owner approves one run, bound to this manifest digest and a fresh nonce, and acknowledges that the run creates up to twelve accounts it will delete."
+    "A named owner approves one run, bound to this manifest digest and a fresh nonce, and acknowledges that the run creates up to fourteen accounts it will delete."
   ],
   "permissionEnvelope": {
     "allowedEndpoints": [

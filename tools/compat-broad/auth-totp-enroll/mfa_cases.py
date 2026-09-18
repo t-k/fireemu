@@ -260,6 +260,21 @@ def _totp_cases() -> list[dict[str, Any]]:
             200,
             None,
         ),
+        # Declared where it executes: the account has to hold exactly one TOTP factor,
+        # so this row belongs after the readback and before the withdrawal rows remove
+        # it. The declared order is the execution order, and the recorder follows it.
+        _case(
+            "second-factor-limit",
+            "interaction",
+            "negative",
+            "accounts/mfaEnrollment:start",
+            "mfa-enrollment-start",
+            "totp-lifecycle",
+            "Starting a second TOTP enrollment on an account that already has one is refused; "
+            "fireemu refuses at start, so the step production refuses at is worth recording.",
+            400,
+            "SECOND_FACTOR_EXISTS",
+        ),
         _case(
             "totp-signin-start",
             "totp-lifecycle",
@@ -368,18 +383,6 @@ def _interaction_cases() -> list[dict[str, Any]]:
             "INVALID_ID_TOKEN",
         ),
         _case(
-            "second-factor-limit",
-            "interaction",
-            "negative",
-            "accounts/mfaEnrollment:start",
-            "mfa-enrollment-start",
-            "totp-lifecycle",
-            "Starting a second TOTP enrollment on an account that already has one is refused; "
-            "fireemu refuses at start, so the step production refuses at is worth recording.",
-            400,
-            "SECOND_FACTOR_EXISTS",
-        ),
-        _case(
             "project-mfa-config-readback",
             "interaction",
             "control",
@@ -448,9 +451,16 @@ def critical_path_seconds() -> int:
 
 
 def serial_aging_seconds() -> int:
-    """Return what the same run would cost if each aged resource were acquired in turn."""
-    return sum(case["dueOffsetSeconds"] or 0 for case in observation_cases()) + (
-        TOTP_STEP_ROLLOVER_SECONDS
+    """Return what the same run would cost if each aged resource were acquired in turn.
+
+    The cost is per aged resource, not per row: the three rows that share one aged pending
+    credential age it once between them, so summing the rows' offsets would count the same
+    wait three times.
+    """
+    return (
+        sum(AGED_PENDING_SAMPLES)
+        + sum(SAMPLED_AGES_SECONDS)
+        + TOTP_STEP_ROLLOVER_SECONDS
     )
 
 

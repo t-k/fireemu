@@ -205,3 +205,16 @@ def test_reaping_an_already_finished_child_is_a_no_op() -> None:
     process = subprocess.Popen(argv)
     process.wait(timeout=30)
     assert reap_owned_child(process, argv) == "stopped"
+
+
+def test_the_recorder_walks_the_cases_in_their_declared_order() -> None:
+    """The ledger's rows are the recorder's own sequence, so this pins the two together."""
+    ledger = json.loads(
+        (
+            repository_root() / "spec/compatibility/broad-runs/o2-mfa-local-shadow.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert [row["id"] for row in ledger["rows"]] == list(CASE_IDS)
+    observed = {row["id"]: row for row in ledger["rows"]}
+    assert observed["second-factor-limit"]["errorCode"] == "SECOND_FACTOR_EXISTS"
+    assert observed["totp-withdraw"]["status"] == 200

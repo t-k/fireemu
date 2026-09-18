@@ -1,10 +1,10 @@
 {
   "campaignId": "FS-WRITE-LIMITS-03",
   "campaignSources": {
-    "spec/limits/firestore-standard-2026-08-25.json": "2c29e7492fd581e236ce9f044294bf59e9a6b89f2c4dc3c48d9f74beb291d406",
+    "spec/limits/firestore-standard-2026-08-25.json": "f12ab3686e197be53b14880beec8c6bc72970ca55a72e780fa9d4e99c7abd625",
     "tools/compat-broad/fs-write-limits/collector_03.py": "5c69fa9d316392dfc9d7a09e5db5e2cd2e5faa42ba4c0e9bfc763615d326f4de",
     "tools/compat-broad/fs-write-limits/comparator_03.py": "1528fd6bb73c9c7228a155d4228893cda0653d2547b41042cd7a2668b091d843",
-    "tools/compat-broad/fs-write-limits/compiler_03.py": "691c8b6930cebdf8dd83f1a2e238726e2fdeea0a1bce69012de3567a5bfc05e7",
+    "tools/compat-broad/fs-write-limits/compiler_03.py": "e865b477e631726b0eb9ea9206093f0c20ffc4729f78ef7c4d7541ccfc7c3156",
     "tools/compat-broad/fs-write-limits/expectations_03.py": "390f0b56bd7fd97d6be8aedb8cb105860e7e6cbc36fc0fd70a20fac089334d1d",
     "tools/compat-broad/fs-write-limits/shadow.py": "a340d768ad298390ea64d027cc9b798111e157e5207790c398baaefe012db712",
     "tools/compat-broad/fs-write-limits/shadow_03.py": "302b9a59390ec4a65b172cb0e78a2bd36e12e03a99da2b48c2587dfad7258c4f",
@@ -25,22 +25,22 @@
           "fireemu",
           "--message-format=json"
         ],
-        "runtimeInputCount": 407,
-        "runtimeInputsDigest": "e146866b0aa7a21ef9069508ffb57820d7c6bb245f6b692298b1838aea3d5330",
+        "runtimeInputCount": 410,
+        "runtimeInputsDigest": "873f5d4e562db2fab3b4d7c9c7d82401300a21a30978f47e1aa5f286e866adcc",
         "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-        "sha256": "ad675de6443bf2e04058362313209a2b2cdd6ce21d181f93def649b224c3adae"
+        "sha256": "4a0b42c089b43f036baa922a30987beb90cf7f7147b2eaa4ec5ed614e017dd6f"
       },
       "campaignId": "FS-WRITE-LIMITS-03A",
       "digests": {
-        "parentManifestSha256": "77a52711edb7577f5b240faa9323b45905537b1add9f7a2ce31832f281dfbb88",
+        "parentManifestSha256": "d3554b938bd1cab05939931f42c7efb4638c052fa4350fda645a049ed1d7d54a",
         "sourceInputsBound": true,
-        "supervisorManifestSha256": "4546e00bddb46f270c708c1827e4a36d9ed6563dbc24c7d926b9c797e32865b0"
+        "supervisorManifestSha256": "59a3ac5e2206e0db987b925a9b46265257ee68706dae82a106a69dfe412bb92e"
       },
       "execution": {
         "allOwnedResourcesAbsentAfterRecovery": true,
         "cleanupComplete": true,
         "cleanupValidated": true,
-        "configurationDigest": "af921b359103ea893c89103a27328472b6aa104bbfc7ac33f5c63047bc2c0f38",
+        "configurationDigest": "181512a3c9120722f8bcc22a7ba10e1dee9a799b26dc4605953624a3eaf07467",
         "database": "(default)",
         "indexConfiguration": {
           "sha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
@@ -51,7 +51,7 @@
         "ownedDocuments": 18,
         "ownedProcess": {
           "listenersClosed": true,
-          "pid": 24053,
+          "pid": 60379,
           "stopped": true
         },
         "pendingDifferences": [
@@ -72,11 +72,7 @@
           36,
           37,
           38,
-          39,
-          52,
-          53,
-          54,
-          55
+          39
         ],
         "project": "demo-firestore-probe",
         "receiptValidated": true,
@@ -97,22 +93,22 @@
           "fireemu",
           "--message-format=json"
         ],
-        "runtimeInputCount": 407,
-        "runtimeInputsDigest": "e146866b0aa7a21ef9069508ffb57820d7c6bb245f6b692298b1838aea3d5330",
+        "runtimeInputCount": 410,
+        "runtimeInputsDigest": "873f5d4e562db2fab3b4d7c9c7d82401300a21a30978f47e1aa5f286e866adcc",
         "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-        "sha256": "9a609d87b96f2600cd5ee6516e1d9cce086b189b8d13c219d6eb085a564eb267"
+        "sha256": "a90a5d6e58c04a438574c8fe128d321d178d74b3c7d2170a1bd9d52c69e2165f"
       },
       "campaignId": "FS-WRITE-LIMITS-03B",
       "digests": {
-        "parentManifestSha256": "aae00c092f7e3313bba91cf44dc0b9a77e22eb1357b7097f6dfcecbd27e5b42d",
+        "parentManifestSha256": "ceb07476387123e8eb5e42f975817927bb9030807f465359ac342e03ef13e56a",
         "sourceInputsBound": true,
-        "supervisorManifestSha256": "e7cb3d9c18cbe3ce623a2e73834ab8f889944c7e75db04ed7aa34b6a87070579"
+        "supervisorManifestSha256": "77662f6ea95cd11ec96158959c67bdd28bca21d4a4dd33ad8c7720a5051175c5"
       },
       "execution": {
         "allOwnedResourcesAbsentAfterRecovery": true,
         "cleanupComplete": true,
         "cleanupValidated": true,
-        "configurationDigest": "2ab7fc20e10a3442a8f810dd401929adbf3406c296eacdf4dd0b7495a4016f58",
+        "configurationDigest": "c5bcb49d68d6940a2be58589f25aef766bd72a081c00494149ccf624c2cc1f88",
         "database": "(default)",
         "indexConfiguration": {
           "sha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
@@ -123,41 +119,11 @@
         "ownedDocuments": 11,
         "ownedProcess": {
           "listenersClosed": true,
-          "pid": 24283,
+          "pid": 65332,
           "stopped": true
         },
-        "pendingDifferences": [
-          {
-            "basis": "negative boundary was not refused with INVALID_ARGUMENT",
-            "index": 16,
-            "pending": true,
-            "reason": "the catalog records this limit as unsupported, so the expectation is the documented production behaviour rather than an observed local one"
-          },
-          {
-            "basis": "typed resource absence not proven",
-            "index": 17,
-            "pending": true,
-            "reason": "the catalog records this limit as unsupported, so the expectation is the documented production behaviour rather than an observed local one"
-          },
-          {
-            "basis": "whole-request refusal was not a typed INVALID_ARGUMENT",
-            "index": 20,
-            "pending": true,
-            "reason": "the catalog records this limit as unsupported, so the expectation is the documented production behaviour rather than an observed local one"
-          }
-        ],
-        "pendingRows": [
-          15,
-          16,
-          17,
-          18,
-          19,
-          20,
-          21,
-          22,
-          23,
-          24
-        ],
+        "pendingDifferences": [],
+        "pendingRows": [],
         "project": "demo-firestore-probe",
         "receiptValidated": true,
         "recordingComplete": true,
@@ -169,6 +135,6 @@
     }
   },
   "productionExecuted": false,
-  "sourceCommit": "2d563ec82bc117a7772f42b988b26b8ec488886a",
+  "sourceCommit": "844e56851a7d569b47f5d18b840b69a0b4c9516c",
   "status": "completed-local-only"
 }

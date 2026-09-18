@@ -52,12 +52,12 @@
   "localShadow": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03-local-shadow.json",
     "productionExecuted": false,
-    "sha256": "68d9c33753342814dc7dfb74c91c172626c9d883ed6d0f5f19a48dff120f1fbe",
+    "sha256": "c73c1d521806e22bb963a90d89250192d1c60e33c528fbc30cabaa796028ccdc",
     "status": "completed"
   },
   "manifest": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03.json",
-    "sha256": "441117da6077e3a78cb217301636ab466a7b6d3a79ce6ef368eaf870ddf34196"
+    "sha256": "f27c0aae3ccdfa6951171fba6553475c6ff802d627d1c9b0fd32ab6abccf8d98"
   },
   "parts": [
     "FS-WRITE-LIMITS-03A",
@@ -65,12 +65,12 @@
   ],
   "productionExecuted": false,
   "source": {
-    "codeSourceHead": "2d563ec82bc117a7772f42b988b26b8ec488886a",
-    "commit": "2d563ec82bc117a7772f42b988b26b8ec488886a",
+    "codeSourceHead": "844e56851a7d569b47f5d18b840b69a0b4c9516c",
+    "commit": "844e56851a7d569b47f5d18b840b69a0b4c9516c",
     "productionArtifactSha256": null,
     "shadowArtifactSha256": {
-      "A": "ad675de6443bf2e04058362313209a2b2cdd6ce21d181f93def649b224c3adae",
-      "B": "9a609d87b96f2600cd5ee6516e1d9cce086b189b8d13c219d6eb085a564eb267"
+      "A": "4a0b42c089b43f036baa922a30987beb90cf7f7147b2eaa4ec5ed614e017dd6f",
+      "B": "a90a5d6e58c04a438574c8fe128d321d178d74b3c7d2170a1bd9d52c69e2165f"
     }
   },
   "status": "BLOCKED_OWNER",

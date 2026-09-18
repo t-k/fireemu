@@ -146,6 +146,7 @@ def test_a_preparation_receipt_from_this_package_is_never_promoted() -> None:
         project="demo-auth-action",
         nonce=NONCE,
         send=Empty().send,
+        sleep=lambda _: None,
     )
     result = compare(local, copy.deepcopy(local))
     assert result["classification"] == "INDETERMINATE"

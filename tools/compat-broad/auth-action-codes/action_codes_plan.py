@@ -475,35 +475,47 @@ def campaign_stages() -> list[dict[str, Any]]:
     return stages
 
 
+def _address_lookup(identifier: str, requires: str) -> dict[str, Any]:
+    """Look both owned addresses up in one privileged request."""
+    return {
+        "id": identifier,
+        "account": None,
+        "operationType": "auth-lookup",
+        "selector": "email",
+        "routeClass": "admin",
+        "method": "POST",
+        "path": _ADMIN.format(project="{project}", method="lookup"),
+        "body": {"email": ["$binding:accountA.email", "$binding:accountB.email"]},
+        "requires": requires,
+    }
+
+
 def campaign_recovery() -> list[dict[str, Any]]:
-    """Delete every owned account and then prove its absence."""
-    rows: list[dict[str, Any]] = []
+    """Discover owned accounts by address, delete them, then prove absence.
+
+    The address is the ownership key. A runtime identifier only exists when a
+    create response was both received and parsed, so a lost response would hide
+    a real account from a recovery keyed on `localId`.
+    """
+    rows: list[dict[str, Any]] = [
+        _address_lookup("recover-discover", "the owned identifiers, however they arose")
+    ]
     for account in ("accountA", "accountB"):
         rows.append(
             {
                 "id": "recover-delete-" + account,
                 "account": account,
                 "operationType": "auth-delete",
+                "selector": "localId",
                 "routeClass": "admin",
                 "method": "POST",
                 "path": _ADMIN.format(project="{project}", method="delete"),
                 "body": {"localId": "$binding:" + account + ".localId"},
                 "tolerates": "already absent",
+                "identifierSource": "the discovery readback, or the create response",
             }
         )
-    for account in ("accountA", "accountB"):
-        rows.append(
-            {
-                "id": "recover-absence-" + account,
-                "account": account,
-                "operationType": "auth-lookup",
-                "routeClass": "admin",
-                "method": "POST",
-                "path": _ADMIN.format(project="{project}", method="lookup"),
-                "body": {"localId": "$binding:" + account + ".localId"},
-                "requires": "typed absence",
-            }
-        )
+    rows.append(_address_lookup("recover-absence", "typed absence of both addresses"))
     return rows
 
 
@@ -617,6 +629,7 @@ def campaign_manifest(nonce: str = NONCE_TEMPLATE) -> dict[str, Any]:
             "recoveryRequests": len(recovery),
             "maxConcurrency": 1,
             "requestRatePerSecondMax": 4,
+            "requestRateEnforced": True,
             "wallSeconds": 300,
             "recoverySeconds": 180,
             "ownedAccountsMax": 2,
@@ -629,6 +642,22 @@ def campaign_manifest(nonce: str = NONCE_TEMPLATE) -> dict[str, Any]:
                 "the run; no message is delivered, so no messaging tariff applies."
             ),
         },
+        "permissionEnvelope": {
+            "role": "roles/firebaseauth.admin",
+            "scope": "https://www.googleapis.com/auth/identitytoolkit",
+            "projectScope": "the single approved project",
+            "methods": [
+                "accounts:sendOobCode",
+                "accounts:update",
+                "accounts:lookup",
+                "accounts:delete",
+            ],
+            "notRequired": [
+                "https://www.googleapis.com/auth/cloud-platform",
+                "organization or folder level access",
+                "any Firestore, Storage or Functions permission",
+            ],
+        },
         "ownerInputs": {
             "owner": None,
             "permissionReference": None,
@@ -637,13 +666,15 @@ def campaign_manifest(nonce: str = NONCE_TEMPLATE) -> dict[str, Any]:
             "endsAt": None,
             "nonce": None,
             "credentialSource": None,
+            "credentialRole": None,
         },
         "ownerPreconditions": [
-            "A Google OAuth credential authorized for privileged link generation on the target project.",
+            "A Google OAuth credential holding roles/firebaseauth.admin on the single approved project, with the identitytoolkit scope rather than cloud-platform.",
             "Confirmation that the target project has no blocking function or tenant that changes these routes.",
             "Acceptance that two accounts are created and deleted inside the approved window.",
             "A fresh, unused 32-character hexadecimal nonce supplied at approval time.",
             "A source commit and built artifact digest bound before the local side is recorded.",
+            "Acceptance that the reserved example.invalid domain is usable for signUp and sendOobCode on the target project; a refusal stops the run at its first stage and fails closed, consuming the approved window without an observation.",
         ],
         "productionExecutable": False,
         "productionExecuted": False,

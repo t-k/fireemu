@@ -138,6 +138,8 @@ def test_budget_is_bounded_and_far_below_one_dollar() -> None:
     assert budget["observationRequests"] == len(STAGE_IDS)
     assert budget["recoveryRequests"] == len(manifest["recovery"])
     assert budget["maxConcurrency"] == 1
+    assert budget["requestRatePerSecondMax"] == 4
+    assert budget["requestRateEnforced"] is True
     assert budget["planningCeilingUsd"] <= 0.05
     assert budget["expectedMeteredUsd"] == 0.0
     assert budget["deliveredMessages"] == 0
@@ -145,18 +147,52 @@ def test_budget_is_bounded_and_far_below_one_dollar() -> None:
     assert budget["recoverySeconds"] <= 180
 
 
-def test_recovery_deletes_and_then_proves_absence_of_every_owned_account() -> None:
+def test_recovery_proves_absence_by_address_not_by_runtime_identifier() -> None:
     manifest = campaign_manifest(NONCE)
     owned = set(manifest["ownedAccounts"])
-    deleted = [
-        row for row in manifest["recovery"] if row["operationType"] == "auth-delete"
+    rows = {row["id"]: row for row in manifest["recovery"]}
+    assert list(rows) == [
+        "recover-discover",
+        "recover-delete-accountA",
+        "recover-delete-accountB",
+        "recover-absence",
     ]
-    absence = [
-        row for row in manifest["recovery"] if row["operationType"] == "auth-lookup"
-    ]
-    assert {row["account"] for row in deleted} == owned
-    assert {row["account"] for row in absence} == owned
+    # The address is the ownership key, because a lost create response leaves an
+    # account whose runtime identifier this collector never learned.
+    for identifier in ("recover-discover", "recover-absence"):
+        row = rows[identifier]
+        assert row["operationType"] == "auth-lookup"
+        assert row["selector"] == "email"
+        assert row["body"]["email"] == [
+            "$binding:" + name + ".email" for name in sorted(owned)
+        ]
+    assert {rows["recover-delete-" + name]["account"] for name in owned} == owned
     assert all(row["routeClass"] == "admin" for row in manifest["recovery"])
+
+
+def test_the_permission_envelope_names_a_least_privilege_role() -> None:
+    manifest = campaign_manifest(NONCE)
+    permission = manifest["permissionEnvelope"]
+    assert permission["role"] == "roles/firebaseauth.admin"
+    assert permission["scope"] == "https://www.googleapis.com/auth/identitytoolkit"
+    assert permission["projectScope"] == "the single approved project"
+    assert any("cloud-platform" in row for row in permission["notRequired"])
+    assert set(permission["methods"]) == {
+        "accounts:sendOobCode",
+        "accounts:update",
+        "accounts:lookup",
+        "accounts:delete",
+    }
+    assert manifest["ownerInputs"]["credentialRole"] is None
+
+
+def test_the_reserved_address_domain_is_a_stated_owner_assumption() -> None:
+    manifest = campaign_manifest(NONCE)
+    assumption = [
+        row for row in manifest["ownerPreconditions"] if "example.invalid" in row
+    ]
+    assert len(assumption) == 1
+    assert "fail" in assumption[0].lower()
 
 
 def test_no_stage_body_or_manifest_text_carries_a_secret_value() -> None:

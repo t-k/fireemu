@@ -81,6 +81,7 @@
       "planningCeilingUsd": 0.02,
       "recoveryRequests": 4,
       "recoverySeconds": 180,
+      "requestRateEnforced": true,
       "requestRatePerSecondMax": 4,
       "wallSeconds": 300
     },
@@ -106,6 +107,7 @@
       }
     },
     "ownerInputs": {
+      "credentialRole": null,
       "credentialSource": null,
       "endsAt": null,
       "nonce": null,
@@ -115,25 +117,60 @@
       "startsAt": null
     },
     "ownerPreconditions": [
-      "A Google OAuth credential authorized for privileged link generation on the target project.",
+      "A Google OAuth credential holding roles/firebaseauth.admin on the single approved project, with the identitytoolkit scope rather than cloud-platform.",
       "Confirmation that the target project has no blocking function or tenant that changes these routes.",
       "Acceptance that two accounts are created and deleted inside the approved window.",
       "A fresh, unused 32-character hexadecimal nonce supplied at approval time.",
-      "A source commit and built artifact digest bound before the local side is recorded."
+      "A source commit and built artifact digest bound before the local side is recorded.",
+      "Acceptance that the reserved example.invalid domain is usable for signUp and sendOobCode on the target project; a refusal stops the run at its first stage and fails closed, consuming the approved window without an observation."
     ],
+    "permissionEnvelope": {
+      "methods": [
+        "accounts:sendOobCode",
+        "accounts:update",
+        "accounts:lookup",
+        "accounts:delete"
+      ],
+      "notRequired": [
+        "https://www.googleapis.com/auth/cloud-platform",
+        "organization or folder level access",
+        "any Firestore, Storage or Functions permission"
+      ],
+      "projectScope": "the single approved project",
+      "role": "roles/firebaseauth.admin",
+      "scope": "https://www.googleapis.com/auth/identitytoolkit"
+    },
     "productionExecutable": false,
     "productionExecuted": false,
     "recovery": [
+      {
+        "account": null,
+        "body": {
+          "email": [
+            "$binding:accountA.email",
+            "$binding:accountB.email"
+          ]
+        },
+        "id": "recover-discover",
+        "method": "POST",
+        "operationType": "auth-lookup",
+        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:lookup",
+        "requires": "the owned identifiers, however they arose",
+        "routeClass": "admin",
+        "selector": "email"
+      },
       {
         "account": "accountA",
         "body": {
           "localId": "$binding:accountA.localId"
         },
         "id": "recover-delete-accountA",
+        "identifierSource": "the discovery readback, or the create response",
         "method": "POST",
         "operationType": "auth-delete",
         "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:delete",
         "routeClass": "admin",
+        "selector": "localId",
         "tolerates": "already absent"
       },
       {
@@ -142,35 +179,29 @@
           "localId": "$binding:accountB.localId"
         },
         "id": "recover-delete-accountB",
+        "identifierSource": "the discovery readback, or the create response",
         "method": "POST",
         "operationType": "auth-delete",
         "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:delete",
         "routeClass": "admin",
+        "selector": "localId",
         "tolerates": "already absent"
       },
       {
-        "account": "accountA",
+        "account": null,
         "body": {
-          "localId": "$binding:accountA.localId"
+          "email": [
+            "$binding:accountA.email",
+            "$binding:accountB.email"
+          ]
         },
-        "id": "recover-absence-accountA",
+        "id": "recover-absence",
         "method": "POST",
         "operationType": "auth-lookup",
         "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:lookup",
-        "requires": "typed absence",
-        "routeClass": "admin"
-      },
-      {
-        "account": "accountB",
-        "body": {
-          "localId": "$binding:accountB.localId"
-        },
-        "id": "recover-absence-accountB",
-        "method": "POST",
-        "operationType": "auth-lookup",
-        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:lookup",
-        "requires": "typed absence",
-        "routeClass": "admin"
+        "requires": "typed absence of both addresses",
+        "routeClass": "admin",
+        "selector": "email"
       }
     ],
     "secretFields": [

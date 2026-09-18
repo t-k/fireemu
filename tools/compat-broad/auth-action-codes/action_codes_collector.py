@@ -111,6 +111,8 @@ class _Run:
         wall_seconds: int,
         recovery_seconds: int,
         clock: Callable[[], float],
+        rate_per_second: int,
+        sleep: Callable[[float], None],
     ) -> None:
         self.origin = origin
         self.project = project
@@ -121,6 +123,9 @@ class _Run:
         self.wall_seconds = wall_seconds
         self.recovery_seconds = recovery_seconds
         self.clock = clock
+        self.minimum_interval = 1 / rate_per_second if rate_per_second else 0.0
+        self.sleep = sleep
+        self.last_start: float | None = None
         self.started = clock()
         self.requests = 0
         self.recovery_requests = 0
@@ -129,6 +134,14 @@ class _Run:
         self.recovering = False
         self.secrets: dict[str, str] = {}
         self.owned: dict[str, dict[str, Any]] = {}
+
+    def pace(self) -> None:
+        """Keep request starts at or under the published rate."""
+        if self.last_start is not None and self.minimum_interval:
+            waiting = self.last_start + self.minimum_interval - self.clock()
+            if waiting > 0:
+                self.sleep(waiting)
+        self.last_start = self.clock()
 
     def spend(self) -> None:
         if self.recovering:
@@ -162,6 +175,7 @@ class _Run:
 
     def request(self, path: str, body: dict[str, Any], privileged: bool):
         self.spend()
+        self.pace()
         headers = {"content-type": "application/json"}
         if privileged:
             headers["authorization"] = "Bearer owner"
@@ -261,53 +275,95 @@ def _project_stage(
 
 def _recover(
     run: _Run, manifest: dict[str, Any]
-) -> tuple[list[dict[str, Any]], bool, int, int]:
-    """Delete every owned account, then require typed absence for each one."""
+) -> tuple[list[dict[str, Any]], bool, int, int, bool]:
+    """Discover owned addresses, delete what they name, then prove absence.
+
+    Ownership is keyed on the address, never on a runtime identifier: a create
+    whose response was lost still left a real account behind, and only a lookup
+    by address can see it.
+    """
     rows: list[dict[str, Any]] = []
-    remaining = 0
     delete_failures = 0
-    for row in manifest["recovery"]:
-        account = row["account"]
-        if account + ".localId" not in run.secrets:
+    owned_emails = {
+        run.secrets[name + ".email"]: name for name in manifest["ownedAccounts"]
+    }
+
+    def address_lookup(
+        row: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, str | None] | None]:
+        try:
+            status, body = run.request(row["path"], row["body"], True)
+        except Exception as error:  # noqa: BLE001 -- recovery records, never raises.
+            return {
+                "id": row["id"],
+                "account": None,
+                "status": None,
+                "failure": type(error).__name__,
+            }, None
+        users = body.get("users") if isinstance(body, dict) else None
+        if status != 200 or not isinstance(users, list | type(None)):
+            return {"id": row["id"], "account": None, "status": status}, None
+        present = {
+            user.get("email"): user.get("localId")
+            for user in (users or [])
+            if isinstance(user, dict)
+        }
+        found = {email: uid for email, uid in present.items() if email in owned_emails}
+        return {
+            "id": row["id"],
+            "account": None,
+            "status": status,
+            "presentAddresses": len(found),
+        }, found
+
+    by_id = {row["id"]: row for row in manifest["recovery"]}
+    discovery, discovered = address_lookup(by_id["recover-discover"])
+    rows.append(discovery)
+    for email, identifier in (discovered or {}).items():
+        name = owned_emails[email]
+        # The identifier a lost create response never delivered.
+        if name + ".localId" not in run.secrets and isinstance(identifier, str):
+            run.secrets[name + ".localId"] = identifier
+
+    for name in manifest["ownedAccounts"]:
+        row = by_id["recover-delete-" + name]
+        if name + ".localId" not in run.secrets:
             rows.append(
                 {
                     "id": row["id"],
-                    "account": account,
+                    "account": name,
                     "status": None,
-                    "skipped": "never-created",
+                    "skipped": "no identifier and no address present",
                 }
             )
             continue
         try:
-            status, body = run.request(row["path"], row["body"], True)
+            status, _ = run.request(row["path"], row["body"], True)
         except Exception as error:  # noqa: BLE001 -- recovery records, never raises.
             rows.append(
                 {
                     "id": row["id"],
-                    "account": account,
+                    "account": name,
                     "status": None,
                     "failure": type(error).__name__,
                 }
             )
             delete_failures += 1
             continue
-        record = {"id": row["id"], "account": account, "status": status}
-        if row["operationType"] == "auth-lookup":
-            users = body.get("users") if isinstance(body, dict) else None
-            record["absent"] = status == 200 and not users
-            if not record["absent"]:
-                remaining += 1
-        elif status != 200:
-            # A delete can be refused because a stage already removed the
-            # account. Absence, proven below, is the requirement; a refusal is
-            # recorded but does not by itself fail recovery.
-            record["deleted"] = False
+        record = {"id": row["id"], "account": name, "status": status}
+        # A delete can be refused because a stage already removed the account.
+        # Absence, proven below by address, is the requirement.
+        record["deleted"] = status == 200
+        if status != 200:
             delete_failures += 1
-        else:
-            record["deleted"] = True
         rows.append(record)
-    complete = remaining == 0 and not any("failure" in row for row in rows)
-    return rows, complete, remaining, delete_failures
+
+    absence, still_present = address_lookup(by_id["recover-absence"])
+    rows.append(absence)
+    proven = still_present is not None
+    remaining = len(still_present) if proven else len(owned_emails)
+    complete = proven and remaining == 0 and not any("failure" in row for row in rows)
+    return rows, complete, remaining, delete_failures, proven
 
 
 def collect(
@@ -320,6 +376,7 @@ def collect(
     request_budget: int | None = None,
     wall_seconds: int | None = None,
     clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
     tolerate_failure: bool = False,
 ) -> dict[str, Any]:
     """Run the frozen matrix against one loopback origin and return a receipt."""
@@ -338,6 +395,8 @@ def collect(
         wall_seconds if wall_seconds is not None else budget["wallSeconds"],
         budget["recoverySeconds"],
         clock,
+        budget["requestRatePerSecondMax"],
+        sleep,
     )
     _bind_accounts(run, manifest)
     stages: list[dict[str, Any]] = []
@@ -360,7 +419,9 @@ def collect(
             break
         stages.append(_project_stage(run, stage, status, body))
     run.begin_recovery()
-    recovery, cleanup_complete, remaining, delete_failures = _recover(run, manifest)
+    recovery, cleanup_complete, remaining, delete_failures, proven = _recover(
+        run, manifest
+    )
     receipt = {
         "contract": CONTRACT,
         "campaignId": CAMPAIGN_ID,
@@ -377,6 +438,7 @@ def collect(
         "cleanupComplete": cleanup_complete,
         "remainingAccounts": remaining,
         "deleteFailures": delete_failures,
+        "absenceProven": proven,
         "requests": run.requests,
         "requestBudget": run.request_budget,
         "recoveryRequests": run.recovery_requests,

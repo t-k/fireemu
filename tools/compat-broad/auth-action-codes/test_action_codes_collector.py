@@ -157,6 +157,21 @@ class FakeService:
         }
 
     def _lookup(self, body: dict):
+        if "email" in body:
+            if self.behaviour.get("lookupFails"):
+                return 503, {"error": {"message": "UNAVAILABLE"}}
+            found = [a for a in self.accounts.values() if a["email"] in body["email"]]
+            answer = {"kind": "identitytoolkit#GetAccountInfoResponse"}
+            if found:
+                answer["users"] = [
+                    {
+                        "localId": a["localId"],
+                        "email": a["email"],
+                        "emailVerified": a["emailVerified"],
+                    }
+                    for a in found
+                ]
+            return 200, answer
         account = self.accounts.get(body["localId"])
         if account is None:
             return 200, {"kind": "identitytoolkit#GetAccountInfoResponse"}
@@ -180,6 +195,8 @@ class FakeService:
 
 def run(service: FakeService | None = None, **options):
     service = service or FakeService()
+    # Pacing is exercised by its own test; every other test waits for nothing.
+    options.setdefault("sleep", lambda _: None)
     receipt = collect(
         origin=ORIGIN,
         project=PROJECT,
@@ -311,7 +328,10 @@ def test_a_failed_deletion_is_reported_instead_of_being_swallowed() -> None:
     assert receipt["cleanupComplete"] is False
     assert receipt["remainingAccounts"] == 2
     assert receipt["deleteFailures"] == 2
-    assert receipt["recovery"][0]["status"] == 500
+    deletes = [
+        row for row in receipt["recovery"] if row["id"].startswith("recover-delete")
+    ]
+    assert [row["status"] for row in deletes] == [500, 500]
 
 
 def test_cleanup_only_touches_accounts_this_run_owns() -> None:
@@ -325,9 +345,13 @@ def test_cleanup_only_touches_accounts_this_run_owns() -> None:
     _, receipt = run(service)
     assert list(service.accounts) == ["foreign"]
     assert set(receipt["ownedAccounts"]) == {"accountA", "accountB"}
+    # Address lookups are not per-account; the deletes are, and only ours.
     assert all(
-        row["account"] in receipt["ownedAccounts"] for row in receipt["recovery"]
+        row["account"] in receipt["ownedAccounts"]
+        for row in receipt["recovery"]
+        if row["account"] is not None
     )
+    assert receipt["recovery"][-1]["presentAddresses"] == 0
 
 
 def test_privileged_stages_carry_the_owner_credential_and_clients_do_not() -> None:
@@ -339,7 +363,9 @@ def test_privileged_stages_carry_the_owner_credential_and_clients_do_not() -> No
         captured.append({"url": url, "headers": headers})
         return service.send(method, url, headers, body)
 
-    collect(origin=ORIGIN, project=PROJECT, nonce=NONCE, send=send)
+    collect(
+        origin=ORIGIN, project=PROJECT, nonce=NONCE, send=send, sleep=lambda _: None
+    )
     for record in captured:
         privileged = "/projects/" in record["url"]
         assert ("authorization" in record["headers"]) is privileged
@@ -434,3 +460,84 @@ def test_an_unmodelled_error_shape_is_kept_redacted() -> None:
         "detail": {"idToken": "[REDACTED]"},
     }
     assert "leaked" not in json.dumps(receipt)
+
+
+def test_an_account_created_behind_a_lost_response_is_still_recovered() -> None:
+    """The reviewer's reproduction: the server stores the account, we lose the answer."""
+
+    class LostAnswer(FakeService):
+        def _signUp(self, body: dict):
+            status, answer = super()._signUp(body)
+            if body["email"].endswith("-b@example.invalid"):
+                raise ConnectionError("response lost after the account was stored")
+            return status, answer
+
+    service = LostAnswer()
+    _, receipt = run(service, tolerate_failure=True)
+    assert receipt["stopReason"] == "stage-failed:account-b-create"
+    # The account exists on the server and its identifier never reached us.
+    assert receipt["ownedAccounts"].get("accountB") is None
+    assert service.accounts == {}
+    assert receipt["cleanupComplete"] is True
+    assert receipt["remainingAccounts"] == 0
+    discovered = receipt["recovery"][0]
+    assert discovered["id"] == "recover-discover"
+    assert discovered["presentAddresses"] == 2
+
+
+def test_an_address_still_present_after_recovery_fails_cleanup() -> None:
+    class Undeletable(FakeService):
+        def _delete(self, body: dict):
+            return 200, {"kind": "identitytoolkit#DeleteAccountResponse"}
+
+    service = Undeletable()
+    _, receipt = run(service)
+    assert receipt["cleanupComplete"] is False
+    assert receipt["remainingAccounts"] == 2
+    assert receipt["recovery"][-1]["presentAddresses"] == 2
+
+
+def test_a_failed_absence_lookup_can_never_report_proven_cleanup() -> None:
+    service = FakeService(lookupFails=True)
+    _, receipt = run(service)
+    assert receipt["cleanupComplete"] is False
+    assert receipt["recovery"][-1]["status"] == 503
+    assert receipt["absenceProven"] is False
+
+
+def test_a_create_refused_by_the_address_domain_stops_and_owns_nothing() -> None:
+    class RefusesDomain(FakeService):
+        def _signUp(self, body: dict):
+            return 400, {"error": {"message": "INVALID_EMAIL"}}
+
+    service = RefusesDomain()
+    _, receipt = run(service, tolerate_failure=True)
+    assert receipt["stopReason"] == "stage-failed:reset-code-lookup"
+    assert receipt["ownedAccounts"] == {}
+    assert receipt["recordingComplete"] is False
+    assert receipt["cleanupComplete"] is True
+    assert receipt["remainingAccounts"] == 0
+    assert service.accounts == {}
+
+
+def test_the_published_request_rate_is_actually_enforced() -> None:
+    waits: list[float] = []
+    ticks = iter([index * 0.01 for index in range(400)])
+    now = [0.0]
+
+    def clock() -> float:
+        now[0] = next(ticks)
+        return now[0]
+
+    run(clock=clock, sleep=waits.append)
+    # Four requests a second means a quarter second between starts, and the
+    # 10 ms fake clock never gets there on its own.
+    assert len(waits) >= 25
+    assert all(0 < wait <= 0.25 for wait in waits)
+
+
+def test_a_slow_transport_is_never_delayed_further() -> None:
+    waits: list[float] = []
+    ticks = iter([index * 5.0 for index in range(400)])
+    run(clock=lambda: next(ticks), sleep=waits.append, wall_seconds=100000)
+    assert waits == []

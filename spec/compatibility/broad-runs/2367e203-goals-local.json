@@ -57,7 +57,7 @@
         "pid": 31280,
         "exitCode": 0,
         "command": [
-          "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-13/shared-a35f85b4/fireemu",
+          "docs.local/logs/2026-09-13/shared-a35f85b4/fireemu",
           "exec",
           "--config",
           "tools/sdk-smoke/fireemu.smoke.json",

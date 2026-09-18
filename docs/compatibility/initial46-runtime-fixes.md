@@ -47,7 +47,7 @@ The nineteen current Auth state/identity assertions also pass locally. They are 
 - `cargo fmt --all --check`, relevant-package Clippy, Ruff and ty passed. The catalog and candidate preparation checks passed. Full-workspace Rust, lifetime suites and their publishers were not rerun in this runtime-focused phase.
 - Security review concentrated on client UID selection, admin-only fields, credential failures and side effects. Its timestamp persistence finding was fixed and re-reviewed. The separate comparator review found an invalid-offset normalization case; the regression failed before the correction and passed afterward. No outstanding Must Fix or Should Fix remains in either review. Review is not production execution permission.
 
-Actual commands were run from the integration checkout; `<private>` below abbreviates `/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-13`:
+Actual commands were run from the integration checkout; `<private>` below abbreviates the private log directory `docs.local/logs/2026-09-13` in the main checkout:
 
 ```sh
 cargo nextest run -p fireemu-adapter-http -p fireemu-core-auth -p fireemu-adapter-grpc --profile pr --no-fail-fast
@@ -58,7 +58,7 @@ uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/c
 uv tool run ruff check tools/compat-broad/batch_pair.py tools/compat-broad/batch_local.py tools/compat-broad/broad_cases.py tools/compat-broad/test_batch_pair.py
 uv tool run ty check --python tools/compat-inventory/.venv --extra-search-path tools/compat-inventory tools/compat-broad/batch_pair.py tools/compat-broad/batch_local.py tools/compat-broad/broad_cases.py tools/compat-broad/test_batch_pair.py
 uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --check-catalog
-python3 /Users/tk/.agents/skills/port-registry/scripts/portctl.py run --service fireemu-postfix-local46 --range 24000-24999 --ttl 20m -- uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_local.py --output <private>/ed90292a-local46
+python3 ~/.agents/skills/port-registry/scripts/portctl.py run --service fireemu-postfix-local46 --range 24000-24999 --ttl 20m -- uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_local.py --output <private>/ed90292a-local46
 uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_pair.py --saved-ab7bd698 --local <private>/ed90292a-local46/batch/result.json --output <private>/ed90292a-comparison.json --check
 ```
 

@@ -8,7 +8,7 @@
     "runtimeSourceCommit": "de8a14b8",
     "artifactSha256": "6a1292eccd6f35773f74244f558e9a1791482949cb0fb228af20c29a6d449733",
     "command": [
-      "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-13/goals/retained-artifacts/fireemu-de8a14b8-second45",
+      "docs.local/logs/2026-09-13/goals/retained-artifacts/fireemu-de8a14b8-second45",
       "exec",
       "--only",
       "auth,firestore",

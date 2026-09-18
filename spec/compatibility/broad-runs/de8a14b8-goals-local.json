@@ -266,7 +266,7 @@
         "3.12",
         "tools/compat-broad/batch_local.py",
         "--output",
-        "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-13/goals/de8a14b8-first46"
+        "docs.local/logs/2026-09-13/goals/de8a14b8-first46"
       ],
       "commit": "de8a14b87218cca78b8bc48db0890f678085f96e",
       "start": "2026-09-13T07:08:41.740402+00:00",
@@ -285,7 +285,7 @@
         "3.12",
         "tools/compat-broad/second_mapped.py",
         "--output",
-        "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-13/goals/de8a14b8-second45"
+        "docs.local/logs/2026-09-13/goals/de8a14b8-second45"
       ],
       "commit": "de8a14b87218cca78b8bc48db0890f678085f96e",
       "start": "2026-09-13T07:09:11.596636+00:00",

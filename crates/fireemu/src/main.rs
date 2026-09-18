@@ -368,20 +368,23 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
             .unwrap_or_else(|| config::RuntimeConfig::default().auth_project)
     };
     let locator = hub::Locator::path_for(&project);
-    let text = std::fs::read_to_string(&locator).map_err(|_| {
-        CliError::refused(format!(
+    // "Not there at all" is the ordinary case and says how to start a suite. Anything else the
+    // locator might be -- a symlink, another user's file, a file anyone can write, a document
+    // too large to be a locator -- is a refusal from the shared reader, because reaching the
+    // origin this file names means presenting the run's control capability.
+    if std::fs::symlink_metadata(&locator).is_err() {
+        return Err(CliError::refused(format!(
             "no running fireemu suite for {project} was found: {} does not exist. Start one with `fireemu up --project {project}`, or name the project with --project.",
             locator.display()
-        ))
-    })?;
-    let document: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| CliError::refused(format!("{} does not parse: {e}", locator.display())))?;
+        )));
+    }
+    let document = hub::read_locator(&locator).map_err(CliError::refused)?;
     let origin = document
         .get("origins")
         .and_then(|o| o.get(0))
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| CliError::refused(format!("{} names no Hub origin", locator.display())))?;
-    let address = origin.trim_start_matches("http://");
+    let address = hub::loopback_authority(origin).map_err(CliError::refused)?;
     let token = document
         .get("fireemuControlToken")
         .and_then(serde_json::Value::as_str)
@@ -396,7 +399,7 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
         "initiatedBy": "emulators:export",
     })
     .to_string();
-    let (status, response) = post_json(address, "/_admin/export", &body, token)
+    let (status, response) = post_json(&address, "/_admin/export", &body, token)
         .map_err(|e| CliError::refused(format!("the export request to {origin} failed: {e}")))?;
     if status != 200 {
         let message = serde_json::from_str::<serde_json::Value>(&response)

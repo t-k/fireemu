@@ -1,6 +1,6 @@
 {
-  "artifactSha256": "61408b06ed7a134cff392731bbfe5aa192f8638754e5ca60b80403a373c4f739",
-  "campaignDigest": "8c932979ccadf878433e03e51e37e6f213a96bab10904f5fe29354ee0213a790",
+  "artifactSha256": "034296efa8925329805c7648cebe8f695985914840ab692b5d292d2b6147a766",
+  "campaignDigest": "09e8cd8662b07823e21f9d654d8c0f1676b1bc5d2aad228020de314e8f96a8d9",
   "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
   "cases": [
     {
@@ -28,14 +28,14 @@
       "localObserved": "refused",
       "productionExpectation": "refused",
       "requestBytes": 10485761,
-      "status": "refusal-shape-difference"
+      "status": "local-only"
     }
   ],
   "complete": true,
   "database": "(default)",
   "formalCompatibilityClaim": false,
   "kind": "fs-request-bytes-local-shadow-v1",
-  "nonce": "ce2c01764a1d44d29180be073d2dfda0",
+  "nonce": "07836058ff91410988ec64f543ccb541",
   "note": "Owned local artifact shadow. No production request was sent, no credential was used and no parent group is promoted. The raw REST body byte count remains an observation hypothesis about production's enforcement metric.",
   "observation": {
     "canonicalRequestBytesMeasuredLocally": true,
@@ -45,12 +45,12 @@
     "formalCompatibilityClaim": false,
     "localOnly": true,
     "overRefusal": {
-      "classification": "semantic-discrepancy",
-      "errorCode": 413,
+      "classification": "expected",
+      "errorCode": 400,
       "errorStatus": "INVALID_ARGUMENT",
-      "httpStatus": 413
+      "httpStatus": 400
     },
-    "planDigest": "0015c3134f0bea53114f51087d983d75795f9effdd09063edc26757192e8dbd1",
+    "planDigest": "d242755bca99d236c96b6fe3bdad2eedf7edb1edb09d929a063971462ca6a958",
     "productionExecuted": false,
     "rawHttpMetricStatus": "observation hypothesis",
     "recoveryRowCount": 153,
@@ -58,7 +58,7 @@
     "resourceAbsence": true,
     "rowCount": 105
   },
-  "planDigest": "0015c3134f0bea53114f51087d983d75795f9effdd09063edc26757192e8dbd1",
+  "planDigest": "d242755bca99d236c96b6fe3bdad2eedf7edb1edb09d929a063971462ca6a958",
   "probeOutcomes": [
     {
       "complete": true,
@@ -70,7 +70,7 @@
       "requestBytes": 10485759,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "b4d7891f861fdb9cb2b534204e7c96a7997c3829e676320cdadfd5bd75bac5c9"
+      "responseSha256": "e46176e7bc5c827a161415e14a24186caaf6ec91c9b8d71d3ea95b18c0a49aa8"
     },
     {
       "complete": true,
@@ -82,19 +82,19 @@
       "requestBytes": 10485760,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "b5b4f62e2ffaf62e6c7dc3f5446fc61b78ea13a9347d607943b5976cbf785804"
+      "responseSha256": "6cce2c63cfe8db75b4ebb987d1a4dd0c478126a0cc82489e567e64c30de1d88e"
     },
     {
       "complete": true,
-      "errorCode": 413,
-      "errorMessage": "request body too large",
+      "errorCode": 400,
+      "errorMessage": "Request payload size exceeds the limit: 10485760 bytes.",
       "errorStatus": "INVALID_ARGUMENT",
-      "httpStatus": 413,
+      "httpStatus": 400,
       "probe": "over",
       "requestBytes": 10485761,
-      "responseBody": "{\"error\":{\"code\":413,\"message\":\"request body too large\",\"status\":\"INVALID_ARGUMENT\"}}",
-      "responseBytes": 85,
-      "responseSha256": "40103e44520cdd1dd977c8c9ce8fc6e2ca1cc964e4510c2bf7fc813ec026f862"
+      "responseBody": "{\"error\":{\"code\":400,\"message\":\"Request payload size exceeds the limit: 10485760 bytes.\",\"status\":\"INVALID_ARGUMENT\"}}",
+      "responseBytes": 118,
+      "responseSha256": "293bf2902042c662ca5f65c932f4fafcd9596dac70ace5460ccc5e5f015b68b9"
     }
   ],
   "productionExecuted": false,
@@ -102,15 +102,15 @@
   "rawHttpMetricStatus": "observation hypothesis",
   "recordingComplete": true,
   "runtime": {
-    "artifactSha256": "61408b06ed7a134cff392731bbfe5aa192f8638754e5ca60b80403a373c4f739",
-    "runtimeInputCount": 407,
+    "artifactSha256": "034296efa8925329805c7648cebe8f695985914840ab692b5d292d2b6147a766",
+    "runtimeInputCount": 410,
     "runtimeInputsClean": true,
-    "runtimeInputsDigest": "386f9f489058994810ed7995ef5770e3f2ee456cc241193b8387e7a9c22d3618",
-    "sourceCommit": "ce9c8439d7bb04cad7d062865df209d814b8d8cc",
+    "runtimeInputsDigest": "a0fccda62045c50889dc6f5bf3b64656954576e4ddda66d13fcf0d7760f4b689",
+    "sourceCommit": "af61fc352e3b8ed1304ff9acd69e6fec04d94b78",
     "sourceRoot": "repository-root"
   },
   "shadow": {
-    "classification": "local-boundary-enforced-shape-differs",
+    "classification": "local-shape-matches-production-expectation",
     "differenceMasked": false,
     "enforcementSource": "crates/fireemu-adapter-grpc/src/serve.rs, MAX_REST_BODY_BYTES = 10 * 1024 * 1024",
     "expectedClassification": "local-boundary-enforced-shape-differs",
@@ -123,18 +123,18 @@
     },
     "formalCompatibilityClaim": false,
     "localEnforcement": "transport body cap",
-    "matchesBaseline": true,
+    "matchesBaseline": false,
     "observedFailures": [],
     "overRefusal": {
-      "classification": "semantic-discrepancy",
-      "errorCode": 413,
+      "classification": "expected",
+      "errorCode": 400,
       "errorStatus": "INVALID_ARGUMENT",
-      "httpStatus": 413
+      "httpStatus": 400
     },
     "productionExecuted": false,
     "productionRefusalExpectation": "400 INVALID_ARGUMENT",
     "resourceAbsence": true,
-    "summary": "The local transport refused the over-boundary Commit at exactly the 10 MiB boundary with a typed 413. Production is expected to answer 400, so the boundary agrees and the refusal shape does not.",
+    "summary": "The local runtime refused the over-boundary Commit with a typed 400. The limits-layer implementation has landed and this baseline is stale.",
     "untypedOverRefusal": null
   },
   "sourceDigestAfter": "9a39c82b75a146ef4cbe9901924d3a16abeb2b16f1043cff65b032f8716a6364",

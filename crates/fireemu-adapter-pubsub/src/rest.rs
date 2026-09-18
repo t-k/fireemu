@@ -21,7 +21,10 @@ use fireemu_core_pubsub::{
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Map, Value};
 
-use crate::convert::validate_topic_options;
+use crate::convert::{
+    is_declared_subscription_field, validate_subscription_update_paths, validate_topic_options,
+    SUPPORTED_SUBSCRIPTION_FIELDS,
+};
 use crate::{PubSubHandle, MAX_MESSAGE_BYTES};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 
@@ -404,21 +407,18 @@ fn create_subscription(
         .as_object()
         .ok_or_else(|| RestError::invalid("subscription must be an object"))?;
     for key in object.keys() {
-        match key.as_str() {
-            "name"
-            | "topic"
-            | "ackDeadlineSeconds"
-            | "enableMessageOrdering"
-            | "filter"
-            | "deadLetterPolicy"
-            | "retryPolicy"
-            | "pushConfig" => {}
-            _ => {
-                return Err(RestError::unimplemented(format!(
-                    "subscription.{key} is not supported by the Pub/Sub emulator"
-                )))
-            }
+        let field = snake_case_field(key);
+        if SUPPORTED_SUBSCRIPTION_FIELDS.contains(&field.as_str()) {
+            continue;
         }
+        if is_declared_subscription_field(&field) {
+            return Err(RestError::unimplemented(format!(
+                "subscription.{field} is not supported by the Pub/Sub emulator"
+            )));
+        }
+        return Err(RestError::invalid(format!(
+            "unknown subscription field {key}"
+        )));
     }
     if let Some(name) = object.get("name") {
         let name = name
@@ -528,27 +528,17 @@ fn update_subscription(
     if update_mask.is_empty() {
         return Err(RestError::invalid("updateMask must not be empty"));
     }
-    let paths = update_mask.split(',').collect::<Vec<_>>();
-    for path in &paths {
-        match *path {
-            "ackDeadlineSeconds" | "pushConfig" => {}
-            "deadLetterPolicy" | "retryPolicy" | "filter" | "enableMessageOrdering" => {
-                return Err(RestError::unimplemented(format!(
-                    "updating {path} is not supported by the Pub/Sub emulator"
-                )))
-            }
-            _ => {
-                return Err(RestError::invalid(format!(
-                    "unknown updateMask path {path}"
-                )))
-            }
-        }
-    }
+    let paths = update_mask
+        .split(',')
+        .map(snake_case_field)
+        .collect::<Vec<_>>();
+    validate_subscription_update_paths(&paths).map_err(RestError::from_core)?;
     let ack_deadline_seconds = paths
-        .contains(&"ackDeadlineSeconds")
+        .iter()
+        .any(|path| path == "ack_deadline_seconds")
         .then(|| parse_ack_deadline(update.get("ackDeadlineSeconds")))
         .transpose()?;
-    let push_config = if paths.contains(&"pushConfig") {
+    let push_config = if paths.iter().any(|path| path == "push_config") {
         Some(
             update
                 .get("pushConfig")
@@ -987,6 +977,28 @@ fn topic_update_field_path(path: &str) -> String {
         || normalized.to_owned(),
         |tail| format!("{normalized}.{tail}"),
     )
+}
+
+/// Normalizes a JSON field name or field-mask path segment to its protobuf field name. The
+/// Pub/Sub JSON API accepts both the `lowerCamelCase` and the original `snake_case` spelling, so both
+/// reach the shared option validators under one name.
+fn snake_case_field(field: &str) -> String {
+    let (head, tail) = field
+        .split_once('.')
+        .map_or((field, None), |(head, tail)| (head, Some(tail)));
+    let mut normalized = String::with_capacity(head.len() + 4);
+    for ch in head.chars() {
+        if ch.is_ascii_uppercase() {
+            normalized.push('_');
+            normalized.push(ch.to_ascii_lowercase());
+        } else {
+            normalized.push(ch);
+        }
+    }
+    match tail {
+        Some(tail) => format!("{normalized}.{tail}"),
+        None => normalized,
+    }
 }
 
 fn subscription_json(state: &PubSubState, config: &SubscriptionConfig) -> Value {

@@ -164,3 +164,53 @@ def test_required_permission_forbids_reobservation():
     assert required["concurrencyUpperBound"] == 1
     assert required["costUpperMicrousd"] == value["budget"]["costMicrousd"]
     assert required["casesDigest"] == cases.cases_digest()
+
+
+def test_every_operation_declares_a_per_request_timeout():
+    value = compiled()
+    for step in value["operations"]:
+        assert isinstance(step["timeoutSeconds"], int)
+        assert 0 < step["timeoutSeconds"] <= plan.CONTENDED_REQUEST_TIMEOUT_SECONDS
+
+
+def test_the_contended_requests_get_the_longer_timeout():
+    value = compiled()
+    contended = {
+        step["slot"]: step["timeoutSeconds"]
+        for step in value["operations"]
+        if step["timeoutSeconds"] != plan.DEFAULT_REQUEST_TIMEOUT_SECONDS
+    }
+    assert contended == {
+        "idle/lock-held": plan.CONTENDED_REQUEST_TIMEOUT_SECONDS,
+        "idle/lock-released": plan.CONTENDED_REQUEST_TIMEOUT_SECONDS,
+    }
+
+
+def test_timeouts_plus_waits_fit_inside_the_wall_envelope():
+    value = compiled()
+    worst = value["bounds"]["worstCaseSeconds"]
+    assert worst == sum(
+        step["timeoutSeconds"] + step["waitSeconds"] for step in value["operations"]
+    )
+    assert worst <= value["budget"]["wallSeconds"]
+
+
+def test_headroom_covers_a_rollback_for_every_transaction_the_plan_opens():
+    value = compiled()
+    opened = len([s for s in value["operations"] if s["opensTransaction"]])
+    assert plan.DATA_SLOT_HEADROOM >= opened
+
+
+def test_every_elapsed_case_names_the_transaction_whose_idle_time_it_measures():
+    value = compiled()
+    by_case = {s["caseId"]: s for s in value["operations"] if s["caseId"]}
+    for case in cases.CASES:
+        step = by_case[case["id"]]
+        if case["requiresElapsedSeconds"]:
+            assert step["idleOfTransaction"], f"{case['id']} measures nothing"
+        else:
+            assert step["idleOfTransaction"] is None
+
+
+def test_the_unissued_retry_token_reuses_the_published_corpus_constant():
+    assert plan.unissued_retry_token("any-nonce") == bytes(8)

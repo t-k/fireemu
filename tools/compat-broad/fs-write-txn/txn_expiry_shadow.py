@@ -68,8 +68,39 @@ STATUS_TO_CODE = {
     "UNAUTHENTICATED": 16,
 }
 
-REQUEST_TIMEOUT_SECONDS = 45
-CHILD_TIMEOUT_SECONDS = 420
+DEFAULT_TIMEOUT_SECONDS = plan_module.DEFAULT_REQUEST_TIMEOUT_SECONDS
+CHILD_TIMEOUT_SECONDS = 600
+
+PUBLICATION_NOTE = (
+    "Owned local rehearsal only. The elapsed time was produced by advancing the "
+    "emulator's virtual clock, not by waiting. No production request was sent "
+    "and no parent group is promoted."
+)
+
+#: Keys whose values legitimately differ between two runs of the same tool.
+#: Everything else in the published record must reproduce.
+VOLATILE_KEYS = (
+    "nonce",
+    "ownerId",
+    "elapsedSeconds",
+    "documentPrefix",
+    "startedAt",
+    "finishedAt",
+    "at",
+    "updateTime",
+    "readTime",
+    "transaction",
+    "pid",
+    "parentPid",
+    "firestoreOrigin",
+    "controlOrigin",
+    "artifactPath",
+    "path",
+    "name",
+    "sourceCommit",
+    "endedAt",
+    "wallSeconds",
+)
 
 
 def runtime_binding(artifact, root):
@@ -113,10 +144,16 @@ def save(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
-def rest_transport(origin, *, timeout=REQUEST_TIMEOUT_SECONDS):
-    """Build a bounded REST transport for one Firestore origin."""
+def rest_transport(origin, *, timeout=None):
+    """Build a bounded REST transport for one Firestore origin.
+
+    The per-request time bound comes from the plan. A transport that ignored it
+    would leave the campaign's wall envelope unenforced, so the request's own
+    `timeoutSeconds` wins and the constructor argument is only a fallback.
+    """
 
     def send(request):
+        deadline = request.get("timeoutSeconds") or timeout or DEFAULT_TIMEOUT_SECONDS
         database = request["database"]
         project = request["projectId"]
         base = f"{origin}/v1/projects/{project}/databases/{database}/documents"
@@ -142,7 +179,7 @@ def rest_transport(origin, *, timeout=REQUEST_TIMEOUT_SECONDS):
         http.add_header("Authorization", "Bearer owner")
         limit = request["maxResponseBytes"]
         try:
-            with urllib.request.urlopen(http, timeout=timeout) as response:
+            with urllib.request.urlopen(http, timeout=deadline) as response:
                 raw = response.read(limit + 1)
                 if len(raw) > limit:
                     return {
@@ -218,6 +255,17 @@ def clock_advance(control_origin, token, *, timeout=15):
         with urllib.request.urlopen(request, timeout=timeout) as response:
             if response.status != 200:
                 raise RuntimeError("clock advance refused")
+            raw = response.read(65536)
+        # Report the virtual seconds the emulator says it applied, so the
+        # receipt records an observed advance rather than the request.
+        try:
+            body = json.loads(raw or b"{}")
+        except ValueError:
+            return None
+        applied = body.get("advancedSeconds")
+        if isinstance(applied, (int, float)):
+            return float(applied)
+        return float(seconds)
 
     return advance
 
@@ -291,6 +339,96 @@ def stop_child(process, artifact):
         return {"stopped": True, "signal": "SIGKILL", "exitCode": process.returncode}
 
 
+def scrub_run_identity(value, *, nonce, owner_id, prefix):
+    """Replace this run's own identities inside every string with fixed slots.
+
+    A run's nonce appears inside document resource names, and those names appear
+    inside diagnostics. Two runs of the same tool therefore differ in their
+    message text even when they observed exactly the same thing. Scrubbing makes
+    the comparison about behaviour rather than about which run it was.
+    """
+    replacements = [
+        (prefix, "<prefix>"),
+        (nonce, "<nonce>"),
+        (owner_id, "<owner>"),
+    ]
+    if isinstance(value, dict):
+        return {
+            key: scrub_run_identity(
+                entry, nonce=nonce, owner_id=owner_id, prefix=prefix
+            )
+            for key, entry in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            scrub_run_identity(entry, nonce=nonce, owner_id=owner_id, prefix=prefix)
+            for entry in value
+        ]
+    if isinstance(value, str):
+        for needle, slot in replacements:
+            if needle:
+                value = value.replace(needle, slot)
+        return value
+    return value
+
+
+def build_shadow_document(
+    *,
+    before,
+    after,
+    artifact_sha,
+    binding,
+    version,
+    nonce,
+    owner_id,
+    elapsed,
+    child,
+    receipt,
+    contract,
+):
+    """Build the published shadow record.
+
+    This is the only place the record's shape is decided, so the checked-in
+    evidence is something the tool produces rather than something a person
+    assembled afterwards.
+    """
+    runtime = dict(binding)
+    runtime["version"] = version
+    instance = (receipt or {}).get("instance") or {}
+    runtime["wrongControlTokenStatus"] = instance.get("wrongTokenStatus")
+    runtime["childObservedArtifactSha256"] = instance.get("artifactSha256")
+    result = {
+        "kind": CONTRACT,
+        "campaign": cases.CAMPAIGN,
+        "casesDigest": cases.cases_digest(),
+        "sourceDigestBefore": before,
+        "sourceDigestAfter": after,
+        "artifactSha256": artifact_sha,
+        "runtime": runtime,
+        "nonce": nonce,
+        "ownerId": owner_id,
+        "elapsedSeconds": elapsed,
+        "child": child,
+        "receipt": receipt,
+        "selfContract": contract,
+        "productionExecuted": False,
+        "note": PUBLICATION_NOTE,
+        "acquisitionValidated": False,
+        "promotionReady": False,
+    }
+    result["complete"] = bool(
+        runtime["artifactSha256"] == artifact_sha
+        and runtime["runtimeInputsClean"]
+        and runtime["childObservedArtifactSha256"] == artifact_sha
+        and receipt
+        and receipt.get("complete")
+        and contract
+        and contract.get("classification") == comparison.MATCH
+        and before == after
+    )
+    return result
+
+
 def run_shadow(artifact, output):
     artifact = Path(artifact).resolve(strict=True)
     source_root = Path(__file__).resolve().parents[3]
@@ -339,6 +477,9 @@ def run_shadow(artifact, output):
         "--owner",
         owner_id,
     ]
+    version = subprocess.check_output(
+        [str(retained), "--version"], cwd=output, text=True, timeout=30
+    ).strip()
     started = time.time()
     process = subprocess.Popen(argv, cwd=output)
     try:
@@ -352,31 +493,18 @@ def run_shadow(artifact, output):
     contract = (
         json.loads(contract_path.read_bytes()) if contract_path.exists() else None
     )
-    result = {
-        "kind": CONTRACT,
-        "campaign": cases.CAMPAIGN,
-        "casesDigest": cases.cases_digest(),
-        "sourceDigestBefore": before,
-        "sourceDigestAfter": plan_module.source_digest(),
-        "artifactSha256": artifact_sha,
-        "runtime": binding,
-        "nonce": nonce,
-        "ownerId": owner_id,
-        "elapsedSeconds": round(time.time() - started, 3),
-        "child": stopped,
-        "receipt": receipt,
-        "selfContract": contract,
-        "acquisitionValidated": False,
-        "promotionReady": False,
-    }
-    result["complete"] = bool(
-        binding["artifactSha256"] == artifact_sha
-        and binding["runtimeInputsClean"]
-        and receipt
-        and receipt.get("complete")
-        and contract
-        and contract.get("classification") == comparison.MATCH
-        and result["sourceDigestBefore"] == result["sourceDigestAfter"]
+    result = build_shadow_document(
+        before=before,
+        after=plan_module.source_digest(),
+        artifact_sha=artifact_sha,
+        binding=binding,
+        version=version,
+        nonce=nonce,
+        owner_id=owner_id,
+        elapsed=round(time.time() - started, 3),
+        child=stopped,
+        receipt=receipt,
+        contract=contract,
     )
     save(output / "shadow.json", result)
     return result

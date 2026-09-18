@@ -121,3 +121,35 @@ def test_declared_unprepared_conditions_are_recorded_not_silently_dropped():
     for entry in cases.NOT_PREPARED:
         assert entry["condition"]
         assert entry["reason"]
+
+
+def test_every_control_declares_the_evidence_it_repeats_or_says_there_is_none():
+    for case in cases.CASES:
+        if case["kind"] != "control":
+            continue
+        prior = case["previouslyObserved"]
+        assert prior is not None, (
+            f"{case['id']} is a control but names no prior observation; "
+            "cite the recorded step or mark it explicitly as unobserved"
+        )
+        assert prior == cases.NO_PRIOR_OBSERVATION or prior.startswith(
+            ("conformance:", "broad-run:")
+        )
+
+
+def test_the_rolled_back_retry_control_cites_the_recorded_production_step():
+    case = cases.CASE_BY_ID["retry-token/retry-with-rolled-back-previous"]
+    assert case["previouslyObserved"] == (
+        "conformance:transactions/lifecycle#begin-read-write-with-retry-transaction"
+    )
+
+
+def test_validate_cases_rejects_an_uncited_control(monkeypatch):
+    broken = []
+    for case in cases.CASES:
+        if case["kind"] == "control" and case["previouslyObserved"] is not None:
+            case = dict(case, previouslyObserved=None)
+        broken.append(case)
+    monkeypatch.setattr(cases, "CASES", tuple(broken))
+    with pytest.raises(ValueError):
+        cases.validate_cases()

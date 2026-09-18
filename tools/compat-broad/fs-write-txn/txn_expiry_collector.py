@@ -16,6 +16,7 @@ refuse to treat the two as interchangeable by accident.
 from __future__ import annotations
 
 import base64
+import datetime
 import sys
 import time
 from pathlib import Path
@@ -42,7 +43,20 @@ OK = 0
 
 #: Recovery gets its own deadline so an exhausted observation budget still
 #: leaves room to give owned documents back.
-RECOVERY_SECONDS = 120
+RECOVERY_SECONDS = 180
+
+#: A wall-clock wait is served in bounded steps rather than one long sleep, so
+#: the run records progress and can be interrupted between steps. This records
+#: progress; it does not make a killed process resume.
+CHECKPOINT_SECONDS = 5
+
+
+def _instant(seconds):
+    return (
+        datetime.datetime.fromtimestamp(seconds, tz=datetime.timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def owner_marker(owner_id):
@@ -146,6 +160,8 @@ class Collection:
         sleeper=None,
         advance=None,
         monotonic=time.monotonic,
+        wall=time.time,
+        checkpoint=None,
     ):
         self.options = validate_collector_options(options)
         self.plan = plan
@@ -153,10 +169,19 @@ class Collection:
         self.sleeper = sleeper or time.sleep
         self.advance = advance
         self.monotonic = monotonic
+        self.wall = wall
+        self.checkpoint = checkpoint
         self.rows = []
         self.tokens = {}
+        self.open_tokens = {}
+        self.locked_at = {}
+        self.virtual_elapsed = 0.0
+        self.checkpoints = []
         self.created = {}
         self.failure = None
+        self.started_at = None
+        self.finished_at = None
+        self.current_timeout = plan_module.DEFAULT_REQUEST_TIMEOUT_SECONDS
         if self.options["timing"] == CONTROL_CLOCK and advance is None:
             raise ValueError("control-clock timing needs a clock advance callable")
 
@@ -179,6 +204,8 @@ class Collection:
             "body": body,
             "query": query,
             "maxResponseBytes": plan_module.MAX_RESPONSE_BYTES,
+            "maxRequestBytes": plan_module.MAX_REQUEST_BYTES,
+            "timeoutSeconds": self.current_timeout,
         }
         return self.transport(request)
 
@@ -229,20 +256,77 @@ class Collection:
             "waited": waited,
             "detail": detail,
         }
+        tag = step.get("idleOfTransaction")
+        if tag is not None and tag in self.locked_at:
+            row["idleSeconds"] = self._campaign_now() - self.locked_at[tag]
+            row["idleOfTransaction"] = tag
+        elif tag is not None:
+            row["idleSeconds"] = None
+            row["idleOfTransaction"] = tag
         if step["caseId"]:
             case = CASE_BY_ID[step["caseId"]]
             row["expectedLocal"] = dict(case["expectedLocal"])
         self.rows.append(row)
         return row
 
-    def _elapse(self, seconds):
+    def _campaign_now(self):
+        """The coordinate the campaign measures idle time in.
+
+        Wall-clock runs measure real monotonic seconds. Control-clock runs
+        measure the virtual seconds the emulator actually reported advancing.
+        Neither is the plan's requested number.
+        """
+        if self.options["timing"] == WALL_CLOCK:
+            return self.monotonic()
+        return self.virtual_elapsed
+
+    def _elapse(self, seconds, slot):
         if seconds <= 0:
             return None
+        started_monotonic = self.monotonic()
+        started_wall = self.wall()
         if self.options["timing"] == WALL_CLOCK:
-            self.sleeper(seconds)
-            return {"mode": WALL_CLOCK, "seconds": seconds}
-        self.advance(seconds)
-        return {"mode": CONTROL_CLOCK, "seconds": seconds}
+            steps = self._wall_wait(seconds, slot, started_monotonic)
+            measured = self.monotonic() - started_monotonic
+        else:
+            steps = 1
+            reported = self.advance(seconds)
+            measured = None if reported is None else float(reported)
+            if measured is not None:
+                self.virtual_elapsed += measured
+        return {
+            "mode": self.options["timing"],
+            "requestedSeconds": seconds,
+            "measuredSeconds": measured,
+            "startedAt": _instant(started_wall),
+            "endedAt": _instant(self.wall()),
+            "wallSeconds": self.wall() - started_wall,
+            "checkpoints": steps,
+        }
+
+    def _wall_wait(self, seconds, slot, started):
+        """Wait in bounded steps, recording a checkpoint after each one."""
+        steps = 0
+        while True:
+            remaining = seconds - (self.monotonic() - started)
+            if remaining <= 0:
+                return steps
+            step = min(CHECKPOINT_SECONDS, remaining)
+            self.sleeper(step)
+            steps += 1
+            record = {
+                "slot": slot,
+                "step": steps,
+                "elapsedSeconds": self.monotonic() - started,
+                "requestedSeconds": seconds,
+                "at": _instant(self.wall()),
+            }
+            self.checkpoints.append(record)
+            if self.checkpoint is not None:
+                self.checkpoint(record)
+            if steps > 2 * (seconds / CHECKPOINT_SECONDS) + 10:
+                # The injected clock is not advancing; stop rather than spin.
+                return steps
 
     # -- execution ----------------------------------------------------------
 
@@ -254,22 +338,29 @@ class Collection:
             self.failure = stop.reason
         except Exception as error:  # noqa: BLE001 - retained, never reinterpreted
             self.failure = type(error).__name__
-        cleanup = self._cleanup()
-        return self._receipt(cleanup)
+        cleanup, releases = self._cleanup()
+        return self._receipt(cleanup, releases)
 
     def _guard(self, deadline, needed):
         if deadline.remaining() <= needed:
             raise _Stopped("deadline-reached")
 
     def _observe(self, deadline):
+        self.started_at = _instant(self.wall())
         for step in self.plan["operations"]:
             if step["phase"] == "cleanup":
                 continue
             wait = step["waitSeconds"]
-            self._guard(deadline, wait)
-            waited = self._elapse(wait)
+            self._guard(deadline, wait + step["timeoutSeconds"])
+            waited = self._elapse(wait, step["slot"])
+            self.current_timeout = step["timeoutSeconds"]
             response = self._dispatch(step)
             row = self._record(step, response, waited=waited)
+            closes = step["closesTransaction"]
+            if closes and response.get("code") == OK:
+                self.open_tokens.pop(closes, None)
+            if step["slot"].startswith("idle/read/"):
+                self.locked_at[step["slot"].rsplit("/", 1)[1]] = self._campaign_now()
             if not row["complete"]:
                 raise _Stopped("incomplete-response")
 
@@ -314,7 +405,9 @@ class Collection:
         tag = step["opensTransaction"]
         token = (response.get("body") or {}).get("transaction")
         if response.get("code") == OK and token and tag:
-            self.tokens[tag] = base64.b64decode(token)
+            decoded = base64.b64decode(token)
+            self.tokens[tag] = decoded
+            self.open_tokens[tag] = decoded
         return response
 
     # -- individual case handlers ------------------------------------------
@@ -388,12 +481,50 @@ class Collection:
     # -- cleanup ------------------------------------------------------------
 
     def _cleanup(self):
+        self.current_timeout = plan_module.DEFAULT_REQUEST_TIMEOUT_SECONDS
         recovery = _Deadline(RECOVERY_SECONDS, self.monotonic)
+        releases = self._release_transactions(recovery)
         results = []
         for resource in self.plan["resources"]:
             role = resource["role"]
             results.append(self._recover_one(role, recovery))
-        return results
+        self.finished_at = _instant(self.wall())
+        return results, releases
+
+    def _release_transactions(self, recovery):
+        """Roll back every transaction still open before touching a document.
+
+        A conditional delete is an out-of-band write. Against a document a live
+        transaction still locks it is refused, so releasing first is what makes
+        recovery possible at all. A refusal here is recorded and does not stop
+        the remaining releases.
+        """
+        releases = []
+        for tag in sorted(self.open_tokens):
+            entry = {"transaction": tag, "released": False, "skipped": False}
+            if recovery.expired():
+                entry["skipped"] = True
+                entry["failure"] = "recovery-deadline-reached"
+                releases.append(entry)
+                continue
+            try:
+                response = self._rollback(self.open_tokens[tag])
+            except Exception as error:  # noqa: BLE001 - retained, never reinterpreted
+                entry["failure"] = type(error).__name__
+                releases.append(entry)
+                continue
+            entry["code"] = response.get("code")
+            entry["status"] = response.get("status")
+            # A finished or expired transaction is already released; the refusal
+            # is the proof, not a failure.
+            entry["released"] = response.get("code") in (OK, ABORTED)
+            if not entry["released"]:
+                entry["failure"] = "rollback-refused"
+            releases.append(entry)
+        for entry in releases:
+            if entry["released"]:
+                self.open_tokens.pop(entry["transaction"], None)
+        return releases
 
     def _recover_one(self, role, recovery):
         entry = {
@@ -444,7 +575,7 @@ class Collection:
 
     # -- receipt ------------------------------------------------------------
 
-    def _receipt(self, cleanup):
+    def _receipt(self, cleanup, releases):
         observed = {row["caseId"]: row for row in self.rows if row["caseId"]}
         missing = [case["id"] for case in cases.CASES if case["id"] not in observed]
         unrecovered = [entry["role"] for entry in cleanup if not entry["complete"]]
@@ -461,10 +592,20 @@ class Collection:
             "nonce": self.options["nonce"],
             "rows": self.rows,
             "cleanup": cleanup,
+            "transactionReleases": releases,
+            "openTransactions": sorted(self.open_tokens),
+            "checkpoints": self.checkpoints,
+            "startedAt": self.started_at,
+            "finishedAt": self.finished_at,
             "unrecovered": unrecovered,
             "missingCases": missing,
             "failure": self.failure,
-            "complete": not missing and not unrecovered and self.failure is None,
+            "complete": (
+                not missing
+                and not unrecovered
+                and not self.open_tokens
+                and self.failure is None
+            ),
             "requestCount": len(self.rows)
             + sum(
                 1 + (1 if "delete" in e else 0) + (1 if "absence" in e else 0)

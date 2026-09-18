@@ -47,10 +47,18 @@ stays `BLOCKED_OWNER`; it binds no credential and no endpoint.
 
 `txn_expiry_collector.py` executes the plan through an injected transport. It
 creates only documents below its own nonce prefix, stops at an absolute
-deadline, and always attempts the cleanup contract: an owned read, a delete
-conditional on the observed update time, then a typed absence check. It never
-deletes what it cannot prove it owns and never turns a transport failure into a
-semantic result.
+deadline, and always attempts the cleanup contract: roll back every transaction
+still open, then per document an owned read, a delete conditional on the
+observed update time, and a typed absence check. Releasing the transactions
+first is what makes the deletes possible, since a conditional delete is an
+out-of-band write that a live lock refuses. It never deletes what it cannot
+prove it owns and never turns a transport failure into a semantic result.
+
+Elapsed time is measured, never copied from the plan. Each wait records the
+interval observed, and each elapsed-dependent case records the measured idle
+time of the transaction it uses. A wall-clock wait is served in five-second
+checkpointed steps; it blocks, and records progress, but does not make a killed
+run resumable.
 
 `txn_expiry_comparison.py` is the credential-free comparator. It reports
 `MATCH`, `EXPECTED_NONDETERMINISM`, `SEMANTIC_MISMATCH` or `INDETERMINATE`, and
@@ -67,6 +75,12 @@ The local emulator runs a virtual clock that does not follow wall time, so the
 rehearsal reaches the idle limit through the control endpoint `clock:advance`
 while production would wait real seconds. Every row records which mechanism
 produced its elapsed time.
+
+The published rehearsal is exactly what `run_shadow` writes, with no hand
+editing. `test_txn_expiry_evidence.py` rebuilds the record from the generator and
+requires equality, and with `FIREEMU_O3_FRESH_SHADOW` set to an independently
+produced `shadow.json` it requires the committed file to equal that fresh run
+once per-run identities and instants are scrubbed.
 
 The frozen proposal and the recorded rehearsal are
 `spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-manifest.json` and

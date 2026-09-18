@@ -57,6 +57,10 @@ READ_ONLY_RETRY = "read-only transaction cannot be retried as read-write"
 #: known open repair, recorded in the preparation document.
 MALFORMED_BASE64 = "invalid base64"
 
+#: A control that genuinely has no recorded production observation says so
+#: explicitly rather than leaving the citation empty.
+NO_PRIOR_OBSERVATION = "none-recorded"
+
 
 def _case(
     identifier,
@@ -108,6 +112,7 @@ CASES = (
         resources=("locked-d",),
         elapsed=20,
         post_state={"locked-d": "committed-before-idle"},
+        previously_observed="conformance:transactions/lifecycle#commit-in-transaction",
     ),
     _case(
         "idle-expiry/commit-after-idle",
@@ -181,6 +186,7 @@ CASES = (
         rpc="Rollback",
         code=0,
         resources=(),
+        previously_observed="conformance:transactions/lifecycle#rollback",
     ),
     _case(
         "finished-token/rollback-after-commit",
@@ -219,6 +225,9 @@ CASES = (
         rpc="BeginTransaction",
         code=0,
         resources=(),
+        previously_observed=(
+            "conformance:transactions/lifecycle#begin-read-write-with-retry-transaction"
+        ),
     ),
     _case(
         "retry-token/retry-with-committed-previous",
@@ -369,8 +378,11 @@ def validate_cases():
         referenced.update(case["controls"])
         if case["kind"] == "observation" and not case["controls"]:
             raise ValueError(f"{case['id']} has no control")
-        if case["previouslyObserved"] is not None and case["kind"] != "control":
+        prior = case["previouslyObserved"]
+        if prior is not None and case["kind"] != "control":
             raise ValueError(f"{case['id']} re-observes recorded evidence")
+        if case["kind"] == "control" and prior is None:
+            raise ValueError(f"{case['id']} is a control that cites no evidence")
         if case["mutatesConfiguration"]:
             raise ValueError(f"{case['id']} mutates configuration")
         elapsed = case["requiresElapsedSeconds"]
@@ -416,3 +428,6 @@ def cases_digest():
 def maximum_elapsed_seconds():
     """The longest single wait any case needs."""
     return max(case["requiresElapsedSeconds"] for case in CASES)
+
+
+CASE_BY_ID = {case["id"]: case for case in CASES}

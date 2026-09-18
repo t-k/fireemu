@@ -128,6 +128,14 @@ def _reasons(receipt, side, *, expect_target):
                 "detail": list(receipt["missingCases"]),
             }
         )
+    if receipt.get("openTransactions"):
+        reasons.append(
+            {
+                "code": "open-transactions",
+                "side": side,
+                "detail": list(receipt["openTransactions"]),
+            }
+        )
     if receipt.get("unrecovered"):
         reasons.append(
             {
@@ -147,8 +155,15 @@ def _reasons(receipt, side, *, expect_target):
 
 
 def _elapsed_reasons(receipt, side):
+    """Refuse a receipt whose measured idle time does not support its cases.
+
+    The number checked is what the run observed, not what the plan asked for. A
+    collector that skipped its waits, or whose clock advance was not applied,
+    fails here rather than producing a semantic verdict.
+    """
     reasons = []
     rows = _case_rows(receipt)
+    limit = cases.DECLARED_IDLE_LIMIT_SECONDS
     for case in cases.CASES:
         required = case["requiresElapsedSeconds"]
         if not required:
@@ -156,8 +171,17 @@ def _elapsed_reasons(receipt, side):
         row = rows.get(case["id"])
         if row is None:
             continue
-        reached = _reached_seconds(receipt, case["id"])
-        if reached < required:
+        measured = row.get("idleSeconds")
+        if measured is None:
+            reasons.append(
+                {
+                    "code": "elapsed-time-not-measured",
+                    "side": side,
+                    "detail": {"case": case["id"]},
+                }
+            )
+            continue
+        if measured < required:
             reasons.append(
                 {
                     "code": "elapsed-time-not-reached",
@@ -165,22 +189,57 @@ def _elapsed_reasons(receipt, side):
                     "detail": {
                         "case": case["id"],
                         "required": required,
-                        "reached": reached,
+                        "measured": measured,
+                    },
+                }
+            )
+        elif case["kind"] == "control" and measured >= limit:
+            # A control that was meant to stay below the idle limit but aged
+            # past it during a slow run proves nothing; it is not a mismatch.
+            reasons.append(
+                {
+                    "code": "control-aged-past-idle-limit",
+                    "side": side,
+                    "detail": {
+                        "case": case["id"],
+                        "limit": limit,
+                        "measured": measured,
+                    },
+                }
+            )
+    reasons += _wait_reasons(receipt, side)
+    return reasons
+
+
+def _wait_reasons(receipt, side):
+    """Every recorded wait must report the interval it actually observed."""
+    reasons = []
+    for row in receipt.get("rows", []):
+        waited = row.get("waited")
+        if not waited:
+            continue
+        measured = waited.get("measuredSeconds")
+        if measured is None:
+            reasons.append(
+                {
+                    "code": "wait-not-measured",
+                    "side": side,
+                    "detail": {"slot": row.get("slot")},
+                }
+            )
+        elif measured < waited.get("requestedSeconds", 0):
+            reasons.append(
+                {
+                    "code": "wait-shorter-than-requested",
+                    "side": side,
+                    "detail": {
+                        "slot": row.get("slot"),
+                        "requested": waited.get("requestedSeconds"),
+                        "measured": measured,
                     },
                 }
             )
     return reasons
-
-
-def _reached_seconds(receipt, case_id):
-    total = 0
-    for row in receipt.get("rows", []):
-        waited = row.get("waited")
-        if waited:
-            total += waited.get("seconds", 0)
-        if row.get("caseId") == case_id:
-            return total
-    return total
 
 
 def compare(production, local):
@@ -232,6 +291,13 @@ def compare(production, local):
             "classification": SEMANTIC_MISMATCH,
             "differences": differences,
             "timing": timing,
+            "bindings": bindings,
+        }
+    if production.get("sourceDigest") != local.get("sourceDigest"):
+        return {
+            **result,
+            "classification": INDETERMINATE,
+            "reasons": [{"code": "collector-source-digest-differs"}],
             "bindings": bindings,
         }
     identical = _identities(production) == _identities(local)

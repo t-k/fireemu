@@ -92,8 +92,11 @@ class Endpoint:
 
 
 def advances(record):
+    """A control-clock advance that reports the virtual seconds it applied."""
+
     def advance(seconds):
         record.append(seconds)
+        return seconds
 
     return advance
 
@@ -183,7 +186,10 @@ def test_receipt_records_the_timing_mechanism():
     assert waited
     for entry in waited:
         assert entry["mode"] == collector.CONTROL_CLOCK
-        assert entry["seconds"] > 0
+        assert entry["measuredSeconds"] > 0
+        assert entry["requestedSeconds"] > 0
+        assert entry["startedAt"].endswith("Z")
+        assert entry["endedAt"].endswith("Z")
 
 
 def test_cleanup_never_deletes_a_document_it_cannot_prove_it_owns():
@@ -278,3 +284,169 @@ def test_receipt_binds_the_case_table_and_source_digest():
     )
     assert receipt["casesDigest"] == cases.cases_digest()
     assert receipt["sourceDigest"] == plan_module.source_digest()
+
+
+class LockingEndpoint(Endpoint):
+    """An endpoint that models per-transaction document locks.
+
+    A transactional read takes the lock. An out-of-band write to a locked
+    document is refused with ABORTED, exactly as a backend under pessimistic
+    concurrency does, so a collector that never releases its transactions
+    cannot delete what it created.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.locks = {}
+        self.rollbacks = []
+
+    def __call__(self, request):
+        rpc = request["rpc"]
+        body = request.get("body") or {}
+        if rpc == "GetDocument":
+            token = (request.get("query") or {}).get("transaction")
+            if token is not None:
+                self.locks[request["name"]] = token
+            return super().__call__(request)
+        if rpc == "Rollback":
+            token = body.get("transaction")
+            self.rollbacks.append(token)
+            self.locks = {k: v for k, v in self.locks.items() if v != token}
+            return super().__call__(request)
+        if rpc == "Commit":
+            token = body.get("transaction")
+            for write in body.get("writes", []):
+                target = write.get("delete") or write["update"]["name"]
+                holder = self.locks.get(target)
+                if holder is not None and holder != token:
+                    self.calls.append(request)
+                    return {
+                        "code": 10,
+                        "status": "ABORTED",
+                        "message": "Too much contention on these documents.",
+                    }
+            return super().__call__(request)
+        return super().__call__(request)
+
+
+def test_wall_clock_elapsed_is_measured_not_copied_from_the_plan():
+    clock = {"now": 0.0}
+
+    def sleeper(seconds):
+        clock["now"] += seconds
+
+    receipt = collector.collect(
+        options(timing=collector.WALL_CLOCK),
+        Endpoint(),
+        sleeper=sleeper,
+        monotonic=lambda: clock["now"],
+        wall=lambda: 1_800_000_000 + clock["now"],
+    )
+    waited = [row["waited"] for row in receipt["rows"] if row["waited"]]
+    assert waited
+    for entry in waited:
+        assert entry["measuredSeconds"] == pytest.approx(entry["requestedSeconds"])
+        assert entry["checkpoints"] >= 1
+
+
+def test_a_sleeper_that_does_not_sleep_produces_zero_measured_elapsed():
+    receipt = collector.collect(
+        options(timing=collector.WALL_CLOCK),
+        Endpoint(),
+        sleeper=lambda seconds: None,
+        monotonic=lambda: 0.0,
+        wall=lambda: 1_800_000_000.0,
+    )
+    waited = [row["waited"] for row in receipt["rows"] if row["waited"]]
+    assert waited
+    for entry in waited:
+        assert entry["measuredSeconds"] == 0
+        assert entry["requestedSeconds"] > 0
+    idle = [row["idleSeconds"] for row in receipt["rows"] if "idleSeconds" in row]
+    assert idle and all(value == 0 for value in idle)
+
+
+def test_idle_seconds_are_attributed_to_the_transaction_that_holds_the_lock():
+    receipt = collector.collect(
+        options(), Endpoint(), advance=advances([]), monotonic=lambda: 0.0
+    )
+    rows = {row["caseId"]: row for row in receipt["rows"] if row["caseId"]}
+    assert rows["idle-expiry/commit-before-idle"]["idleOfTransaction"] == "d"
+    assert rows["idle-expiry/commit-before-idle"]["idleSeconds"] == 20
+    assert rows["idle-expiry/commit-after-idle"]["idleOfTransaction"] == "a"
+    assert rows["idle-expiry/commit-after-idle"]["idleSeconds"] == 90
+    assert rows["idle-expiry/rollback-after-idle"]["idleSeconds"] == 90
+
+
+def test_wall_clock_waits_are_served_in_bounded_checkpointed_steps():
+    clock = {"now": 0.0}
+    seen = []
+
+    def sleeper(seconds):
+        assert seconds <= collector.CHECKPOINT_SECONDS
+        clock["now"] += seconds
+
+    receipt = collector.collect(
+        options(timing=collector.WALL_CLOCK),
+        Endpoint(),
+        sleeper=sleeper,
+        monotonic=lambda: clock["now"],
+        wall=lambda: 1_800_000_000 + clock["now"],
+        checkpoint=seen.append,
+    )
+    assert receipt["checkpoints"]
+    assert seen == receipt["checkpoints"]
+    assert len(seen) == (20 + 70) / collector.CHECKPOINT_SECONDS
+
+
+def test_an_abort_after_the_locks_are_taken_still_returns_every_document():
+    endpoint = LockingEndpoint()
+
+    def monotonic():
+        # Time jumps forward the moment all four transactional reads have taken
+        # their locks, so the run aborts with every transaction still open.
+        return 10_000.0 if len(endpoint.locks) >= 4 else 0.0
+
+    receipt = collector.collect(
+        options(),
+        endpoint,
+        advance=advances([]),
+        monotonic=monotonic,
+    )
+    assert receipt["failure"] == "deadline-reached"
+    released = {entry["transaction"] for entry in receipt["transactionReleases"]}
+    assert released, "no transaction was released"
+    assert receipt["openTransactions"] == []
+    assert receipt["unrecovered"] == [], receipt["cleanup"]
+    assert endpoint.rollbacks
+
+
+def test_an_open_transaction_left_behind_makes_the_receipt_incomplete():
+    def refusing(request):
+        if request["rpc"] == "Rollback":
+            return {"code": 3, "status": "INVALID_ARGUMENT", "message": "no"}
+        return Endpoint()(request)
+
+    endpoint = Endpoint()
+
+    def transport(request):
+        if request["rpc"] == "Rollback" and request["body"].get("transaction"):
+            endpoint.calls.append(request)
+            return {"code": 3, "status": "INVALID_ARGUMENT", "message": "refused"}
+        return endpoint(request)
+
+    receipt = collector.collect(
+        options(), transport, advance=advances([]), monotonic=lambda: 0.0
+    )
+    assert receipt["openTransactions"]
+    assert receipt["complete"] is False
+
+
+def test_every_request_carries_the_plan_s_per_request_timeout():
+    endpoint = Endpoint()
+    collector.collect(options(), endpoint, advance=advances([]), monotonic=lambda: 0.0)
+    timeouts = {call["timeoutSeconds"] for call in endpoint.calls}
+    assert timeouts
+    assert all(isinstance(value, int) and value > 0 for value in timeouts)
+    assert plan_module.CONTENDED_REQUEST_TIMEOUT_SECONDS in timeouts
+    assert plan_module.DEFAULT_REQUEST_TIMEOUT_SECONDS in timeouts

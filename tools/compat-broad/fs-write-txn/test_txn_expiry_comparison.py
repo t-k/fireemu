@@ -21,29 +21,40 @@ def receipt(target, *, project, nonce, timing):
         required = case["requiresElapsedSeconds"]
         waited = None
         if required > elapsed:
-            waited = {"mode": timing, "seconds": required - elapsed}
+            step = required - elapsed
+            waited = {
+                "mode": timing,
+                "requestedSeconds": step,
+                "measuredSeconds": step,
+                "startedAt": "2026-09-18T00:00:00Z",
+                "endedAt": "2026-09-18T00:01:30Z",
+                "wallSeconds": step,
+                "checkpoints": 1,
+            }
             elapsed = required
         expected = case["expectedLocal"]
         message = expected["message"]
         if case["id"] == "idle-expiry/commit-after-idle":
             message = f'Document "{project}/{prefix}/locked-a" is gone. {message}'
-        rows.append(
-            {
-                "slot": case["id"],
-                "phase": case["group"],
-                "caseId": case["id"],
-                "rpc": expected["rpc"],
-                "role": case["resources"][0] if case["resources"] else None,
-                "observed": {
-                    "code": expected["code"],
-                    "status": expected["status"],
-                    "message": message,
-                },
-                "complete": True,
-                "waited": waited,
-                "expectedLocal": dict(expected),
-            }
-        )
+        row = {
+            "slot": case["id"],
+            "phase": case["group"],
+            "caseId": case["id"],
+            "rpc": expected["rpc"],
+            "role": case["resources"][0] if case["resources"] else None,
+            "observed": {
+                "code": expected["code"],
+                "status": expected["status"],
+                "message": message,
+            },
+            "complete": True,
+            "waited": waited,
+            "expectedLocal": dict(expected),
+        }
+        if required:
+            row["idleSeconds"] = required
+            row["idleOfTransaction"] = "a"
+        rows.append(row)
     return {
         "kind": collector.CONTRACT,
         "campaign": cases.CAMPAIGN,
@@ -57,6 +68,9 @@ def receipt(target, *, project, nonce, timing):
         "nonce": nonce,
         "rows": rows,
         "cleanup": [],
+        "transactionReleases": [],
+        "openTransactions": [],
+        "checkpoints": [],
         "unrecovered": [],
         "missingCases": [],
         "failure": None,
@@ -144,14 +158,62 @@ def test_a_production_receipt_with_simulated_time_is_refused():
     assert any(r["code"] == "production-timing-simulated" for r in result["reasons"])
 
 
-def test_a_receipt_that_did_not_reach_the_idle_limit_is_refused():
+def test_a_receipt_whose_measured_idle_time_is_short_is_refused():
     value = production()
     for row in value["rows"]:
-        if row["waited"]:
-            row["waited"]["seconds"] = 1
+        if "idleSeconds" in row:
+            row["idleSeconds"] = 1
     result = comparison.compare(value, local())
     assert result["classification"] == comparison.INDETERMINATE
     assert any(r["code"] == "elapsed-time-not-reached" for r in result["reasons"])
+
+
+def test_a_receipt_that_declares_the_wait_but_never_took_it_is_refused():
+    value = production()
+    for row in value["rows"]:
+        if row["waited"]:
+            row["waited"]["measuredSeconds"] = 0
+    result = comparison.compare(value, local())
+    assert result["classification"] == comparison.INDETERMINATE
+    assert any(r["code"] == "wait-shorter-than-requested" for r in result["reasons"])
+
+
+def test_a_receipt_with_an_unmeasured_wait_is_refused():
+    value = production()
+    for row in value["rows"]:
+        if row["waited"]:
+            row["waited"]["measuredSeconds"] = None
+    result = comparison.compare(value, local())
+    assert result["classification"] == comparison.INDETERMINATE
+    assert any(r["code"] == "wait-not-measured" for r in result["reasons"])
+
+
+def test_a_control_that_aged_past_the_idle_limit_is_refused():
+    value = production()
+    for row in value["rows"]:
+        if row["caseId"] == "idle-expiry/commit-before-idle":
+            row["idleSeconds"] = cases.DECLARED_IDLE_LIMIT_SECONDS + 5
+    result = comparison.compare(value, local())
+    assert result["classification"] == comparison.INDETERMINATE
+    assert any(r["code"] == "control-aged-past-idle-limit" for r in result["reasons"])
+
+
+def test_a_receipt_with_an_open_transaction_is_refused():
+    value = local()
+    value["openTransactions"] = ["a"]
+    result = comparison.compare(production(), value)
+    assert result["classification"] == comparison.INDETERMINATE
+    assert any(r["code"] == "open-transactions" for r in result["reasons"])
+
+
+def test_receipts_from_different_collector_versions_are_not_compared():
+    value = local()
+    value["sourceDigest"] = "f" * 64
+    result = comparison.compare(production(), value)
+    assert result["classification"] == comparison.INDETERMINATE
+    assert any(
+        r["code"] == "collector-source-digest-differs" for r in result["reasons"]
+    )
 
 
 def test_a_receipt_carrying_credential_material_is_refused():
@@ -189,3 +251,47 @@ def test_local_self_contract_reports_a_disagreeing_case():
     result = comparison.local_self_contract(value)
     assert result["classification"] == comparison.SEMANTIC_MISMATCH
     assert "idle-expiry/commit-after-idle" in result["disagreements"]
+
+
+def test_the_synthetic_receipt_shape_matches_a_real_collector_receipt():
+    """The fixtures above must not drift from what the collector emits."""
+    from test_txn_expiry_collector import Endpoint, advances, options
+
+    real = collector.collect(
+        options(), Endpoint(), advance=advances([]), monotonic=lambda: 0.0
+    )
+    synthetic = local()
+    assert set(synthetic) <= set(real), set(synthetic) - set(real)
+    real_case_rows = [row for row in real["rows"] if row["caseId"]]
+    synthetic_row = synthetic["rows"][0]
+    assert set(synthetic_row) <= set(real_case_rows[0]) | {
+        "idleSeconds",
+        "idleOfTransaction",
+    }
+    waited = next(row["waited"] for row in real["rows"] if row["waited"])
+    synthetic_waited = next(row["waited"] for row in synthetic["rows"] if row["waited"])
+    assert set(synthetic_waited) == set(waited)
+
+
+def test_a_production_receipt_measured_by_a_no_op_sleeper_is_refused():
+    """The end-to-end form of MF-1: a real run that never waited is refused."""
+    from test_txn_expiry_collector import Endpoint, options
+
+    faked = collector.collect(
+        options(
+            target="production",
+            host=collector.PRODUCTION_HOST,
+            timing=collector.WALL_CLOCK,
+        ),
+        Endpoint(),
+        sleeper=lambda seconds: None,
+        monotonic=lambda: 0.0,
+        wall=lambda: 1_800_000_000.0,
+    )
+    assert faked["timing"] == collector.WALL_CLOCK
+    assert faked["target"] == "production"
+    result = comparison.compare(faked, local())
+    assert result["classification"] == comparison.INDETERMINATE
+    codes = {r["code"] for r in result["reasons"]}
+    assert "wait-shorter-than-requested" in codes
+    assert "elapsed-time-not-reached" in codes

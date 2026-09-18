@@ -113,3 +113,90 @@ def test_runtime_binding_refuses_a_missing_artifact():
     root = Path(__file__).resolve().parents[3]
     with pytest.raises(FileNotFoundError):
         shadow.runtime_binding(Path("/nonexistent/fireemu"), root)
+
+
+def synthetic_document(**overrides):
+    binding = {
+        "artifactSha256": "a" * 64,
+        "sourceCommit": "b" * 40,
+        "sourceRoot": "/somewhere",
+        "runtimeInputsDigest": "c" * 64,
+        "runtimeInputCount": 400,
+        "runtimeInputsClean": True,
+    }
+    value = {
+        "before": "d" * 64,
+        "after": "d" * 64,
+        "artifact_sha": "a" * 64,
+        "binding": binding,
+        "version": "fireemu 0.7.1",
+        "nonce": "o3expiry-0000000000000001",
+        "owner_id": "0" * 32,
+        "elapsed": 1.0,
+        "child": {"stopped": True, "signal": None, "exitCode": 0},
+        "receipt": {
+            "complete": True,
+            "instance": {"wrongTokenStatus": 403, "artifactSha256": "a" * 64},
+        },
+        "contract": {"classification": "MATCH"},
+    }
+    value.update(overrides)
+    return shadow.build_shadow_document(**value)
+
+
+def test_the_builder_emits_the_publication_fields_itself():
+    value = synthetic_document()
+    assert value["productionExecuted"] is False
+    assert value["note"] == shadow.PUBLICATION_NOTE
+    assert value["runtime"]["version"] == "fireemu 0.7.1"
+    assert value["runtime"]["wrongControlTokenStatus"] == 403
+    assert value["complete"] is True
+
+
+def test_the_builder_keeps_the_child_computed_artifact_proof():
+    value = synthetic_document()
+    assert value["runtime"]["childObservedArtifactSha256"] == "a" * 64
+    assert value["receipt"]["instance"]["artifactSha256"] == "a" * 64
+
+
+def test_a_child_that_ran_a_different_artifact_is_not_complete():
+    value = synthetic_document(
+        receipt={
+            "complete": True,
+            "instance": {"wrongTokenStatus": 403, "artifactSha256": "e" * 64},
+        }
+    )
+    assert value["complete"] is False
+
+
+def test_a_dirty_rust_tree_or_shifted_source_digest_is_not_complete():
+    value = synthetic_document(
+        binding={
+            "artifactSha256": "a" * 64,
+            "sourceCommit": "b" * 40,
+            "sourceRoot": "/somewhere",
+            "runtimeInputsDigest": "c" * 64,
+            "runtimeInputCount": 400,
+            "runtimeInputsClean": False,
+        }
+    )
+    assert value["complete"] is False
+    shifted = synthetic_document(after="f" * 64)
+    assert shifted["complete"] is False
+
+
+def test_the_transport_prefers_the_per_request_timeout_from_the_plan():
+    send = shadow.rest_transport("http://127.0.0.1:1", timeout=99)
+    response = send(
+        {
+            "rpc": "Rollback",
+            "database": "(default)",
+            "projectId": "fireemu-test",
+            "name": None,
+            "body": {"transaction": "AA=="},
+            "query": None,
+            "maxResponseBytes": 4096,
+            "timeoutSeconds": 1,
+        }
+    )
+    assert response["complete"] is False

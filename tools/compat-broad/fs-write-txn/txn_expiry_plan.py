@@ -39,15 +39,22 @@ PHASES = (
 MAX_RESPONSE_BYTES = 65_536
 MAX_REQUEST_BYTES = 8_192
 
-#: Slots reserved beyond the compiled operations, so a recovery path that needs
-#: one extra conditional delete does not exceed the permission.
-DATA_SLOT_HEADROOM = 8
+#: Slots reserved beyond the compiled operations. Recovery may have to roll back
+#: every transaction the plan opened before it can delete anything, so the
+#: headroom covers one rollback per opened transaction plus a small margin.
+DATA_SLOT_HEADROOM = 16
+
+#: Per-request time bound. Every request in this campaign is a small unary call.
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 10
+#: The single request that is expected to block: production does not refuse an
+#: out-of-band write to a locked document immediately, it waits for the lock.
+CONTENDED_REQUEST_TIMEOUT_SECONDS = 120
 METADATA_REQUESTS = 8
 CREDENTIAL_REQUESTS = 2
 
-#: Wall-clock envelope. The compiled waits total 90 seconds; the rest is
-#: connection, recovery and cleanup headroom.
-WALL_SECONDS = 600
+#: Wall-clock envelope. It must cover every per-request timeout plus every
+#: scheduled wait, with headroom; a test enforces that.
+WALL_SECONDS = 1200
 
 REQUEST_COST_MICROUSD = 100
 #: Conservative fixed network reserve. Every response is capped at 64 KiB and
@@ -89,6 +96,8 @@ def _op(
     wait=0,
     opens=None,
     closes=None,
+    idle_of=None,
+    timeout=DEFAULT_REQUEST_TIMEOUT_SECONDS,
     detail=None,
 ):
     return {
@@ -100,6 +109,8 @@ def _op(
         "waitSeconds": wait,
         "opensTransaction": opens,
         "closesTransaction": closes,
+        "idleOfTransaction": idle_of,
+        "timeoutSeconds": timeout,
         "detail": detail,
         "maxRequestBytes": MAX_REQUEST_BYTES,
         "maxResponseBytes": MAX_RESPONSE_BYTES,
@@ -152,6 +163,7 @@ def _operations():
             "Commit",
             case_id="idle-expiry/lock-held-before-idle",
             role="locked-c",
+            timeout=CONTENDED_REQUEST_TIMEOUT_SECONDS,
             detail="out-of-band commit while transaction c still holds the lock",
         )
     )
@@ -164,6 +176,7 @@ def _operations():
             role="locked-d",
             wait=20,
             closes="d",
+            idle_of="d",
         )
     )
     steps.append(
@@ -175,6 +188,7 @@ def _operations():
             role="locked-a",
             wait=cases.maximum_elapsed_seconds() - 20,
             closes="a",
+            idle_of="a",
         )
     )
     steps.append(
@@ -185,6 +199,7 @@ def _operations():
             case_id="idle-expiry/rollback-after-idle",
             role="locked-b",
             closes="b",
+            idle_of="b",
         )
     )
     steps.append(
@@ -194,6 +209,8 @@ def _operations():
             "Commit",
             case_id="idle-expiry/lock-released-after-idle",
             role="locked-a",
+            idle_of="a",
+            timeout=CONTENDED_REQUEST_TIMEOUT_SECONDS,
             detail="out-of-band commit after the holding transaction expired",
         )
     )
@@ -334,9 +351,16 @@ def _operations():
     return tuple(steps)
 
 
+#: The same eight zero bytes the recorded production corpus used for
+#: `rollback-unknown` and `commit-with-unknown-transaction`, where production
+#: answered `Invalid transaction.` rather than a decoding error. Reusing the
+#: published constant keeps this row directly comparable to that corpus.
+UNISSUED_RETRY_TOKEN = bytes(8)
+
+
 def unissued_retry_token(nonce):
-    """A deterministic, well-formed retry token this database never issued."""
-    return hashlib.sha256(f"{nonce}:unissued-retry".encode()).digest()[:32]
+    """A well-formed retry token this database never issued."""
+    return UNISSUED_RETRY_TOKEN
 
 
 def compile_plan(nonce, owner_id, *, project=PROJECT, database=DATABASE):
@@ -366,6 +390,11 @@ def compile_plan(nonce, owner_id, *, project=PROJECT, database=DATABASE):
             "maxRequestBytes": MAX_REQUEST_BYTES,
             "maxResponseBytes": MAX_RESPONSE_BYTES,
             "deadlineSeconds": WALL_SECONDS,
+            "defaultRequestTimeoutSeconds": DEFAULT_REQUEST_TIMEOUT_SECONDS,
+            "worstCaseSeconds": (
+                sum(step["timeoutSeconds"] for step in operations)
+                + sum(step["waitSeconds"] for step in operations)
+            ),
             "concurrency": 1,
         },
         "budget": {

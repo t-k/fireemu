@@ -81,6 +81,13 @@ The malformed control separates a request-decoding refusal from a semantic one,
 so a single `INVALID_ARGUMENT` on the unissued case cannot be mistaken for a
 parser rejection.
 
+The unissued token is the same eight zero bytes (`AAAAAAAAAAA=`) that the
+recorded corpus already sent for `rollback-unknown` and
+`commit-with-unknown-transaction`, where production answered `Invalid
+transaction.` rather than a decoding error. Reusing the published constant makes
+the new row directly comparable to that corpus instead of introducing a fresh
+value whose shape production has never been asked about.
+
 ## The timing problem, stated plainly
 
 The local emulator runs a virtual clock. It does not follow wall time, so the
@@ -99,6 +106,19 @@ mechanisms, and the package refuses to hide that:
 What is compared across the two sides is the observed code, the normalized
 diagnostic and the post-state. The mechanism that produced the elapsed time is
 not compared, because it cannot be the same.
+
+The numbers being checked are measured, not declared. Each wait records the
+interval the run observed, and each elapsed-dependent case records the idle time
+of the specific transaction it uses, measured from that transaction's own
+lock-taking read. The comparator refuses a receipt whose measured wait is shorter
+than the requested one, whose idle time is below the case's declared seconds, or
+whose wait was never measured at all. A collector wired to a sleeper that does
+not sleep therefore fails, and a test drives exactly that case end to end.
+
+The controls are bounded on the other side too. A slow production run could age
+the 20-second control past the idle limit, which would look like a semantic
+disagreement while actually being an invalid control. The comparator reports that
+as `INDETERMINATE`.
 
 The waits are placed well away from the limit so that neither side depends on
 the exact boundary: controls sit at 20 seconds and observations at 90 seconds,
@@ -124,6 +144,21 @@ is itself the finding.
   as a failure. It is never turned into a semantic result.
 - Loopback-locked. A local collection must target a loopback host; a production
   collection must target the fixed Firestore host.
+- Time-bounded per request. Every operation carries its own timeout from the
+  plan, which the transport must honour. The two contended writes get 120
+  seconds because production does not refuse a write to a locked document
+  immediately; everything else gets 10. The worst case, every timeout plus every
+  wait, is 910 seconds against a 1200-second envelope.
+- Self-releasing. Cleanup rolls back every transaction still open before it
+  touches a document, because a conditional delete is an out-of-band write and a
+  live transaction's lock would refuse it. A receipt that still holds an open
+  transaction is incomplete. Without this, aborting after the transactional
+  reads stranded four of the five owned documents.
+
+Waiting blocks the collector. A wall-clock wait is served in five-second steps
+and each step records a checkpoint, so the run reports progress and can be
+interrupted between steps, but a collector that is killed mid-wait still loses
+the run and must start over. This is progress recording, not process resumption.
 
 ## Campaign manifest and budget
 
@@ -135,20 +170,25 @@ a fresh nonce and the real owner identity.
 
 | Bound | Value |
 | --- | --- |
-| Total request slots | 78 |
-| Data slots | 68 |
+| Total request slots | 86 |
+| Data slots | 76 |
 | Metadata slots | 8 |
 | Credential preparation slots | 2 |
 | Owned documents | 5 |
 | Accounts created | 0 |
 | Concurrency | 1 |
-| Wall-clock envelope | 600 seconds |
-| Planning ceiling | US$0.014988 |
+| Default request timeout | 10 seconds |
+| Contended request timeout | 120 seconds |
+| Worst case, timeouts plus waits | 910 seconds |
+| Wall-clock envelope | 1200 seconds |
+| Planning ceiling | US$0.015788 |
 
-The cost is a conservative planning ceiling, not an invoice. It is 78 request
+The cost is a conservative planning ceiling, not an invoice. It is 86 request
 slots at US$0.0001 plus a fixed US$0.007188 network reserve, which is a 32 MiB
 allowance at US$0.23 per GiB against an actual expected transfer of a few MiB.
-The local rehearsal used 60 of the 68 data slots.
+The data slots include one rollback for every transaction the plan opens, so
+recovery can release its locks before deleting anything. The local rehearsal
+used 60 of the 76 data slots.
 
 The permission envelope holds one `EXCLUSIVE` lock on the owned document prefix
 and five `READ` locks on indexes, Rules, database configuration, Auth
@@ -194,23 +234,41 @@ The recorded run is
 | Cases observed | 13 of 13 |
 | Local self-contract | `MATCH` |
 | Resources recovered with typed absence | 5 of 5 |
-| Data requests used | 60 of 68 |
-| Elapsed | 15.2 seconds |
+| Transactions left open | 0 |
+| Data requests used | 60 of 76 |
+| Elapsed | 15.1 seconds |
 | Child exit | 0, no signal needed |
 
 The runtime artifact is SHA-256
-`8c6bae9e7e5f72a315e88c9afb6b9a5f0a479239d856c04a98a4503e02830994`
+`c67fd37561ba32a6638d0f273efd33352b26fdcb3b55460d2cc0674cd306e210`
 (`fireemu 0.7.1`), built with `cargo build -p fireemu` inside this lane's own
 worktree. The rehearsal records the source commit, the hashed Rust input set
 (`32a872989f5e0d8fabf17a2a30cda85a2467574e23c4712a37711f0dbd196d18`, 400 files)
 and that those inputs were clean. That digest is byte-identical to the one at the
 lane base `3d0e56bdf`, so the artifact provably describes this branch.
 
+The Rust input digest, not the artifact digest, is the stable binding. A debug
+build is not bit-reproducible, so rebuilding the same source yields a different
+binary; an earlier rehearsal in this lane recorded
+`8c6bae9e7e5f72a315e88c9afb6b9a5f0a479239d856c04a98a4503e02830994` from the same
+inputs. The child computes the artifact digest independently from inside the
+running instance, and the record keeps both that value and the parent's.
+
 A binary taken from the shared checkout or a sibling worktree describes a
 different source and must not be used. An earlier rehearsal did exactly that and
 produced a different artifact digest; the evidence test now refuses a recorded
-artifact whose source root is not this worktree, or whose Rust input digest no
-longer matches the working tree.
+artifact whose source root is not this worktree, whose Rust input digest no
+longer matches the working tree, or whose child observed a different binary.
+
+The published record is exactly what `run_shadow` writes. There is no
+hand-editing step: the publication fields, the note and the runtime block are all
+emitted by the generator, and `receipt.instance` is kept rather than redacted so
+the child's independent artifact proof survives. Two tests enforce this. One
+rebuilds the record from the generator and requires equality. The other, run with
+`FIREEMU_O3_FRESH_SHADOW` pointing at an independently produced `shadow.json`,
+requires the committed file to equal that fresh run once per-run identities and
+instants are scrubbed. Both were run against a genuinely separate rehearsal
+before this evidence was committed.
 
 The first rehearsal disagreed on one case and the frozen expectation was wrong,
 not the runtime: the emulator says `invalid base64` where the table claimed
@@ -227,6 +285,10 @@ Cleanup behavior is exercised offline rather than assumed:
   is incomplete.
 - An exhausted deadline stops the observation, and cleanup still runs against
   its own separate recovery deadline.
+- An abort taken while all four transactional reads hold their locks still
+  returns all five documents, because cleanup rolls the transactions back first.
+  A transaction whose rollback is refused stays recorded as open and the receipt
+  is incomplete.
 - An incomplete transport response stops the collection with
   `incomplete-response` rather than producing a semantic row.
 
@@ -271,6 +333,17 @@ than fixed, because it is a runtime change outside this lane.
 uv run --python 3.12 --with pytest pytest -q tools/compat-broad/fs-write-txn
 uv run --python 3.12 --with ruff ruff check tools/compat-broad/fs-write-txn
 uv run --python 3.12 --with ruff ruff format --check tools/compat-broad/fs-write-txn
+```
+
+To check the published rehearsal against an independent one, run the shadow into
+a fresh directory and point the evidence suite at its result:
+
+```
+uv run --python 3.12 python tools/compat-broad/fs-write-txn/txn_expiry_shadow.py \
+  --artifact target/debug/fireemu --output /tmp/txn-expiry-fresh
+FIREEMU_O3_FRESH_SHADOW=/tmp/txn-expiry-fresh/shadow.json \
+  uv run --python 3.12 --with pytest pytest -q \
+  tools/compat-broad/fs-write-txn/test_txn_expiry_evidence.py
 ```
 
 The published manifest is a bound input. Editing any of the five campaign

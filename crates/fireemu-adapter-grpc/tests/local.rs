@@ -8047,21 +8047,26 @@ fn missing_database_message(project: &str, database: &str) -> String {
     )
 }
 
+/// Asserts one surface answered with production's refusal for a database nothing created.
+fn assert_missing_database(error: &tonic::Status, surface: &str) {
+    assert_eq!(error.code(), tonic::Code::NotFound, "{surface}");
+    assert_eq!(
+        error.message(),
+        missing_database_message("demo-app", "never-created"),
+        "{surface}"
+    );
+}
+
+const NEVER_CREATED: &str = "projects/demo-app/databases/never-created";
+
 #[tokio::test]
-async fn grpc_refuses_every_data_plane_call_on_a_database_that_was_never_created() {
+async fn grpc_refuses_document_calls_on_a_database_that_was_never_created() {
     let (mut client, _clock, handle) = start().await;
-    let database = "projects/demo-app/databases/never-created";
-    let docs = format!("{database}/documents");
+    let docs = format!("{NEVER_CREATED}/documents");
     let document = format!("{docs}/c/d");
-    let expected = missing_database_message("demo-app", "never-created");
 
-    let refusal = |error: tonic::Status, surface: &str| {
-        assert_eq!(error.code(), tonic::Code::NotFound, "{surface}");
-        assert_eq!(error.message(), expected, "{surface}");
-    };
-
-    refusal(
-        client
+    assert_missing_database(
+        &client
             .get_document(pb::GetDocumentRequest {
                 name: document.clone(),
                 ..Default::default()
@@ -8070,8 +8075,8 @@ async fn grpc_refuses_every_data_plane_call_on_a_database_that_was_never_created
             .unwrap_err(),
         "GetDocument",
     );
-    refusal(
-        client
+    assert_missing_database(
+        &client
             .list_documents(pb::ListDocumentsRequest {
                 parent: docs.clone(),
                 collection_id: "c".to_owned(),
@@ -8081,10 +8086,10 @@ async fn grpc_refuses_every_data_plane_call_on_a_database_that_was_never_created
             .unwrap_err(),
         "ListDocuments",
     );
-    refusal(
-        client
+    assert_missing_database(
+        &client
             .batch_get_documents(pb::BatchGetDocumentsRequest {
-                database: database.to_owned(),
+                database: NEVER_CREATED.to_owned(),
                 documents: vec![document.clone()],
                 ..Default::default()
             })
@@ -8092,59 +8097,70 @@ async fn grpc_refuses_every_data_plane_call_on_a_database_that_was_never_created
             .unwrap_err(),
         "BatchGetDocuments",
     );
-    refusal(
-        client
-            .begin_transaction(pb::BeginTransactionRequest {
-                database: database.to_owned(),
-                ..Default::default()
-            })
-            .await
-            .unwrap_err(),
-        "BeginTransaction",
-    );
-    refusal(
-        client
-            .commit(pb::CommitRequest {
-                database: database.to_owned(),
-                writes: vec![pb::Write {
-                    operation: Some(pb::write::Operation::Update(pb::Document {
-                        name: document.clone(),
-                        ..Default::default()
-                    })),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
-            .await
-            .unwrap_err(),
-        "Commit",
-    );
-    refusal(
-        client
-            .batch_write(pb::BatchWriteRequest {
-                database: database.to_owned(),
-                writes: vec![pb::Write {
-                    operation: Some(pb::write::Operation::Delete(document.clone())),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
-            .await
-            .unwrap_err(),
-        "BatchWrite",
-    );
-    refusal(
-        client
+    assert_missing_database(
+        &client
             .list_collection_ids(pb::ListCollectionIdsRequest {
-                parent: docs.clone(),
+                parent: docs,
                 ..Default::default()
             })
             .await
             .unwrap_err(),
         "ListCollectionIds",
     );
-    refusal(
-        client
+    let write = pb::Write {
+        operation: Some(pb::write::Operation::Update(pb::Document {
+            name: document,
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    assert_missing_database(
+        &client
+            .commit(pb::CommitRequest {
+                database: NEVER_CREATED.to_owned(),
+                writes: vec![write.clone()],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err(),
+        "Commit",
+    );
+    assert_missing_database(
+        &client
+            .batch_write(pb::BatchWriteRequest {
+                database: NEVER_CREATED.to_owned(),
+                writes: vec![write],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err(),
+        "BatchWrite",
+    );
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn grpc_refuses_query_and_transaction_calls_on_a_database_that_was_never_created() {
+    let (mut client, _clock, handle) = start().await;
+    let docs = format!("{NEVER_CREATED}/documents");
+    let collection = vec![sq::CollectionSelector {
+        collection_id: "c".to_owned(),
+        all_descendants: false,
+    }];
+
+    assert_missing_database(
+        &client
+            .begin_transaction(pb::BeginTransactionRequest {
+                database: NEVER_CREATED.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err(),
+        "BeginTransaction",
+    );
+    assert_missing_database(
+        &client
             .partition_query(pb::PartitionQueryRequest {
                 parent: docs.clone(),
                 partition_count: 2,
@@ -8164,20 +8180,20 @@ async fn grpc_refuses_every_data_plane_call_on_a_database_that_was_never_created
         "PartitionQuery",
     );
 
-    let query = pb::RunQueryRequest {
-        parent: docs.clone(),
-        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
-            pb::StructuredQuery {
-                from: vec![sq::CollectionSelector {
-                    collection_id: "c".to_owned(),
-                    all_descendants: false,
-                }],
-                ..Default::default()
-            },
-        )),
-        ..Default::default()
-    };
-    let refused = match client.run_query(query).await {
+    // A refusal a stream carries instead of returning is still the same refusal.
+    let refused = match client
+        .run_query(pb::RunQueryRequest {
+            parent: docs,
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: collection,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        })
+        .await
+    {
         Err(error) => error,
         Ok(response) => response
             .into_inner()
@@ -8186,7 +8202,7 @@ async fn grpc_refuses_every_data_plane_call_on_a_database_that_was_never_created
             .expect("the stream reports the refusal")
             .unwrap_err(),
     };
-    refusal(refused, "RunQuery");
+    assert_missing_database(&refused, "RunQuery");
 
     handle.abort();
 }

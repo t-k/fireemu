@@ -8,6 +8,8 @@ from o5_user_token_shadow import (
     expected_local_bundle,
     launch_specification,
     local_deviations,
+    redact_principals,
+    unredacted_identifiers,
 )
 from test_o5_user_token_collector import Transport
 
@@ -130,3 +132,38 @@ def test_field_checks_are_skipped_without_a_uid_map() -> None:
     plan = case()
     result = collect_shadow(plan, Transport(plan), run_id="local-1")
     assert local_deviations(result, plan) == []
+
+
+def test_redaction_replaces_every_account_identifier() -> None:
+    uids = {
+        "owner-a": "L7fNfbBctFzloK39kcvtQpSrtUFx",
+        "other-b": "Ab12Cd34Ef56Gh78Ij90Kl12Mn34",
+    }
+    bundle = {
+        "rows": [{"observed": {"fields": {"ownerUid": uids["owner-a"]}}}],
+        "cleanup": {"accountSteps": [{"observed": {"uid": uids["other-b"]}}]},
+        "attemptedAccounts": ["owner-a", "other-b"],
+    }
+    redacted = redact_principals(bundle, uids)
+    assert redacted["rows"][0]["observed"]["fields"]["ownerUid"] == "principal:owner-a"
+    assert (
+        redacted["cleanup"]["accountSteps"][0]["observed"]["uid"] == "principal:other-b"
+    )
+    assert redacted["attemptedAccounts"] == ["owner-a", "other-b"]
+    assert unredacted_identifiers(redacted) == []
+    # The input is not mutated, so the run keeps its real identifiers.
+    assert bundle["rows"][0]["observed"]["fields"]["ownerUid"] == uids["owner-a"]
+
+
+def test_unredacted_identifiers_finds_an_account_identifier() -> None:
+    assert unredacted_identifiers({"uid": "L7fNfbBctFzloK39kcvtQpSrtUFx"}) == [
+        "L7fNfbBctFzloK39kcvtQpSrtUFx"
+    ]
+
+
+def test_unredacted_identifiers_ignores_digests_and_fingerprints() -> None:
+    assert unredacted_identifiers({"planDigest": "a" * 64}) == []
+    assert unredacted_identifiers({"credentialFingerprint": "0123456789abcdef"}) == []
+    assert unredacted_identifiers({"sourceCommit": "b" * 40}) == []
+    assert unredacted_identifiers({"nonce": "c" * 32}) == []
+    assert unredacted_identifiers({"caseId": "a-owner-reads-own-document"}) == []

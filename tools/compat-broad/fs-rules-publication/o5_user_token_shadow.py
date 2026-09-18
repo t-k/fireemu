@@ -13,6 +13,7 @@ process launcher in a preparation package would be a liability, not evidence.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -206,3 +207,62 @@ def _resolve(fields: Mapping[str, Any], uids: Mapping[str, str]) -> dict[str, An
         else:
             resolved[key] = value
     return resolved
+
+
+UID_SHAPE = re.compile(r"[A-Za-z0-9]{24,}")
+
+
+def redact_principals(value: Any, uids: Mapping[str, str]) -> Any:
+    """Replace every account identifier with its stable principal label.
+
+    A run has to hold real uids to build requests and to check frozen fields,
+    but nothing published needs them. Publishing an identifier that a real
+    campaign would have minted against a real project is avoidable, so it is
+    avoided here rather than only in review. The replacement is the principal
+    reference, which is what the compiled matrix speaks in anyway.
+    """
+    replacements = {uid: f"principal:{ref}" for ref, uid in uids.items()}
+    return _redact(value, replacements)
+
+
+def _redact(value: Any, replacements: Mapping[str, str]) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _redact(nested, replacements) for key, nested in value.items()}
+    if isinstance(value, list):
+        return [_redact(nested, replacements) for nested in value]
+    if isinstance(value, str):
+        return replacements.get(value, value)
+    return value
+
+
+def unredacted_identifiers(value: Any) -> list[str]:
+    """Identifier-shaped strings still present in a published document.
+
+    Digests, fingerprints and the campaign nonce are hexadecimal and of fixed
+    length, so they are excluded; what remains is the shape an Identity
+    Platform uid has.
+    """
+    found: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, Mapping):
+            for nested in node.values():
+                walk(nested)
+        elif isinstance(node, list):
+            for nested in node:
+                walk(nested)
+        elif isinstance(node, str) and UID_SHAPE.fullmatch(node):
+            if len(node) in (16, 32, 40, 64) and _is_hexadecimal(node):
+                return
+            found.append(node)
+
+    walk(value)
+    return found
+
+
+def _is_hexadecimal(value: str) -> bool:
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True

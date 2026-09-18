@@ -6,6 +6,7 @@ from pathlib import Path
 
 from o5_user_token_campaign import OWNER_PRECONDITIONS, PERMISSION_ENVELOPE, budget
 from o5_user_token_case import CAMPAIGN, compile_case
+from o5_user_token_shadow import unredacted_identifiers
 
 SPEC_DIRECTORY = Path(__file__).resolve().parents[3] / "spec" / "compatibility"
 MATRIX = SPEC_DIRECTORY / "fs-rules-user-token-matrix.json"
@@ -90,6 +91,34 @@ def test_the_shadow_record_is_a_complete_local_run() -> None:
 
 def test_the_local_runtime_matched_every_expected_decision() -> None:
     assert shadow()["deviations"] == []
+
+
+def test_the_published_record_carries_no_account_identifier() -> None:
+    """A published record must speak principal labels, never uids.
+
+    Locally the uids are throwaway. The same publication path would otherwise
+    put a real campaign's account identifiers into the repository.
+    """
+    record = shadow()
+    assert unredacted_identifiers(record) == []
+    owners = [
+        row["observed"]["fields"]["ownerUid"]
+        for row in record["bundle"]["rows"]
+        if (row.get("observed") or {}).get("fields", {}).get("ownerUid")
+    ]
+    assert owners
+    assert all(value.startswith("principal:") for value in owners)
+    uids = [
+        step["observed"]["uid"]
+        for step in record["bundle"]["cleanup"]["accountSteps"]
+        if (step.get("observed") or {}).get("uid")
+    ]
+    assert uids
+    assert all(value.startswith("principal:") for value in uids)
+
+
+def test_the_published_record_keeps_the_journal_out_of_a_temporary_path() -> None:
+    assert "/" not in shadow()["bundle"]["journal"]
 
 
 def test_the_shadow_record_carries_no_credential() -> None:

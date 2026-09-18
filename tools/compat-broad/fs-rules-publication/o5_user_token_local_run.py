@@ -46,6 +46,8 @@ from o5_user_token_shadow import (
     ENVIRONMENT_ALLOWLIST,
     launch_specification,
     local_deviations,
+    redact_principals,
+    unredacted_identifiers,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -428,8 +430,13 @@ def run_child(output: Path, nonce: str) -> int:
             recovery_deadline_seconds=600.0,
             journal_path=output / "journal.jsonl",
         )
-        record["bundle"] = bundle
-        record["deviations"] = local_deviations(bundle, shadow.plan, shadow.uids)
+        # Deviations are computed against the real uids, then everything that
+        # gets written out is reduced to principal labels. The raw uids stay in
+        # this process.
+        deviations = local_deviations(bundle, shadow.plan, shadow.uids)
+        bundle["journal"] = Path(bundle["journal"]).name
+        record["bundle"] = redact_principals(bundle, shadow.uids)
+        record["deviations"] = redact_principals(deviations, shadow.uids)
         record["tenantDeleted"] = shadow.delete_tenant()
         record["wireRequests"] = shadow.wire_requests
         record["launchSpecification"] = launch_specification(shadow.plan)
@@ -437,6 +444,15 @@ def run_child(output: Path, nonce: str) -> int:
         record["failure"] = str(error)
     except Exception as error:  # noqa: BLE001 - type name only
         record["failure"] = f"{type(error).__name__}"
+    leaked = unredacted_identifiers(record)
+    if leaked:
+        record = {
+            "contract": record["contract"],
+            "status": record["status"],
+            "productionExecuted": False,
+            "productionReady": False,
+            "failure": f"unredacted-identifier-count:{len(leaked)}",
+        }
     (output / "local-shadow.json").write_text(
         json.dumps(record, indent=2, sort_keys=True) + "\n"
     )

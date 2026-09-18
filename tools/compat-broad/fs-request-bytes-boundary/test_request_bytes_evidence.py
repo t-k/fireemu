@@ -390,25 +390,52 @@ def test_a_tampered_timing_block_is_rejected(mutate):
         )
 
 
-def test_the_preparation_doc_describes_the_published_run():
+def test_the_preparation_doc_citation_is_generated_from_the_published_record():
     """The prose and the record must name the same run.
 
     They drifted once: a rebind updated the record and left the document citing
     an earlier run's commit and artifact, so the published narrative described
-    evidence that was no longer published.
+    evidence that was no longer published. The citation block is now generated,
+    so the two cannot disagree; this compares it against what the generator
+    emits for the record as published.
     """
     value = record()
-    doc = (
-        ROOT / "docs/compatibility/fs-request-bytes-campaign-preparation.md"
+    doc = (ROOT / shadow_module.PREPARATION_DOC).read_text()
+    assert shadow_module.CITATION_BEGIN in doc
+    assert shadow_module.CITATION_END in doc
+    expected = shadow_module.citation_block(value)
+    begin = doc.index(shadow_module.CITATION_BEGIN)
+    end = doc.index(shadow_module.CITATION_END) + len(shadow_module.CITATION_END)
+    assert doc[begin:end] == expected, (
+        "the preparation document's evidence citation does not match the "
+        "published record. Rebind both with one command:\n\n    "
+        + shadow_module.REBIND_COMMAND
+    )
+
+
+def test_the_citation_rewrite_leaves_the_hand_written_document_alone():
+    """Only the delimited block is generated."""
+    value = record()
+    doc = (ROOT / shadow_module.PREPARATION_DOC).read_text()
+    rewritten = shadow_module.rewrite_citation(doc, value)
+    assert rewritten == doc
+    head = doc.split(shadow_module.CITATION_BEGIN)[0]
+    tail = doc.split(shadow_module.CITATION_END)[1]
+    assert head == rewritten.split(shadow_module.CITATION_BEGIN)[0]
+    assert tail == rewritten.split(shadow_module.CITATION_END)[1]
+    assert "## Artifacts" in tail or "## Artifacts" in head
+
+
+def test_a_document_without_markers_is_refused_rather_than_guessed_at():
+    value = record()
+    with pytest.raises(ValueError, match="citation markers"):
+        shadow_module.rewrite_citation("# A document with no markers\n", value)
+
+
+def test_the_rebind_command_is_documented_where_it_is_needed():
+    """A failure message naming a command nobody wrote down is not a fix."""
+    readme = (
+        ROOT / "tools/compat-broad/fs-request-bytes-boundary/README.md"
     ).read_text()
-    for field in ("sourceCommit",):
-        assert value["runtime"][field] in doc, (
-            f"the preparation doc does not name the published run's {field}"
-        )
-    assert value["artifactSha256"] in doc
-    assert value["nonce"] in doc
-    timings = value["slotTimings"]["classes"]
-    for entry in (timings["smallRequest"], timings["boundaryCommit"]):
-        assert f"{entry['medianSeconds']:.4f}" in doc, (
-            "the preparation doc quotes timings from a different run"
-        )
+    assert shadow_module.REBIND_COMMAND in readme
+    assert "--publish" in shadow_module.REBIND_COMMAND

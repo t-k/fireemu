@@ -163,3 +163,24 @@ needs a production measurement, which the production transport can now supply.
 The record carries that disclaimer beside the numbers and
 `validate_slot_timings` refuses a block that drops it or claims to be a
 production estimate.
+
+
+## Rebinding after a runtime change
+
+The published record and the preparation document's evidence citation are
+rebound together, by one command, because they drifted apart when they were two
+steps. Run the shadow into a fresh directory and publish:
+
+```text
+uv run --offline --project tools/compat-inventory --locked python tools/compat-broad/fs-request-bytes-boundary/request_bytes_shadow.py --output <fresh-directory> --publish
+```
+
+That runs the shadow against an artifact built from the current checkout, writes
+`spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, and
+regenerates the block between the citation markers in
+`docs/compatibility/fs-request-bytes-campaign-preparation.md` from it. Everything
+outside those markers is hand-written and is left alone.
+
+The tree must be committed first: `broad.run` refuses a dirty checkout so the
+record binds to a reachable commit. That is why a rebind lands one commit after
+the change it describes.

@@ -244,17 +244,32 @@ profiles. That superseded baseline stays on the record, and the shadow keeps its
 classification as a **regression** outcome: a strict-profile build answering 413
 has lost the implemented shape.
 
+<!-- BEGIN generated evidence citation -->
+
 The recorded run is published as
 `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, at source
 `1d787e10e511ae28495dd21740767cd63090dee3`, artifact SHA-256
-`b38c585def7a7274c9bdc6c8b581e9b43e1f72066554891654ce3ed915fbb878`, nonce `cf1ca01095d44992b408fd7dd7c4949e`, with supervisor status
-`completed`, `recordingComplete` and `stateValidation` true, the owned process
-stopped and all listeners closed. It completed 105 observation rows and 153
-recovery rows, sent 241 of the 258 bounded requests, and proved all 51 owned
-resources absent afterwards. The 17 unsent requests are the over probe's delete
-slots, consumed as zero-wire skips because a refused Commit grants no cleanup
-ownership. That is also the post-state evidence: the refused request wrote
-nothing.
+`b38c585def7a7274c9bdc6c8b581e9b43e1f72066554891654ce3ed915fbb878`, nonce `cf1ca01095d44992b408fd7dd7c4949e`.
+
+| Property | Value |
+| --- | --- |
+| Supervisor status | `completed` |
+| Classification | `local-shape-matches-production-expectation` |
+| Recording complete | true |
+| State validation | true |
+| Observation rows | 105 |
+| Recovery rows | 153 |
+| Requests sent | 241 |
+| Every owned resource absent | true |
+| Small-request median, p99 | 0.0013 s, 0.0141 s |
+| Boundary Commit median | 0.0287 s |
+
+The timings are a loopback floor, not a production estimate; see the
+section above. This block is generated from the record, so it cannot
+describe a run that is not the published one. Regenerate it with the
+command in the lane README.
+
+<!-- END generated evidence citation -->
 
 The record carries the three probe outcomes, the refusal bytes verbatim, the
 collector summary, the runtime binding and the run's own nonce, so a reader can

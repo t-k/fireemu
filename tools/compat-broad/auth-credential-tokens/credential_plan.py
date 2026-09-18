@@ -23,10 +23,16 @@ STATUS = "PREPARATION"
 #: collector binding that makes a receipt pair comparable.
 FROZEN_MODULES = BOUND_MODULES
 
+#: `recoveryRequests` and `recoveryWallSeconds` are held back from the totals above, not
+#: added to them. Cleanup needs three calls per owned account and the run creates at most
+#: four, so twelve requests and sixty seconds keep cleanup reachable from any stopping
+#: point while the declared bound the campaign is approved against stays sixty requests.
 BUDGET = {
     "maxRequests": 60,
     "maxWallSeconds": 600,
     "maxCostUsd": 0.05,
+    "recoveryRequests": 12,
+    "recoveryWallSeconds": 60,
     "enforced": True,
 }
 

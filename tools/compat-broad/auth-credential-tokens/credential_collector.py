@@ -293,32 +293,84 @@ def cleanup_report(tracker: dict[str, Any]) -> dict[str, Any]:
 # --- budget ----------------------------------------------------------------------
 
 
+RUN_PHASE = "run"
+RECOVERY_PHASE = "recovery"
+
+
 def new_budget(
-    max_requests: int, max_wall_seconds: float, max_cost_usd: float
+    max_requests: int,
+    max_wall_seconds: float,
+    max_cost_usd: float,
+    *,
+    recovery_requests: int = 0,
+    recovery_wall_seconds: float = 0.0,
 ) -> dict[str, Any]:
-    """Create an enforced budget. The ceiling is checked here, not merely declared."""
+    """Create an enforced budget. The ceiling is checked here, not merely declared.
+
+    Part of the total is held back for recovery. Cleanup has to delete every account the
+    run created and read both its UID and its address back, and a run that spent its last
+    request observing a case would have nothing left to do that with. The reserve is
+    carved out of the total rather than added to it, so the declared bound still holds.
+    """
     if not max_cost_usd < COST_CEILING_USD:
         raise ValueError(f"cost ceiling is US${COST_CEILING_USD}")
     if max_requests < 1 or max_wall_seconds <= 0:
         raise ValueError("positive request and wall-clock bounds are required")
+    if recovery_requests < 0 or recovery_wall_seconds < 0:
+        raise ValueError("a recovery reserve cannot be negative")
+    if recovery_requests >= max_requests or recovery_wall_seconds >= max_wall_seconds:
+        raise ValueError("the recovery reserve must leave the run something to spend")
     return {
         "maxRequests": max_requests,
         "maxWallSeconds": max_wall_seconds,
         "maxCostUsd": max_cost_usd,
+        "recoveryRequests": recovery_requests,
+        "recoveryWallSeconds": recovery_wall_seconds,
         "requests": 0,
         "wallSeconds": 0.0,
+        "phase": RUN_PHASE,
         "enforced": True,
     }
 
 
-def charge_request(budget: dict[str, Any], elapsed_seconds: float) -> None:
-    """Charge one request; exceeding either bound stops the run."""
-    budget["requests"] += 1
-    budget["wallSeconds"] += float(elapsed_seconds)
-    if budget["requests"] > budget["maxRequests"]:
+def request_allowance(budget: dict[str, Any]) -> int:
+    """How many requests this phase may spend in total."""
+    held_back = budget["recoveryRequests"] if budget["phase"] == RUN_PHASE else 0
+    return budget["maxRequests"] - held_back
+
+
+def wall_allowance(budget: dict[str, Any]) -> float:
+    """How many wall-clock seconds this phase may spend in total."""
+    held_back = budget["recoveryWallSeconds"] if budget["phase"] == RUN_PHASE else 0.0
+    return budget["maxWallSeconds"] - held_back
+
+
+def reserve_request(budget: dict[str, Any]) -> None:
+    """Reserve one request before it is sent; an exhausted bound sends nothing.
+
+    Charging after the fact would let an exhausted budget spend one more request against
+    the service, which is the one thing an enforced bound exists to prevent.
+    """
+    if budget["requests"] + 1 > request_allowance(budget):
         raise BudgetExceeded("request budget exhausted")
-    if budget["wallSeconds"] > budget["maxWallSeconds"]:
+    if budget["wallSeconds"] >= wall_allowance(budget):
         raise BudgetExceeded("wall-clock budget exhausted")
+    budget["requests"] += 1
+
+
+def charge_elapsed(budget: dict[str, Any], elapsed_seconds: float) -> None:
+    """Charge the wall time a sent request took.
+
+    This never raises. The response is already in hand by the time it is called, and a
+    sign-up whose result is thrown away leaves a live account nothing knows about. The
+    overrun stops the run at the next reservation instead.
+    """
+    budget["wallSeconds"] += float(elapsed_seconds)
+
+
+def enter_recovery(budget: dict[str, Any]) -> None:
+    """Release the reserve so cleanup can run after the run's own bound is spent."""
+    budget["phase"] = RECOVERY_PHASE
 
 
 # --- collector binding ---------------------------------------------------------------

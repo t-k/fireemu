@@ -30,12 +30,14 @@ from credential_cases import CAMPAIGN_ID, observation_cases
 from credential_collector import (
     BudgetExceeded,
     build_receipt,
-    charge_request,
+    charge_elapsed,
     claim_shape,
+    enter_recovery,
     mark_deleted,
     new_budget,
     new_tracker,
     owned_email,
+    reserve_request,
     track_account,
 )
 from credential_plan import BUDGET
@@ -70,18 +72,10 @@ def unsigned_jwt(payload: dict[str, Any]) -> str:
     return f"{header}.{body}."
 
 
-def post(
-    budget: dict[str, Any],
-    base: str,
-    path: str,
-    body: dict[str, Any],
-    *,
-    owner: bool = False,
-) -> tuple[int, dict[str, Any]]:
-    """POST JSON to the owned local daemon and return the status and parsed body."""
-    host = base.split("//", 1)[-1].split(":")[0]
-    if host not in LOOPBACK_HOSTS:
-        raise ShadowError(f"refusing a non-loopback target: {host}")
+def _send_over_http(
+    base: str, path: str, body: dict[str, Any], owner: bool
+) -> tuple[int, bytes]:
+    """Perform one request against the owned local daemon."""
     request = urllib.request.Request(
         f"{base}{path}",
         data=json.dumps(body).encode(),
@@ -91,16 +85,39 @@ def post(
         },
         method="POST",
     )
-    started = time.monotonic()
     try:
         with urllib.request.urlopen(
             request, timeout=REQUEST_TIMEOUT_SECONDS
         ) as response:
-            status, raw = response.status, response.read()
+            return response.status, response.read()
     except urllib.error.HTTPError as error:
-        status, raw = error.code, error.read()
+        return error.code, error.read()
+
+
+def post(
+    budget: dict[str, Any],
+    base: str,
+    path: str,
+    body: dict[str, Any],
+    *,
+    owner: bool = False,
+    sender: Any = None,
+) -> tuple[int, dict[str, Any]]:
+    """POST JSON to the owned local daemon and return the status and parsed body.
+
+    The budget is reserved before anything is sent, so an exhausted bound costs nothing.
+    The wall time is charged afterwards and never raises: by then the response exists,
+    and discarding it could lose an account this run just created.
+    """
+    host = base.split("//", 1)[-1].split(":")[0]
+    if host not in LOOPBACK_HOSTS:
+        raise ShadowError(f"refusing a non-loopback target: {host}")
+    reserve_request(budget)
+    started = time.monotonic()
+    try:
+        status, raw = (sender or _send_over_http)(base, path, body, owner)
     finally:
-        charge_request(budget, time.monotonic() - started)
+        charge_elapsed(budget, time.monotonic() - started)
     try:
         parsed = json.loads(raw or b"{}")
     except json.JSONDecodeError as error:
@@ -222,8 +239,13 @@ def _row(
     }
 
 
+def _rest(seconds: float) -> None:
+    """Wait for real time to pass, named so a test can drive a run without waiting."""
+    time.sleep(max(0.0, seconds))
+
+
 def _sleep_to_next_second() -> None:
-    time.sleep(1.05 - (time.time() % 1))
+    _rest(1.05 - (time.time() % 1))
 
 
 def run_cases(
@@ -231,6 +253,7 @@ def run_cases(
     budget: dict[str, Any],
     tracker: dict[str, Any],
     rows: dict[str, dict[str, Any]],
+    poster: Any = None,
 ) -> dict[str, dict[str, Any]]:
     """Run every declared case, filling `rows` as it goes.
 
@@ -238,13 +261,14 @@ def run_cases(
     row observed so far in the caller's hands, which is what the failure rehearsal
     promises for an exhausted budget.
     """
+    send = poster or post
     identity = f"{base}/identitytoolkit.googleapis.com/v1"
     secure = f"{base}/securetoken.googleapis.com/v1/token?key={API_KEY}"
     admin = f"{identity}/projects/{PROJECT}"
 
     def signup(index: int) -> dict[str, Any]:
         email = owned_email(tracker, index)
-        status, body = post(
+        status, body = send(
             budget,
             identity,
             f"/accounts:signUp?key={API_KEY}",
@@ -256,7 +280,7 @@ def run_cases(
         return body
 
     def signin(email: str) -> dict[str, Any]:
-        status, body = post(
+        status, body = send(
             budget,
             identity,
             f"/accounts:signInWithPassword?key={API_KEY}",
@@ -267,15 +291,15 @@ def run_cases(
         return body
 
     def lookup(id_token: str) -> tuple[int, dict[str, Any]]:
-        return post(
+        return send(
             budget, identity, f"/accounts:lookup?key={API_KEY}", {"idToken": id_token}
         )
 
     # --- refresh -------------------------------------------------------------
     first = signup(0)
     base_shape = claim_shape(first["idToken"])
-    time.sleep(2)
-    status, body = post(
+    _rest(2)
+    status, body = send(
         budget,
         secure,
         "",
@@ -307,8 +331,8 @@ def run_cases(
             "refreshed": refreshed["times"] if refreshed else None,
         },
     )
-    time.sleep(1)
-    status, body = post(
+    _rest(1)
+    status, body = send(
         budget,
         secure,
         "",
@@ -341,7 +365,7 @@ def run_cases(
             "refreshed": second["times"] if second else None,
         },
     )
-    status, body = post(
+    status, body = send(
         budget,
         secure,
         "",
@@ -359,7 +383,7 @@ def run_cases(
     revoked_email = owned_email(tracker, 1)
     revoked_shape = claim_shape(revoked["idToken"])
     valid_since = revoked_shape["times"]["auth_time"] + 2
-    post(
+    send(
         budget,
         admin,
         "/accounts:update",
@@ -374,19 +398,19 @@ def run_cases(
     # Pin the boundary from server-reported values: sign in, read the token's own
     # auth_time back, set validSince to exactly that whole second and confirm the
     # readback. Without all three the row is not a boundary observation.
-    time.sleep(2)
+    _rest(2)
     _sleep_to_next_second()
     boundary = signin(revoked_email)
     boundary_shape = claim_shape(boundary["idToken"])
     boundary_second = boundary_shape["times"]["auth_time"]
-    post(
+    send(
         budget,
         admin,
         "/accounts:update",
         {"localId": revoked["localId"], "validSince": str(boundary_second)},
         owner=True,
     )
-    _, read_back = post(
+    _, read_back = send(
         budget, admin, "/accounts:lookup", {"localId": [revoked["localId"]]}, owner=True
     )
     stored = read_back.get("users", [{}])[0].get("validSince")
@@ -401,7 +425,7 @@ def run_cases(
         boundarySeconds={"authTime": boundary_second, "validSince": stored},
     )
 
-    time.sleep(2)
+    _rest(2)
     later = signin(revoked_email)
     status, body = lookup(later["idToken"])
     rows["revocation-newer-session-accepted"] = _row(
@@ -428,7 +452,7 @@ def run_cases(
             "exp": now + 3600,
         }
     )
-    status, body = post(
+    status, body = send(
         budget,
         identity,
         f"/accounts:signInWithCustomToken?key={API_KEY}",
@@ -464,7 +488,7 @@ def run_cases(
             "exp": now + 3600,
         }
     )
-    status, body = post(
+    status, body = send(
         budget,
         identity,
         f"/accounts:signInWithCustomToken?key={API_KEY}",
@@ -484,7 +508,7 @@ def run_cases(
             "exp": now - 3600,
         }
     )
-    status, body = post(
+    status, body = send(
         budget,
         identity,
         f"/accounts:signInWithCustomToken?key={API_KEY}",
@@ -508,7 +532,7 @@ def run_cases(
         payload: dict[str, Any] = {"idToken": cookie_token}
         if duration is not None:
             payload["validDuration"] = str(duration)
-        status, body = post(budget, admin, ":createSessionCookie", payload, owner=True)
+        status, body = send(budget, admin, ":createSessionCookie", payload, owner=True)
         cookie = (
             claim_shape(body["sessionCookie"], reveal=("role", "iss"))
             if status == 200 and body.get("sessionCookie")
@@ -551,7 +575,7 @@ def run_cases(
             k: v for k, v in rows[case_id]["assertions"].items() if k in declared
         }
 
-    status, body = post(
+    status, body = send(
         budget,
         admin,
         ":createSessionCookie",
@@ -563,7 +587,7 @@ def run_cases(
     )
 
     # --- claim precedence ----------------------------------------------------
-    post(
+    send(
         budget,
         admin,
         "/accounts:update",
@@ -573,8 +597,8 @@ def run_cases(
         },
         owner=True,
     )
-    time.sleep(1)
-    status, body = post(
+    _rest(1)
+    status, body = send(
         budget,
         secure,
         "",
@@ -684,6 +708,8 @@ def shadow_budget() -> dict[str, Any]:
         max_requests=BUDGET["maxRequests"],
         max_wall_seconds=BUDGET["maxWallSeconds"],
         max_cost_usd=0.0,
+        recovery_requests=BUDGET["recoveryRequests"],
+        recovery_wall_seconds=BUDGET["recoveryWallSeconds"],
     )
 
 
@@ -765,6 +791,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         rows, failure = collect(base, budget, tracker)
     finally:
+        # Cleanup runs on the reserve held back from the total, so a run that stopped on
+        # an exhausted bound can still delete every account it created.
+        enter_recovery(budget)
         try:
             problems = cleanup(base, budget, tracker)
         except STOP_CONDITIONS as error:

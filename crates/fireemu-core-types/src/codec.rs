@@ -62,6 +62,15 @@ const fn hex_nibble(byte: u8) -> Option<u8> {
 /// never accepted.
 #[must_use]
 pub fn percent_decode(value: &str, plus: PlusMode) -> String {
+    String::from_utf8_lossy(&percent_decode_bytes(value, plus)).into_owned()
+}
+
+/// The bytes [`percent_decode`] decodes, before any UTF-8 interpretation.
+///
+/// A caller that must refuse a sequence which is not UTF-8, rather than replace it, decodes
+/// through this and validates the bytes itself. The escape semantics stay in one place.
+#[must_use]
+pub fn percent_decode_bytes(value: &str, plus: PlusMode) -> Vec<u8> {
     let bytes = value.as_bytes();
     let mut output = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -82,12 +91,41 @@ pub fn percent_decode(value: &str, plus: PlusMode) -> String {
         }
         index += 1;
     }
-    String::from_utf8_lossy(&output).into_owned()
+    output
+}
+
+/// Whether every `%` in `value` introduces a complete escape of two ASCII hexadecimal
+/// digits.
+///
+/// [`percent_decode`] keeps a malformed escape byte-for-byte, which is what a lenient
+/// surface wants. A surface that refuses one instead asks this first, so both agree on what
+/// an escape is: `%2f` is well formed, and `%`, `%2`, `%2G` and `%+f` are not.
+#[must_use]
+pub fn percent_escapes_are_well_formed(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len()
+                || hex_nibble(bytes[index + 1]).is_none()
+                || hex_nibble(bytes[index + 2]).is_none()
+            {
+                return false;
+            }
+            index += 3;
+        } else {
+            index += 1;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{json_escape_into, percent_decode, write_json_string, JsonControlEscape, PlusMode};
+    use super::{
+        json_escape_into, percent_decode, percent_decode_bytes, percent_escapes_are_well_formed,
+        write_json_string, JsonControlEscape, PlusMode,
+    };
 
     #[test]
     fn percent_decode_has_explicit_plus_semantics_and_strict_hex_digits() {
@@ -95,6 +133,32 @@ mod tests {
         assert_eq!(percent_decode("a%20b+c", PlusMode::Literal), "a b+c");
         assert_eq!(percent_decode("%+f%2G%", PlusMode::Literal), "%+f%2G%");
         assert_eq!(percent_decode("%2f%2F", PlusMode::Literal), "//");
+    }
+
+    #[test]
+    fn malformed_escapes_are_recognised_by_the_same_rule_that_decodes_them() {
+        for well_formed in ["", "plain", "%2f", "%2F%20", "a%00b"] {
+            assert!(
+                percent_escapes_are_well_formed(well_formed),
+                "{well_formed}"
+            );
+        }
+        for malformed in ["%", "%2", "%2G", "%+f", "%-1", "a%zzb"] {
+            assert!(!percent_escapes_are_well_formed(malformed), "{malformed}");
+            // The lenient decoder keeps exactly what the strict check refuses.
+            assert_eq!(percent_decode(malformed, PlusMode::Literal), malformed);
+        }
+    }
+
+    #[test]
+    fn decoded_bytes_are_returned_before_any_utf8_interpretation() {
+        // A lone 0x80 is not UTF-8: the lossy decoder replaces it, the byte decoder does not.
+        assert_eq!(percent_decode_bytes("%80", PlusMode::Literal), vec![0x80]);
+        assert_eq!(percent_decode("%80", PlusMode::Literal), "\u{fffd}");
+        assert_eq!(
+            percent_decode_bytes("a+b", PlusMode::Space),
+            b"a b".to_vec()
+        );
     }
 
     #[test]

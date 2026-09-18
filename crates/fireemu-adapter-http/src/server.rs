@@ -302,24 +302,7 @@ fn finish(
 /// `k=v&k=v` (percent-encoded) → JSON object of strings.
 fn form_to_json(text: &str) -> serde_json::Value {
     fn decode(s: &str) -> String {
-        let bytes = s.as_bytes();
-        let mut out = Vec::with_capacity(bytes.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'%' && i + 2 < bytes.len() {
-                if let Some(b) = s
-                    .get(i + 1..i + 3)
-                    .and_then(|h| u8::from_str_radix(h, 16).ok())
-                {
-                    out.push(b);
-                    i += 3;
-                    continue;
-                }
-            }
-            out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
-            i += 1;
-        }
-        String::from_utf8_lossy(&out).into_owned()
+        fireemu_core_types::codec::percent_decode(s, fireemu_core_types::codec::PlusMode::Space)
     }
     let mut map = serde_json::Map::new();
     for kv in text.split('&').filter(|s| !s.is_empty()) {

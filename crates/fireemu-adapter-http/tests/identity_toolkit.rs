@@ -1714,6 +1714,40 @@ async fn serves_over_a_real_socket() {
     server.abort();
 }
 
+/// PCT-1. The form decoder in the server layer took `%+f` through `u8::from_str_radix`,
+/// which accepts a leading sign, and produced U+000F. The shared codec takes two ASCII
+/// hexadecimal digits and nothing else, so the sequence stays literal and only `+` is a
+/// space.
+#[tokio::test]
+async fn a_form_encoded_body_decodes_percent_escapes_strictly() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shared = Arc::new(state());
+    let server = tokio::spawn(fireemu_adapter_http::server::serve(
+        listener,
+        shared.clone(),
+    ));
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let body = "email=form@example.com&password=hunter22&displayName=na%+fme";
+    let request = format!(
+        "POST {V1}/accounts:signUp HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.unwrap();
+    let text = String::from_utf8(response).unwrap();
+    assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+    let json_start = text.find("\r\n\r\n").unwrap() + 4;
+    let parsed: Value = serde_json::from_str(&text[json_start..]).unwrap();
+    assert_eq!(parsed["email"], "form@example.com");
+    // `+` is still a form-encoded space; `%` keeps its literal self, so no control
+    // character reaches the profile guard.
+    assert_eq!(parsed["displayName"], "na% fme");
+    server.abort();
+}
+
 #[tokio::test]
 async fn auth_root_is_a_bounded_readiness_route() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

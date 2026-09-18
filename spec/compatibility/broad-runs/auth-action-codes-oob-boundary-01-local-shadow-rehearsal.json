@@ -32,7 +32,7 @@
     "schemaVersion": 1
   },
   "contract": "auth-action-codes-v1",
-  "kind": "auth-action-codes-local-shadow-evidence",
+  "kind": "auth-action-codes-local-shadow-rehearsal-evidence",
   "localStages": [
     {
       "basis": "setup",
@@ -141,67 +141,19 @@
       "errorCode": null,
       "id": "email-link-generate",
       "status": 200
-    },
-    {
-      "basis": "diagnostic",
-      "errorCode": null,
-      "id": "email-link-signin",
-      "status": 200
-    },
-    {
-      "basis": "diagnostic",
-      "errorCode": "INVALID_OOB_CODE",
-      "id": "email-link-reuse",
-      "status": 400
-    },
-    {
-      "basis": "setup",
-      "errorCode": null,
-      "id": "email-link-generate-second",
-      "status": 200
-    },
-    {
-      "basis": "control",
-      "errorCode": "INVALID_OOB_CODE",
-      "id": "email-link-mismatched-email",
-      "status": 400
-    },
-    {
-      "basis": "setup",
-      "errorCode": null,
-      "id": "deleted-user-link-generate",
-      "status": 200
-    },
-    {
-      "basis": "setup",
-      "errorCode": null,
-      "id": "account-b-delete",
-      "status": 200
-    },
-    {
-      "basis": "diagnostic",
-      "errorCode": "USER_DISABLED",
-      "id": "reset-after-delete",
-      "status": 400
-    },
-    {
-      "basis": "diagnostic",
-      "errorCode": null,
-      "id": "link-generate-unknown-email",
-      "status": 200
     }
   ],
-  "manifestDigest": "0a41438b5eaa9eb5c4af1a428a331353ef7124c2bc251458ca6f460688e3a4b7",
+  "manifestDigest": "7e20a7cac3004981aabf6c1edc613e260382f8411a634194e254f2366701c6f0",
   "observation": {
     "absenceProven": true,
     "cleanupComplete": true,
     "deliveredMessages": 0,
-    "observationRequests": 26,
-    "recordingComplete": true,
+    "observationRequests": 19,
+    "recordingComplete": false,
     "recoveryRequests": 4,
     "remainingAccounts": 0,
-    "stagesRecorded": 26,
-    "stopReason": null
+    "stagesRecorded": 18,
+    "stopReason": "stage-failed:email-link-signin"
   },
   "ownedProcess": {
     "exitCode": 0,
@@ -210,7 +162,7 @@
   },
   "productionExecuted": false,
   "productionObserved": "none",
-  "receiptSha256": "653ec88117015c9d63a3821a9f5481de84a9db1407e6c4ca49e50d9c7a71c356",
+  "receiptSha256": "27c59d28a1c7827f8f7742f323afe2ad0235fb5404a1d2c391c9a8ff54c00fd5",
   "receiptSourceBinding": {
     "artifactSha256": null,
     "binding": "unbound",
@@ -222,7 +174,7 @@
       "account": null,
       "deleted": null,
       "id": "recover-discover",
-      "presentAddresses": 1,
+      "presentAddresses": 2,
       "status": 200
     },
     {
@@ -234,10 +186,10 @@
     },
     {
       "account": "accountB",
-      "deleted": false,
+      "deleted": true,
       "id": "recover-delete-accountB",
       "presentAddresses": null,
-      "status": 400
+      "status": 200
     },
     {
       "account": null,
@@ -247,6 +199,6 @@
       "status": 200
     }
   ],
-  "rehearsal": null,
+  "rehearsal": "transport failure injected at accounts:signInWithEmailLink",
   "status": "PREPARED_LOCAL_SHADOW"
 }

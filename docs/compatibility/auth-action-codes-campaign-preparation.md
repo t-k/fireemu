@@ -67,17 +67,17 @@ A fourth observation is carried by the readback control rather than by a dedicat
 
 ## Bounds, budget and owner preconditions
 
-One serialized worker, at most four requests a second, 26 observation requests inside a 300-second wall bound, and four recovery requests inside a separate 180-second reserve. The reserve is independent on purpose: an exhausted observation budget can never stop the owned accounts from being deleted.
+One serialized worker and at most four requests a second, paced by the collector itself rather than merely published, with 26 observation requests inside a 300-second wall bound and four recovery requests inside a separate 180-second reserve. The reserve is independent on purpose: an exhausted observation budget can never stop the owned accounts from being deleted.
 
 Identity Platform charges monthly active users, not action-code requests, and no message is delivered, so the expected metered cost is US$0.00 against a planning ceiling of US$0.02. Both figures are planning values, not an invoice.
 
-The owner must still supply, at approval time: a Google OAuth credential authorized for privileged link generation on the target project; confirmation that the project has no blocking function or tenant that changes these routes; acceptance that two accounts are created and deleted inside the approved window; a fresh unused nonce; and a source commit with a built artifact digest bound before the local side is recorded. The package supplies none of these, and its `ownerInputs` are all unset.
+The credential this campaign needs is `roles/firebaseauth.admin` on the single approved project, carrying the `identitytoolkit` scope rather than `cloud-platform`, and exercising only `accounts:sendOobCode`, `accounts:update`, `accounts:lookup` and `accounts:delete`. The owner must still supply, at approval time: that credential; confirmation that the project has no blocking function or tenant that changes these routes; acceptance that two accounts are created and deleted inside the approved window; a fresh unused nonce; a source commit with a built artifact digest bound before the local side is recorded; and acceptance that the reserved `example.invalid` domain is usable for sign-up and link generation on the target project. A refusal of that domain stops the run at its first stage and fails closed, which consumes the approved window without producing an observation. The package supplies none of these, and its `ownerInputs` are all unset.
 
 ## Recovery contract
 
-Recovery deletes both owned accounts and then requires a typed absence readback for each. A delete refused because a stage already removed that account is recorded and tolerated; proven absence is the requirement. A transport failure during recovery, or any account still present afterwards, leaves `cleanupComplete` false, and the comparator refuses to give such a receipt a verdict in either direction.
+Recovery is keyed on the owned address, not on a runtime identifier. It first looks both addresses up in one privileged request, deletes whatever that discovery names, and then requires a second lookup to show both addresses absent. The address is the only ownership key that survives a lost create response: an account the backend stored before the answer was lost has no identifier this collector ever saw, and a recovery keyed on `localId` would silently skip it while reporting proven cleanup. A delete refused because a stage already removed that account is recorded and tolerated; proven absence is the requirement. A failed lookup, a transport failure, or any address still present leaves `cleanupComplete` false and `absenceProven` false, and the comparator refuses such a receipt a verdict in either direction.
 
-A rehearsal exercised exactly that path. With a transport failure injected at the email-link sign-in stage, the run stopped after 18 of 26 stages, both accounts were still deleted and proven absent, and the owned process exited with its listeners closed.
+A rehearsal exercised that path and is committed as evidence. With a transport failure injected at the email-link sign-in stage, the run stopped after 18 of 26 stages, both addresses were proven absent, and the owned process exited with its listeners closed. The [rehearsal receipt](../../spec/compatibility/broad-runs/auth-action-codes-oob-boundary-01-local-shadow-rehearsal.json) records it.
 
 ## Local shadow
 
@@ -85,20 +85,20 @@ The shadow owns the artifact it measures: it copies the binary into a private di
 
 | Item | Value |
 | --- | --- |
-| Collector source commit | `e0d0cd925fbab2ecdd07fc127a4b45d4fcde86f1` |
+| Collector source commit | `2e804dd820e38d93827d82d271022d6572bf459a` |
 | Artifact SHA-256 | `bad6b9280e895f90484b5a89056c62ce7c4f3f44e8571891f5175986e99f53a6` (version 0.7.0) |
 | Artifact binding | `retained-external`; not rebuilt from the collector source commit |
-| Campaign package SHA-256 | `98e80129235a85fcd355e213c6ef47ac090462ccd478131db5f652621ceb5b63` |
-| Receipt SHA-256 | `e7676d7ccc1c017970cdcff872420998b7adfc33bfff19a6a1461b0837dcb658` |
+| Campaign package SHA-256 | `d2c440583ac4132e6caf0c2ab7c17f85da66fe26d613889c21f127f55b8f23aa` |
+| Receipt SHA-256 | `653ec88117015c9d63a3821a9f5481de84a9db1407e6c4ca49e50d9c7a71c356` |
 | Result | 26 stages recorded, cleanup complete, 0 accounts remaining, process exit 0, listeners closed |
 
-The artifact binding is the honest limit of this evidence. The digest of the executed binary is recorded, but the package does not claim it was built from the collector source commit, so the local side is not yet a bound comparison input. Rebuilding the artifact from the execution commit is an owner precondition, not a step this package performed.
+The artifact binding is the honest limit of this evidence, and it is now enforced rather than described. The receipt carries the binding kind alongside the digests, the shadow records `unbound` for a binary it did not build, and the comparator refuses a verdict unless the receipt says `built-from-source` and names the same commit twice. Filling a retained digest into the binding can no longer buy a verdict. Rebuilding the artifact from the execution commit remains an owner precondition, not a step this package performed.
 
 ## Comparator contract
 
 The comparator classifies one local and one production receipt as `MATCH`, `SEMANTIC_MISMATCH` or `INDETERMINATE`. A verdict requires both sides complete and recovered, bound to the same frozen manifest digest, carrying complete source bindings, produced by different runs, and, on the production side, naming an owner permission and recording an executed observation. Everything else is `INDETERMINATE`: an infrastructure, binding or cleanup failure is never reported as a compatibility result.
 
-Status, error code, response field presence, request type, verification state, new-user state, whether a code or link was returned, the code's character class, token presence and readback counts decide the verdict. Diagnostic prose and the length of a returned code stay visible as informational differences, because neither is part of the contract being compared.
+A verdict also requires both sides to record zero delivered messages and a proven absence: the delivery boundary and the cleanup contract are gate conditions, not prose. A receipt whose stage rows are missing, reordered, mistyped or foreign is classified `INDETERMINATE` rather than allowed to raise. Status, error code, response field presence, request type, verification state, new-user state, whether a code or link was returned, the code's character class, token presence, delivered-message counts and readback counts decide the verdict. Diagnostic prose and the length of a returned code stay visible as informational differences, because neither is part of the contract being compared.
 
 ## Reproduction
 

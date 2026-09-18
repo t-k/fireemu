@@ -24,9 +24,13 @@ Every code is obtained through the privileged `accounts:sendOobCode` call with `
 | File | Role |
 | --- | --- |
 | `action_codes_plan.py` | The frozen matrix, owned accounts, recovery, budget, owner preconditions and the unobserved conditions. |
-| `action_codes_collector.py` | The bounded loopback collector: request and wall-clock budgets, a separate recovery reserve, secret redaction and an owned-resource finalizer. |
+| `action_codes_collector.py` | The bounded loopback collector: request, rate and wall-clock budgets, a separate recovery reserve, secret redaction and an address-keyed recovery finalizer. |
 | `action_codes_comparator.py` | The fail-closed comparison contract: `MATCH`, `SEMANTIC_MISMATCH` or `INDETERMINATE`. |
 | `action_codes_shadow.py` | Owns one local fireemu artifact, runs the collector as its child and proves the process and its listeners are gone. |
+
+## Recovery
+
+Recovery is keyed on the owned address. One privileged lookup discovers whatever exists under both addresses, the deletes follow, and a second lookup must show both absent. A create whose response was lost still left an account behind that no runtime identifier names, so only the address can find it. `cleanupComplete` requires `absenceProven`, and the comparator refuses a verdict without both.
 
 ## Secrets
 

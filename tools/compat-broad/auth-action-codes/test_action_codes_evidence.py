@@ -19,6 +19,10 @@ SHADOW = (
     ROOT
     / "spec/compatibility/broad-runs/auth-action-codes-oob-boundary-01-local-shadow.json"
 )
+REHEARSAL = ROOT / (
+    "spec/compatibility/broad-runs/"
+    "auth-action-codes-oob-boundary-01-local-shadow-rehearsal.json"
+)
 
 
 def test_the_checked_in_manifest_is_exactly_the_frozen_proposal() -> None:
@@ -47,7 +51,11 @@ def test_the_local_shadow_recorded_every_stage_and_recovered() -> None:
     assert observation["remainingAccounts"] == 0
     assert observation["stagesRecorded"] == len(STAGE_IDS)
     assert observation["observationRequests"] == len(STAGE_IDS)
+    assert observation["recoveryRequests"] == 4
+    assert observation["absenceProven"] is True
     assert observation["deliveredMessages"] == 0
+    assert evidence["recovery"][0]["id"] == "recover-discover"
+    assert evidence["recovery"][-1]["presentAddresses"] == 0
     assert [row["id"] for row in evidence["localStages"]] == list(STAGE_IDS)
     assert evidence["ownedProcess"] == {
         "exitCode": 0,
@@ -56,10 +64,38 @@ def test_the_local_shadow_recorded_every_stage_and_recovered() -> None:
     }
 
 
+def test_the_committed_rehearsal_shows_recovery_after_an_injected_failure() -> None:
+    evidence = json.loads(REHEARSAL.read_bytes())
+    observation = evidence["observation"]
+    assert evidence["rehearsal"].startswith("transport failure injected")
+    assert observation["stopReason"] == "stage-failed:email-link-signin"
+    assert observation["recordingComplete"] is False
+    assert observation["stagesRecorded"] == 18
+    # The point of the rehearsal: an interrupted run still owns nothing after it.
+    assert observation["cleanupComplete"] is True
+    assert observation["absenceProven"] is True
+    assert observation["remainingAccounts"] == 0
+    assert evidence["recovery"][-1]["presentAddresses"] == 0
+    assert evidence["ownedProcess"] == {
+        "exitCode": 0,
+        "stopped": True,
+        "listenersClosed": True,
+    }
+
+
+def test_neither_committed_receipt_claims_provenance_it_lacks() -> None:
+    for path in (SHADOW, REHEARSAL):
+        evidence = json.loads(path.read_bytes())
+        assert evidence["receiptSourceBinding"]["binding"] == "unbound"
+        assert evidence["receiptSourceBinding"]["builtFromSourceCommit"] is None
+        assert evidence["artifact"]["binding"] == "retained-external"
+        assert evidence["productionExecuted"] is False
+
+
 def test_no_evidence_file_carries_a_secret_value() -> None:
     # A secret name may only introduce a `$binding:` placeholder or a plan
     # expectation, never a value a run produced.
-    for path in (MANIFEST, SHADOW):
+    for path in (MANIFEST, SHADOW, REHEARSAL):
         value = json.loads(path.read_bytes())
         for field, holder in _secret_slots(value):
             assert isinstance(holder, str) and holder.startswith("$binding:"), field

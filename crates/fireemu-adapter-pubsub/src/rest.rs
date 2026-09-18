@@ -21,7 +21,10 @@ use fireemu_core_pubsub::{
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Map, Value};
 
-use crate::convert::validate_topic_options;
+use crate::convert::{
+    is_declared_subscription_field, is_declared_topic_field, validate_subscription_update_paths,
+    validate_topic_options, SUPPORTED_SUBSCRIPTION_FIELDS,
+};
 use crate::{PubSubHandle, MAX_MESSAGE_BYTES};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 
@@ -214,19 +217,15 @@ fn dispatch_topic(
 }
 
 fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), RestError> {
-    let topic_body = body.get("topic").unwrap_or(body);
+    let topic_body = field(body, "topic").unwrap_or(body);
     let topic_options = topic_from_json(topic, topic_body)?;
-    let update_mask = body
-        .get("updateMask")
+    let update_mask = field(body, "updateMask")
         .and_then(Value::as_str)
         .ok_or_else(|| RestError::invalid("updateMask must be a comma-separated string"))?;
     if update_mask.is_empty() {
         return Err(RestError::invalid("updateMask must not be empty"));
     }
-    let paths = update_mask
-        .split(',')
-        .map(topic_update_field_path)
-        .collect();
+    let paths = update_mask.split(',').map(snake_case_field).collect();
     let request = pb::UpdateTopicRequest {
         topic: Some(topic_options),
         update_mask: Some(prost_types::FieldMask { paths }),
@@ -322,14 +321,20 @@ fn dispatch_snapshot(
             let object = body
                 .as_object()
                 .ok_or_else(|| RestError::invalid("snapshot request must be an object"))?;
+            reject_duplicate_spellings("snapshot", object)?;
             for key in object.keys() {
-                if !matches!(key.as_str(), "name" | "subscription" | "labels") {
+                let field = snake_case_field(key);
+                if matches!(field.as_str(), "name" | "subscription" | "labels") {
+                    continue;
+                }
+                if matches!(field.as_str(), "topic" | "expire_time" | "tags") {
                     return Err(RestError::unimplemented(format!(
-                        "snapshot.{key} is not supported by the Pub/Sub emulator"
+                        "snapshot.{field} is not supported by the Pub/Sub emulator"
                     )));
                 }
+                return Err(RestError::invalid(format!("unknown snapshot field {key}")));
             }
-            if let Some(body_name) = object.get("name") {
+            if let Some(body_name) = json_field(object, "name") {
                 let body_name = body_name
                     .as_str()
                     .ok_or_else(|| RestError::invalid("snapshot.name must be a string"))?;
@@ -377,8 +382,7 @@ fn publish(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    let messages = body
-        .get("messages")
+    let messages = field(body, "messages")
         .and_then(Value::as_array)
         .ok_or_else(|| RestError::invalid("publish requires a messages array"))?
         .iter()
@@ -403,24 +407,22 @@ fn create_subscription(
     let object = body
         .as_object()
         .ok_or_else(|| RestError::invalid("subscription must be an object"))?;
+    reject_duplicate_spellings("subscription", object)?;
     for key in object.keys() {
-        match key.as_str() {
-            "name"
-            | "topic"
-            | "ackDeadlineSeconds"
-            | "enableMessageOrdering"
-            | "filter"
-            | "deadLetterPolicy"
-            | "retryPolicy"
-            | "pushConfig" => {}
-            _ => {
-                return Err(RestError::unimplemented(format!(
-                    "subscription.{key} is not supported by the Pub/Sub emulator"
-                )))
-            }
+        let field = snake_case_field(key);
+        if SUPPORTED_SUBSCRIPTION_FIELDS.contains(&field.as_str()) {
+            continue;
         }
+        if is_declared_subscription_field(&field) {
+            return Err(RestError::unimplemented(format!(
+                "subscription.{field} is not supported by the Pub/Sub emulator"
+            )));
+        }
+        return Err(RestError::invalid(format!(
+            "unknown subscription field {key}"
+        )));
     }
-    if let Some(name) = object.get("name") {
+    if let Some(name) = json_field(object, "name") {
         let name = name
             .as_str()
             .ok_or_else(|| RestError::invalid("subscription.name must be a string"))?;
@@ -431,9 +433,8 @@ fn create_subscription(
         }
     }
     let topic = TopicName::parse(string_field(body, "topic")?).map_err(RestError::from_core)?;
-    let ack_deadline_seconds = parse_ack_deadline(body.get("ackDeadlineSeconds"))?;
-    let filter_source = body
-        .get("filter")
+    let ack_deadline_seconds = parse_ack_deadline(field(body, "ackDeadlineSeconds"))?;
+    let filter_source = field(body, "filter")
         .map(|filter| {
             filter
                 .as_str()
@@ -442,8 +443,7 @@ fn create_subscription(
         .transpose()?
         .unwrap_or_default();
     let filter = Filter::parse(filter_source).map_err(RestError::from_core)?;
-    let enable_message_ordering = body
-        .get("enableMessageOrdering")
+    let enable_message_ordering = field(body, "enableMessageOrdering")
         .map(|value| {
             value
                 .as_bool()
@@ -451,17 +451,14 @@ fn create_subscription(
         })
         .transpose()?
         .unwrap_or(false);
-    let push_config = body
-        .get("pushConfig")
+    let push_config = field(body, "pushConfig")
         .map(parse_push_config)
         .transpose()?
         .unwrap_or_default();
-    let dead_letter_policy = body
-        .get("deadLetterPolicy")
+    let dead_letter_policy = field(body, "deadLetterPolicy")
         .map(parse_dead_letter_policy)
         .transpose()?;
-    let retry_policy = body
-        .get("retryPolicy")
+    let retry_policy = field(body, "retryPolicy")
         .map(parse_retry_policy)
         .transpose()?;
     let config = SubscriptionConfig {
@@ -507,11 +504,11 @@ fn update_subscription(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    let update = body
-        .get("subscription")
+    let update = field(body, "subscription")
         .and_then(Value::as_object)
         .ok_or_else(|| RestError::invalid("update requires a subscription object"))?;
-    if let Some(name) = update.get("name") {
+    reject_duplicate_spellings("subscription", update)?;
+    if let Some(name) = json_field(update, "name") {
         let name = name
             .as_str()
             .ok_or_else(|| RestError::invalid("subscription.name must be a string"))?;
@@ -521,37 +518,25 @@ fn update_subscription(
             ));
         }
     }
-    let update_mask = body
-        .get("updateMask")
+    let update_mask = field(body, "updateMask")
         .and_then(Value::as_str)
         .ok_or_else(|| RestError::invalid("updateMask must be a comma-separated string"))?;
     if update_mask.is_empty() {
         return Err(RestError::invalid("updateMask must not be empty"));
     }
-    let paths = update_mask.split(',').collect::<Vec<_>>();
-    for path in &paths {
-        match *path {
-            "ackDeadlineSeconds" | "pushConfig" => {}
-            "deadLetterPolicy" | "retryPolicy" | "filter" | "enableMessageOrdering" => {
-                return Err(RestError::unimplemented(format!(
-                    "updating {path} is not supported by the Pub/Sub emulator"
-                )))
-            }
-            _ => {
-                return Err(RestError::invalid(format!(
-                    "unknown updateMask path {path}"
-                )))
-            }
-        }
-    }
+    let paths = update_mask
+        .split(',')
+        .map(snake_case_field)
+        .collect::<Vec<_>>();
+    validate_subscription_update_paths(&paths).map_err(RestError::from_core)?;
     let ack_deadline_seconds = paths
-        .contains(&"ackDeadlineSeconds")
-        .then(|| parse_ack_deadline(update.get("ackDeadlineSeconds")))
+        .iter()
+        .any(|path| path == "ack_deadline_seconds")
+        .then(|| parse_ack_deadline(json_field(update, "ackDeadlineSeconds")))
         .transpose()?;
-    let push_config = if paths.contains(&"pushConfig") {
+    let push_config = if paths.iter().any(|path| path == "push_config") {
         Some(
-            update
-                .get("pushConfig")
+            json_field(update, "pushConfig")
                 .map(parse_push_config)
                 .transpose()?
                 .unwrap_or_default(),
@@ -578,15 +563,16 @@ fn parse_push_config(value: &Value) -> Result<PushConfig, RestError> {
     let push_config = value
         .as_object()
         .ok_or_else(|| RestError::invalid("pushConfig must be an object"))?;
+    reject_duplicate_spellings("pushConfig", push_config)?;
     for key in push_config.keys() {
-        if key != "pushEndpoint" {
+        let field = snake_case_field(key);
+        if field != "push_endpoint" {
             return Err(RestError::unimplemented(format!(
-                "pushConfig.{key} is not supported by the Pub/Sub emulator"
+                "pushConfig.{field} is not supported by the Pub/Sub emulator"
             )));
         }
     }
-    let endpoint = push_config
-        .get("pushEndpoint")
+    let endpoint = json_field(push_config, "pushEndpoint")
         .map(|endpoint| {
             endpoint
                 .as_str()
@@ -614,8 +600,12 @@ fn parse_dead_letter_policy(value: &Value) -> Result<DeadLetterPolicy, RestError
     let policy = value
         .as_object()
         .ok_or_else(|| RestError::invalid("deadLetterPolicy must be an object"))?;
+    reject_duplicate_spellings("deadLetterPolicy", policy)?;
     for key in policy.keys() {
-        if !matches!(key.as_str(), "deadLetterTopic" | "maxDeliveryAttempts") {
+        if !matches!(
+            snake_case_field(key).as_str(),
+            "dead_letter_topic" | "max_delivery_attempts"
+        ) {
             return Err(RestError::invalid(format!(
                 "unknown deadLetterPolicy field {key}"
             )));
@@ -624,8 +614,7 @@ fn parse_dead_letter_policy(value: &Value) -> Result<DeadLetterPolicy, RestError
     Ok(DeadLetterPolicy {
         dead_letter_topic: TopicName::parse(string_field(value, "deadLetterTopic")?)
             .map_err(RestError::from_core)?,
-        max_delivery_attempts: match policy
-            .get("maxDeliveryAttempts")
+        max_delivery_attempts: match json_field(policy, "maxDeliveryAttempts")
             .map(parse_u32)
             .transpose()?
             .unwrap_or_default()
@@ -640,23 +629,25 @@ fn parse_retry_policy(value: &Value) -> Result<RetryPolicy, RestError> {
     let policy = value
         .as_object()
         .ok_or_else(|| RestError::invalid("retryPolicy must be an object"))?;
+    reject_duplicate_spellings("retryPolicy", policy)?;
     for key in policy.keys() {
-        if !matches!(key.as_str(), "minimumBackoff" | "maximumBackoff") {
+        if !matches!(
+            snake_case_field(key).as_str(),
+            "minimum_backoff" | "maximum_backoff"
+        ) {
             return Err(RestError::invalid(format!(
                 "unknown retryPolicy field {key}"
             )));
         }
     }
     Ok(RetryPolicy {
-        minimum_backoff: policy
-            .get("minimumBackoff")
+        minimum_backoff: json_field(policy, "minimumBackoff")
             .map(parse_duration)
             .transpose()?
             .unwrap_or_else(|| {
                 LogicalDuration::from_seconds(DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS)
             }),
-        maximum_backoff: policy
-            .get("maximumBackoff")
+        maximum_backoff: json_field(policy, "maximumBackoff")
             .map(parse_duration)
             .transpose()?
             .unwrap_or_else(|| LogicalDuration::from_seconds(MAX_RETRY_BACKOFF_SECONDS)),
@@ -705,8 +696,7 @@ fn pull(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    let max = body
-        .get("maxMessages")
+    let max = field(body, "maxMessages")
         .map(parse_usize)
         .transpose()?
         .unwrap_or(100);
@@ -742,7 +732,7 @@ fn modify_ack_deadline(
 ) -> Result<(StatusCode, Value), RestError> {
     let ack_ids = string_array(body, "ackIds")?;
     let seconds = parse_u32(
-        body.get("ackDeadlineSeconds")
+        field(body, "ackDeadlineSeconds")
             .ok_or_else(|| RestError::invalid("modifyAckDeadline requires ackDeadlineSeconds"))?,
     )?;
     handle
@@ -758,16 +748,31 @@ fn seek(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    let now = handle.now();
-    if let Some(snapshot) = body.get("snapshot").and_then(Value::as_str) {
-        handle
-            .state()
-            .seek_to_snapshot(&subscription, snapshot, now)
-            .map_err(RestError::from_core)?;
-    } else {
-        return Err(RestError::invalid(
-            "REST seek currently requires a snapshot resource",
-        ));
+    match (field(body, "snapshot"), field(body, "time")) {
+        (Some(_), Some(_)) => {
+            return Err(RestError::invalid("seek takes either a time or a snapshot"))
+        }
+        (Some(snapshot), None) => {
+            let snapshot = snapshot
+                .as_str()
+                .ok_or_else(|| RestError::invalid("seek snapshot must be a string"))?;
+            handle
+                .seek_to_snapshot(&subscription, snapshot)
+                .map_err(RestError::from_core)?;
+        }
+        (None, Some(time)) => {
+            let time = time
+                .as_str()
+                .ok_or_else(|| RestError::invalid("seek time must be an RFC 3339 string"))?;
+            let time = LogicalInstant::parse_rfc3339(time)
+                .map_err(|_| RestError::invalid("seek time must be an RFC 3339 string"))?;
+            handle
+                .seek_to_time(&subscription, time)
+                .map_err(RestError::from_core)?;
+        }
+        (None, None) => {
+            return Err(RestError::invalid("seek requires a time or a snapshot"));
+        }
     }
     Ok((StatusCode::OK, json!({})))
 }
@@ -780,17 +785,17 @@ fn split_operation<'a>(parts: &'a [&'a str]) -> (&'a str, Option<&'a str>) {
         })
 }
 
-fn string_field<'a>(body: &'a Value, field: &str) -> Result<&'a str, RestError> {
-    body.get(field)
+fn string_field<'a>(body: &'a Value, name: &str) -> Result<&'a str, RestError> {
+    field(body, name)
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| RestError::invalid(format!("{field} must be a non-empty string")))
+        .ok_or_else(|| RestError::invalid(format!("{name} must be a non-empty string")))
 }
 
-fn string_array(body: &Value, field: &str) -> Result<Vec<String>, RestError> {
-    body.get(field)
+fn string_array(body: &Value, name: &str) -> Result<Vec<String>, RestError> {
+    field(body, name)
         .and_then(Value::as_array)
-        .ok_or_else(|| RestError::invalid(format!("{field} must be an array")))
+        .ok_or_else(|| RestError::invalid(format!("{name} must be an array")))
         .and_then(|values| {
             values
                 .iter()
@@ -798,26 +803,26 @@ fn string_array(body: &Value, field: &str) -> Result<Vec<String>, RestError> {
                     value
                         .as_str()
                         .map(str::to_owned)
-                        .ok_or_else(|| RestError::invalid(format!("{field} must contain strings")))
+                        .ok_or_else(|| RestError::invalid(format!("{name} must contain strings")))
                 })
                 .collect()
         })
 }
 
-fn object_strings(body: &Value, field: &str) -> Result<BTreeMap<String, String>, RestError> {
-    let Some(value) = body.get(field) else {
+fn object_strings(body: &Value, name: &str) -> Result<BTreeMap<String, String>, RestError> {
+    let Some(value) = field(body, name) else {
         return Ok(BTreeMap::new());
     };
     let object = value
         .as_object()
-        .ok_or_else(|| RestError::invalid(format!("{field} must be an object")))?;
+        .ok_or_else(|| RestError::invalid(format!("{name} must be an object")))?;
     object
         .iter()
         .map(|(key, value)| {
             value
                 .as_str()
                 .map(|value| (key.clone(), value.to_owned()))
-                .ok_or_else(|| RestError::invalid(format!("{field} values must be strings")))
+                .ok_or_else(|| RestError::invalid(format!("{name} values must be strings")))
         })
         .collect()
 }
@@ -844,8 +849,7 @@ fn message_from_json(value: &Value) -> Result<PubsubMessage, RestError> {
     let object = value
         .as_object()
         .ok_or_else(|| RestError::invalid("each published message must be an object"))?;
-    let data = object
-        .get("data")
+    let data = json_field(object, "data")
         .and_then(Value::as_str)
         .map(|data| {
             BASE64
@@ -854,13 +858,11 @@ fn message_from_json(value: &Value) -> Result<PubsubMessage, RestError> {
         })
         .transpose()?
         .unwrap_or_default();
-    let attributes = object
-        .get("attributes")
+    let attributes = json_field(object, "attributes")
         .map(|_| object_strings(value, "attributes"))
         .transpose()?
         .unwrap_or_default();
-    let ordering_key = object
-        .get("orderingKey")
+    let ordering_key = json_field(object, "orderingKey")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
@@ -879,27 +881,15 @@ fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestErr
     let object = body
         .as_object()
         .ok_or_else(|| RestError::invalid("topic must be an object"))?;
+    reject_duplicate_spellings("topic", object)?;
     for key in object.keys() {
-        if !matches!(
-            key.as_str(),
-            "name"
-                | "labels"
-                | "schemaSettings"
-                | "messageRetentionDuration"
-                | "kmsKeyName"
-                | "messageStoragePolicy"
-                | "ingestionDataSourceSettings"
-                | "messageTransforms"
-                | "tags"
-                | "state"
-                | "satisfiesPzs"
-        ) {
-            return Err(RestError::unimplemented(format!(
-                "topic.{key} is not supported by the Pub/Sub emulator"
-            )));
+        let field = snake_case_field(key);
+        if is_declared_topic_field(&field) {
+            continue;
         }
+        return Err(RestError::invalid(format!("unknown topic field {key}")));
     }
-    if let Some(name) = object.get("name") {
+    if let Some(name) = json_field(object, "name") {
         let name = name
             .as_str()
             .ok_or_else(|| RestError::invalid("topic.name must be a string"))?;
@@ -912,19 +902,13 @@ fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestErr
         labels: object_strings(body, "labels")?.into_iter().collect(),
         ..Default::default()
     };
-    if object
-        .get("schemaSettings")
-        .is_some_and(|value| !value.is_null())
-    {
+    if json_field(object, "schemaSettings").is_some_and(|value| !value.is_null()) {
         options.schema_settings = Some(pb::SchemaSettings::default());
     }
-    if object
-        .get("messageRetentionDuration")
-        .is_some_and(|value| !value.is_null())
-    {
+    if json_field(object, "messageRetentionDuration").is_some_and(|value| !value.is_null()) {
         options.message_retention_duration = Some(prost_types::Duration::default());
     }
-    if let Some(value) = object.get("kmsKeyName") {
+    if let Some(value) = json_field(object, "kmsKeyName") {
         if !value.is_null() {
             value
                 .as_str()
@@ -932,19 +916,13 @@ fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestErr
                 .clone_into(&mut options.kms_key_name);
         }
     }
-    if object
-        .get("messageStoragePolicy")
-        .is_some_and(|value| !value.is_null())
-    {
+    if json_field(object, "messageStoragePolicy").is_some_and(|value| !value.is_null()) {
         options.message_storage_policy = Some(pb::MessageStoragePolicy::default());
     }
-    if object
-        .get("ingestionDataSourceSettings")
-        .is_some_and(|value| !value.is_null())
-    {
+    if json_field(object, "ingestionDataSourceSettings").is_some_and(|value| !value.is_null()) {
         options.ingestion_data_source_settings = Some(pb::IngestionDataSourceSettings::default());
     }
-    if let Some(value) = object.get("messageTransforms") {
+    if let Some(value) = json_field(object, "messageTransforms") {
         if !value.is_null() {
             let transforms = value
                 .as_array()
@@ -956,7 +934,7 @@ fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestErr
             }
         }
     }
-    if let Some(value) = object.get("tags") {
+    if let Some(value) = json_field(object, "tags") {
         if !value.is_null() {
             let tags = value
                 .as_object()
@@ -969,24 +947,59 @@ fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestErr
     Ok(options)
 }
 
-fn topic_update_field_path(path: &str) -> String {
-    let (head, tail) = path
-        .split_once('.')
-        .map_or((path, None), |(head, tail)| (head, Some(tail)));
-    let normalized = match head {
-        "schemaSettings" => "schema_settings",
-        "messageRetentionDuration" => "message_retention_duration",
-        "kmsKeyName" => "kms_key_name",
-        "messageStoragePolicy" => "message_storage_policy",
-        "ingestionDataSourceSettings" => "ingestion_data_source_settings",
-        "messageTransforms" => "message_transforms",
-        "tags" => "tags",
-        _ => head,
-    };
-    tail.map_or_else(
-        || normalized.to_owned(),
-        |tail| format!("{normalized}.{tail}"),
-    )
+/// Reads one field of a JSON object by its `lowerCamelCase` name, also accepting the `snake_case`
+/// spelling of the same protobuf field, which proto3 JSON accepts on input. Every reader goes
+/// through this, so a spelling that admission accepts is never dropped by the reader.
+fn json_field<'a>(object: &'a Map<String, Value>, camel_name: &str) -> Option<&'a Value> {
+    object.get(camel_name).or_else(|| {
+        let snake = snake_case_field(camel_name);
+        (snake != camel_name).then(|| object.get(&snake)).flatten()
+    })
+}
+
+/// [`json_field`] for a body that is expected to be an object.
+fn field<'a>(body: &'a Value, camel_name: &str) -> Option<&'a Value> {
+    body.as_object()
+        .and_then(|object| json_field(object, camel_name))
+}
+
+/// Refuses a body that spells the same protobuf field twice, which proto3 JSON rejects as a
+/// duplicate name rather than silently picking one.
+fn reject_duplicate_spellings(
+    resource: &str,
+    object: &Map<String, Value>,
+) -> Result<(), RestError> {
+    let mut seen = BTreeMap::new();
+    for key in object.keys() {
+        if let Some(previous) = seen.insert(snake_case_field(key), key) {
+            return Err(RestError::invalid(format!(
+                "{resource} names the same field twice: {previous} and {key}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Normalizes a JSON field name or field-mask path to its protobuf spelling. The Pub/Sub JSON API
+/// accepts both the `lowerCamelCase` and the original `snake_case` spelling, so both reach the
+/// shared option validators, and the readers, under one name. Every segment of a nested path is
+/// normalized, so a REST refusal names the same path a gRPC refusal names.
+fn snake_case_field(field: &str) -> String {
+    let mut normalized = String::with_capacity(field.len() + 4);
+    for (index, segment) in field.split('.').enumerate() {
+        if index > 0 {
+            normalized.push('.');
+        }
+        for ch in segment.chars() {
+            if ch.is_ascii_uppercase() {
+                normalized.push('_');
+                normalized.push(ch.to_ascii_lowercase());
+            } else {
+                normalized.push(ch);
+            }
+        }
+    }
+    normalized
 }
 
 fn subscription_json(state: &PubSubState, config: &SubscriptionConfig) -> Value {

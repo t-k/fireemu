@@ -45,8 +45,6 @@ pub use subscriber::SubscriberService;
 /// Maximum gRPC message size accepted or produced (10 MiB), matching Pub/Sub's message bound.
 pub const MAX_MESSAGE_BYTES: usize = 10 * 1024 * 1024;
 const MAX_PUSH_WORKERS: usize = 256;
-const MAX_PUSH_ATTEMPTS: usize = 3;
-const PUSH_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(10);
 
 struct PushDispatcherCancellationGuard(PubSubHandle);
 
@@ -504,6 +502,51 @@ impl PubSubHandle {
         self.commit_dead_letters_locked(&pending);
     }
 
+    /// Seeks a subscription to a point in time.
+    ///
+    /// The seek is serialized with dead-letter forwarding: a transfer that has already published
+    /// to the destination completes its source before the seek rewrites the delivery states, so a
+    /// replay cannot duplicate a committed transfer. A seek also republishes the resulting backlog
+    /// to an idle push subscriber, which would otherwise wait for an unrelated operation.
+    pub fn seek_to_time(
+        &self,
+        subscription: &SubscriptionName,
+        time: LogicalInstant,
+    ) -> Result<(), PubSubError> {
+        let now = self.now();
+        self.seek_locked(subscription, |state| {
+            state.seek_to_time(subscription, time, now)
+        })
+    }
+
+    /// Seeks a subscription to a snapshot. See [`PubSubHandle::seek_to_time`] for the ordering
+    /// guarantees this shares with dead-letter forwarding and push delivery.
+    pub fn seek_to_snapshot(
+        &self,
+        subscription: &SubscriptionName,
+        snapshot: &str,
+    ) -> Result<(), PubSubError> {
+        let now = self.now();
+        self.seek_locked(subscription, |state| {
+            state.seek_to_snapshot(subscription, snapshot, now)
+        })
+    }
+
+    fn seek_locked(
+        &self,
+        subscription: &SubscriptionName,
+        seek: impl FnOnce(&mut PubSubState) -> Result<(), PubSubError>,
+    ) -> Result<(), PubSubError> {
+        let topic = {
+            let _dead_letter = self.lock_dead_letter();
+            let mut state = self.state();
+            seek(&mut state)?;
+            state.subscription_config(subscription)?.topic.clone()
+        };
+        self.schedule_push(&topic);
+        Ok(())
+    }
+
     pub(crate) fn acknowledge(
         &self,
         subscription: &SubscriptionName,
@@ -709,12 +752,14 @@ impl PubSubHandle {
         }
     }
 
+    /// Returns the current push endpoint and whether the subscription has a dead-letter policy,
+    /// which decides whether the payload reports the delivery attempt.
     fn push_endpoint_if_current(
         &self,
         subscription: &fireemu_core_pubsub::SubscriptionName,
         key: &str,
         generation: u64,
-    ) -> Option<String> {
+    ) -> Option<(String, bool)> {
         let dispatch = self.push_dispatch.lock().expect("push dispatch lock");
         if dispatch.shutting_down || dispatch.generations.get(key).copied() != Some(generation) {
             return None;
@@ -723,7 +768,12 @@ impl PubSubHandle {
             .subscription_config(subscription)
             .ok()
             .filter(|config| config.is_push())
-            .map(|config| config.push_config.push_endpoint.clone())
+            .map(|config| {
+                (
+                    config.push_config.push_endpoint.clone(),
+                    config.dead_letter_policy.is_some(),
+                )
+            })
     }
 
     fn acknowledge_push_if_current(
@@ -778,31 +828,20 @@ impl PubSubHandle {
             if !self.is_current_push_generation(key, generation) {
                 return false;
             }
-            let mut delivered = false;
-            for attempt in 0..MAX_PUSH_ATTEMPTS {
-                if !self.is_current_push_generation(key, generation) {
-                    return false;
+            // One request per delivery attempt: a failed push is nacked rather than retried inside
+            // the worker, so the attempt the endpoint sees, the attempt the retry policy schedules
+            // and the attempt the dead-letter budget counts are the same attempt.
+            let Some((endpoint, report_delivery_attempt)) =
+                self.push_endpoint_if_current(subscription, key, generation)
+            else {
+                return false;
+            };
+            let delivered = tokio::select! {
+                result = push::deliver(&endpoint, subscription, message, report_delivery_attempt) => {
+                    result.is_ok()
                 }
-                let Some(endpoint) = self.push_endpoint_if_current(subscription, key, generation)
-                else {
-                    return false;
-                };
-                tokio::select! {
-                    result = push::deliver(&endpoint, subscription, message) => {
-                        if result.is_ok() {
-                            delivered = true;
-                            break;
-                        }
-                    }
-                    () = self.wait_until_push_invalidated(key, generation) => return false,
-                }
-                if attempt + 1 < MAX_PUSH_ATTEMPTS {
-                    tokio::select! {
-                        () = tokio::time::sleep(PUSH_RETRY_DELAY) => {},
-                        () = self.wait_until_push_invalidated(key, generation) => return false,
-                    }
-                }
-            }
+                () = self.wait_until_push_invalidated(key, generation) => return false,
+            };
             if delivered {
                 if !self.acknowledge_push_if_current(subscription, key, generation, &message.ack_id)
                 {
@@ -1315,8 +1354,15 @@ mod dispatch_tests {
         );
     }
 
-    #[test]
-    fn concurrent_dead_letter_retries_forward_a_pending_message_once() {
+    /// Builds a registry whose source subscription holds one exhausted message waiting for
+    /// dead-letter destination admission. Returns the state, the destination topic, the source
+    /// subscription and the instant the exhaustion happened at.
+    fn pending_dead_letter_fixture() -> (
+        Arc<Mutex<PubSubState>>,
+        TopicName,
+        SubscriptionName,
+        LogicalInstant,
+    ) {
         let source_topic = TopicName::new("demo-project", "source").unwrap();
         let destination_topic = TopicName::new("demo-project", "dead-letter").unwrap();
         let source_subscription =
@@ -1374,6 +1420,12 @@ mod dispatch_tests {
             assert!(outcome.received.is_empty());
             assert_eq!(outcome.dead_lettered.len(), 1);
         }
+        (state, destination_topic, source_subscription, now)
+    }
+
+    #[test]
+    fn concurrent_dead_letter_retries_forward_a_pending_message_once() {
+        let (state, destination_topic, _source_subscription, now) = pending_dead_letter_fixture();
 
         let entered = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
@@ -1417,6 +1469,73 @@ mod dispatch_tests {
         second.join().unwrap();
         assert_eq!(destination_commits.load(Ordering::SeqCst), 1);
         assert!(state.lock().unwrap().pending_dead_letters().is_empty());
+    }
+
+    #[test]
+    fn a_seek_cannot_interleave_with_an_in_flight_dead_letter_transfer() {
+        let (state, destination_topic, source_subscription, now) = pending_dead_letter_fixture();
+
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let destination_commits = Arc::new(AtomicUsize::new(0));
+        let handle = PubSubHandle::new(
+            state.clone(),
+            Arc::new(Mutex::new(VirtualClock::new(now))),
+            Some(Arc::new(BlockingDeadLetterDelivery {
+                destination: destination_topic.to_full(),
+                block_first_commit: Arc::new(AtomicBool::new(true)),
+                entered: entered.clone(),
+                release: release.clone(),
+                destination_commits: destination_commits.clone(),
+            })),
+        );
+
+        // The transfer has published to the destination and has not completed its source yet.
+        let transfer_handle = handle.clone();
+        let transfer = std::thread::spawn(move || transfer_handle.retry_pending_dead_letters());
+        entered.wait();
+
+        let seek_handle = handle.clone();
+        let seek_subscription = source_subscription.clone();
+        let (finished_sender, finished_receiver) = std::sync::mpsc::channel();
+        let seek = std::thread::spawn(move || {
+            loop {
+                match seek_handle.dead_letter_gate.try_lock() {
+                    Ok(gate) => drop(gate),
+                    Err(std::sync::TryLockError::WouldBlock) => break,
+                    Err(std::sync::TryLockError::Poisoned(_)) => {
+                        panic!("dead-letter gate was poisoned")
+                    }
+                }
+                std::thread::yield_now();
+            }
+            seek_handle
+                .seek_to_time(&seek_subscription, LogicalInstant::UNIX_EPOCH)
+                .unwrap();
+            finished_sender.send(()).unwrap();
+        });
+
+        // A seek that rewrote the delivery states here would strand the published transfer with
+        // no source completion, so it waits for the transfer instead.
+        assert!(
+            matches!(
+                finished_receiver.recv_timeout(std::time::Duration::from_millis(200)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "a seek must not run inside an in-flight dead-letter transfer"
+        );
+
+        release.wait();
+        transfer.join().unwrap();
+        seek.join().unwrap();
+        finished_receiver.recv().unwrap();
+
+        assert_eq!(destination_commits.load(Ordering::SeqCst), 1);
+        let mut state = state.lock().unwrap();
+        assert!(state.pending_dead_letters().is_empty());
+        // The seek replayed the backlog, so the source holds one deliverable copy and the
+        // destination still holds exactly the one message the completed transfer published.
+        assert_eq!(state.pull(&source_subscription, 10, now).unwrap().len(), 1);
     }
 
     #[tokio::test]

@@ -1084,6 +1084,55 @@ mod tests {
         assert_eq!(out.dead_lettered.len(), 1);
     }
 
+    /// Exhausts the delivery budget and leaves the message waiting for destination admission.
+    fn pending_forward_state() -> (SubscriptionState, LogicalInstant) {
+        let mut c = cfg();
+        c.dead_letter_policy = Some(DeadLetterPolicy {
+            dead_letter_topic: TopicName::new("demo-app", "dead-letters").unwrap(),
+            max_delivery_attempts: MIN_DEAD_LETTER_ATTEMPTS,
+        });
+        let mut s = SubscriptionState::new(c);
+        let mut now = LogicalInstant::from_unix_seconds(100);
+        s.enqueue(stored("1", b"a", 100), now).unwrap();
+        let mut ids = counter();
+        for _ in 0..MIN_DEAD_LETTER_ATTEMPTS {
+            assert_eq!(s.pull(10, now, &mut ids).received.len(), 1);
+            now = now.checked_add(LogicalDuration::from_seconds(11)).unwrap();
+            s.expire_deadlines(now);
+        }
+        assert_eq!(s.pull(10, now, &mut ids).dead_lettered.len(), 1);
+        assert_eq!(s.pending_forwards().len(), 1);
+        (s, now)
+    }
+
+    #[test]
+    fn seeking_past_a_pending_forward_releases_the_reservation_and_refuses_a_late_completion() {
+        let (mut s, now) = pending_forward_state();
+        // The seek skips the message: the reservation is released rather than retained forever.
+        s.seek_to_time(LogicalInstant::from_unix_seconds(200), now)
+            .unwrap();
+        assert!(s.pending_forwards().is_empty());
+        assert!(
+            !s.complete_forward("1"),
+            "a transfer superseded by a seek must not complete a replayed entry"
+        );
+        assert!(s.pull(10, now, &mut counter()).received.is_empty());
+    }
+
+    #[test]
+    fn seeking_before_a_pending_forward_replays_it_and_refuses_a_late_completion() {
+        let (mut s, now) = pending_forward_state();
+        // The seek replays the message: it is deliverable again with a fresh attempt budget, and a
+        // retry of the superseded transfer cannot acknowledge the replayed entry.
+        s.seek_to_time(LogicalInstant::from_unix_seconds(50), now)
+            .unwrap();
+        assert!(s.pending_forwards().is_empty());
+        assert!(!s.complete_forward("1"));
+        let replayed = s.pull(10, now, &mut counter());
+        assert_eq!(replayed.received.len(), 1);
+        assert_eq!(replayed.received[0].delivery_attempt, 1);
+    }
+
     #[test]
     fn ordering_holds_key_until_ack() {
         let mut c = cfg();

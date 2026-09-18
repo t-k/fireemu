@@ -1,0 +1,179 @@
+{
+  "artifactProfile": "repaired-567565bdd",
+  "artifactSha256": "e792e0bc1947bbd227b3ee9778eca093cda94fbde767911dd6139a6cbfd90be4",
+  "authorization": {
+    "accountsAllowed": 0,
+    "aggregateCeilingUsd": 10.0,
+    "budget": {
+      "accounts": 0,
+      "concurrency": 1,
+      "costMicrousd": 132370,
+      "recoverySeconds": 180,
+      "requests": 27,
+      "resources": 2,
+      "seconds": 1200
+    },
+    "configurationMutationAllowed": false,
+    "iterationsAuthorized": 1,
+    "iterationsExecuted": 1,
+    "ownerAccepted": true,
+    "permissionReference": "commit500-501-o8-candidate-v11-under-usd10"
+  },
+  "campaignId": "FS-DATA-WRITE-COMMIT-TRANSFORMS-03",
+  "caseOwnership": {
+    "FS-LIMIT-FIELD-TRANSFORMS-PER-DOCUMENT": "FS-DATA-WRITE-COMMIT-TRANSFORMS-03"
+  },
+  "closure": {
+    "closesInventoryRow": "R2",
+    "compatVerifiedParents": 0,
+    "newlyCompatibilityVerifiedConditions": 0,
+    "newlyObservedFiniteCaseGroups": 1,
+    "parent": "FS-DATA-WRITE",
+    "parentsPromoted": 0,
+    "remaining": [
+      "Repair and saved-reference recompare of the four normalization mismatches.",
+      "BatchWrite continuation past a malformed or undecodable item.",
+      "The catalog limits FS-LIMIT-COLLECTION-ID, FS-LIMIT-SUBCOLLECTION-DEPTH, FS-LIMIT-DOCUMENT-NAME-BYTES, FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT, FS-LIMIT-INDEX-ENTRY-BYTES and FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT.",
+      "The four write-path limits the catalog declares unsupported, which need an implementation plus observation or an explicit owner decision.",
+      "Final-artifact regression against the current artifact and independent closure review."
+    ],
+    "targetParents": 14
+  },
+  "collectorSourceDigest": "4e6cbcbb0c0319cf6769edc14e3ca3cad67f5f50316f0f59d2ae77b491df4dba",
+  "comparatorSha256": "07fbc3c4329e9daf486d24207043325cdfb3c284d2789309a8508505df763f53",
+  "comparison": {
+    "acquisitionValidated": false,
+    "classification": "SEMANTIC_MISMATCH",
+    "errors": [],
+    "kernelKind": "fs-commit-transform-semantic-kernel-v2",
+    "promotionReady": false,
+    "rowClassificationCounts": {
+      "MATCH": 13,
+      "SEMANTIC_MISMATCH": 4
+    },
+    "rows": [
+      {
+        "classification": "SEMANTIC_MISMATCH",
+        "index": 0
+      },
+      {
+        "classification": "SEMANTIC_MISMATCH",
+        "index": 1
+      },
+      {
+        "classification": "MATCH",
+        "index": 2
+      },
+      {
+        "classification": "MATCH",
+        "index": 3
+      },
+      {
+        "classification": "MATCH",
+        "index": 4
+      },
+      {
+        "classification": "MATCH",
+        "index": 5
+      },
+      {
+        "classification": "MATCH",
+        "index": 6
+      },
+      {
+        "classification": "MATCH",
+        "index": 7
+      },
+      {
+        "classification": "MATCH",
+        "index": 8
+      },
+      {
+        "classification": "MATCH",
+        "index": 9
+      },
+      {
+        "classification": "MATCH",
+        "index": 10
+      },
+      {
+        "classification": "MATCH",
+        "index": 11
+      },
+      {
+        "classification": "MATCH",
+        "index": 12
+      },
+      {
+        "classification": "SEMANTIC_MISMATCH",
+        "index": 13
+      },
+      {
+        "classification": "MATCH",
+        "index": 14
+      },
+      {
+        "classification": "MATCH",
+        "index": 15
+      },
+      {
+        "classification": "SEMANTIC_MISMATCH",
+        "index": 16
+      }
+    ]
+  },
+  "compilerSha256": "eab79d565e2ab28c2be0c46d2d3dfcef193aee808bf570a484e9121f3c7c7d53",
+  "conditionObserved": {
+    "accepted": "250 + 250 = 500 field transforms split over two writes on one document, 200",
+    "boundary": "split-write per-document field transforms, 500 accepted and 501 refused",
+    "condition": "FS-LIMIT-FIELD-TRANSFORMS-PER-DOCUMENT",
+    "matchingLocalRows": [
+      6,
+      8
+    ],
+    "refused": "250 + 251 = 501 field transforms split over two writes on one document, 400 INVALID_ARGUMENT \"cannot have more than 500 field transforms on a single document\"",
+    "scope": "the limit is per document and sums every write in one Commit that targets that document"
+  },
+  "database": "(default)",
+  "evidenceCategory": "production-observed-and-fixed-artifact-comparison",
+  "executionKind": "fixed-production-wire",
+  "inputsDigest": "9604ea6e8e8749d6292d467955979b17fa4851d1e04ad402f88c240befec5cde",
+  "kind": "fs-commit-transform-limits-production-result-v1",
+  "limitations": [
+    "Recorded cost is conservative budget accounting, not a measured invoice.",
+    "Four of the 17 rows are classified SEMANTIC_MISMATCH by the comparator frozen with this run, which does not normalize the resource name embedded in a NOT_FOUND message; production and fireemu agree on status, code and status string for all four. This original classification is immutable and is repaired only by saved-reference recompare.",
+    "Seventeen rows cover one finite field-transform case group, not seventeen independent requirements or all Firestore write limits.",
+    "The local side is the retained repaired-567565bdd artifact, not the current build; final-artifact regression is still required.",
+    "Raw nonce, credentials, owned resource names and document payloads are retained privately and are not published here."
+  ],
+  "manifestSha256": "721def298e8dec75ed00c136e9b077d33f13b784da08c2f552768c439a17db58",
+  "nonceDigest": "10be7f76188bb9fa788516f5ee332a8e94dab697617530e5159f2da6548a93fe",
+  "permissionDigest": "4591e54be787edb17f8feefb147d3295882a70494bbc302803abcf2d28fa1c06",
+  "planDigest": "3ec53f1ed15869c3d84fb9c6840a259323127d08d95923be1aab4604e576981a",
+  "privateEvidenceSha256": {
+    "frozenInputs": "9b423965e9ce3980a623191e40a30546f4c7ebb49d97ff1f1563df38156fcff0",
+    "localReferenceForComparison": "3f7cb838295ef7bc50d62fe19832c655ed9576536d39a0f2cb4e22179700e67f",
+    "localReferenceResult": "d21f1410f68e946e250a85fbe1aa50a161de42653913d0655a9fad5e3a763afd",
+    "productionCollection": "7732d63909fd0514c18f2dac5bdfb4a90e74e4d9d5b40a68d7d04be3d1200934",
+    "productionReceipt": "6b196cda5324342c6d3ee1a4d799b3661ca87c330417b3f185cc43fdae0359da",
+    "productionRelease": "2addba5dc8e4a4ead8d7b664b1906ca53ee3b3940029784c75de23d58d5b5b3a"
+  },
+  "production": {
+    "accountingCostMicrousd": 132370,
+    "acquisitionValidated": false,
+    "billingMeasured": false,
+    "cleanupComplete": true,
+    "configurationUnchanged": true,
+    "dataRequests": 17,
+    "infrastructureFailures": 0,
+    "productionExecuted": true,
+    "recordingComplete": true,
+    "requestsUsed": 27,
+    "reservationReleased": true,
+    "reservationState": "released",
+    "resourcesCreated": 2,
+    "rows": 17
+  },
+  "project": "fireemu-35fe6",
+  "sourceCommit": "031c74bfe372e5a1f7e667397c84a063503a53d6"
+}

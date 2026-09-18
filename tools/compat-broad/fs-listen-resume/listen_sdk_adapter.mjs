@@ -287,6 +287,11 @@ export const main = async ({ env = process.env, argv = process.argv } = {}) => {
     cleanupBudget,
     productionExecuted: false,
   });
+  receipt.transportTimeline = caseRecords
+    .flatMap(record =>
+      (record.transportTimeline ?? []).map(entry => ({ ...entry, caseId: record.caseId })),
+    )
+    .sort((left, right) => left.atMs - right.atMs);
   receipt.sourceDigests = sourceDigests(repoRoot, [
     'tools/compat-broad/fs-listen-resume/listen_collector.mjs',
     'tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs',

@@ -709,3 +709,57 @@ test('an exhausted cleanup reserve makes the receipt incomplete', () => {
   assert.equal(receipt.complete, false);
   assert.equal(receipt.cleanupBudget.exhausted, true);
 });
+
+test('the resume case records a connect, disconnect and reconnect it can justify', async () => {
+  const fake = createFake();
+  const clock = nowFactory();
+  const spec = caseFixture({
+    comparison: 'aggregate-changes',
+    listeners: [{ name: 'primary', kind: 'query', target: 'docs', where: ['rank', '<', 10], limit: 10, includeMetadataChanges: true }],
+    steps: [
+      { kind: 'seed', doc: 'alpha', fields: { rank: 1 } },
+      { kind: 'listen', listener: 'primary' },
+      { kind: 'await', listener: 'primary', events: 1 },
+      { kind: 'baseline' },
+      { kind: 'break', client: 'primary', mode: 'disable-network' },
+      { kind: 'write', client: 'witness', doc: 'gamma', fields: { rank: 5 } },
+      { kind: 'resume', client: 'primary', mode: 'enable-network' },
+      { kind: 'settle', listener: 'primary', seconds: 5 },
+    ],
+    expectedLocal: [{ docs: ['alpha', 'gamma'] }],
+  });
+  const ctx = contextFor(fake, clock, spec);
+  const record = await runCase({ ...clock, firestore: fake.firestore, auth: fake.auth }, spec, ctx);
+  const kinds = record.transportTimeline.map(entry => entry.kind);
+  assert.deepEqual(kinds, [
+    'connect',
+    'break-requested',
+    'disconnect',
+    'resume-requested',
+    'reconnect',
+  ]);
+  for (const entry of record.transportTimeline) {
+    assert.equal(typeof entry.atMs, 'number');
+    assert.ok(entry.derivedFrom.length > 0);
+  }
+  const stamps = record.transportTimeline.map(entry => entry.atMs);
+  assert.deepEqual(stamps, [...stamps].sort((a, b) => a - b));
+});
+
+test('a case with no break records a connect and nothing else', async () => {
+  const fake = createFake();
+  const clock = nowFactory();
+  const spec = caseFixture({
+    steps: [
+      { kind: 'seed', doc: 'alpha', fields: { rank: 1 } },
+      { kind: 'listen', listener: 'primary' },
+      { kind: 'await', listener: 'primary', events: 1 },
+    ],
+  });
+  const ctx = contextFor(fake, clock, spec);
+  const record = await runCase({ ...clock, firestore: fake.firestore, auth: fake.auth }, spec, ctx);
+  assert.deepEqual(
+    record.transportTimeline.map(entry => entry.kind),
+    ['connect'],
+  );
+});

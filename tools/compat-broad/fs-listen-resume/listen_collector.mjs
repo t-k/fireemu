@@ -353,6 +353,13 @@ export const runCase = async (deps, caseSpec, ctx) => {
   let errored = false;
   let breakSeen = false;
   let baselineAt = 0;
+  // Connectivity as the collector can actually observe it from the client SDK.
+  // The Node SDK does not surface wire events, so each entry says what it was
+  // derived from rather than claiming to be a transport frame.
+  const transportTimeline = [];
+  let connected = false;
+  const note = (kind, derivedFrom) =>
+    transportTimeline.push({ kind, atMs: deps.now(), derivedFrom });
   let allListenersClosed = true;
   const docsBeforeBreak = new Set();
 
@@ -368,6 +375,13 @@ export const runCase = async (deps, caseSpec, ctx) => {
     }
     if (row.snapshotKind === 'error') errored = true;
     if (row.snapshotKind !== 'error') {
+      if (row.fromCache === false && !connected) {
+        connected = true;
+        note(breakSeen ? 'reconnect' : 'connect', 'first server-backed snapshot');
+      } else if (row.fromCache === true && connected) {
+        connected = false;
+        note('disconnect', 'listener fell back to the local cache');
+      }
       for (const change of row.changes) {
         if (change.type === 'added') {
           if (breakSeen && docsBeforeBreak.has(change.doc)) counters.duplicateAdded.push(change.doc);
@@ -508,9 +522,11 @@ export const runCase = async (deps, caseSpec, ctx) => {
         case 'break':
           for (const doc of events.at(-1)?.docs ?? []) docsBeforeBreak.add(doc);
           breakSeen = true;
+          note('break-requested', 'collector called disableNetwork');
           await deps.firestore.disableNetwork(ctx.client);
           break;
         case 'resume':
+          note('resume-requested', 'collector called enableNetwork');
           await deps.firestore.enableNetwork(ctx.client);
           break;
         case 'signIn':
@@ -573,6 +589,7 @@ export const runCase = async (deps, caseSpec, ctx) => {
     rawEventCount: events.length,
     baselineAt,
     comparedFields: caseSpec.comparedFields ?? null,
+    transportTimeline,
     invariantViolations: checkInvariants(caseSpec.invariants, counters),
     listenersClosed: allListenersClosed && registered.size === 0,
   };

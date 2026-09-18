@@ -77,3 +77,25 @@ def test_every_listener_case_actually_delivered_or_declared_silence():
             assert row["observed"], row["caseId"]
         else:
             assert case["invariants"], row["caseId"]
+
+
+def test_the_shadow_recorded_an_ordered_transport_timeline():
+    timeline = _receipt()["transportTimeline"]
+    assert timeline
+    stamps = [entry["atMs"] for entry in timeline]
+    assert stamps == sorted(stamps)
+    kinds = {entry["kind"] for entry in timeline}
+    assert {"connect", "disconnect", "reconnect"} <= kinds
+    for entry in timeline:
+        assert entry["derivedFrom"]
+        assert entry["caseId"]
+
+
+def test_the_resume_case_is_the_one_that_broke_and_recovered():
+    timeline = _receipt()["transportTimeline"]
+    breaking = {
+        entry["caseId"]
+        for entry in timeline
+        if entry["kind"] in {"break-requested", "resume-requested"}
+    }
+    assert breaking == {"FS-LISTEN-SDK-104"}

@@ -7144,6 +7144,36 @@ fn a_verify_email_link_with_a_wrong_code_kind_is_expired_wording() {
     assert_eq!(issued_code(&s, "PASSWORD_RESET"), code);
 }
 
+/// PCT-1. `%` followed by anything but two hexadecimal digits is not an escape. The
+/// hand-rolled decoder accepted `from_str_radix` extensions, so `%+f` became U+000F and the
+/// password below was refused as a control character.
+#[test]
+fn action_link_query_decoding_rejects_non_hexadecimal_percent_escapes() {
+    let s = state();
+    sign_up(&s, "percent@example.com");
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "percent@example.com"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let code = issued_code(&s, "PASSWORD_RESET");
+    let (status, done) = follow(
+        &s,
+        &format!(
+            "http://127.0.0.1:9099/emulator/action?mode=resetPassword&oobCode={code}&apiKey=fake-api-key&newPassword=one%+ftwo%2Gthree%zz"
+        ),
+    );
+    assert_eq!(status, 200, "{done}");
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        // `+` is still a form-encoded space; `%` keeps its literal self.
+        &json!({"email": "percent@example.com", "password": "one% ftwo%2Gthree%zz"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+}
+
 #[test]
 fn the_reset_password_link_needs_a_real_new_password_and_then_sets_it() {
     let s = state();

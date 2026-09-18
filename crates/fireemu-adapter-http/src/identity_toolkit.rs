@@ -7611,36 +7611,10 @@ fn create_session_cookie(store: &AuthStore, body: &Value, at: LogicalInstant) ->
     }
 }
 
-/// Minimal `application/x-www-form-urlencoded` query decoding (ASCII percent escapes).
+/// `application/x-www-form-urlencoded` query decoding through the shared codec: `+` is a
+/// space and only two ASCII hexadecimal digits form an escape, so `%+f` stays literal.
 fn decode_query_component(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 2 < bytes.len() => {
-                if let Some(b) = s
-                    .get(i + 1..i + 3)
-                    .and_then(|hex| u8::from_str_radix(hex, 16).ok())
-                {
-                    out.push(b);
-                    i += 3;
-                } else {
-                    out.push(b'%');
-                    i += 1;
-                }
-            }
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
+    fireemu_core_types::codec::percent_decode(s, fireemu_core_types::codec::PlusMode::Space)
 }
 
 fn query_params(query: Option<&str>) -> BTreeMap<String, String> {

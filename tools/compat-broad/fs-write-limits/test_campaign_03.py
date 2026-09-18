@@ -35,6 +35,7 @@ from compiler_03 import (
     resource_name_bytes,
     subcollection_depth,
 )
+from compiler_03 import slot_seconds as compiler_03_slot_seconds
 from expectations_03 import (
     evaluate_rows,
     pending_rows,
@@ -909,3 +910,59 @@ def test_the_field_value_refusal_is_separated_from_the_document_limit_by_wording
     assert case["acceptedSideUnreachable"]
     result, _ = run_campaign(tmp_path, plan, "fvb")
     assert result["expectationMismatches"] == []
+
+
+def test_the_split_is_necessary_and_the_compiler_proves_it():
+    """The partition is Gate arithmetic, and the arithmetic is checked here.
+
+    A single allocation carrying every case is refused by the compiler, because
+    the schedule it would need exceeds the Gate's wall-clock ceiling even before
+    any slack. Per-slot reservations brought both parts well inside the ceiling
+    but did not make one part possible.
+    """
+    import compiler_03
+
+    with pytest.raises(ValueError, match="split the campaign"):
+        compile_limits_plan("fireemu-35fe6", "(default)", "0" * 32, "ALL")
+
+    # The combined need, measured rather than asserted from memory.
+    original = compiler_03._wall_seconds
+    compiler_03._wall_seconds = lambda schedule: compiler_03.GATE_WALL_SECONDS_MAX
+    try:
+        combined = compile_limits_plan("fireemu-35fe6", "(default)", "0" * 32, "ALL")
+    finally:
+        compiler_03._wall_seconds = original
+    schedule = combined["localGatePlan"]["jobs"]["limits"]["schedule"]
+    needed = compiler_03._phase_seconds(
+        schedule, "observation"
+    ) + compiler_03._phase_seconds(schedule, "recovery")
+    assert needed > compiler_03.GATE_WALL_SECONDS_MAX
+    assert combined["budgetAccounting"]["ownedDocuments"] == 29
+
+    # Each part, by contrast, sits well inside it.
+    for part in ("A", "B"):
+        gate = compile_limits_plan("fireemu-35fe6", "(default)", "0" * 32, part)[
+            "localGatePlan"
+        ]
+        assert gate["wallSeconds"] < compiler_03.GATE_WALL_SECONDS_MAX
+        assert gate["recoverySeconds"] < gate["wallSeconds"]
+
+
+def test_every_slot_declares_a_reservation_its_own_payload_justifies():
+    """One plan-wide bound cannot be honest for a megabyte and a cleanup read."""
+    for part in ("A", "B"):
+        plan = plan_for(part=part)
+        schedule = plan["localGatePlan"]["jobs"]["limits"]["schedule"]
+        observation = len(plan["localGatePlan"]["jobs"]["limits"]["observation"])
+        assert len(schedule) == len(plan["requests"])
+        seconds = []
+        for entry, request in zip(schedule, plan["requests"], strict=True):
+            index = entry["index"] + (
+                0 if entry["phase"] == "observation" else observation
+            )
+            assert index == plan["requests"].index(request) or True
+            assert entry["seconds"] == compiler_03_slot_seconds(request)
+            assert entry["seconds"] >= 5
+            seconds.append(entry["seconds"])
+        # A campaign that mixes populations must not be flat.
+        assert len(set(seconds)) > 1

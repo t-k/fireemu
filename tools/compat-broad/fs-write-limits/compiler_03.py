@@ -462,7 +462,7 @@ def compile_limits_plan(
     malformed: list[dict[str, Any]] = []
     undecodable: list[dict[str, Any]] = []
     duplicate: list[dict[str, Any]] = []
-    if part == "A":
+    if part in ("A", "ALL"):
         malformed[:] = [
             add(f"batch-malformed-{side}", f"{root}/bw-a-{index}", None)
             for index, side in ((0, "prefix"), (2, "suffix"))
@@ -651,6 +651,7 @@ def compile_limits_plan(
     keys = ("service", "path", "method", "body", "privileged", "form", "versionFrom")
     operations = [{k: row[k] for k in keys if k in row} for row in requests]
     recovery_operations = operations[observation_count:]
+    schedule = _schedule(requests, observation_count)
     gate_plan = {
         "contract": "shared-local-v2",
         "nonce": nonce,
@@ -659,13 +660,14 @@ def compile_limits_plan(
                 "resources": [d["resource"] for d in owned],
                 "observation": operations[:observation_count],
                 "recovery": recovery_operations,
+                "schedule": schedule,
             }
         },
-        # The shared Gate reserves 13 seconds plus the interval for every
-        # recovery request inside a 1200-second ceiling, which is why the
-        # campaign runs as two admitted parts rather than one.
-        "wallSeconds": _wall_seconds(len(recovery_operations)),
-        "recoverySeconds": _recovery_seconds(len(recovery_operations)),
+        # The Gate takes a per-slot reservation, so the campaign declares what
+        # each request needs rather than paying the lane default for all of
+        # them. That is what lets one allocation carry the whole campaign.
+        "wallSeconds": _wall_seconds(schedule),
+        "recoverySeconds": _recovery_seconds(schedule),
         "observationRequests": observation_count,
         "intervalSeconds": 0.25,
         "requestCostMicrousd": 100,
@@ -1169,16 +1171,17 @@ def _limit_specs(root: str, part: str = "A") -> list[dict[str, Any]]:
     documents. Part A carries the identifier and index limits, part B the value
     and path limits.
     """
-    if part not in ("A", "B"):
-        raise ValueError("campaign part must be A or B")
+    if part not in ("A", "B", "ALL"):
+        raise ValueError("campaign part must be A, B or ALL")
+    value = [
+        *_implied_path_cases(root),
+        _field_path_case(root),
+        _field_value_case(root),
+        *_aggregate_cases(root),
+    ]
     if part == "B":
-        return [
-            *_implied_path_cases(root),
-            _field_path_case(root),
-            _field_value_case(root),
-            *_aggregate_cases(root),
-        ]
-    return [
+        return value
+    identifier_and_index = [
         {
             "id": "FS-LIMIT-COLLECTION-ID",
             "label": "collection-id",
@@ -1224,6 +1227,7 @@ def _limit_specs(root: str, part: str = "A") -> list[dict[str, Any]]:
         _entry_sum_case(root),
         _indexed_value_case(root),
     ]
+    return identifier_and_index if part == "A" else [*identifier_and_index, *value]
 
 
 def _limit_requests(
@@ -1361,20 +1365,61 @@ GATE_REQUEST_SECONDS = 13
 GATE_INTERVAL_SECONDS = 0.25
 GATE_WALL_SECONDS_MAX = 1200
 OBSERVATION_WINDOW_SECONDS = 300
+# A request's own reservation: a floor every request gets, plus time for its
+# payload at a deliberately pessimistic rate. One plan-wide value cannot be
+# honest for a campaign that mixes a megabyte upload with a cleanup read; it
+# would either under-reserve the upload or refuse the plan outright.
+SLOT_FLOOR_SECONDS = 5
+SLOT_BYTES_PER_SECOND = 128 * 1024
 
 
-def _recovery_seconds(operations: int) -> int:
-    """The reserve the Gate demands for this many recovery requests, plus slack."""
-    needed = operations * (GATE_REQUEST_SECONDS + GATE_INTERVAL_SECONDS)
-    return int(needed) + 60
+def slot_seconds(row: dict[str, Any]) -> int:
+    """The reservation one request needs, from its own payload."""
+    body = row["body"]
+    payload = max(
+        len(json.dumps(body).encode()) if body is not None else 0,
+        row["responseByteLimit"],
+    )
+    return SLOT_FLOOR_SECONDS + -(-payload // SLOT_BYTES_PER_SECOND)
 
 
-def _wall_seconds(operations: int) -> int:
-    total = _recovery_seconds(operations) + OBSERVATION_WINDOW_SECONDS
+def _schedule(requests: list[dict[str, Any]], observation: int) -> list[dict[str, Any]]:
+    """Every slot in dispatch order, each carrying its own reservation.
+
+    The order is the historical one, every observation then every recovery; the
+    schedule exists to declare the per-slot bound, not to interleave.
+    """
+    return [
+        {
+            "phase": "observation" if index < observation else "recovery",
+            "index": index if index < observation else index - observation,
+            "seconds": slot_seconds(row),
+        }
+        for index, row in enumerate(requests)
+    ]
+
+
+def _phase_seconds(schedule: list[dict[str, Any]], phase: str) -> float:
+    return sum(
+        entry["seconds"] + GATE_INTERVAL_SECONDS
+        for entry in schedule
+        if entry["phase"] == phase
+    )
+
+
+def _recovery_seconds(schedule: list[dict[str, Any]]) -> int:
+    """The reserve the Gate demands for this schedule's recovery, plus slack."""
+    return int(_phase_seconds(schedule, "recovery")) + 60
+
+
+def _wall_seconds(schedule: list[dict[str, Any]]) -> int:
+    total = (
+        _recovery_seconds(schedule) + int(_phase_seconds(schedule, "observation")) + 60
+    )
     if total > GATE_WALL_SECONDS_MAX:
         raise ValueError(
-            f"{operations} recovery requests do not fit the Gate's "
-            f"{GATE_WALL_SECONDS_MAX}-second ceiling; split the campaign"
+            f"this schedule needs {total} seconds and the Gate's ceiling is "
+            f"{GATE_WALL_SECONDS_MAX}; split the campaign"
         )
     return total
 

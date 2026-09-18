@@ -143,10 +143,12 @@ resource for an ownership read and an absence proof. The validator enforces
 both, and enforces that the hard ceiling clears the maximum cost rather than the
 forecast.
 
-The seconds come from the shared Gate's own formula rather than from judgement.
-`shared_gate.create` charges each slot its request time plus an interval with a
-floor of 0.25 seconds, refuses a wall above 1200 seconds, and refuses a recovery
-reservation that cannot pay for its slots. At three seconds a small request:
+The seconds are what the shared Gate charges, computed by calling it rather than
+by re-deriving its formula. `shared_gate` charges each slot its own reserved
+seconds plus an interval with a floor of 0.25, requires a slot carrying a body to
+reserve the transport ceiling, refuses a wall above 1200 seconds, and refuses a
+recovery reservation that cannot pay for its slots. At three seconds a small
+request:
 
 | Phase | Slots | Reserved |
 | --- | ---: | ---: |
@@ -161,8 +163,9 @@ against 1009.50, inside the Gate's 1200 cap. The earlier published pair, 300 and
 slot, and at two seconds the recovery phase alone needs 344.25. That figure was
 never stated in the artifact, which is how the published windows and the
 runner's reservation came to disagree. The arithmetic is now computed in
-`budget.schedulingReservation` and the validator refuses a window that cannot
-pay for its own schedule.
+`budget.schedulingReservation` by calling the Gate, and a test drives
+`shared_gate.create` on this campaign's schedule to prove it admits the published
+windows and refuses 900/300, 900/500 and 1100/300.
 
 Three seconds is roughly an order of magnitude over a few-hundred-millisecond
 round trip, which is the shape a bound should have. It is also the per-request
@@ -243,8 +246,8 @@ has lost the implemented shape.
 
 The recorded run is published as
 `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, at source
-`08e0ef78ae998a0993cd42c905590087d32a8c66`, artifact SHA-256
-`14bfd4cdd52130f4f573fd73097e0074623d433053d603e71878c1bf4ca8ed66`, nonce `1ed3307dd0174c5b889bf1c2142076bf`, with supervisor status
+`31a5102c9d357a6b5349f364a3b84a37a21c6a35`, artifact SHA-256
+`f493ac8bf8b4bf74642e65f3be97a24e745d16299fcdc3bafd141c01d2f6602e`, nonce `54e96c7d41094fa5928672d4adae6efe`, with supervisor status
 `completed`, `recordingComplete` and `stateValidation` true, the owned process
 stopped and all listeners closed. It completed 105 observation rows and 153
 recovery rows, sent 241 of the 258 bounded requests, and proved all 51 owned
@@ -298,8 +301,8 @@ zero-wire skips are excluded, since they send nothing.
 
 **The published figures are a floor and not an estimate, and the record says so
 beside them.** A local shadow runs over loopback against an emulator on the same
-machine. In the published run the small-request median is 0.0012 s with a p99 of 0.0125 s, and the
-three boundary Commits ran 0.0283 s at the median. That is service time with no
+machine. In the published run the small-request median is 0.0011 s with a p99 of 0.0115 s, and the
+three boundary Commits ran 0.0249 s at the median. That is service time with no
 network in it at all; a production small read is an HTTPS round trip and
 will be one to two orders of magnitude higher. Citing the local p99 as a
 production per-slot figure would be wrong by that margin. It bounds the

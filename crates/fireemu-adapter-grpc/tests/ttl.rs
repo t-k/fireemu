@@ -310,6 +310,61 @@ fn a_policy_disabled_after_the_scan_deletes_nothing_it_had_already_chosen() {
 }
 
 #[test]
+fn a_commit_fault_stops_one_sweep_deletion_and_the_next_candidate_still_goes() {
+    use fireemu_core_session::fault::{
+        FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,
+    };
+
+    let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
+    write_document(&backend, "sessions/s1", Some(timestamp(1_100)));
+    write_document(&backend, "sessions/s2", Some(timestamp(1_100)));
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .expect("enable ttl");
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
+
+    // The sweep draws one commit fault occurrence per candidate, so a rule that fires on the
+    // first occurrence stops the first deletion alone.
+    let registry = Arc::new(FaultRegistry::new());
+    registry
+        .default_state()
+        .lock()
+        .expect("fault state")
+        .install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "firestore.commit".into(),
+                    nth: Some(1),
+                    function: None,
+                    event_type: None,
+                },
+                action: FaultAction::ReturnError {
+                    code: "UNAVAILABLE".into(),
+                },
+            }],
+        });
+    backend.set_faults(registry);
+
+    assert_eq!(
+        backend
+            .sweep_expired_documents_now(&everything(), LogicalInstant::from_unix_seconds(1_101)),
+        1
+    );
+    // The candidate the fault took is left for the next sweep rather than reported deleted.
+    assert!(exists(&backend, "sessions/s1"));
+    assert!(!exists(&backend, "sessions/s2"));
+
+    backend.set_faults(Arc::new(FaultRegistry::new()));
+    assert_eq!(
+        backend
+            .sweep_expired_documents_now(&everything(), LogicalInstant::from_unix_seconds(1_101)),
+        1
+    );
+    assert!(!exists(&backend, "sessions/s1"));
+}
+
+#[test]
 fn a_policy_moved_to_another_field_after_the_scan_is_evaluated_on_the_new_field() {
     let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
     write_document(&backend, "sessions/s1", Some(timestamp(1_100)));

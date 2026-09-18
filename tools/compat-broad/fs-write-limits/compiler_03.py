@@ -1172,7 +1172,23 @@ def _limit_specs(root: str, part: str = "A") -> list[dict[str, Any]]:
 def _limit_requests(
     spec: dict[str, Any], documents: dict[str, Any], batch_path: str
 ) -> list[dict[str, Any]]:
-    """The ordered observation requests for one limit."""
+    """The ordered observation requests for one limit.
+
+    A pending reason belongs to the case, not to one half of it: if the local
+    side cannot yet show the documented production behaviour for the write, it
+    cannot show it for the readback that follows either.
+    """
+    requests = _limit_request_shapes(spec, documents, batch_path)
+    reason = spec.get("pendingReason")
+    if reason:
+        for request in requests:
+            request["expect"]["pendingReason"] = reason
+    return requests
+
+
+def _limit_request_shapes(
+    spec: dict[str, Any], documents: dict[str, Any], batch_path: str
+) -> list[dict[str, Any]]:
     accept = documents.get(f"{spec['label']}-accept")
     refuse = documents[f"{spec['label']}-refuse"]
     pending = spec.get("pendingReason")

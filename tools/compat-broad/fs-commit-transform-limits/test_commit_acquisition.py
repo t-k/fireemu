@@ -60,7 +60,8 @@ def baseline_fixture(tmp_path, database):
     )
     sha = hashlib.sha256(journal.read_bytes()).hexdigest()
     # The journal is only a baseline if hash-bound run evidence says the
-    # responses came off the wire; a replay has the same shape.
+    # responses came off the wire; a replay has the same shape. The run's own
+    # response record is what ties these journal lines to that run.
     receipt = evidence / "receipt.json"
     receipt.write_text(
         json.dumps(
@@ -68,6 +69,15 @@ def baseline_fixture(tmp_path, database):
                 "kind": "commit-acquisition-receipt-v2",
                 "executionKind": "fixed-production-wire",
                 "productionExecuted": True,
+                "metadata": [
+                    {
+                        "id": "observation:" + commit_baseline.ROUTE_ACTIONS[route],
+                        "status": 200,
+                        "responseDigest": digest(body),
+                        "value": {},
+                    }
+                    for route, body in bodies
+                ],
             }
         )
     )

@@ -115,6 +115,15 @@ def test_both_parts_are_declared_and_carry_the_whole_scope() -> None:
     assert limits == set(manifest["requirementSurfaces"][1:])
 
 
+def test_the_package_says_why_it_declines_a_per_slot_schedule() -> None:
+    """Declining the Gate's per-slot reservation is a decision, so it is recorded."""
+    manifest = load(MANIFEST)
+    declined = manifest["scheduleDeclined"]
+    assert declined["declared"] is False
+    assert "fail-closed" in declined["reason"]
+    assert "1200" in manifest["partitionReason"]
+
+
 def test_the_only_index_configuration_change_is_the_declared_exemption() -> None:
     manifest = load(MANIFEST)
     configuration = manifest["indexConfiguration"]
@@ -215,18 +224,11 @@ def test_budgets_match_the_compiled_plans_and_stay_inside_the_cap() -> None:
         assert budgets["envelopeCostMicrousd"] < budgets["costCapUsd"] * 1_000_000
         assert budgets["tariffsConfirmed"] is False
         # Each part must fit the shared Gate's own ceiling, which is why the
-        # campaign is partitioned at all. The reserve is measured against the
-        # schedule the plan declares, not a flat per-request figure.
-        import compiler_03
-
-        schedule = gate["jobs"]["limits"]["schedule"]
-        assert gate["recoverySeconds"] >= compiler_03._phase_seconds(
-            schedule, "recovery"
-        )
+        # campaign is partitioned at all. No schedule is declared, so every
+        # request reserves the lane default and recovery survives an early stop.
+        assert "schedule" not in gate["jobs"]["limits"]
+        assert gate["recoverySeconds"] >= accounting["recoveryRequests"] * 13.25
         assert gate["recoverySeconds"] < gate["wallSeconds"] <= 1200
-        assert {entry["seconds"] for entry in schedule} != {
-            schedule[0]["seconds"]
-        } or len(schedule) == 1
 
 
 def test_binding_and_source_digests_resolve_at_the_declared_commit() -> None:

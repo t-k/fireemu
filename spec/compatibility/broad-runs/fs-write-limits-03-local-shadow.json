@@ -4,7 +4,7 @@
     "spec/limits/firestore-standard-2026-08-25.json": "f12ab3686e197be53b14880beec8c6bc72970ca55a72e780fa9d4e99c7abd625",
     "tools/compat-broad/fs-write-limits/collector_03.py": "185f13258c5b14d7b4d462ea065f7f3782e10503a793fc35d2ae411cf1bc6288",
     "tools/compat-broad/fs-write-limits/comparator_03.py": "1528fd6bb73c9c7228a155d4228893cda0653d2547b41042cd7a2668b091d843",
-    "tools/compat-broad/fs-write-limits/compiler_03.py": "f619cdee7d28e3d256413dbb32543728ec8d70b0d8cefdd836e24999dc8fd65e",
+    "tools/compat-broad/fs-write-limits/compiler_03.py": "9aba8cbc599690d7d78e8124c5912fe94871865fa2e76bb6fb7bb51908d73532",
     "tools/compat-broad/fs-write-limits/expectations_03.py": "99510c025eb2527b43a20bfefe2d7ca88f889b8f1e1cba1d2a473ea6730c740b",
     "tools/compat-broad/fs-write-limits/shadow.py": "a340d768ad298390ea64d027cc9b798111e157e5207790c398baaefe012db712",
     "tools/compat-broad/fs-write-limits/shadow_03.py": "0df98687a90fee8f4a9068ead2a7ffff8eb20cc0da989afb677c5d94ba5b9649",
@@ -28,19 +28,19 @@
         "runtimeInputCount": 410,
         "runtimeInputsDigest": "ce40631924a08e492b5d95ab78d4dbb002a4f0386114fea0caf6069cebd705af",
         "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-        "sha256": "8f171cae31f3752477154ec4846dacf0c7a590736e6e9466e386f83229ef1b1f"
+        "sha256": "082f61b82807cd3e56632feabf92262388a9f856a67388a55f9d818ce7c2425d"
       },
       "campaignId": "FS-WRITE-LIMITS-03A",
       "digests": {
-        "parentManifestSha256": "f8f4b6cc721a14a2e0f7281addda68cae3f35849dee71c9184cf7f40b243c8de",
+        "parentManifestSha256": "7cd6536ee554d18b653ff7c785c8ff1ccfb5929aa45a49a605ad686418ac7da6",
         "sourceInputsBound": true,
-        "supervisorManifestSha256": "b99bc210ba5a2c410cdb34f5d5c1cb62ba624c3b5b79946921cd2b2bf2fdd400"
+        "supervisorManifestSha256": "8ae8c51ae7611975ea06136fc488ba7b0aeb06c5f993235f40eee19b317abaac"
       },
       "execution": {
         "allOwnedResourcesAbsentAfterRecovery": true,
         "cleanupComplete": true,
         "cleanupValidated": true,
-        "configurationDigest": "7d54b57f8d314cd55d0d8cdef64e2b3110385bd50c2bb228d2aacdb1f65624e5",
+        "configurationDigest": "3ee6cf5f0f95231cb23c0f8c6265f34d73d4ac977031e38506e8369bd5036a89",
         "database": "(default)",
         "indexConfiguration": {
           "sha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
@@ -51,7 +51,7 @@
         "ownedDocuments": 18,
         "ownedProcess": {
           "listenersClosed": true,
-          "pid": 26948,
+          "pid": 20864,
           "stopped": true
         },
         "pendingDifferences": [
@@ -96,19 +96,19 @@
         "runtimeInputCount": 410,
         "runtimeInputsDigest": "ce40631924a08e492b5d95ab78d4dbb002a4f0386114fea0caf6069cebd705af",
         "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-        "sha256": "c9ba0783aaf866bec0e470a78e5db45524d4dbdcc30807c980c35906cfff2d31"
+        "sha256": "d281f626908042b1a88ebd4a49a8b291efcf7eeed29e3a5f8e64d3d0271825c5"
       },
       "campaignId": "FS-WRITE-LIMITS-03B",
       "digests": {
-        "parentManifestSha256": "bc8e99a88cc7ffdc3e3f5ec6e4a5c0e176cd454eca37c7b8d26d9f1b3c056f57",
+        "parentManifestSha256": "961aa4b386476728d27694146e6f5eadc1bfe2e9c007480341254ccfcae65a0d",
         "sourceInputsBound": true,
-        "supervisorManifestSha256": "674ed1b8f05adfcb5539a1deb66d1b679ba3335f222504d13ec29a28976bddb9"
+        "supervisorManifestSha256": "33b17cb760cb27e2eec8e95a74a4c4b4fcd70a2c00284b22eceae9c825e20f72"
       },
       "execution": {
         "allOwnedResourcesAbsentAfterRecovery": true,
         "cleanupComplete": true,
         "cleanupValidated": true,
-        "configurationDigest": "007c99d931f190160e892caf9c0ad2ee1c2980e13590b958d61cbea85cfd93c8",
+        "configurationDigest": "87d1e5095fdd70d1d5d90601cfb74006bcb4f7db496523c36ed9dd4abc66d4fc",
         "database": "(default)",
         "indexConfiguration": {
           "sha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
@@ -119,7 +119,7 @@
         "ownedDocuments": 11,
         "ownedProcess": {
           "listenersClosed": true,
-          "pid": 29255,
+          "pid": 22160,
           "stopped": true
         },
         "pendingDifferences": [],
@@ -135,6 +135,6 @@
     }
   },
   "productionExecuted": false,
-  "sourceCommit": "01a1b9cbbdde50b129bc4d5426dfe5d39cb69efc",
+  "sourceCommit": "befd12ef83f8327a13a0a09f479e0848d324fe44",
   "status": "completed-local-only"
 }

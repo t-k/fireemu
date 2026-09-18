@@ -956,3 +956,16 @@ def test_a_failure_inside_cleanup_still_produces_a_receipt():
     assert receipt["kind"] == collector.CONTRACT
     assert receipt["openTransactions"]
     assert receipt["complete"] is False
+
+
+def test_the_receipt_counts_every_request_it_actually_sent():
+    endpoint = StatefulEndpoint()
+    receipt, _ = run_against(endpoint)
+    assert receipt["requestCount"] == len(endpoint.calls)
+    assert receipt["requestCount"] > len(receipt["rows"])
+
+
+def test_a_request_the_collector_refused_to_send_is_not_counted():
+    endpoint = StatefulEndpoint(preexisting_role="control")
+    receipt, _ = run_against(endpoint)
+    assert receipt["requestCount"] == len(endpoint.calls)

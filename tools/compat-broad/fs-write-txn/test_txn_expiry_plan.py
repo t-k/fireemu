@@ -195,10 +195,13 @@ def test_timeouts_plus_waits_fit_inside_the_wall_envelope():
     assert worst <= value["budget"]["wallSeconds"]
 
 
-def test_headroom_covers_a_rollback_for_every_transaction_the_plan_opens():
+def test_headroom_covers_a_rollback_for_every_begin_the_plan_sends():
+    """Any begin can issue a token, including one the case table expects to fail."""
     value = compiled()
+    begins = len([s for s in value["operations"] if s["rpc"] == "BeginTransaction"])
     opened = len([s for s in value["operations"] if s["opensTransaction"]])
-    assert plan.DATA_SLOT_HEADROOM >= opened
+    assert begins > opened, "the campaign must exercise refused begins"
+    assert plan.DATA_SLOT_HEADROOM >= begins
 
 
 def test_every_elapsed_case_names_the_transaction_whose_idle_time_it_measures():

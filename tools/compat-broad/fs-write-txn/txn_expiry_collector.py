@@ -217,6 +217,7 @@ class Collection:
         self.preconditions = []
         self.failure_sites = []
         self.authority_refusal = None
+        self.request_count = 0
         self.failure = None
         self.started_at = None
         self.finished_at = None
@@ -246,6 +247,7 @@ class Collection:
             "maxRequestBytes": plan_module.MAX_REQUEST_BYTES,
             "timeoutSeconds": self.current_timeout,
         }
+        self.request_count += 1
         return self.transport(request)
 
     def _begin(self, options_body):
@@ -957,12 +959,10 @@ class Collection:
                 and not self.open_tokens
                 and self.failure is None
             ),
-            "requestCount": len(self.rows)
-            + sum(
-                1 + (1 if "delete" in e else 0) + (1 if "absence" in e else 0)
-                for e in cleanup
-                if "ownedRead" in e
-            ),
+            # Counted where the requests are actually sent, so releases and
+            # any request that failed are included and a request the collector
+            # refused to send is not.
+            "requestCount": self.request_count,
         }
 
 

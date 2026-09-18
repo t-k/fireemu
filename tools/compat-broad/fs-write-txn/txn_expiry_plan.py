@@ -40,9 +40,11 @@ MAX_RESPONSE_BYTES = 65_536
 MAX_REQUEST_BYTES = 8_192
 
 #: Slots reserved beyond the compiled operations. Recovery may have to roll back
-#: every transaction the plan opened before it can delete anything, so the
-#: headroom covers one rollback per opened transaction plus a small margin.
-DATA_SLOT_HEADROOM = 16
+#: every transaction the run holds before it can delete anything. That is one
+#: per BeginTransaction the plan sends, not one per transaction it expects to
+#: get: a begin the case table expects to be refused can still issue a token,
+#: and the collector takes responsibility for releasing it.
+DATA_SLOT_HEADROOM = 20
 
 #: Per-request time bound. Every request in this campaign is a small unary call.
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 10

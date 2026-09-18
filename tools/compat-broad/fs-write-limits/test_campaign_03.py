@@ -97,26 +97,44 @@ def _commit_error(resource, fields):
 
 
 def _implied_path_error(fields):
-    """Bound the paths a document implies, where automatic accounting walks.
+    """Bound every path a document implies by nesting, under the strict profile.
 
-    Index accounting recurses into a map held by a field and never into the
-    elements of an array, so an over-long path inside an array is not refused
-    here. That asymmetry is exactly what the two implied-path cases observe.
+    Automatic index accounting walks a map held directly by a field and never
+    the elements of an array, so the array shape had no bound until the
+    write-path lane added one. Under the strict profile both shapes are now
+    refused at the same boundary, and an array contributes no path segment of
+    its own.
     """
 
-    def walk(prefix, value_fields):
-        for name, value in value_fields.items():
-            path = f"{prefix}.{name}" if prefix else name
-            if len(path.encode()) > FIELD_PATH_BYTES_MAX:
-                return f"field path is {len(path.encode())} bytes, maximum is {FIELD_PATH_BYTES_MAX}"
-            nested = value.get("mapValue") if isinstance(value, dict) else None
-            if isinstance(nested, dict):
-                error = walk(path, nested.get("fields", {}))
+    def walk(prefix, value):
+        if isinstance(value, dict) and isinstance(value.get("mapValue"), dict):
+            for name, nested in value["mapValue"].get("fields", {}).items():
+                path = f"{prefix}.{name}" if prefix else name
+                if len(path.encode()) > FIELD_PATH_BYTES_MAX:
+                    return (
+                        f"field path is {len(path.encode())} bytes, "
+                        f"maximum is {FIELD_PATH_BYTES_MAX}"
+                    )
+                error = walk(path, nested)
+                if error:
+                    return error
+        if isinstance(value, dict) and isinstance(value.get("arrayValue"), dict):
+            for item in value["arrayValue"].get("values", []) or []:
+                error = walk(prefix, item)
                 if error:
                     return error
         return None
 
-    return walk("", fields)
+    for name, value in fields.items():
+        if len(name.encode()) > FIELD_PATH_BYTES_MAX:
+            return (
+                f"field path is {len(name.encode())} bytes, "
+                f"maximum is {FIELD_PATH_BYTES_MAX}"
+            )
+        error = walk(name, value)
+        if error:
+            return error
+    return None
 
 
 def _mask_error(mask):
@@ -759,23 +777,22 @@ def test_the_truncating_limit_is_not_written_as_a_refusal():
 
 
 def test_every_pending_row_states_why_it_is_pending():
-    unsupported = set()
+    """With the write-path lanes integrated only one pending reason survives."""
+    reasons = set()
     for part in ("A", "B"):
         plan = plan_for(part=part)
-        rows = pending_rows(plan)
-        assert rows
-        for index in rows:
-            assert plan["requests"][index]["expect"]["pendingReason"]
-        unsupported |= {
-            case["limitId"]
+        for index in pending_rows(plan):
+            reasons.add(plan["requests"][index]["expect"]["pendingReason"])
+        # Every limit the catalog once called unsupported is now implemented,
+        # so no expectation rests on the catalog alone.
+        assert not [
+            case
             for case in plan["cases"]
-            if case.get("catalogImplemented") == "unsupported"
-        }
-    assert unsupported == {
-        "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
-        "FS-LIMIT-FIELD-PATH-BYTES",
-        "FS-LIMIT-FIELD-VALUE-BYTES",
-    }
+            if case.get("catalogImplemented") not in (None, "implemented")
+        ]
+    assert len(reasons) == 1
+    # The one reason left is the local shadow's pinned index configuration.
+    assert "index configuration" in next(iter(reasons))
 
 
 def test_a_pending_difference_is_recorded_but_does_not_fail_the_campaign(tmp_path):

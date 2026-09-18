@@ -7,10 +7,10 @@
   "environment": {
     "kind": "local-fireemu",
     "node": "24.14.0",
-    "sourceCommit": "ffc787dfb69d38ea0987db32d5393d7b52759e32",
+    "sourceCommit": "415c3b629189f96402b8a75aa98fe4e085f6287b",
     "firebaseSdk": "12.18.0",
     "projectId": "demo-o6",
-    "nonceDigest": "6779766e9a2af6dd06061d7f2d7e0b03190f79baccc888020f6913fcf088744c"
+    "nonceDigest": "b60794640e2ea5b64f5fa320d923005879a67f5ee1b6e66b67e03aba501551e8"
   },
   "budget": {
     "used": {
@@ -55,25 +55,25 @@
     "rows": [
       {
         "name": "alpha",
-        "path": "o6_listen/8a7ae3be961541980473afd0315f407b/docs/alpha",
+        "path": "o6_listen/0356f632d5534099de4f3e2084fcb15b/docs/alpha",
         "outcome": "not-created",
         "detail": null
       },
       {
         "name": "beta",
-        "path": "o6_listen/8a7ae3be961541980473afd0315f407b/docs/beta",
+        "path": "o6_listen/0356f632d5534099de4f3e2084fcb15b/docs/beta",
         "outcome": "not-created",
         "detail": null
       },
       {
         "name": "gamma",
-        "path": "o6_listen/8a7ae3be961541980473afd0315f407b/docs/gamma",
+        "path": "o6_listen/0356f632d5534099de4f3e2084fcb15b/docs/gamma",
         "outcome": "not-created",
         "detail": null
       },
       {
         "name": "absent",
-        "path": "o6_listen/8a7ae3be961541980473afd0315f407b/docs/absent",
+        "path": "o6_listen/0356f632d5534099de4f3e2084fcb15b/docs/absent",
         "outcome": "not-created",
         "detail": null
       },
@@ -143,6 +143,13 @@
         "exists",
         "error"
       ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 1789694617474,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
       "invariantViolations": [],
       "listenersClosed": true
     },
@@ -195,6 +202,13 @@
         "docs",
         "exists",
         "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 1789694617520,
+          "derivedFrom": "first server-backed snapshot"
+        }
       ],
       "invariantViolations": [],
       "listenersClosed": true
@@ -289,6 +303,13 @@
         "hasPendingWrites",
         "error"
       ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 1789694617563,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
       "invariantViolations": [],
       "listenersClosed": true
     },
@@ -357,6 +378,13 @@
         "fromCache",
         "hasPendingWrites",
         "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 1789694617636,
+          "derivedFrom": "first server-backed snapshot"
+        }
       ],
       "invariantViolations": [],
       "listenersClosed": true
@@ -532,6 +560,13 @@
         "hasPendingWrites",
         "error"
       ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 1789694617733,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
       "invariantViolations": [],
       "listenersClosed": true
     },
@@ -586,6 +621,13 @@
         "fromCache",
         "hasPendingWrites",
         "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 1789694617867,
+          "derivedFrom": "first server-backed snapshot"
+        }
       ],
       "invariantViolations": [],
       "listenersClosed": true
@@ -719,6 +761,33 @@
         "docs",
         "exists",
         "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 1789694620919,
+          "derivedFrom": "first server-backed snapshot"
+        },
+        {
+          "kind": "break-requested",
+          "atMs": 1789694620941,
+          "derivedFrom": "collector called disableNetwork"
+        },
+        {
+          "kind": "disconnect",
+          "atMs": 1789694620943,
+          "derivedFrom": "listener fell back to the local cache"
+        },
+        {
+          "kind": "resume-requested",
+          "atMs": 1789694620943,
+          "derivedFrom": "collector called enableNetwork"
+        },
+        {
+          "kind": "reconnect",
+          "atMs": 1789694620948,
+          "derivedFrom": "first server-backed snapshot"
+        }
       ],
       "invariantViolations": [],
       "listenersClosed": true
@@ -854,6 +923,13 @@
         "exists",
         "error"
       ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 1789694625980,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
       "invariantViolations": [],
       "listenersClosed": true
     },
@@ -948,6 +1024,13 @@
         "docs",
         "exists",
         "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 1789694631037,
+          "derivedFrom": "first server-backed snapshot"
+        }
       ],
       "invariantViolations": [],
       "listenersClosed": true
@@ -1068,6 +1151,13 @@
         "exists",
         "error"
       ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 1789694634112,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
       "invariantViolations": [],
       "listenersClosed": true
     },
@@ -1171,6 +1261,23 @@
         "exists",
         "error"
       ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 1789694634188,
+          "derivedFrom": "first server-backed snapshot"
+        },
+        {
+          "kind": "disconnect",
+          "atMs": 1789694634241,
+          "derivedFrom": "listener fell back to the local cache"
+        },
+        {
+          "kind": "connect",
+          "atMs": 1789694634242,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
       "invariantViolations": [],
       "listenersClosed": true
     },
@@ -1224,13 +1331,118 @@
         "exists",
         "error"
       ],
+      "transportTimeline": [],
       "invariantViolations": [],
       "listenersClosed": true
     }
   ],
   "complete": true,
+  "transportTimeline": [
+    {
+      "kind": "connect",
+      "atMs": 1789694617474,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-101"
+    },
+    {
+      "kind": "connect",
+      "atMs": 1789694617520,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-101C"
+    },
+    {
+      "kind": "connect",
+      "atMs": 1789694617563,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-102"
+    },
+    {
+      "kind": "connect",
+      "atMs": 1789694617636,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-102C"
+    },
+    {
+      "kind": "connect",
+      "atMs": 1789694617733,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-103"
+    },
+    {
+      "kind": "connect",
+      "atMs": 1789694617867,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-103C"
+    },
+    {
+      "kind": "connect",
+      "atMs": 1789694620919,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-104"
+    },
+    {
+      "kind": "break-requested",
+      "atMs": 1789694620941,
+      "derivedFrom": "collector called disableNetwork",
+      "caseId": "FS-LISTEN-SDK-104"
+    },
+    {
+      "kind": "disconnect",
+      "atMs": 1789694620943,
+      "derivedFrom": "listener fell back to the local cache",
+      "caseId": "FS-LISTEN-SDK-104"
+    },
+    {
+      "kind": "resume-requested",
+      "atMs": 1789694620943,
+      "derivedFrom": "collector called enableNetwork",
+      "caseId": "FS-LISTEN-SDK-104"
+    },
+    {
+      "kind": "reconnect",
+      "atMs": 1789694620948,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-104"
+    },
+    {
+      "kind": "connect",
+      "atMs": 1789694625980,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-104C"
+    },
+    {
+      "kind": "connect",
+      "atMs": 1789694631037,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-105"
+    },
+    {
+      "kind": "connect",
+      "atMs": 1789694634112,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-105C"
+    },
+    {
+      "kind": "connect",
+      "atMs": 1789694634188,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-106"
+    },
+    {
+      "kind": "disconnect",
+      "atMs": 1789694634241,
+      "derivedFrom": "listener fell back to the local cache",
+      "caseId": "FS-LISTEN-SDK-106"
+    },
+    {
+      "kind": "connect",
+      "atMs": 1789694634242,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-106"
+    }
+  ],
   "sourceDigests": {
-    "tools/compat-broad/fs-listen-resume/listen_collector.mjs": "6dd8e9ccad6194fdaa808642f1fe7e1bb54ff8a5908203a17ce9aee08623c35d",
-    "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs": "0ba5f19441a364f8130c933a0e4ff3308c58c4fe2282213ab424a0d249a8da74"
+    "tools/compat-broad/fs-listen-resume/listen_collector.mjs": "681e80b6b2387f103bf8eea7bd966f1bbe5a012ab99681208d0fc7ddfce1b6ef",
+    "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs": "29a25b0ba455f76d6bf85d7cf4d3e8ccf95f2f98cf5df0fa7b909ab7a1412a01"
   }
 }

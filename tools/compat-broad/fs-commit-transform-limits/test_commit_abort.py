@@ -254,4 +254,9 @@ def test_the_held_fixture_still_describes_the_canonical_reservation():
     assert row["claimDigest"] == fixture["row"]["claimDigest"]
     assert row["envelopeDigest"] == fixture["row"]["envelopeDigest"]
     assert row["generation"] == fixture["row"]["generation"]
-    assert row["claim"] == fixture["row"]["claim"]
+    # The committed snapshot slots host-specific paths so the published tree carries no
+    # personal directory; compare the claim with those two fields slotted the same way.
+    def slotted(claim):
+        return {**claim, "gatePath": "<run>/gate", "ledgerPath": "<canonical-ledger>"}
+
+    assert slotted(row["claim"]) == slotted(fixture["row"]["claim"])

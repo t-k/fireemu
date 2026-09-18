@@ -59,6 +59,18 @@ def baseline_fixture(tmp_path, database):
         + "\n"
     )
     sha = hashlib.sha256(journal.read_bytes()).hexdigest()
+    # The journal is only a baseline if hash-bound run evidence says the
+    # responses came off the wire; a replay has the same shape.
+    receipt = evidence / "receipt.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "kind": "commit-acquisition-receipt-v2",
+                "executionKind": "fixed-production-wire",
+                "productionExecuted": True,
+            }
+        )
+    )
     record = tmp_path / "baseline.json"
     record.write_text(
         json.dumps(
@@ -70,13 +82,22 @@ def baseline_fixture(tmp_path, database):
                         "path": "responses.jsonl",
                         "sha256": sha,
                         "index": index,
+                        "production": {
+                            "path": "receipt.json",
+                            "sha256": hashlib.sha256(receipt.read_bytes()).hexdigest(),
+                            "mode": "live",
+                        },
                     }
                     for index, (route, _body) in enumerate(bodies)
                 ],
             }
         )
     )
-    baseline = commit_baseline.baseline_from_record(record, evidence_root=evidence)
+    baseline = commit_baseline.baseline_from_record(
+        record,
+        evidence_root=evidence,
+        production_roots=(evidence.resolve().parts,),
+    )
     return baseline, auth
 
 
@@ -561,8 +582,11 @@ def test_freeze_refuses_a_baseline_no_recorded_observation_produces(
 ):
     """The v10 stop: a hand-written authConfigDigest with no provenance at all."""
     inputs, _ledger, _calls, kwargs = fixture(tmp_path, monkeypatch)
+    evidence = tmp_path / "baseline-evidence"
     baseline = commit_baseline.baseline_from_record(
-        tmp_path / "baseline.json", evidence_root=tmp_path / "baseline-evidence"
+        tmp_path / "baseline.json",
+        evidence_root=evidence,
+        production_roots=(evidence.resolve().parts,),
     )
     permission = copy.deepcopy(inputs["permission"])
     assert _refreeze(tmp_path, kwargs, inputs["plan"], permission, baseline=baseline)

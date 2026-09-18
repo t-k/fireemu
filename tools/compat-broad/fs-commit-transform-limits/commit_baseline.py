@@ -34,6 +34,26 @@ from batch_contract import NUMBER, PROJECT, database_evidence
 from broad_contract import digest
 
 RECORD_KIND = "commit-production-baseline-v1"
+# A recorded replay has the same line shape, the same routes and the same
+# project as a production journal, and sits beside the real logs. Nothing in a
+# journal line distinguishes the two, so a baseline observation must name the
+# run evidence that says the responses came off the wire, and must not live
+# under a directory that holds replays or fixtures.
+PRODUCTION_LOG_ROOTS = (("docs.local", "logs"), ("docs.local", "runs"))
+EXCLUDED_PATH_SEGMENTS = frozenset(
+    {
+        "cli-fixtures",
+        "fixture",
+        "fixtures",
+        "testdata",
+        "tests",
+        "test",
+        "spec",
+        "config",
+        "conformance",
+    }
+)
+LIVE_MODE = "live"
 MAX_RECORD_BYTES = 1 * 1024 * 1024
 MAX_JOURNAL_BYTES = 32 * 1024 * 1024
 # The privileged metadata routes whose responses the baseline is derived from.
@@ -72,10 +92,9 @@ def _read_json(path, *, limit):
     return value
 
 
-def _journal_line(evidence_root, entry):
-    """Read one recorded response out of a journal bound by path and digest."""
+def _bounded_path(evidence_root, relative, *, production_roots):
+    """Resolve one named evidence path inside a recorded production log root."""
     root = Path(evidence_root).resolve()
-    relative = entry.get("path")
     if not isinstance(relative, str) or not relative:
         raise ValueError("named observation path required")
     parts = Path(relative).parts
@@ -88,6 +107,53 @@ def _journal_line(evidence_root, entry):
         or not path.is_file()
     ):
         raise ValueError("bounded observation journal required")
+    resolved = path.parts
+    if any(
+        segment.casefold() in EXCLUDED_PATH_SEGMENTS for segment in resolved
+    ) or not any(
+        resolved[index : index + len(candidate)] == tuple(candidate)
+        for candidate in production_roots
+        for index in range(len(resolved))
+    ):
+        raise ValueError("recorded production log path required")
+    return path
+
+
+def _live_production(evidence_root, marker, *, production_roots):
+    """Require hash-bound run evidence that the responses came off the wire."""
+    if not isinstance(marker, dict) or set(marker) != {"path", "sha256", "mode"}:
+        raise ValueError("production execution evidence required")
+    if marker["mode"] != LIVE_MODE:
+        raise ValueError("live production observation required")
+    path = _bounded_path(
+        evidence_root, marker["path"], production_roots=production_roots
+    )
+    raw = path.read_bytes()
+    if (
+        len(raw) > MAX_RECORD_BYTES
+        or hashlib.sha256(raw).hexdigest() != marker["sha256"]
+    ):
+        raise ValueError("named production evidence changed")
+    receipt = json.loads(raw)
+    if not isinstance(receipt, dict):
+        raise ValueError(  # noqa: TRY004 -- refusal class, not a type report
+            "named production evidence required"
+        )
+    kind = receipt.get("executionKind")
+    if kind == "injected-transport" or not (
+        kind == "fixed-production-wire" or receipt.get("productionExecuted") is True
+    ):
+        raise ValueError("live production execution evidence required")
+
+
+def _journal_line(evidence_root, entry, *, production_roots):
+    """Read one recorded response out of a journal bound by path and digest."""
+    _live_production(
+        evidence_root, entry.get("production"), production_roots=production_roots
+    )
+    path = _bounded_path(
+        evidence_root, entry.get("path"), production_roots=production_roots
+    )
     if path.stat().st_size > MAX_JOURNAL_BYTES:
         raise ValueError("bounded observation journal required")
     raw = path.read_bytes()
@@ -132,8 +198,16 @@ def _derive(route_key, body):
     return {"authConfigDigest": digest(body)}
 
 
-def baseline_from_record(record_path, *, evidence_root):
-    """Recompute every bound baseline value from the observations a record names."""
+def baseline_from_record(
+    record_path, *, evidence_root, production_roots=PRODUCTION_LOG_ROOTS
+):
+    """Recompute every bound baseline value from the observations a record names.
+
+    `production_roots` is the set of path component sequences a recorded
+    production log lives under. It is a parameter so a test, or an operator
+    whose logs live elsewhere, can declare its own; it is never a way to skip
+    the check, which is what keeps a replay fixture out of a baseline.
+    """
     record = _read_json(record_path, limit=MAX_RECORD_BYTES)
     observations = record.get("observations")
     if record.get("kind") != RECORD_KIND or not isinstance(observations, list):
@@ -145,6 +219,7 @@ def baseline_from_record(record_path, *, evidence_root):
             "path",
             "sha256",
             "index",
+            "production",
         }:
             raise ValueError("closed baseline observation entry required")
         keys = [key for key, route in ROUTES.items() if route == entry["route"]]
@@ -160,7 +235,12 @@ def baseline_from_record(record_path, *, evidence_root):
         }
     }
     for key, entry in named.items():
-        baseline.update(_derive(key, _journal_line(evidence_root, entry)))
+        baseline.update(
+            _derive(
+                key,
+                _journal_line(evidence_root, entry, production_roots=production_roots),
+            )
+        )
     if set(baseline) != set(BASELINE_FIELDS):
         raise ValueError("incomplete production baseline")
     return baseline

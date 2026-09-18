@@ -117,7 +117,7 @@ def test_raw_sidecars_preserve_bytes_and_bind_projection(tmp_path: Path) -> None
 
 def test_raw_journal_manifest_can_be_reloaded_after_publication(tmp_path: Path) -> None:
     journal = RawJournal(tmp_path / "raw")
-    body = b"[]"
+    body = b'[{"readTime":"2026-09-18T00:00:00.000000Z"}]'
     binding = journal.add(
         "observation", 2, 200, body, complete=True, content_type="application/json"
     )
@@ -126,8 +126,17 @@ def test_raw_journal_manifest_can_be_reloaded_after_publication(tmp_path: Path) 
     reloaded = RawJournal.reload(tmp_path / "raw")
     assert reloaded.semantic_view(binding)["documents"] == []
     with pytest.raises(ValueError, match="immutable"):
-        reloaded.add("observation", 3, 200, b"[]", complete=True, content_type="application/json")
+        reloaded.add("observation", 3, 200, body, complete=True, content_type="application/json")
     reloaded.close()
+
+
+def test_empty_json_array_is_not_a_typed_query_result(tmp_path: Path) -> None:
+    journal = RawJournal(tmp_path / "raw")
+    binding = journal.add(
+        "observation", 2, 200, b"[]", complete=True, content_type="application/json"
+    )
+    assert journal.semantic_view(binding)["difference"] == "unexpected-query-row"
+    journal.close()
 
 
 @pytest.mark.parametrize(

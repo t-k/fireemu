@@ -559,6 +559,11 @@ class RawJournal:
         if not isinstance(parsed, list):
             result["difference"] = "unexpected-query-shape"
             return result
+        if not parsed:
+            # RunQuery represents an empty result with a typed readTime row.
+            # An empty JSON array has no protocol-bound response evidence.
+            result["difference"] = "unexpected-query-row"
+            return result
         documents = []
         terminal_seen = False
         for index, row in enumerate(parsed):

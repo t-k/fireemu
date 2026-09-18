@@ -23,6 +23,12 @@ from broad_contract import digest
 from shared_gate import Gate, _save, validate_absence_proofs
 
 DIMENSIONS = {"requests", "accounts", "resources", "costMicrousd"}
+GENERATION_FIELDS = {"sourceCommit", "collectorSourceDigest", "sourceDigests"}
+MAX_GENERATION_SOURCES = 64
+# The reviewed source closure of the reservations written before a reservation
+# recorded its own generation. Rows without a recorded generation predate that
+# binding and can only be retired by proving this closure; every new row binds
+# the generation it was acquired under instead. This is history, not a default.
 COMMIT_SOURCE_COMMIT = "09c02557e9a537208a7912f039edb23c1131b1fc"
 COMMIT_COLLECTOR_SOURCE_DIGEST = (
     "b9ae95ca922873d477fc171b08b2bc542721a699c5c0c6714ef22a4f846b54ca"
@@ -33,6 +39,11 @@ COMMIT_SOURCE_DIGESTS = {
     "commit_reserved_adapter.py": "bd3baf3d46a0a252237d1b7b9cda950d4db8eb2658b2f7502a27d0d04b6fc2e3",
     "gate_adapter.py": "a5221f4c4d572a95018772067e5a8364fffea0bd199528da43cf45b470cdd2fa",
     "commit_acquisition.py": "b5c1df452eed0f4c322083b233e94fa77da3c1db27f443c3328e780e3d2d10b0",
+}
+LEGACY_COMMIT_GENERATION = {
+    "sourceCommit": COMMIT_SOURCE_COMMIT,
+    "collectorSourceDigest": COMMIT_COLLECTOR_SOURCE_DIGEST,
+    "sourceDigests": COMMIT_SOURCE_DIGESTS,
 }
 MODES = {"READ": 0, "WRITE": 1, "EXCLUSIVE": 2}
 MAX_BYTES = 16 * 1024 * 1024
@@ -56,6 +67,32 @@ def _budget(value):
         or any(type(n) is not int or not 0 <= n < 2**63 for n in value.values())
     ):
         raise ValueError("closed integer budget required")
+
+
+def _generation(value):
+    """The reviewed source closure one reservation was acquired under."""
+    if not isinstance(value, dict) or set(value) != GENERATION_FIELDS:
+        raise ValueError("closed source generation required")
+    if (
+        not isinstance(value["sourceCommit"], str)
+        or re.fullmatch(r"[a-f0-9]{40}", value["sourceCommit"]) is None
+    ):
+        raise ValueError("frozen source commit required")
+    _hash(value["collectorSourceDigest"])
+    sources = value["sourceDigests"]
+    if (
+        not isinstance(sources, dict)
+        or not 1 <= len(sources) <= MAX_GENERATION_SOURCES
+        or any(
+            not isinstance(name, str)
+            or re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", name) is None
+            or name in {".", ".."}
+            for name in sources
+        )
+    ):
+        raise ValueError("bounded reviewed source closure required")
+    for name in sorted(sources):
+        _hash(sources[name])
 
 
 def _scope(lock):
@@ -250,6 +287,8 @@ class Ledger:
                     > state["envelopes"][row["envelopeDigest"]]["envelope"]["expiresAt"]
                 ):
                     raise ValueError("reservation envelope changed")
+                if "generation" in row:
+                    _generation(row["generation"])
                 if digest(row["claim"]) != row["claimDigest"] or row["state"] not in {
                     "held",
                     "closing",
@@ -268,11 +307,13 @@ class Ledger:
         with self._locked() as state:
             return state
 
-    def reserve(self, envelope, claim, gate_plan, *, now=None):
+    def reserve(self, envelope, claim, gate_plan, *, generation=None, now=None):
         if now is not None:
             _number(now)
         _envelope(envelope)
         _claim(claim)
+        if generation is not None:
+            _generation(generation)
         if (
             digest(gate_plan) != claim["gatePlanDigest"]
             or digest(gate_plan["nonce"]) != claim["nonceDigest"]
@@ -368,13 +409,19 @@ class Ledger:
                 "envelopeDigest": key,
             }
             state["envelopes"][key] = {"envelope": envelope, "allocated": allocated}
-            state["reservations"][reservation] = {
+            row = {
                 "claim": claim,
                 "claimDigest": ticket["claimDigest"],
                 "envelopeDigest": key,
                 "state": "held",
                 "deadline": decision_now + claim["durationSeconds"],
             }
+            if generation is not None:
+                # Bind the retirement path to this acquisition's own reviewed
+                # closure, so a later generation stays retirable without
+                # editing canonical state by hand.
+                row["generation"] = copy.deepcopy(generation)
+            state["reservations"][reservation] = row
             self._save(state)
             return ticket
 
@@ -475,12 +522,8 @@ class Ledger:
             "collectorSourceDigest",
         ):
             _hash(record[key])
-        if (
-            record["sourceCommit"] != COMMIT_SOURCE_COMMIT
-            or record["sourceDigests"] != COMMIT_SOURCE_DIGESTS
-            or record["collectorSourceDigest"] != COMMIT_COLLECTOR_SOURCE_DIGEST
-        ):
-            raise ValueError("reviewed frozen source closure required")
+        claimed_generation = {key: record[key] for key in GENERATION_FIELDS}
+        _generation(claimed_generation)
         receipt_path = Path(record["receiptPath"])
         if (
             str(receipt_path.resolve()) != record["receiptPath"]
@@ -498,6 +541,11 @@ class Ledger:
             raise ValueError("receipt digest changed")
         with self._locked() as state:
             row = self._row(state, ticket)
+            # A reservation is retirable only by proving the reviewed closure it
+            # was acquired under. Rows written before the generation binding
+            # existed carry none and remain bound to the legacy closure.
+            if claimed_generation != row.get("generation", LEGACY_COMMIT_GENERATION):
+                raise ValueError("reviewed frozen source closure required")
             if row["state"] == "aborted-no-data":
                 if row.get("abortRecordDigest") != digest(record):
                     raise ValueError("different terminal abort record")

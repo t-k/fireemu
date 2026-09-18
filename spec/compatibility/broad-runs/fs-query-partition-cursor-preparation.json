@@ -1,0 +1,2786 @@
+{
+ "blockers": [
+  "owner-permission",
+  "execution-window-and-nonce-reservation",
+  "cost-and-retention-acceptance",
+  "exclusive-collection-group-namespace",
+  "typed-production-collector",
+  "recovery-owner"
+ ],
+ "budget": {
+  "concurrencyUpperBound": 1,
+  "costBasis": "at most 42 document writes, 21 document deletes and a few hundred document reads across 37 requests in one run",
+  "costCeilingUsd": 0.01,
+  "documentUpperBound": 21,
+  "observationRequests": 31,
+  "recoveryRequests": 6,
+  "requestUpperBound": 37,
+  "writeUpperBound": 42
+ },
+ "campaignId": "FS-QUERY-PARTITION-CURSOR-04",
+ "isolation": {
+  "collectionGroup": "nonce-unique",
+  "ownedPrefix": "oracle/{nonce}/o4-query-partition-cursor/root",
+  "partitionParent": "database"
+ },
+ "ownerPreconditions": {
+  "deliberatelyUnindexed": [
+   "partition-order-non-name"
+  ],
+  "indexFile": "conformance/firestore.indexes.json",
+  "indexFileChangeRequired": false,
+  "minimalPermissions": [
+   "datastore.entities.create",
+   "datastore.entities.get",
+   "datastore.entities.list",
+   "datastore.entities.delete"
+  ],
+  "notes": [
+   "Partition queries order by __name__ only, which needs no index.",
+   "Cursor cases use single-field orders at collection scope, which automatic single-field indexes already cover.",
+   "The nonce-unique collection group must have no field override, exemption or time-to-live policy."
+  ],
+  "permissionNotes": [
+   "Every compiled operation is a data-plane read, write or delete on the owned documents; none reads or changes configuration, indexes, Rules or backups.",
+   "datastore.entities.list covers RunQuery and PartitionQuery, which need database-wide read because PartitionQuery takes a database parent.",
+   "roles/datastore.user is the smallest predefined role that grants these; a custom role limited to the four permissions is smaller and sufficient."
+  ],
+  "requiredCompositeIndexes": []
+ },
+ "planTemplate": {
+  "budget": {
+   "concurrencyUpperBound": 1,
+   "observationRequests": 31,
+   "reconstructionSlots": 2,
+   "recoveryRequests": 6,
+   "requestUpperBound": 37,
+   "resourceUpperBound": 21
+  },
+  "campaignId": "FS-QUERY-PARTITION-CURSOR-04",
+  "cursorCollection": "cur",
+  "database": "(default)",
+  "databaseRoot": "projects/template-project/databases/(default)/documents",
+  "groupCollection": "o4pc00000000000000000000000000000000",
+  "nonce": "00000000000000000000000000000000",
+  "observation": [
+   {
+    "body": null,
+    "expect": {
+     "status": 404,
+     "typed": "NOT_FOUND"
+    },
+    "form": false,
+    "kind": "preflight-typed-absence",
+    "method": "GET",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "privileged": true,
+    "resource": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "responseByteLimit": 65536,
+    "service": "firestore"
+   },
+   {
+    "body": {
+     "fields": {
+      "marker": {
+       "stringValue": "FS-QUERY-PARTITION-CURSOR-04"
+      }
+     },
+     "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root"
+    },
+    "expect": {
+     "owned": true,
+     "status": 200
+    },
+    "form": false,
+    "kind": "create-only-patch",
+    "method": "PATCH",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root?currentDocument.exists=false",
+    "privileged": true,
+    "resource": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "responseByteLimit": 65536,
+    "service": "firestore"
+   },
+   {
+    "body": {
+     "writes": [
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "a"
+         },
+         "n": {
+          "integerValue": "0"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "b"
+         },
+         "n": {
+          "integerValue": "1"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "a"
+         },
+         "n": {
+          "integerValue": "2"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "b"
+         },
+         "n": {
+          "integerValue": "3"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "a"
+         },
+         "n": {
+          "integerValue": "4"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "b"
+         },
+         "n": {
+          "integerValue": "5"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "a"
+         },
+         "n": {
+          "integerValue": "6"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "b"
+         },
+         "n": {
+          "integerValue": "7"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "a"
+         },
+         "n": {
+          "integerValue": "8"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "b"
+         },
+         "n": {
+          "integerValue": "9"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "a"
+         },
+         "n": {
+          "integerValue": "10"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "b"
+         },
+         "n": {
+          "integerValue": "11"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "a"
+         },
+         "n": {
+          "integerValue": "0"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c0"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "b"
+         },
+         "n": {
+          "integerValue": "1"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c1"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "a"
+         },
+         "n": {
+          "integerValue": "2"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c2"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "b"
+         },
+         "n": {
+          "integerValue": "3"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "a"
+         },
+         "n": {
+          "integerValue": "4"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "b"
+         },
+         "n": {
+          "integerValue": "5"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c5"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "a"
+         },
+         "n": {
+          "integerValue": "6"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c6"
+       }
+      },
+      {
+       "currentDocument": {
+        "exists": false
+       },
+       "update": {
+        "fields": {
+         "g": {
+          "stringValue": "b"
+         },
+         "n": {
+          "integerValue": "7"
+         }
+        },
+        "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c7"
+       }
+      }
+     ]
+    },
+    "expect": {
+     "owned": true,
+     "status": 200,
+     "writeResults": 20
+    },
+    "form": false,
+    "kind": "seed-commit",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:commit",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c0",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c1",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c2",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c5",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c6",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c7"
+    ]
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "allDescendants": true,
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "documents": [
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "0"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "1"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "2"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "3"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "4"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "5"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "6"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "7"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "8"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "9"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "10"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "11"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+      }
+     ],
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "baseline-group-name-order",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+    ]
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "collectionId": "cur"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "n"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "documents": [
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "0"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c0"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "1"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c1"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "2"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c2"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "3"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "4"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "5"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c5"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "6"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c6"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "7"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c7"
+      }
+     ],
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "baseline-collection-order",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c0",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c1",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c2",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c5",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c6",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c7"
+    ]
+   },
+   {
+    "body": {
+     "partitionCount": "1",
+     "structuredQuery": {
+      "from": [
+       {
+        "allDescendants": true,
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "cursorsOrdered": true,
+     "documentsAsserted": false,
+     "maxPartitions": 1,
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "partition-count-1",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:partitionQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+    ]
+   },
+   {
+    "body": {
+     "partitionCount": "4",
+     "structuredQuery": {
+      "from": [
+       {
+        "allDescendants": true,
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "cursorsOrdered": true,
+     "documentsAsserted": false,
+     "maxPartitions": 4,
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "partition-count-4",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:partitionQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+    ]
+   },
+   {
+    "body": {
+     "pageSize": 2,
+     "partitionCount": "4",
+     "structuredQuery": {
+      "from": [
+       {
+        "allDescendants": true,
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "cursorsOrdered": true,
+     "documentsAsserted": false,
+     "maxPartitions": 4,
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "partition-count-4-page-size-2",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:partitionQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+    ]
+   },
+   {
+    "body": {
+     "pageSize": 2,
+     "partitionCount": "4",
+     "structuredQuery": {
+      "from": [
+       {
+        "allDescendants": true,
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "cursorsOrdered": true,
+     "documentsAsserted": false,
+     "maxPartitions": 4,
+     "outcome": "accepted",
+     "skippable": true,
+     "status": 200
+    },
+    "form": false,
+    "kind": "partition-page-token-continuation",
+    "method": "POST",
+    "pageTokenFrom": 7,
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:partitionQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+    ]
+   },
+   {
+    "body": {
+     "partitionCount": "2",
+     "structuredQuery": {
+      "from": [
+       {
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "outcome": "refused",
+     "status": 400,
+     "typed": "INVALID_ARGUMENT"
+    },
+    "form": false,
+    "kind": "partition-not-collection-group",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:partitionQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+    ]
+   },
+   {
+    "body": {
+     "partitionCount": "2",
+     "structuredQuery": {
+      "from": [
+       {
+        "allDescendants": true,
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ],
+      "where": {
+       "fieldFilter": {
+        "field": {
+         "fieldPath": "n"
+        },
+        "op": "GREATER_THAN",
+        "value": {
+         "integerValue": "0"
+        }
+       }
+      }
+     }
+    },
+    "expect": {
+     "outcome": "refused",
+     "status": 400,
+     "typed": "INVALID_ARGUMENT"
+    },
+    "form": false,
+    "kind": "partition-with-filter",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:partitionQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+    ]
+   },
+   {
+    "body": {
+     "partitionCount": "0",
+     "structuredQuery": {
+      "from": [
+       {
+        "allDescendants": true,
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "outcome": "refused",
+     "status": 400,
+     "typed": "INVALID_ARGUMENT"
+    },
+    "form": false,
+    "kind": "partition-count-zero",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:partitionQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+    ]
+   },
+   {
+    "body": {
+     "partitionCount": "2",
+     "structuredQuery": {
+      "from": [
+       {
+        "allDescendants": true,
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "limit": 10,
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "outcome": "refused",
+     "status": 400,
+     "typed": "INVALID_ARGUMENT"
+    },
+    "form": false,
+    "kind": "partition-with-limit",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:partitionQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+    ]
+   },
+   {
+    "body": {
+     "partitionCount": "2",
+     "structuredQuery": {
+      "from": [
+       {
+        "allDescendants": true,
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "offset": 1,
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "outcome": "refused",
+     "status": 400,
+     "typed": "INVALID_ARGUMENT"
+    },
+    "form": false,
+    "kind": "partition-with-offset",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:partitionQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+    ]
+   },
+   {
+    "body": {
+     "partitionCount": "2",
+     "structuredQuery": {
+      "from": [
+       {
+        "allDescendants": true,
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "n"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "outcome": "refused",
+     "status": 400,
+     "typedOpen": true
+    },
+    "form": false,
+    "kind": "partition-order-non-name",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:partitionQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+    ]
+   },
+   {
+    "body": {
+     "partitionCount": "2",
+     "structuredQuery": {
+      "from": [
+       {
+        "allDescendants": true,
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "outcome": "refused",
+     "status": 400,
+     "typed": "INVALID_ARGUMENT"
+    },
+    "form": false,
+    "kind": "partition-document-parent",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root:partitionQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+    ]
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "allDescendants": true,
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ]
+     }
+    },
+    "cursorFrom": 5,
+    "expect": {
+     "documentsAsserted": false,
+     "outcome": "accepted",
+     "reconstruction": true,
+     "skippable": true,
+     "status": 200
+    },
+    "form": false,
+    "kind": "partition-reconstruction-range-0",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:runQuery",
+    "privileged": true,
+    "reconstructionSlot": 0,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+    ]
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "allDescendants": true,
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ]
+     }
+    },
+    "cursorFrom": 5,
+    "expect": {
+     "documentsAsserted": false,
+     "outcome": "accepted",
+     "reconstruction": true,
+     "skippable": true,
+     "status": 200
+    },
+    "form": false,
+    "kind": "partition-reconstruction-range-1",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:runQuery",
+    "privileged": true,
+    "reconstructionSlot": 1,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+    ]
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "collectionId": "cur"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "n"
+        }
+       }
+      ],
+      "startAt": {
+       "before": true,
+       "values": [
+        {
+         "integerValue": "3"
+        }
+       ]
+      }
+     }
+    },
+    "expect": {
+     "documents": [
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "3"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "4"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "5"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c5"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "6"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c6"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "7"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c7"
+      }
+     ],
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "cursor-start-at-value",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c5",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c6",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c7"
+    ]
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "collectionId": "cur"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "n"
+        }
+       }
+      ],
+      "startAt": {
+       "before": false,
+       "values": [
+        {
+         "integerValue": "3"
+        }
+       ]
+      }
+     }
+    },
+    "expect": {
+     "documents": [
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "4"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "5"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c5"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "6"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c6"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "7"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c7"
+      }
+     ],
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "cursor-start-after-value",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c5",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c6",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c7"
+    ]
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "endAt": {
+       "before": false,
+       "values": [
+        {
+         "integerValue": "3"
+        }
+       ]
+      },
+      "from": [
+       {
+        "collectionId": "cur"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "n"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "documents": [
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "0"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c0"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "1"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c1"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "2"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c2"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "3"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3"
+      }
+     ],
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "cursor-end-at-value",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c0",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c1",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c2",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3"
+    ]
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "endAt": {
+       "before": true,
+       "values": [
+        {
+         "integerValue": "3"
+        }
+       ]
+      },
+      "from": [
+       {
+        "collectionId": "cur"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "n"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "documents": [
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "0"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c0"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "1"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c1"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "2"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c2"
+      }
+     ],
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "cursor-end-before-value",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c0",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c1",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c2"
+    ]
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "collectionId": "cur"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ],
+      "startAt": {
+       "before": true,
+       "values": [
+        {
+         "referenceValue": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3"
+        }
+       ]
+      }
+     }
+    },
+    "expect": {
+     "documents": [
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "3"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "4"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "5"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c5"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "6"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c6"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "7"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c7"
+      }
+     ],
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "cursor-document-reference-start-at",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c5",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c6",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c7"
+    ]
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "collectionId": "cur"
+       }
+      ],
+      "limit": 3,
+      "offset": 2,
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "n"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "documents": [
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "2"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c2"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "3"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "4"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4"
+      }
+     ],
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "cursor-offset-limit",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c2",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4"
+    ]
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "collectionId": "cur"
+       }
+      ],
+      "limit": 2,
+      "offset": 1,
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "n"
+        }
+       }
+      ],
+      "startAt": {
+       "before": true,
+       "values": [
+        {
+         "integerValue": "2"
+        }
+       ]
+      }
+     }
+    },
+    "expect": {
+     "documents": [
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "3"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "4"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4"
+      }
+     ],
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "cursor-start-at-with-offset",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4"
+    ]
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "collectionId": "cur"
+       }
+      ],
+      "limit": 3,
+      "orderBy": [
+       {
+        "direction": "DESCENDING",
+        "field": {
+         "fieldPath": "n"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "documents": [
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "7"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c7"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "6"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c6"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "5"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c5"
+      }
+     ],
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "cursor-descending-limit",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "sdkEquivalent": "limitToLast(3) over an ascending order",
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c7",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c6",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c5"
+    ]
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "collectionId": "cur"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "n"
+        }
+       }
+      ],
+      "startAt": {
+       "before": true,
+       "values": [
+        {
+         "integerValue": "3"
+        },
+        {
+         "referenceValue": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3"
+        },
+        {
+         "integerValue": "9"
+        }
+       ]
+      }
+     }
+    },
+    "expect": {
+     "outcome": "refused",
+     "status": 400,
+     "typed": "INVALID_ARGUMENT"
+    },
+    "form": false,
+    "kind": "cursor-too-many-values",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": []
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "collectionId": "cur"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ],
+      "startAt": {
+       "before": true,
+       "values": [
+        {
+         "stringValue": "c3"
+        }
+       ]
+      }
+     }
+    },
+    "expect": {
+     "outcome": "refused",
+     "status": 400,
+     "typed": "INVALID_ARGUMENT"
+    },
+    "form": false,
+    "kind": "cursor-reference-type-mismatch",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": []
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "collectionId": "cur"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ],
+      "startAt": {
+       "before": true,
+       "values": [
+        {
+         "referenceValue": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/o4pc00000000000000000000000000000000/absent"
+        }
+       ]
+      }
+     }
+    },
+    "expect": {
+     "outcome": "refused",
+     "status": 400,
+     "typed": "INVALID_ARGUMENT"
+    },
+    "form": false,
+    "kind": "cursor-foreign-reference",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": []
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "collectionId": "cur"
+       }
+      ],
+      "offset": -1,
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "n"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "outcome": "refused",
+     "status": 400,
+     "typed": "INVALID_ARGUMENT"
+    },
+    "form": false,
+    "kind": "cursor-negative-offset",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": []
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "allDescendants": true,
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "documents": [
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "0"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "1"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "2"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "3"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "4"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "5"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "6"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "7"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "8"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "9"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "a"
+        },
+        "n": {
+         "integerValue": "10"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10"
+      },
+      {
+       "fields": {
+        "g": {
+         "stringValue": "b"
+        },
+        "n": {
+         "integerValue": "11"
+        }
+       },
+       "name": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+      }
+     ],
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "post-state-group-readback",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+    ]
+   }
+  ],
+  "ownedResources": [
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c0",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c1",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c2",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c5",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c6",
+   "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c7"
+  ],
+  "ownedScope": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+  "ownership": "conditional-create-plus-exact-fields",
+  "planDigest": "86f02972b2a1668b09d660f9c8595fb6994879e283609207bc2cd6d301c8fbbd",
+  "productionExecuted": false,
+  "productionReady": false,
+  "project": "template-project",
+  "recovery": [
+   {
+    "body": null,
+    "expect": {
+     "owned": true,
+     "statuses": [
+      200,
+      404
+     ]
+    },
+    "form": false,
+    "kind": "cleanup-ownership-read",
+    "method": "GET",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "privileged": true,
+    "resource": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "responseByteLimit": 65536,
+    "service": "firestore"
+   },
+   {
+    "body": {
+     "writes": [
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c0"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c1"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c2"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c5"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c6"
+      },
+      {
+       "currentDocument": {
+        "updateTime": null
+       },
+       "delete": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c7"
+      }
+     ]
+    },
+    "expect": {
+     "owned": true,
+     "status": 200,
+     "updateTimes": false,
+     "writeResults": 20
+    },
+    "form": false,
+    "kind": "cleanup-seed-delete",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:commit",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": [
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d00",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d01",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d02",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p0/o4pc00000000000000000000000000000000/d03",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d04",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d05",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d06",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p1/o4pc00000000000000000000000000000000/d07",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d08",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d09",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d10",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/part/p2/o4pc00000000000000000000000000000000/d11",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c0",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c1",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c2",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c3",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c4",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c5",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c6",
+     "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root/cur/c7"
+    ],
+    "versionFrom": 2
+   },
+   {
+    "body": null,
+    "expect": {
+     "owned": true,
+     "status": 200
+    },
+    "form": false,
+    "kind": "cleanup-root-delete",
+    "method": "DELETE",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "privileged": true,
+    "resource": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "versionFrom": 1
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "allDescendants": true,
+        "collectionId": "o4pc00000000000000000000000000000000"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "__name__"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "documents": [],
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "cleanup-verify-group-absence",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents",
+    "path": "/v1/projects/template-project/databases/(default)/documents:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": []
+   },
+   {
+    "body": {
+     "structuredQuery": {
+      "from": [
+       {
+        "collectionId": "cur"
+       }
+      ],
+      "orderBy": [
+       {
+        "direction": "ASCENDING",
+        "field": {
+         "fieldPath": "n"
+        }
+       }
+      ]
+     }
+    },
+    "expect": {
+     "documents": [],
+     "outcome": "accepted",
+     "status": 200
+    },
+    "form": false,
+    "kind": "cleanup-verify-collection-absence",
+    "method": "POST",
+    "parent": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root:runQuery",
+    "privileged": true,
+    "responseByteLimit": 65536,
+    "service": "firestore",
+    "targetResources": []
+   },
+   {
+    "body": null,
+    "expect": {
+     "status": 404,
+     "typed": "NOT_FOUND"
+    },
+    "form": false,
+    "kind": "cleanup-verify-root-absence",
+    "method": "GET",
+    "path": "/v1/projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "privileged": true,
+    "resource": "projects/template-project/databases/(default)/documents/oracle/00000000000000000000000000000000/o4-query-partition-cursor/root",
+    "responseByteLimit": 65536,
+    "service": "firestore"
+   }
+  ],
+  "schemaVersion": 1
+ },
+ "productionExecuted": false,
+ "productionReady": false,
+ "schemaVersion": 1,
+ "sourceInputs": {
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_case.py": "4f2dee90a4fbabcff4370baa972b014425aee524c0aaf5aca176e45e133907bc",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_collector.py": "71f66c515a2a0846b39be702d3fe2bedf8b714af95b941c61f1351db07910ea8",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_comparator.py": "6dab93bc33d2928e55a87d3bfa2011a285359d2fee54c923a7d7182385ebb128",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_manifest.py": "b157d11eb6ce86f809c651267ff5130f9234afcbd6a5433612f704ade2f18500",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_offline_fixture.py": "b015e95a172fafcaeef548a7e5b57a0c5b2ac8d8d697ca6b5612bff5132a5729",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_shadow.py": "6f49d9e0a1a9b750c5fb835d02e09e5928177be03bbacb37367f8a11f135ac87"
+ },
+ "status": "PREPARATION_ONLY",
+ "unresolved": [
+  "owner identity, permission reference and execution window",
+  "fresh nonce reservation and exclusive collection-group namespace",
+  "current pricing acceptance and retention bound for the retained bundle",
+  "typed production collector and its raw sidecar retention boundary",
+  "named recovery owner for an interrupted run"
+ ]
+}

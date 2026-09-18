@@ -651,7 +651,6 @@ def compile_limits_plan(
     keys = ("service", "path", "method", "body", "privileged", "form", "versionFrom")
     operations = [{k: row[k] for k in keys if k in row} for row in requests]
     recovery_operations = operations[observation_count:]
-    schedule = _schedule(requests, observation_count)
     gate_plan = {
         "contract": "shared-local-v2",
         "nonce": nonce,
@@ -660,14 +659,17 @@ def compile_limits_plan(
                 "resources": [d["resource"] for d in owned],
                 "observation": operations[:observation_count],
                 "recovery": recovery_operations,
-                "schedule": schedule,
             }
         },
-        # The Gate takes a per-slot reservation, so the campaign declares what
-        # each request needs rather than paying the lane default for all of
-        # them. That is what lets one allocation carry the whole campaign.
-        "wallSeconds": _wall_seconds(schedule),
-        "recoverySeconds": _recovery_seconds(schedule),
+        # The Gate can take a per-slot reservation, and this campaign
+        # deliberately does not declare one. A declared schedule makes the Gate
+        # admit only the next unconsumed slot, so an observation that stops
+        # early can no longer dispatch its recovery: every cleanup request is
+        # refused as outside the frozen schedule. Stopping early and still
+        # reclaiming every owned document is this campaign's fail-closed
+        # guarantee, so it pays the lane default for every request instead.
+        "wallSeconds": _wall_seconds(len(recovery_operations), observation_count),
+        "recoverySeconds": _recovery_seconds(len(recovery_operations)),
         "observationRequests": observation_count,
         "intervalSeconds": 0.25,
         "requestCostMicrousd": 100,
@@ -1407,18 +1409,25 @@ def _phase_seconds(schedule: list[dict[str, Any]], phase: str) -> float:
     )
 
 
-def _recovery_seconds(schedule: list[dict[str, Any]]) -> int:
-    """The reserve the Gate demands for this schedule's recovery, plus slack."""
-    return int(_phase_seconds(schedule, "recovery")) + 60
+def _recovery_seconds(operations: int) -> int:
+    """The reserve the Gate demands for this many recovery requests, plus slack."""
+    return int(operations * (GATE_REQUEST_SECONDS + GATE_INTERVAL_SECONDS)) + 60
 
 
-def _wall_seconds(schedule: list[dict[str, Any]]) -> int:
-    total = (
-        _recovery_seconds(schedule) + int(_phase_seconds(schedule, "observation")) + 60
-    )
+def _wall_seconds(recovery: int, observation: int) -> int:
+    """The wall budget: the recovery reserve plus a window for observation.
+
+    Only the recovery reserve is checked statically by the Gate, because it is
+    the allocation a stopped run must still be able to spend. Observation is
+    bounded per dispatch instead, so the window is sized for requests that
+    complete in seconds rather than for the reserve every one of them could
+    claim.
+    """
+    del observation
+    total = _recovery_seconds(recovery) + OBSERVATION_WINDOW_SECONDS
     if total > GATE_WALL_SECONDS_MAX:
         raise ValueError(
-            f"this schedule needs {total} seconds and the Gate's ceiling is "
+            f"this allocation needs {total} seconds and the Gate's ceiling is "
             f"{GATE_WALL_SECONDS_MAX}; split the campaign"
         )
     return total

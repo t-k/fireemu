@@ -35,7 +35,6 @@ from compiler_03 import (
     resource_name_bytes,
     subcollection_depth,
 )
-from compiler_03 import slot_seconds as compiler_03_slot_seconds
 from expectations_03 import (
     evaluate_rows,
     pending_rows,
@@ -497,7 +496,9 @@ def test_suffix_that_does_not_land_is_an_expectation_mismatch(tmp_path):
     create(tmp_path / "gate", plan["localGatePlan"])
     gate = Gate(tmp_path / "gate", "limits")
     gate.claim()
-    result = collect(gate, plan, tmp_path / "collection", NoSuffix())
+    result = collect(
+        gate, plan, tmp_path / "collection", NoSuffix(), excused=pending_rows(plan)
+    )
     bases = {problem["basis"] for problem in result["expectationMismatches"]}
     assert "BatchWrite per-item status codes differ from the expectation" in bases
     assert result["cleanupComplete"] is True
@@ -515,7 +516,9 @@ def test_whole_request_refusal_of_the_malformed_case_is_a_mismatch(tmp_path):
     create(tmp_path / "gate", plan["localGatePlan"])
     gate = Gate(tmp_path / "gate", "limits")
     gate.claim()
-    result = collect(gate, plan, tmp_path / "collection", WholeRequest())
+    result = collect(
+        gate, plan, tmp_path / "collection", WholeRequest(), excused=pending_rows(plan)
+    )
     assert any(
         problem["basis"] == "BatchWrite did not return a per-item response"
         for problem in result["expectationMismatches"]
@@ -543,7 +546,9 @@ def test_accepted_boundary_that_is_refused_is_a_mismatch(tmp_path):
     create(tmp_path / "gate", plan["localGatePlan"])
     gate = Gate(tmp_path / "gate", "limits")
     gate.claim()
-    result = collect(gate, plan, tmp_path / "collection", StrictNames())
+    result = collect(
+        gate, plan, tmp_path / "collection", StrictNames(), excused=pending_rows(plan)
+    )
     assert result["expectationMismatches"]
     assert result["cleanupComplete"] is True
 
@@ -726,7 +731,13 @@ def test_reading_the_refused_name_the_same_way_is_the_post_state_evidence(tmp_pa
     create(tmp_path / "gate", plan["localGatePlan"])
     gate = Gate(tmp_path / "gate", "limits")
     gate.claim()
-    result = collect(gate, plan, tmp_path / "collection", AbsentNotInvalid())
+    result = collect(
+        gate,
+        plan,
+        tmp_path / "collection",
+        AbsentNotInvalid(),
+        excused=pending_rows(plan),
+    )
     assert any(
         problem["basis"] == "a read of the refused name was not refused the same way"
         for problem in result["expectationMismatches"]
@@ -927,16 +938,15 @@ def test_the_split_is_necessary_and_the_compiler_proves_it():
 
     # The combined need, measured rather than asserted from memory.
     original = compiler_03._wall_seconds
-    compiler_03._wall_seconds = lambda schedule: compiler_03.GATE_WALL_SECONDS_MAX
+    compiler_03._wall_seconds = lambda *_: compiler_03.GATE_WALL_SECONDS_MAX
     try:
         combined = compile_limits_plan("fireemu-35fe6", "(default)", "0" * 32, "ALL")
     finally:
         compiler_03._wall_seconds = original
-    schedule = combined["localGatePlan"]["jobs"]["limits"]["schedule"]
-    needed = compiler_03._phase_seconds(
-        schedule, "observation"
-    ) + compiler_03._phase_seconds(schedule, "recovery")
-    assert needed > compiler_03.GATE_WALL_SECONDS_MAX
+    recovery = combined["budgetAccounting"]["recoveryRequests"]
+    # The recovery reserve alone, which is the part the Gate checks statically,
+    # already exceeds the ceiling for a combined campaign.
+    assert compiler_03._recovery_seconds(recovery) > compiler_03.GATE_WALL_SECONDS_MAX
     assert combined["budgetAccounting"]["ownedDocuments"] == 29
 
     # Each part, by contrast, sits well inside it.
@@ -948,21 +958,15 @@ def test_the_split_is_necessary_and_the_compiler_proves_it():
         assert gate["recoverySeconds"] < gate["wallSeconds"]
 
 
-def test_every_slot_declares_a_reservation_its_own_payload_justifies():
-    """One plan-wide bound cannot be honest for a megabyte and a cleanup read."""
+def test_no_schedule_is_declared_so_recovery_survives_an_early_stop():
+    """A declared schedule would cost this campaign its fail-closed recovery.
+
+    With one, the Gate admits only the next unconsumed slot, so an observation
+    that stops early cannot dispatch its cleanup: every recovery request is
+    refused as outside the frozen schedule. Stopping early and still reclaiming
+    every owned document is the property that matters most here, so the
+    campaign pays the lane default for every request instead.
+    """
     for part in ("A", "B"):
-        plan = plan_for(part=part)
-        schedule = plan["localGatePlan"]["jobs"]["limits"]["schedule"]
-        observation = len(plan["localGatePlan"]["jobs"]["limits"]["observation"])
-        assert len(schedule) == len(plan["requests"])
-        seconds = []
-        for entry, request in zip(schedule, plan["requests"], strict=True):
-            index = entry["index"] + (
-                0 if entry["phase"] == "observation" else observation
-            )
-            assert index == plan["requests"].index(request) or True
-            assert entry["seconds"] == compiler_03_slot_seconds(request)
-            assert entry["seconds"] >= 5
-            seconds.append(entry["seconds"])
-        # A campaign that mixes populations must not be flat.
-        assert len(set(seconds)) > 1
+        job = plan_for(part=part)["localGatePlan"]["jobs"]["limits"]
+        assert "schedule" not in job

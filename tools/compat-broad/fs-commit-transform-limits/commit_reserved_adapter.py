@@ -50,6 +50,7 @@ def source_inputs():
     here = Path(__file__).resolve().parent
     names = (
         "commit_acquisition.py",
+        "commit_baseline.py",
         "commit_reserved_adapter.py",
         "gate_adapter.py",
         "commit_production.py",

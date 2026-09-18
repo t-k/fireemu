@@ -220,7 +220,19 @@ def generation(label="9"):
     }
 
 
-def _no_data_attempt(tmp_path, source_generation=None):
+# The preflight the production adapter actually issues: two credential slots,
+# then four privileged metadata GETs.
+CREDENTIAL_SLOTS = ("oauth-refresh", "oauth-tokeninfo")
+PREFLIGHT = ("project", "database", "auth", "key")
+
+
+def _no_data_attempt(tmp_path, source_generation=None, stop=2, mode="decision"):
+    """One failed attempt that stopped at preflight slot `stop` with no data sent.
+
+    `mode` is "decision" when the request was sent and its evidence appended
+    before the baseline comparison failed, and "transport" when the slot was
+    consumed but no evidence could be appended.
+    """
     ledger = Ledger.create(tmp_path / "ledger")
     first = claim(tmp_path, "a")
     first["gatePath"] = str((tmp_path / "a" / "gate").resolve())
@@ -230,16 +242,18 @@ def _no_data_attempt(tmp_path, source_generation=None):
         if source_generation is None
         else source_generation["collectorSourceDigest"]
     )
-    frozen["observationRequests"] = 4
+    frozen["observationRequests"] = 17
     frozen["management"] = {
         "observation": [
             {"id": name, "timeout": 13, "duration": 12}
-            for name in ("oauth-refresh", "oauth-tokeninfo", "project", "database")
+            for name in (*CREDENTIAL_SLOTS, *PREFLIGHT)
         ],
         "recovery": [],
     }
+    used = [f"observation:{name}" for name in (*CREDENTIAL_SLOTS, *PREFLIGHT[:stop])]
+    observed = PREFLIGHT[: stop if mode == "decision" else stop - 1]
     first["gatePlanDigest"] = digest(frozen)
-    first["budget"]["requests"] = 5
+    first["budget"]["requests"] = 27
     ticket = ledger.reserve(
         envelope(), first, frozen, generation=source_generation, now=1100
     )
@@ -248,15 +262,10 @@ def _no_data_attempt(tmp_path, source_generation=None):
     with gate.locked() as state:
         state["coordinatorPid"] = _stopped_pid()
         state["jobs"]["limits"]["pid"] = state["coordinatorPid"]
-        state["total"] = 4
-        state["observation"] = 4
-        state["costMicrousd"] = 4
-        state["managementUsed"] = [
-            "observation:oauth-refresh",
-            "observation:oauth-tokeninfo",
-            "observation:project",
-            "observation:database",
-        ]
+        state["total"] = len(used)
+        state["observation"] = len(used)
+        state["costMicrousd"] = len(used)
+        state["managementUsed"] = used
         state["managementEvents"] = [
             {"id": item, "started": index, "durationReserved": 12}
             for index, item in enumerate(state["managementUsed"])
@@ -269,17 +278,14 @@ def _no_data_attempt(tmp_path, source_generation=None):
         "planDigest": first["gatePlanDigest"],
         "claimDigest": ticket["claimDigest"],
         "gate": snapshot,
-        "chargedCalls": 4,
+        "chargedCalls": len(used),
         "collection": None,
         "productionExecuted": False,
         "failure": "ValueError",
         "releaseEligible": False,
         "reservationStateAtPublication": "held",
         "executionKind": "fixed-production-wire",
-        "metadata": [
-            {"id": "observation:project", "status": 200},
-            {"id": "observation:database", "status": 200},
-        ],
+        "metadata": [{"id": f"observation:{name}", "status": 200} for name in observed],
         "credentialEvidence": [
             {
                 "slot": "refresh",
@@ -363,6 +369,115 @@ def test_no_data_abort_releases_only_lock_and_keeps_budget_and_nonce(tmp_path):
         ledger.reserve(envelope(), reuse, plan(), now=1110)
 
 
+@pytest.mark.parametrize("stop", [1, 2, 3, 4])
+@pytest.mark.parametrize("mode", ["decision", "transport"])
+def test_no_data_abort_accepts_every_preflight_stop_point(tmp_path, stop, mode):
+    """Any preflight gate can stop an attempt, and all four are retirable.
+
+    The evidence contract used to admit exactly one stop point, which left an
+    attempt that reached the auth or API-key gate with no documented retirement.
+    """
+    ledger, gate, ticket, record = _no_data_attempt(tmp_path, stop=stop, mode=mode)
+    ledger.abort_no_data(ticket, record)
+    row = ledger.snapshot()["reservations"][ticket["reservation"]]
+    assert row["state"] == "aborted-no-data"
+    assert gate.snapshot()["stopped"] is True
+
+
+@pytest.mark.parametrize(
+    "ids",
+    [
+        ["observation:database"],
+        ["observation:database", "observation:project"],
+        ["observation:project", "observation:auth"],
+        ["observation:project", "observation:database", "observation:key"],
+        [
+            "observation:project",
+            "observation:database",
+            "observation:auth",
+            "observation:key",
+        ],
+        [],
+    ],
+    ids=[
+        "wrong-first",
+        "reordered",
+        "skips-database",
+        "skips-auth",
+        "too-many",
+        "none",
+    ],
+)
+def test_no_data_abort_refuses_metadata_that_is_not_a_preflight_prefix(tmp_path, ids):
+    """Only a prefix of the declared preflight sequence proves where it stopped."""
+    ledger, _gate, ticket, record = _no_data_attempt(tmp_path, stop=3)
+    path = Path(record["receiptPath"])
+    receipt = json.loads(path.read_text())
+    receipt["metadata"] = [{"id": name, "status": 200} for name in ids]
+    path.write_text(json.dumps(receipt))
+    record = {**record, "receiptDigest": digest(receipt)}
+    with pytest.raises(ValueError, match="no-data attempt"):
+        ledger.abort_no_data(ticket, record)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        {"gate": {"total": 6}},
+        {"gate": {"observation": 4}},
+        {"gate": {"recovery": 1}},
+        {"job": {"observation": 1}},
+        {"job": {"recovery": 1}},
+        {"job": {"owned": ["projects/p/databases/(default)/documents/owned/a"]}},
+        {"job": {"creationProofs": {"a": {"name": "a"}}}},
+        {"job": {"absent": ["a"]}},
+    ],
+    ids=[
+        "charged-more-than-used",
+        "observation-count",
+        "recovery-count",
+        "job-observation",
+        "job-recovery",
+        "job-owned",
+        "job-creation-proof",
+        "job-absent",
+    ],
+)
+def test_no_data_abort_refuses_a_receipt_that_shows_dispatched_data(tmp_path, damage):
+    """The contract must say "no data left this run", not merely "it stopped early"."""
+    ledger, _gate, ticket, record = _no_data_attempt(tmp_path, stop=3)
+    path = Path(record["receiptPath"])
+    receipt = json.loads(path.read_text())
+    receipt["gate"].update(damage.get("gate", {}))
+    for job in receipt["gate"]["jobs"].values():
+        job.update(damage.get("job", {}))
+    if "total" in damage.get("gate", {}):
+        receipt["chargedCalls"] = receipt["gate"]["total"]
+    path.write_text(json.dumps(receipt))
+    record = {
+        **record,
+        "receiptDigest": digest(receipt),
+        "gateDigest": digest(receipt["gate"]),
+    }
+    with pytest.raises(ValueError, match="no-data attempt"):
+        ledger.abort_no_data(ticket, record)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+def test_no_data_abort_requires_the_receipt_to_bind_the_recorded_generation(tmp_path):
+    """A row that recorded a generation is retired only by a receipt naming it."""
+    source = generation("later")
+    ledger, _gate, ticket, record = _no_data_attempt(tmp_path, source, stop=3)
+    path = Path(record["receiptPath"])
+    receipt = json.loads(path.read_text())
+    del receipt["generation"]
+    path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match="recorded generation"):
+        ledger.abort_no_data(ticket, {**record, "receiptDigest": digest(receipt)})
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
 def test_no_data_abort_retires_a_reservation_of_a_later_generation(tmp_path):
     later = generation()
     ledger, gate, ticket, record = _no_data_attempt(tmp_path, later)
@@ -389,7 +504,7 @@ def test_no_data_abort_refuses_a_receipt_naming_another_generation(tmp_path):
     receipt["generation"] = generation("10")
     receipt_path.write_text(json.dumps(receipt))
     record = {**record, "receiptDigest": digest(receipt)}
-    with pytest.raises(ValueError, match="no-data attempt"):
+    with pytest.raises(ValueError, match="recorded generation"):
         ledger.abort_no_data(ticket, record)
     assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
     assert gate.snapshot()["stopped"] is False

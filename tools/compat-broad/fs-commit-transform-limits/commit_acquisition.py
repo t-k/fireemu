@@ -25,6 +25,7 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT / "tools/compat-broad"))
 sys.path.insert(0, str(ROOT / "tools/compat-broad/production-admission"))
 
+import commit_baseline
 import commit_remote_transport
 from batch_contract import DATABASE_PROJECTION, NUMBER, PROJECT, validate_owner_baseline
 from broad_contract import digest
@@ -543,11 +544,19 @@ def _provenance(source_root, expected_commit, expected_inputs):
             raise ValueError("source input not in frozen commit")
 
 
-def permission_bindings(plan, source_commit, artifact_digest, inputs):
-    """Required non-authorizing fields for an independently supplied permission."""
+def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
+    """Required non-authorizing fields for an independently supplied permission.
+
+    When a derived production baseline is supplied, the three values that cannot
+    be recomputed from the repository, the auth configuration digest, the
+    database projection and its digest, and the pricing location, are required to
+    equal what a named production observation actually produced. A literal that
+    no recorded observation produces is refused here, offline, instead of
+    spending a campaign's preflight budget to discover it.
+    """
     if digest(plan) != digest(compiler_plan(PROJECT, "(default)", plan["nonce"])):
         raise ValueError("fixed production project/database required")
-    return {
+    required = {
         "kind": "commit-owner-execution-permission-v1",
         "project": PROJECT,
         "projectNumber": NUMBER,
@@ -575,11 +584,22 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs):
         ],
         "databaseProjectionContractDigest": digest(DATABASE_PROJECTION),
     }
+    if baseline is not None:
+        required.update(commit_baseline.permission_baseline(baseline))
+        required["baselineProvenance"] = baseline["provenance"]
+    return required
 
 
-def _approve(permission, plan, source_commit, artifact_digest, inputs):
-    required = permission_bindings(plan, source_commit, artifact_digest, inputs)
+def _approve(permission, plan, source_commit, artifact_digest, inputs, baseline=None):
+    required = permission_bindings(
+        plan, source_commit, artifact_digest, inputs, baseline
+    )
     validate_owner_baseline(permission, required, time.time())
+    # A permission always names where its production baseline came from, even
+    # where the observation journals themselves are not available to re-read.
+    commit_baseline.validate_provenance(permission.get("baselineProvenance"))
+    if baseline is not None:
+        commit_baseline.validate_permission_baseline(permission, baseline)
     validate_owner_identity(permission.get("ownerIdentity"), field="ownerIdentity")
     credential_preparation.validate_principal(permission.get("credentialPrincipal"))
     if digest({key: permission.get(key) for key in required}) != digest(required):
@@ -589,8 +609,14 @@ def _approve(permission, plan, source_commit, artifact_digest, inputs):
     validate_owner_identity(permission.get("recoveryOwner"), field="recoveryOwner")
 
 
-def freeze_inputs(permission_path, plan, *, source_root, artifact_path):
-    """Freeze independently read permission and verified on-disk source/artifact."""
+def freeze_inputs(permission_path, plan, *, source_root, artifact_path, baseline=None):
+    """Freeze independently read permission and verified on-disk source/artifact.
+
+    `baseline` is the production baseline recomputed from named observation
+    records. It is supplied when a campaign is frozen, where those journals are
+    available, and omitted when a frozen record is revalidated later; the
+    permission's own provenance block is required either way.
+    """
     permission = _read(permission_path)
     inputs = source_inputs()
     commit = subprocess.check_output(
@@ -598,7 +624,7 @@ def freeze_inputs(permission_path, plan, *, source_root, artifact_path):
     ).strip()
     artifact = _artifact(artifact_path)
     _provenance(source_root, commit, inputs)
-    _approve(permission, plan, commit, artifact, inputs)
+    _approve(permission, plan, commit, artifact, inputs, baseline)
     value = {
         "kind": "commit-frozen-inputs-v2",
         "permission": permission,

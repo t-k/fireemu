@@ -14,7 +14,8 @@ use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::RestState;
 use fireemu_adapter_grpc::serve::{
-    serve_multiplexed, API_REQUEST_BYTES, MAX_GRPC_MESSAGE_BYTES, MAX_REST_BODY_BYTES,
+    serve_multiplexed, serve_multiplexed_with, API_REQUEST_BYTES, MAX_GRPC_MESSAGE_BYTES,
+    MAX_REST_BODY_BYTES,
 };
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_grpc::webchannel::MAX_FORM_BYTES;
@@ -471,6 +472,105 @@ fn the_emulator_profile_keeps_its_own_over_boundary_refusal_shape() {
                 .build()
                 .unwrap()
                 .block_on(boundary_cases(false));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// The body-read deadline on the REST path, over a real socket
+// ---------------------------------------------------------------------------
+
+/// A client that announces a body and then stalls holds a permit. Without a deadline it holds
+/// one until it disconnects, and enough of them stall every write surface. This drives a real
+/// connection that promises 100 bytes and sends one.
+async fn rest_deadline_case() {
+    const DEADLINE: std::time::Duration = std::time::Duration::from_millis(300);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let backend = Arc::new(LocalBackend::new(
+        gateway(true),
+        Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        ))),
+        7,
+    ));
+    let rest = Arc::new(RestState {
+        local: backend.clone(),
+        gateway: Arc::new(gateway(true)),
+        rules: None,
+        app_check: None,
+        control_token: None,
+    });
+    let server = tokio::spawn(serve_multiplexed_with(
+        listener,
+        FirestoreServer::new(GatewayService::local(gateway(true), backend)),
+        rest,
+        DEADLINE,
+    ));
+
+    // Promise 100 bytes, send one, then hold the connection open.
+    let mut stalled = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stalled
+        .write_all(
+            format!(
+                "POST {COMMIT} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer owner\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{{"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    stalled.flush().await.unwrap();
+
+    // While it stalls, an ordinary request is served rather than refused for load.
+    let ready = http(addr, "GET", "/", "").await;
+    assert!(
+        ready.starts_with("HTTP/1.1 200"),
+        "a stalled sender must not refuse anyone else: {ready}"
+    );
+    let control = format!(
+        r#"{{"writes":[{{"update":{{"name":"{NAMES}/req/deadline-control","fields":{{"n":{{"integerValue":"1"}}}}}}}}]}}"#
+    );
+    let commit = http(addr, "POST", COMMIT, &control).await;
+    assert!(
+        !commit.starts_with("HTTP/1.1 503"),
+        "a stalled sender must not exhaust the pool: {commit}"
+    );
+
+    // The stalled request itself ends at the deadline.
+    let started = tokio::time::Instant::now();
+    let mut answer = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        stalled.read_to_end(&mut answer),
+    )
+    .await
+    .expect("the deadline must end the read")
+    .unwrap();
+    let answer = String::from_utf8_lossy(&answer).into_owned();
+    assert!(answer.starts_with("HTTP/1.1 408"), "{answer}");
+    assert!(answer.contains("DEADLINE_EXCEEDED"), "{answer}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "the answer must come from the deadline, not from the client giving up"
+    );
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[test]
+fn a_stalled_rest_body_ends_at_the_deadline_without_refusing_anyone_else() {
+    std::thread::Builder::new()
+        .name("rest-body-deadline".to_owned())
+        .stack_size(4 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(rest_deadline_case());
         })
         .unwrap()
         .join()

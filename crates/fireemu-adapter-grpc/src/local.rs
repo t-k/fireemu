@@ -2664,7 +2664,19 @@ impl LocalBackend {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let catalog = catalogs.entry(key).or_default();
-        catalog.enable(collection_group, field)
+        let state = catalog.enable(collection_group, field)?;
+        drop(catalogs);
+        // The policy takes effect now, so the sweep interval is measured from now: a
+        // document that was already expired when the policy was created still survives one
+        // interval, which is what production's own deletion delay means.
+        let now = self.now();
+        self.ttl_sweeps
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry((project.to_owned(), database.to_owned()))
+            .or_insert_with(|| SweepSchedule::new(self.ttl_sweep_interval))
+            .start(now);
+        Ok(state)
     }
 
     /// Removes the time-to-live policy on one collection group field, reporting whether one

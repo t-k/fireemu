@@ -939,6 +939,11 @@ pub struct RuntimeConfig {
     /// way the official emulator does, or is refused with production's `NOT_FOUND`
     /// (profile-derived; there is no key of its own).
     pub implicit_database_creation: bool,
+    /// How long a document whose time-to-live field has expired stays readable before the
+    /// expiry sweep deletes it (`firestore.ttlSweepIntervalSeconds`). Production deletes
+    /// typically within 24 hours and within 72 hours at worst, so the default is 24 hours
+    /// and the accepted range ends at the documented outer bound.
+    pub ttl_sweep_interval: LogicalDuration,
     /// Only `demo-` project IDs are accepted.
     pub require_demo_prefix: bool,
     /// Initial virtual clock instant.
@@ -1244,6 +1249,7 @@ impl Default for RuntimeConfig {
             enforce_limits: profile.enforce_limits(),
             token_acceptance: profile.token_acceptance(),
             implicit_database_creation: profile.implicit_database_creation(),
+            ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
             require_demo_prefix: true,
             clock_start: LogicalInstant::from_unix_seconds(1_788_004_860),
             clock_start_pinned: false,
@@ -3107,6 +3113,27 @@ impl RuntimeConfig {
             }
             if let Some(b) = fs.get("enforceLimits").and_then(Value::as_bool) {
                 cfg.enforce_limits = b;
+            }
+            if let Some(value) = fs.get("ttlSweepIntervalSeconds") {
+                let seconds = value.as_u64().ok_or_else(|| {
+                    ConfigError(
+                        "firestore.ttlSweepIntervalSeconds must be a whole number of seconds"
+                            .to_owned(),
+                    )
+                })?;
+                let maximum = u64::try_from(
+                    fireemu_core_firestore::ttl::MAX_SWEEP_INTERVAL
+                        .as_nanos()
+                        .div_euclid(1_000_000_000),
+                )
+                .unwrap_or(u64::MAX);
+                if seconds == 0 || seconds > maximum {
+                    return Err(ConfigError(format!(
+                        "firestore.ttlSweepIntervalSeconds must be between 1 and {maximum}, the                          documented outer bound on how long an expired document survives"
+                    )));
+                }
+                cfg.ttl_sweep_interval =
+                    LogicalDuration::from_seconds(i64::try_from(seconds).unwrap_or(i64::MAX));
             }
         }
         if cfg.edition == FirestoreEdition::Standard

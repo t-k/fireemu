@@ -239,6 +239,17 @@ impl ProjectHooks for Projects {
         }
         self.pubsub_handle.on_clock_changed();
     }
+
+    fn clock_settled(&self, now: fireemu_core_types::time::LogicalInstant) -> usize {
+        // Expiry deletes are ordinary writes: they take admission, publish to listeners and
+        // deliver triggers, so they run here rather than inside the exclusive clock
+        // transition above.
+        self.backend.sweep_expired_documents(now)
+    }
+
+    fn sweep_expired_documents_now(&self, now: fireemu_core_types::time::LogicalInstant) -> usize {
+        self.backend.sweep_expired_documents_now(now)
+    }
 }
 
 #[cfg(test)]
@@ -545,6 +556,94 @@ pub(crate) mod tests {
             .unwrap()
             .get_snapshot(&snapshot, expires_at)
             .is_err());
+    }
+
+    /// Writes one document carrying a time-to-live timestamp and enables the policy.
+    fn with_expiring_document(projects: &Projects, expires_at: LogicalInstant) {
+        let db = "projects/demo-app/databases/(default)";
+        projects
+            .backend
+            .commit(&fireemu_proto_firestore::google::firestore::v1::CommitRequest {
+                database: db.to_owned(),
+                writes: vec![fireemu_proto_firestore::google::firestore::v1::Write {
+                    operation: Some(
+                        fireemu_proto_firestore::google::firestore::v1::write::Operation::Update(
+                            fireemu_proto_firestore::google::firestore::v1::Document {
+                                name: format!("{db}/documents/sessions/s1"),
+                                fields: [(
+                                    "expiresAt".to_owned(),
+                                    fireemu_proto_firestore::google::firestore::v1::Value {
+                                        value_type: Some(
+                                            fireemu_proto_firestore::google::firestore::v1::value::ValueType::TimestampValue(
+                                                fireemu_adapter_grpc::encode::encode_instant(expires_at),
+                                            ),
+                                        ),
+                                    },
+                                )]
+                                .into_iter()
+                                .collect(),
+                                ..Default::default()
+                            },
+                        ),
+                    ),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .expect("commit");
+        projects
+            .backend
+            .enable_ttl(
+                "demo-app",
+                "(default)",
+                fireemu_core_types::ids::CollectionId::try_new("sessions").expect("collection"),
+                fireemu_core_firestore::field_path::FieldPath::parse("expiresAt").expect("field"),
+            )
+            .expect("enable ttl");
+    }
+
+    #[test]
+    fn a_settled_clock_sweeps_documents_whose_time_to_live_elapsed_an_interval_ago() {
+        let gate = gate();
+        let projects = projects(&gate);
+        let expires_at = AT.checked_add(LogicalDuration::from_seconds(60)).unwrap();
+        with_expiring_document(&projects, expires_at);
+
+        // Just past expiry, nothing is deleted: the sweep interval has not elapsed.
+        let soon = AT.checked_add(LogicalDuration::from_seconds(61)).unwrap();
+        assert_eq!(
+            fireemu_adapter_http::control::ProjectHooks::clock_settled(&projects, soon),
+            0
+        );
+
+        let due = AT
+            .checked_add(LogicalDuration::from_seconds(86_400))
+            .unwrap();
+        assert_eq!(
+            fireemu_adapter_http::control::ProjectHooks::clock_settled(&projects, due),
+            1
+        );
+    }
+
+    #[test]
+    fn an_immediate_sweep_does_not_wait_for_the_interval() {
+        let gate = gate();
+        let projects = projects(&gate);
+        let expires_at = AT.checked_add(LogicalDuration::from_seconds(60)).unwrap();
+        with_expiring_document(&projects, expires_at);
+        let soon = AT.checked_add(LogicalDuration::from_seconds(61)).unwrap();
+        assert_eq!(
+            fireemu_adapter_http::control::ProjectHooks::sweep_expired_documents_now(
+                &projects, soon
+            ),
+            1
+        );
+        assert_eq!(
+            fireemu_adapter_http::control::ProjectHooks::sweep_expired_documents_now(
+                &projects, soon
+            ),
+            0
+        );
     }
 
     pub(crate) fn admits_for(gate: &AppCheckGate, project: &str, token: &str) -> bool {

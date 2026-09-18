@@ -135,11 +135,52 @@ is itself the finding.
   whole collection runs against an absolute deadline.
 - Owned. It creates only documents below `compat/o3-txn-expiry/<nonce>/`, each
   carrying an owner, role and nonce marker.
+- Established before observed. A setup step's own success is judged separately
+  from any case's result. The preflight read that expects absence, the
+  create-only commit, the transactional reads that take the locks and every
+  other non-case step have to succeed on their own terms. A case's refusal is a
+  result to record; a setup step's refusal means the workspace this run promised
+  to own was never established, and the run stops there.
+
+  When the create-only commit is refused, the role stays unestablished and no
+  later commit naming it is sent at all. Against a foreign document already
+  sitting at one of the roles, the only write the run ever issues for it is that
+  refused create, and no delete follows. The preflight finding alone does not
+  stop the run, because the create-only commit cannot damage what is there and
+  its refusal is the authoritative proof; a create accepted after the preflight
+  saw a document is a contradiction and stops the run too.
 - Recoverable. Cleanup reads each document, proves ownership from all three
   markers plus a present update time, deletes it conditional on the observed
   update time, and then checks typed absence. A document it cannot prove it owns
   is retained and reported, never deleted. A refused delete is reported as
   unrecovered, never as success.
+
+  Recovery is bound to this run's creation record, not to the marker the
+  document currently carries. A marker can be written by a mutation the run
+  should never have made; a creation record cannot. A role this run did not
+  create is never deleted and never counted as unrecovered.
+
+  One document failing to come back says nothing about the others. An exception
+  from a recovery read becomes that document's result and the loop continues
+  within the recovery deadline, so a receipt is always produced naming the
+  documents still outstanding, the transactions still open and the sites where
+  it failed. A refusal that says the caller may not act stops further sends, but
+  every document this run created stays on the unrecovered list.
+- Verified by readback. A response code says what the backend answered, not what
+  it did. The plan places a readback immediately after every case that names a
+  document, before anything can overwrite it, and the receipt keeps the body
+  with the resource names, the instants and this run's identities replaced by
+  fixed slots. It also records where each observed version sits in the sequence
+  of versions seen for that document, which is the version relation a post-state
+  comparison needs and the one thing a volatile instant cannot carry across two
+  runs. A commit that returns `OK` without writing, and a refusal that writes
+  anyway, are both visible here and invisible to a code-only comparison.
+- Answerable for every transaction. Every `BeginTransaction` goes through the
+  same path and registers whatever token came back, whether or not the case
+  expected a refusal. A transaction the backend really started is live and has
+  to be released during recovery; the expectation only classifies the row
+  afterwards. A success-shaped reply whose token is missing or cannot be decoded
+  is recorded as an incomplete acquisition, not as a transaction this run holds.
 - Honest about failure. A transport failure stops the collection and is recorded
   as a failure. It is never turned into a semantic result.
 - Loopback-locked. A local collection must target a loopback host; a production
@@ -148,7 +189,7 @@ is itself the finding.
   plan, which the transport must honour. The two contended writes get 120
   seconds because production does not refuse a write to a locked document
   immediately; everything else gets 10. The worst case, every timeout plus every
-  wait, is 910 seconds against a 1200-second envelope.
+  wait, is 960 seconds against a 1200-second envelope.
 - Self-releasing. Cleanup rolls back every transaction still open before it
   touches a document, because a conditional delete is an out-of-band write and a
   live transaction's lock would refuse it. A receipt that still holds an open
@@ -177,8 +218,8 @@ a fresh nonce and the real owner identity.
 
 | Bound | Value |
 | --- | --- |
-| Total request slots | 86 |
-| Data slots | 76 |
+| Total request slots | 95 |
+| Data slots | 85 |
 | Metadata slots | 8 |
 | Credential preparation slots | 2 |
 | Owned documents | 5 |
@@ -186,16 +227,16 @@ a fresh nonce and the real owner identity.
 | Concurrency | 1 |
 | Default request timeout | 10 seconds |
 | Contended request timeout | 120 seconds |
-| Worst case, timeouts plus waits | 910 seconds |
+| Worst case, timeouts plus waits | 960 seconds |
 | Wall-clock envelope | 1200 seconds |
-| Planning ceiling | US$0.015788 |
+| Planning ceiling | US$0.016688 |
 
-The cost is a conservative planning ceiling, not an invoice. It is 86 request
+The cost is a conservative planning ceiling, not an invoice. It is 95 request
 slots at US$0.0001 plus a fixed US$0.007188 network reserve, which is a 32 MiB
 allowance at US$0.23 per GiB against an actual expected transfer of a few MiB.
-The data slots include one rollback for every transaction the plan opens, so
-recovery can release its locks before deleting anything. The local rehearsal
-used 60 of the 76 data slots.
+The data slots include one rollback for every `BeginTransaction` the plan sends,
+not one per transaction it expects to receive, because a begin the case table
+expects to be refused can still issue a token the run has to release.
 
 The permission envelope holds one `EXCLUSIVE` lock on the owned document prefix
 and five `READ` locks on indexes, Rules, database configuration, Auth
@@ -212,17 +253,25 @@ verdicts and never claims acquisition validity or promotion.
   identities agree too.
 - `EXPECTED_NONDETERMINISM`: every case agrees, but the project, prefix, nonce or
   database differ. Two runs against different projects always land here.
-- `SEMANTIC_MISMATCH`: a case's code or normalized diagnostic differs.
+- `SEMANTIC_MISMATCH`: a case's code, normalized diagnostic or post state
+  differs.
 - `INDETERMINATE`: a receipt is incomplete, unbound, unrecovered, collected
   against the wrong target, produced with simulated production time, short of a
-  declared elapsed time, or carrying credential material.
+  declared elapsed time, missing a readback for a post state a case declares, or
+  carrying credential material.
 
 Infrastructure failure is never reported as a semantic mismatch. Diagnostic
 normalization replaces only request-bound resource identities and instants; it
 does not touch diagnostic grammar, so a wording difference stays visible.
 
+The post state is compared as well as the code. Each case's readback is
+compared leaf for leaf between the two receipts, and a post state a case
+declares but no readback recorded makes the comparison indeterminate rather than
+a mismatch nobody observed.
+
 A separate `local_self_contract` checks a local receipt against the frozen
-expected local results. It is explicitly not a production comparison.
+expected local results, including each case's declared post state. It is
+explicitly not a production comparison.
 
 ## Local shadow run
 

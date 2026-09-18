@@ -54,6 +54,31 @@ first is what makes the deletes possible, since a conditional delete is an
 out-of-band write that a live lock refuses. It never deletes what it cannot
 prove it owns and never turns a transport failure into a semantic result.
 
+A setup step is judged on its own terms, apart from any case result. If the
+create-only commit for a role is refused, that role is never established, no
+later commit naming it is sent, and recovery skips it: the only write a foreign
+document ever receives is that refused create, and no delete follows. Recovery
+binds to this run's creation record rather than to the marker the document
+currently carries.
+
+Every `BeginTransaction` registers whatever token came back, including one
+issued against the case table's expectation, so recovery releases it. A
+success-shaped reply without a usable token is an incomplete acquisition, not a
+transaction the run holds.
+
+A readback follows every case that names a document, placed before anything can
+overwrite it, and its body is kept in the receipt with resource names, instants
+and this run's identities replaced by fixed slots. The comparator compares those
+bodies, so a commit that returns `OK` without writing and a refusal that writes
+anyway are both caught even though their codes are correct.
+
+Recovery keeps going. An exception from one document's read becomes that
+document's result, the remaining documents are still attempted within the
+recovery deadline, and a receipt naming the outstanding documents, the open
+transactions and the failure sites is always produced. A refusal that says the
+caller may not act stops further sends while keeping every document this run
+created on the unrecovered list.
+
 Elapsed time is measured, never copied from the plan. Each wait records the
 interval observed, and each elapsed-dependent case records the measured idle
 time of the transaction it uses. A wall-clock wait is served in five-second

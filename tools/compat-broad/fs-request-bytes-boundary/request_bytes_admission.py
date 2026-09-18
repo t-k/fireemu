@@ -23,6 +23,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -42,6 +43,7 @@ from o8_admission import (
     revoke_production_capability,
     validate_owner_identity,
 )
+from request_bytes_descriptor import commit_baseline
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
 UNRESOLVED_GATE = (
@@ -51,11 +53,14 @@ UNRESOLVED_GATE = (
 )
 
 __all__ = [
+    "NO_DATA_STOP_POINTS",
+    "UNCERTAIN_STOP_POINTS",
     "UNRESOLVED_GATE",
     "ProductionWireCapability",
     "abort_generation",
     "bind_execute",
     "build_receipt",
+    "classify_stop",
     "descriptor",
     "execution_host",
     "freeze_inputs",
@@ -63,8 +68,10 @@ __all__ = [
     "permission_bindings",
     "reservation_claim",
     "revoke_production_capability",
+    "stop_points",
     "validate_fresh_admission",
     "validate_frozen_inputs",
+    "validate_no_data_receipt",
     "validate_o7_admission",
 ]
 
@@ -73,8 +80,10 @@ def descriptor():
     return campaign.descriptor()
 
 
-def permission_bindings(plan, source_commit, artifact_digest, inputs):
-    return campaign.permission_bindings(plan, source_commit, artifact_digest, inputs)
+def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
+    return campaign.permission_bindings(
+        plan, source_commit, artifact_digest, inputs, baseline
+    )
 
 
 def validate_frozen_inputs(inputs) -> None:
@@ -131,10 +140,37 @@ def _provenance(source_root, expected_commit, expected_inputs) -> None:
             raise ValueError("source input not in frozen commit")
 
 
-def _approve(permission, plan, source_commit, artifact_digest, inputs) -> None:
-    required = permission_bindings(plan, source_commit, artifact_digest, inputs)
+def _validate_owner_window(permission) -> None:
+    """An owner permission is short-lived and must still cover the whole run."""
+    issued, expiry = permission.get("issuedAt"), permission.get("expiresAt")
+    now = time.time()
+    if (
+        type(issued) not in (int, float)
+        or type(expiry) not in (int, float)
+        or isinstance(issued, bool)
+        or isinstance(expiry, bool)
+        or not 0 <= now - issued <= 86400
+        or not now + campaign.campaign_seconds() + campaign.recovery_seconds()
+        <= expiry
+        <= issued + 86400
+    ):
+        raise ValueError("owner permission expired or too short for recovery")
+
+
+def _approve(
+    permission, plan, source_commit, artifact_digest, inputs, baseline=None
+) -> None:
+    required = permission_bindings(
+        plan, source_commit, artifact_digest, inputs, baseline
+    )
     if digest({key: permission.get(key) for key in required}) != digest(required):
         raise ValueError("typed owner permission binding differs")
+    _validate_owner_window(permission)
+    # A permission always names where its production baseline came from, even
+    # where the observation journals themselves are not available to re-read.
+    commit_baseline.validate_provenance(permission.get("baselineProvenance"))
+    if baseline is not None:
+        commit_baseline.validate_permission_baseline(permission, baseline)
     validate_owner_identity(permission.get("ownerIdentity"), field="ownerIdentity")
     # The recovery owner carries the same provenance weight as the execution
     # identity: it names who answers for a campaign that stops mid-flight, and
@@ -147,7 +183,7 @@ def _approve(permission, plan, source_commit, artifact_digest, inputs) -> None:
         raise ValueError("owner supplied permissionReference required")
 
 
-def freeze_inputs(permission_path, plan, *, source_root, artifact_path):
+def freeze_inputs(permission_path, plan, *, source_root, artifact_path, baseline=None):
     """Freeze an independently read permission over a verified source snapshot.
 
     `plan` is the reference, not the 63 MB compiled plan. Recompiling it here
@@ -161,7 +197,7 @@ def freeze_inputs(permission_path, plan, *, source_root, artifact_path):
     ).strip()
     artifact = _artifact(artifact_path)
     _provenance(source_root, commit, inputs)
-    _approve(permission, plan, commit, artifact, inputs)
+    _approve(permission, plan, commit, artifact, inputs, baseline)
     return o8_admission.freeze_inputs(
         descriptor(),
         permission,
@@ -218,7 +254,7 @@ def reservation_claim(inputs, *, gate_path=None):
         "manifestDigest": inputs["planDigest"],
         "nonceDigest": digest(plan["nonce"]),
         "locks": descriptor_.lock_scopes(plan),
-        "budget": copy.deepcopy(descriptor_.budget),
+        "budget": campaign.ledger_budget(),
         "durationSeconds": descriptor_.campaign_seconds,
     }
     if gate_path is None:
@@ -264,7 +300,96 @@ def bind_execute(capability, plan, token, *, schedule=None):
     return execute
 
 
-def build_receipt(inputs, result, *, capability, rows, generation, failure=None):
+# Every point this campaign can stop at with nothing of its own left behind.
+# The schedule runs three probes; each opens with the ownership preflight reads
+# that prove the owned namespace is empty, then makes its one Commit, then its
+# version-bound cleanup. A stop anywhere in a probe's preflight has created
+# nothing. A stop at the Commit's transport deadline has NOT: the Commit may
+# have been applied while the receipt was lost, which is the one outcome that is
+# uncertain by construction and must never be retired as a no-data abort.
+PROBES = ("u", "e", "o")
+NO_DATA_STOP_POINTS = tuple(f"probe-{probe}01-preflight" for probe in PROBES) + (
+    "schedule-not-started",
+)
+UNCERTAIN_STOP_POINTS = tuple(f"probe-{probe}01-commit-deadline" for probe in PROBES)
+
+
+def stop_points() -> dict[str, tuple[str, ...]]:
+    """The reachable terminal states, split by whether data may exist."""
+    return {"noData": NO_DATA_STOP_POINTS, "uncertain": UNCERTAIN_STOP_POINTS}
+
+
+def classify_stop(receipt) -> dict:
+    """Name the terminal disposition a stopped run is entitled to.
+
+    A no-data stop is retirable: the run holds no creation proof and its own
+    journal shows no document was written. An uncertain stop is not, however it
+    is labelled, because a Commit whose receipt was lost may have been applied.
+    """
+    if not isinstance(receipt, dict):
+        raise ValueError("bounded receipt required")  # noqa: TRY004 -- refusal class, not a type report
+    stop = receipt.get("stopPoint")
+    collection = receipt.get("collection") or {}
+    created = int(collection.get("rowCount") or 0)
+    uncertain = bool(collection.get("uncertainCommit"))
+    if stop in UNCERTAIN_STOP_POINTS or uncertain:
+        return {
+            "stopPoint": stop,
+            "disposition": "owner-escalation",
+            "retirableAsNoData": False,
+            "reason": (
+                "a Commit whose receipt was lost may have been applied; up to "
+                "17 documents can remain under the owned scope"
+            ),
+        }
+    if stop not in NO_DATA_STOP_POINTS:
+        raise ValueError("unknown request-byte stop point")
+    if (
+        created
+        or receipt.get("productionExecuted") is not True
+        or collection.get("cleanupComplete") is False
+        or any(collection.get(key) for key in ("overRefusal", "untypedOverRefusal"))
+    ):
+        return {
+            "stopPoint": stop,
+            "disposition": "owner-escalation",
+            "retirableAsNoData": False,
+            "reason": "the journal does not prove that nothing was written",
+        }
+    return {
+        "stopPoint": stop,
+        "disposition": "aborted-no-data",
+        "retirableAsNoData": True,
+        "reason": "no Commit was dispatched and no document was created",
+    }
+
+
+def validate_no_data_receipt(receipt) -> dict:
+    """Accept only a receipt that proves this campaign wrote nothing."""
+    verdict = classify_stop(receipt)
+    if not verdict["retirableAsNoData"]:
+        raise ValueError(f"receipt is not a no-data stop: {verdict['reason']}")
+    generation = receipt.get("generation")
+    if not isinstance(generation, dict) or set(generation) != {
+        "sourceCommit",
+        "collectorSourceDigest",
+        "sourceDigests",
+    }:
+        raise ValueError("receipt records no acquisition generation")
+    metadata = receipt.get("metadata")
+    if not isinstance(metadata, list) or any(
+        not isinstance(item, dict) or not isinstance(item.get("responseDigest"), str)
+        for item in metadata
+    ):
+        raise ValueError("receipt records no per-route response digests")
+    if receipt.get("routeDigest") != digest(metadata):
+        raise ValueError("receipt route journal differs")
+    return verdict
+
+
+def build_receipt(
+    inputs, result, *, capability, rows, generation, failure=None, stop_point=None
+):
     """The campaign receipt, binding every route it observed by response digest."""
     metadata = [
         {
@@ -291,5 +416,6 @@ def build_receipt(inputs, result, *, capability, rows, generation, failure=None)
         "productionExecuted": capability is not None,
         "workerSha256": capability.binding_digest if capability is not None else None,
         "transportDeadlineSeconds": campaign.transport_deadline_seconds(),
+        "stopPoint": stop_point,
         "failure": failure,
     }

@@ -27,24 +27,120 @@ import request_bytes_descriptor as campaign
 import request_bytes_o8
 import request_bytes_remote_transport
 from broad_contract import digest
-from o8_campaign import BASE_APPROVAL_FIELDS, CampaignDescriptor
+from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
+
+# The baseline derivation is the Commit lane's reviewed module, reached the way
+# the descriptor reaches it: by path, never by prepending that lane to sys.path.
+commit_baseline = campaign.commit_baseline
 
 NONCE = "b" * 32
+PROJECT_BODY = {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
+DATABASE_BODY = {
+    "name": "projects/fireemu-35fe6/databases/(default)",
+    "uid": "fixture-uid",
+    "type": "FIRESTORE_NATIVE",
+    "databaseEdition": "STANDARD",
+    "locationId": "us-central1",
+}
+AUTH_BODY = {"name": "projects/592603257417/config", "mfa": {"state": "DISABLED"}}
+BASELINE_BODIES = [
+    (commit_baseline.ROUTES["projectIdentity"], PROJECT_BODY),
+    (commit_baseline.ROUTES["database"], DATABASE_BODY),
+    (commit_baseline.ROUTES["authConfig"], AUTH_BODY),
+]
+
+
+def baseline_record(tmp_path):
+    """A recorded production observation journal and the run evidence beside it."""
+    evidence = tmp_path / "baseline-evidence"
+    evidence.mkdir()
+    journal = evidence / "responses.jsonl"
+    journal.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "service": "metadata",
+                    "route": route,
+                    "phase": "observation",
+                    "response": {
+                        "httpStatus": 200,
+                        "mediaType": "application/json",
+                        "body": body,
+                    },
+                    "digest": digest(body),
+                }
+            )
+            for route, body in BASELINE_BODIES
+        )
+        + "\n"
+    )
+    receipt = evidence / "receipt.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "kind": "commit-acquisition-receipt-v2",
+                "executionKind": "fixed-production-wire",
+                "productionExecuted": False,
+                "metadata": [
+                    {
+                        "id": "observation:" + commit_baseline.ROUTE_ACTIONS[route],
+                        "status": 200,
+                        "responseDigest": digest(body),
+                        "value": {},
+                    }
+                    for route, body in BASELINE_BODIES
+                ],
+            }
+        )
+    )
+    journal_sha = hashlib.sha256(journal.read_bytes()).hexdigest()
+    receipt_sha = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    record = tmp_path / "baseline.json"
+    record.write_text(
+        json.dumps(
+            {
+                "kind": commit_baseline.RECORD_KIND,
+                "observations": [
+                    {
+                        "route": route,
+                        "path": "responses.jsonl",
+                        "sha256": journal_sha,
+                        "index": index,
+                        "production": {
+                            "path": "receipt.json",
+                            "sha256": receipt_sha,
+                            "mode": "live",
+                        },
+                    }
+                    for index, (route, _body) in enumerate(BASELINE_BODIES)
+                ],
+            }
+        )
+    )
+    return commit_baseline.baseline_from_record(
+        record,
+        evidence_root=evidence,
+        production_roots=(evidence.resolve().parts,),
+    )
+
+
 CAMPAIGN_ID = "FS-LIMIT-API-REQUEST-BYTES"
 
 
 def test_the_descriptor_is_complete_and_published_budget_bound():
     descriptor = campaign.descriptor()
     assert descriptor.campaign_id == CAMPAIGN_ID
-    assert descriptor.approval_fields == BASE_APPROVAL_FIELDS
-    assert len(descriptor.approval_fields) == 16
-    assert descriptor.binds_campaign_id is False
-    assert descriptor.budget == {
+    assert descriptor.approval_fields == CAMPAIGN_APPROVAL_FIELDS
+    assert len(descriptor.approval_fields) == 17
+    assert descriptor.binds_campaign_id is True
+    assert descriptor.budget == campaign.budget_document()["budget"]
+    assert campaign.ledger_budget() == {
         "requests": 258,
         "accounts": 1,
         "resources": 51,
-        "costMicrousd": 190,
+        "costMicrousd": 262,
     }
+    assert descriptor.artifact_profile == "request-bytes-689af9482"
     assert (descriptor.campaign_seconds, descriptor.recovery_seconds) == (900, 300)
     assert descriptor.window_seconds == 1200
 
@@ -78,7 +174,10 @@ def test_the_source_map_names_the_collector_comparator_and_worker():
         campaign.WORKER_ENTRY,
     ):
         assert sources[entry] == hashlib.sha256((ROOT / entry).read_bytes()).hexdigest()
-    assert not any(Path(name).name.startswith("test_") for name in sources)
+    # The sweep is deliberate: a test edit moves the frozen digest rather than
+    # sitting outside it, and every published bound source is covered.
+    assert any(Path(name).name.startswith("test_") for name in sources)
+    assert all(name in sources for name in campaign.budget_document()["boundSources"])
     assert sources[campaign.WORKER_ENTRY] == (
         request_bytes_remote_transport._WORKER_SHA256
     )
@@ -108,9 +207,9 @@ def frozen_checkout(tmp_path):
     return source
 
 
-def owner_permission(plan, commit, artifact_digest, inputs):
+def owner_permission(plan, commit, artifact_digest, inputs, baseline):
     return {
-        **campaign.permission_bindings(plan, commit, artifact_digest, inputs),
+        **campaign.permission_bindings(plan, commit, artifact_digest, inputs, baseline),
         "ownerIdentity": "offline-fixture-not-permission",
         "permissionReference": "offline-fixture",
         "recoveryOwner": "offline-recovery",
@@ -132,11 +231,13 @@ class Admission:
         self.artifact_path.write_bytes(b"retained request-byte artifact")
         self.plan = self.descriptor.plan_compiler(NONCE)
         self.execution_plan = campaign.execution_plan(self.plan)
+        self.baseline = baseline_record(tmp_path)
         self.permission = owner_permission(
             self.plan,
             self.commit,
             hashlib.sha256(self.artifact_path.read_bytes()).hexdigest(),
             campaign.source_map(),
+            self.baseline,
         )
         self.permission_path = tmp_path / "permission.json"
         self.permission_path.write_text(json.dumps(self.permission))
@@ -145,6 +246,7 @@ class Admission:
             self.plan,
             source_root=self.source,
             artifact_path=self.artifact_path,
+            baseline=self.baseline,
         )
         self.ledger = tmp_path / "ledger"
         self.ledger.mkdir()
@@ -193,7 +295,8 @@ class Admission:
             "launcherSha256": hashlib.sha256(
                 self.launcher_path.read_bytes()
             ).hexdigest(),
-            "artifactProfile": campaign.ARTIFACT_PROFILE,
+            "artifactProfile": campaign.artifact_profile(),
+            "campaignId": CAMPAIGN_ID,
             "windowStartsAt": now - 1,
             "windowExpiresAt": now + 4 * self.descriptor.window_seconds,
             "executionHost": admission.execution_host(),
@@ -290,6 +393,7 @@ def test_a_permission_that_does_not_bind_the_campaign_is_refused(tmp_path, damag
             built.plan,
             source_root=built.source,
             artifact_path=built.artifact_path,
+            baseline=built.baseline,
         )
 
 
@@ -539,13 +643,217 @@ def test_a_lock_key_carrying_the_nonce_also_counts_as_reuse(tmp_path):
         admission.validate_fresh_admission(built.ledger, built.plan, built.permission)
 
 
+def test_an_approval_naming_another_campaign_is_refused(tmp_path):
+    """The 17-key schema exists so a cross-campaign replay is refused by name."""
+    built = Admission(tmp_path)
+    assert built.approval["campaignId"] == CAMPAIGN_ID
+    for other in ("FS-DATA-WRITE-COMMIT-TRANSFORMS-03", "", None):
+        with pytest.raises(ValueError, match="another campaign|approval artifact"):
+            admission.validate_o7_admission(
+                **built.bindings(approval={**built.approval, "campaignId": other})
+            )
+    without = {
+        key: value for key, value in built.approval.items() if key != "campaignId"
+    }
+    with pytest.raises(ValueError, match="approval artifact"):
+        admission.validate_o7_admission(**built.bindings(approval=without))
+
+
+def test_a_commit_frozen_record_cannot_be_admitted_by_this_campaign(tmp_path):
+    """Neither direction: the four schema kinds differ from the Commit lane's."""
+    built = Admission(tmp_path)
+    assert campaign.FROZEN_INPUTS_KIND != "commit-frozen-inputs-v2"
+    assert campaign.PERMISSION_KIND != "commit-owner-execution-permission-v1"
+    assert campaign.APPROVAL_KIND != "commit-o8-approval-v1"
+    assert campaign.MANIFEST_KIND != "commit-o8-manifest-v1"
+    foreign = {**built.inputs, "kind": "commit-frozen-inputs-v2"}
+    with pytest.raises(ValueError, match="frozen approval binding"):
+        admission.validate_frozen_inputs(foreign)
+    foreign_permission = {
+        **built.inputs["permission"],
+        "kind": "commit-owner-execution-permission-v1",
+    }
+    with pytest.raises(ValueError, match="frozen approval binding"):
+        admission.validate_frozen_inputs(
+            {**built.inputs, "permission": foreign_permission}
+        )
+
+
+def test_an_approval_one_second_short_of_the_minimum_window_is_refused(tmp_path):
+    """The carried-over defect: a window sized to the wall budget alone."""
+    built = Admission(tmp_path)
+    assert campaign.MINIMUM_WINDOW_SECONDS == 1200
+    assert built.descriptor.window_seconds == campaign.MINIMUM_WINDOW_SECONDS
+    now = time.time()
+    short = admission.o8_admission  # the check lives in the shared core
+    assert short is not None
+    with pytest.raises(ValueError, match="window expired"):
+        admission.validate_o7_admission(
+            **built.bindings(
+                approval={
+                    **built.approval,
+                    "windowStartsAt": now - 1,
+                    "windowExpiresAt": now - 1 + campaign.MINIMUM_WINDOW_SECONDS - 1,
+                }
+            )
+        )
+    admitted = admission.validate_o7_admission(
+        **built.bindings(
+            approval={
+                **built.approval,
+                "windowStartsAt": now - 60,
+                "windowExpiresAt": now + 3600,
+            }
+        )
+    )
+    assert admitted["campaignId"] == CAMPAIGN_ID
+
+
+def test_an_owner_permission_outside_its_own_day_is_refused(tmp_path):
+    built = Admission(tmp_path)
+    for damage in (
+        {"issuedAt": time.time() - 90000},
+        {"expiresAt": time.time() + 60},
+        {"expiresAt": time.time() + 200000},
+    ):
+        built.permission_path.write_text(json.dumps({**built.permission, **damage}))
+        with pytest.raises(ValueError, match="expired or too short"):
+            admission.freeze_inputs(
+                built.permission_path,
+                built.plan,
+                source_root=built.source,
+                artifact_path=built.artifact_path,
+                baseline=built.baseline,
+            )
+
+
+def test_a_permission_without_baseline_provenance_is_refused(tmp_path):
+    built = Admission(tmp_path)
+    stripped = {
+        key: value
+        for key, value in built.permission.items()
+        if key != "baselineProvenance"
+    }
+    built.permission_path.write_text(json.dumps(stripped))
+    with pytest.raises(ValueError):
+        admission.freeze_inputs(
+            built.permission_path,
+            built.plan,
+            source_root=built.source,
+            artifact_path=built.artifact_path,
+            baseline=built.baseline,
+        )
+
+
+def stopped_receipt(built, stop_point, **collection):
+    rows = [
+        {
+            "phase": "observation",
+            "index": index,
+            "route": f"/v1/{built.plan['ownedScope']}/probe-u01/items/control",
+            "status": 404,
+            "responseDigest": digest({"index": index}),
+        }
+        for index in range(2)
+    ]
+    result = {
+        "completed": False,
+        "rowCount": 0,
+        "recoveryRowCount": 0,
+        "cleanupComplete": True,
+        **collection,
+    }
+    return admission.build_receipt(
+        built.inputs,
+        result,
+        capability=None,
+        rows=rows,
+        generation=admission.abort_generation(built.inputs),
+        failure="ValueError",
+        stop_point=stop_point,
+    ) | {"productionExecuted": True}
+
+
+@pytest.mark.parametrize("stop", admission.NO_DATA_STOP_POINTS)
+def test_every_no_data_stop_point_is_retirable(tmp_path, stop):
+    """The v10 lesson: a stop the retirement path cannot express strands a row."""
+    built = Admission(tmp_path)
+    receipt = stopped_receipt(built, stop)
+    verdict = admission.validate_no_data_receipt(receipt)
+    assert verdict["disposition"] == "aborted-no-data"
+    assert verdict["retirableAsNoData"] is True
+
+
+@pytest.mark.parametrize("stop", admission.UNCERTAIN_STOP_POINTS)
+def test_a_transport_deadline_stop_is_never_retired_as_no_data(tmp_path, stop):
+    """A Commit whose receipt was lost may have been applied; that is not no-data."""
+    built = Admission(tmp_path)
+    receipt = stopped_receipt(built, stop)
+    verdict = admission.classify_stop(receipt)
+    assert verdict["disposition"] == "owner-escalation"
+    assert verdict["retirableAsNoData"] is False
+    assert "may have been applied" in verdict["reason"]
+    with pytest.raises(ValueError, match="not a no-data stop"):
+        admission.validate_no_data_receipt(receipt)
+
+
+@pytest.mark.parametrize(
+    "collection",
+    [
+        {"rowCount": 1},
+        {"uncertainCommit": True},
+        {"cleanupComplete": False},
+        {"untypedOverRefusal": True},
+        {"overRefusal": True},
+    ],
+    ids=["wrote-a-row", "uncertain", "residue", "untyped-refusal", "over-refusal"],
+)
+def test_a_stop_that_may_have_written_is_never_retired_as_no_data(tmp_path, collection):
+    built = Admission(tmp_path)
+    receipt = stopped_receipt(built, admission.NO_DATA_STOP_POINTS[0], **collection)
+    with pytest.raises(ValueError, match="not a no-data stop"):
+        admission.validate_no_data_receipt(receipt)
+
+
+def test_every_reachable_stop_point_is_named(tmp_path):
+    points = admission.stop_points()
+    assert len(points["noData"]) == 4
+    assert len(points["uncertain"]) == 3
+    assert set(points["noData"]) & set(points["uncertain"]) == set()
+    built = Admission(tmp_path)
+    with pytest.raises(ValueError, match="unknown request-byte stop point"):
+        admission.classify_stop(stopped_receipt(built, "invented-stop"))
+
+
+def test_a_no_data_receipt_must_carry_its_generation_and_route_journal(tmp_path):
+    built = Admission(tmp_path)
+    receipt = stopped_receipt(built, admission.NO_DATA_STOP_POINTS[0])
+    for damage in (
+        {"generation": None},
+        {"generation": {"sourceCommit": "0" * 40}},
+        {"metadata": []},
+        {"routeDigest": "0" * 64},
+    ):
+        damaged = {**receipt, **damage}
+        if "metadata" in damage:
+            damaged["routeDigest"] = digest([])
+            admission.validate_no_data_receipt(damaged)
+            continue
+        with pytest.raises(ValueError):
+            admission.validate_no_data_receipt(damaged)
+
+
 def test_the_reservation_claim_is_settled_except_for_its_gate(tmp_path):
     built = Admission(tmp_path)
     with pytest.raises(ValueError, match="reservation is unavailable"):
         admission.reservation_claim(built.inputs)
     claim = admission.reservation_claim(built.inputs, gate_path=tmp_path / "gate")
     assert claim["campaignId"] == CAMPAIGN_ID
-    assert claim["budget"] == built.descriptor.budget
+    assert claim["budget"] == campaign.ledger_budget()
+    # 258 already covers observation and recovery; no reserve is added on top.
+    assert claim["budget"]["requests"] == 258 == 105 + 153
+    assert claim["budget"]["accounts"] == 1
+    assert claim["budget"]["costMicrousd"] == 262
     assert claim["nonceDigest"] == digest(built.plan["nonce"])
     assert claim["durationSeconds"] == 900
     assert any(lock["mode"] == "WRITE" for lock in claim["locks"])

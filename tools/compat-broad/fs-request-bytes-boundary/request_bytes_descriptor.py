@@ -38,7 +38,8 @@ sys.path.insert(0, str(HERE))
 import request_bytes_remote_transport
 from batch_contract import NUMBER, PROJECT
 from broad_contract import digest
-from o8_campaign import BASE_APPROVAL_FIELDS, CampaignDescriptor
+from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
+from request_bytes_campaign import campaign_digest, compile_request_bytes_campaign
 from request_bytes_collector import collect_local
 from request_bytes_compiler import (
     CAMPAIGN,
@@ -47,6 +48,29 @@ from request_bytes_compiler import (
 )
 from request_bytes_shadow import classify_local_result
 
+
+def _load(name: str, path: Path):
+    """Load one reviewed module by exact path, without touching sys.path.
+
+    Prepending another lane's directory would outlive this import and shadow
+    same-named modules for every lane loaded afterwards in the same process.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"reviewed module unavailable: {name}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# The baseline derivation is the Commit lane's reviewed implementation, reused
+# rather than reimplemented: it already refuses a literal, a replay journal and
+# a recovery-phase line.
+BASELINE_MODULE = "tools/compat-broad/fs-commit-transform-limits/commit_baseline.py"
+commit_baseline = _load("_request_bytes_commit_baseline", ROOT / BASELINE_MODULE)
+
 DATABASE = "(default)"
 _NONCE = re.compile(r"^[0-9a-f]{32}$")
 BUDGET_PATH = "spec/compatibility/fs-request-bytes-budget.json"
@@ -54,10 +78,11 @@ FROZEN_INPUTS_KIND = "request-bytes-frozen-inputs-v1"
 PERMISSION_KIND = "request-bytes-owner-execution-permission-v1"
 APPROVAL_KIND = "request-bytes-o8-approval-v1"
 MANIFEST_KIND = "request-bytes-o8-manifest-v1"
-# The lane has no reviewed build profile registry of its own. The retained
-# artifact is bound by digest, which proves which bytes the owner retained and
-# nothing about whether that build was reviewed.
-ARTIFACT_PROFILE = "request-bytes-retained-artifact-v1"
+SHADOW_RECORD = "spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json"
+# The published local shadow is the comparison reference, so the artifact
+# profile names the build that shadow ran, derived from the record rather than
+# typed in. The digest still proves only which bytes the owner retained.
+MINIMUM_WINDOW_SECONDS = 1200
 
 COLLECTOR_ENTRY = (
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_collector.py"
@@ -71,23 +96,12 @@ WORKER_ENTRY = (
 TRANSPORT_ENTRY = (
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_remote_transport.py"
 )
-# The lane modules the budget declares as bound, plus the admission surface this
-# campaign executes. Test modules are deliberately excluded: they are not run by
-# an acquisition, and including them would churn the frozen digest on every
-# test edit.
-LANE_SOURCES = (
-    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_compiler.py",
-    COLLECTOR_ENTRY,
-    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_campaign.py",
-    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_local_transport.py",
-    TRANSPORT_ENTRY,
-    WORKER_ENTRY,
-    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_process_exchange.py",
-    COMPARATOR_ENTRY,
-    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_descriptor.py",
-    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_admission.py",
-)
+# Every top-level module of the lane is swept, test modules included, so that a
+# test edit is visible in the frozen digest rather than silently outside it.
+# The seven boundSources of the published budget are a subset and are checked.
+LANE_DIRECTORY = "tools/compat-broad/fs-request-bytes-boundary"
 SHARED_SOURCES = (
+    BASELINE_MODULE,
     "tools/compat-broad/broad_contract.py",
     "tools/compat-broad/batch_contract.py",
     "tools/compat-broad/shared_gate.py",
@@ -104,6 +118,28 @@ ABORT_CLOSURE_SOURCES = (
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_admission.py",
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_descriptor.py",
 )
+
+
+def shadow_record() -> dict:
+    """The published local shadow this campaign's production run is compared to."""
+    path = ROOT / SHADOW_RECORD
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("published local shadow record required")
+    value = json.loads(path.read_bytes())
+    runtime = value.get("runtime") if isinstance(value, dict) else None
+    if (
+        not isinstance(runtime, dict)
+        or value.get("campaignId") != CAMPAIGN
+        or not isinstance(runtime.get("sourceCommit"), str)
+        or len(runtime["sourceCommit"]) != 40
+    ):
+        raise ValueError("published local shadow record required")
+    return value
+
+
+def artifact_profile() -> str:
+    """The build the comparison is bound to, named by the shadow's own Rust SHA."""
+    return "request-bytes-" + shadow_record()["runtime"]["sourceCommit"][:9]
 
 
 def budget_document() -> dict:
@@ -150,26 +186,59 @@ def transport_deadline_seconds() -> float:
 
 
 def budget() -> dict:
-    """The Ledger budget dimensions, derived from the published budget."""
+    """The published budget object, unmodified."""
+    return copy.deepcopy(budget_document()["budget"])
+
+
+def recovery_reserve_microusd() -> int:
+    """What the declared recovery reserve costs at the published unit prices."""
+    published = budget_document()
+    reserve = published["budget"]["recoveryWindow"]
+    prices = published["cost"]["unitPricesUsd"]
+    usd = (
+        reserve["reserveDeletes"] * prices["documentDelete"]
+        + reserve["reserveReads"] * prices["documentRead"]
+    )
+    return math.ceil(usd * 1_000_000)
+
+
+def ledger_budget() -> dict:
+    """The four Ledger dimensions, with recovery already inside every one.
+
+    `requests` is 258 because the compiled schedule is 105 observation slots
+    plus 153 recovery slots; a recovery reserve on top would double-count the
+    same wire calls. `accounts` is 1, matching the published `maxAccounts`: this
+    campaign spends one authorized principal's quota, where the Commit campaign
+    claimed 0 because it consumed no account-scoped resource at all. The cost
+    covers the estimate plus the declared recovery reserve, far under the
+    published hard ceiling.
+    """
     _published, published_budget, _cost, micro = _budget_numbers()
     return {
         "requests": int(published_budget["maxHttpRequests"]),
         "accounts": int(published_budget["maxAccounts"]),
         "resources": int(published_budget["maxDistinctResources"]),
-        "costMicrousd": micro,
+        "costMicrousd": micro + recovery_reserve_microusd(),
     }
 
 
 def frozen_bounds() -> dict:
+    """The bounded shape of one run, every figure taken from the published budget."""
     published, published_budget, _cost, _micro = _budget_numbers()
     accounting = published["accounting"]
     return {
         "dataRequests": int(accounting["httpRequests"]),
+        "observationRequests": 105,
+        "recoveryRequests": 153,
         "documentWrites": int(accounting["documentWrites"]),
         "documentReads": int(accounting["documentReads"]),
         "documentDeletes": int(accounting["documentDeletes"]),
         "uploadedBytes": int(accounting["uploadedBytes"]),
         "totalRequests": int(published_budget["maxHttpRequests"]),
+        "distinctResources": int(published_budget["maxDistinctResources"]),
+        "peakLiveDocuments": int(published_budget["maxPeakLiveDocuments"]),
+        "maxRequestBytes": int(published_budget["maxRequestBytes"]),
+        "maxResponseBytes": int(published_budget["maxResponseBytes"]),
         "perRequestTimeoutSeconds": transport_deadline_seconds(),
     }
 
@@ -268,14 +337,25 @@ def lock_scopes(plan: dict) -> list[dict]:
     ]
 
 
+def lane_sources() -> tuple[str, ...]:
+    """Every top-level module of the lane, in a stable order."""
+    directory = ROOT / LANE_DIRECTORY
+    return tuple(
+        sorted(f"{LANE_DIRECTORY}/{path.name}" for path in directory.glob("*.py"))
+    )
+
+
 def source_map() -> dict[str, str]:
-    """Digest every source this campaign executes, by name rather than by glob."""
+    """Digest every source this campaign binds: the whole lane, plus the closure."""
     values = {}
-    for name in (*LANE_SOURCES, *SHARED_SOURCES):
+    for name in (*lane_sources(), *SHARED_SOURCES):
         path = ROOT / name
         if path.is_symlink() or not path.is_file():
             raise ValueError("frozen campaign source missing")
         values[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    bound = budget_document()["boundSources"]
+    if any(name not in values for name in bound):
+        raise ValueError("frozen source map omits a published bound source")
     return values
 
 
@@ -289,8 +369,35 @@ def collector(gate, plan, output, *, transmit):
     return collect_local(plan, transmit, output)
 
 
-def comparator(result):
-    return classify_local_result(result)
+def comparator(result, shadow=None):
+    """Compare a production result's classification with the published shadow's.
+
+    The published local shadow is the reference this campaign is bound to, so a
+    comparison is not a classification of one result: it is whether the two
+    classifications agree, and on what. This establishes agreement, never a
+    compatibility claim; that remains an owner decision on the evidence.
+    """
+    published = shadow_record() if shadow is None else shadow
+    observed = classify_local_result(result)
+    reference = {
+        "classification": published.get("shadow", {}).get("classification")
+        if isinstance(published.get("shadow"), dict)
+        else None,
+        "probeOutcomes": published.get("probeOutcomes"),
+    }
+    if reference["classification"] is None:
+        reference["classification"] = classify_local_result(
+            published.get("observation", {})
+        ).get("classification")
+    return {
+        "campaignId": CAMPAIGN,
+        "production": observed,
+        "shadow": reference,
+        "classificationAgrees": observed.get("classification")
+        == reference["classification"],
+        "shadowRecordDigest": digest(published),
+        "formalCompatibilityClaim": False,
+    }
 
 
 def transport_bound(value, *, binding, binding_digest):
@@ -310,6 +417,13 @@ def transport_bound(value, *, binding, binding_digest):
     }:
         raise ValueError("closed request-byte wire call required")
     verify_worker_binding(binding, binding_digest, None)
+    bounds = budget_document()["budget"]
+    if (
+        request_bytes_remote_transport.MAX_REQUEST_BYTES != bounds["maxRequestBytes"]
+        or request_bytes_remote_transport.MAX_RESPONSE_BYTES
+        != bounds["maxResponseBytes"]
+    ):
+        raise ValueError("transport byte caps differ from the published budget")
     return request_bytes_remote_transport.request(
         value["plan"],
         value["phase"],
@@ -351,7 +465,7 @@ def retained_artifact_validator(artifact_path, manifest_path, profile):
     build profile registry. Here the profile is a label: the digests prove which
     bytes the owner retained, not that the build behind them was reviewed.
     """
-    if profile != ARTIFACT_PROFILE:
+    if profile != artifact_profile():
         raise ValueError("retained artifact profile differs")
     values = {}
     for key, path in (
@@ -375,12 +489,24 @@ def forbidden_transports():
     )
 
 
-def permission_bindings(plan, source_commit, artifact_digest, inputs) -> dict:
-    """Required non-authorizing fields for an independently supplied permission."""
+def campaign_digest_for(nonce: str) -> str:
+    """The lane's own campaign digest for one nonce, computed by the lane."""
+    return campaign_digest(compile_request_bytes_campaign(PROJECT, DATABASE, nonce))
+
+
+def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
+    """Required non-authorizing fields for an independently supplied permission.
+
+    When a derived production baseline is supplied, the values the repository
+    cannot recompute are required to equal what a named production observation
+    produced. A literal that no recorded observation produces is refused here,
+    offline, rather than after a run spends its budget discovering it.
+    """
     canonical = plan_compiler(plan["nonce"])
     if digest(plan) != digest(canonical):
         raise ValueError("fixed production project/database required")
-    return {
+    published_budget = budget_document()["budget"]
+    required = {
         "kind": PERMISSION_KIND,
         "campaignId": CAMPAIGN,
         "project": PROJECT,
@@ -396,28 +522,43 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs) -> dict:
         "collectorSha256": inputs[COLLECTOR_ENTRY],
         "comparatorSha256": inputs[COMPARATOR_ENTRY],
         "workerSha256": inputs[WORKER_ENTRY],
+        "campaignDigest": campaign_digest_for(plan["nonce"]),
         "budget": budget(),
+        "ledgerBudget": ledger_budget(),
         "ownedScope": plan["ownedScope"],
         "ownedResourceCount": plan["ownedResourceCount"],
+        # `wallSeconds` is the name the shared admission core checks; the
+        # gatekeeper's `campaignSeconds` is the same number under its own name,
+        # carried so both readings are explicit rather than assumed equal.
         "wallSeconds": campaign_seconds(),
+        "campaignSeconds": campaign_seconds(),
         "recoverySeconds": recovery_seconds(),
         "perRequestTimeoutSeconds": transport_deadline_seconds(),
+        "maxRequestBytes": int(published_budget["maxRequestBytes"]),
+        "maxResponseBytes": int(published_budget["maxResponseBytes"]),
         "concurrency": 1,
         "tariffsConfirmedBelowPlanningCeilings": True,
         "costModel": cost_model(),
     }
+    if baseline is not None:
+        required.update(commit_baseline.permission_baseline(baseline))
+        required["baselineProvenance"] = baseline["provenance"]
+    return required
 
 
 def descriptor() -> CampaignDescriptor:
     """The request-byte campaign as the shared admission core sees it."""
+    window = campaign_seconds() + recovery_seconds()
+    if window < MINIMUM_WINDOW_SECONDS:
+        raise ValueError("approved window below the campaign minimum")
     return CampaignDescriptor(
         campaign_id=CAMPAIGN,
         frozen_inputs_kind=FROZEN_INPUTS_KIND,
         permission_kind=PERMISSION_KIND,
         approval_kind=APPROVAL_KIND,
         manifest_kind=MANIFEST_KIND,
-        approval_fields=BASE_APPROVAL_FIELDS,
-        artifact_profile=ARTIFACT_PROFILE,
+        approval_fields=CAMPAIGN_APPROVAL_FIELDS,
+        artifact_profile=artifact_profile(),
         campaign_seconds=campaign_seconds(),
         recovery_seconds=recovery_seconds(),
         source_map=source_map,

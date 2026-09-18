@@ -455,3 +455,71 @@ def test_independent_clock_shifts_preserve_later_commit_and_creation_relations()
         rows[6]["body"]["commitTime"] = f"2026-{month}-19T00:00:00Z"
         rows[6]["body"]["writeResults"][0]["updateTime"] = f"2026-{month}-17T12:00:00Z"
     assert compare_rows(left_plan, left, right_plan, right)["classification"] == "MATCH"
+
+
+_ABSENCE_KINDS = ("preflight-typed-absence", "cleanup-verify-absence")
+
+
+def _with_absence_messages(
+    rows: list[dict], *, template: str = 'Document "{resource}" not found.'
+) -> list[dict]:
+    """Add the resource-bearing NOT_FOUND message production actually returns."""
+    rows = copy.deepcopy(rows)
+    for row in rows:
+        if row["request"]["kind"] in _ABSENCE_KINDS:
+            resource = row["request"].get("resource") or row["request"]["path"].split(
+                "?", 1
+            )[0].removeprefix("/v1/")
+            row["body"]["error"]["message"] = template.format(resource=resource)
+    return rows
+
+
+def test_not_found_message_resource_name_is_normalized_like_the_name_slot() -> None:
+    left_plan = compile_plan("fireemu-oracle", "(default)", "a" * 32)
+    right_plan = compile_plan("demo-firestore-probe", "(default)", "b" * 32)
+    left = _with_absence_messages(_rows(left_plan))
+    right = _with_absence_messages(_rows(right_plan))
+    left_recovery = _with_absence_messages(_recovery_rows(left_plan))
+    right_recovery = _with_absence_messages(_recovery_rows(right_plan))
+    result = compare_rows(
+        left_plan,
+        left,
+        right_plan,
+        right,
+        left_recovery=left_recovery,
+        right_recovery=right_recovery,
+    )
+    absent = [
+        index
+        for index, row in enumerate(left + left_recovery)
+        if row["request"]["kind"] in _ABSENCE_KINDS
+    ]
+    assert absent == [0, 1, 13, 16]
+    assert [result["rows"][index]["classification"] for index in absent] == [
+        "MATCH"
+    ] * 4
+    assert result["classification"] == "MATCH"
+    assert len(result["rows"]) == 17
+
+
+def test_a_genuinely_different_not_found_message_remains_a_semantic_mismatch() -> None:
+    plan = compile_plan("demo", "(default)", "a" * 32)
+    left = _with_absence_messages(_rows(plan))
+    right = _with_absence_messages(
+        _rows(plan), template='Document "{resource}" was deleted.'
+    )
+    result = compare_rows(plan, left, plan, right)
+    assert result["rows"][0]["classification"] == "SEMANTIC_MISMATCH"
+    assert result["classification"] == "SEMANTIC_MISMATCH"
+
+
+def test_a_not_found_message_naming_a_foreign_resource_is_not_normalized() -> None:
+    left_plan = compile_plan("demo-left", "(default)", "a" * 32)
+    right_plan = compile_plan("demo-right", "(default)", "b" * 32)
+    left = _with_absence_messages(_rows(left_plan))
+    right = _with_absence_messages(_rows(right_plan))
+    right[0]["body"]["error"]["message"] = (
+        'Document "projects/other/databases/(default)/documents/x/y" not found.'
+    )
+    result = compare_rows(left_plan, left, right_plan, right)
+    assert result["rows"][0]["classification"] == "SEMANTIC_MISMATCH"

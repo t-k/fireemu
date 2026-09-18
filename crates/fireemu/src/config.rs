@@ -1100,9 +1100,11 @@ pub struct RuntimeConfig {
     /// Attempts per event for functions declared with `retry` (`events.maxAttempts`).
     pub events_max_attempts: u32,
     /// Minimum interval kept between two push deliveries of the same Pub/Sub message while the
-    /// subscription has no retry policy (`pubsub.pushMinimumRedeliveryIntervalMillis`). It is an
-    /// emulator protection against re-requesting a failing push endpoint with no interval at all;
-    /// `0` restores unthrottled redelivery, and a retry policy always decides its own backoff.
+    /// subscription has no retry policy (`pubsub.pushMinimumRedeliveryIntervalMillis`). The
+    /// default is `0`, which follows production: without a retry policy the service redelivers as
+    /// soon as possible. A non-zero interval is an opt-in emulator protection against re-requesting
+    /// a failing push endpoint with no interval at all. A retry policy always decides its own
+    /// backoff.
     pub pubsub_push_minimum_redelivery_interval_millis: i64,
     /// Schedule runs enqueued per clock change and job (`scheduler.maxCatchUpRuns`).
     pub scheduler_max_catch_up_runs: usize,
@@ -3624,13 +3626,18 @@ mod tests {
         assert_eq!(cfg.token_acceptance, TokenAcceptance::Verified);
     }
 
-    /// The minimum push redelivery interval is configurable, bounded and defaulted.
+    /// The minimum push redelivery interval is configurable and bounded, and it defaults to zero
+    /// so an unconfigured emulator redelivers as soon as possible, as production does.
     #[test]
-    fn pubsub_push_minimum_redelivery_interval_is_parsed_bounded_and_defaulted() {
+    fn pubsub_push_minimum_redelivery_interval_is_parsed_bounded_and_defaults_to_immediate() {
         let default = with_profile(json!({})).expect("a config without a pubsub section");
         assert_eq!(
-            default.pubsub_push_minimum_redelivery_interval_millis,
-            fireemu_core_pubsub::subscription::DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS
+            default.pubsub_push_minimum_redelivery_interval_millis, 0,
+            "the default must follow production, which redelivers as soon as possible"
+        );
+        assert_eq!(
+            fireemu_core_pubsub::subscription::DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
+            0
         );
 
         let configured = with_profile(json!({

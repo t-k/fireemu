@@ -469,12 +469,19 @@ type BarrierPushSink = (
     thread::JoinHandle<()>,
 );
 
-/// The minimum interval the emulator keeps between two push deliveries of the same message while
-/// the subscription has no retry policy.
-fn minimum_push_redelivery_interval() -> LogicalDuration {
-    LogicalDuration::from_millis(
-        fireemu_core_pubsub::subscription::DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
-    )
+/// The interval a test opts into when it exercises the push redelivery protection. It is not the
+/// default: without a retry policy the default is immediate redelivery, as production does.
+fn configured_push_redelivery_interval() -> LogicalDuration {
+    LogicalDuration::from_millis(100)
+}
+
+/// Opts the subscription registry into a minimum push redelivery interval, exactly as the daemon
+/// does from `pubsub.pushMinimumRedeliveryIntervalMillis`.
+fn configure_push_redelivery_interval(h: &Harness, interval: LogicalDuration) {
+    h.state
+        .lock()
+        .unwrap()
+        .set_push_minimum_redelivery_interval(interval);
 }
 
 /// Advances the shared virtual clock and wakes the push dispatcher, exactly as the control API
@@ -501,19 +508,6 @@ async fn await_scheduled_redelivery(h: &Harness, subscription: &str, expected: L
     .unwrap_or_else(|_| {
         panic!("the redelivery of {subscription} must be scheduled for {expected}")
     });
-}
-
-/// Waits for `count` recorded requests while advancing the virtual clock by the minimum push
-/// redelivery interval, which is what releases every attempt after the first.
-async fn await_push_count_advancing(h: &Harness, bodies: &Arc<Mutex<Vec<Vec<u8>>>>, count: usize) {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while bodies.lock().unwrap().len() < count {
-            advance(h, minimum_push_redelivery_interval());
-            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-        }
-    })
-    .await
-    .unwrap_or_else(|_| panic!("push request {count} must be sent"));
 }
 
 /// Waits until the sink has recorded `count` requests.
@@ -1582,23 +1576,9 @@ async fn push_subscription_retries_after_failures_without_a_new_publish() {
     .await
     .unwrap();
 
-    // No retry policy: every attempt after the first waits the minimum push redelivery interval,
-    // so the fourth request is only sent after three clock advances.
-    let interval = minimum_push_redelivery_interval();
-    for attempt in 1..=4 {
-        await_push_count(&bodies, attempt).await;
-        if attempt < 4 {
-            let eligible_at = h
-                .clock
-                .lock()
-                .unwrap()
-                .now_for_test()
-                .checked_add(interval)
-                .unwrap();
-            await_scheduled_redelivery(&h, subscription, eligible_at).await;
-            advance(&h, interval);
-        }
-    }
+    // No retry policy and no configured protection: production redelivers as soon as possible, and
+    // so does the emulator, so the fourth request is sent without the virtual clock advancing.
+    await_push_count(&bodies, 4).await;
     assert_eq!(bodies.lock().unwrap().len(), 4);
     let pulled = subc
         .pull(pb::PullRequest {
@@ -1616,12 +1596,14 @@ async fn push_subscription_retries_after_failures_without_a_new_publish() {
     worker.join().unwrap();
 }
 
-/// Without a retry policy the emulator keeps a minimum interval between two push attempts of the
-/// same message: the endpoint is re-requested only once the virtual clock reaches it, and never
-/// before it.
+/// Without a retry policy, and only when `pubsub.pushMinimumRedeliveryIntervalMillis` opts the
+/// protection in, the emulator keeps a minimum interval between two push attempts of the same
+/// message: the endpoint is re-requested only once the virtual clock reaches it, never before it.
+/// The default stays immediate, which is what production does.
 #[tokio::test]
 async fn push_without_a_retry_policy_waits_exactly_the_minimum_redelivery_interval() {
     let h = start().await;
+    configure_push_redelivery_interval(&h, configured_push_redelivery_interval());
     let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
     let (endpoint, bodies, stop, worker) = push_sink_sequence(vec![500, 500, 500, 500]);
@@ -1652,7 +1634,7 @@ async fn push_without_a_retry_policy_waits_exactly_the_minimum_redelivery_interv
     .await
     .unwrap();
 
-    let interval = minimum_push_redelivery_interval();
+    let interval = configured_push_redelivery_interval();
     let just_short = LogicalDuration::from_nanos(interval.as_nanos() - 1);
     for attempt in 1..=4 {
         await_push_count(&bodies, attempt).await;
@@ -1729,9 +1711,9 @@ async fn ordered_push_delivers_successor_after_dead_letter_forwarding() {
     .await
     .unwrap();
 
-    // The five failing attempts have no retry policy, so each redelivery waits the minimum push
-    // redelivery interval; the dead-letter budget still counts one attempt per request.
-    await_push_count_advancing(&h, &bodies, 6).await;
+    // The five failing attempts have no retry policy, so each redelivery is immediate; the
+    // dead-letter budget still counts one attempt per request.
+    await_push_count(&bodies, 6).await;
     let pushed = bodies.lock().unwrap().clone();
     assert_eq!(pushed.len(), 6);
     let last = String::from_utf8(pushed.last().unwrap().clone()).unwrap();
@@ -2701,8 +2683,7 @@ async fn push_exhaustion_forwards_to_the_destination_exactly_once() {
                 .unwrap()
                 .into_inner()
                 .received_messages;
-            // Without a retry policy each failed push waits the minimum redelivery interval.
-            advance(&h, minimum_push_redelivery_interval());
+            // Without a retry policy each failed push is redelivered immediately.
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         }
     })
@@ -2925,8 +2906,7 @@ async fn a_failed_push_delivery_counts_one_delivery_attempt_against_the_dead_let
                 .unwrap()
                 .into_inner()
                 .received_messages;
-            // Without a retry policy each failed push waits the minimum redelivery interval.
-            advance(&h, minimum_push_redelivery_interval());
+            // Without a retry policy each failed push is redelivered immediately.
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         }
     })

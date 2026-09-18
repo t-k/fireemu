@@ -33,12 +33,13 @@ pub const MAX_RETRY_BACKOFF_SECONDS: i64 = 600;
 /// Default minimum interval between two push deliveries of the same message when the
 /// subscription has no retry policy, in milliseconds.
 ///
-/// The Pub/Sub documentation says a subscription without a retry policy redelivers "as soon as
-/// possible", and the interval the production service actually keeps between two push attempts
-/// has not been observed yet. This emulator protection keeps a failing push endpoint from being
-/// re-requested with no interval at all; it is documented as an emulator behaviour, not as
-/// observed production behaviour, and `0` restores unthrottled redelivery.
-pub const DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS: i64 = 100;
+/// The default is zero, which follows production: the Pub/Sub documentation says a subscription
+/// without a retry policy redelivers "as soon as possible". A non-zero interval is an opt-in
+/// emulator protection that keeps a failing push endpoint from being re-requested with no
+/// interval at all; it is never on by default, because that would be a gap against production.
+/// The interval the production service actually keeps between two push attempts has not been
+/// observed yet, and the default follows the observed value once it is.
+pub const DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS: i64 = 0;
 /// Inclusive maximum for the configured minimum push redelivery interval, in milliseconds. It
 /// matches the maximum a retry policy may ask for.
 pub const MAX_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS: i64 = MAX_RETRY_BACKOFF_SECONDS * 1000;
@@ -1255,10 +1256,15 @@ mod tests {
         config
     }
 
-    /// A push subscription with no retry policy: a nack must not make the message immediately
-    /// deliverable again, because the dispatcher would then hammer a failing endpoint.
+    /// The interval these tests opt into when they exercise the push redelivery protection. It is
+    /// not the default: the default is zero, which is what production does.
+    const CONFIGURED_INTERVAL_MILLIS: i64 = 100;
+
+    /// A push subscription with no retry policy redelivers a nacked message immediately by
+    /// default, which is what production does: without a retry policy the service redelivers as
+    /// soon as possible.
     #[test]
-    fn a_nacked_push_message_waits_the_minimum_redelivery_interval_without_a_retry_policy() {
+    fn a_nacked_push_message_is_redelivered_immediately_by_default() {
         let mut s = SubscriptionState::new(push_cfg());
         let now = LogicalInstant::from_unix_seconds(100);
         s.enqueue(stored("1", b"a", 100), now).unwrap();
@@ -1266,17 +1272,13 @@ mod tests {
         let first = s.pull(1, now, &mut ids);
         s.modify_ack_deadline(&first.received[0].ack_id, 0, now);
 
-        let interval =
-            LogicalDuration::from_millis(DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS);
-        let eligible_at = now.checked_add(interval).unwrap();
-        assert_eq!(s.next_available_at(), Some(eligible_at));
-        assert!(s.pull(1, now, &mut ids).received.is_empty());
-        assert_eq!(s.pull(1, eligible_at, &mut ids).received.len(), 1);
+        assert_eq!(s.next_available_at(), Some(now));
+        assert_eq!(s.pull(1, now, &mut ids).received.len(), 1);
     }
 
-    /// The same interval applies when the ack deadline expires rather than the subscriber nacking.
+    /// An expired ack deadline is redelivered immediately by default too.
     #[test]
-    fn an_expired_push_deadline_waits_the_minimum_redelivery_interval() {
+    fn an_expired_push_deadline_is_redelivered_immediately_by_default() {
         let mut s = SubscriptionState::new(push_cfg());
         let now = LogicalInstant::from_unix_seconds(100);
         s.enqueue(stored("1", b"a", 100), now).unwrap();
@@ -1289,8 +1291,45 @@ mod tests {
             .unwrap();
         s.expire_deadlines(expired);
 
-        let interval =
-            LogicalDuration::from_millis(DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS);
+        assert_eq!(s.next_available_at(), Some(expired));
+    }
+
+    /// With the protection configured, a nack must not make the message immediately deliverable
+    /// again, because the dispatcher would then hammer a failing endpoint.
+    #[test]
+    fn a_nacked_push_message_waits_the_configured_minimum_redelivery_interval() {
+        let mut s = SubscriptionState::new(push_cfg());
+        let interval = LogicalDuration::from_millis(CONFIGURED_INTERVAL_MILLIS);
+        s.set_push_minimum_redelivery_interval(interval);
+        let now = LogicalInstant::from_unix_seconds(100);
+        s.enqueue(stored("1", b"a", 100), now).unwrap();
+        let mut ids = counter();
+        let first = s.pull(1, now, &mut ids);
+        s.modify_ack_deadline(&first.received[0].ack_id, 0, now);
+
+        let eligible_at = now.checked_add(interval).unwrap();
+        assert_eq!(s.next_available_at(), Some(eligible_at));
+        assert!(s.pull(1, now, &mut ids).received.is_empty());
+        assert_eq!(s.pull(1, eligible_at, &mut ids).received.len(), 1);
+    }
+
+    /// The same interval applies when the ack deadline expires rather than the subscriber nacking.
+    #[test]
+    fn an_expired_push_deadline_waits_the_configured_minimum_redelivery_interval() {
+        let mut s = SubscriptionState::new(push_cfg());
+        let interval = LogicalDuration::from_millis(CONFIGURED_INTERVAL_MILLIS);
+        s.set_push_minimum_redelivery_interval(interval);
+        let now = LogicalInstant::from_unix_seconds(100);
+        s.enqueue(stored("1", b"a", 100), now).unwrap();
+        let mut ids = counter();
+        s.pull(1, now, &mut ids);
+        let expired = now
+            .checked_add(LogicalDuration::from_seconds(i64::from(
+                DEFAULT_ACK_DEADLINE_SECONDS,
+            )))
+            .unwrap();
+        s.expire_deadlines(expired);
+
         assert_eq!(
             s.next_available_at(),
             Some(expired.checked_add(interval).unwrap())
@@ -1306,6 +1345,9 @@ mod tests {
             maximum_backoff: LogicalDuration::from_seconds(10),
         });
         let mut s = SubscriptionState::new(config);
+        s.set_push_minimum_redelivery_interval(LogicalDuration::from_millis(
+            CONFIGURED_INTERVAL_MILLIS,
+        ));
         let now = LogicalInstant::from_unix_seconds(100);
         s.enqueue(stored("1", b"a", 100), now).unwrap();
         let mut ids = counter();
@@ -1319,7 +1361,7 @@ mod tests {
     }
 
     /// A retry policy whose backoff is zero keeps redelivering immediately: the policy wins even
-    /// when it asks for less than the emulator protection.
+    /// when it asks for less than the configured emulator protection.
     #[test]
     fn a_zero_retry_policy_keeps_immediate_push_redelivery() {
         let mut config = push_cfg();
@@ -1328,6 +1370,9 @@ mod tests {
             maximum_backoff: LogicalDuration::ZERO,
         });
         let mut s = SubscriptionState::new(config);
+        s.set_push_minimum_redelivery_interval(LogicalDuration::from_millis(
+            CONFIGURED_INTERVAL_MILLIS,
+        ));
         let now = LogicalInstant::from_unix_seconds(100);
         s.enqueue(stored("1", b"a", 100), now).unwrap();
         let mut ids = counter();
@@ -1342,6 +1387,9 @@ mod tests {
     #[test]
     fn a_pull_subscription_still_redelivers_a_nacked_message_immediately() {
         let mut s = SubscriptionState::new(cfg());
+        s.set_push_minimum_redelivery_interval(LogicalDuration::from_millis(
+            CONFIGURED_INTERVAL_MILLIS,
+        ));
         let now = LogicalInstant::from_unix_seconds(100);
         s.enqueue(stored("1", b"a", 100), now).unwrap();
         let mut ids = counter();
@@ -1351,10 +1399,13 @@ mod tests {
         assert_eq!(s.pull(1, now, &mut ids).received.len(), 1);
     }
 
-    /// The interval is configurable, and zero restores the pre-protection behaviour exactly.
+    /// Setting the interval back to zero returns to the production default exactly.
     #[test]
     fn a_zero_minimum_push_redelivery_interval_restores_immediate_redelivery() {
         let mut s = SubscriptionState::new(push_cfg());
+        s.set_push_minimum_redelivery_interval(LogicalDuration::from_millis(
+            CONFIGURED_INTERVAL_MILLIS,
+        ));
         s.set_push_minimum_redelivery_interval(LogicalDuration::ZERO);
         let now = LogicalInstant::from_unix_seconds(100);
         s.enqueue(stored("1", b"a", 100), now).unwrap();
@@ -1365,10 +1416,14 @@ mod tests {
         assert_eq!(s.pull(1, now, &mut ids).received.len(), 1);
     }
 
-    /// A subscription that becomes a push subscription through `ModifyPushConfig` is protected too.
+    /// A subscription that becomes a push subscription through `ModifyPushConfig` is protected too,
+    /// once the protection is configured.
     #[test]
     fn a_subscription_promoted_to_push_uses_the_minimum_redelivery_interval() {
         let mut s = SubscriptionState::new(cfg());
+        s.set_push_minimum_redelivery_interval(LogicalDuration::from_millis(
+            CONFIGURED_INTERVAL_MILLIS,
+        ));
         s.set_push_config(PushConfig {
             push_endpoint: "http://127.0.0.1:1/push".to_owned(),
         });

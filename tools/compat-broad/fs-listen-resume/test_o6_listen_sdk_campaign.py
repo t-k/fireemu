@@ -77,7 +77,10 @@ def test_planned_counts_fit_the_frozen_budget():
     assert counts["writes"] <= BUDGET["maxWrites"]
     assert counts["deletes"] <= BUDGET["maxDeletes"]
     assert counts["reads"] <= BUDGET["maxReads"]
-    assert counts["snapshots"] <= BUDGET["maxSnapshots"]
+    assert counts["rawSnapshotAllowance"] <= BUDGET["maxSnapshots"]
+    assert counts["rawSnapshotAllowance"] > counts["snapshots"]
+    assert counts["cleanupReads"] <= BUDGET["cleanupReserveReads"]
+    assert counts["cleanupDeletes"] <= BUDGET["cleanupReserveDeletes"]
     assert counts["listenerRegistrations"] >= len(cases.CASES)
     assert counts["listenerRegistrations"] <= BUDGET["maxListenerRegistrations"]
 

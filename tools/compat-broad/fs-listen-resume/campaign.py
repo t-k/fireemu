@@ -196,6 +196,12 @@ def count_operations() -> dict[str, int]:
         "reads": reads,
         "snapshots": snapshots,
         "listenerRegistrations": listeners,
+        # Listeners subscribe with metadata changes, so the transport delivers
+        # more raw snapshots than the compared projection keeps: a cached
+        # delivery, a server delivery and, for a local write, a pending and an
+        # acknowledged delivery. The budget bounds raw deliveries, so it
+        # reserves four per compared event.
+        "rawSnapshotAllowance": snapshots * 4,
         "cleanupReads": owned * passes * 2,
         "cleanupDeletes": owned * passes,
     }
@@ -231,7 +237,7 @@ def compile_campaign(
         counts["writes"] > BUDGET["maxWrites"]
         or counts["deletes"] > BUDGET["maxDeletes"]
         or counts["reads"] > BUDGET["maxReads"]
-        or counts["snapshots"] > BUDGET["maxSnapshots"]
+        or counts["rawSnapshotAllowance"] > BUDGET["maxSnapshots"]
         or counts["listenerRegistrations"] > BUDGET["maxListenerRegistrations"]
         or counts["cleanupReads"] > BUDGET["cleanupReserveReads"]
         or counts["cleanupDeletes"] > BUDGET["cleanupReserveDeletes"]

@@ -15,3 +15,35 @@ Run the focused checks with:
 ```text
 uv run --project tools/compat-inventory --locked pytest -q tools/compat-broad/fs-listen-resume
 ```
+
+## Production campaign preparation
+
+A second, separate layer prepares a bounded production campaign for the same
+inventory row. It does not execute one, and the row stays `WAITING_ORACLE`.
+
+- `cases.py` declares twelve Observation Cases: six observations, each with a
+  control or negative counterpart, covering document and query event order,
+  `hasPendingWrites`, resume after a forced stream break, unsubscribe and auth
+  switching on a Rules-protected document.
+- `campaign.py` freezes the manifest: resolved SDK identities with npm
+  integrity digests, the budget, the permission envelope and the owner
+  preconditions. A compiled campaign is `BLOCKED_OWNER` until a campaign-scoped
+  permission is supplied, and then only `PREPARED`.
+- `listen_collector.mjs` is the bounded step machine, budget, invariant checker
+  and cleanup contract. It imports no Firebase code; `listen_sdk_adapter.mjs`
+  supplies the real SDK and refuses production mode.
+- `observation.py` compares a local receipt against a production receipt. It
+  reaches `MATCH` only on acquisition evidence and reports the paths it could
+  not observe in every result.
+- `export_spec.py` publishes the catalog and budget the Node side reads, under
+  `spec/compatibility/`.
+
+The full narrative, including the campaign cost, the owner preconditions and the
+browser and mobile paths that remain unobserved, is in
+`docs/compatibility/fs-listen-sdk-campaign-preparation.md`.
+
+Run the Node checks with:
+
+```text
+node --test tools/compat-broad/fs-listen-resume/*.test.mjs
+```

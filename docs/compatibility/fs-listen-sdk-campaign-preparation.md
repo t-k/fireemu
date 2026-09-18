@@ -1,0 +1,225 @@
+# FS-LISTEN-SDK campaign preparation
+
+This document describes a bounded production campaign for the `FS-LISTEN-SDK`
+row of the Firestore production-compatibility inventory. The campaign is
+prepared, not executed. Nothing here contacted Firebase production, read a
+production credential, or consumed a permission. The row stays `WAITING_ORACLE`
+and the count of production-unobserved conditions it reduces is zero.
+
+What this preparation adds is the part that was missing: a finite catalog of
+observation cases with controls, a bounded collector that actually runs them
+through the declared Node client SDK, a comparator that can reach `MATCH` only
+on acquisition evidence, a frozen campaign manifest with a permission envelope
+and owner preconditions, and a local shadow that ran the whole catalog against
+`fireemu` and agreed with every expected local result.
+
+## Observation Cases
+
+Twelve cases live in `tools/compat-broad/fs-listen-resume/cases.py` and are
+published for the Node collector as `spec/compatibility/fs-listen-sdk-cases.json`.
+Six are observation cases; each has a control or negative counterpart, so a run
+cannot report agreement from a listener that never delivered anything.
+
+| Case | Dimension | What it observes | Counterpart |
+| --- | --- | --- | --- |
+| `FS-LISTEN-SDK-101` | Document event order | One server snapshot for an existing document | `101C` listens to an absent document and still gets a non-existent snapshot |
+| `FS-LISTEN-SDK-102` | Pending writes | A local write raises `hasPendingWrites` before the acknowledged snapshot | `102C` writes from a second client, where the flag must never rise |
+| `FS-LISTEN-SDK-103` | Query change order | `added`, `modified` with reordering, and `removed`, with old and new index | `103C` writes a document outside the predicate and expects silence |
+| `FS-LISTEN-SDK-104` | Resume after a break | Which changes arrive after a forced stream break and reconnect | `104C` applies the same mutations with no break |
+| `FS-LISTEN-SDK-105` | Unsubscribe | Callbacks stop while a witness listener still sees the write | `105C` keeps the listener and sees the same write on both |
+| `FS-LISTEN-SDK-106` | Auth switching | Signing out mid-listen terminates a Rules-protected listener | `106N` starts the listener signed out and never reaches the server |
+
+Each case declares the fields it compares. A listener that does not treat
+metadata as a signal drops `fromCache` and `hasPendingWrites` from the compared
+projection and keeps them in the raw receipt, because their value there
+reflects delivery timing rather than a semantic difference.
+
+Resume is compared as an aggregate rather than event by event, because the SDK
+is free to batch deliveries differently between runs. The aggregate collapses
+the delta sequence into one row and is checked against three invariants: a
+document that did not change is never re-delivered as `added`, the listener
+reports a cache-served window that recovers, and the terminal document set is
+complete. The control asserts the mirror image, that no cache-served window
+appears without a break.
+
+## Bounded collector
+
+`listen_collector.mjs` holds the step machine, the budget, the invariant checks
+and the cleanup contract. It imports no Firebase code and opens no socket: every
+effect arrives through an injected dependency object, so its behaviour is
+tested against an in-memory fake. `listen_sdk_adapter.mjs` is the only file that
+touches the SDK.
+
+Bounds and ownership:
+
+- Every chargeable operation goes through one budget. A charge past a cap or
+  past the deadline fails and is recorded; it is never retried around.
+- Cleanup runs on a separate reserve, so an exhausted observation budget or an
+  expired observation deadline can never leave an owned document behind. A
+  rehearsal with a four second deadline produced an incomplete receipt whose
+  cleanup still completed.
+- Cleanup reads each owned path, deletes it only when the owner marker still
+  names this run, then reads again to prove absence. A document that is absent,
+  not owned, or still present after its delete is recorded as such. Those
+  outcomes make the receipt incomplete rather than passing.
+- Listener shutdown is tracked per case. A failed unsubscribe is a failure, not
+  a silent success.
+
+Secrets:
+
+- The collector refuses to start when a secret-shaped value appears in argv.
+- The throwaway account password is read from a private file descriptor and is
+  held in a local binding in the adapter. It never reaches the collector, a log
+  line, or the receipt.
+- Everything written to a receipt passes through a redactor that strips
+  secret-named keys and bearer-shaped strings.
+
+## Campaign manifest
+
+`campaign.py` compiles the frozen manifest for one run nonce. Compiling it
+performs no network call and grants nothing: the manifest carries
+`status = BLOCKED_OWNER` until an owner supplies a campaign-scoped permission,
+and even then it only reaches `PREPARED`. Execution is a separate step that this
+lane does not implement, and the adapter refuses production mode outright.
+
+Frozen inputs are the resolved SDK identities and their npm integrity digests
+for `firebase`, `@firebase/firestore`, `@firebase/auth` and
+`@firebase/webchannel-wrapper`, taken from the pinned lockfile, plus the
+lockfile digest and the case catalog digest.
+
+Planned operations and the frozen caps:
+
+| Quantity | Planned | Cap |
+| --- | --- | --- |
+| Writes | 21 | 60 |
+| Deletes (observation) | 1 | 80 |
+| Reads (observation) | 22 | 600 |
+| Raw snapshot deliveries | 64 | 120 |
+| Listener registrations | 15 | 40 |
+| Cleanup reads (reserve) | 130 | 200 |
+| Cleanup deletes (reserve) | 65 | 100 |
+| Wall clock | one run | 600 s plus a 180 s cleanup reserve |
+
+The estimated cost at published Firestore list prices is USD 0.000142, against a
+hard ceiling of USD 0.50. That is a planning ceiling, not an observed bill.
+
+The permission envelope inherits from nothing. It allows one run of the declared
+catalog, one throwaway account sign-in and sign-out, and creation plus
+conditional deletion of the declared owned documents. It forbids reuse of any
+earlier compat-broad permission, any write outside the owned prefixes, any retry
+past the deadline or the cost ceiling, and recording an identity token, refresh
+token or password anywhere in the output.
+
+## Owner preconditions
+
+1. **Rules.** Merge the additive fragment into the oracle project and publish it.
+   It grants nothing to unauthenticated callers and contains no catch-all deny,
+   because the oracle project is shared with other lanes. The manifest carries
+   its digest so a deployed fragment can be checked against the plan.
+
+   ```
+   match /o6_listen/{runId}/docs/{docId} {
+     allow read, write: if request.auth != null;
+   }
+   match /o6_listen_private/{uid} {
+     allow read, write: if request.auth != null && request.auth.uid == uid;
+   }
+   ```
+
+2. **Throwaway account.** One email and password account owned by the campaign
+   operator, its password supplied through a private file descriptor.
+3. **Index.** None. The query filters and orders on the same field, which the
+   automatic single-field index serves.
+4. **Clean prefix.** The nonce-scoped run document and the private document must
+   not exist before the run.
+
+## Comparator contract
+
+`observation.py` is a separate schema and API from the offline preparation
+comparator, which still always answers `PREPARATION_ONLY`. The observation
+comparator can answer `MATCH`, but only after both receipts pass admission:
+
+- the receipt binds the frozen campaign digest and the case catalog digest;
+- the bound sources are recomputed from the files on disk and compared against
+  the digests the receipt declares, so a copied digest does not pass;
+- the production receipt names the campaign permission, its campaign is
+  `PREPARED`, its resolved SDK identities match the manifest, and it carries an
+  ordered transport timeline with connect, disconnect and reconnect entries;
+- both receipts report an unexhausted budget, a complete cleanup, closed
+  listeners and no invariant violations;
+- neither receipt carries secret material.
+
+A missing or unproven element yields `INDETERMINATE`. A local receipt alone
+never reaches `MATCH`. The same receipt submitted on both sides is rejected as a
+production claim, and flipping a production marker on a local receipt fails on
+the permission and transport bindings.
+
+## Local shadow
+
+The collector ran the full catalog against an owned local `fireemu` instance
+started by `fireemu exec` with the Firestore and Auth emulators on OS-assigned
+ports. All twelve cases agreed with their expected local results, every listener
+closed, no invariant was violated, and cleanup proved absence for every owned
+path. Three consecutive runs produced the same result, and a fourth with a four
+second deadline produced an honest incomplete receipt with cleanup still
+complete.
+
+The receipt is checked in at `spec/compatibility/fs-listen-sdk-local-shadow.json`
+and bound to the working tree by `test_o6_listen_sdk_local_shadow.py`, which
+recomputes the source digests, the catalog digest and every case comparison.
+
+Reproduce it with:
+
+```sh
+npm install --prefix <scratch> firebase@12.18.0
+O6_FIREBASE_MODULE_DIR=<scratch> O6_REPO_ROOT="$PWD" GOOGLE_CLOUD_PROJECT=demo-o6 \
+  target/debug/fireemu exec \
+  --firebase-json tools/compat-broad/fs-listen-resume/fs-listen-sdk.firebase.json \
+  --project demo-o6 --only firestore,auth \
+  --firestore-port 0 --http-port 0 --hub-port 0 --ui-port 0 --logging-port 0 \
+  --log-verbosity silent -- \
+  node tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs > receipt.json
+node tools/compat-broad/fs-listen-resume/local_shadow_check.mjs receipt.json
+```
+
+This is local evidence only. It shows that the catalog is executable, finite and
+deterministic, and that `fireemu` produces the expected local result. It does
+not show that production produces the same result; that is the campaign's whole
+purpose.
+
+## What this preparation established about the SDK
+
+Three expectations written before the shadow ran turned out to be wrong about
+the client SDK, and the cases were corrected rather than the runtime:
+
+- A listener's first callback is frequently served from the local cache. The
+  initial snapshot is therefore defined as the first server-backed snapshot, and
+  cached deliveries before it are the same initial snapshot.
+- A listener that does not request metadata changes cannot be waited on for a
+  server-backed snapshot, because the SDK raises no second callback when the
+  content is unchanged. The collector always subscribes with metadata changes so
+  it can tell when a listener is ready, and collapses metadata-only events back
+  out for cases that do not compare them.
+- A listener on a denied path may still raise a cached snapshot before its
+  terminal error. The negative auth case therefore asserts that no server
+  snapshot preceded the error, not that no snapshot did.
+
+None of these is a `fireemu` defect, and no Repair Ticket was opened.
+
+## What remains unobserved
+
+Four paths cannot be observed from this lane. Each is recorded in the catalog
+and repeated in every comparison result, so a future `MATCH` cannot be read as
+covering them.
+
+| Path | Why it is unobserved | Plan |
+| --- | --- | --- |
+| Browser WebChannel | The Node SDK build selects the gRPC transport. WebChannel framing, long-poll fallback and tab lifecycle are never exercised. | A separate browser campaign driving the same catalog through a headless Chromium page against the same oracle project, capturing the WebChannel request log from the page rather than from Node. |
+| Android SDK | No Android runtime, Gradle toolchain or device is available here. | An instrumented Android test module replaying the same catalog and emitting the same normalized event rows. |
+| Apple SDK | No iOS or macOS SDK harness exists in this repository. | An XCTest target replaying the same catalog and emitting the same normalized event rows. |
+| Raw resume token | The Node client SDK owns the resume token and does not expose it, so `RESET`, stale tokens and compacted tokens cannot be driven from application code. | A direct gRPC Listen probe that supplies a chosen resume token and records the `TargetChange` response, kept as a separate case from SDK-level resume. |
+
+Because all four remain open, `FS-LISTEN-SDK` keeps its blocking condition and
+its `WAITING_ORACLE` status. Running this campaign would reduce that condition
+to the browser, Android and Apple paths plus raw token behaviour; it would not
+clear it.

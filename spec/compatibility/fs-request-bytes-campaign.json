@@ -57,9 +57,10 @@
       "trigger": "any probe that reaches an observation failure, an uncertain Commit or an interrupted run"
     },
     "schedulingReservation": {
-      "basis": "shared_gate.create charges each slot requestSeconds plus intervalSeconds, refuses an interval below 0.25 and a wall above 1200, and refuses a recovery reservation below the recovery slots' cost.",
+      "basis": "Computed by calling shared_gate's own charging helpers on this campaign's schedule, so a Gate change that alters the charge fails this artifact's tests rather than the campaign's admission.",
       "boundaryCommitSeconds": 60.0,
-      "enforcement": "smallRequestSeconds is also the per-request timeout for a small read or delete, so a slot cannot outrun its own reservation; the boundary Commits keep the 60-second transport deadline.",
+      "chargedBy": "shared_gate",
+      "enforcement": "smallRequestSeconds is also the per-request timeout for a small read or delete, so a slot cannot outrun its own reservation; the boundary Commits keep the transport deadline, which the Gate's ceiling check requires them to reserve.",
       "gateWallCapSeconds": 1200,
       "intervalSeconds": 0.25,
       "observationCommitSlots": 3,

@@ -21,6 +21,7 @@ from request_bytes_campaign import (
     _accept_combinations,
     campaign_digest,
     compile_request_bytes_campaign,
+    gate_charging_plan,
     probe_usage,
     validate_request_bytes_campaign,
 )
@@ -675,24 +676,88 @@ def test_validator_rejects_a_reserve_or_ceiling_sized_by_the_forecast(
 # --- The wall-clock arithmetic closes under the shared Gate's formula ---------
 
 
-def test_the_reservation_matches_the_gate_formula(campaign: dict) -> None:
-    """shared_gate.create charges each slot its request time plus the interval."""
+def test_the_reservation_is_what_the_real_gate_charges(campaign: dict) -> None:
+    """Computed by calling shared_gate, not by re-deriving its formula.
+
+    The previous version copied REQUEST_SECONDS out of the Gate and did its own
+    arithmetic, so it agreed with a Gate that no longer existed.
+    """
+    import shared_gate
+
+    plan = compile_request_bytes_plan(PROJECT, DATABASE, NONCE)
+    gate = gate_charging_plan(plan)
+    seconds = shared_gate.request_seconds(gate)
     reservation = campaign["budget"]["schedulingReservation"]
-    interval = reservation["intervalSeconds"]
-    small = reservation["smallRequestSeconds"]
-    assert interval == 0.25
-    assert reservation["recoverySlots"] == 3 * DOCUMENT_COUNT * 3
+    assert reservation["chargedBy"] == "shared_gate"
     assert reservation["recoverySeconds"] == pytest.approx(
-        reservation["recoverySlots"] * (small + interval)
+        shared_gate._recovery_time(gate, seconds)
     )
     assert reservation["observationSeconds"] == pytest.approx(
-        reservation["observationSmallSlots"] * (small + interval)
-        + reservation["observationCommitSlots"]
-        * (reservation["boundaryCommitSeconds"] + interval)
+        shared_gate._observation_time(gate, seconds)
     )
-    assert reservation["totalSeconds"] == pytest.approx(
-        reservation["recoverySeconds"] + reservation["observationSeconds"]
+    assert shared_gate._valid_schedule(gate["jobs"]["request-bytes"])
+    assert shared_gate._ceiling_honoured(gate, seconds)
+
+
+def test_every_slot_reserves_its_own_bound(campaign: dict) -> None:
+    """A 10 MiB upload and a small cleanup read cannot share one honest bound."""
+    plan = compile_request_bytes_plan(PROJECT, DATABASE, NONCE)
+    schedule = gate_charging_plan(plan)["jobs"]["request-bytes"]["schedule"]
+    assert len(schedule) == 258
+    commits = [entry for entry in schedule if entry["creates"]]
+    smalls = [entry for entry in schedule if not entry["creates"]]
+    assert len(commits) == len(REQUEST_TARGETS)
+    assert all(entry["seconds"] == 60.0 for entry in commits)
+    assert all(entry["seconds"] == 3.0 for entry in smalls)
+
+
+def _gate_allocation(campaign: dict, wall: float, recovery: float) -> dict:
+    plan = compile_request_bytes_plan(PROJECT, DATABASE, NONCE)
+    allocation = dict(gate_charging_plan(plan))
+    allocation.update(
+        contract="shared-local-v2",
+        wallSeconds=wall,
+        recoverySeconds=recovery,
+        costMicrousd=int(campaign["cost"]["maximumCostUsd"] * 1_000_000) + 1,
+        observationRequests=campaign["budget"]["maxHttpRequests"],
+        requestCostMicrousd=1,
     )
+    return allocation
+
+
+def test_the_real_gate_accepts_the_published_windows(campaign: dict, tmp_path) -> None:
+    """The decisive check: the Gate itself admits this allocation."""
+    import shared_gate
+
+    budget = campaign["budget"]
+    shared_gate.create(
+        tmp_path / "gate",
+        _gate_allocation(
+            campaign,
+            budget["maxDurationSeconds"],
+            budget["recoveryWindow"]["reserveSeconds"],
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("wall", "recovery"),
+    [
+        pytest.param(900, 300, id="the-windows-this-lane-published-before"),
+        pytest.param(900, 500, id="reserve-raised-but-wall-too-small"),
+        pytest.param(1100, 300, id="wall-raised-but-reserve-too-small"),
+    ],
+)
+def test_the_real_gate_refuses_windows_that_cannot_pay(
+    campaign: dict, tmp_path, wall, recovery
+) -> None:
+    import shared_gate
+
+    with pytest.raises(ValueError):
+        shared_gate.create(
+            tmp_path / f"gate-{wall}-{recovery}",
+            _gate_allocation(campaign, wall, recovery),
+        )
 
 
 def test_the_published_windows_pay_for_the_reservation(campaign: dict) -> None:
@@ -767,3 +832,27 @@ def test_validator_rejects_windows_that_cannot_pay_for_the_schedule(
     mutate(mutated)
     with pytest.raises((ValueError, TypeError, KeyError)):
         validate_request_bytes_campaign(mutated)
+
+
+def test_the_campaign_digest_is_reproducible_from_the_published_file() -> None:
+    """An admission record names a digest a reader must be able to recompute.
+
+    The digest used to depend on key insertion order, so the object this module
+    builds and the same artifact loaded back from its sorted JSON file hashed
+    differently.
+    """
+    published = json.loads(SPEC.read_text())
+    rebuilt = compile_request_bytes_campaign(
+        published["owner"]["project"], published["owner"]["database"], NONCE
+    )
+    assert published == rebuilt
+    assert campaign_digest(published) == campaign_digest(rebuilt)
+
+
+def test_the_campaign_digest_ignores_key_order_but_not_value() -> None:
+    published = json.loads(SPEC.read_text())
+    reordered = dict(reversed(list(published.items())))
+    assert list(reordered) != list(published)
+    assert campaign_digest(reordered) == campaign_digest(published)
+    changed = {**published, "catalogMaximum": 1}
+    assert campaign_digest(changed) != campaign_digest(published)

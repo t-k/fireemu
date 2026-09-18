@@ -44,9 +44,10 @@
       "trigger": "any probe that reaches an observation failure, an uncertain Commit or an interrupted run"
     },
     "schedulingReservation": {
-      "basis": "shared_gate.create charges each slot requestSeconds plus intervalSeconds, refuses an interval below 0.25 and a wall above 1200, and refuses a recovery reservation below the recovery slots' cost.",
+      "basis": "Computed by calling shared_gate's own charging helpers on this campaign's schedule, so a Gate change that alters the charge fails this artifact's tests rather than the campaign's admission.",
       "boundaryCommitSeconds": 60.0,
-      "enforcement": "smallRequestSeconds is also the per-request timeout for a small read or delete, so a slot cannot outrun its own reservation; the boundary Commits keep the 60-second transport deadline.",
+      "chargedBy": "shared_gate",
+      "enforcement": "smallRequestSeconds is also the per-request timeout for a small read or delete, so a slot cannot outrun its own reservation; the boundary Commits keep the transport deadline, which the Gate's ceiling check requires them to reserve.",
       "gateWallCapSeconds": 1200,
       "intervalSeconds": 0.25,
       "observationCommitSlots": 3,
@@ -83,7 +84,7 @@
     "peakLiveDocuments": 17,
     "uploadedBytes": 31457280
   },
-  "note": "The local shadow runs under these same bounds; production additionally requires the owner preconditions in fs-request-bytes-campaign.json. The maxima cover every probe being accepted; accounting is the forecast and binds nothing. budget.schedulingReservation closes the wall-clock arithmetic under shared_gate.create's formula.",
+  "note": "The local shadow runs under these same bounds; production additionally requires the owner preconditions in fs-request-bytes-campaign.json. The maxima cover every probe being accepted; accounting is the forecast and binds nothing. budget.schedulingReservation is what shared_gate charges this schedule, computed by calling it.",
   "schema": "fs-request-bytes-budget-v1",
   "transportDeadline": {
     "consequenceIfMissed": "The receipt is incomplete, the Commit is uncertain, and the run holds no conditional-creation proof. The version-bound delete is then a zero-wire skip by design, so cleanup detects the residue as `cleanup-not-absent` but cannot remove it: up to 17 documents stay in the project pending manual owner action.",

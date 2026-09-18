@@ -26,6 +26,7 @@ from broad_contract import digest
 from shared_gate import (
     Gate,
     _save,
+    abandoned_cleanup_complete,
     non_creating_dispatches,
     typed_absence,
     validate_absence_proofs,
@@ -73,6 +74,8 @@ MAX_BYTES = 16 * 1024 * 1024
 MAX_RESERVATIONS = 10000
 
 
+ABANDON_KIND = "shared-abandoned-cleanup-close-v1"
+ABANDON_FIELDS = {"kind", "ticket", "gateDigest", "receiptPath", "receiptDigest"}
 ESCALATION_KIND = "shared-owner-escalation-close-v1"
 ATTESTATION_KIND = "owner-escalation-attestation-v1"
 ESCALATION_FIELDS = {
@@ -505,6 +508,7 @@ class Ledger:
                     "released",
                     "aborted-no-data",
                     "closed-after-escalation",
+                    "closed-after-abandon",
                 }:
                     raise ValueError("reservation binding changed")
             yield state
@@ -591,7 +595,12 @@ class Ledger:
                 r
                 for r in rows
                 if r["state"]
-                not in {"released", "aborted-no-data", "closed-after-escalation"}
+                not in {
+                    "released",
+                    "aborted-no-data",
+                    "closed-after-escalation",
+                    "closed-after-abandon",
+                }
             ]
             if any(
                 conflicts(a, b)
@@ -746,28 +755,15 @@ class Ledger:
         ):
             raise ValueError("fresh owner escalation attestation required")
 
-    def close_after_escalation(self, ticket, record):
-        """Retire a reservation whose run may have written, after the owner proves it did not persist.
-
-        An uncertain stop, a Commit whose receipt was lost, can never be retired
-        as no data: it may have been applied. Holding the row while that is
-        unresolved is right, but before this there was no exit afterwards, so the
-        row stayed active forever and kept its lock key and its whole allocation
-        even once the owner had removed the residue by hand.
-
-        This is deliberately not the no-data path and shares no evidence with it.
-        A receipt whose Gate proves no data was written is refused here and must
-        use `abort_no_data`; a receipt that does not is refused there. Neither
-        can be mistaken for the other, and this transition never asserts that
-        nothing was written, only that nothing remains.
-        """
+    def _terminal_receipt(self, ticket, record, fields, kind, label):
+        """The receipt and Gate an abandoned or escalated close is bound to."""
         if (
             not isinstance(record, dict)
-            or set(record) != ESCALATION_FIELDS
-            or record["kind"] != ESCALATION_KIND
+            or set(record) != fields
+            or record["kind"] != kind
             or record["ticket"] != ticket
         ):
-            raise ValueError("exact escalation close record required")
+            raise ValueError(f"exact {label} record required")
         for key in ("gateDigest", "receiptDigest"):
             _hash(record[key])
         receipt_path = Path(record["receiptPath"])
@@ -789,8 +785,103 @@ class Ledger:
         if not _gate_plan_consistent(gate) or digest(gate) != record["gateDigest"]:
             raise ValueError("receipt does not bind its own Gate")
         if _no_data_gate(gate):
-            # The two exits are disjoint by evidence, not merely by record shape.
+            # The exits are disjoint by evidence, not merely by record shape.
             raise ValueError("no-data evidence must use the no-data abort")
+        return receipt, gate
+
+    def _terminal_row(self, state, ticket, gate, record, *, digest_key, final):
+        """Shared checks for a terminal close: job, state, receipt and workers."""
+        row = self._row(state, ticket)
+        claim = row["claim"]
+        if "gateJob" in claim and claim["gateJob"] not in gate.get("jobs", {}):
+            raise ValueError("registered Gate job is absent")
+        if row["state"] == final:
+            if row.get(digest_key) != digest(record):
+                raise ValueError(f"different terminal {final} record")
+            return None
+        if row["state"] not in {"held", "closing"}:
+            raise ValueError("reservation unavailable for a terminal close")
+        return row
+
+    def _terminal_binding(self, row, ticket, receipt, gate, claim):
+        if (
+            receipt.get("ticket") != ticket
+            or receipt.get("claimDigest") != row["claimDigest"]
+            or receipt.get("planDigest") != claim["gatePlanDigest"]
+            or gate.get("planDigest") != claim["gatePlanDigest"]
+            or receipt.get("reservationStateAtPublication") != "held"
+            or receipt.get("releaseEligible") is not False
+        ):
+            raise ValueError("receipt does not bind this held reservation")
+        for pid in [gate.get("coordinatorPid")] + [
+            job.get("pid") for job in gate["jobs"].values()
+        ]:
+            if type(pid) is not int or pid <= 0:
+                raise ValueError("recorded worker identity required")
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue
+            raise ValueError("worker exit not proven")
+        if str(Path(claim["gatePath"]).resolve()) != claim["gatePath"]:
+            raise ValueError("registered Gate path changed")
+        if digest(Gate(claim["gatePath"], _gate_job(claim)).snapshot()) != digest(gate):
+            raise ValueError("registered Gate moved since the receipt")
+
+    def close_after_abandon(self, ticket, record):
+        """Retire a run that stopped early and then deleted everything it created.
+
+        The Gate's own journal carries the typed absence for every document the
+        run created, so nothing is left for an owner to attest to and this exit
+        asks for no attestation. It is not a no-data claim: documents were
+        written, and the record says only that none of them remain.
+
+        A created document still present is refused here and stays with the
+        owner-attested escalation exit, and a run that proved no creation belongs
+        to the no-data abort, so the three are disjoint by evidence.
+        """
+        receipt, gate = self._terminal_receipt(
+            ticket, record, ABANDON_FIELDS, ABANDON_KIND, "abandoned cleanup close"
+        )
+        if abandoned_cleanup_complete(gate) is None:
+            raise ValueError("a complete abandoned cleanup is required")
+        with self._locked() as state:
+            row = self._terminal_row(
+                state,
+                ticket,
+                gate,
+                record,
+                digest_key="abandonRecordDigest",
+                final="closed-after-abandon",
+            )
+            if row is None:
+                return
+            self._terminal_binding(row, ticket, receipt, gate, row["claim"])
+            row["state"] = "closed-after-abandon"
+            row["abandonRecordDigest"] = digest(record)
+            row["finalGateDigest"] = record["gateDigest"]
+            self._save(state)
+
+    def close_after_escalation(self, ticket, record):
+        """Retire a reservation whose run may have written, after the owner proves it did not persist.
+
+        An uncertain stop, a Commit whose receipt was lost, can never be retired
+        as no data: it may have been applied. Holding the row while that is
+        unresolved is right, but before this there was no exit afterwards, so the
+        row stayed active forever and kept its lock key and its whole allocation
+        even once the owner had removed the residue by hand.
+
+        This is deliberately not the no-data path and shares no evidence with it.
+        A receipt whose Gate proves no data was written is refused here and must
+        use `abort_no_data`; a receipt that does not is refused there. Neither
+        can be mistaken for the other, and this transition never asserts that
+        nothing was written, only that nothing remains.
+        """
+        receipt, gate = self._terminal_receipt(
+            ticket, record, ESCALATION_FIELDS, ESCALATION_KIND, "escalation close"
+        )
+        if abandoned_cleanup_complete(gate) is not None:
+            raise ValueError("a recoverable stop must use the abandoned cleanup close")
         owned = _owned_resources(gate)
         absence = record["absence"]
         if (

@@ -291,6 +291,43 @@ def _observation_time(plan, seconds):
     return total
 
 
+def abandoned_cleanup_complete(state):
+    """The documents an abandoned run created, when every one is proven absent.
+
+    `None` when the state cannot support that claim: a job that dispatched but
+    proved no creation, a job with creation proofs that never abandoned or whose
+    scheduled cleanup did not run to the end, or one whose typed absence journal
+    does not cover exactly its assigned resources. A created document still
+    present therefore stays with the owner-attested exit, which is the whole
+    point of separating the two.
+    """
+    created = []
+    for name, job in state["jobs"].items():
+        proofs = job.get("creationProofs") or {}
+        if not proofs:
+            if job["observation"] or job["recovery"]:
+                # It ran and proved no creation: that is a no-data stop or an
+                # uncertain one, and neither is this.
+                return None
+            continue
+        schedule = job_schedule(state["plan"]["jobs"][name])
+        if (
+            schedule is None
+            or job.get("stopReason") is None
+            or job.get("scheduleDone", 0) != len(schedule)
+            or job["inflight"]
+            or set(proofs) != set(job["resources"])
+            or set(job.get("absent") or []) != set(job["resources"])
+        ):
+            return None
+        try:
+            validate_absence_proofs(state, name)
+        except Exception:  # noqa: BLE001 -- any failure to validate means the claim is unsupported
+            return None
+        created.extend(proofs)
+    return sorted(created) or None
+
+
 def non_creating_dispatches(state):
     """How many data slots ran, when every one of them could not create a document.
 

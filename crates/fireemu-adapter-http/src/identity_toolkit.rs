@@ -8508,21 +8508,19 @@ fn reset_password(
     let Some(entry) = store.oob_code(code).cloned() else {
         return error(400, "INVALID_OOB_CODE");
     };
+    let new_password = match opt_str(body, "newPassword") {
+        // Check mode (`checkActionCode` / `verifyPasswordResetCode`): describe the code
+        // without consuming it, whatever its type. Only the reset itself is restricted to
+        // `PASSWORD_RESET`.
+        Ok(None) => return check_oob_code(&entry),
+        Ok(Some(new_password)) => new_password,
+        Err(r) => return r,
+    };
     if entry.request_type != OobRequestType::PasswordReset {
         return error(400, "INVALID_OOB_CODE");
     }
     let Some(uid) = entry.uid.clone() else {
         return error(400, "INVALID_OOB_CODE");
-    };
-    let new_password = match opt_str(body, "newPassword") {
-        Ok(Some(new_password)) => new_password,
-        Ok(None) => {
-            return JsonResponse {
-                status: 200,
-                body: json!({"kind": "identitytoolkit#ResetPasswordResponse", "email": entry.email, "requestType": "PASSWORD_RESET"}),
-            };
-        }
-        Err(r) => return r,
     };
     if let Err(e) = store.validate_password_for(
         fireemu_core_auth::password_policy::Operation::Reset,
@@ -8557,6 +8555,31 @@ fn reset_password(
     JsonResponse {
         status: 200,
         body: json!({"kind": "identitytoolkit#ResetPasswordResponse", "email": entry.email, "requestType": "PASSWORD_RESET"}),
+    }
+}
+
+/// The `accounts:resetPassword` answer for a code that is only being inspected. Production
+/// reports the code's own `requestType`, the address it concerns and, for a pending address
+/// change, the new address; the address is omitted for a sign-in link.
+fn check_oob_code(entry: &fireemu_core_auth::store::OobCode) -> JsonResponse {
+    let mut body = serde_json::Map::new();
+    body.insert(
+        "kind".to_owned(),
+        Value::String("identitytoolkit#ResetPasswordResponse".to_owned()),
+    );
+    body.insert(
+        "requestType".to_owned(),
+        Value::String(entry.request_type.as_str().to_owned()),
+    );
+    if entry.request_type != OobRequestType::EmailSignIn {
+        body.insert("email".to_owned(), Value::String(entry.email.clone()));
+    }
+    if let Some(new_email) = entry.new_email.clone() {
+        body.insert("newEmail".to_owned(), Value::String(new_email));
+    }
+    JsonResponse {
+        status: 200,
+        body: Value::Object(body),
     }
 }
 

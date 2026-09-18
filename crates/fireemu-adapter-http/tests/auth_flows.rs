@@ -429,6 +429,81 @@ fn password_reset_goes_through_an_oob_code_the_test_can_read() {
     assert_eq!(status, 200, "{refreshed}");
 }
 
+/// RPCHK-1/RPCHK-2. `accounts:resetPassword` without `newPassword` is `checkActionCode`:
+/// production describes the code without consuming it, whatever its type, and only the
+/// `newPassword` branch is restricted to `PASSWORD_RESET`
+/// (<https://cloud.google.com/identity-platform/docs/reference/rest/v1/accounts/resetPassword>).
+#[test]
+fn reset_password_check_mode_describes_every_out_of_band_code_type() {
+    let s = state();
+    let user = sign_up(&s, "check-mode@example.com");
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    for body in [
+        json!({"requestType": "VERIFY_EMAIL", "idToken": id_token}),
+        json!({"requestType": "EMAIL_SIGNIN", "email": "check-link@example.com"}),
+        json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "idToken": id_token, "newEmail": "check-new@example.com"}),
+    ] {
+        let (status, sent) = post(&s, &format!("{V1}/accounts:sendOobCode"), &body);
+        assert_eq!(status, 200, "{sent}");
+    }
+    let verify_code = issued_code(&s, "VERIFY_EMAIL");
+    let link_code = issued_code(&s, "EMAIL_SIGNIN");
+    let change_code = issued_code(&s, "VERIFY_AND_CHANGE_EMAIL");
+
+    let (status, checked) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": verify_code}),
+    );
+    assert_eq!(status, 200, "{checked}");
+    assert_eq!(checked["requestType"], "VERIFY_EMAIL");
+    assert_eq!(checked["email"], "check-mode@example.com");
+    assert!(checked.get("newEmail").is_none(), "{checked}");
+
+    // An email-link code has no account yet, and production omits the address for it.
+    let (status, checked) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": link_code}),
+    );
+    assert_eq!(status, 200, "{checked}");
+    assert_eq!(checked["requestType"], "EMAIL_SIGNIN");
+    assert!(checked.get("email").is_none(), "{checked}");
+
+    let (status, checked) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": change_code}),
+    );
+    assert_eq!(status, 200, "{checked}");
+    assert_eq!(checked["requestType"], "VERIFY_AND_CHANGE_EMAIL");
+    assert_eq!(checked["email"], "check-mode@example.com");
+    assert_eq!(checked["newEmail"], "check-new@example.com");
+
+    // RPCHK-2. The type check still guards the reset itself, and checking never consumed
+    // the codes: the verification code still applies.
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": verify_code, "newPassword": "newpassword1"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "INVALID_OOB_CODE");
+    let (status, applied) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"oobCode": verify_code}),
+    );
+    assert_eq!(status, 200, "{applied}");
+    assert_eq!(applied["emailVerified"], true);
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "check-link@example.com", "oobCode": link_code}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+}
+
 fn password_with_utf16_units(units: usize) -> String {
     assert!(units >= 2);
     let mut password = "a".repeat(units - 2);

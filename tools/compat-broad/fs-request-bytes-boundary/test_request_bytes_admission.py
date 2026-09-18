@@ -213,6 +213,7 @@ def owner_permission(plan, commit, artifact_digest, inputs, baseline):
         "ownerIdentity": "offline-fixture-not-permission",
         "permissionReference": "offline-fixture",
         "recoveryOwner": "offline-recovery",
+        "gateReservationSeconds": {"upload": 60.0, "slot": 2.0},
         "issuedAt": time.time() - 1,
         "expiresAt": time.time() + 4800,
     }
@@ -843,11 +844,199 @@ def test_a_no_data_receipt_must_carry_its_generation_and_route_journal(tmp_path)
             admission.validate_no_data_receipt(damaged)
 
 
-def test_the_reservation_claim_is_settled_except_for_its_gate(tmp_path):
+def test_the_gate_plan_hosts_three_interleaved_probes(tmp_path):
+    """The shared Gate hosts the campaign once the descriptor declares its shape."""
+    from shared_gate import create
+
     built = Admission(tmp_path)
-    with pytest.raises(ValueError, match="reservation is unavailable"):
-        admission.reservation_claim(built.inputs)
-    claim = admission.reservation_claim(built.inputs, gate_path=tmp_path / "gate")
+    plan = admission.gate_plan_for(built.inputs, built.permission)
+    assert plan["jobSlots"] == 3
+    assert len(plan["jobs"]) == 3
+    assert plan["receiptKind"] == campaign.RECEIPT_KIND
+    assert plan["management"] == {
+        "observation": [],
+        "recovery": [],
+        "credentialIds": [],
+        "credentialSlots": [],
+    }
+    for job in plan["jobs"].values():
+        assert len(job["observation"]) == 35
+        assert len(job["recovery"]) == 51
+        assert len(job["resources"]) == 17
+        covered = sorted((item["phase"], item["index"]) for item in job["schedule"])
+        assert covered == sorted(
+            (phase, index)
+            for phase, count in (("observation", 35), ("recovery", 51))
+            for index in range(count)
+        )
+        phases = [item["phase"] for item in job["schedule"]]
+        # Within one probe the order is its 35 observations then its 51
+        # recovery slots, so the one-way recovery rule is satisfied per job.
+        assert phases == ["observation"] * 35 + ["recovery"] * 51
+        uploads = [item for item in job["schedule"] if item["seconds"] == 60.0]
+        assert len(uploads) == 1
+    assert sum(len(job["resources"]) for job in plan["jobs"].values()) == 51
+    # The campaign-wide schedule does interleave the two phases, which is what
+    # the three-job split resolves: each probe finishes before the next begins.
+    campaign_phases = [
+        entry["phase"]
+        for entry in campaign.execution_plan(built.plan)["executionSchedule"]
+    ]
+    assert "observation" in campaign_phases[campaign_phases.index("recovery") :]
+    create(tmp_path / "gate", plan)
+    assert (tmp_path / "gate" / "state.json").is_file()
+
+
+def test_the_gate_reservations_are_owner_declared_and_must_fit(tmp_path):
+    """No single reservation covers a 60 second upload and a 1.71 second slot."""
+    built = Admission(tmp_path)
+    assert admission.gate_reservations(built.permission) == {
+        "upload": 60.0,
+        "slot": 2.0,
+    }
+    for damage in (
+        {"gateReservationSeconds": None},
+        {"gateReservationSeconds": {"upload": 60.0}},
+        {"gateReservationSeconds": {"upload": 12.0, "slot": 2.0}},
+        {"gateReservationSeconds": {"upload": 60.0, "slot": 0}},
+        {"gateReservationSeconds": {"upload": 60.0, "slot": True}},
+    ):
+        with pytest.raises(ValueError):
+            admission.gate_reservations({**built.permission, **damage})
+    execution = campaign.execution_plan(built.plan)
+    # A slot reservation that cannot fit 153 recovery slots in the window is
+    # refused by arithmetic, not by a comment.
+    with pytest.raises(ValueError, match="do not fit"):
+        campaign.gate_plan(execution, upload_seconds=60.0, slot_seconds=13.0)
+    with pytest.raises(ValueError, match="above the enforced transport ceiling"):
+        campaign.gate_plan(execution, upload_seconds=61.0, slot_seconds=2.0)
+    with pytest.raises(ValueError, match="declared upload_seconds required"):
+        campaign.gate_plan(execution, upload_seconds=None, slot_seconds=2.0)
+
+
+def test_both_owner_fields_refuse_every_placeholder_shape(tmp_path):
+    """The recovery owner answers for a campaign that stops mid-flight."""
+    built = Admission(tmp_path)
+    for field in ("ownerIdentity", "recoveryOwner"):
+        for value in ("<<fill me in>>", "TBD", "agent", "claude", "  ", "", None):
+            built.permission_path.write_text(
+                json.dumps({**built.permission, field: value})
+            )
+            with pytest.raises(ValueError, match=f"owner supplied {field} required"):
+                admission.freeze_inputs(
+                    built.permission_path,
+                    built.plan,
+                    source_root=built.source,
+                    artifact_path=built.artifact_path,
+                    baseline=built.baseline,
+                )
+
+
+def test_every_lane_module_the_launcher_imports_is_in_the_source_map():
+    """The closure rule, enforced rather than described."""
+    sources = campaign.source_map()
+    lane = HERE.name
+    imported = {
+        name: module
+        for name, module in sys.modules.items()
+        if getattr(module, "__file__", None) and Path(module.__file__).parent == HERE
+    }
+    assert imported, "the launcher's lane modules are loaded by this test"
+    for module in imported.values():
+        relative = f"tools/compat-broad/{lane}/{Path(module.__file__).name}"
+        assert relative in sources, relative
+    # The Commit lane's baseline module is executed too, and is named as well.
+    assert campaign.BASELINE_MODULE in sources
+
+
+def test_the_artifact_profile_states_what_it_does_not_establish(tmp_path):
+    built = Admission(tmp_path)
+    basis = built.permission["artifactProfileBasis"]
+    assert basis["profile"] == campaign.artifact_profile()
+    assert basis["registry"] == "none"
+    assert basis["ownerAcceptanceRequired"] is True
+    assert "not that the build was reviewed" in basis["doesNotEstablish"].replace(
+        "that the build was reviewed", "not that the build was reviewed", 1
+    )
+    assert basis["sourceCommit"] == campaign.shadow_record()["runtime"]["sourceCommit"]
+
+
+def test_the_launcher_reads_no_credential_until_every_check_has_passed(
+    tmp_path, monkeypatch
+):
+    """A run that was going to be refused never touches the owner's token."""
+    built = Admission(tmp_path)
+    reads = []
+    monkeypatch.setattr(
+        request_bytes_o8,
+        "_read_handoff",
+        lambda args: reads.append(args) or {"kind": "x"},
+    )
+    built.approval_path.write_text(json.dumps({**built.approval, "status": "pending"}))
+    built.approval_path.chmod(0o600)
+    assert request_bytes_o8.main(built.argv(tmp_path)) == 2
+    assert reads == []
+
+
+def test_the_shared_evidence_contract_reads_this_campaigns_gate_plan(tmp_path):
+    """The retirement contract is derived from the plan, and finds no slots here.
+
+    This campaign acquires no credential and makes no metadata preflight
+    request, so its Gate plan declares no management slots at all. The shared
+    no-data contract measures a stop by how many preflight slots it consumed,
+    which cannot express a campaign that has none: every stop of this campaign
+    is refused today. The lane contract below is what classifies them, and
+    closing the shared one is an open item for the Ledger owner.
+    """
+    import reservations
+
+    built = Admission(tmp_path)
+    plan = admission.gate_plan_for(built.inputs, built.permission)
+    gate = {
+        "plan": plan,
+        "managementUsed": [],
+        "total": 0,
+        "observation": 0,
+        "recovery": 0,
+        "jobs": {
+            name: {
+                "observation": 0,
+                "recovery": 0,
+                "owned": [],
+                "creationProofs": {},
+                "absent": [],
+            }
+            for name in plan["jobs"]
+        },
+    }
+    receipt = {"gate": gate, "metadata": []}
+    # Read from the plan, not from Commit literals: the kind and the slots are
+    # this campaign's.
+    assert reservations._receipt_kind(gate) == campaign.RECEIPT_KIND
+    assert reservations._credential_slots(gate) == []
+    assert reservations._management(gate) == ([], [])
+    assert reservations._no_data_gate(gate) is True
+    # The open item: no preflight slots means no expressible stop point.
+    assert reservations._preflight_stop(receipt) is None
+
+
+def test_the_reservation_claim_binds_its_gate(tmp_path):
+    built = Admission(tmp_path)
+    gate_plan = admission.gate_plan_for(built.inputs, built.permission)
+    claim = admission.reservation_claim(
+        built.inputs, gate_path=tmp_path / "gate", gate_plan=gate_plan
+    )
+    assert claim["gatePlanDigest"] == digest(gate_plan)
+    assert claim["gateJob"] == "request-bytes-probe-u01"
+    assert claim["gateJob"] in gate_plan["jobs"]
+    for foreign in (
+        {**gate_plan, "nonce": "c" * 32},
+        {**gate_plan, "campaignId": "FS-DATA-WRITE-COMMIT-TRANSFORMS-03"},
+    ):
+        with pytest.raises(ValueError, match="another campaign or nonce"):
+            admission.reservation_claim(
+                built.inputs, gate_path=tmp_path / "other", gate_plan=foreign
+            )
     assert claim["campaignId"] == CAMPAIGN_ID
     assert claim["budget"] == campaign.ledger_budget()
     # 258 already covers observation and recovery; no reserve is added on top.
@@ -893,7 +1082,7 @@ def test_the_receipt_binds_every_route_it_observed(tmp_path):
         admission.revoke_production_capability(capability)
 
 
-def test_the_launcher_admits_the_campaign_and_stops_at_the_reservation(tmp_path):
+def test_the_launcher_admits_the_campaign_and_stops_only_for_the_approval(tmp_path):
     built = Admission(tmp_path)
     before = len(admission.o8_admission._ISSUED)
     assert request_bytes_o8.main(built.argv(tmp_path)) == 3

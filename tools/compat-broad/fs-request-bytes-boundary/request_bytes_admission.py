@@ -5,15 +5,10 @@ set through the campaign-generic core, and adapts the reviewed remote transport
 to a capability-bound wire call. It has no command line; the launcher is
 `request_bytes_o8.py`.
 
-What it deliberately does not do is start a production run. The shared
-reservation contract requires a Gate that hosts the campaign's schedule, and
-the shared Gate cannot host this one: `shared_gate.create` admits one or two
-jobs while the schedule spans three probes, `Gate.dispatch` makes recovery a
-one-way transition per job while the schedule interleaves observation and
-recovery within each probe, and `Ledger.finish` addresses the Gate by the fixed
-job name `limits`. `reservation_claim` therefore builds every part of the claim
-that is settled and refuses to invent the Gate binding that is not. Admission,
-which is what an O7 freeze binds, is complete and testable today.
+The shared Gate now hosts this campaign: the descriptor declares its job count,
+its per-slot reservations and its own execution schedule, and the Ledger claim
+names the Gate job. What still stops a run is the owner's side, a fresh approval
+for an unreserved nonce, which is exactly where a campaign should stop.
 """
 
 from __future__ import annotations
@@ -46,16 +41,15 @@ from o8_admission import (
 from request_bytes_descriptor import commit_baseline
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
-UNRESOLVED_GATE = (
-    "the shared Gate cannot host the request-byte schedule: three probes exceed "
-    "the two-job limit, and recovery is a one-way transition per job while the "
-    "schedule interleaves observation and recovery within each probe"
-)
+# The shared Gate hosts this campaign since the descriptor may declare its job
+# count, its per-request reservation and its own execution schedule. What still
+# stops a run is the owner's side: a fresh approval for a fresh nonce.
+MISSING_APPROVAL = "a fresh owner approval for an unreserved nonce is required"
 
 __all__ = [
+    "MISSING_APPROVAL",
     "NO_DATA_STOP_POINTS",
     "UNCERTAIN_STOP_POINTS",
-    "UNRESOLVED_GATE",
     "ProductionWireCapability",
     "abort_generation",
     "bind_execute",
@@ -64,6 +58,8 @@ __all__ = [
     "descriptor",
     "execution_host",
     "freeze_inputs",
+    "gate_plan_for",
+    "gate_reservations",
     "issue_production_capability",
     "permission_bindings",
     "reservation_claim",
@@ -140,6 +136,37 @@ def _provenance(source_root, expected_commit, expected_inputs) -> None:
             raise ValueError("source input not in frozen commit")
 
 
+def gate_reservations(permission) -> dict:
+    """The per-slot reservations the owner declared, checked but never invented.
+
+    No single reservation covers this campaign: the three 10 MiB Commits are
+    bounded by the transport at 60 seconds while the recovery window allows at
+    most 1.71 seconds per slot. The upload figure is the published ceiling; the
+    small-slot figure is a planning bound only the owner can set, because the
+    lane has never recorded per-request durations. This checks both and proves
+    the arithmetic, and refuses a permission that omits them.
+    """
+    declared = permission.get("gateReservationSeconds")
+    if not isinstance(declared, dict) or set(declared) != {"upload", "slot"}:
+        raise ValueError("owner declared Gate reservations required")
+    for value in declared.values():
+        if type(value) not in (int, float) or isinstance(value, bool) or value <= 0:
+            raise ValueError("owner declared Gate reservations required")
+    if declared["upload"] != campaign.transport_deadline_seconds():
+        raise ValueError("upload reservation differs from the enforced ceiling")
+    return dict(declared)
+
+
+def gate_plan_for(inputs, permission) -> dict:
+    """Compile this campaign's Gate plan from the frozen inputs and permission."""
+    declared = gate_reservations(permission)
+    return campaign.gate_plan(
+        campaign.execution_plan(inputs["plan"]),
+        upload_seconds=declared["upload"],
+        slot_seconds=declared["slot"],
+    )
+
+
 def _validate_owner_window(permission) -> None:
     """An owner permission is short-lived and must still cover the whole run."""
     issued, expiry = permission.get("issuedAt"), permission.get("expiresAt")
@@ -166,6 +193,14 @@ def _approve(
     if digest({key: permission.get(key) for key in required}) != digest(required):
         raise ValueError("typed owner permission binding differs")
     _validate_owner_window(permission)
+    # The Gate reservations are owner-declared planning bounds, and compiling
+    # the Gate plan here proves they fit the campaign's wall and recovery split
+    # before anything is frozen around them.
+    campaign.gate_plan(
+        campaign.execution_plan(plan),
+        upload_seconds=gate_reservations(permission)["upload"],
+        slot_seconds=gate_reservations(permission)["slot"],
+    )
     # A permission always names where its production baseline came from, even
     # where the observation journals themselves are not available to re-read.
     commit_baseline.validate_provenance(permission.get("baselineProvenance"))
@@ -240,27 +275,33 @@ def validate_fresh_admission(ledger_root, plan, permission) -> dict:
     }
 
 
-def reservation_claim(inputs, *, gate_path=None):
-    """The shared Ledger claim for this campaign, minus the unresolved Gate.
+def reservation_claim(inputs, *, gate_path, gate_plan):
+    """The shared Ledger claim for this campaign, with its Gate binding.
 
-    Every settled part is here: the campaign identity, the frozen plan digest,
-    the nonce digest, the owned document lock scopes and the budget. The Gate
-    binding is not, and this refuses rather than inventing one.
+    `gate_plan` is the campaign's own projection onto the shared Gate schema,
+    compiled by the descriptor because the timing and the cost are the
+    campaign's, not the shared module's. The claim addresses one job by name;
+    the Ledger validates every job of the reserved Gate regardless, so the name
+    only says which job the retirement path binds its Gate handle to.
     """
     descriptor_ = descriptor()
     plan = inputs["plan"]
-    claim = {
+    if (
+        digest(gate_plan.get("nonce")) != digest(plan["nonce"])
+        or gate_plan.get("campaignId") != descriptor_.campaign_id
+    ):
+        raise ValueError("Gate plan belongs to another campaign or nonce")
+    return {
         "campaignId": descriptor_.campaign_id,
         "manifestDigest": inputs["planDigest"],
         "nonceDigest": digest(plan["nonce"]),
+        "gatePath": str(Path(gate_path).resolve()),
+        "gatePlanDigest": digest(gate_plan),
+        "gateJob": campaign.gate_job_name(campaign.PROBE_SCOPES[0]),
         "locks": descriptor_.lock_scopes(plan),
         "budget": campaign.ledger_budget(),
         "durationSeconds": descriptor_.campaign_seconds,
     }
-    if gate_path is None:
-        raise ValueError(f"request-byte reservation is unavailable: {UNRESOLVED_GATE}")
-    claim["gatePath"] = str(Path(gate_path).resolve())
-    return claim
 
 
 def transport_call(plan, phase, index, operation, token) -> dict:

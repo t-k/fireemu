@@ -83,6 +83,7 @@ SHADOW_RECORD = "spec/compatibility/broad-runs/fs-request-bytes-local-shadow.jso
 # profile names the build that shadow ran, derived from the record rather than
 # typed in. The digest still proves only which bytes the owner retained.
 MINIMUM_WINDOW_SECONDS = 1200
+RECEIPT_KIND = "request-bytes-acquisition-receipt-v1"
 
 COLLECTOR_ENTRY = (
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_collector.py"
@@ -137,9 +138,38 @@ def shadow_record() -> dict:
     return value
 
 
+# The lane has no reviewed build profile registry. This states, in the code O7
+# reads, exactly what the profile does and does not establish, so accepting it
+# is a decision the gatekeeper makes on the record rather than an omission.
+ARTIFACT_PROFILE_BASIS = {
+    "kind": "request-bytes-artifact-profile-v1",
+    "registry": "none",
+    "derivedFrom": "the published local shadow record's runtime.sourceCommit",
+    "establishes": (
+        "which build the comparison reference was produced by, and that the "
+        "retained bytes hash to the digest the approval binds"
+    ),
+    "doesNotEstablish": (
+        "that the build was reviewed; no profile registry entry exists for this "
+        "lane and O7 must accept the profile explicitly"
+    ),
+    "ownerAcceptanceRequired": True,
+}
+
+
 def artifact_profile() -> str:
     """The build the comparison is bound to, named by the shadow's own Rust SHA."""
     return "request-bytes-" + shadow_record()["runtime"]["sourceCommit"][:9]
+
+
+def artifact_profile_basis() -> dict:
+    """What the profile establishes, for the record O7 accepts it on."""
+    return {
+        **copy.deepcopy(ARTIFACT_PROFILE_BASIS),
+        "profile": artifact_profile(),
+        "sourceCommit": shadow_record()["runtime"]["sourceCommit"],
+        "shadowArtifactSha256": shadow_record()["runtime"]["artifactSha256"],
+    }
 
 
 def budget_document() -> dict:
@@ -345,6 +375,132 @@ def lane_sources() -> tuple[str, ...]:
     )
 
 
+PROBE_SCOPES = ("probe-u01", "probe-e01", "probe-o01")
+PROBE_OBSERVATIONS = 35
+PROBE_RECOVERY = 51
+GATE_CONTRACT = "shared-local-v2"
+GATE_INTERVAL_SECONDS = 0.25
+GATE_REQUEST_COST_MICROUSD = 1
+
+
+def gate_job_name(probe: str) -> str:
+    return f"request-bytes-{probe}"
+
+
+def _probe_slice(plan, probe_index):
+    """One probe's own operations, in the compiler's fixed per-probe order."""
+    observation = plan["observation"][
+        probe_index * PROBE_OBSERVATIONS : (probe_index + 1) * PROBE_OBSERVATIONS
+    ]
+    recovery = plan["recovery"][
+        probe_index * PROBE_RECOVERY : (probe_index + 1) * PROBE_RECOVERY
+    ]
+    if len(observation) != PROBE_OBSERVATIONS or len(recovery) != PROBE_RECOVERY:
+        raise ValueError("compiled plan does not carry three equal probes")
+    return observation, recovery
+
+
+def _probe_schedule(plan, probe_index, *, upload_seconds, slot_seconds):
+    """The campaign schedule projected onto one probe's own slot indices.
+
+    The campaign's `executionSchedule` indexes the whole plan; a Gate job indexes
+    its own lists. The projection keeps the campaign's order and renumbers, so
+    the interleaving the Gate now admits is the one the collector actually runs.
+    """
+    bounds = {"observation": PROBE_OBSERVATIONS, "recovery": PROBE_RECOVERY}
+    entries = []
+    for entry in plan["executionSchedule"]:
+        span = bounds[entry["phase"]]
+        if entry["index"] // span != probe_index:
+            continue
+        local = entry["index"] % span
+        operations = plan[entry["phase"]]
+        upload = operations[entry["index"]]["method"] == "POST"
+        entries.append(
+            {
+                "phase": entry["phase"],
+                "index": local,
+                "seconds": upload_seconds if upload else slot_seconds,
+            }
+        )
+    return entries
+
+
+def gate_plan(plan, *, upload_seconds, slot_seconds, wall_seconds=None):
+    """Project the compiled campaign onto the shared Gate schema.
+
+    Both reservations are required arguments with no default. The three 10 MiB
+    Commits are bounded by the transport at 60 seconds while the other 255
+    requests are small, and no single plan-wide reservation is an upper bound for
+    both: the recovery window forces at most 1.71 seconds per slot, which is not
+    a bound on a 60 second upload. Neither number may be invented here, so the
+    caller states both and this function proves the arithmetic fits.
+    """
+    for name, value in (
+        ("upload_seconds", upload_seconds),
+        ("slot_seconds", slot_seconds),
+    ):
+        if type(value) not in (int, float) or isinstance(value, bool) or value <= 0:
+            raise ValueError(f"declared {name} required")
+    if upload_seconds > transport_deadline_seconds():
+        raise ValueError("upload reservation above the enforced transport ceiling")
+    jobs = {}
+    for index, probe in enumerate(PROBE_SCOPES):
+        observation, recovery = _probe_slice(plan, index)
+        jobs[gate_job_name(probe)] = {
+            "resources": [
+                name for name in plan["ownedResources"] if f"/{probe}/" in name
+            ],
+            "observation": copy.deepcopy(observation),
+            "recovery": copy.deepcopy(recovery),
+            "schedule": _probe_schedule(
+                plan,
+                index,
+                upload_seconds=upload_seconds,
+                slot_seconds=slot_seconds,
+            ),
+        }
+    recovery_time = math.ceil(
+        len(PROBE_SCOPES) * PROBE_RECOVERY * (slot_seconds + GATE_INTERVAL_SECONDS)
+    )
+    wall = int(wall_seconds if wall_seconds is not None else campaign_seconds())
+    observation_time = math.ceil(
+        len(PROBE_SCOPES)
+        * (
+            (PROBE_OBSERVATIONS - 1) * (slot_seconds + GATE_INTERVAL_SECONDS)
+            + upload_seconds
+            + GATE_INTERVAL_SECONDS
+        )
+    )
+    if not 0 < recovery_time < wall or observation_time > wall - recovery_time:
+        raise ValueError(
+            "declared reservations do not fit the campaign wall and recovery split"
+        )
+    return {
+        "contract": GATE_CONTRACT,
+        "campaignId": CAMPAIGN,
+        "nonce": plan["nonce"],
+        "jobSlots": len(PROBE_SCOPES),
+        "requestSeconds": slot_seconds,
+        "wallSeconds": wall,
+        "recoverySeconds": recovery_time,
+        "intervalSeconds": GATE_INTERVAL_SECONDS,
+        "observationRequests": len(PROBE_SCOPES) * PROBE_OBSERVATIONS,
+        "requestCostMicrousd": GATE_REQUEST_COST_MICROUSD,
+        "costMicrousd": ledger_budget()["costMicrousd"],
+        "receiptKind": RECEIPT_KIND,
+        # The owner supplies the bearer token, so this campaign acquires no
+        # credential and takes no management slot at all.
+        "management": {
+            "observation": [],
+            "recovery": [],
+            "credentialIds": [],
+            "credentialSlots": [],
+        },
+        "jobs": jobs,
+    }
+
+
 def source_map() -> dict[str, str]:
     """Digest every source this campaign binds: the whole lane, plus the closure."""
     values = {}
@@ -539,6 +695,7 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
         "concurrency": 1,
         "tariffsConfirmedBelowPlanningCeilings": True,
         "costModel": cost_model(),
+        "artifactProfileBasis": artifact_profile_basis(),
     }
     if baseline is not None:
         required.update(commit_baseline.permission_baseline(baseline))

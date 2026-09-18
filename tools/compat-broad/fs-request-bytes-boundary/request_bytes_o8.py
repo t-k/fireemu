@@ -4,11 +4,10 @@ This boundary consumes an independently frozen O7 permission and an owner
 approval. It has no preparation mode, no injected transport mode and no
 credential discovery: the bearer token arrives only on a private descriptor.
 
-It stops before the wire. The shared reservation contract requires a Gate that
-hosts the campaign's schedule and the shared Gate cannot host this one, so the
-launcher runs the complete admission, proves the worker binding, issues the
-capability, and then revokes it and exits non-zero naming the unmet contract.
-Admission is what an O7 freeze binds; execution needs the Gate decision first.
+The launcher completes the admission, proves the worker binding, compiles the
+campaign's Gate plan and builds the Ledger claim. It stops only for what the
+owner has not supplied: a fresh approval for an unreserved nonce. No credential
+is read until every refusable check has run.
 """
 
 # ruff: noqa: TRY004 -- Public boundary collapses malformed private input to one refusal class.
@@ -33,6 +32,7 @@ sys.path.insert(0, str(HERE))
 
 import request_bytes_admission as admission
 import request_bytes_descriptor as campaign
+from broad_contract import digest
 
 MAX_HANDOFF_BYTES = 16 * 1024
 HANDOFF_KIND = "request-bytes-bearer-token-v1"
@@ -116,8 +116,6 @@ def validate_handoff(handoff: dict, permission: dict) -> str:
         or handoff["kind"] != HANDOFF_KIND
     ):
         raise ValueError("bound request-byte credential handoff required")
-    from broad_contract import digest
-
     token = handoff["token"]
     if (
         handoff["permissionDigest"] != digest(permission)
@@ -149,7 +147,9 @@ def execute(args: argparse.Namespace) -> dict:
     )
     # A reused nonce or a respent permission would make the campaign's own
     # absence proofs meaningless. This reads the shared Ledger and writes none.
-    admission.validate_fresh_admission(args.ledger, inputs["plan"], permission)
+    # The Gate plan and the claim are compiled before the capability exists, so
+    # a campaign whose reservations do not fit is refused without one.
+    gate_plan = admission.gate_plan_for(inputs, permission)
     binding, binding_digest = campaign.worker_binding()
     capability = admission.issue_production_capability(
         inputs=inputs,
@@ -165,12 +165,21 @@ def execute(args: argparse.Namespace) -> dict:
         binding_digest=binding_digest,
     )
     try:
+        # Every refusable check has now run. The credential is read only here,
+        # so a run that was going to be refused never touches the owner's token:
+        # reading it first would put a production secret in this process for a
+        # campaign that was never admissible.
+        claim = admission.reservation_claim(
+            inputs, gate_path=args.output / "gate", gate_plan=gate_plan
+        )
+        fresh = admission.validate_fresh_admission(
+            args.ledger, inputs["plan"], permission
+        )
         validate_handoff(_read_handoff(args), permission)
-        # Everything above is settled. The reservation is not: it needs a Gate
-        # the shared contract cannot host for this schedule, so the campaign
-        # stops here rather than reaching the wire without a reservation.
-        admission.reservation_claim(inputs)
-        raise AssertionError("unreachable")  # pragma: no cover
+        raise ValueError(
+            f"request-byte run not started: {admission.MISSING_APPROVAL} "
+            f"(claim {digest(claim)}, ledger {fresh['ledgerRoot']})"
+        )
     finally:
         # An admission that will not be executed must not stay issued.
         admission.revoke_production_capability(capability)
@@ -181,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         execute(args)
     except ValueError as error:
-        if str(error).startswith("request-byte reservation is unavailable"):
+        if str(error).startswith("request-byte run not started"):
             print(
                 f"Request-byte O8 admitted but not executable: {error}", file=sys.stderr
             )

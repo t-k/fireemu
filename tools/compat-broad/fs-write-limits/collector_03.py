@@ -62,24 +62,39 @@ def collect(gate, plan, output, wire, *, before_recovery=None, excused=()):
         save(output / f"{phase}-{index:02d}.json", entry)
         return entry
 
+    abandoned = None
     try:
         for index, operation in enumerate(observation):
             if operation["method"] in MUTATING and not writes_safe(
                 rows, plan, excused=excused
             ):
+                abandoned = "write-safety predicate refused a mutating request"
                 break
             entry = dispatch(operation, False, index, index)
             rows.append(entry)
             if entry.get("dispatchFailure"):
+                abandoned = "a dispatch failed"
                 break
             if index < preflights and not typed_absence(
                 entry.get("status"), entry.get("body")
             ):
+                abandoned = "a namespace preflight did not prove typed absence"
                 break
     except Exception as error:
+        abandoned = "an observation raised"
         failures.append({"phase": "observation", "failure": type(error).__name__})
     finally:
-        gate.stop()
+        # With a declared schedule the Gate admits only the next slot in the
+        # frozen order, so an observation that ends early has to say so before
+        # its cleanup slots become reachable. Without one, stopping is enough.
+        scheduled = "schedule" in plan["localGatePlan"]["jobs"]["limits"]
+        if abandoned is not None and scheduled:
+            try:
+                gate.abandon_observation(abandoned)
+            except Exception as error:
+                failures.append({"phase": "abandon", "failure": type(error).__name__})
+        else:
+            gate.stop()
         recovery_ready = True
         if before_recovery is not None:
             try:

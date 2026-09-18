@@ -550,15 +550,36 @@ def test_accepted_boundary_that_is_refused_is_a_mismatch(tmp_path):
         gate, plan, tmp_path / "collection", StrictNames(), excused=pending_rows(plan)
     )
     assert result["expectationMismatches"]
-    # The frozen schedule is what makes the reservation honest, and it is also
-    # what makes recovery unreachable once the run stops past a creating slot:
-    # the Gate admits only the next unconsumed slot. The journal is preserved
-    # and the owned documents go to the recovery owner. A stop inside the
-    # non-creating prefix is different, and is covered by the creates flags.
+    # The run stops past a creating slot. The abandon transition reopens the
+    # cleanup slots, so every document the run created is deleted and verified
+    # absent: no cleanup request is refused and nothing is orphaned.
+    assert not [
+        failure
+        for failure in result["infrastructureFailures"]
+        if failure["phase"] == "cleanup"
+    ]
+    created = {
+        row["request"]["path"].split("?", 1)[0].removeprefix("/v1/")
+        for row in result["rows"]
+        if row.get("status") == 200 and row["request"]["method"] == "PATCH"
+    }
+    created |= {
+        write["update"]["name"]
+        for row in result["rows"]
+        if row.get("status") == 200 and row["request"]["method"] == "POST"
+        for write in row["request"]["body"]["writes"]
+        if write
+    }
+    assert created, "the stop has to happen past a creating slot to be this test"
+    assert all(result["resourceAbsence"][name] for name in created)
+    # The terminal close is a separate matter and is blocked in the Gate today:
+    # a slot skipped because its resource was never created records no absence
+    # proof, so `finish` and `abandoned_cleanup_complete` cannot see the set they
+    # require. Nothing is orphaned by it; only the bookkeeping is unfinished.
     assert result["cleanupComplete"] is False
-    assert any(
-        failure["phase"] == "cleanup" for failure in result["infrastructureFailures"]
-    )
+    assert [failure["phase"] for failure in result["infrastructureFailures"]] == [
+        "finish"
+    ]
 
 
 def _journal(plan, tmp_path, name):
@@ -983,14 +1004,16 @@ def test_the_split_selections_remain_available():
         assert gate["recoverySeconds"] < gate["wallSeconds"]
 
 
-def test_the_schedule_states_what_an_early_stop_costs():
-    """The frozen schedule buys an honest reservation and costs late recovery.
+def test_the_schedule_keeps_fail_closed_recovery():
+    """A frozen schedule buys an honest reservation without costing recovery.
 
-    The Gate admits only the next unconsumed slot, so a run that stops past a
-    creating slot cannot dispatch its cleanup. A stop inside the non-creating
-    prefix is different: every slot there is declared `creates: false`, which is
-    what lets the Gate admit a no-data abort. The campaign declares both, so
-    neither is a surprise at admission.
+    The Gate admits only the next unconsumed slot, so a run that stopped part
+    way through observation once could not reach its own cleanup at all. The
+    Gate's abandon transition ends the observation explicitly and reopens the
+    recovery slots in their declared order, so the campaign keeps both the
+    per-slot reservation and its fail-closed guarantee. Every slot that cannot
+    create is still declared `creates: false`, which is what lets the Gate admit
+    a no-data abort inside that prefix.
     """
     job = compile_limits_plan("fireemu-35fe6", "(default)", "0" * 32)["localGatePlan"][
         "jobs"

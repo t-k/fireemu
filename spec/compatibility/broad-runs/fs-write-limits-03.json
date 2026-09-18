@@ -111,7 +111,7 @@
         6145
       ],
       "closes": "FS-LIMIT-DOCUMENT-NAME-BYTES boundary",
-      "constraint": "This boundary is not observed by a create. An automatic single-field index entry is charged the document name and its parent document's name, so the smallest possible entry for a document named at 6144 bytes is 11040 bytes against the 7680-byte FS-LIMIT-INDEX-ENTRY-BYTES maximum, whatever the fields hold. The first artifact shadow observed exactly this refusal at 12543 bytes. Observing the boundary with a create needs the same index configuration decision that gates the three index-entry limits.",
+      "constraint": "This boundary is not observed by a create. An automatic single-field index entry is charged the document name and its parent document's name, so the smallest possible entry for a document named at 6144 bytes is 11040 bytes against the 7680-byte FS-LIMIT-INDEX-ENTRY-BYTES maximum, whatever the fields hold. An artifact shadow of the earlier create-based shape observed exactly this refusal at 12543 bytes. Observing the boundary with a create needs the same index configuration decision that gates the three index-entry limits.",
       "expected": [
         "a read of the boundary name answers typed absence",
         "the over-boundary write is refused",

@@ -178,9 +178,28 @@ impl PushDispatchState {
         self.backoff.get(key).map(|backoff| backoff.resume_at)
     }
 
-    /// Records one failed push attempt and returns the instant delivery may resume. Consecutive
-    /// failures lengthen the wait; the progression is [`push::push_backoff_after`].
-    fn record_push_failure(&mut self, key: &str, now: LogicalInstant) -> LogicalInstant {
+    /// Whether `generation` is still the incarnation this dispatcher serves for `key`. A worker
+    /// that no longer owns its subscription must not touch any of its state.
+    fn owns(&self, key: &str, generation: u64) -> bool {
+        !self.shutting_down && self.generations.get(key).copied() == Some(generation)
+    }
+
+    /// Records one failed push attempt and returns the instant delivery may resume, or `None`
+    /// when `generation` no longer owns the subscription. Consecutive failures lengthen the wait;
+    /// the progression is [`push::push_backoff_after`].
+    ///
+    /// The ownership check and the update share this one borrow, which is the dispatch lock: a
+    /// caller that checked first and updated afterwards would leave the window where the
+    /// subscription is deleted and recreated in between.
+    fn record_push_failure(
+        &mut self,
+        key: &str,
+        generation: u64,
+        now: LogicalInstant,
+    ) -> Option<LogicalInstant> {
+        if !self.owns(key, generation) {
+            return None;
+        }
         let consecutive_failures = self
             .backoff
             .get(key)
@@ -196,12 +215,19 @@ impl PushDispatchState {
                 resume_at,
             },
         );
-        resume_at
+        Some(resume_at)
     }
 
     /// Clears a subscription's push backoff after a successful delivery.
-    fn clear_push_backoff(&mut self, key: &str) {
+    /// Clears a subscription's push backoff after a delivery its endpoint accepted. Returns
+    /// whether `generation` still owned the subscription; a stale worker changes nothing. The
+    /// check and the removal share this borrow for the reason given on [`Self::record_push_failure`].
+    fn clear_push_backoff(&mut self, key: &str, generation: u64) -> bool {
+        if !self.owns(key, generation) {
+            return false;
+        }
         self.backoff.remove(key);
+        true
     }
 
     fn claim(&mut self) -> Option<PushWork> {
@@ -866,19 +892,25 @@ impl PubSubHandle {
             .deliver_push_messages(&work.subscription, &key, work.generation, received)
             .await
         {
+            // The backoff belongs to the incarnation that delivered, not to the name. The
+            // subscription may have been deleted and recreated while the endpoint was being
+            // awaited, and then this worker owns nothing and stops without touching it.
             PushAttemptOutcome::Delivered => {
-                self.clear_push_backoff(&key);
-                PushQuantumResult::Continue
+                if self.clear_push_backoff(&key, work.generation) {
+                    PushQuantumResult::Continue
+                } else {
+                    PushQuantumResult::Stop
+                }
             }
             // The endpoint failed, so the subscription owes its push backoff before the next
             // attempt. The retry policy may ask for longer, and then it decides.
-            PushAttemptOutcome::Failed => {
-                let resume_at = self.record_push_failure(&key);
-                PushQuantumResult::Defer(push_resume_after_failure(
+            PushAttemptOutcome::Failed => match self.record_push_failure(&key, work.generation) {
+                Some(resume_at) => PushQuantumResult::Defer(push_resume_after_failure(
                     resume_at,
                     self.next_push_delivery_at(&work.subscription),
-                ))
-            }
+                )),
+                None => PushQuantumResult::Stop,
+            },
             PushAttemptOutcome::Invalidated => PushQuantumResult::Stop,
         }
     }
@@ -903,21 +935,23 @@ impl PubSubHandle {
         self.push_backoff_for_key(&subscription.to_full())
     }
 
-    /// Records a failed push attempt on the virtual clock and returns when delivery may resume.
-    fn record_push_failure(&self, key: &str) -> LogicalInstant {
+    /// Records a failed push attempt on the virtual clock and returns when delivery may resume,
+    /// or `None` when the delivering incarnation is no longer the current one.
+    fn record_push_failure(&self, key: &str, generation: u64) -> Option<LogicalInstant> {
         let now = self.now();
         self.push_dispatch
             .lock()
             .expect("push dispatch lock")
-            .record_push_failure(key, now)
+            .record_push_failure(key, generation, now)
     }
 
-    /// Releases a subscription's push backoff after a delivery the endpoint accepted.
-    fn clear_push_backoff(&self, key: &str) {
+    /// Releases a subscription's push backoff after a delivery the endpoint accepted. Returns
+    /// whether the delivering incarnation still owned the subscription.
+    fn clear_push_backoff(&self, key: &str, generation: u64) -> bool {
         self.push_dispatch
             .lock()
             .expect("push dispatch lock")
-            .clear_push_backoff(key);
+            .clear_push_backoff(key, generation)
     }
 
     async fn wait_until_push_invalidated(&self, key: &str, generation: u64) {
@@ -1188,6 +1222,20 @@ mod dispatch_tests {
         name
     }
 
+    /// Records a failed attempt the way the dispatcher does, for the incarnation the dispatcher
+    /// currently serves, registering one when the subscription has none yet.
+    fn record_failure_for_current(
+        dispatch: &mut PushDispatchState,
+        name: &SubscriptionName,
+        now: LogicalInstant,
+    ) -> LogicalInstant {
+        let key = name.to_full();
+        let generation = dispatch.generation_for(&key);
+        dispatch
+            .record_push_failure(&key, generation, now)
+            .expect("the current incarnation records its own failure")
+    }
+
     /// The push backoff doubles from the documented minimum and stops at the documented maximum.
     /// The curve between the two bounds is this emulator's choice; the bounds are production's.
     #[test]
@@ -1266,12 +1314,13 @@ mod dispatch_tests {
     #[test]
     fn recording_push_failures_lengthens_the_wait_until_a_success_clears_it() {
         let topic = TopicName::new("demo-project", "backoff").unwrap();
-        let key = subscription(0, &topic).to_full();
+        let name = subscription(0, &topic);
+        let key = name.to_full();
         let mut dispatch = PushDispatchState::default();
         assert_eq!(dispatch.backoff_resume_at(&key), None);
 
         for failures in 1..=3_u32 {
-            let resume_at = dispatch.record_push_failure(&key, TEST_NOW);
+            let resume_at = record_failure_for_current(&mut dispatch, &name, TEST_NOW);
             assert_eq!(
                 resume_at,
                 TEST_NOW
@@ -1281,13 +1330,99 @@ mod dispatch_tests {
             assert_eq!(dispatch.backoff_resume_at(&key), Some(resume_at));
         }
 
-        dispatch.clear_push_backoff(&key);
+        let generation = dispatch.generation_for(&key);
+        assert!(dispatch.clear_push_backoff(&key, generation));
         assert_eq!(dispatch.backoff_resume_at(&key), None);
         assert_eq!(
-            dispatch.record_push_failure(&key, TEST_NOW),
+            record_failure_for_current(&mut dispatch, &name, TEST_NOW),
             TEST_NOW.checked_add(push::push_backoff_after(1)).unwrap(),
             "a success must reset the streak, not merely pause it"
         );
+    }
+
+    /// A worker delivers for one incarnation of a subscription. If that incarnation is deleted
+    /// and a new one takes its name, the old worker's outcome must not reach the new one's
+    /// backoff: a stale success would release a throttle the new incarnation just earned.
+    #[test]
+    fn a_stale_success_does_not_clear_the_backoff_of_a_recreated_subscription() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let name = subscription(0, &topic);
+        let key = name.to_full();
+        let mut dispatch = PushDispatchState::default();
+
+        dispatch.enqueue(name.clone(), TEST_NOW);
+        let first = dispatch.claim().expect("the first incarnation is claimed");
+
+        // The subscription is deleted and recreated while that worker is still delivering.
+        dispatch.invalidate(&key);
+        dispatch.enqueue(name.clone(), TEST_NOW);
+        let second = dispatch.claim().expect("the new incarnation is claimed");
+        assert_ne!(first.generation, second.generation);
+        let resume_at = dispatch.record_push_failure(&key, second.generation, TEST_NOW);
+        assert!(resume_at.is_some(), "the new incarnation earned a backoff");
+
+        // The stale worker's delivery completes only now.
+        assert!(
+            !dispatch.clear_push_backoff(&key, first.generation),
+            "a stale worker owns nothing"
+        );
+        assert_eq!(
+            dispatch.backoff_resume_at(&key),
+            resume_at,
+            "the new incarnation keeps the backoff it earned"
+        );
+    }
+
+    /// The other direction: a stale failure must not throttle a healthy new incarnation.
+    #[test]
+    fn a_stale_failure_does_not_back_off_a_recreated_subscription() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let name = subscription(0, &topic);
+        let key = name.to_full();
+        let mut dispatch = PushDispatchState::default();
+
+        dispatch.enqueue(name.clone(), TEST_NOW);
+        let first = dispatch.claim().expect("the first incarnation is claimed");
+        dispatch.invalidate(&key);
+        dispatch.enqueue(name.clone(), TEST_NOW);
+        let second = dispatch.claim().expect("the new incarnation is claimed");
+        assert_ne!(first.generation, second.generation);
+
+        assert_eq!(
+            dispatch.record_push_failure(&key, first.generation, TEST_NOW),
+            None,
+            "a stale worker owns nothing"
+        );
+        assert_eq!(
+            dispatch.backoff_resume_at(&key),
+            None,
+            "the healthy new incarnation must not inherit a throttle"
+        );
+    }
+
+    /// The controls: the worker that owns the current incarnation does update the backoff.
+    #[test]
+    fn the_current_incarnation_clears_and_extends_its_own_backoff() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let name = subscription(0, &topic);
+        let key = name.to_full();
+        let mut dispatch = PushDispatchState::default();
+        dispatch.enqueue(name, TEST_NOW);
+        let work = dispatch.claim().expect("the incarnation is claimed");
+
+        let first = dispatch
+            .record_push_failure(&key, work.generation, TEST_NOW)
+            .expect("the owner records its failure");
+        let second = dispatch
+            .record_push_failure(&key, work.generation, TEST_NOW)
+            .expect("the owner records its second failure");
+        assert!(second > first, "consecutive failures extend the wait");
+
+        assert!(
+            dispatch.clear_push_backoff(&key, work.generation),
+            "the owner clears its own backoff"
+        );
+        assert_eq!(dispatch.backoff_resume_at(&key), None);
     }
 
     /// A failing subscription's backoff never reaches another subscription's queue.
@@ -1297,7 +1432,7 @@ mod dispatch_tests {
         let failing = subscription(0, &topic);
         let healthy = subscription(1, &topic);
         let mut dispatch = PushDispatchState::default();
-        let resume_at = dispatch.record_push_failure(&failing.to_full(), TEST_NOW);
+        let resume_at = record_failure_for_current(&mut dispatch, &failing, TEST_NOW);
 
         dispatch.enqueue(failing.clone(), TEST_NOW);
         dispatch.enqueue(healthy.clone(), TEST_NOW);
@@ -1324,7 +1459,7 @@ mod dispatch_tests {
         let name = subscription(0, &topic);
         let key = name.to_full();
         let mut dispatch = PushDispatchState::default();
-        let resume_at = dispatch.record_push_failure(&key, TEST_NOW);
+        let resume_at = record_failure_for_current(&mut dispatch, &name, TEST_NOW);
 
         for _ in 0..3 {
             dispatch.enqueue(name.clone(), TEST_NOW);
@@ -1351,7 +1486,9 @@ mod dispatch_tests {
         let work = dispatch.claim().expect("the worker claims the work");
         // The endpoint is still being awaited, so no failure is recorded yet.
         dispatch.enqueue(name.clone(), TEST_NOW);
-        let resume_at = dispatch.record_push_failure(&key, TEST_NOW);
+        let resume_at = dispatch
+            .record_push_failure(&key, work.generation, TEST_NOW)
+            .expect("the delivering incarnation records its failure");
         dispatch.defer(work, resume_at, TEST_NOW);
 
         assert!(
@@ -1376,7 +1513,7 @@ mod dispatch_tests {
         let key = name.to_full();
         let mut dispatch = PushDispatchState::default();
 
-        let resume_at = dispatch.record_push_failure(&key, TEST_NOW);
+        let resume_at = record_failure_for_current(&mut dispatch, &name, TEST_NOW);
         let now = resume_at
             .checked_add(LogicalDuration::from_millis(1))
             .unwrap();
@@ -1407,16 +1544,16 @@ mod dispatch_tests {
         let name = subscription(0, &topic);
         let key = name.to_full();
         let mut dispatch = PushDispatchState::default();
-        dispatch.record_push_failure(&key, TEST_NOW);
+        record_failure_for_current(&mut dispatch, &name, TEST_NOW);
         dispatch.enqueue(name.clone(), TEST_NOW);
 
         dispatch.invalidate(&key);
         assert_eq!(dispatch.backoff_resume_at(&key), None);
 
-        dispatch.enqueue(name, TEST_NOW);
+        dispatch.enqueue(name.clone(), TEST_NOW);
         assert!(dispatch.claim().is_some(), "a clean subscription is ready");
 
-        dispatch.record_push_failure(&key, TEST_NOW);
+        record_failure_for_current(&mut dispatch, &name, TEST_NOW);
         dispatch.invalidate_all();
         assert_eq!(dispatch.backoff_resume_at(&key), None);
     }

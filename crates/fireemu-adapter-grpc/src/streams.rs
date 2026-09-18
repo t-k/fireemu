@@ -226,6 +226,10 @@ fn handle_write_request(
                 "the first Write request must name the database root",
             ));
         }
+        // A stream is opened against a database that exists. A database `databases.create`
+        // was never called for is `NOT_FOUND` here, next to the refusal an id the project
+        // could never have carried already gets, rather than at the first commit.
+        ctx.local.database_handle(&parent)?;
         // The route and the target database are resolved; App Check decides before the
         // Firebase Auth credential, Security Rules and every mutation (section 7.4).
         ctx.admit_app_check(&parent, "Write")?;

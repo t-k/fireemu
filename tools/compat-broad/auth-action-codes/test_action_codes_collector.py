@@ -357,3 +357,35 @@ def test_the_command_line_never_accepts_a_code_or_a_credential() -> None:
         "approval",
     }
     assert {"origin", "project", "nonce", "output"} <= options
+
+
+def test_a_violated_bound_still_deletes_every_owned_account() -> None:
+    service = FakeService()
+    with pytest.raises(CollectorError, match="request budget") as raised:
+        run(service, request_budget=5)
+    receipt = raised.value.receipt
+    assert receipt["stopReason"].startswith("bound-exceeded:")
+    assert receipt["recordingComplete"] is False
+    assert receipt["cleanupComplete"] is True
+    assert receipt["remainingAccounts"] == 0
+    assert service.accounts == {}
+    assert receipt["recoveryRequests"] <= 4
+
+
+def test_recovery_has_its_own_reserve_and_is_not_starved_by_observation() -> None:
+    service = FakeService()
+    with pytest.raises(CollectorError):
+        run(service, request_budget=2)
+    assert service.accounts == {}
+
+
+def test_an_unbound_stage_input_is_recorded_rather_than_raised() -> None:
+    class Silent(FakeService):
+        def _sendOobCode(self, body: dict):
+            return 200, {"kind": "identitytoolkit#GetOobConfirmationCodeResponse"}
+
+    service = Silent()
+    _, receipt = run(service, tolerate_failure=True)
+    assert receipt["stopReason"] == "stage-failed:reset-code-lookup"
+    assert receipt["cleanupComplete"] is True
+    assert service.accounts == {}

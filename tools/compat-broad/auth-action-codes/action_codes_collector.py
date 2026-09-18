@@ -43,6 +43,10 @@ class CollectorError(RuntimeError):
     """A bound, an ownership rule or the closed production entry was violated."""
 
 
+class BindingError(RuntimeError):
+    """A stage asked for a runtime value an earlier stage never produced."""
+
+
 def redact(value: Any) -> Any:
     """Replace every secret-named value, at any depth, with a fixed marker."""
     if isinstance(value, dict):
@@ -101,7 +105,9 @@ class _Run:
         nonce: str,
         send: Callable[..., tuple[int, Any]],
         request_budget: int,
+        recovery_budget: int,
         wall_seconds: int,
+        recovery_seconds: int,
         clock: Callable[[], float],
     ) -> None:
         self.origin = origin
@@ -109,25 +115,42 @@ class _Run:
         self.nonce = nonce
         self.send = send
         self.request_budget = request_budget
+        self.recovery_budget = recovery_budget
         self.wall_seconds = wall_seconds
+        self.recovery_seconds = recovery_seconds
         self.clock = clock
         self.started = clock()
         self.requests = 0
+        self.recovery_requests = 0
+        # Recovery draws on its own reserve, so an exhausted observation budget
+        # can never stop the owned accounts from being deleted.
+        self.recovering = False
         self.secrets: dict[str, str] = {}
         self.owned: dict[str, dict[str, Any]] = {}
 
     def spend(self) -> None:
+        if self.recovering:
+            self.recovery_requests += 1
+            if self.recovery_requests > self.recovery_budget:
+                raise CollectorError("recovery request budget exhausted")
+            if self.clock() - self.recovery_started > self.recovery_seconds:
+                raise CollectorError("recovery wall clock budget exhausted")
+            return
         self.requests += 1
         if self.requests > self.request_budget:
             raise CollectorError("request budget exhausted")
         if self.clock() - self.started > self.wall_seconds:
             raise CollectorError("wall clock budget exhausted")
 
+    def begin_recovery(self) -> None:
+        self.recovering = True
+        self.recovery_started = self.clock()
+
     def resolve(self, value: Any) -> Any:
         if isinstance(value, str) and value.startswith("$binding:"):
             name = value.removeprefix("$binding:")
             if name not in self.secrets:
-                raise CollectorError("unbound stage input: " + name)
+                raise BindingError("unbound stage input: " + name)
             return self.secrets[name]
         if isinstance(value, dict):
             return {key: self.resolve(item) for key, item in value.items()}
@@ -301,28 +324,33 @@ def collect(
         project,
         nonce,
         send,
-        request_budget
-        if request_budget is not None
-        else budget["observationRequests"] + budget["recoveryRequests"],
+        request_budget if request_budget is not None else budget["observationRequests"],
+        budget["recoveryRequests"],
         wall_seconds if wall_seconds is not None else budget["wallSeconds"],
+        budget["recoverySeconds"],
         clock,
     )
     _bind_accounts(run, manifest)
     stages: list[dict[str, Any]] = []
     stop_reason: str | None = None
     failure: BaseException | None = None
+    bound_failure: CollectorError | None = None
     for stage in manifest["stages"]:
         try:
             status, body = run.request(
                 stage["path"], stage["body"], stage["routeClass"] == "admin"
             )
-        except CollectorError:
-            raise
+        except CollectorError as error:
+            # A violated bound still recovers before it is reported.
+            stop_reason = "bound-exceeded:" + stage["id"]
+            bound_failure = error
+            break
         except Exception as error:  # noqa: BLE001 -- a stage failure still recovers.
             stop_reason = "stage-failed:" + stage["id"]
             failure = error
             break
         stages.append(_project_stage(run, stage, status, body))
+    run.begin_recovery()
     recovery, cleanup_complete, remaining, delete_failures = _recover(run, manifest)
     receipt = {
         "contract": CONTRACT,
@@ -342,12 +370,16 @@ def collect(
         "deleteFailures": delete_failures,
         "requests": run.requests,
         "requestBudget": run.request_budget,
+        "recoveryRequests": run.recovery_requests,
         "ownedAccounts": {
             name: {"email": account["email"]} for name, account in run.owned.items()
         },
         "deliveredMessages": 0,
     }
     _assert_no_secret_leaked(receipt, run)
+    if bound_failure is not None:
+        bound_failure.receipt = receipt
+        raise bound_failure
     if failure is not None and not tolerate_failure:
         receipt["failure"] = type(failure).__name__
     return receipt

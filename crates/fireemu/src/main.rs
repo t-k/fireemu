@@ -416,6 +416,21 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Refuses a connection that did not land on this host's loopback interface.
+///
+/// The control capability is only ever presented to a peer whose address is loopback. A
+/// locator naming `http://localhost:4400` passes the origin rule, but the name is resolved by
+/// the host, so the address it resolved to is what decides.
+fn refuse_non_loopback_peer(peer: std::net::SocketAddr) -> Result<(), String> {
+    if peer.ip().is_loopback() {
+        return Ok(());
+    }
+    Err(format!(
+        "the Hub origin resolved to {}, which is not loopback; the control capability is not sent there",
+        peer.ip()
+    ))
+}
+
 /// One `POST` against a loopback Hub, written by hand: the binary carries a server-side
 /// hyper only, and the Hub's answers are small enough to read in one go.
 fn post_json(
@@ -426,6 +441,13 @@ fn post_json(
 ) -> Result<(u16, String), String> {
     use std::io::{Read as _, Write as _};
     let mut stream = std::net::TcpStream::connect(address).map_err(|e| e.to_string())?;
+    // `loopback_authority` has already refused every origin but a loopback one, and it accepts
+    // the name `localhost` because that is what a locator usually spells. A name is resolved
+    // by the host, and the host can be told to resolve it elsewhere (HOSTALIASES, /etc/hosts,
+    // a search domain), so what the connection actually reached is checked before the control
+    // capability is written to it.
+    let peer = stream.peer_addr().map_err(|e| e.to_string())?;
+    refuse_non_loopback_peer(peer)?;
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(120)))
         .map_err(|e| e.to_string())?;
@@ -2469,7 +2491,7 @@ fn control_state(
     let pubsub_resources = pubsub_resources.to_vec();
     let pubsub_project = cfg.auth_project.clone();
     reset_hooks.push(Arc::new(move || {
-        let _publication = pubsub_handle_for_reset.lock_publication();
+        let _publication = pubsub_handle_for_reset.lock_publication()?;
         if let Some(runtime) = &functions_for_reset {
             runtime.reset();
         }
@@ -3515,5 +3537,99 @@ mod reset_pubsub_tests {
         let state = pubsub.lock().expect("the lock is still usable");
         assert_eq!(state.list_topics("demo-app").len(), 1);
         assert_eq!(state.list_subscriptions("demo-app").len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod loopback_peer_tests {
+    use std::net::{SocketAddr, TcpListener, UdpSocket};
+
+    use super::{post_json, refuse_non_loopback_peer};
+
+    /// LOOPPEER-1: the origin rule accepts the name `localhost`, and a name is resolved by the
+    /// host, which can be told to resolve it elsewhere. What the connection reached is what
+    /// decides whether the control capability is written to it.
+    #[test]
+    fn only_a_peer_on_the_loopback_interface_is_trusted() {
+        for loopback in ["127.0.0.1:4400", "127.0.0.2:4400", "[::1]:4400"] {
+            let peer: SocketAddr = loopback.parse().expect("the address parses");
+            assert_eq!(refuse_non_loopback_peer(peer), Ok(()), "{loopback}");
+        }
+        for routable in ["10.0.0.1:4400", "203.0.113.7:80", "[2001:db8::1]:4400"] {
+            let peer: SocketAddr = routable.parse().expect("the address parses");
+            let refusal =
+                refuse_non_loopback_peer(peer).expect_err("a routable peer must be refused");
+            assert!(refusal.contains("not loopback"), "{refusal}");
+            assert!(refusal.contains(&peer.ip().to_string()), "{refusal}");
+        }
+    }
+
+    /// The address this host would use to reach the outside world, when it has one. No packet
+    /// is sent: a connected UDP socket only fixes the route so the local address can be read.
+    fn outward_address() -> Option<std::net::IpAddr> {
+        let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+        socket.connect("203.0.113.1:80").ok()?;
+        let address = socket.local_addr().ok()?.ip();
+        (!address.is_loopback() && !address.is_unspecified()).then_some(address)
+    }
+
+    /// LOOPPEER-2: the same rule over a real connection. A Hub reached on this host's own
+    /// non-loopback address is refused, and the socket it reached is left with nothing written
+    /// to it, so the control capability never lands where other hosts can also connect.
+    ///
+    /// The refusal is the claim being fixed here. The check that nothing was written is
+    /// best-effort by nature: connecting to an ephemeral port on this same host can produce a
+    /// TCP simultaneous open, where the socket connects to itself and the listener never sees
+    /// it. That case leaves nothing to inspect, and the test says so rather than hanging on an
+    /// accept that will not arrive.
+    #[test]
+    fn a_hub_reached_off_the_loopback_interface_is_never_sent_the_capability() {
+        let Some(address) = outward_address() else {
+            // A host with no non-loopback address cannot exercise this; LOOPPEER-1 still does.
+            return;
+        };
+        let Ok(listener) = TcpListener::bind((address, 0)) else {
+            return;
+        };
+        let bound = listener.local_addr().expect("the listener has an address");
+        listener
+            .set_nonblocking(true)
+            .expect("the listener accepts without blocking");
+
+        let refusal = post_json(
+            &bound.to_string(),
+            "/_admin/export",
+            "{}",
+            "secret-control-token",
+        )
+        .expect_err("a non-loopback peer must be refused");
+
+        assert!(refusal.contains("not loopback"), "{refusal}");
+        assert!(refusal.contains(&address.to_string()), "{refusal}");
+
+        // Whatever reached the listener, if anything did, carried no request.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    use std::io::Read as _;
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                        .expect("the timeout is set");
+                    let mut received = Vec::new();
+                    let _ = stream.read_to_end(&mut received);
+                    assert!(
+                        received.is_empty(),
+                        "nothing may be written to a non-loopback peer, but it received {:?}",
+                        String::from_utf8_lossy(&received)
+                    );
+                    return;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(_) => return,
+            }
+        }
     }
 }

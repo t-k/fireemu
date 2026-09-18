@@ -315,10 +315,17 @@ impl PubSubHandle {
 
     /// Locks the publication coordinator. Reset and snapshot restore paths use this same lock so
     /// a Functions reservation cannot be invalidated between admission and commit.
-    pub fn lock_publication(&self) -> std::sync::MutexGuard<'_, ()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns the refusal when the gate is poisoned. A panic here would be the second one:
+    /// the gate is held across the control-plane transitions that publish and reset Pub/Sub
+    /// state, so panicking on a poisoned gate turns one earlier failure into a permanent one
+    /// for every caller that needs it.
+    pub fn lock_publication(&self) -> Result<std::sync::MutexGuard<'_, ()>, String> {
         self.publication_gate
             .lock()
-            .expect("Pub/Sub publication lock")
+            .map_err(|_| "the Pub/Sub publication gate is poisoned".to_owned())
     }
 
     /// Shares the publication coordinator with session reset and snapshot hooks.
@@ -1553,5 +1560,54 @@ mod dispatch_tests {
             assert!(lifecycle.task.is_none());
         }
         handle.shutdown_push_dispatcher().await;
+    }
+}
+
+#[cfg(test)]
+mod publication_gate_tests {
+    use std::sync::{Arc, Mutex};
+
+    use fireemu_core_pubsub::PubSubState;
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_types::time::LogicalInstant;
+
+    use super::PubSubHandle;
+
+    fn handle() -> PubSubHandle {
+        PubSubHandle::new(
+            Arc::new(Mutex::new(PubSubState::new(5))),
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            None,
+        )
+    }
+
+    /// PUBGATE-1: the publication gate is held across the control-plane transitions that
+    /// publish and reset Pub/Sub state, so panicking on a poisoned gate would turn one earlier
+    /// failure into a permanent one for every later caller. The refusal is returned instead.
+    #[test]
+    fn a_poisoned_publication_gate_is_reported_rather_than_panicked_on() {
+        let handle = handle();
+        assert!(
+            handle.lock_publication().is_ok(),
+            "a fresh gate must be lockable"
+        );
+
+        let gate = handle.publication_gate();
+        let poisoner = std::thread::spawn(move || {
+            let _held = gate.lock().expect("the gate is not yet poisoned");
+            panic!("the holder fails while the gate is held");
+        });
+        assert!(
+            poisoner.join().is_err(),
+            "the poisoning thread must have panicked"
+        );
+
+        let refusal = handle
+            .lock_publication()
+            .expect_err("a poisoned gate must be reported");
+        assert!(refusal.contains("publication gate"), "{refusal}");
+        assert!(refusal.contains("poisoned"), "{refusal}");
     }
 }

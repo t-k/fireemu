@@ -23,6 +23,7 @@ from compiler_03 import (
     DOCUMENT_NAME_MAX,
     SUBCOLLECTION_DEPTH_MAX,
     compile_limits_plan,
+    largest_index_entry_bytes,
     resource_name_bytes,
     subcollection_depth,
 )
@@ -178,7 +179,7 @@ def test_campaign_covers_exactly_the_two_declared_residues():
     refused = [
         document for document in plan["documents"].values() if not document["owned"]
     ]
-    assert len(refused) == 3
+    assert len(refused) == 4
     assert all(
         document["resource"] not in plan["localGatePlan"]["jobs"]["limits"]["resources"]
         for document in refused
@@ -251,18 +252,19 @@ def test_plan_is_deterministic_bounded_and_nonce_isolated():
     other = plan_for("b")
     assert all("a" * 32 not in json.dumps(request) for request in other["requests"])
     accounting = first["budgetAccounting"]
-    assert accounting["observationRequests"] == 32
-    assert accounting["recoveryRequests"] == 30
-    assert accounting["ownedDocuments"] == 10
-    assert accounting["probedNames"] == 3
+    assert accounting["observationRequests"] == 30
+    assert accounting["recoveryRequests"] == 27
+    assert accounting["ownedDocuments"] == 9
+    assert accounting["probedNames"] == 4
     assert accounting["productionReady"] is False
-    assert preflight_count(first) == 10
+    assert preflight_count(first) == 9
     kinds = [request["kind"] for request in first["requests"]]
-    assert kinds[:10] == ["preflight-typed-absence"] * 10
+    assert kinds[:9] == ["preflight-typed-absence"] * 9
     assert kinds.count("batch-write") == 3
-    assert kinds.count("create-only-patch") == 6
+    assert kinds.count("create-only-patch") == 5
     assert kinds.count("refusal-consistency-readback") == 3
-    assert kinds.count("cleanup-conditional-delete") == 10
+    assert kinds.count("name-boundary-readback") == 1
+    assert kinds.count("cleanup-conditional-delete") == 9
 
 
 def test_every_batch_write_is_create_only_and_namespace_marked():
@@ -305,7 +307,7 @@ def test_unproven_namespace_cannot_authorize_any_mutation():
             "body": NOT_FOUND,
             "request": observation[index],
         }
-        for index in range(10)
+        for index in range(9)
     ]
     assert writes_safe(rows, plan) is True
     rows[7]["body"] = {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}
@@ -408,11 +410,18 @@ def test_accepted_boundary_that_is_refused_is_a_mismatch(tmp_path):
     plan = plan_for("d")
 
     class StrictNames(Responder):
+        """Refuses the accepted collection-id boundary one byte early."""
+
         def _respond(self, operation):
             if operation["method"] == "PATCH":
                 resource = operation["path"].split("?", 1)[0].removeprefix("/v1/")
-                if resource_name_bytes(resource) >= DOCUMENT_NAME_MAX:
-                    return 400, _invalid("document name is too long")
+                segments = resource.split("/documents/", 1)[1].split("/")
+                if any(
+                    len(segment.encode()) >= COLLECTION_ID_MAX
+                    for index, segment in enumerate(segments)
+                    if index % 2 == 0
+                ):
+                    return 400, _invalid("collection id is too long")
             return super()._respond(operation)
 
     create(tmp_path / "gate", plan["localGatePlan"])
@@ -503,3 +512,55 @@ def test_evaluate_rows_refuses_a_reordered_journal(tmp_path):
     swapped = copy.deepcopy(rows)
     swapped[0], swapped[1] = swapped[1], swapped[0]
     assert evaluate_rows(swapped, plan)
+
+
+def test_document_name_boundary_is_probed_by_name_not_by_a_create():
+    plan = plan_for()
+    accept = plan["documents"]["document-name-accept"]
+    refuse = plan["documents"]["document-name-refuse"]
+    assert accept["owned"] is False and refuse["owned"] is False
+    # A document at this name cannot be created while the automatic
+    # single-field indexes are in force, so the boundary is read, not written.
+    assert largest_index_entry_bytes(accept["resource"], accept["fields"]) > 7680
+    probe = compile_limits_plan("demo-firestore-probe", "(default)", "a" * 32)
+    oracle = probe["documents"]["document-name-accept"]
+    assert largest_index_entry_bytes(oracle["resource"], oracle["fields"]) == 12543
+    assert (
+        largest_index_entry_bytes(accept["resource"], {"v": {"integerValue": "0"}})
+        > 7680
+    )
+    kinds = {
+        request["kind"]
+        for request in plan["requests"]
+        if request["path"].endswith(accept["resource"])
+    }
+    assert kinds == {"name-boundary-readback"}
+
+
+def test_a_created_document_that_would_exceed_an_index_entry_is_refused(monkeypatch):
+    import compiler_03
+
+    monkeypatch.setattr(compiler_03, "INDEX_ENTRY_BYTES_MAX", 1000)
+    with pytest.raises(ValueError, match="cannot be created"):
+        compiler_03.compile_limits_plan("demo-test", "(default)", "a" * 32)
+
+
+def test_reading_the_refused_name_the_same_way_is_the_post_state_evidence(tmp_path):
+    plan = plan_for("b")
+
+    class AbsentNotInvalid(Responder):
+        def _respond(self, operation):
+            if operation["method"] == "GET":
+                resource = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+                if _path_error(resource):
+                    return 404, NOT_FOUND
+            return super()._respond(operation)
+
+    create(tmp_path / "gate", plan["localGatePlan"])
+    gate = Gate(tmp_path / "gate", "limits")
+    gate.claim()
+    result = collect(gate, plan, tmp_path / "collection", AbsentNotInvalid())
+    assert any(
+        problem["basis"] == "a read of the refused name was not refused the same way"
+        for problem in result["expectationMismatches"]
+    )

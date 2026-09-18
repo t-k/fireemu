@@ -30,6 +30,10 @@ CAMPAIGN = "FS-WRITE-LIMITS-03"
 COLLECTION_ID_MAX = 1_500
 SUBCOLLECTION_DEPTH_MAX = 100
 DOCUMENT_NAME_MAX = 6_144
+# Not observed by this campaign, but every created document must stay inside it
+# or the refusal under test is confounded. See `_check_no_confound`.
+INDEX_ENTRY_BYTES_MAX = 7_680
+INDEXED_VALUE_TRUNCATION = 1_500
 _NONCE = re.compile(r"^[0-9a-f]{32}$")
 _ROOT = Path(__file__).resolve().parents[3]
 _CATALOG = _ROOT / "spec/limits/firestore-standard-2026-08-25.json"
@@ -67,6 +71,50 @@ def resource_name_bytes(resource: str) -> int:
     pad by different amounts to reach the same boundary.
     """
     return len(resource.encode("utf-8"))
+
+
+def storage_name_bytes(resource: str) -> int:
+    """`document_name_size` from `crates/fireemu-core-firestore/src/size.rs`.
+
+    This is the quantity index entries are charged, and it is not the same as
+    the protocol resource-name byte count that `FS-LIMIT-DOCUMENT-NAME-BYTES`
+    is measured on.
+    """
+    relative = resource.split("/documents/", 1)[1]
+    return 16 + sum(len(segment.encode()) + 1 for segment in relative.split("/"))
+
+
+def _indexed_value_bytes(value: dict[str, Any]) -> int:
+    if "referenceValue" in value:
+        size = storage_name_bytes(value["referenceValue"])
+    elif "integerValue" in value:
+        size = 8
+    elif "stringValue" in value:
+        size = len(value["stringValue"].encode()) + 1
+    elif "arrayValue" in value:
+        members = value["arrayValue"].get("values")
+        # The undecodable case carries a value the server never indexes.
+        size = (
+            sum(_indexed_value_bytes(member) for member in members)
+            if isinstance(members, list)
+            else 0
+        )
+    else:
+        raise ValueError("unsupported indexed value")
+    return min(size, INDEXED_VALUE_TRUNCATION)
+
+
+def largest_index_entry_bytes(resource: str, fields: dict[str, Any]) -> int:
+    """Largest automatic single-field collection index entry for a document."""
+    parent = "/".join(resource.split("/")[:-2])
+    parent_bytes = (
+        storage_name_bytes(parent) if parent.split("/documents/", 1)[-1] else 0
+    )
+    base = storage_name_bytes(resource) + parent_bytes + 32
+    return base + max(
+        len(name.encode()) + 1 + _indexed_value_bytes(value)
+        for name, value in fields.items()
+    )
 
 
 def subcollection_depth(resource: str) -> int:
@@ -248,6 +296,7 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
             "accept": f"{root}/cid-exact/{'i' * COLLECTION_ID_MAX}/x",
             "refuse": f"{root}/cid-over/{'i' * (COLLECTION_ID_MAX + 1)}/x",
             "boundary": [COLLECTION_ID_MAX, COLLECTION_ID_MAX + 1],
+            "probe": "create",
         },
         {
             "id": "FS-LIMIT-SUBCOLLECTION-DEPTH",
@@ -255,6 +304,7 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
             "accept": _depth_resource(root, "depth-exact", SUBCOLLECTION_DEPTH_MAX),
             "refuse": _depth_resource(root, "depth-over", SUBCOLLECTION_DEPTH_MAX + 1),
             "boundary": [SUBCOLLECTION_DEPTH_MAX, SUBCOLLECTION_DEPTH_MAX + 1],
+            "probe": "create",
         },
         {
             "id": "FS-LIMIT-DOCUMENT-NAME-BYTES",
@@ -262,13 +312,24 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
             "accept": _padded_resource(root, "name-exact", DOCUMENT_NAME_MAX),
             "refuse": _padded_resource(root, "name-over", DOCUMENT_NAME_MAX + 1),
             "boundary": [DOCUMENT_NAME_MAX, DOCUMENT_NAME_MAX + 1],
+            # A document named at 6144 bytes cannot be created at all while the
+            # automatic single-field indexes are in force: its smallest possible
+            # index entry is 11040 bytes against a 7680-byte limit, because the
+            # entry charges the document name and its parent's name. So this
+            # boundary is probed by requests that carry the name without
+            # creating an index entry. Observing it with a create needs the same
+            # index configuration decision that gates the index-entry limits.
+            "probe": "name-only",
         },
     ]
     for index, limit in enumerate(limits):
         for side in ("accept", "refuse"):
             resource = limit[side]
             document = add(
-                f"{limit['label']}-{side}", resource, None, owned=side == "accept"
+                f"{limit['label']}-{side}",
+                resource,
+                None,
+                owned=side == "accept" and limit["probe"] == "create",
             )
             document["fields"] = _fields(resource, 100 + index)
             document["limitId"] = limit["id"]
@@ -377,7 +438,22 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
     for limit in limits:
         accept = documents[f"{limit['label']}-accept"]
         refuse = documents[f"{limit['label']}-refuse"]
-        requests.append(_create_only_patch(accept, positive=True))
+        if limit["probe"] == "create":
+            requests.append(_create_only_patch(accept, positive=True))
+        else:
+            requests.append(
+                {
+                    "kind": "name-boundary-readback",
+                    "service": "firestore",
+                    "method": "GET",
+                    "path": "/v1/" + accept["resource"],
+                    "body": None,
+                    # A name at the boundary is a valid resource, so the request
+                    # is processed and answers typed absence rather than a
+                    # syntax refusal.
+                    "expect": {"status": 404, "typed": "NOT_FOUND"},
+                }
+            )
         requests.append(_create_only_patch(refuse, positive=False))
         requests.append(
             {
@@ -393,11 +469,12 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
                 "expect": {"status": 400, "typed": "INVALID_ARGUMENT"},
             }
         )
-        requests.append(
-            _readback(
-                accept["resource"], present=True, kind="unchanged-control-readback"
+        if limit["probe"] == "create":
+            requests.append(
+                _readback(
+                    accept["resource"], present=True, kind="unchanged-control-readback"
+                )
             )
-        )
 
     observation_count = len(requests)
     for document in owned:
@@ -453,7 +530,7 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
             }
         },
         "wallSeconds": 1000,
-        "recoverySeconds": 450,
+        "recoverySeconds": 420,
         "observationRequests": observation_count,
         "intervalSeconds": 0.25,
         "requestCostMicrousd": 100,
@@ -546,6 +623,14 @@ def _check_no_confound(documents: dict[str, Any], limits: list[dict[str, Any]]) 
         "FS-LIMIT-SUBCOLLECTION-DEPTH": lambda d: d["depth"],
         "FS-LIMIT-DOCUMENT-NAME-BYTES": lambda d: d["nameBytes"],
     }
+    for label, document in documents.items():
+        if not document["owned"]:
+            continue
+        entry = largest_index_entry_bytes(document["resource"], document["fields"])
+        if entry > INDEX_ENTRY_BYTES_MAX:
+            raise ValueError(
+                f"{label} cannot be created: its index entry is {entry} bytes"
+            )
     for limit in limits:
         accept = documents[f"{limit['label']}-accept"]
         refuse = documents[f"{limit['label']}-refuse"]

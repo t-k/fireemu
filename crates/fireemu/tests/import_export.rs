@@ -2107,9 +2107,10 @@ fn an_over_budget_unmanaged_entry_leaves_the_existing_export_unchanged() {
         .unwrap();
 
     let log = text(&output);
-    assert!(
-        output.status.success(),
-        "the command's exit code is preserved: {log}"
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a refused export is reported in the exit code, not only on stderr: {log}"
     );
     assert!(
         log.contains("1073741824 byte cumulative copy limit"),
@@ -2144,9 +2145,10 @@ fn a_failed_staged_export_leaves_the_existing_export_unchanged() {
         .output()
         .unwrap();
     let log = text(&output);
-    assert!(
-        output.status.success(),
-        "the command's exit code is preserved: {log}"
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a refused export is reported in the exit code, not only on stderr: {log}"
     );
     assert!(log.contains("not a regular file or directory"), "{log}");
     assert_eq!(std::fs::read(&manifest).unwrap(), original_manifest);
@@ -2192,9 +2194,10 @@ fn a_hard_linked_unmanaged_file_leaves_the_existing_export_unchanged() {
         .unwrap();
     let log = text(&output);
 
-    assert!(
-        output.status.success(),
-        "the command's exit code is preserved: {log}"
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a refused export is reported in the exit code, not only on stderr: {log}"
     );
     assert!(log.contains("multiple hard links"), "{log}");
     assert_eq!(std::fs::read(&manifest).unwrap(), original_manifest);
@@ -2470,4 +2473,38 @@ fn emulators_export_refuses_a_locator_it_must_not_believe() {
         assert_eq!(output.status.code(), Some(1), "{log}");
         assert!(log.contains("writable"), "{log}");
     }
+}
+
+/// EXPEXIT-1: an export requested with --export-on-exit runs after the command, so its failure
+/// has only one place left to show: the process exit status. Reporting it on stderr alone let a
+/// scheduled job that refreshes a seed directory pass while refreshing nothing.
+#[cfg(unix)]
+#[test]
+fn a_failed_export_on_exit_is_visible_in_the_exit_code() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = scratch("export-on-exit-failure");
+    // The export target's parent has to be created at exit, inside a directory this user
+    // cannot write to, so the export fails after the command has already succeeded.
+    let sealed = dir.join("sealed");
+    std::fs::create_dir_all(&sealed).unwrap();
+    let target = sealed.join("inner").join("out");
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+    let output = exec()
+        .arg("--export-on-exit")
+        .arg(&target)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    assert!(log.contains("--export-on-exit"), "{log}");
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "the command succeeded but its export did not, and the exit status said success: {log}"
+    );
+    assert!(!target.exists(), "{log}");
 }

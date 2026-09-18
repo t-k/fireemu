@@ -1184,6 +1184,7 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
         }
         _ => 0,
     };
+    let mut code = code;
     if let Some(dir) = &export_on_exit {
         use hub::ExportRunner as _;
         match exporter.export(dir, "exit") {
@@ -1192,7 +1193,15 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
                     println!("exported to {}", dir.display());
                 }
             }
-            Err(e) => eprintln!("error: --export-on-exit {}: {e}", dir.display()),
+            Err(e) => {
+                eprintln!("error: --export-on-exit {}: {e}", dir.display());
+                // The export runs after the command, so a refusal has nowhere else to show.
+                // A command that already failed keeps its own status: that is the more
+                // specific signal and is non-zero already.
+                if code == 0 {
+                    code = 1;
+                }
+            }
         }
     }
     if let Some(runtime) = functions_runtime {

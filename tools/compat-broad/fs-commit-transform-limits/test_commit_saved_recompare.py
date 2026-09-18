@@ -84,7 +84,7 @@ def test_saved_recompare_refuses_a_comparator_root_without_sources(
     inputs, output, reference = _saved(tmp_path, monkeypatch)
     empty = tmp_path / "empty-comparator-root"
     empty.mkdir()
-    with pytest.raises(ValueError, match="comparator source required"):
+    with pytest.raises(ValueError, match="regular non-empty file required"):
         recompare.recompare_saved(
             output,
             reference,
@@ -285,3 +285,92 @@ def test_an_input_swapped_while_the_validator_runs_is_still_caught(
     monkeypatch.setattr(recompare, "compare_saved", swap_then_validate)
     with pytest.raises(ValueError, match="changed while the recompare ran"):
         _recompare(inputs, output, reference, root)
+
+
+_SITE_PROBE = """import sys
+
+
+def compare_rows(plan, rows, ref_plan, ref_rows, **kwargs):
+    try:
+        import pytest  # noqa: F401
+
+        reachable = "yes"
+    except ImportError:
+        reachable = "no"
+    return {
+        "classification": "MATCH",
+        "errors": [],
+        "kind": f"no_site={sys.flags.no_site};site_packages_import={reachable}",
+        "rows": [{"index": index, "classification": "MATCH"} for index in range(17)],
+    }
+"""
+
+
+def test_the_child_interpreter_cannot_reach_site_packages(tmp_path, monkeypatch):
+    """The snapshot is the only place a lane module can come from.
+
+    pytest is installed for this run and lives only in site-packages, so the
+    child failing to import it is the observable form of that claim.
+    """
+    inputs, output, reference = _saved(tmp_path, monkeypatch)
+    root = _comparator_root(tmp_path / "comparator-site", slow=False)
+    (root / "transform_comparator.py").write_text(_SITE_PROBE)
+    record = _recompare(inputs, output, reference, root)
+    assert record["repaired"]["kind"] == "no_site=1;site_packages_import=no"
+
+
+def test_the_witness_covers_what_the_validator_reads_too(tmp_path, monkeypatch):
+    """The release record, the OAuth journals and every row journal.
+
+    `compare_saved` reads these in the same run and the frozen classification
+    depends on them, so a replacement after it read them must still refuse even
+    though the published record carries no digest for them.
+    """
+    inputs, output, reference = _saved(tmp_path, monkeypatch)
+    root = _comparator_root(tmp_path / "comparator-a", slow=False)
+    original = recompare.compare_saved
+    targets = [
+        output / "release.json",
+        output / "coordinator/oauth-refresh-charge.json",
+        output / "coordinator/oauth-refresh-receipt.json",
+        output / "coordinator/oauth-tokeninfo-charge.json",
+        output / "coordinator/oauth-tokeninfo-receipt.json",
+        output / "collection/observation-00.json",
+        output / "collection/recovery-05.json",
+    ]
+    for target in targets:
+        assert target.is_file(), target
+
+        def swap_then_validate(*args, _target=target, **kwargs):
+            value = original(*args, **kwargs)
+            body = json.loads(_target.read_text())
+            body["reviewMarker"] = "replaced after the validator read it"
+            staging = _target.with_name(_target.name + ".incoming")
+            staging.write_text(json.dumps(body))
+            os.replace(staging, _target)
+            return value
+
+        keep = target.read_bytes()
+        monkeypatch.setattr(recompare, "compare_saved", swap_then_validate)
+        with pytest.raises(ValueError, match=f"{target.name} changed"):
+            _recompare(inputs, output, reference, root)
+        monkeypatch.setattr(recompare, "compare_saved", original)
+        target.write_bytes(keep)
+
+
+def test_a_refused_saved_acquisition_propagates_from_a_complete_saved_set(
+    tmp_path, monkeypatch
+):
+    """The reviewer's fifth condition, with every saved file present."""
+    inputs, output, reference = _saved(tmp_path, monkeypatch)
+    root = _comparator_root(tmp_path / "comparator-a", slow=False)
+    reached = []
+
+    def refuse(saved, reference_path, **kwargs):
+        reached.append(str(saved))
+        raise ValueError("fixture: saved acquisition invalid")
+
+    monkeypatch.setattr(recompare, "compare_saved", refuse)
+    with pytest.raises(ValueError, match="^fixture: saved acquisition invalid$"):
+        _recompare(inputs, output, reference, root)
+    assert reached == [str(output)]

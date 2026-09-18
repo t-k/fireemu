@@ -17,19 +17,36 @@ The record only means something if the digests it publishes are the digests of
 the bytes that actually produced the classification, so nothing it names is read
 twice. Every saved input is read once and the parsed values, the published
 digests and the executed sources all come from that one read. The repaired
-comparator sources are written into a private read-only snapshot from those same
-bytes, the snapshot is what the subprocess imports and what the record hashes,
-and it holds the complete lane import closure so the child cannot reach back
-into a mutable directory.
+comparator sources are written into a private snapshot from those same bytes as
+read-only files, the snapshot is what the subprocess imports and what the record
+hashes, and it holds the complete lane import closure. The child runs with
+`-I -S -B`, so neither the environment, nor user site, nor site-packages is on
+its path and the snapshot is the only place a lane module can come from: a
+comparator that grows a new lane import fails to import rather than loading it
+from a directory this run does not hash.
 
 `compare_saved` runs before that read and opens the saved records and the
 reference for itself, and its refusal for an invalid saved directory has to
 reach the caller unchanged, so the pre-image taken ahead of it is only a probe
 that never raises. Comparing the probe with the real read closes the window
 around the validator. `comparator_root` need not be a frozen checkout, so every
-path this run depended on is compared against its bytes again at the end.
-Anything that changed underneath refuses the whole recompare rather than
-returning a record whose result and digests describe different bytes.
+path this run read is compared against its bytes again at the end. That covers
+what `compare_saved` reads as well as what this module parses: the release
+record, both bounded OAuth charge and receipt journals and every per-row
+journal, none of whose digests the published record carries but on which the
+frozen classification depends. Those are witnessed only if they are there,
+because which files a saved directory must contain is `compare_saved`'s question
+and this module adds no requirement of its own. Anything that changed underneath
+refuses the whole recompare rather than returning a record whose result and
+digests describe different bytes.
+
+Two limits are worth stating. A file replaced and restored within the run is
+invisible to a closing byte comparison; the repaired half is immune because the
+snapshot is what ran, but the frozen half, which `compare_saved` imports
+straight out of the saved directory, has only this detection. And the snapshot
+directory is owner-writable while the run is in flight even though its files are
+not, so a process under the same account could add a module ahead of the
+comparator on the child's path.
 
 No production request is made, no credential is read, and no current permission,
 checkout or artifact is consulted. The saved output directory is only read.
@@ -74,7 +91,7 @@ def _read_bytes(path) -> bytes:
     """Read one regular file exactly once; its bytes are what gets hashed."""
     path = Path(path)
     if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
-        raise ValueError("comparator source required")
+        raise ValueError(f"{Path(path).name}: regular non-empty file required")
     return path.read_bytes()
 
 
@@ -94,6 +111,55 @@ def _probe(path) -> bytes | None:
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _required_paths(output: Path, comparator_root: Path, reference_path: Path):
+    """The paths this module parses or publishes a digest for.
+
+    These are the only files it insists on. Which files a saved directory must
+    contain is `compare_saved`'s question, not this module's, so everything else
+    is witnessed only if it is there.
+    """
+    return (
+        output / "inputs.json",
+        output / "receipt.json",
+        output / "collection/collection.json",
+        output / "transform_comparator.py",
+        output / "transform_compiler.py",
+        reference_path,
+        *(comparator_root / name for name in _SOURCES),
+    )
+
+
+def _validator_paths(output: Path):
+    """Fixed paths `compare_saved` reads that this module does not parse.
+
+    The frozen classification depends on the release record and both bounded
+    OAuth charge and receipt journals, so a replacement after the validator read
+    them has to be caught even though the published record carries no digest for
+    them. The per-row journals belong to the same set and come from
+    `_journal_paths` once the collection is known.
+    """
+    return (
+        output / "release.json",
+        *(
+            output / "coordinator" / f"oauth-{slot}-{record}.json"
+            for slot in ("refresh", "tokeninfo")
+            for record in ("charge", "receipt")
+        ),
+    )
+
+
+def _journal_paths(output: Path, collection: Any):
+    """The per-row journals `compare_saved` checks, named by the collection."""
+    if not isinstance(collection, dict):
+        return ()
+    return tuple(
+        output / "collection" / f"{phase}-{index:02d}.json"
+        for phase, key in (("observation", "rows"), ("recovery", "cleanup"))
+        for index in range(len(collection.get(key) or []))
+        if isinstance(collection.get(key), list)
+    )
 
 
 def _counts(rows: list[dict[str, Any]]) -> dict[str, int]:
@@ -156,23 +222,32 @@ def recompare_saved(
     output = Path(output)
     comparator_root = Path(comparator_root)
     reference_path = Path(reference_path)
-    depends_on = (
-        output / "inputs.json",
-        output / "receipt.json",
-        output / "collection/collection.json",
-        output / "transform_comparator.py",
-        output / "transform_compiler.py",
-        reference_path,
-        *(comparator_root / name for name in _SOURCES),
-    )
+    depends_on = _required_paths(output, comparator_root, reference_path)
 
     # The pre-image is taken first, but only as a probe, because
     # `compare_saved` owns the refusal for an invalid saved directory and that
     # refusal has to reach the caller unchanged rather than being masked by a
     # read of our own. `compare_saved` opens these same paths for itself, so
     # comparing the probe with the real read below is what closes the window
-    # around it.
+    # around it. The row journals are named by the collection, so they can only
+    # be probed once it parses; a collection that does not parse is the
+    # validator's refusal to make.
     probe = {path: _probe(path) for path in depends_on}
+    probed = probe[output / "collection/collection.json"]
+    try:
+        probed_collection = json.loads(probed) if probed is not None else None
+    except ValueError:
+        probed_collection = None
+    probe.update(
+        {
+            path: _probe(path)
+            for path in (
+                *_validator_paths(output),
+                *_journal_paths(output, probed_collection),
+            )
+        }
+    )
+
     frozen = compare_saved(
         output,
         reference_path,
@@ -185,12 +260,17 @@ def recompare_saved(
     # snapshot all come from here and nothing is opened again until the closing
     # check.
     witness = {path: _read_bytes(path) for path in depends_on}
-    for path, before in probe.items():
-        if before is not None and before != witness[path]:
+    collection = json.loads(witness[output / "collection/collection.json"])
+    for path in (*_validator_paths(output), *_journal_paths(output, collection)):
+        present = _probe(path)
+        if present is not None:
+            witness[path] = present
+    for path, current in witness.items():
+        before = probe.get(path)
+        if before is not None and before != current:
             raise ValueError(f"{path.name} changed while the recompare ran")
     inputs = json.loads(witness[output / "inputs.json"])
     receipt = json.loads(witness[output / "receipt.json"])
-    collection = json.loads(witness[output / "collection/collection.json"])
     reference = json.loads(witness[reference_path])
     payload = json.dumps(
         {
@@ -208,7 +288,7 @@ def recompare_saved(
             {name: witness[comparator_root / name] for name in _SOURCES}, snapshot
         )
         completed = subprocess.run(
-            [sys.executable, "-I", "-B", "-c", _KERNEL, str(snapshot)],
+            [sys.executable, "-I", "-S", "-B", "-c", _KERNEL, str(snapshot)],
             input=payload,
             text=True,
             capture_output=True,

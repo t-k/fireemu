@@ -108,6 +108,7 @@ async fn read_body(req: Request<Incoming>, limit: usize) -> Result<Bytes, ()> {
         .map_err(|_| ())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn rest_call(
     state: Arc<RestState>,
     req: Request<Incoming>,
@@ -130,6 +131,8 @@ async fn rest_call(
     let path = req.uri().path().to_owned();
     let query = req.uri().query().unwrap_or("").to_owned();
     let authorization = header(&req, "authorization").map(str::to_owned);
+    let browser_metadata =
+        fireemu_core_session::loopback::carries_browser_metadata(|name| header(&req, name));
     // Every instance, in wire order: duplicates and folded values must survive to the
     // classifier, which refuses them (spec 7.3).
     let app_check: Vec<String> = req
@@ -171,6 +174,10 @@ async fn rest_call(
         path,
         query,
         authorization,
+        origin: origin.clone(),
+        // The privileged emulator routes need to know whether a browser issued the request;
+        // the set of fields that says so is the shared one.
+        browser_metadata,
         app_check,
         body,
     };

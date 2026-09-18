@@ -49,6 +49,7 @@ async fn firestore_root_is_ready_without_capturing_rest_or_grpc() {
         gateway: Arc::new(gateway.clone()),
         rules: None,
         app_check: None,
+        control_token: None,
     });
     let server = tokio::spawn(serve_multiplexed(
         listener,

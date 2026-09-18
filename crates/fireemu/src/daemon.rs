@@ -612,6 +612,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         clock_observer,
         storage_policy,
         storage_admin_capability.clone(),
+        control_token.clone(),
     )?;
     if let Some(runtime) = &functions_runtime {
         runtime.set_faults(faults.for_project(runtime.project()));
@@ -872,6 +873,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         gateway: Arc::new(gateway),
         rules: enforcer,
         app_check: firestore_policy,
+        control_token: Some(control_token.clone()),
     });
     Ok(ReadySuite {
         log_bus,

@@ -273,6 +273,7 @@ async fn start(mode: BaselineMode) -> Harness {
         gateway: Arc::new(gateway),
         rules: Some(enforcer),
         app_check: policy,
+        control_token: None,
     });
     Harness {
         client: FirestoreClient::new(channel),
@@ -359,6 +360,8 @@ impl Harness {
             authorization: authorization.map(str::to_owned),
             app_check: app_check.iter().map(|v| (*v).to_owned()).collect(),
             body,
+            origin: None,
+            browser_metadata: false,
         });
         (r.status, r.body)
     }

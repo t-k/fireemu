@@ -44,6 +44,10 @@ pub struct RestState {
     pub gateway: Arc<Gateway>,
     /// Rules enforcement, if configured.
     pub rules: Option<Arc<RulesEnforcer>>,
+    /// The run's control token. The emulator routes that replace the ruleset are privileged,
+    /// so a request from a browser has to present it. `None` is a run with no control
+    /// surface, and then no browser request may reach them.
+    pub control_token: Option<String>,
     /// The App Check baseline policy of Cloud Firestore (`appCheck.services.firestore`).
     /// `None` is the `off` mode: no header is collected and nothing is classified.
     pub app_check: Option<Arc<fireemu_core_app_check::admission::ServiceAdmission>>,
@@ -60,6 +64,11 @@ pub struct RestRequest {
     pub query: String,
     /// `Authorization` header.
     pub authorization: Option<String>,
+    /// `Origin` header, when the transport saw one.
+    pub origin: Option<String>,
+    /// Whether the transport saw any field only a browser attaches
+    /// (`fireemu_core_session::loopback::BROWSER_METADATA_HEADERS`).
+    pub browser_metadata: bool,
     /// Every `X-Firebase-AppCheck` field instance, in wire order (specification section 7.3).
     pub app_check: Vec<String>,
     /// Parsed JSON body (`{}` when empty).
@@ -493,18 +502,27 @@ impl RestState {
 
     /// The Firestore emulator's own routes, under `/emulator/v1/projects/`.
     ///
-    /// Only `DELETE .../databases/{database}/documents` exists: it drops every document of
-    /// the project, which is what `@firebase/rules-unit-testing`'s `clearFirestore()` and
-    /// the Emulator UI's "clear data" button call between tests. It takes no credential,
-    /// exactly as the official emulator's route does not -- `clearFirestore` sends no
-    /// headers at all -- and is reachable only from the loopback listener. A browser page
-    /// cannot reach it either: `DELETE` is not a CORS-simple method, so it needs a preflight
-    /// that this surface never answers.
+    /// `DELETE .../databases/{database}/documents` drops every document of the project, which
+    /// is what `@firebase/rules-unit-testing`'s `clearFirestore()` and the Emulator UI's
+    /// "clear data" button call between tests. It takes no credential, exactly as the official
+    /// emulator's route does not -- `clearFirestore` sends no headers at all -- and is
+    /// reachable only from the loopback listener. Being loopback-only is not by itself enough:
+    /// this surface answers a CORS preflight for any loopback origin, `PUT` and `DELETE`
+    /// included, so a page on another loopback port could drive it. Wiping a session's data is
+    /// as privileged as replacing its ruleset, so the route takes the same admission: a request
+    /// that carries browser metadata needs a loopback origin and the run's control token, while
+    /// the process-issued request `clearFirestore()` makes carries none of that metadata and is
+    /// unaffected. The Emulator UI reaches it through its own front, which has already required
+    /// the control token.
     ///
     /// `PUT .../{project}:securityRules` replaces the session's Firestore ruleset, which is
     /// what `@firebase/rules-unit-testing` calls from `initializeTestEnvironment` and from
-    /// `loadFirestoreRules`. It carries the same guard as the clear route and for the same
-    /// reason: a loopback-only listener plus a method no CORS-simple request can use.
+    /// `loadFirestoreRules`. Replacing the authorization policy of the whole run is a
+    /// privileged operation and this surface does answer a CORS preflight for any loopback
+    /// origin, so the route applies the shared privileged-route policy on top of the loopback
+    /// listener: a request that carries browser metadata must come from a loopback origin and
+    /// present the run's control token. A process-issued request carries none of that
+    /// metadata and keeps its unauthenticated access.
     fn emulator_route(&self, req: &RestRequest, rest: &str) -> Result<RestResponse, Status> {
         if let Some(project) = rest.strip_suffix(":securityRules") {
             return self.security_rules_route(req, project);
@@ -527,6 +545,7 @@ impl RestState {
         if req.method != "DELETE" {
             return Ok(not_found_text());
         }
+        self.privileged_browser_guard(req)?;
         if project.is_empty() || database.is_empty() {
             return Err(Status::invalid_argument(
                 "the project and database of an emulator clear must both be named",
@@ -537,6 +556,34 @@ impl RestState {
         // while the Admin database catalog remains available for the existing databases.
         self.local.clear_project_documents(project)?;
         Ok(ok(Value::Object(serde_json::Map::new())))
+    }
+
+    /// The browser policy shared by the privileged emulator routes -- replacing the ruleset
+    /// and clearing the data -- which is the one policy every privileged route of every
+    /// surface applies (`fireemu_core_session::loopback`). A request that carries no browser
+    /// metadata is a process and runs unauthenticated, which is what keeps
+    /// `@firebase/rules-unit-testing` and the CLI working; a request from a page must come
+    /// from a loopback origin and present the run's control token. A run with no control
+    /// surface can present no token, so no page reaches these routes at all.
+    fn privileged_browser_guard(&self, req: &RestRequest) -> Result<(), Status> {
+        use fireemu_core_session::loopback::{privileged_route_admission, PrivilegedAdmission};
+        let presented = req
+            .authorization
+            .as_deref()
+            .and_then(|a| a.strip_prefix("Bearer "))
+            .map(str::trim);
+        let token_ok = self.control_token.as_deref().is_some_and(|expected| {
+            fireemu_adapter_support::secret::optional_str_matches(presented, expected)
+        });
+        match privileged_route_admission(req.browser_metadata, req.origin.as_deref(), token_ok) {
+            PrivilegedAdmission::Admit => Ok(()),
+            PrivilegedAdmission::ForeignOrigin => {
+                Err(Status::permission_denied("FORBIDDEN_ORIGIN"))
+            }
+            PrivilegedAdmission::ControlTokenRequired => Err(Status::permission_denied(
+                "CONTROL_TOKEN_REQUIRED : browser requests need Authorization: Bearer <control token>",
+            )),
+        }
     }
 
     /// `PUT /emulator/v1/projects/{project}:securityRules`.
@@ -555,6 +602,7 @@ impl RestState {
         req: &RestRequest,
         project: &str,
     ) -> Result<RestResponse, Status> {
+        self.privileged_browser_guard(req)?;
         if req.method != "PUT" {
             return Err(Status::invalid_argument(format!(
                 "{} is not supported on {}; the ruleset is replaced with PUT",

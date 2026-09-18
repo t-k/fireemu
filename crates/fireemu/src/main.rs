@@ -1833,6 +1833,7 @@ fn storage_state(
     clock_observer: Option<Arc<dyn Fn() + Send + Sync>>,
     app_check_policy: Option<Arc<fireemu_core_app_check::ServiceAdmission>>,
     admin_capability: String,
+    control_token: String,
 ) -> Result<Arc<fireemu_adapter_http::storage::StorageState>, String> {
     let parent = fireemu_adapter_grpc::decode::Parent {
         project: fireemu_core_types::ids::ProjectId::try_new(cfg.auth_project.clone())
@@ -1863,6 +1864,7 @@ fn storage_state(
         app_check_policy,
         admin_capability: Some(admin_capability),
         token_acceptance: cfg.token_acceptance,
+        control_token: Some(control_token),
     }))
 }
 
@@ -2071,6 +2073,7 @@ fn clock_millis(clock: &Arc<Mutex<VirtualClock>>) -> i64 {
     i64::try_from(nanos / 1_000_000).unwrap_or(i64::MAX)
 }
 
+#[allow(clippy::too_many_lines)]
 fn print_banner(
     cfg: &RuntimeConfig,
     verb: &str,
@@ -2087,9 +2090,18 @@ fn print_banner(
         None => println!("  auth:             not selected by --only (nothing is bound)"),
     }
     match addrs.storage {
-        Some(a) => println!(
-            "  storage (HTTP):   {a}   FIREBASE_STORAGE_EMULATOR_HOST={a}   STORAGE_EMULATOR_HOST=http://{a}"
-        ),
+        Some(a) => {
+            println!(
+                "  storage (HTTP):   {a}   FIREBASE_STORAGE_EMULATOR_HOST={a}   STORAGE_EMULATOR_HOST=http://{a}"
+            );
+            // A run with no ruleset denies every end-user request, as production's default
+            // rules do; say so, because the configuration that reaches it is an omission.
+            if cfg.storage_rules_file.is_none() && cfg.storage_rules_by_target.is_empty() {
+                println!(
+                    "  storage rules:    none loaded, so every end-user request is denied; set storage.rules in firebase.json (the owner credential and the JSON API are unaffected)"
+                );
+            }
+        }
         None => println!("  storage:          not selected by --only (nothing is bound)"),
     }
     match addrs.functions {

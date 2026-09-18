@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_session::loopback::PrivilegedAdmission;
 use fireemu_core_session::tenancy::Scope;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::edition::FirestoreEdition;
@@ -2362,6 +2363,13 @@ fn base64_encode(data: &[u8]) -> String {
 /// The browser policy of every control route (also applied by the asynchronous
 /// `awaitIdle` path): foreign origins are refused, and a page on a loopback origin needs
 /// the control token for anything but reads.
+///
+/// The decision itself is [`fireemu_core_session::loopback::privileged_route_admission`], the
+/// one privileged-route policy every surface applies; this function only decides which routes
+/// of the control API are privileged. The browser test is `Origin` alone here because that is
+/// the only browser field [`RequestHeaders`] carries; surfaces whose transport forwards the
+/// rest pass [`fireemu_core_session::loopback::carries_browser_metadata`] instead, which is
+/// strictly wider.
 #[must_use]
 pub fn browser_guard(
     state: &ControlState,
@@ -2370,9 +2378,6 @@ pub fn browser_guard(
     headers: &RequestHeaders,
 ) -> Option<JsonResponse> {
     let origin = headers.origin.as_deref()?;
-    if !crate::identity_toolkit::origin_is_local(origin) {
-        return Some(error(403, "FORBIDDEN_ORIGIN"));
-    }
     // Decide on the same path the router matches: a query string must not change which
     // routes are privileged.
     let path = path.split('?').next().unwrap_or(path);
@@ -2384,13 +2389,15 @@ pub fn browser_guard(
         .as_deref()
         .and_then(|a| a.strip_prefix("Bearer "))
         .map(str::trim);
-    if privileged && !token_matches(presented, &state.control_token) {
-        return Some(error(
+    let token_ok = !privileged || token_matches(presented, &state.control_token);
+    match fireemu_core_session::loopback::privileged_route_admission(true, Some(origin), token_ok) {
+        PrivilegedAdmission::Admit => None,
+        PrivilegedAdmission::ForeignOrigin => Some(error(403, "FORBIDDEN_ORIGIN")),
+        PrivilegedAdmission::ControlTokenRequired => Some(error(
             403,
             "CONTROL_TOKEN_REQUIRED : browser requests need Authorization: Bearer <control token>",
-        ));
+        )),
     }
-    None
 }
 
 /// `POST /v1/sessions/{s}:awaitIdle`: waits until the functions runtime has no outstanding

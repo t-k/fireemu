@@ -2277,6 +2277,7 @@ fn note_password_updated_at(
 #[allow(clippy::too_many_lines)]
 fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, ArtifactError> {
     let refuse = |message: String| ArtifactError::new("auth", path, message);
+    header_safe_account(record, &refuse)?;
     if let Some((member, _)) = record.extra.first() {
         return Err(refuse(format!(
             "account {} contains unsupported member {member:?}; fireemu cannot preserve it during import",
@@ -2412,6 +2413,61 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
         totp_factors,
         phone_factors,
     })
+}
+
+/// Refuses the control characters an account may carry in the strings the Auth store does not
+/// check itself.
+///
+/// `AuthStore::import_user` already rejects them in the local id, the email, the display name,
+/// the photo URL and the phone number. The linked providers and the enrolled second factors go
+/// in unchecked, and every one of those strings is rendered back into an account response, a
+/// log line and a re-exported artifact, so the artifact boundary applies the same rule to them.
+/// The classification is the one predicate both product sections of an artifact use
+/// ([`fireemu_core_storage::store::is_header_safe`]), so Auth and Storage cannot drift apart
+/// on what a control character is. The refusal names the field and never repeats the value.
+fn header_safe_account(
+    record: &UserRecord,
+    refuse: &impl Fn(String) -> ArtifactError,
+) -> Result<(), ArtifactError> {
+    let check = |field: &str, value: &str| -> Result<(), ArtifactError> {
+        if fireemu_core_storage::store::is_header_safe(value) {
+            Ok(())
+        } else {
+            Err(refuse(format!("{field} contains a control character")))
+        }
+    };
+    for provider in &record.provider_user_info {
+        check("providerUserInfo.providerId", &provider.provider_id)?;
+        check("providerUserInfo.rawId", &provider.raw_id)?;
+        for (field, value) in [
+            ("providerUserInfo.federatedId", &provider.federated_id),
+            ("providerUserInfo.email", &provider.email),
+            ("providerUserInfo.displayName", &provider.display_name),
+            ("providerUserInfo.photoUrl", &provider.photo_url),
+            ("providerUserInfo.phoneNumber", &provider.phone_number),
+            ("providerUserInfo.screenName", &provider.screen_name),
+        ] {
+            if let Some(value) = value {
+                check(field, value)?;
+            }
+        }
+    }
+    for enrollment in &record.mfa_info {
+        check("mfaInfo.mfaEnrollmentId", &enrollment.mfa_enrollment_id)?;
+        for (field, value) in [
+            ("mfaInfo.displayName", &enrollment.display_name),
+            ("mfaInfo.phoneInfo", &enrollment.phone_info),
+            (
+                "mfaInfo.unobfuscatedPhoneInfo",
+                &enrollment.unobfuscated_phone_info,
+            ),
+        ] {
+            if let Some(value) = value {
+                check(field, value)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The sign-in provider an account is attributed to, from the providers the export listed.
@@ -2647,6 +2703,7 @@ fn enforce_storage_object_count(count: usize, path: &Path) -> Result<(), Artifac
 
 fn imported_object(meta: &ExportedObject, path: &Path) -> Result<ImportedObject, ArtifactError> {
     let refuse = |message: String| ArtifactError::new("storage", path, message);
+    header_safe_metadata(meta, &refuse)?;
     let bucket = BucketName::try_new(meta.bucket.clone())
         .map_err(|e| refuse(format!("bucket {:?}: {e}", meta.bucket)))?;
     let name = ObjectName::try_new(meta.name.clone())
@@ -2684,6 +2741,45 @@ fn imported_object(meta: &ExportedObject, path: &Path) -> Result<ImportedObject,
         crc32c: meta.crc32c.as_deref().and_then(|c| c.parse().ok()),
         size: Some(meta.size),
     })
+}
+
+/// Refuses, before any object is installed, the metadata strings an artifact may carry that
+/// would be served as HTTP header values.
+///
+/// The store applies the same check, but it does so one object at a time after the previous
+/// state has been cleared; refusing here keeps a crafted artifact from clearing the store and
+/// installing a prefix of its objects. The refusal names the field and never repeats the
+/// value, which is by definition untrusted and carries control characters.
+fn header_safe_metadata(
+    meta: &ExportedObject,
+    refuse: &impl Fn(String) -> ArtifactError,
+) -> Result<(), ArtifactError> {
+    let check = |field: &str, value: &str| -> Result<(), ArtifactError> {
+        if fireemu_core_storage::store::is_header_safe(value) {
+            Ok(())
+        } else {
+            Err(refuse(format!("{field} contains a control character")))
+        }
+    };
+    for (field, value) in [
+        ("contentType", &meta.content_type),
+        ("contentDisposition", &meta.content_disposition),
+        ("contentEncoding", &meta.content_encoding),
+        ("contentLanguage", &meta.content_language),
+        ("cacheControl", &meta.cache_control),
+    ] {
+        if let Some(value) = value {
+            check(field, value)?;
+        }
+    }
+    for (key, value) in &meta.custom_metadata {
+        check("metadata key", key)?;
+        check(&format!("metadata.{key}"), value)?;
+    }
+    for token in &meta.download_tokens {
+        check("downloadTokens", token)?;
+    }
+    Ok(())
 }
 
 fn imported_instant(
@@ -3784,6 +3880,7 @@ mod tests {
             app_check_policy: None,
             admin_capability: None,
             token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+            control_token: None,
         });
         let endpoints = super::Endpoints {
             backend: &backend,
@@ -4017,6 +4114,7 @@ mod tests {
                 app_check_policy: None,
                 admin_capability: None,
                 token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+                control_token: None,
             });
             (backend, storage)
         };
@@ -4644,6 +4742,7 @@ mod tests {
             app_check_policy: None,
             admin_capability: None,
             token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+            control_token: None,
         });
         let endpoints = super::Endpoints {
             backend: &backend,

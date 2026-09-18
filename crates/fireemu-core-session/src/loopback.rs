@@ -61,3 +61,66 @@ pub fn origin_is_local(origin: &str) -> bool {
     }
     authority_is_loopback(authority)
 }
+
+/// Request fields whose presence marks a request as issued by a web page rather than by a
+/// process.
+///
+/// `Origin` alone is not enough to rely on: it is attached to the requests a page makes that
+/// need CORS, but the decision of a privileged route must not hinge on one header an old or
+/// unusual browser may omit. `Sec-Fetch-*` is attached by every current browser and cannot be
+/// set by page script; `Referer` and `Cookie` are attached by browsers that predate
+/// `Sec-Fetch-*`. A process-issued request (a test library running under Node, the CLI) sends
+/// none of them, which is what keeps the unauthenticated compatibility paths working.
+pub const BROWSER_METADATA_HEADERS: &[&str] = &[
+    "origin",
+    "sec-fetch-site",
+    "sec-fetch-mode",
+    "sec-fetch-dest",
+    "referer",
+    "cookie",
+];
+
+/// Whether any [`BROWSER_METADATA_HEADERS`] field is present, through a case-insensitive
+/// lookup the caller supplies (surfaces carry their headers in different shapes).
+///
+/// A field present but empty counts as absent: the Storage transport spells a duplicated
+/// header that way, and an empty `Origin` is not an origin.
+pub fn carries_browser_metadata<'a>(header: impl Fn(&str) -> Option<&'a str>) -> bool {
+    BROWSER_METADATA_HEADERS
+        .iter()
+        .any(|name| header(name).is_some_and(|value| !value.is_empty()))
+}
+
+/// What a privileged route does with one request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivilegedAdmission {
+    /// The request may run.
+    Admit,
+    /// The request came from a page on another site.
+    ForeignOrigin,
+    /// The request came from a page and presented no control token, or the wrong one.
+    ControlTokenRequired,
+}
+
+/// The one browser policy every privileged emulator route applies: a request with no browser
+/// metadata is a process and runs unauthenticated (the emulator serves loopback without a
+/// credential); a request from a page must come from a loopback origin and must present the
+/// run's control token.
+///
+/// `token_ok` is computed by the caller so that the comparison stays constant-time in the
+/// crate that owns the secret.
+#[must_use]
+pub fn privileged_route_admission(
+    from_browser: bool,
+    origin: Option<&str>,
+    token_ok: bool,
+) -> PrivilegedAdmission {
+    if origin.is_some_and(|origin| !origin_is_local(origin)) {
+        return PrivilegedAdmission::ForeignOrigin;
+    }
+    if !from_browser || token_ok {
+        PrivilegedAdmission::Admit
+    } else {
+        PrivilegedAdmission::ControlTokenRequired
+    }
+}

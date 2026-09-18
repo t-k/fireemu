@@ -107,14 +107,19 @@ enum BodyError {
 /// buffer is dropped, which is after the handler returns (also on every error path).
 struct BudgetedBody {
     budget: &'static BodyBudget,
+    /// The longest body this request may have. It is [`MAX_STORAGE_BODY_BYTES`] for the data
+    /// routes and the control port's limit for the privileged rules route, and it is applied
+    /// as the bytes arrive, so a client that declares no length cannot buffer more than it.
+    cap: usize,
     charged: usize,
     bytes: Vec<u8>,
 }
 
 impl BudgetedBody {
-    fn new(budget: &'static BodyBudget) -> Self {
+    fn new(budget: &'static BodyBudget, cap: usize) -> Self {
         Self {
             budget,
+            cap,
             charged: 0,
             bytes: Vec::new(),
         }
@@ -140,7 +145,7 @@ impl BudgetedBody {
 
     /// Reserves the declared body size up front: one allocation for the whole body.
     fn reserve_declared(&mut self, declared: usize) -> Result<(), BodyError> {
-        if declared > MAX_STORAGE_BODY_BYTES {
+        if declared > self.cap {
             return Err(BodyError::TooLarge);
         }
         self.reserve(declared)?;
@@ -154,7 +159,7 @@ impl BudgetedBody {
             .len()
             .checked_add(chunk.len())
             .ok_or(BodyError::TooLarge)?;
-        if end > MAX_STORAGE_BODY_BYTES {
+        if end > self.cap {
             return Err(BodyError::TooLarge);
         }
         self.reserve(end)?;
@@ -179,10 +184,11 @@ impl Drop for BudgetedBody {
 /// Buffers the whole request body under the budget and the body limit.
 async fn collect_body(
     budget: &'static BodyBudget,
+    cap: usize,
     declared: Option<usize>,
     mut body: Incoming,
 ) -> Result<BudgetedBody, BodyError> {
-    let mut buffer = BudgetedBody::new(budget);
+    let mut buffer = BudgetedBody::new(budget, cap);
     if let Some(declared) = declared {
         buffer.reserve_declared(declared)?;
     }
@@ -221,6 +227,10 @@ const FORWARDED_HEADERS: &[&str] = &[
     "sec-fetch-site",
     "sec-fetch-mode",
     "sec-fetch-dest",
+    // Browser metadata older than `Sec-Fetch-*`: the privileged rules route must not depend
+    // on one header an unusual browser may omit (see `loopback::BROWSER_METADATA_HEADERS`).
+    "referer",
+    "cookie",
 ];
 
 /// The header set the official emulator's `cors` middleware exposes, verbatim.
@@ -278,11 +288,23 @@ async fn respond(
     if req.method() == hyper::Method::OPTIONS {
         // The preflight the official emulator's `cors` middleware answers: the requested
         // headers reflected, the express method list, and both Vary members.
+        //
+        // The one exception is the privileged rules route. `PUT` there replaces the
+        // authorization policy of the whole run, and a browser will not send a request its
+        // preflight did not admit, so withholding the method blocks every compliant browser
+        // without reading a single request header. The handler's control-token guard stays as
+        // the answer for a client that ignores the preflight. Browsers that legitimately need
+        // to replace rules use the control port's `PUT /v1/storage/rules`.
+        let privileged_rules_route = req.uri().path() == "/internal/setRules";
         let mut builder = Response::builder()
             .status(204)
             .header(
                 "access-control-allow-methods",
-                "GET,HEAD,PUT,PATCH,POST,DELETE",
+                if privileged_rules_route {
+                    "GET,HEAD,PATCH,POST,DELETE"
+                } else {
+                    "GET,HEAD,PUT,PATCH,POST,DELETE"
+                },
             )
             .header("access-control-expose-headers", EXPOSED_HEADERS)
             .header("vary", "Origin, Access-Control-Request-Headers");
@@ -335,9 +357,17 @@ async fn respond(
         .get(hyper::header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.trim().parse::<usize>().ok());
+    // The privileged rules route is bounded at the control port's limit rather than the
+    // object-upload limit, and the bound is applied as the body streams in, so a client that
+    // withholds its Content-Length cannot make this port buffer a rules body up to 260 MiB.
+    let cap = if method == "PUT" && path == "/internal/setRules" {
+        crate::storage::MAX_SET_RULES_BODY_BYTES
+    } else {
+        MAX_STORAGE_BODY_BYTES
+    };
     // The buffer holds its budget charge until it is dropped at the end of this function,
     // so the bytes the handler works on are accounted for the whole time they exist here.
-    let mut buffer = match collect_body(budget, declared, req.into_body()).await {
+    let mut buffer = match collect_body(budget, cap, declared, req.into_body()).await {
         Ok(buffer) => buffer,
         Err(e) => return Ok(body_error_response(e, origin.as_deref())),
     };

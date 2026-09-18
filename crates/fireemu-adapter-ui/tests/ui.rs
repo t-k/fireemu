@@ -76,6 +76,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
         app_check_policy: None,
         admin_capability: None,
         token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+        control_token: None,
     });
     let control = Arc::new(ControlState {
         clock: clock.clone(),
@@ -134,6 +135,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
             local: backend.clone(),
             gateway: Arc::new(gateway),
             rules: None,
+            control_token: None,
             app_check: None,
         }),
         backend,

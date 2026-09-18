@@ -72,6 +72,7 @@ fn hub_and_local(rules: Option<&str>, acceptance: TokenAcceptance) -> (Hub, Arc<
         gateway: Arc::new(gateway),
         rules,
         app_check: None,
+        control_token: None,
     }));
     (hub, local)
 }
@@ -1169,6 +1170,7 @@ fn indexed_hub() -> Hub {
         gateway: Arc::new(gateway),
         rules: None,
         app_check: None,
+        control_token: None,
     }))
 }
 

@@ -110,16 +110,16 @@ Planned operations and the frozen caps:
 
 | Quantity | Planned | Cap |
 | --- | --- | --- |
-| Writes | 21 | 60 |
+| Writes | 25 | 60 |
 | Deletes (observation) | 1 | 80 |
-| Reads (observation) | 22 | 600 |
-| Raw snapshot deliveries | 64 | 120 |
-| Listener registrations | 15 | 40 |
-| Cleanup reads (reserve) | 130 | 200 |
-| Cleanup deletes (reserve) | 65 | 100 |
+| Reads (observation) | 25 | 600 |
+| Raw snapshot deliveries | 76 | 120 |
+| Listener registrations | 17 | 40 |
+| Cleanup reads (reserve) | 150 | 200 |
+| Cleanup deletes (reserve) | 75 | 100 |
 | Wall clock | one run | 600 s plus a 180 s cleanup reserve |
 
-The estimated cost at published Firestore list prices is USD 0.000142, against a
+The estimated cost at published Firestore list prices is USD 0.000165, against a
 hard ceiling of USD 0.50. That is a planning ceiling, not an observed bill.
 
 The permission envelope inherits from nothing. It allows one run of the declared

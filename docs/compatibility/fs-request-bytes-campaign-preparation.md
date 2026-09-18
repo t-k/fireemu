@@ -193,6 +193,13 @@ because a refused Commit grants no cleanup ownership. That is the intended
 behaviour and it is also the post-state evidence: the refused request wrote
 nothing.
 
+The recorded run is at source `f3e2c64672d2e849e929ffa54f18b0f7e57c39fb`, artifact
+SHA-256 `e48d71416ce8841d04cdf2246a8b299a9d3ad4680253c5bdeb54e7dcc6bd4f21`, with
+supervisor status `completed`, `recordingComplete` and `stateValidation` true, the
+owned process stopped and all listeners closed. The shadow uses its own per-run
+nonce against `demo-firestore-probe`; it is not the campaign nonce and it writes
+nothing to the oracle project.
+
 ## Artifacts
 
 - `spec/compatibility/fs-request-bytes-campaign.json`, the campaign artifact.

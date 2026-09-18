@@ -446,20 +446,17 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<pb::SeekResponse>, Status> {
         let req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
-        let now = self.handle.now();
         match req.target {
             Some(pb::seek_request::Target::Time(ts)) => {
                 let time = from_timestamp(&ts);
                 self.handle
-                    .state()
-                    .seek_to_time(&name, time, now)
+                    .seek_to_time(&name, time)
                     .map_err(|e| status(&e))?;
                 Ok(Response::new(pb::SeekResponse::default()))
             }
             Some(pb::seek_request::Target::Snapshot(snapshot)) => {
                 self.handle
-                    .state()
-                    .seek_to_snapshot(&name, &snapshot, now)
+                    .seek_to_snapshot(&name, &snapshot)
                     .map_err(|e| status(&e))?;
                 Ok(Response::new(pb::SeekResponse::default()))
             }

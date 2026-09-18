@@ -2306,3 +2306,437 @@ async fn deleting_and_recreating_a_subscription_invalidates_the_old_push_generat
     worker_old.join().unwrap();
     worker_new.join().unwrap();
 }
+
+/// Creates a source topic, a destination topic and a source subscription whose dead-letter policy
+/// forwards after `max_delivery_attempts` deliveries. Returns the source subscription name.
+async fn setup_dead_letter_source(
+    h: &Harness,
+    slug: &str,
+    push_endpoint: Option<String>,
+) -> (String, String, String) {
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let source_topic = format!("projects/demo-app/topics/{slug}-source");
+    let destination_topic = format!("projects/demo-app/topics/{slug}-destination");
+    for topic in [&source_topic, &destination_topic] {
+        pubc.create_topic(pb::Topic {
+            name: topic.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+    let subscription = format!("projects/demo-app/subscriptions/{slug}-source");
+    subc.create_subscription(pb::Subscription {
+        name: subscription.clone(),
+        topic: source_topic.clone(),
+        ack_deadline_seconds: 10,
+        dead_letter_policy: Some(pb::DeadLetterPolicy {
+            dead_letter_topic: destination_topic.clone(),
+            max_delivery_attempts: 5,
+        }),
+        push_config: push_endpoint.map(|push_endpoint| pb::PushConfig {
+            push_endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    (source_topic, destination_topic, subscription)
+}
+
+#[tokio::test]
+async fn unary_pull_exhaustion_forwards_to_an_idle_destination_push_subscriber() {
+    let h = start().await;
+    let (source_topic, destination_topic, subscription) =
+        setup_dead_letter_source(&h, "dlq-unary", None).await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+
+    // The destination subscriber is a push subscription that has been idle since it was created:
+    // only the forwarded message may wake it.
+    let (endpoint, bodies, stop, worker) = push_sink(204);
+    subc.create_subscription(pb::Subscription {
+        name: "projects/demo-app/subscriptions/dlq-unary-destination".to_owned(),
+        topic: destination_topic,
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    pubc.publish(pb::PublishRequest {
+        topic: source_topic,
+        messages: vec![msg(b"poison")],
+    })
+    .await
+    .unwrap();
+
+    for attempt in 1..=5 {
+        let received = subc
+            .pull(pb::PullRequest {
+                subscription: subscription.clone(),
+                max_messages: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .received_messages;
+        assert_eq!(received.len(), 1, "attempt {attempt}");
+        h.clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(11))
+            .unwrap();
+    }
+    // The pull that exhausts the budget forwards instead of delivering.
+    let forwarded = subc
+        .pull(pb::PullRequest {
+            subscription: subscription.clone(),
+            max_messages: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert!(forwarded.is_empty());
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while bodies.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the forwarded message must wake the idle destination push subscriber");
+    let pushed = bodies.lock().unwrap().clone();
+    assert_eq!(pushed.len(), 1, "the transfer must not be repeated");
+    assert!(String::from_utf8(pushed[0].clone())
+        .unwrap()
+        .contains("cG9pc29u"));
+
+    // The source keeps no redeliverable copy of a committed transfer.
+    let after = subc
+        .pull(pb::PullRequest {
+            subscription,
+            max_messages: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert!(after.is_empty());
+
+    h.shutdown().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}
+
+#[tokio::test]
+async fn streaming_pull_exhaustion_forwards_to_the_destination_exactly_once() {
+    let h = start().await;
+    let (source_topic, destination_topic, subscription) =
+        setup_dead_letter_source(&h, "dlq-stream", None).await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    subc.create_subscription(pb::Subscription {
+        name: "projects/demo-app/subscriptions/dlq-stream-destination".to_owned(),
+        topic: destination_topic,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: source_topic,
+        messages: vec![msg(b"poison")],
+    })
+    .await
+    .unwrap();
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<pb::StreamingPullRequest>(8);
+    tx.send(pb::StreamingPullRequest {
+        subscription: subscription.clone(),
+        stream_ack_deadline_seconds: 10,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let mut responses = subc
+        .streaming_pull(tokio_stream::wrappers::ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+
+    // Nack every delivery on the same stream until the budget is exhausted.
+    let mut deliveries = 0;
+    while deliveries < 5 {
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), responses.next())
+            .await
+            .expect("a streaming response arrives")
+            .expect("stream open")
+            .expect("ok response");
+        for received in response.received_messages {
+            deliveries += 1;
+            tx.send(pb::StreamingPullRequest {
+                modify_deadline_ack_ids: vec![received.ack_id],
+                modify_deadline_seconds: vec![0],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        }
+    }
+
+    let mut destination = Vec::new();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while destination.is_empty() {
+            destination = subc
+                .pull(pb::PullRequest {
+                    subscription: "projects/demo-app/subscriptions/dlq-stream-destination"
+                        .to_owned(),
+                    max_messages: 10,
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .received_messages;
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("streaming-pull exhaustion must forward to the dead-letter topic");
+    assert_eq!(destination.len(), 1);
+    assert_eq!(destination[0].message.as_ref().unwrap().data, b"poison");
+    drop(tx);
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn push_exhaustion_forwards_to_the_destination_exactly_once() {
+    let h = start().await;
+    // Every source delivery fails, so the delivery budget is exhausted by push alone.
+    let (source_endpoint, _source_bodies, source_stop, source_worker) =
+        push_sink_sequence(vec![500; 200]);
+    let (source_topic, destination_topic, _subscription) =
+        setup_dead_letter_source(&h, "dlq-push", Some(source_endpoint)).await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    subc.create_subscription(pb::Subscription {
+        name: "projects/demo-app/subscriptions/dlq-push-destination".to_owned(),
+        topic: destination_topic,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: source_topic,
+        messages: vec![msg(b"poison")],
+    })
+    .await
+    .unwrap();
+
+    let mut destination = Vec::new();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while destination.is_empty() {
+            destination = subc
+                .pull(pb::PullRequest {
+                    subscription: "projects/demo-app/subscriptions/dlq-push-destination".to_owned(),
+                    max_messages: 10,
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .received_messages;
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("push exhaustion must forward to the dead-letter topic");
+    assert_eq!(destination.len(), 1);
+    assert_eq!(destination[0].message.as_ref().unwrap().data, b"poison");
+
+    h.shutdown().await;
+    source_stop.store(true, Ordering::Release);
+    source_worker.join().unwrap();
+}
+
+#[tokio::test]
+async fn a_deleted_destination_topic_retains_the_forward_until_it_is_created_again() {
+    // The bridge records every committed publication, so the transfer is observable even though a
+    // destination subscription cannot outlive the deleted topic.
+    let recorder = Arc::new(RecordingTopicDelivery::default());
+    let h = start_with_bridge(Some(recorder.clone())).await;
+    let (source_topic, destination_topic, subscription) =
+        setup_dead_letter_source(&h, "dlq-missing", None).await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    pubc.publish(pb::PublishRequest {
+        topic: source_topic,
+        messages: vec![msg(b"poison")],
+    })
+    .await
+    .unwrap();
+    pubc.delete_topic(pb::DeleteTopicRequest {
+        topic: destination_topic.clone(),
+    })
+    .await
+    .unwrap();
+
+    for _ in 0..5 {
+        subc.pull(pb::PullRequest {
+            subscription: subscription.clone(),
+            max_messages: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        h.clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(11))
+            .unwrap();
+    }
+    // The destination is gone: the exhausted message is retained, neither delivered nor dropped.
+    for _ in 0..2 {
+        let received = subc
+            .pull(pb::PullRequest {
+                subscription: subscription.clone(),
+                max_messages: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .received_messages;
+        assert!(
+            received.is_empty(),
+            "a pending forward must not be delivered to the source subscriber again"
+        );
+    }
+    assert_eq!(
+        recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|topic| **topic == destination_topic)
+            .count(),
+        0,
+        "a missing destination must not receive a partial publication"
+    );
+
+    pubc.create_topic(pb::Topic {
+        name: destination_topic.clone(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(
+        recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|topic| **topic == destination_topic)
+            .count(),
+        1,
+        "a recreated destination must accept the retained transfer exactly once"
+    );
+    let after = subc
+        .pull(pb::PullRequest {
+            subscription,
+            max_messages: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert!(
+        after.is_empty(),
+        "the source must be completed once the destination accepted the transfer"
+    );
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn seeking_to_a_snapshot_replays_the_backlog_to_an_idle_push_subscriber() {
+    let h = start().await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let topic = "projects/demo-app/topics/seek-push";
+    let subscription = "projects/demo-app/subscriptions/seek-push";
+    let (endpoint, bodies, stop, worker) = push_sink(204);
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: subscription.to_owned(),
+        topic: topic.to_owned(),
+        push_config: Some(pb::PushConfig {
+            push_endpoint: endpoint,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_snapshot(pb::CreateSnapshotRequest {
+        name: "projects/demo-app/snapshots/seek-push".to_owned(),
+        subscription: subscription.to_owned(),
+        labels: HashMap::new(),
+        tags: HashMap::new(),
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![msg(b"replayed")],
+    })
+    .await
+    .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while bodies.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the first delivery reaches the push endpoint");
+
+    // The subscription is now idle: the seek alone must schedule the replayed backlog.
+    subc.seek(pb::SeekRequest {
+        subscription: subscription.to_owned(),
+        target: Some(pb::seek_request::Target::Snapshot(
+            "projects/demo-app/snapshots/seek-push".to_owned(),
+        )),
+    })
+    .await
+    .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while bodies.lock().unwrap().len() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("a seek must wake an idle push subscriber without another publish");
+
+    h.shutdown().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}

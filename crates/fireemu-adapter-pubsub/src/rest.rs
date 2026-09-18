@@ -748,11 +748,9 @@ fn seek(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    let now = handle.now();
     if let Some(snapshot) = body.get("snapshot").and_then(Value::as_str) {
         handle
-            .state()
-            .seek_to_snapshot(&subscription, snapshot, now)
+            .seek_to_snapshot(&subscription, snapshot)
             .map_err(RestError::from_core)?;
     } else {
         return Err(RestError::invalid(

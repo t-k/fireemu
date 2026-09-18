@@ -276,6 +276,8 @@ export const main = async ({ env = process.env, argv = process.argv } = {}) => {
     environment: {
       kind: 'local-fireemu',
       node: process.versions.node,
+      sourceCommit: env.O6_LISTEN_SOURCE_COMMIT ?? null,
+      firebaseSdk: env.O6_LISTEN_SDK_VERSION ?? null,
       projectId,
       nonceDigest: createHash('sha256').update(nonce).digest('hex'),
     },

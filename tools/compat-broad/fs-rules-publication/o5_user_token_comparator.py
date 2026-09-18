@@ -21,7 +21,11 @@ from __future__ import annotations
 from typing import Any
 
 from o5_user_token_case import validate_case
-from o5_user_token_collector import COLLECTOR_CONTRACT, ROLE_LOCAL_SHADOW, ROLE_PRODUCTION
+from o5_user_token_collector import (
+    COLLECTOR_CONTRACT,
+    ROLE_LOCAL_SHADOW,
+    ROLE_PRODUCTION,
+)
 
 COMPARATOR_CONTRACT = "fs-rules-user-token-comparator-v1"
 
@@ -36,16 +40,21 @@ _PRECEDENCE = (SEMANTIC_MISMATCH, INDETERMINATE, EXPECTED_NONDETERMINISM, MATCH)
 _NONDETERMINISTIC_FIELDS = ("createTime", "updateTime", "readTime", "uid", "name")
 
 
-def _validate_side(bundle: Any, expected_role: str, plan: dict[str, Any]) -> dict[str, Any]:
+def _validate_side(
+    bundle: Any, expected_role: str, plan: dict[str, Any]
+) -> dict[str, Any]:
     if not isinstance(bundle, dict):
-        raise ValueError(f"{expected_role}:not-a-bundle")
+        raise TypeError(f"{expected_role}:not-a-bundle")
     if bundle.get("contract") != COLLECTOR_CONTRACT:
         raise ValueError(f"{expected_role}:collector-contract-drift")
-    if bundle.get("productionReady") is True or bundle.get("acquisitionValidated") is True:
+    if (
+        bundle.get("productionReady") is True
+        or bundle.get("acquisitionValidated") is True
+    ):
         raise ValueError(f"{expected_role}:bundle-claims-authority")
     provenance = bundle.get("provenance")
     if not isinstance(provenance, dict):
-        raise ValueError(f"{expected_role}:missing-provenance")
+        raise TypeError(f"{expected_role}:missing-provenance")
     if provenance.get("role") != expected_role:
         raise ValueError(f"{expected_role}:role-mismatch")
     if provenance.get("collectorContract") != COLLECTOR_CONTRACT:
@@ -59,8 +68,11 @@ def _validate_side(bundle: Any, expected_role: str, plan: dict[str, Any]) -> dic
         raise ValueError(f"{expected_role}:row-count")
     for row, operation in zip(rows, plan["observation"], strict=True):
         if not isinstance(row, dict):
-            raise ValueError(f"{expected_role}:row-shape")
-        if row.get("caseId") != operation["caseId"] or row.get("index") != operation["index"]:
+            raise TypeError(f"{expected_role}:row-shape")
+        if (
+            row.get("caseId") != operation["caseId"]
+            or row.get("index") != operation["index"]
+        ):
             raise ValueError(f"{expected_role}:row-identity")
         if row.get("credentialRef") != operation["credential"]["ref"]:
             raise ValueError(f"{expected_role}:principal-drift")
@@ -94,7 +106,10 @@ def _classify_row(
     if fields_production == fields_local:
         return {"classification": MATCH, "reason": "identical"}
     if _only_nondeterministic(fields_production, fields_local):
-        return {"classification": EXPECTED_NONDETERMINISM, "reason": "server-assigned-values"}
+        return {
+            "classification": EXPECTED_NONDETERMINISM,
+            "reason": "server-assigned-values",
+        }
     return {"classification": SEMANTIC_MISMATCH, "reason": "fields"}
 
 
@@ -138,7 +153,10 @@ def compare(production: Any, local: Any, plan: Any) -> dict[str, Any]:
 
     rows = []
     for production_row, local_row, operation in zip(
-        production_bundle["rows"], local_bundle["rows"], plan["observation"], strict=True
+        production_bundle["rows"],
+        local_bundle["rows"],
+        plan["observation"],
+        strict=True,
     ):
         verdict = _classify_row(production_row, local_row, operation)
         rows.append(
@@ -158,9 +176,9 @@ def compare(production: Any, local: Any, plan: Any) -> dict[str, Any]:
     conditions: dict[str, str] = {}
     for row in rows:
         current = conditions.get(row["condition"])
-        if current is None or _PRECEDENCE.index(row["classification"]) < _PRECEDENCE.index(
-            current
-        ):
+        if current is None or _PRECEDENCE.index(
+            row["classification"]
+        ) < _PRECEDENCE.index(current):
             conditions[row["condition"]] = row["classification"]
     result["conditions"] = conditions
     return result

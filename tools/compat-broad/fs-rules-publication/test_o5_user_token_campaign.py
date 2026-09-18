@@ -3,7 +3,12 @@ from __future__ import annotations
 import copy
 
 import pytest
-from o5_user_token_campaign import CAMPAIGN_CONTRACT, admission, manifest, validate_manifest
+from o5_user_token_campaign import (
+    CAMPAIGN_CONTRACT,
+    admission,
+    manifest,
+    validate_manifest,
+)
 
 PROJECT = "fireemu-35fe6"
 NONCE = "c" * 32
@@ -89,7 +94,7 @@ def test_manifest_drift_rejected(mutation) -> None:
         entry["observationCase"] = None
     else:
         entry["manifestDigest"] = "0" * 64
-    with pytest.raises(ValueError):
+    with pytest.raises((TypeError, ValueError)):
         validate_manifest(entry)
 
 

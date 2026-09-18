@@ -88,7 +88,9 @@ def _request(operation: Mapping[str, Any], nonce: str) -> dict[str, Any]:
         "createdDocuments": list(operation["createdDocuments"]),
         "credentialRef": operation["credential"]["ref"],
         "credentialClass": operation["credential"]["class"],
-        "credentialFingerprint": _credential_fingerprint(nonce, operation["credential"]["ref"]),
+        "credentialFingerprint": _credential_fingerprint(
+            nonce, operation["credential"]["ref"]
+        ),
     }
 
 
@@ -133,7 +135,10 @@ def collect(
         raise ValueError("unknown collector role")
     if not isinstance(run_id, str) or not run_id:
         raise ValueError("run identity required")
-    if not isinstance(deadline_seconds, (int, float)) or not 0 < deadline_seconds <= 3600:
+    if (
+        not isinstance(deadline_seconds, (int, float))
+        or not 0 < deadline_seconds <= 3600
+    ):
         raise ValueError("deadline out of range")
 
     nonce = plan["nonce"]
@@ -309,7 +314,12 @@ def _cleanup_step(
     try:
         budget.take_recovery()
     except BudgetExhausted as error:
-        return {"kind": kind, "resource": resource, "observed": None, "failure": str(error)}
+        return {
+            "kind": kind,
+            "resource": resource,
+            "observed": None,
+            "failure": str(error),
+        }
     try:
         raw = execute(dict(request))
     except Exception as error:  # noqa: BLE001 - type name only, never a message
@@ -320,7 +330,12 @@ def _cleanup_step(
             "failure": f"transport:{type(error).__name__}",
         }
     if not isinstance(raw, Mapping):
-        return {"kind": kind, "resource": resource, "observed": None, "failure": "invalid-receipt"}
+        return {
+            "kind": kind,
+            "resource": resource,
+            "observed": None,
+            "failure": "invalid-receipt",
+        }
     leaked = sorted(set(raw) & FORBIDDEN_RECEIPT_KEYS)
     if leaked:
         return {
@@ -330,7 +345,12 @@ def _cleanup_step(
             "failure": "credential-leak:" + ",".join(leaked),
         }
     if raw.get("complete") is not True:
-        return {"kind": kind, "resource": resource, "observed": None, "failure": "incomplete"}
+        return {
+            "kind": kind,
+            "resource": resource,
+            "observed": None,
+            "failure": "incomplete",
+        }
     return {
         "kind": kind,
         "resource": resource,

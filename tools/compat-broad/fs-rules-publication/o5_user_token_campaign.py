@@ -36,8 +36,11 @@ OWNER_PRECONDITIONS = (
     "an execution window with a named owner present for the whole window",
     "an administrator credential for fixture setup, custom-claim minting and cleanup",
     "Identity Platform multi-tenancy enabled with the named tenant already created",
-    "the two Rulesets already released by the owner, or an owner-held publication "
-    "lock plus the captured bytes and version of the preexisting release",
+    (
+        "the two Rulesets already released by the owner, or an owner-held "
+        "publication lock plus the captured bytes and version of the "
+        "preexisting release"
+    ),
     "a recovery owner who restores the preexisting release if the window ends early",
     "accepted cost ceiling and data-retention decision for the run directory",
 )
@@ -63,7 +66,9 @@ def _source_digests() -> dict[str, str]:
     digests = {}
     for name in _SOURCE_FILES:
         path = here / name
-        digests[name] = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else ""
+        digests[name] = (
+            hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else ""
+        )
     return digests
 
 
@@ -115,7 +120,8 @@ def manifest(
             "caseDigest": plan["planDigest"],
             "sources": _source_digests(),
             "rulesetDigests": {
-                label: digest(body["source"]) for label, body in plan["rulesets"].items()
+                label: digest(body["source"])
+                for label, body in plan["rulesets"].items()
             },
         },
         "budget": budget(plan),
@@ -141,11 +147,14 @@ def validate_manifest(value: Any) -> None:
         raise ValueError("manifest contract drift")
     if value.get("status") != "PREPARATION_ONLY":
         raise ValueError("manifest status drift")
-    if value.get("productionExecuted") is not False or value.get("productionReady") is not False:
+    if (
+        value.get("productionExecuted") is not False
+        or value.get("productionReady") is not False
+    ):
         raise ValueError("manifest cannot claim production authority")
     case = value.get("observationCase")
     if not isinstance(case, dict):
-        raise ValueError("invalid observation case")
+        raise TypeError("invalid observation case")
     identity = [case.get(key) for key in ("project", "database", "nonce", "tenant")]
     if not all(isinstance(part, str) for part in identity):
         raise ValueError("invalid case identity")

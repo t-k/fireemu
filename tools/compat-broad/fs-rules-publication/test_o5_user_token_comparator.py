@@ -51,7 +51,9 @@ def test_a_differing_rules_decision_is_a_semantic_mismatch() -> None:
     production["rows"][1]["observed"]["status"] = "OK"
     result = compare(production, local, plan)
     assert result["classification"] == SEMANTIC_MISMATCH
-    mismatched = [row for row in result["rows"] if row["classification"] == SEMANTIC_MISMATCH]
+    mismatched = [
+        row for row in result["rows"] if row["classification"] == SEMANTIC_MISMATCH
+    ]
     assert [row["reason"] for row in mismatched] == ["status"]
     assert result["conditions"]["principal-separation"] == SEMANTIC_MISMATCH
 

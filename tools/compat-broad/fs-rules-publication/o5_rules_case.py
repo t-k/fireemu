@@ -19,15 +19,14 @@ _DATABASE = re.compile(r"^[a-z][a-z0-9-]{2,61}[a-z0-9]$")
 
 def digest(value: Any) -> str:
     return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
     ).hexdigest()
 
 
 def _resource(project: str, database: str, *segments: str) -> str:
-    return (
-        f"projects/{project}/databases/{database}/documents/"
-        + "/".join(segments)
-    )
+    return f"projects/{project}/databases/{database}/documents/" + "/".join(segments)
 
 
 def _rules_source(nonce: str, *, deny_owned: bool) -> str:
@@ -121,12 +120,18 @@ def _compile_plan(project: str, database: str, nonce: str) -> dict[str, Any]:
                 "decision": "deny-owned-user",
                 "publicDecision": "allow-public",
             },
-            },
+        },
         "observation": observations,
-        "negativeCredentials": ["empty-bearer", "malformed-bearer", "admin-shaped-credential"],
+        "negativeCredentials": [
+            "empty-bearer",
+            "malformed-bearer",
+            "admin-shaped-credential",
+        ],
         "unresolved": [
-            "project/database binding", "nonce reservation and shared publication lock",
-            "typed user-token collector", "Rules publication and readback",
+            "project/database binding",
+            "nonce reservation and shared publication lock",
+            "typed user-token collector",
+            "Rules publication and readback",
             "version-bound resource cleanup and final absence",
             "conditional restoration of preexisting database Rules",
             "wire, cost, and execution-window enforcement",

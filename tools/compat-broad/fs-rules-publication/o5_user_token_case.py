@@ -79,7 +79,9 @@ CLAIM_VALUE = "editor"
 
 def digest(value: Any) -> str:
     return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
     ).hexdigest()
 
 
@@ -99,68 +101,54 @@ def _resource(project: str, database: str, suffix: str) -> str:
 def _rules_source(nonce: str, tenant: str, *, owner_read: bool) -> str:
     scope = _scope_segment(nonce)
     base = f"/databases/$(database)/documents/o5-user-token/{scope}/cases"
-    owner_condition = (
-        "request.auth != null && request.auth.uid == resource.data.ownerUid"
-        if owner_read
-        else "false"
+    authed = "request.auth != null"
+    owns = "request.auth.uid == resource.data.ownerUid"
+    owner_condition = f"{authed} && {owns}" if owner_read else "false"
+    claim = f"request.auth.token.{CLAIM_NAME} == '{CLAIM_VALUE}'"
+    tenant_clause = (
+        f"allow get: if {authed}"
+        + f" && request.auth.token.firebase.tenant == '{tenant}';"
     )
-    return "\n".join(
-        [
-            "rules_version = '2';",
-            "service cloud.firestore {",
-            "  match /databases/{database}/documents {",
-            f"    match /o5-user-token/{scope}/cases/{{document}} {{",
-            "      allow read, write: if false;",
-            "    }",
-            f"    match /o5-user-token/{scope}/cases/owned-a {{",
-            f"      allow get: if {owner_condition};",
-            "    }",
-            f"    match /o5-user-token/{scope}/cases/owned-b {{",
-            "      allow get: if request.auth != null"
-            " && request.auth.uid == resource.data.ownerUid;",
-            "    }",
-            f"    match /o5-user-token/{scope}/cases/public-open {{",
-            "      allow get: if request.auth == null;",
-            "    }",
-            f"    match /o5-user-token/{scope}/cases/claim-gated {{",
-            "      allow get: if request.auth != null"
-            f" && request.auth.token.{CLAIM_NAME} == '{CLAIM_VALUE}';",
-            "    }",
-            f"    match /o5-user-token/{scope}/cases/tenant-gated {{",
-            "      allow get: if request.auth != null"
-            f" && request.auth.token.firebase.tenant == '{tenant}';",
-            "    }",
-            f"    match /o5-user-token/{scope}/cases/exists-guarded {{",
-            "      allow get: if request.auth != null && exists("
-            f"{base}/exists-guard-present);",
-            "    }",
-            f"    match /o5-user-token/{scope}/cases/exists-guarded-missing {{",
-            "      allow get: if request.auth != null && exists("
-            f"{base}/exists-guard-absent);",
-            "    }",
-            f"    match /o5-user-token/{scope}/cases/get-guarded {{",
-            "      allow get: if request.auth != null && get("
-            f"{base}/owned-a).data.ownerUid == request.auth.uid;",
-            "    }",
-            f"    match /o5-user-token/{scope}/cases/getafter-target {{",
-            "      allow create: if request.auth != null && getAfter("
-            f"{base}/getafter-guard).data.ownerUid == request.auth.uid;",
-            "    }",
-            f"    match /o5-user-token/{scope}/cases/getafter-guard {{",
-            "      allow create: if request.auth != null"
-            " && request.resource.data.ownerUid == request.auth.uid;",
-            "    }",
-            f"    match /o5-user-token/{scope}/cases/multiwrite-x {{",
-            "      allow get, update: if request.auth != null"
-            " && request.auth.uid == resource.data.ownerUid;",
-            "    }",
-            f"    match /o5-user-token/{scope}/cases/multiwrite-y {{",
-            "      allow create: if false;",
-            "    }",
-            "  }",
-            "}",
-        ]
+    exists_present = f"allow get: if {authed} && exists({base}/exists-guard-present);"
+    exists_absent = f"allow get: if {authed} && exists({base}/exists-guard-absent);"
+    get_clause = (
+        f"allow get: if {authed}"
+        + f" && get({base}/owned-a).data.ownerUid == request.auth.uid;"
     )
+    getafter_target = (
+        f"allow create: if {authed}"
+        + f" && getAfter({base}/getafter-guard).data.ownerUid == request.auth.uid;"
+    )
+    getafter_guard = (
+        f"allow create: if {authed}"
+        + " && request.resource.data.ownerUid == request.auth.uid;"
+    )
+    clauses: list[tuple[str, str]] = [
+        ("{document}", "allow read, write: if false;"),
+        ("owned-a", f"allow get: if {owner_condition};"),
+        ("owned-b", f"allow get: if {authed} && {owns};"),
+        ("public-open", "allow get: if request.auth == null;"),
+        ("claim-gated", f"allow get: if {authed} && {claim};"),
+        ("tenant-gated", tenant_clause),
+        ("exists-guarded", exists_present),
+        ("exists-guarded-missing", exists_absent),
+        ("get-guarded", get_clause),
+        ("getafter-target", getafter_target),
+        ("getafter-guard", getafter_guard),
+        ("multiwrite-x", f"allow get, update: if {authed} && {owns};"),
+        ("multiwrite-y", "allow create: if false;"),
+    ]
+    lines = [
+        "rules_version = '2';",
+        "service cloud.firestore {",
+        "  match /databases/{database}/documents {",
+    ]
+    for document, clause in clauses:
+        lines.append(f"    match /o5-user-token/{scope}/cases/{document} {{")
+        lines.append(f"      {clause}")
+        lines.append("    }")
+    lines.extend(["  }", "}"])
+    return "\n".join(lines)
 
 
 def _operation(
@@ -555,9 +543,24 @@ def _principals(nonce: str, tenant: str) -> list[dict[str, Any]]:
             "claims": {},
             "ownedFixtures": [],
         },
-        {"ref": PRINCIPAL_UNAUTHENTICATED, "kind": "absent", "claims": {}, "ownedFixtures": []},
-        {"ref": PRINCIPAL_EXPIRED, "kind": "expired-id-token", "claims": {}, "ownedFixtures": []},
-        {"ref": PRINCIPAL_MALFORMED, "kind": "malformed", "claims": {}, "ownedFixtures": []},
+        {
+            "ref": PRINCIPAL_UNAUTHENTICATED,
+            "kind": "absent",
+            "claims": {},
+            "ownedFixtures": [],
+        },
+        {
+            "ref": PRINCIPAL_EXPIRED,
+            "kind": "expired-id-token",
+            "claims": {},
+            "ownedFixtures": [],
+        },
+        {
+            "ref": PRINCIPAL_MALFORMED,
+            "kind": "malformed",
+            "claims": {},
+            "ownedFixtures": [],
+        },
         {"ref": PRINCIPAL_EMPTY, "kind": "empty", "claims": {}, "ownedFixtures": []},
     ]
 
@@ -611,7 +614,9 @@ def _compile(project: str, database: str, nonce: str, tenant: str) -> dict[str, 
         "fixtures": [
             {
                 "document": document,
-                "resource": _resource(project, database, _document_path(nonce, document)),
+                "resource": _resource(
+                    project, database, _document_path(nonce, document)
+                ),
                 "fields": _fixture_fields(nonce, document),
                 "createdBy": "administrator-setup",
             }
@@ -620,7 +625,9 @@ def _compile(project: str, database: str, nonce: str, tenant: str) -> dict[str, 
         "observationCreatedDocuments": [
             {
                 "document": document,
-                "resource": _resource(project, database, _document_path(nonce, document)),
+                "resource": _resource(
+                    project, database, _document_path(nonce, document)
+                ),
                 "createdBy": "user-token-observation",
             }
             for document in _OBSERVATION_CREATED

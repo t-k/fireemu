@@ -58,7 +58,11 @@ def test_principal_separation_uses_three_distinct_principals() -> None:
     ]
     principals = {row["principal"] for row in separation}
     assert {"owner-a", "other-b", "anonymous-c"} <= principals
-    denied = {row["principal"] for row in separation if row["expect"]["status"] == PERMISSION_DENIED}
+    denied = {
+        row["principal"]
+        for row in separation
+        if row["expect"]["status"] == PERMISSION_DENIED
+    }
     assert denied == {"other-b", "anonymous-c"}
 
 
@@ -69,7 +73,10 @@ def test_request_auth_null_is_explicit_in_both_directions() -> None:
         for row in plan["observation"]
         if row["condition"] == "request-auth-null"
     }
-    assert rows["a-unauthenticated-allowed-by-explicit-null-clause"]["expect"]["status"] == OK
+    assert (
+        rows["a-unauthenticated-allowed-by-explicit-null-clause"]["expect"]["status"]
+        == OK
+    )
     assert (
         rows["a-authenticated-denied-by-explicit-null-clause"]["expect"]["status"]
         == PERMISSION_DENIED
@@ -91,7 +98,9 @@ def test_ruleset_transition_changes_only_the_owner_clause() -> None:
     source_b = plan["rulesets"]["B"]["source"]
     differing = [
         (left, right)
-        for left, right in zip(source_a.splitlines(), source_b.splitlines(), strict=True)
+        for left, right in zip(
+            source_a.splitlines(), source_b.splitlines(), strict=True
+        )
         if left != right
     ]
     assert len(differing) == 1
@@ -99,12 +108,18 @@ def test_ruleset_transition_changes_only_the_owner_clause() -> None:
     transition = [
         row for row in plan["observation"] if row["condition"] == "ruleset-transition"
     ]
-    assert [row["expect"]["status"] for row in transition] == [PERMISSION_DENIED, OK, OK]
+    assert [row["expect"]["status"] for row in transition] == [
+        PERMISSION_DENIED,
+        OK,
+        OK,
+    ]
 
 
 def test_atomic_multiwrite_refusal_has_a_poststate_row() -> None:
     plan = case()
-    rows = [row for row in plan["observation"] if row["condition"] == "atomic-multiwrite"]
+    rows = [
+        row for row in plan["observation"] if row["condition"] == "atomic-multiwrite"
+    ]
     assert [row["role"] for row in rows] == ["primary", "poststate"]
     assert rows[0]["expect"]["status"] == PERMISSION_DENIED
     assert rows[1]["expect"]["status"] == OK
@@ -156,7 +171,9 @@ def test_malformed_identity_rejected(project, database, nonce, tenant) -> None:
         compile_case(project, database, nonce, tenant)
 
 
-@pytest.mark.parametrize("mutation", ["status", "expect", "principal", "digest", "contract"])
+@pytest.mark.parametrize(
+    "mutation", ["status", "expect", "principal", "digest", "contract"]
+)
 def test_case_drift_rejected(mutation) -> None:
     plan = copy.deepcopy(case())
     if mutation == "status":

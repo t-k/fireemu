@@ -20,7 +20,9 @@ def case() -> dict:
 class Transport:
     """A scripted transport. It never opens a socket and holds no credential."""
 
-    def __init__(self, plan: dict, *, leak: bool = False, incomplete_at: int | None = None):
+    def __init__(
+        self, plan: dict, *, leak: bool = False, incomplete_at: int | None = None
+    ):
         self.plan = plan
         self.leak = leak
         self.incomplete_at = incomplete_at
@@ -110,7 +112,9 @@ def test_rows_bind_their_principal_without_a_secret() -> None:
 
 def test_a_leaked_credential_aborts_the_run() -> None:
     plan = case()
-    bundle = collect(plan, Transport(plan, leak=True), role=ROLE_PRODUCTION, run_id="run-1")
+    bundle = collect(
+        plan, Transport(plan, leak=True), role=ROLE_PRODUCTION, run_id="run-1"
+    )
     assert bundle["abort"].startswith("credential-leak")
     assert len(bundle["rows"]) == 1
     assert bundle["rows"][0]["observed"] is None
@@ -191,9 +195,7 @@ def test_an_already_absent_resource_is_not_deleted() -> None:
 def test_attempted_creates_are_owned_even_when_the_response_is_lost() -> None:
     plan = case()
     transport = Transport(plan)
-    creating = next(
-        row for row in plan["observation"] if row["createdDocuments"]
-    )
+    creating = next(row for row in plan["observation"] if row["createdDocuments"])
 
     def lost(request: dict) -> dict:
         if request.get("phase") != "recovery" and request["index"] == creating["index"]:
@@ -203,7 +205,9 @@ def test_attempted_creates_are_owned_even_when_the_response_is_lost() -> None:
     bundle = collect(plan, lost, role=ROLE_PRODUCTION, run_id="run-1")
     assert bundle["attemptedResources"]
     for document in creating["createdDocuments"]:
-        assert any(resource.endswith(document) for resource in bundle["attemptedResources"])
+        assert any(
+            resource.endswith(document) for resource in bundle["attemptedResources"]
+        )
 
 
 @pytest.mark.parametrize(

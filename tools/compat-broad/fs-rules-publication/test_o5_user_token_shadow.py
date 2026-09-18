@@ -86,4 +86,6 @@ def test_a_failed_local_row_is_a_repair_ticket_too() -> None:
     plan = case()
     result = collect_shadow(plan, Transport(plan, incomplete_at=0), run_id="local-1")
     tickets = local_deviations(result, plan)
-    assert tickets[0]["reason"] == "incomplete-receipt" or tickets[0]["observed"] is None
+    assert (
+        tickets[0]["reason"] == "incomplete-receipt" or tickets[0]["observed"] is None
+    )

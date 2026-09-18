@@ -121,7 +121,9 @@ def collect_shadow(
     )
 
 
-def local_deviations(bundle: Mapping[str, Any], plan: Mapping[str, Any]) -> list[dict[str, Any]]:
+def local_deviations(
+    bundle: Mapping[str, Any], plan: Mapping[str, Any]
+) -> list[dict[str, Any]]:
     """Rows where the local runtime disagreed with the compiled expectation.
 
     A deviation is a repair ticket for the local runtime. It is never evidence
@@ -129,7 +131,9 @@ def local_deviations(bundle: Mapping[str, Any], plan: Mapping[str, Any]) -> list
     """
     validate_case(plan)
     deviations = []
-    for row, operation in zip(bundle.get("rows", []), plan["observation"], strict=False):
+    for row, operation in zip(
+        bundle.get("rows", []), plan["observation"], strict=False
+    ):
         observed = row.get("observed") or {}
         status = observed.get("status")
         if row.get("failure") is not None:

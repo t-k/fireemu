@@ -147,11 +147,8 @@ fn page_offset(binding: [u8; 6], token: &str) -> Result<usize, Status> {
     if token.len() != 20 {
         return Err(refuse());
     }
-    let mut bytes = [0_u8; 10];
-    for (index, slot) in bytes.iter_mut().enumerate() {
-        let pair = token.get(index * 2..index * 2 + 2).ok_or_else(refuse)?;
-        *slot = u8::from_str_radix(pair, 16).map_err(|_| refuse())?;
-    }
+    let decoded = fireemu_core_types::codec::hex_decode(token).ok_or_else(refuse)?;
+    let bytes: [u8; 10] = decoded.try_into().map_err(|_| refuse())?;
     if bytes[..6] != binding {
         return Err(refuse());
     }

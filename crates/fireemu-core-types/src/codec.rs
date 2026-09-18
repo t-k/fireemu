@@ -65,6 +65,23 @@ pub fn percent_decode(value: &str, plus: PlusMode) -> String {
     String::from_utf8_lossy(&percent_decode_bytes(value, plus)).into_owned()
 }
 
+/// Decodes a lowercase or uppercase hexadecimal string into bytes.
+///
+/// Every byte must be spelled by exactly two ASCII hexadecimal digits; an odd length, a
+/// sign, whitespace or any other character yields `None`. Adapters that carry opaque
+/// hexadecimal tokens decode them here so the nibble rule lives in one place.
+#[must_use]
+pub fn hex_decode(value: &str) -> Option<Vec<u8>> {
+    let bytes = value.as_bytes();
+    if bytes.len() % 2 != 0 {
+        return None;
+    }
+    bytes
+        .chunks_exact(2)
+        .map(|pair| Some((hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?))
+        .collect()
+}
+
 /// The bytes [`percent_decode`] decodes, before any UTF-8 interpretation.
 ///
 /// A caller that must refuse a sequence which is not UTF-8, rather than replace it, decodes
@@ -175,5 +192,24 @@ mod tests {
         let mut unquoted = String::new();
         json_escape_into(&mut unquoted, text, JsonControlEscape::Unicode);
         assert_eq!(unquoted, &unicode[1..unicode.len() - 1]);
+    }
+}
+
+#[cfg(test)]
+mod hex_decode_tests {
+    use super::hex_decode;
+
+    #[test]
+    fn decodes_exactly_two_digits_per_byte_in_either_case() {
+        assert_eq!(hex_decode("00ff7Fa0"), Some(vec![0x00, 0xff, 0x7f, 0xa0]));
+        assert_eq!(hex_decode(""), Some(Vec::new()));
+    }
+
+    #[test]
+    fn refuses_odd_length_signs_and_non_hex() {
+        assert_eq!(hex_decode("abc"), None);
+        assert_eq!(hex_decode("+f"), None);
+        assert_eq!(hex_decode(" f"), None);
+        assert_eq!(hex_decode("zz"), None);
     }
 }

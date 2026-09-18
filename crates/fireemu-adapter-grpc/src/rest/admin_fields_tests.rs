@@ -38,6 +38,7 @@ fn state_with(edition: FirestoreEdition, api_mode: FirestoreApiMode) -> RestStat
         )),
         gateway: Arc::new(gateway),
         rules: None,
+        control_token: None,
         app_check: None,
     }
 }
@@ -65,6 +66,8 @@ fn call_as(
         authorization: authorization.map(str::to_owned),
         app_check: Vec::new(),
         body,
+        origin: None,
+        browser_metadata: false,
     });
     (response.status, response.body)
 }

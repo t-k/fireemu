@@ -1,6 +1,6 @@
 {
-  "artifactSha256": "d4d94fdd3141ecfb7bde4c63d5425c6989d5ef814aac815379908e69b2d384d3",
-  "campaignDigest": "140c2538438220525d89c4fef0e990d1c4b5ce11b787799031294c0b9391bd90",
+  "artifactSha256": "61408b06ed7a134cff392731bbfe5aa192f8638754e5ca60b80403a373c4f739",
+  "campaignDigest": "8c932979ccadf878433e03e51e37e6f213a96bab10904f5fe29354ee0213a790",
   "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
   "cases": [
     {
@@ -35,7 +35,7 @@
   "database": "(default)",
   "formalCompatibilityClaim": false,
   "kind": "fs-request-bytes-local-shadow-v1",
-  "nonce": "b626c4a80e73438782dc8740a0d9a059",
+  "nonce": "ce2c01764a1d44d29180be073d2dfda0",
   "note": "Owned local artifact shadow. No production request was sent, no credential was used and no parent group is promoted. The raw REST body byte count remains an observation hypothesis about production's enforcement metric.",
   "observation": {
     "canonicalRequestBytesMeasuredLocally": true,
@@ -50,7 +50,7 @@
       "errorStatus": "INVALID_ARGUMENT",
       "httpStatus": 413
     },
-    "planDigest": "8770beebe94867717bf14bd170898caa45c9f735bdff353d2b53312f658aaedb",
+    "planDigest": "0015c3134f0bea53114f51087d983d75795f9effdd09063edc26757192e8dbd1",
     "productionExecuted": false,
     "rawHttpMetricStatus": "observation hypothesis",
     "recoveryRowCount": 153,
@@ -58,7 +58,7 @@
     "resourceAbsence": true,
     "rowCount": 105
   },
-  "planDigest": "8770beebe94867717bf14bd170898caa45c9f735bdff353d2b53312f658aaedb",
+  "planDigest": "0015c3134f0bea53114f51087d983d75795f9effdd09063edc26757192e8dbd1",
   "probeOutcomes": [
     {
       "complete": true,
@@ -70,7 +70,7 @@
       "requestBytes": 10485759,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "2d731b41df95423da1ae060d47997f522cd6cd4d605f72c0a774a8f30862d3d4"
+      "responseSha256": "b4d7891f861fdb9cb2b534204e7c96a7997c3829e676320cdadfd5bd75bac5c9"
     },
     {
       "complete": true,
@@ -82,7 +82,7 @@
       "requestBytes": 10485760,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "35b6a8e4dbbfd2a328eaf32055776a290bc1f79780ed70d89887e007a7b59c66"
+      "responseSha256": "b5b4f62e2ffaf62e6c7dc3f5446fc61b78ea13a9347d607943b5976cbf785804"
     },
     {
       "complete": true,
@@ -102,11 +102,11 @@
   "rawHttpMetricStatus": "observation hypothesis",
   "recordingComplete": true,
   "runtime": {
-    "artifactSha256": "d4d94fdd3141ecfb7bde4c63d5425c6989d5ef814aac815379908e69b2d384d3",
+    "artifactSha256": "61408b06ed7a134cff392731bbfe5aa192f8638754e5ca60b80403a373c4f739",
     "runtimeInputCount": 407,
     "runtimeInputsClean": true,
-    "runtimeInputsDigest": "f61d1039be89bf7e25c322c8da9d997bfe86fe03f62e2d3afd7e75c30b56b7a1",
-    "sourceCommit": "d33518e24ec51e83f97e9604670664d3a4a83e7e",
+    "runtimeInputsDigest": "386f9f489058994810ed7995ef5770e3f2ee456cc241193b8387e7a9c22d3618",
+    "sourceCommit": "ce9c8439d7bb04cad7d062865df209d814b8d8cc",
     "sourceRoot": "repository-root"
   },
   "shadow": {

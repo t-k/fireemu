@@ -4781,6 +4781,44 @@ fn a_provider_id_with_control_characters_is_refused() {
         .starts_with("INVALID_CREDENTIAL_OR_PROVIDER_ID"));
 }
 
+/// ITKM-1. The photo URL is injected into a CSS `url('...')` string, so HTML escaping alone
+/// does not contain it: the HTML parser turns `&#39;` back into `'` before the CSS parser
+/// sees the attribute, which closes the string and lets the account declare its own style.
+#[test]
+fn the_idp_widget_escapes_a_photo_url_for_its_css_string_context() {
+    use fireemu_adapter_http::identity_toolkit::widget;
+    let s = state();
+    let photo = "https://p.example/a.png'); display: none; background-image: url('x";
+    let oidc = json!({"sub": "css-1", "email": "css@example.com", "picture": photo, "email_verified": true});
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId=oidc.corp&id_token={}", percent(&oidc.to_string())), "requestUri": DUMMY_URI}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let rendered = widget::render(
+        &s,
+        "/emulator/auth/handler",
+        Some("apiKey=fake-api-key&providerId=oidc.corp"),
+    );
+    assert_eq!(rendered.status, 200);
+    // Neither a raw quote nor an HTML character reference that decodes to one survives in
+    // the style attribute: the quote is a CSS escape.
+    let style = rendered
+        .body
+        .split("style=\"background-image: url('")
+        .nth(1)
+        .expect("the account renders its photo")
+        .split("')\"")
+        .next()
+        .expect("the CSS string is closed by the template")
+        .to_owned();
+    assert!(!style.contains('\''), "{style}");
+    assert!(!style.contains("&#39;"), "{style}");
+    assert!(style.contains("\\27"), "{style}");
+    assert!(style.contains("display"), "{style}");
+}
+
 #[test]
 fn the_idp_widget_handler_lists_accounts_and_escapes_them() {
     use fireemu_adapter_http::identity_toolkit::widget;

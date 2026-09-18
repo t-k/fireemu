@@ -4983,36 +4983,51 @@ fn validate_document(doc: &Document, scope: LimitScope) -> Result<(), FirestoreE
 }
 
 #[derive(Debug, Clone)]
-struct PropertyPath {
-    segments: Vec<String>,
+struct PropertyPath<'a> {
+    /// The path this one extends, borrowed from the caller's stack frame. Descending costs
+    /// one pointer rather than a copy of every name above it: a document is walked once per
+    /// nested value, so copying would make the walk quadratic in its own nesting depth
+    /// before `FS-LIMIT-DOCUMENT-BYTES` ever refused it.
+    parent: Option<&'a PropertyPath<'a>>,
+    /// This path's last segment.
+    name: &'a str,
     /// Canonical path bytes: the raw segment bytes plus one `.` per separator, the same
     /// quantity [`FieldPath::from_segments`] bounds (`FS-LIMIT-FIELD-PATH-BYTES`). Backtick
     /// quoting is a client-side notation and does not count toward the limit.
     bytes: usize,
 }
 
-impl PropertyPath {
-    fn root(name: &str) -> Self {
+impl<'a> PropertyPath<'a> {
+    fn root(name: &'a str) -> Self {
         Self {
-            segments: vec![name.to_owned()],
+            parent: None,
+            name,
             bytes: name.len(),
         }
     }
 
-    fn child(&self, name: &str) -> Self {
-        let mut segments = self.segments.clone();
-        segments.push(name.to_owned());
+    fn child(&'a self, name: &'a str) -> Self {
         Self {
-            segments,
+            parent: Some(self),
+            name,
             bytes: self.bytes.saturating_add(1).saturating_add(name.len()),
         }
     }
 
+    /// The dotted canonical form. Only a refusal renders one, so walking back up to the root
+    /// here costs nothing on the path every accepted write takes.
     fn canonical(&self) -> String {
-        self.segments
-            .iter()
+        let mut segments = Vec::new();
+        let mut current = Some(self);
+        while let Some(path) = current {
+            segments.push(path.name);
+            current = path.parent;
+        }
+        segments.reverse();
+        segments
+            .into_iter()
             .map(|segment| {
-                FieldPath::from_segments([segment.as_str()])
+                FieldPath::from_segments([segment])
                     .expect("stored field names are validated before rendering")
                     .canonical()
             })

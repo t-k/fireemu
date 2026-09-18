@@ -2942,14 +2942,20 @@ impl AuthStore {
             Self::validate_phone_number(phone).map_err(|_| MfaError::InvalidCode)?;
             crate::mfa::validate_factor_display_name(display_name.as_deref())?;
         }
-        // The list replaces the phone factors, so it competes for the budget with the TOTP
-        // factors it keeps. Refusing here leaves the existing factors in place.
-        let totp_factors = self
-            .users
-            .get(uid)
-            .map_or(0, |user| user.mfa.totp_factors().len());
-        if totp_factors + factors.len() > MAX_FACTORS_PER_USER {
-            return Err(MfaError::TooManyFactors);
+        // The account conditions `enroll_phone_factor` refuses on, decided here so the clear
+        // below does not run first. An empty list enrolls nothing, so it is not an
+        // enrollment and is not held to them: a disabled account can still have its factors
+        // cleared, and creating one carries an empty list.
+        if !factors.is_empty() {
+            let user = self.users.get(uid).ok_or(MfaError::UserNotFound)?;
+            if user.disabled {
+                return Err(MfaError::UserDisabled);
+            }
+            // The list replaces the phone factors, so it competes for the budget with the
+            // TOTP factors it keeps.
+            if user.mfa.totp_factors().len() + factors.len() > MAX_FACTORS_PER_USER {
+                return Err(MfaError::TooManyFactors);
+            }
         }
         if let Some(user) = self.users.get_mut(uid).map(Arc::make_mut) {
             user.mfa.phone_factors_mut().clear();

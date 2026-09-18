@@ -2069,6 +2069,80 @@ fn a_refused_control_character_leaves_the_rest_of_the_request_unapplied() {
     assert_eq!(factors[0]["phoneInfo"], "+15550004444");
 }
 
+/// M-2 follow-up. `enroll_phone_factor` refuses a disabled account, and that refusal came
+/// after the replacement had already dropped the existing factors. Every refusal it can
+/// raise is now decided before the clear, so a rejected replacement leaves the account as it
+/// was.
+#[test]
+fn a_disabled_account_keeps_its_second_factor_when_a_replacement_is_refused() {
+    let s = state();
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({
+            "email": "disabled-factors@example.com",
+            "password": "hunter22",
+            "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+15550008888", "displayName": "original"}]
+        }),
+    );
+    assert_eq!(status, 200, "{created}");
+    let local_id = created["localId"].as_str().unwrap().to_owned();
+    let (status, disabled) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": local_id, "disableUser": true}),
+    );
+    assert_eq!(status, 200, "{disabled}");
+
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({
+            "localId": local_id,
+            "mfa": {"enrollments": [{"phoneInfo": "+15550009999", "displayName": "replacement"}]}
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "USER_DISABLED");
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [local_id]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    let factors = lookup["users"][0]["mfaInfo"]
+        .as_array()
+        .expect("the original factor survives");
+    assert_eq!(factors.len(), 1, "{lookup}");
+    assert_eq!(factors[0]["phoneInfo"], "+15550008888");
+    assert_eq!(factors[0]["displayName"], "original");
+}
+
+/// Creating a disabled account carries no enrollment list, so nothing is refused: the empty
+/// replacement is not an enrollment and must not become one.
+#[test]
+fn a_disabled_account_can_be_created_without_second_factors() {
+    let s = state();
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({
+            "email": "disabled-plain@example.com",
+            "password": "hunter22",
+            "disabled": true
+        }),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"email": ["disabled-plain@example.com"]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    assert_eq!(lookup["users"][0]["disabled"], true);
+}
+
 fn percent(s: &str) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();

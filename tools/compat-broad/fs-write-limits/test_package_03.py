@@ -87,7 +87,7 @@ def test_one_allocation_carries_the_whole_scope() -> None:
     assert manifest["campaignId"] == CAMPAIGN
     assert manifest["allocation"]["parts"] == 1
     assert manifest["allocation"]["chargedBy"] == "shared_gate"
-    assert manifest["allocation"]["scheduleStopConsequence"]
+    assert manifest["allocation"]["earlyStop"]
     limits, residues = set(), set()
     for case in manifest["cases"]:
         residues.add(case["residue"])
@@ -116,11 +116,14 @@ def test_one_allocation_carries_the_whole_scope() -> None:
     assert limits == set(manifest["requirementSurfaces"][1:])
 
 
-def test_the_package_states_what_the_frozen_schedule_costs() -> None:
-    """A per-slot reservation the Gate can enforce has a price, so it is recorded."""
+def test_the_package_states_how_an_early_stop_is_handled() -> None:
+    """A frozen schedule keeps fail-closed recovery, and the record says how."""
     allocation = load(MANIFEST)["allocation"]
-    assert "no-data abort" in allocation["scheduleStopConsequence"]
-    assert "recovery owner" in allocation["scheduleStopConsequence"]
+    assert "no-data abort" in allocation["earlyStop"]
+    assert "abandon transition" in allocation["earlyStop"]
+    assert "verified absent" in allocation["earlyStop"]
+    # The one thing still open in the Gate is named rather than glossed.
+    assert "absence proof" in allocation["openGateDefect"]
     assert allocation["gateWallCapSeconds"] == 1200
 
 

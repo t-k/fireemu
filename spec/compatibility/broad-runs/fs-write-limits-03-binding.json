@@ -12,7 +12,7 @@
   ],
   "collector": {
     "differenceFromLimits02": "Every mutating method is gated by the write-safety predicate, not PATCH alone, because this campaign sends writes over :batchWrite. The preflight prefix length is read from the plan. A row the campaign has declared it cannot predict locally is excused from the safety predicate, though its journal integrity is still checked. collector.py is byte-for-byte unchanged, so the frozen limits-02 collector source digest still resolves.",
-    "digest": "185f13258c5b14d7b4d462ea065f7f3782e10503a793fc35d2ae411cf1bc6288",
+    "digest": "94e41aaff2441f5d3e32a64c6799297fca72e75543d31ac054e58c6799e55fe3",
     "path": "tools/compat-broad/fs-write-limits/collector_03.py",
     "productionCollector": null,
     "scope": "REST BatchWrite per-position outcome, create-only document writes, typed readbacks and request-stage name refusals, with ownership and version bound cleanup. No configuration, index, Rules or account operation.",
@@ -55,20 +55,20 @@
   "localShadow": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03-local-shadow.json",
     "productionExecuted": false,
-    "sha256": "59789ba750f4daf91d4594d51858ee794a14990c7121322f8a39bf61ecc7e08f",
+    "sha256": "2ba79c5be80b7cdbdfcaabb2178cdcb48faa3715bd54b32d66b5dabcdffb50df",
     "status": "completed"
   },
   "manifest": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03.json",
-    "sha256": "40a90265df0a6fa8237856b77b5e1705d9c8dc0f6767fdf5943853bdc708f5b6"
+    "sha256": "2c980933eb11a361c0ff2020d9822722423be8d9d5606ce422c03f0a6d21545b"
   },
   "productionExecuted": false,
   "source": {
-    "codeSourceHead": "c9a3611ae326646a70c3bd367a42962f68b7a918",
-    "commit": "c9a3611ae326646a70c3bd367a42962f68b7a918",
+    "codeSourceHead": "2906dffc3bbdceae13e9e29157e8e7cc2cd5847a",
+    "commit": "2906dffc3bbdceae13e9e29157e8e7cc2cd5847a",
     "productionArtifactSha256": null,
     "shadowArtifactSha256": {
-      "ALL": "98f89a4c0df4d69de918d6e0efe7f08aed64070c11471e45d9f63233e2ef15b2"
+      "ALL": "f3308333c4e7dd1acead9db87cdbc07781f925105881cdc55e1c90b8546aae60"
     }
   },
   "status": "BLOCKED_OWNER",

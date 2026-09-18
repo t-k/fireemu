@@ -196,20 +196,29 @@
   ],
   "formalCompatibilityClaim": false,
   "localExpectation": {
-    "classification": "expected-local-difference",
-    "expectedCollectorFailures": [
-      "over:unexpected-success"
-    ],
-    "expectedCompleted": false,
-    "expectedProbeOutcomes": {
+    "catalogNote": "The limits catalog still records FS-LIMIT-API-REQUEST-BYTES as unsupported, and the limits layer does indeed not implement it. The boundary is nonetheless enforced, one layer earlier.",
+    "catalogState": "unsupported",
+    "classification": "local-boundary-enforced-shape-differs",
+    "differenceFromProductionExpectation": "The boundary byte count agrees with the catalog maximum. The refusal code does not: the local runtime answers 413, while the expected production shape is 400. Under the collector's rules 413 is a typed refusal classified as a semantic discrepancy, so this difference is recorded rather than waived.",
+    "enforcementSource": "crates/fireemu-adapter-grpc/src/serve.rs, MAX_REST_BODY_BYTES = 10 * 1024 * 1024",
+    "expectedCollectorFailures": [],
+    "expectedCompleted": true,
+    "expectedResourceAbsence": true,
+    "localEnforcement": "transport body cap",
+    "note": "A local run in which the over probe is accepted would mean the transport cap was removed or raised; the shadow reports that as `local-boundary-not-enforced` rather than passing.",
+    "observedProbeOutcomes": {
       "exact": "accepted",
-      "over": "accepted (production is expected to refuse)",
+      "over": "refused",
       "under": "accepted"
     },
-    "expectedResourceAbsence": true,
-    "localEnforcement": "implementation pending",
-    "note": "A local run that reports `completed: true` would mean the local runtime accepted the over probe without the shadow noticing, or the plan changed. Either is a defect in this lane.",
-    "reason": "The limits catalog records FS-LIMIT-API-REQUEST-BYTES as unsupported in the local runtime. A separate Rust lane is implementing the check."
+    "observedRefusal": {
+      "classification": "semantic-discrepancy",
+      "errorCode": 413,
+      "errorStatus": "INVALID_ARGUMENT",
+      "httpStatus": 413,
+      "message": "request body too large"
+    },
+    "pendingLimitsImplementation": "A separate Rust lane is implementing this condition in the limits layer. The transport cap already refuses at the same boundary, so a limits-layer check will never be reached on the REST path unless it runs before the body cap or the cap is raised. That lane needs this observation."
   },
   "operations": [
     "Commit"

@@ -18,29 +18,41 @@ if str(HERE) not in sys.path:
 from request_bytes_campaign import LOCAL_EXPECTATION
 from request_bytes_shadow import classify_local_result
 
-PENDING = {
-    "completed": False,
-    "cleanupComplete": False,
+REFUSAL_413 = {
+    "httpStatus": 413,
+    "errorCode": 413,
+    "errorStatus": "INVALID_ARGUMENT",
+    "classification": "semantic-discrepancy",
+}
+
+BASELINE = {
+    "completed": True,
+    "cleanupComplete": True,
     "resourceAbsence": True,
-    "failures": ["over:unexpected-success"],
+    "failures": [],
+    "overRefusal": REFUSAL_413,
 }
 
 
-def test_pending_implementation_is_an_expected_difference() -> None:
-    verdict = classify_local_result(dict(PENDING))
-    assert verdict["classification"] == "expected-local-difference"
-    assert verdict["localEnforcement"] == "implementation pending"
+def test_observed_baseline_is_an_enforced_boundary_with_a_different_shape() -> None:
+    verdict = classify_local_result(dict(BASELINE))
+    assert verdict["classification"] == "local-boundary-enforced-shape-differs"
+    assert verdict["matchesBaseline"] is True
+    assert verdict["expectedClassification"] == LOCAL_EXPECTATION["classification"]
+    assert verdict["productionRefusalExpectation"] == "400 INVALID_ARGUMENT"
     assert verdict["differenceMasked"] is False
-    assert verdict["observedFailures"] == LOCAL_EXPECTATION["expectedCollectorFailures"]
 
 
-def test_a_local_refusal_marks_the_expectation_stale() -> None:
+def test_the_baseline_names_the_enforcement_source() -> None:
+    verdict = classify_local_result(dict(BASELINE))
+    assert "MAX_REST_BODY_BYTES" in verdict["enforcementSource"]
+    assert verdict["localEnforcement"] == "transport body cap"
+
+
+def test_a_typed_400_marks_the_baseline_stale() -> None:
     verdict = classify_local_result(
         {
-            "completed": True,
-            "cleanupComplete": True,
-            "resourceAbsence": True,
-            "failures": [],
+            **BASELINE,
             "overRefusal": {
                 "httpStatus": 400,
                 "errorCode": 400,
@@ -49,45 +61,52 @@ def test_a_local_refusal_marks_the_expectation_stale() -> None:
             },
         }
     )
-    assert verdict["classification"] == "local-enforcement-observed"
-    assert verdict["overRefusal"]["httpStatus"] == 400
+    assert verdict["classification"] == "local-shape-matches-production-expectation"
+    assert verdict["matchesBaseline"] is False
+
+
+def test_an_accepted_over_probe_is_reported_as_an_unenforced_boundary() -> None:
+    verdict = classify_local_result(
+        {
+            "completed": False,
+            "cleanupComplete": False,
+            "resourceAbsence": True,
+            "failures": ["over:unexpected-success"],
+        }
+    )
+    assert verdict["classification"] == "local-boundary-not-enforced"
+    assert verdict["matchesBaseline"] is False
 
 
 @pytest.mark.parametrize(
     "result",
     [
-        pytest.param({**PENDING, "resourceAbsence": False}, id="cleanup-incomplete"),
-        pytest.param({**PENDING, "failures": []}, id="no-failure-recorded"),
+        pytest.param({**BASELINE, "resourceAbsence": False}, id="cleanup-incomplete"),
+        pytest.param({**BASELINE, "completed": False}, id="not-completed"),
+        pytest.param(
+            {**BASELINE, "failures": ["under:commit-proof-missing"]},
+            id="failure-alongside-refusal",
+        ),
+        pytest.param({**BASELINE, "overRefusal": None}, id="clean-run-without-refusal"),
+        pytest.param(
+            {**BASELINE, "overRefusal": {"httpStatus": 500}}, id="unexpected-code"
+        ),
+        pytest.param({**BASELINE, "overRefusal": "413"}, id="refusal-not-an-object"),
         pytest.param(
             {
-                **PENDING,
-                "failures": ["over:unexpected-success", "under:commit-proof-missing"],
+                "completed": False,
+                "resourceAbsence": False,
+                "failures": ["over:unexpected-success"],
             },
-            id="extra-failure",
-        ),
-        pytest.param(
-            {**PENDING, "failures": ["under:commit-proof-missing"]}, id="wrong-failure"
-        ),
-        pytest.param(
-            {**PENDING, "overRefusal": {"httpStatus": 400}}, id="refusal-with-failures"
-        ),
-        pytest.param(
-            {
-                "completed": True,
-                "cleanupComplete": True,
-                "resourceAbsence": True,
-                "failures": [],
-            },
-            id="clean-run-without-a-refusal",
+            id="accepted-but-not-cleaned-up",
         ),
         pytest.param(
             {
                 "completed": False,
                 "resourceAbsence": True,
-                "failures": [],
-                "overRefusal": {"httpStatus": 413},
+                "failures": ["over:unexpected-success", "under:commit-proof-missing"],
             },
-            id="refusal-but-not-completed",
+            id="accepted-with-extra-failure",
         ),
     ],
 )
@@ -103,6 +122,6 @@ def test_malformed_results_are_rejected_rather_than_classified() -> None:
 
 
 def test_classification_never_claims_production() -> None:
-    verdict = classify_local_result(dict(PENDING))
+    verdict = classify_local_result(dict(BASELINE))
     assert verdict["productionExecuted"] is False
     assert verdict["formalCompatibilityClaim"] is False

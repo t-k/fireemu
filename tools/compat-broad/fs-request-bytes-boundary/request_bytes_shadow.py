@@ -60,11 +60,20 @@ def source_inputs() -> dict[str, str]:
 def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
     """Compare a collector result against the declared pending-implementation expectation.
 
-    An `expected-local-difference` means the local runtime accepted the
-    over-boundary Commit, which is exactly what an unimplemented limit looks
-    like. `local-enforcement-observed` means the local runtime refused it, which
-    would mean the pending implementation landed and this expectation is stale.
-    Everything else is a shadow failure and is reported as such.
+    Three outcomes are recognised, and none of them relaxes the production
+    expectation:
+
+    - `local-boundary-enforced-shape-differs` is the observed baseline. The
+      local transport refuses the over-boundary Commit at exactly 10 MiB with a
+      typed 413, where production is expected to answer 400. The boundary
+      agrees; the refusal shape does not.
+    - `local-shape-matches-production-expectation` means a typed 400 was
+      returned, so the limits-layer implementation has landed ahead of the
+      transport cap and this baseline is stale.
+    - `local-boundary-not-enforced` means the over-boundary Commit was accepted,
+      so the transport cap was removed or raised.
+
+    Anything else is a shadow failure and is reported as such.
     """
     if not isinstance(result, dict):
         raise TypeError("result must be an object")
@@ -73,30 +82,43 @@ def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
         raise TypeError("result failures malformed")
     absence = result.get("resourceAbsence") is True
     refusal = result.get("overRefusal")
-    expected_failures = list(LOCAL_EXPECTATION["expectedCollectorFailures"])
-    if failures == expected_failures and refusal is None and absence:
-        classification = "expected-local-difference"
+    completed = result.get("completed") is True
+    observed = LOCAL_EXPECTATION["observedRefusal"]
+    clean_refusal = not failures and completed and absence and isinstance(refusal, dict)
+    if clean_refusal and refusal.get("httpStatus") == observed["httpStatus"]:
+        classification = "local-boundary-enforced-shape-differs"
         summary = (
-            "The local runtime accepted the over-boundary Commit. "
-            "FS-LIMIT-API-REQUEST-BYTES is not implemented locally yet."
+            "The local transport refused the over-boundary Commit at exactly the "
+            "10 MiB boundary with a typed 413. Production is expected to answer "
+            "400, so the boundary agrees and the refusal shape does not."
         )
-    elif not failures and refusal is not None and result.get("completed") is True:
-        classification = "local-enforcement-observed"
+    elif clean_refusal and refusal.get("httpStatus") == 400:
+        classification = "local-shape-matches-production-expectation"
         summary = (
-            "The local runtime refused the over-boundary Commit with a typed error. "
-            "The pending-implementation expectation in this lane is now stale."
+            "The local runtime refused the over-boundary Commit with a typed 400. "
+            "The limits-layer implementation has landed and this baseline is stale."
+        )
+    elif failures == ["over:unexpected-success"] and refusal is None and absence:
+        classification = "local-boundary-not-enforced"
+        summary = (
+            "The local runtime accepted the over-boundary Commit. The transport "
+            "body cap was removed or raised."
         )
     else:
         classification = "shadow-failure"
-        summary = "The local run matched neither the pending-implementation expectation nor a clean local refusal."
+        summary = "The local run matched none of the three recognised local outcomes."
     return {
         "classification": classification,
         "summary": summary,
+        "expectedClassification": LOCAL_EXPECTATION["classification"],
+        "matchesBaseline": classification == LOCAL_EXPECTATION["classification"],
         "localEnforcement": LOCAL_EXPECTATION["localEnforcement"],
-        "expectedCollectorFailures": expected_failures,
+        "enforcementSource": LOCAL_EXPECTATION["enforcementSource"],
+        "expectedRefusal": observed,
         "observedFailures": failures,
         "resourceAbsence": absence,
         "overRefusal": refusal,
+        "productionRefusalExpectation": "400 INVALID_ARGUMENT",
         "differenceMasked": False,
         "productionExecuted": False,
         "formalCompatibilityClaim": False,
@@ -207,12 +229,13 @@ def _child(output: Path, nonce: str) -> None:
                     "family": "firestore",
                     "requestBytes": case["requestBytes"],
                     "productionExpectation": case["productionExpectation"],
-                    "localExpectation": LOCAL_EXPECTATION["expectedProbeOutcomes"][
+                    "localObserved": LOCAL_EXPECTATION["observedProbeOutcomes"][
                         case["probe"]
                     ],
-                    "status": "difference"
+                    "status": "refusal-shape-difference"
                     if case["productionExpectation"] == "refused"
-                    and shadow["classification"] == "expected-local-difference"
+                    and shadow["classification"]
+                    == "local-boundary-enforced-shape-differs"
                     else "local-only",
                     "basis": "Local typed state invariants and version-bound cleanup; no production comparison.",
                 }

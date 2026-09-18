@@ -101,22 +101,36 @@ REFUSAL_EXPECTATION: dict[str, Any] = {
     },
 }
 
-#: What the local fireemu runtime is expected to do today. The limit is not
-#: implemented in the local runtime, so the over probe is expected to be
-#: accepted locally. The shadow records that difference rather than masking it.
+#: What the local fireemu runtime does today, as observed by the local shadow on
+#: 2026-09-18 rather than assumed. The limits layer does not implement this
+#: condition, but the REST transport already caps the request body at exactly
+#: 10 MiB, so the boundary is enforced and the refusal shape differs from the
+#: one expected of production. The shadow reports that difference; it does not
+#: relax the production expectation to absorb it.
 LOCAL_EXPECTATION: dict[str, Any] = {
-    "localEnforcement": "implementation pending",
-    "reason": "The limits catalog records FS-LIMIT-API-REQUEST-BYTES as unsupported in the local runtime. A separate Rust lane is implementing the check.",
-    "expectedProbeOutcomes": {
+    "localEnforcement": "transport body cap",
+    "enforcementSource": "crates/fireemu-adapter-grpc/src/serve.rs, MAX_REST_BODY_BYTES = 10 * 1024 * 1024",
+    "catalogState": "unsupported",
+    "catalogNote": "The limits catalog still records FS-LIMIT-API-REQUEST-BYTES as unsupported, and the limits layer does indeed not implement it. The boundary is nonetheless enforced, one layer earlier.",
+    "observedProbeOutcomes": {
         "under": "accepted",
         "exact": "accepted",
-        "over": "accepted (production is expected to refuse)",
+        "over": "refused",
     },
-    "expectedCollectorFailures": ["over:unexpected-success"],
-    "expectedCompleted": False,
+    "observedRefusal": {
+        "httpStatus": 413,
+        "errorCode": 413,
+        "errorStatus": "INVALID_ARGUMENT",
+        "message": "request body too large",
+        "classification": "semantic-discrepancy",
+    },
+    "differenceFromProductionExpectation": "The boundary byte count agrees with the catalog maximum. The refusal code does not: the local runtime answers 413, while the expected production shape is 400. Under the collector's rules 413 is a typed refusal classified as a semantic discrepancy, so this difference is recorded rather than waived.",
+    "expectedCollectorFailures": [],
+    "expectedCompleted": True,
     "expectedResourceAbsence": True,
-    "classification": "expected-local-difference",
-    "note": "A local run that reports `completed: true` would mean the local runtime accepted the over probe without the shadow noticing, or the plan changed. Either is a defect in this lane.",
+    "classification": "local-boundary-enforced-shape-differs",
+    "pendingLimitsImplementation": "A separate Rust lane is implementing this condition in the limits layer. The transport cap already refuses at the same boundary, so a limits-layer check will never be reached on the REST path unless it runs before the body cap or the cap is raised. That lane needs this observation.",
+    "note": "A local run in which the over probe is accepted would mean the transport cap was removed or raised; the shadow reports that as `local-boundary-not-enforced` rather than passing.",
 }
 
 
@@ -411,12 +425,31 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
     local = campaign.get("localExpectation")
     if not isinstance(local, dict):
         raise TypeError("missing local expectation")
-    if local.get("localEnforcement") != "implementation pending":
-        raise ValueError("the local expectation must record the pending implementation")
-    if local.get("expectedCompleted") is not False:
-        raise ValueError("a local run must not be expected to complete cleanly")
+    if local.get("localEnforcement") != "transport body cap":
+        raise ValueError("the local expectation must record the observed enforcement")
+    if not local.get("enforcementSource"):
+        raise ValueError("the local enforcement source must be named")
+    if local.get("catalogState") != "unsupported":
+        raise ValueError("the catalog state for this condition is unsupported")
+    observed = local.get("observedRefusal")
+    if not isinstance(observed, dict):
+        raise TypeError("the local expectation must record the observed refusal")
+    if observed.get("httpStatus") != 413 or observed.get("errorCode") != 413:
+        raise ValueError("the observed local refusal code drifted")
+    if observed.get("classification") != "semantic-discrepancy":
+        raise ValueError(
+            "a local refusal code unlike production is a semantic discrepancy"
+        )
+    if not local.get("differenceFromProductionExpectation"):
+        raise ValueError("the local difference must be stated, not absorbed")
+    if not local.get("pendingLimitsImplementation"):
+        raise ValueError("the pending limits-layer implementation must be recorded")
+    if local.get("expectedCompleted") is not True:
+        raise ValueError("the observed local run completes; say so")
     if local.get("expectedResourceAbsence") is not True:
         raise ValueError("a local run must still prove resource absence")
+    if local.get("expectedCollectorFailures") != []:
+        raise ValueError("the observed local run records no collector failure")
 
     owner = campaign.get("owner")
     if not isinstance(owner, dict):

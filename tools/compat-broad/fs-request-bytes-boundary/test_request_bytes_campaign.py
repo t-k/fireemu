@@ -146,13 +146,26 @@ def test_batchwrite_and_grpc_are_excluded_with_a_reason(campaign: dict) -> None:
     assert campaign["operations"] == ["Commit"]
 
 
-def test_local_expectation_records_the_pending_implementation(campaign: dict) -> None:
+def test_local_expectation_records_the_observed_transport_cap(campaign: dict) -> None:
     local = campaign["localExpectation"]
-    assert local is LOCAL_EXPECTATION or local == LOCAL_EXPECTATION
-    assert local["localEnforcement"] == "implementation pending"
-    assert local["expectedCollectorFailures"] == ["over:unexpected-success"]
-    assert local["expectedCompleted"] is False
+    assert local == LOCAL_EXPECTATION
+    assert local["localEnforcement"] == "transport body cap"
+    assert "MAX_REST_BODY_BYTES" in local["enforcementSource"]
+    assert local["catalogState"] == "unsupported"
+    assert local["observedProbeOutcomes"]["over"] == "refused"
+    assert local["observedRefusal"]["httpStatus"] == 413
+    assert local["observedRefusal"]["classification"] == "semantic-discrepancy"
+    assert local["expectedCollectorFailures"] == []
+    assert local["expectedCompleted"] is True
     assert local["expectedResourceAbsence"] is True
+
+
+def test_local_expectation_states_the_difference_and_the_pending_lane(
+    campaign: dict,
+) -> None:
+    local = campaign["localExpectation"]
+    assert "400" in local["differenceFromProductionExpectation"]
+    assert local["pendingLimitsImplementation"]
 
 
 def test_campaign_does_not_authorize_production(campaign: dict) -> None:
@@ -207,16 +220,38 @@ def test_campaign_does_not_authorize_production(campaign: dict) -> None:
             id="partial-readback",
         ),
         pytest.param(
-            lambda c: c["localExpectation"].update(localEnforcement="implemented"),
-            id="local-difference-masked",
+            lambda c: c["localExpectation"].update(
+                localEnforcement="implementation pending"
+            ),
+            id="local-enforcement-misreported",
         ),
         pytest.param(
-            lambda c: c["localExpectation"].update(expectedCompleted=True),
-            id="local-run-expected-clean",
+            lambda c: c["localExpectation"].update(expectedCompleted=False),
+            id="local-outcome-misreported",
         ),
         pytest.param(
             lambda c: c["localExpectation"].update(expectedResourceAbsence=False),
             id="local-absence-waived",
+        ),
+        pytest.param(
+            lambda c: c["localExpectation"].update(
+                observedRefusal={"httpStatus": 400, "errorCode": 400}
+            ),
+            id="local-refusal-code-drift",
+        ),
+        pytest.param(
+            lambda c: c["localExpectation"].update(
+                differenceFromProductionExpectation=""
+            ),
+            id="local-difference-absorbed",
+        ),
+        pytest.param(
+            lambda c: c["localExpectation"].update(enforcementSource=""),
+            id="enforcement-source-unnamed",
+        ),
+        pytest.param(
+            lambda c: c["localExpectation"].update(pendingLimitsImplementation=""),
+            id="pending-lane-not-recorded",
         ),
         pytest.param(
             lambda c: c["owner"].update(nonce="not-a-nonce"), id="nonce-malformed"

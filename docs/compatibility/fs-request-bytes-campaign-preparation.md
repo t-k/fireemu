@@ -140,21 +140,58 @@ escalates to the owner; it never widens scope and never retries a Commit.
 5. Acknowledgement of the untyped-refusal risk above, or a collector extension
    first.
 
-## Local shadow
+## Local shadow, and what it found
 
-The local runtime does not implement this limit. A separate Rust lane is
-implementing the check now. The shadow therefore records the difference rather
-than masking it: the over-boundary Commit is expected to be **accepted** by the
-local artifact, which the collector records as the failure
-`over:unexpected-success`, leaving `completed: false` while `resourceAbsence`
-stays true because the accepted documents are still cleaned up with absence
-proofs.
+The shadow runs the same plan and collector against an owned local fireemu
+artifact built from this checkout, through the existing `broad.run` artifact
+builder and process supervisor.
 
-`classify_local_result` reports that outcome as `expected-local-difference`. A
-local run that refuses the over probe is reported as `local-enforcement-observed`
-and means this expectation is stale because the implementation landed. Any other
-outcome is a `shadow-failure`. A clean local run with no refusal is explicitly a
-shadow failure, so the difference cannot be quietly absorbed.
+The expectation going in was that the local runtime does not enforce this limit,
+so the over-boundary Commit would be accepted. That expectation was wrong, and
+the run says so:
+
+| Probe | Request bytes | Local result |
+| --- | ---: | --- |
+| under | 10,485,759 | HTTP 200, accepted |
+| exact | 10,485,760 | HTTP 200, accepted |
+| over | 10,485,761 | HTTP 413, refused |
+
+The refusal body is exactly:
+
+```json
+{"error":{"code":413,"message":"request body too large","status":"INVALID_ARGUMENT"}}
+```
+
+The local runtime therefore enforces the boundary at exactly the catalog
+maximum, but one layer earlier than the limits catalog suggests and with a
+different refusal code. The enforcement is the REST transport body cap
+`MAX_REST_BODY_BYTES` in `crates/fireemu-adapter-grpc/src/serve.rs`, not the
+limits layer. The limits catalog still records the condition as `unsupported`,
+and that is accurate about the limits layer while being misleading about the
+observable behaviour.
+
+Two consequences follow.
+
+First, the difference that remains against the production expectation is the
+refusal **shape**, not the boundary. The collector accepts 413 with
+`INVALID_ARGUMENT` as a typed refusal but classifies it as a semantic
+discrepancy, which is what the shadow records. The shadow classifies this run as
+`local-boundary-enforced-shape-differs`; a typed 400 would be
+`local-shape-matches-production-expectation`, and an accepted over probe would be
+`local-boundary-not-enforced`. Nothing is absorbed into a pass.
+
+Second, the lane implementing this condition in the limits layer needs this
+observation. A limits-layer check on the REST path will never be reached, because
+the transport cap rejects the body before the request is decoded. That check has
+to run before the body cap, or the cap has to be raised, or the implementation
+will be dead code on this path while appearing to work.
+
+The run completed all 105 observation rows and 153 recovery rows, sent 241 of the
+258 bounded requests, and proved all 51 owned resources absent afterwards. The 17
+unsent requests are the over probe's delete slots, consumed as zero-wire skips
+because a refused Commit grants no cleanup ownership. That is the intended
+behaviour and it is also the post-state evidence: the refused request wrote
+nothing.
 
 ## Artifacts
 

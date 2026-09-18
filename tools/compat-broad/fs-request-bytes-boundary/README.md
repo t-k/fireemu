@@ -61,11 +61,19 @@ request wrote nothing.
 
 `request_bytes_shadow.py` runs the plan and collector against an owned local
 fireemu artifact built from this checkout, through the existing `broad.run`
-artifact builder and process supervisor. The local runtime does not implement
-this limit yet, so the over-boundary Commit is expected to be accepted locally.
-`classify_local_result` reports that as `expected-local-difference` rather than
-relaxing the expectation; a clean local run without a refusal is a shadow
-failure. Neither module authorizes production execution.
+artifact builder and process supervisor.
+
+The observed local baseline is that the boundary **is** enforced, by the REST
+transport body cap `MAX_REST_BODY_BYTES` in
+`crates/fireemu-adapter-grpc/src/serve.rs`, not by the limits layer. The over
+probe is refused with HTTP 413 and `{"error":{"code":413,"message":"request body
+too large","status":"INVALID_ARGUMENT"}}`. `classify_local_result` reports that
+as `local-boundary-enforced-shape-differs`, because the boundary agrees with
+production while the refusal code does not. A typed 400 is
+`local-shape-matches-production-expectation` and means the limits-layer
+implementation landed; an accepted over probe is `local-boundary-not-enforced`
+and means the cap was removed or raised. Any other outcome is a shadow failure.
+Neither module authorizes production execution.
 
 Run the offline tests with:
 

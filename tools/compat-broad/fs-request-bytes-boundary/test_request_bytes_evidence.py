@@ -388,3 +388,27 @@ def test_a_tampered_timing_block_is_rejected(mutate):
         shadow_module.validate_slot_timings(
             timings, value["observation"]["requestCount"]
         )
+
+
+def test_the_preparation_doc_describes_the_published_run():
+    """The prose and the record must name the same run.
+
+    They drifted once: a rebind updated the record and left the document citing
+    an earlier run's commit and artifact, so the published narrative described
+    evidence that was no longer published.
+    """
+    value = record()
+    doc = (
+        ROOT / "docs/compatibility/fs-request-bytes-campaign-preparation.md"
+    ).read_text()
+    for field in ("sourceCommit",):
+        assert value["runtime"][field] in doc, (
+            f"the preparation doc does not name the published run's {field}"
+        )
+    assert value["artifactSha256"] in doc
+    assert value["nonce"] in doc
+    timings = value["slotTimings"]["classes"]
+    for entry in (timings["smallRequest"], timings["boundaryCommit"]):
+        assert f"{entry['medianSeconds']:.4f}" in doc, (
+            "the preparation doc quotes timings from a different run"
+        )

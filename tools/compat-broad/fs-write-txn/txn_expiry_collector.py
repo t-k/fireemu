@@ -126,6 +126,17 @@ def _b64(raw):
     return base64.b64encode(raw).decode()
 
 
+def _decode_token(token):
+    """Decode a transaction token, or None when it cannot be used as one."""
+    if not isinstance(token, str) or not token:
+        return None
+    try:
+        decoded = base64.b64decode(token, validate=True)
+    except (ValueError, TypeError):
+        return None
+    return decoded or None
+
+
 def document_name(project, database, path):
     return f"projects/{project}/databases/{database}/documents/{path}"
 
@@ -356,6 +367,8 @@ class Collection:
         for key in ("blocked", "incomplete"):
             if response.get(key):
                 row[key] = response[key]
+        if response.get("acquisition"):
+            row["acquisition"] = response["acquisition"]
         if step.get("verifiesCase"):
             row["verifiesCase"] = step["verifiesCase"]
         if step["rpc"] == "GetDocument" and step["role"]:
@@ -598,14 +611,44 @@ class Collection:
         raise ValueError(f"unhandled slot {prefix}: {slot}")
 
     def _open(self, step, options_body):
+        """Begin a transaction and take responsibility for whatever it issued.
+
+        A case may expect the request to be refused. Whether it was is a result
+        to record, not a reason to look away: a transaction the backend really
+        did start is live, holds whatever it holds, and has to be released
+        during recovery. So every fully successful begin is registered, and the
+        expectation only classifies the row afterwards.
+        """
         response = self._begin(options_body)
-        tag = step["opensTransaction"]
-        token = (response.get("body") or {}).get("transaction")
-        if response.get("code") == OK and token and tag:
-            decoded = base64.b64decode(token)
-            self.tokens[tag] = decoded
-            self.open_tokens[tag] = decoded
-        return response
+        if response.get("code") != OK:
+            return response
+        tag = step["opensTransaction"] or f"unplanned/{step['slot']}"
+        decoded = _decode_token((response.get("body") or {}).get("transaction"))
+        if decoded is None:
+            # A success-shaped reply without a usable token has not acquired
+            # anything, and it may still have started a transaction this run can
+            # never name. That is an incomplete response, not an acquisition.
+            return {
+                **response,
+                "complete": False,
+                "incomplete": "begin-without-usable-token",
+            }
+        self.tokens[tag] = decoded
+        self.open_tokens[tag] = decoded
+        expected = self._expected_code(step) == OK
+        return {
+            **response,
+            "acquisition": {
+                "transaction": tag,
+                "tokenRegistered": True,
+                "expected": expected,
+                "planned": bool(step["opensTransaction"]),
+            },
+        }
+
+    def _expected_code(self, step):
+        case = CASE_BY_ID.get(step["caseId"]) if step["caseId"] else None
+        return case["expectedLocal"]["code"] if case else OK
 
     # -- individual case handlers ------------------------------------------
 
@@ -646,17 +689,21 @@ class Collection:
         )
 
     def _retry_committed(self, step):
-        return self._begin({"readWrite": {"retryTransaction": _b64(self.tokens["i"])}})
+        return self._open(
+            step, {"readWrite": {"retryTransaction": _b64(self.tokens["i"])}}
+        )
 
     def _retry_read_only(self, step):
-        return self._begin({"readWrite": {"retryTransaction": _b64(self.tokens["j"])}})
+        return self._open(
+            step, {"readWrite": {"retryTransaction": _b64(self.tokens["j"])}}
+        )
 
     def _retry_unissued(self, step):
         token = plan_module.unissued_retry_token(self.options["nonce"])
-        return self._begin({"readWrite": {"retryTransaction": _b64(token)}})
+        return self._open(step, {"readWrite": {"retryTransaction": _b64(token)}})
 
     def _retry_malformed(self, step):
-        return self._begin({"readWrite": {"retryTransaction": "not base64!"}})
+        return self._open(step, {"readWrite": {"retryTransaction": "not base64!"}})
 
     _HANDLERS: ClassVar[dict] = {
         "idle/lock-held": _lock_held,

@@ -754,3 +754,105 @@ def test_the_state_a_case_left_behind_is_recorded_next_to_that_case():
     }
     assert states["idle-expiry/commit-before-idle"] == "committed-before-idle"
     assert states["idle-expiry/lock-released-after-idle"] == "written-after-expiry"
+
+
+class UnexpectedlyIssuingEndpoint(StatefulEndpoint):
+    """An endpoint that accepts a retry the case table expects to be refused."""
+
+    def __init__(self, slot):
+        super().__init__()
+        self.slot = slot
+        self.collection = None
+        self.steps = None
+        self.issued_tokens = []
+        self.live = set()
+        self.rolled_back = []
+
+    def attach(self, collection):
+        super().attach(collection)
+        self.collection = collection
+        self.steps = [
+            step for step in collection.plan["operations"] if step["phase"] != "cleanup"
+        ]
+
+    def __call__(self, request):
+        index = len(self.collection.rows)
+        step = self.steps[index] if index < len(self.steps) else None
+        slot = step["slot"] if step else "cleanup"
+        response = super().__call__(request)
+        if request["rpc"] == "BeginTransaction" and response["code"] == 0:
+            token = response["body"]["transaction"]
+            self.live.add(token)
+            if slot == self.slot:
+                self.issued_tokens.append(token)
+        if request["rpc"] == "Rollback":
+            token = request["body"]["transaction"]
+            self.rolled_back.append(token)
+            self.live.discard(token)
+        if request["rpc"] == "Commit" and (request["body"] or {}).get("transaction"):
+            self.live.discard(request["body"]["transaction"])
+        return response
+
+
+def test_a_transaction_issued_against_expectation_is_still_tracked_and_released():
+    endpoint = UnexpectedlyIssuingEndpoint("retry/committed-previous")
+    receipt, _ = run_against(endpoint)
+    assert endpoint.issued_tokens, "the fixture must issue the unexpected token"
+    for token in endpoint.issued_tokens:
+        assert token in endpoint.rolled_back
+    assert endpoint.live == set()
+    assert receipt["openTransactions"] == []
+
+
+def test_an_unexpected_token_is_recorded_on_the_row_that_obtained_it():
+    endpoint = UnexpectedlyIssuingEndpoint("retry/unissued-previous")
+    receipt, _ = run_against(endpoint)
+    row = next(
+        row
+        for row in receipt["rows"]
+        if row["caseId"] == "retry-token/retry-with-unissued-previous"
+    )
+    assert row["acquisition"]["tokenRegistered"] is True
+    assert row["acquisition"]["expected"] is False
+    released = {entry["transaction"] for entry in receipt["transactionReleases"]}
+    assert row["acquisition"]["transaction"] in released
+
+
+def test_a_begin_that_reports_success_without_a_token_is_incomplete():
+    def transport(request):
+        if request["rpc"] == "BeginTransaction":
+            return {
+                "code": 0,
+                "status": "OK",
+                "message": None,
+                "complete": True,
+                "body": {},
+            }
+        return StatefulEndpoint()(request)
+
+    receipt = collector.collect(
+        options(), transport, advance=advances([]), monotonic=lambda: 0.0
+    )
+    assert receipt["failure"] == "incomplete-response"
+    site = receipt["failureSites"][-1]
+    assert site["reason"] == "incomplete-response"
+    assert site["incomplete"] == "begin-without-usable-token"
+
+
+def test_a_begin_that_reports_success_with_an_unusable_token_is_incomplete():
+    def transport(request):
+        if request["rpc"] == "BeginTransaction":
+            return {
+                "code": 0,
+                "status": "OK",
+                "message": None,
+                "complete": True,
+                "body": {"transaction": "not base64!"},
+            }
+        return StatefulEndpoint()(request)
+
+    receipt = collector.collect(
+        options(), transport, advance=advances([]), monotonic=lambda: 0.0
+    )
+    assert receipt["failure"] == "incomplete-response"
+    assert receipt["failureSites"][-1]["incomplete"] == "begin-without-usable-token"

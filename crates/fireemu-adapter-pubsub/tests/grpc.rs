@@ -1538,7 +1538,9 @@ async fn ordered_push_delivers_successor_after_dead_letter_forwarding() {
     let h = start().await;
     let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
-    let mut statuses = vec![500; 15];
+    // Five failed pushes exhaust the dead-letter budget of the predecessor; the sixth request is
+    // the successor's.
+    let mut statuses = vec![500; 5];
     statuses.push(204);
     let (endpoint, bodies, stop, worker) = push_sink_sequence(statuses);
     let source_topic = "projects/demo-app/topics/ordered-dlq-source";
@@ -1582,14 +1584,14 @@ async fn ordered_push_delivers_successor_after_dead_letter_forwarding() {
     .unwrap();
 
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        while bodies.lock().unwrap().len() < 16 {
+        while bodies.lock().unwrap().len() < 6 {
             tokio::task::yield_now().await;
         }
     })
     .await
     .expect("the ordered successor must be delivered after its predecessor reaches the DLQ");
     let pushed = bodies.lock().unwrap().clone();
-    assert_eq!(pushed.len(), 16);
+    assert_eq!(pushed.len(), 6);
     let last = String::from_utf8(pushed.last().unwrap().clone()).unwrap();
     assert!(last.contains("b3JkZXJlZC1zdWNjZXNzb3I"));
 
@@ -1641,30 +1643,31 @@ async fn push_retry_waits_for_virtual_backoff_and_resumes_after_clock_advance() 
     .await
     .unwrap();
 
-    tokio::time::timeout(std::time::Duration::from_secs(1), async {
-        while bodies.lock().unwrap().len() < 3 {
-            tokio::task::yield_now().await;
+    // One request per attempt: every retry waits for the logical backoff, so the count only grows
+    // when the virtual clock advances.
+    for attempt in 1..=4 {
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while bodies.lock().unwrap().len() < attempt {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the eligible attempt must be delivered");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            bodies.lock().unwrap().len(),
+            attempt,
+            "attempt {attempt} must wait for the logical backoff"
+        );
+        if attempt < 4 {
+            h.clock
+                .lock()
+                .unwrap()
+                .advance(LogicalDuration::from_seconds(5))
+                .unwrap();
+            h.handle.on_clock_changed();
         }
-    })
-    .await
-    .expect("the worker must exhaust its immediate HTTP attempts");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    assert_eq!(bodies.lock().unwrap().len(), 3);
-
-    h.clock
-        .lock()
-        .unwrap()
-        .advance(LogicalDuration::from_seconds(5))
-        .unwrap();
-    h.handle.on_clock_changed();
-    tokio::time::timeout(std::time::Duration::from_secs(1), async {
-        while bodies.lock().unwrap().len() < 4 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("clock advancement must wake the logically eligible retry");
-    assert_eq!(bodies.lock().unwrap().len(), 4);
+    }
 
     h.shutdown().await;
     stop.store(true, Ordering::Release);
@@ -1715,12 +1718,12 @@ async fn a_new_publication_wakes_a_subscription_deferred_for_push_backoff() {
     .unwrap();
 
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
-        while bodies.lock().unwrap().len() < 3 {
+        while bodies.lock().unwrap().is_empty() {
             tokio::task::yield_now().await;
         }
     })
     .await
-    .expect("the first message must exhaust immediate HTTP attempts");
+    .expect("the first message must fail its attempt and enter backoff");
 
     pubc.publish(pb::PublishRequest {
         topic: topic.to_owned(),
@@ -1729,7 +1732,7 @@ async fn a_new_publication_wakes_a_subscription_deferred_for_push_backoff() {
     .await
     .unwrap();
     let second_delivered = tokio::time::timeout(std::time::Duration::from_secs(1), async {
-        while bodies.lock().unwrap().len() < 4 {
+        while bodies.lock().unwrap().len() < 2 {
             tokio::task::yield_now().await;
         }
     })
@@ -1748,7 +1751,7 @@ async fn deferred_push_backoff_leaves_worker_capacity_for_other_subscriptions() 
     let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
     let (blocked_endpoint, blocked_bodies, stop_blocked, blocked_worker) =
-        push_sink_sequence(vec![500; DELAYED_SUBSCRIPTIONS * 3]);
+        push_sink_sequence(vec![500; DELAYED_SUBSCRIPTIONS]);
     let (other_endpoint, other_bodies, stop_other, other_worker) = push_sink(204);
     let blocked_topic = "projects/demo-app/topics/push-backoff-saturated";
     let other_topic = "projects/demo-app/topics/push-backoff-other";
@@ -1803,7 +1806,7 @@ async fn deferred_push_backoff_leaves_worker_capacity_for_other_subscriptions() 
     .await
     .unwrap();
     let attempts = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-        while blocked_bodies.lock().unwrap().len() < DELAYED_SUBSCRIPTIONS * 3 {
+        while blocked_bodies.lock().unwrap().len() < DELAYED_SUBSCRIPTIONS {
             tokio::task::yield_now().await;
         }
     })
@@ -1889,7 +1892,7 @@ async fn deleting_an_unrelated_subscription_does_not_stop_a_deferred_retry() {
     .await
     .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
-        while bodies.lock().unwrap().len() < 3 {
+        while bodies.lock().unwrap().is_empty() {
             tokio::task::yield_now().await;
         }
     })
@@ -1908,7 +1911,7 @@ async fn deleting_an_unrelated_subscription_does_not_stop_a_deferred_retry() {
         .unwrap();
     h.handle.on_clock_changed();
     let retried = tokio::time::timeout(std::time::Duration::from_secs(1), async {
-        while bodies.lock().unwrap().len() < 4 {
+        while bodies.lock().unwrap().len() < 2 {
             tokio::task::yield_now().await;
         }
     })
@@ -2735,6 +2738,70 @@ async fn seeking_to_a_snapshot_replays_the_backlog_to_an_idle_push_subscriber() 
     })
     .await
     .expect("a seek must wake an idle push subscriber without another publish");
+
+    h.shutdown().await;
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_push_delivery_counts_one_delivery_attempt_against_the_dead_letter_budget() {
+    let h = start().await;
+    // More failures than the budget allows: only the budget may decide when forwarding happens.
+    let (endpoint, bodies, stop, worker) = push_sink_sequence(vec![500; 50]);
+    let (source_topic, destination_topic, _subscription) =
+        setup_dead_letter_source(&h, "dlq-attempts", Some(endpoint)).await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    subc.create_subscription(pb::Subscription {
+        name: "projects/demo-app/subscriptions/dlq-attempts-destination".to_owned(),
+        topic: destination_topic,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: source_topic,
+        messages: vec![msg(b"poison")],
+    })
+    .await
+    .unwrap();
+
+    let mut destination = Vec::new();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while destination.is_empty() {
+            destination = subc
+                .pull(pb::PullRequest {
+                    subscription: "projects/demo-app/subscriptions/dlq-attempts-destination"
+                        .to_owned(),
+                    max_messages: 10,
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .received_messages;
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the message must reach the dead-letter topic");
+    assert_eq!(destination.len(), 1);
+
+    // Each failed push request is one delivery attempt, so the budget of five allows five.
+    let pushed = bodies.lock().unwrap().clone();
+    assert_eq!(
+        pushed.len(),
+        5,
+        "a push subscription must dead-letter after exactly max_delivery_attempts failed pushes"
+    );
+    // Every attempt reports its own delivery_attempt to the endpoint, as production does when a
+    // dead-letter policy is set.
+    for (index, body) in pushed.iter().enumerate() {
+        let body = String::from_utf8(body.clone()).unwrap();
+        let expected = format!("\"deliveryAttempt\":{}", index + 1);
+        assert!(body.contains(&expected), "attempt {}: {body}", index + 1);
+    }
 
     h.shutdown().await;
     stop.store(true, Ordering::Release);

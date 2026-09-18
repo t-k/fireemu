@@ -45,8 +45,6 @@ pub use subscriber::SubscriberService;
 /// Maximum gRPC message size accepted or produced (10 MiB), matching Pub/Sub's message bound.
 pub const MAX_MESSAGE_BYTES: usize = 10 * 1024 * 1024;
 const MAX_PUSH_WORKERS: usize = 256;
-const MAX_PUSH_ATTEMPTS: usize = 3;
-const PUSH_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(10);
 
 struct PushDispatcherCancellationGuard(PubSubHandle);
 
@@ -754,12 +752,14 @@ impl PubSubHandle {
         }
     }
 
+    /// Returns the current push endpoint and whether the subscription has a dead-letter policy,
+    /// which decides whether the payload reports the delivery attempt.
     fn push_endpoint_if_current(
         &self,
         subscription: &fireemu_core_pubsub::SubscriptionName,
         key: &str,
         generation: u64,
-    ) -> Option<String> {
+    ) -> Option<(String, bool)> {
         let dispatch = self.push_dispatch.lock().expect("push dispatch lock");
         if dispatch.shutting_down || dispatch.generations.get(key).copied() != Some(generation) {
             return None;
@@ -768,7 +768,12 @@ impl PubSubHandle {
             .subscription_config(subscription)
             .ok()
             .filter(|config| config.is_push())
-            .map(|config| config.push_config.push_endpoint.clone())
+            .map(|config| {
+                (
+                    config.push_config.push_endpoint.clone(),
+                    config.dead_letter_policy.is_some(),
+                )
+            })
     }
 
     fn acknowledge_push_if_current(
@@ -823,31 +828,20 @@ impl PubSubHandle {
             if !self.is_current_push_generation(key, generation) {
                 return false;
             }
-            let mut delivered = false;
-            for attempt in 0..MAX_PUSH_ATTEMPTS {
-                if !self.is_current_push_generation(key, generation) {
-                    return false;
+            // One request per delivery attempt: a failed push is nacked rather than retried inside
+            // the worker, so the attempt the endpoint sees, the attempt the retry policy schedules
+            // and the attempt the dead-letter budget counts are the same attempt.
+            let Some((endpoint, report_delivery_attempt)) =
+                self.push_endpoint_if_current(subscription, key, generation)
+            else {
+                return false;
+            };
+            let delivered = tokio::select! {
+                result = push::deliver(&endpoint, subscription, message, report_delivery_attempt) => {
+                    result.is_ok()
                 }
-                let Some(endpoint) = self.push_endpoint_if_current(subscription, key, generation)
-                else {
-                    return false;
-                };
-                tokio::select! {
-                    result = push::deliver(&endpoint, subscription, message) => {
-                        if result.is_ok() {
-                            delivered = true;
-                            break;
-                        }
-                    }
-                    () = self.wait_until_push_invalidated(key, generation) => return false,
-                }
-                if attempt + 1 < MAX_PUSH_ATTEMPTS {
-                    tokio::select! {
-                        () = tokio::time::sleep(PUSH_RETRY_DELAY) => {},
-                        () = self.wait_until_push_invalidated(key, generation) => return false,
-                    }
-                }
-            }
+                () = self.wait_until_push_invalidated(key, generation) => return false,
+            };
             if delivered {
                 if !self.acknowledge_push_if_current(subscription, key, generation, &message.ack_id)
                 {

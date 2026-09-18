@@ -1020,9 +1020,9 @@
         "mode": "READ"
       }
     ],
-    "sourceDigest": "4f41db006393cb960b759b708b8bcdbeedf3ae6c6e317f8268b5ed4ae0610fee"
+    "sourceDigest": "a70866004417739ad7002aaf7b0b3261f9c9b638758e7dda402d3788556b7331"
   },
-  "manifestDigest": "c04995567dbd0e1b17fa07fb066413dedd819236fa2c9991878e9b22c122c687",
+  "manifestDigest": "2861bd6c63bf1f359421ef3010e2d8163b7db76c7846a192b70aa99c50cacda7",
   "nonceBinding": "The nonce and owner identity above are reference values so the plan is reviewable. Execution must recompile the plan with a fresh nonce and the real owner identity; only the case table, source digest, budget, locks and operation slots are frozen here.",
   "note": "Preparation only. No credential, endpoint or production request is bound here. Execution needs a separate owner permission, a fresh nonce and admission review.",
   "ownerFieldsRequired": [
@@ -1045,12 +1045,12 @@
     "allowedReobservations": 0,
     "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
     "casesDigest": "f1b3320febc65af2ea8cba068adf51dc53495f159506043436e1d5ff219e289d",
-    "collectorSourceDigest": "4f41db006393cb960b759b708b8bcdbeedf3ae6c6e317f8268b5ed4ae0610fee",
+    "collectorSourceDigest": "a70866004417739ad7002aaf7b0b3261f9c9b638758e7dda402d3788556b7331",
     "concurrencyUpperBound": 1,
     "costUpperMicrousd": 15788,
     "database": "(default)",
     "kind": "txn-expiry-required-permission-v1",
-    "manifestSha256": "c04995567dbd0e1b17fa07fb066413dedd819236fa2c9991878e9b22c122c687",
+    "manifestSha256": "2861bd6c63bf1f359421ef3010e2d8163b7db76c7846a192b70aa99c50cacda7",
     "nonce": "o3expiry-reference-000000001",
     "ownerId": "00000000000000000000000000000000",
     "project": "fireemu-35fe6",

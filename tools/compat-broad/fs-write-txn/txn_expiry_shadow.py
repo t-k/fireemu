@@ -100,6 +100,11 @@ VOLATILE_KEYS = (
     "sourceCommit",
     "endedAt",
     "wallSeconds",
+    # A debug build is not bit-reproducible, so rebuilding the same Rust source
+    # yields a different binary. The stable cross-run binding is
+    # runtimeInputsDigest, which is deliberately not listed here.
+    "artifactSha256",
+    "childObservedArtifactSha256",
 )
 
 

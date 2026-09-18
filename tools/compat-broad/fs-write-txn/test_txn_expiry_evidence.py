@@ -251,7 +251,21 @@ def test_the_published_shadow_equals_a_fresh_run_modulo_volatile_keys():
         )
         return _stable(scrubbed, volatile)
 
-    assert prepared(fresh) == prepared(shadow())
+    committed = shadow()
+    assert prepared(fresh) == prepared(committed)
+    # The artifact digest is scrubbed above because a debug rebuild is not
+    # bit-reproducible, so assert the bindings it would otherwise carry.
+    for value in (fresh, committed):
+        assert (
+            value["artifactSha256"]
+            == value["runtime"]["artifactSha256"]
+            == value["runtime"]["childObservedArtifactSha256"]
+            == value["receipt"]["instance"]["artifactSha256"]
+        )
+    assert (
+        fresh["runtime"]["runtimeInputsDigest"]
+        == committed["runtime"]["runtimeInputsDigest"]
+    ), "the two runs describe different Rust source"
 
 
 def test_the_published_shadow_was_produced_by_the_current_modules():

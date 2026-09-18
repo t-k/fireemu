@@ -240,7 +240,7 @@ The recorded run is
 | Child exit | 0, no signal needed |
 
 The runtime artifact is SHA-256
-`c67fd37561ba32a6638d0f273efd33352b26fdcb3b55460d2cc0674cd306e210`
+`cc3f799d4fb21bdd80aaae99ca1ae889595ed59ad64ab14a7824c372f1f33e0c`
 (`fireemu 0.7.1`), built with `cargo build -p fireemu` inside this lane's own
 worktree. The rehearsal records the source commit, the hashed Rust input set
 (`32a872989f5e0d8fabf17a2a30cda85a2467574e23c4712a37711f0dbd196d18`, 400 files)
@@ -249,10 +249,12 @@ lane base `3d0e56bdf`, so the artifact provably describes this branch.
 
 The Rust input digest, not the artifact digest, is the stable binding. A debug
 build is not bit-reproducible, so rebuilding the same source yields a different
-binary; an earlier rehearsal in this lane recorded
-`8c6bae9e7e5f72a315e88c9afb6b9a5f0a479239d856c04a98a4503e02830994` from the same
-inputs. The child computes the artifact digest independently from inside the
-running instance, and the record keeps both that value and the parent's.
+binary: three rehearsals in this lane recorded three different artifact digests
+from byte-identical inputs. The cross-run comparison therefore scrubs the
+artifact digest and asserts instead that both runs report the same Rust input
+digest, and that within each run the parent's digest, the runtime block and the
+child's own independently computed digest all agree. That combination was
+verified against a deliberately rebuilt, different binary.
 
 A binary taken from the shared checkout or a sibling worktree describes a
 different source and must not be used. An earlier rehearsal did exactly that and
@@ -266,9 +268,10 @@ emitted by the generator, and `receipt.instance` is kept rather than redacted so
 the child's independent artifact proof survives. Two tests enforce this. One
 rebuilds the record from the generator and requires equality. The other, run with
 `FIREEMU_O3_FRESH_SHADOW` pointing at an independently produced `shadow.json`,
-requires the committed file to equal that fresh run once per-run identities and
-instants are scrubbed. Both were run against a genuinely separate rehearsal
-before this evidence was committed.
+requires the committed file to equal that fresh run once per-run identities,
+instants and the per-build artifact digest are scrubbed. Both were run against
+genuinely separate rehearsals before this evidence was committed, including one
+produced by a different binary built from the same source.
 
 The first rehearsal disagreed on one case and the frozen expectation was wrong,
 not the runtime: the emulator says `invalid base64` where the table claimed

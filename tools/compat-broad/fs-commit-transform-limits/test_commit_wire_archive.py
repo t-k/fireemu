@@ -379,11 +379,25 @@ def test_reap_escalates_to_kill_when_terminate_is_ignored(tmp_path: Path):
     assert child.returncode < 0
 
 
-def test_spawn_reaps_the_worker_when_the_parent_raises(tmp_path: Path):
+def test_spawn_reaps_the_worker_when_the_parent_raises(tmp_path: Path, monkeypatch):
     """A failure that is not a deadline must still leave no unreaped child."""
     command, _ready = _sleeper(tmp_path, trap=False)
+    started: list[subprocess.Popen] = []
+    original = transport.subprocess.Popen
+
+    def record(*args, **kwargs):
+        # A recording wrapper around the real Popen, not a substitute for it:
+        # the worker must be identified by pid, because unrelated children of
+        # this test process would answer a wait on any child.
+        child = original(*args, **kwargs)
+        started.append(child)
+        return child
+
+    monkeypatch.setattr(transport.subprocess, "Popen", record)
     with pytest.raises((TypeError, AttributeError)):
         # A non-text payload fails inside communicate, after the child started.
         transport._spawn(command, 17, 5.0, ())
+    assert len(started) == 1
+    assert started[0].returncode is not None
     with pytest.raises(ChildProcessError):
-        os.waitpid(-1, os.WNOHANG)
+        os.waitpid(started[0].pid, os.WNOHANG)

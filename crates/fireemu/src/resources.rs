@@ -231,6 +231,36 @@ impl Process {
             .map_err(|_| "ps printed no resident set size".to_owned())?;
         Ok(kib.saturating_mul(1024))
     }
+
+    /// Turns what the platform answered into the service report.
+    ///
+    /// `None` is a session that is not charged for the process at all. A host that publishes
+    /// no resident set size this process can read answers one gauge, not the report: the gauge
+    /// is dropped and counted, so every other service still reports and the reader sees why
+    /// the number is missing instead of an incomplete report.
+    fn report(measured: Option<&Result<u64, String>>, budget: RootBudget) -> ServiceResources {
+        let mut gauges = Vec::new();
+        let mut refusals = Vec::new();
+        match measured {
+            Some(Ok(rss)) => {
+                let mut gauge =
+                    Gauge::logical("process.resident_set_bytes", Unit::Bytes, *rss, None);
+                gauge.measure = Measure::Process;
+                gauges.push(gauge);
+            }
+            Some(Err(_)) => refusals.push(Refusal {
+                reason: "process.resident_set_bytes.unavailable".to_owned(),
+                count: 1,
+            }),
+            None => {}
+        }
+        ServiceResources {
+            service: "process".to_owned(),
+            gauges,
+            refusals,
+            roots: budget.bound(Vec::new()),
+        }
+    }
 }
 
 impl ResourceHook for Process {
@@ -242,31 +272,11 @@ impl ResourceHook for Process {
         scope: &Scope,
         budget: RootBudget,
     ) -> Result<ServiceResources, TransitionFailure> {
-        let mut gauges = Vec::new();
-        let mut refusals = Vec::new();
-        if scope.is_default() {
-            match Self::resident_set_bytes() {
-                Ok(rss) => {
-                    let mut gauge =
-                        Gauge::logical("process.resident_set_bytes", Unit::Bytes, rss, None);
-                    gauge.measure = Measure::Process;
-                    gauges.push(gauge);
-                }
-                // The host publishes no resident set size this process can read. That is one
-                // gauge's answer, not the report's: every other service still reports, and the
-                // reader sees why the gauge is missing instead of an incomplete report.
-                Err(_) => refusals.push(Refusal {
-                    reason: "process.resident_set_bytes.unavailable".to_owned(),
-                    count: 1,
-                }),
-            }
-        }
-        Ok(ServiceResources {
-            service: "process".to_owned(),
-            gauges,
-            refusals,
-            roots: budget.bound(Vec::new()),
-        })
+        // Only the default session is charged for the process, and the measurement is taken
+        // once here so that turning it into a report stays a pure function the tests can
+        // drive with either answer.
+        let measured = scope.is_default().then(Self::resident_set_bytes);
+        Ok(Self::report(measured.as_ref(), budget))
     }
 }
 
@@ -287,28 +297,50 @@ mod tests {
     const UNAVAILABLE: &str = "process.resident_set_bytes.unavailable";
 
     #[test]
-    fn the_process_report_answers_on_a_host_where_ps_cannot_be_found() {
-        // A host with no `ps` on the path: the report is still complete, and the gauge is
-        // either a real measurement (a platform that publishes it without a subprocess) or a
-        // counted refusal.
-        std::env::set_var("PATH", "");
+    fn a_host_that_publishes_no_resident_set_size_still_reports_the_service() {
+        // The platform answered that it has no source for the gauge (no `ps` on a minimal
+        // container, or Windows). The report is still the service's, with the gauge dropped
+        // and counted. The answer is injected rather than provoked, so this test never
+        // touches the environment other tests in this process are reading.
+        let report = Process::report(
+            Some(&Err("ps is not available".to_owned())),
+            RootBudget::DEFAULT,
+        );
+        assert_eq!(report.service, "process");
+        assert!(report.gauges.is_empty());
+        assert_eq!(report.refusals.len(), 1);
+        assert_eq!(report.refusals[0].reason, UNAVAILABLE);
+        assert_eq!(report.refusals[0].count, 1);
+
+        // A measured host publishes the gauge and refuses nothing.
+        let report = Process::report(Some(&Ok(32_768)), RootBudget::DEFAULT);
+        assert!(report.refusals.is_empty());
+        assert_eq!(report.gauges.len(), 1);
+        assert_eq!(report.gauges[0].id, GAUGE);
+        assert_eq!(report.gauges[0].measure, Measure::Process);
+        assert_eq!(report.gauges[0].unit, Unit::Bytes);
+        assert_eq!(report.gauges[0].current, 32_768);
+        assert_eq!(report.gauges[0].limit, None);
+
+        // A session that is not charged for the process reports neither.
+        let report = Process::report(None, RootBudget::DEFAULT);
+        assert!(report.gauges.is_empty());
+        assert!(report.refusals.is_empty());
+    }
+
+    /// On this host the hook itself answers, whatever the platform publishes: a measurement or
+    /// a counted refusal, never a failed report.
+    #[test]
+    fn the_hook_never_fails_the_report_on_this_host() {
         let report = Process
             .collect(&Scope::AllExcept(BTreeSet::new()), RootBudget::DEFAULT)
             .expect("the process hook never fails the whole report");
-        assert_eq!(report.service, "process");
+        assert_eq!(report.gauges.len() + report.refusals.len(), 1);
         if let Some(gauge) = report.gauges.first() {
             assert_eq!(gauge.id, GAUGE);
-            assert_eq!(gauge.measure, Measure::Process);
-            assert_eq!(gauge.unit, Unit::Bytes);
             assert!(gauge.current > 0, "a reported resident set size is real");
-            assert!(report.refusals.is_empty());
         } else {
-            let refusal = report
-                .refusals
-                .first()
-                .expect("an unavailable gauge is counted as a refusal");
-            assert_eq!(refusal.reason, UNAVAILABLE);
-            assert_eq!(refusal.count, 1);
+            assert_eq!(report.refusals[0].reason, UNAVAILABLE);
         }
     }
 

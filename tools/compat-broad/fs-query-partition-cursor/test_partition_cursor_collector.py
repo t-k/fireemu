@@ -1,0 +1,390 @@
+"""Contract tests for the bounded loopback-only partition/cursor collector."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+
+import pytest
+from partition_cursor_case import OBSERVATION_COUNT, RECOVERY_COUNT, compile_plan
+from partition_cursor_collector import LOOPBACK_ORIGINS, collect_local
+
+NONCE = "a" * 32
+TIME = "2026-09-18T00:00:00.000001Z"
+
+
+def plan() -> dict:
+    return compile_plan("demo-project", "(default)", NONCE)
+
+
+def _document(name: str, ordinal: int) -> dict:
+    return {
+        "name": name,
+        "fields": {
+            "n": {"integerValue": str(ordinal)},
+            "g": {"stringValue": "a" if ordinal % 2 == 0 else "b"},
+        },
+        "createTime": TIME,
+        "updateTime": TIME,
+    }
+
+
+def _cursor(name: str) -> dict:
+    return {"values": [{"referenceValue": name}], "before": True}
+
+
+class Transport:
+    """An offline transport that answers the compiled plan as production would."""
+
+    def __init__(
+        self, value: dict, *, partitions: int = 0, page_token: str = ""
+    ) -> None:
+        self.plan = value
+        self.partitions = partitions
+        self.page_token = page_token
+        self.sent: list[dict] = []
+        self.raw = True
+        self.fail_at: int | None = None
+        self.create_status = 200
+        self.write_results: int | None = None
+
+    def _seeded(self) -> list[str]:
+        return self.plan["ownedResources"][1:]
+
+    def _partition_cursors(self) -> list[dict]:
+        return [_cursor(name) for name in self._seeded()[1 : 1 + self.partitions]]
+
+    def _body(self, request: dict) -> tuple[int, dict]:
+        kind = request["kind"]
+        if kind == "preflight-typed-absence" or kind == "cleanup-verify-root-absence":
+            return 404, {"error": {"status": "NOT_FOUND", "code": 404}}
+        if kind == "create-only-patch":
+            if self.create_status != 200:
+                return self.create_status, {"error": {"status": "ALREADY_EXISTS"}}
+            return 200, {
+                "name": self.plan["ownedScope"],
+                "fields": {"marker": {"stringValue": self.plan["campaignId"]}},
+                "createTime": TIME,
+                "updateTime": TIME,
+            }
+        if kind in ("seed-commit", "cleanup-seed-delete"):
+            count = (
+                self.write_results
+                if self.write_results is not None
+                else len(request["body"]["writes"])
+            )
+            return 200, {
+                "writeResults": [{"updateTime": TIME} for _ in range(count)],
+                "commitTime": TIME,
+            }
+        if kind in ("cleanup-ownership-read",):
+            return 200, {
+                "name": self.plan["ownedScope"],
+                "fields": {"marker": {"stringValue": self.plan["campaignId"]}},
+                "createTime": TIME,
+                "updateTime": TIME,
+            }
+        if kind == "cleanup-root-delete":
+            return 200, {}
+        expect = self.plan[request["phase"]][request["index"]]["expect"]
+        if expect.get("outcome") == "refused":
+            return 400, {"error": {"status": "INVALID_ARGUMENT", "code": 400}}
+        if request["path"].endswith(":partitionQuery"):
+            body: dict = {"partitions": self._partition_cursors()}
+            if self.page_token and "pageToken" not in request["body"]:
+                body["nextPageToken"] = self.page_token
+            return 200, body
+        documents = expect.get("documents", [])
+        return 200, [
+            {
+                "document": _document(
+                    item["name"], int(item["fields"]["n"]["integerValue"])
+                )
+            }
+            for item in documents
+        ] or [{"readTime": TIME}]
+
+    def __call__(self, request: dict) -> dict:
+        self.sent.append(request)
+        if self.fail_at is not None and len(self.sent) - 1 == self.fail_at:
+            raise ConnectionError("offline transport failure")
+        status, body = self._body(request)
+        encoded = json.dumps(body).encode()
+        receipt = {
+            "status": status,
+            "body": body,
+            "complete": True,
+            "contentType": "application/json; charset=UTF-8",
+            "byteCount": len(encoded),
+        }
+        if self.raw:
+            receipt["rawBody"] = encoded
+        return receipt
+
+
+def run(
+    directory, *, transport: Transport | None = None, **kwargs
+) -> tuple[dict, Transport]:
+    value = plan()
+    transport = transport or Transport(value)
+    return collect_local(value, transport, directory, **kwargs), transport
+
+
+def test_a_non_loopback_origin_sends_nothing(tmp_path) -> None:
+    value = plan()
+    transport = Transport(value)
+    with pytest.raises(PermissionError):
+        collect_local(
+            value,
+            transport,
+            tmp_path / "out",
+            origin="https://firestore.googleapis.com",
+        )
+    assert transport.sent == []
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("origin", sorted(LOOPBACK_ORIGINS))
+def test_declared_loopback_origins_are_accepted(tmp_path, origin) -> None:
+    result, _ = run(
+        tmp_path / origin.replace(":", "-").replace("/", "_"), origin=origin
+    )
+    assert result["origin"] == origin
+
+
+def test_an_unparsable_origin_sends_nothing(tmp_path) -> None:
+    value = plan()
+    transport = Transport(value)
+    with pytest.raises(PermissionError):
+        collect_local(value, transport, tmp_path / "out", origin="not an origin")
+    assert transport.sent == []
+
+
+def test_a_drifted_plan_sends_nothing(tmp_path) -> None:
+    value = plan()
+    value["observation"].pop()
+    transport = Transport(value)
+    with pytest.raises(ValueError):
+        collect_local(value, transport, tmp_path / "out")
+    assert transport.sent == []
+
+
+def test_every_compiled_slot_is_sent_once_in_order(tmp_path) -> None:
+    result, transport = run(tmp_path / "out")
+    assert result["status"] == "pass"
+    assert len(result["rows"]) == OBSERVATION_COUNT
+    assert len(result["cleanup"]["rows"]) == RECOVERY_COUNT
+    value = plan()
+    expected = [operation["kind"] for operation in value["observation"]]
+    reconstruction = {
+        "partition-page-token-continuation",
+        "partition-reconstruction-range-1",
+    }
+    assert [request["kind"] for request in transport.sent] == [
+        kind for kind in expected if kind not in reconstruction
+    ] + [operation["kind"] for operation in value["recovery"]]
+
+
+def test_rows_record_the_request_that_was_actually_sent(tmp_path) -> None:
+    result, _transport = run(tmp_path / "out")
+    for row in result["rows"]:
+        if row["status"] != "skipped":
+            assert row["request"]["path"].startswith("/v1/")
+            assert row["request"]["kind"] == row["kind"]
+
+
+def test_the_continuation_is_skipped_without_a_next_page_token(tmp_path) -> None:
+    result, transport = run(tmp_path / "out")
+    row = result["rows"][8]
+    assert row["kind"] == "partition-page-token-continuation"
+    assert row["status"] == "skipped"
+    assert row["skipReason"] == "no-page-token"
+    assert all("pageToken" not in (request["body"] or {}) for request in transport.sent)
+
+
+def test_a_recorded_next_page_token_is_substituted_exactly(tmp_path) -> None:
+    value = plan()
+    transport = Transport(value, page_token="opaque-token")
+    result = collect_local(value, transport, tmp_path / "out")
+    row = result["rows"][8]
+    assert row["status"] == "pass"
+    assert row["request"]["body"]["pageToken"] == "opaque-token"
+    assert row["boundFrom"] == {"pageTokenFrom": 7}
+
+
+def test_zero_partitions_use_one_reconstruction_slot(tmp_path) -> None:
+    result, _ = run(tmp_path / "out")
+    first, second = result["rows"][15], result["rows"][16]
+    assert first["status"] == "pass"
+    assert "startAt" not in first["request"]["body"]["structuredQuery"]
+    assert "endAt" not in first["request"]["body"]["structuredQuery"]
+    assert second["status"] == "skipped"
+    assert second["skipReason"] == "range-not-required"
+
+
+def test_one_partition_binds_both_reconstruction_ranges(tmp_path) -> None:
+    value = plan()
+    transport = Transport(value, partitions=1)
+    result = collect_local(value, transport, tmp_path / "out")
+    first, second = result["rows"][15], result["rows"][16]
+    cursor = _cursor(value["ownedResources"][2])
+    assert first["request"]["body"]["structuredQuery"]["endAt"] == cursor
+    assert "startAt" not in first["request"]["body"]["structuredQuery"]
+    assert second["request"]["body"]["structuredQuery"]["startAt"] == cursor
+    assert "endAt" not in second["request"]["body"]["structuredQuery"]
+
+
+def test_more_partitions_than_slots_send_no_reconstruction_request(tmp_path) -> None:
+    value = plan()
+    transport = Transport(value, partitions=3)
+    result = collect_local(value, transport, tmp_path / "out")
+    for row in result["rows"][15:17]:
+        assert row["status"] == "skipped"
+        assert row["skipReason"] == "reconstruction-slots-exceeded"
+    assert not any(
+        request["kind"].startswith("partition-reconstruction")
+        for request in transport.sent
+    )
+    assert result["status"] == "incomplete"
+
+
+def test_cleanup_deletes_carry_the_recorded_creation_versions(tmp_path) -> None:
+    result, transport = run(tmp_path / "out")
+    deletes = [
+        request
+        for request in transport.sent
+        if request["kind"] == "cleanup-seed-delete"
+    ]
+    assert len(deletes) == 1
+    writes = deletes[0]["body"]["writes"]
+    assert len(writes) == 20
+    for write in writes:
+        assert write["currentDocument"] == {"updateTime": TIME}
+    root = [
+        request
+        for request in transport.sent
+        if request["kind"] == "cleanup-root-delete"
+    ]
+    assert root[0]["path"].endswith("?currentDocument.updateTime=" + TIME)
+    assert result["cleanup"]["complete"] is True
+
+
+def test_cleanup_is_skipped_when_this_run_never_created_the_root(tmp_path) -> None:
+    value = plan()
+    transport = Transport(value)
+    transport.create_status = 409
+    result = collect_local(value, transport, tmp_path / "out")
+    kinds = [request["kind"] for request in transport.sent]
+    assert "cleanup-seed-delete" not in kinds
+    assert "cleanup-root-delete" not in kinds
+    assert result["cleanup"]["complete"] is False
+    assert result["cleanup"]["rows"][1]["skipReason"] == "no-current-run-ownership"
+
+
+def test_cleanup_is_skipped_when_the_seed_receipt_is_not_version_bound(
+    tmp_path,
+) -> None:
+    value = plan()
+    transport = Transport(value)
+    transport.write_results = 19
+    result = collect_local(value, transport, tmp_path / "out")
+    assert "cleanup-seed-delete" not in [request["kind"] for request in transport.sent]
+    assert result["cleanup"]["rows"][1]["skipReason"] == "unbound-write-versions"
+
+
+def test_a_transport_failure_stops_sending_but_still_attempts_cleanup(tmp_path) -> None:
+    value = plan()
+    transport = Transport(value)
+    transport.fail_at = 5
+    result = collect_local(value, transport, tmp_path / "out")
+    assert result["status"] == "incomplete"
+    assert result["rows"][5]["status"] == "failed"
+    assert result["rows"][5]["failure"] == "ConnectionError"
+    assert [row["status"] for row in result["rows"][6:]] == ["skipped"] * (
+        OBSERVATION_COUNT - 6
+    )
+    assert "cleanup-seed-delete" in [request["kind"] for request in transport.sent]
+
+
+def test_a_refused_observation_is_recorded_as_a_pass_against_its_expectation(
+    tmp_path,
+) -> None:
+    result, _ = run(tmp_path / "out")
+    refusals = [
+        row
+        for row in result["rows"]
+        if plan()["observation"][row["index"]]["expect"].get("outcome") == "refused"
+    ]
+    assert len(refusals) == 9
+    for row in refusals:
+        assert row["status"] == "pass"
+        assert row["receipt"]["status"] == 400
+
+
+def test_raw_sidecars_are_published_with_verified_digests(tmp_path) -> None:
+    directory = tmp_path / "out"
+    result, _ = run(directory)
+    manifest = json.loads((directory / "raw" / "manifest.json").read_bytes())
+    assert result["raw"]["complete"] is True
+    assert len(manifest["bindings"]) == len(
+        [row for row in result["rows"] if row["status"] != "skipped"]
+    ) + len([row for row in result["cleanup"]["rows"] if row["status"] != "skipped"])
+    for binding in manifest["bindings"]:
+        payload = (directory / "raw" / binding["path"]).read_bytes()
+        assert hashlib.sha256(payload).hexdigest() == binding["sha256"]
+        assert binding["byteCount"] == len(payload)
+
+
+def test_absent_transport_bytes_are_never_reconstructed_from_the_decoded_body(
+    tmp_path,
+) -> None:
+    value = plan()
+    transport = Transport(value)
+    transport.raw = False
+    directory = tmp_path / "out"
+    result = collect_local(value, transport, directory)
+    assert result["raw"]["complete"] is False
+    assert result["raw"]["bindings"] == 0
+    assert not (directory / "raw").exists() or not list(
+        (directory / "raw").glob("*.raw")
+    )
+
+
+def test_an_oversized_raw_response_is_recorded_as_incomplete_evidence(tmp_path) -> None:
+    value = plan()
+
+    class Oversized(Transport):
+        def __call__(self, request: dict) -> dict:
+            receipt = super().__call__(request)
+            receipt["rawBody"] = b"x" * 70000
+            receipt["byteCount"] = 70000
+            return receipt
+
+    result = collect_local(value, Oversized(value), tmp_path / "out")
+    assert result["raw"]["complete"] is False
+    assert result["status"] == "incomplete"
+
+
+def test_published_rows_match_the_returned_result(tmp_path) -> None:
+    directory = tmp_path / "out"
+    result, _ = run(directory)
+    published = json.loads((directory / "collection.json").read_bytes())
+    assert published == result
+
+
+def test_an_existing_output_directory_is_refused(tmp_path) -> None:
+    directory = tmp_path / "out"
+    directory.mkdir()
+    value = plan()
+    transport = Transport(value)
+    with pytest.raises(FileExistsError):
+        collect_local(value, transport, directory)
+    assert transport.sent == []
+
+
+def test_the_result_is_never_marked_production(tmp_path) -> None:
+    result, _ = run(tmp_path / "out")
+    assert result["productionExecuted"] is False
+    assert result["promotionReady"] is False
+    assert result["campaignId"] == plan()["campaignId"]
+    assert result["planDigest"] == plan()["planDigest"]

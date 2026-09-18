@@ -238,7 +238,7 @@ impl PushDispatchState {
         }
     }
 
-    fn defer(&mut self, work: PushWork, eligible_at: LogicalInstant) {
+    fn defer(&mut self, work: PushWork, eligible_at: LogicalInstant, now: LogicalInstant) {
         let key = work.subscription.to_full();
         if self.active.get(&key).copied() == Some(work.generation) {
             self.active.remove(&key);
@@ -246,10 +246,13 @@ impl PushDispatchState {
         if self.shutting_down || self.generations.get(&key).copied() != Some(work.generation) {
             return;
         }
-        if let Some(resume_at) = self.backoff_resume_at(&key) {
-            // A push backoff throttles the subscription itself. Work enqueued while the failing
-            // attempt was still in flight was admitted before the failure was known, so it waits
-            // with the subscription instead of running at once.
+        // A backoff counts only while it is still running. It is cleared by a successful delivery
+        // or by invalidation, so an elapsed one can still be recorded here, and it must hold
+        // nothing. `enqueue` and the delivery gate read it the same way.
+        if let Some(resume_at) = self.backoff_resume_at(&key).filter(|resume| *resume > now) {
+            // A live push backoff throttles the subscription itself. Work enqueued while the
+            // failing attempt was in flight was admitted before the failure was known, so it
+            // waits with the subscription instead of running at once.
             self.queued.remove(&key);
             self.ready
                 .retain(|queued| queued.subscription.to_full() != key);
@@ -257,8 +260,8 @@ impl PushDispatchState {
                 .insert(key, (work, eligible_at.max(resume_at)));
             return;
         }
-        // No backoff: a publication that arrived during the attempt is deliverable now, and its
-        // queued work must not be turned back into a deferral.
+        // No live backoff: a publication that arrived during the attempt is deliverable now, and
+        // its queued work must not be turned back into a deferral.
         if self.queued.contains(&key) {
             return;
         }
@@ -805,13 +808,15 @@ impl PubSubHandle {
                     match completed {
                         Some(Ok((task_id, work, result))) => {
                             work_by_task.remove(&task_id);
+                            // Read the clock before the dispatch lock, as every other caller does.
+                            let now = self.now();
                             let mut dispatch =
                                 self.push_dispatch.lock().expect("push dispatch lock");
                             match result {
                                 PushQuantumResult::Continue => dispatch.complete(&work, true),
                                 PushQuantumResult::Stop => dispatch.complete(&work, false),
                                 PushQuantumResult::Defer(eligible_at) => {
-                                    dispatch.defer(work, eligible_at);
+                                    dispatch.defer(work, eligible_at, now);
                                 }
                             }
                         }
@@ -1347,7 +1352,7 @@ mod dispatch_tests {
         // The endpoint is still being awaited, so no failure is recorded yet.
         dispatch.enqueue(name.clone(), TEST_NOW);
         let resume_at = dispatch.record_push_failure(&key, TEST_NOW);
-        dispatch.defer(work, resume_at);
+        dispatch.defer(work, resume_at, TEST_NOW);
 
         assert!(
             dispatch.claim().is_none(),
@@ -1357,6 +1362,40 @@ mod dispatch_tests {
         assert!(
             dispatch.claim().is_some(),
             "the work returns once the backoff elapses"
+        );
+    }
+
+    /// A backoff that has already elapsed must not hold anything. It is cleared only by a
+    /// successful delivery or by invalidation, so an expired one can still be recorded when an
+    /// unrelated retry-policy deferral arrives: that deferral must not withdraw work a
+    /// publication made deliverable now and fold it into the retry instant.
+    #[test]
+    fn an_elapsed_backoff_does_not_fold_a_mid_attempt_publication_into_a_retry_deferral() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let name = subscription(0, &topic);
+        let key = name.to_full();
+        let mut dispatch = PushDispatchState::default();
+
+        let resume_at = dispatch.record_push_failure(&key, TEST_NOW);
+        let now = resume_at
+            .checked_add(LogicalDuration::from_millis(1))
+            .unwrap();
+        assert!(
+            dispatch.backoff_resume_at(&key).is_some(),
+            "the streak is still recorded after it elapses"
+        );
+
+        dispatch.enqueue(name.clone(), now);
+        let work = dispatch.claim().expect("the worker claims the work");
+        // A publication lands while the worker holds the key.
+        dispatch.enqueue(name.clone(), now);
+        // The worker found nothing deliverable and defers to what the retry policy scheduled.
+        let retry_at = now.checked_add(LogicalDuration::from_seconds(30)).unwrap();
+        dispatch.defer(work, retry_at, now);
+
+        assert!(
+            dispatch.claim().is_some(),
+            "the elapsed backoff holds nothing, so the publication is deliverable now"
         );
     }
 
@@ -1436,6 +1475,7 @@ mod dispatch_tests {
             first_work,
             now.checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(10))
                 .unwrap(),
+            now,
         );
         assert!(dispatch.active.is_empty());
         assert!(dispatch.ready.is_empty());
@@ -1469,6 +1509,7 @@ mod dispatch_tests {
             first_work,
             now.checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(10))
                 .unwrap(),
+            now,
         );
         dispatch.invalidate(&second.to_full());
 

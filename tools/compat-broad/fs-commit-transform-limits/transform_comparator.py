@@ -48,7 +48,16 @@ def _canonical_body(body: Any, plan: dict[str, Any], *, kind: str) -> Any:
 
     Internal metadata tokens cannot collide with any JSON literal, including a
     user-supplied object that resembles the token's serialized representation.
+
+    A typed absence response embeds the requested resource name inside its
+    message. Only that one substring is replaced by the same identity label the
+    `name` slot uses; the rest of the message is still compared literally, and a
+    message naming no declared resource is not normalized at all.
     """
+    absence_kinds = {
+        "preflight-typed-absence",
+        "cleanup-verify-absence",
+    }
     document_kinds = {
         "create-only-patch",
         "baseline-readback",
@@ -74,8 +83,16 @@ def _canonical_body(body: Any, plan: dict[str, Any], *, kind: str) -> Any:
                 and path[2] == "updateTime"
             )
         )
+        message = kind in absence_kinds and path == ("error", "message")
         if identity and isinstance(value, str) and value in labels:
             return ("identity", labels[value])
+        if message and isinstance(value, str):
+            for resource, label in sorted(
+                labels.items(), key=lambda item: len(item[0]), reverse=True
+            ):
+                if resource in value:
+                    head, _, tail = value.partition(resource)
+                    return ("message", head, ("identity", label), tail)
         if timestamp and _timestamp(value):
             return ("metadata", path[-1])
         if isinstance(value, dict):

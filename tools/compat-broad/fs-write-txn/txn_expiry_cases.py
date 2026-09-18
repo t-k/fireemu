@@ -31,7 +31,7 @@ GROUPS = ("idle-expiry", "finished-token", "retry-token")
 
 #: Owned document roles. The collector creates exactly these, below its own
 #: nonce prefix, and deletes them again under an ownership proof.
-RESOURCE_ROLES = ("control", "locked-a", "locked-b", "locked-c")
+RESOURCE_ROLES = ("control", "locked-a", "locked-b", "locked-c", "locked-d")
 
 RPCS = (
     "BeginTransaction",
@@ -101,9 +101,9 @@ CASES = (
         ),
         rpc="Commit",
         code=0,
-        resources=("locked-a",),
+        resources=("locked-d",),
         elapsed=20,
-        post_state={"locked-a": "committed-before-idle"},
+        post_state={"locked-d": "committed-before-idle"},
     ),
     _case(
         "idle-expiry/commit-after-idle",
@@ -119,7 +119,7 @@ CASES = (
         resources=("locked-a",),
         controls=("idle-expiry/commit-before-idle",),
         elapsed=90,
-        post_state={"locked-a": "committed-before-idle"},
+        post_state={"locked-a": "created"},
     ),
     _case(
         "idle-expiry/rollback-after-idle",

@@ -23,8 +23,24 @@ use tonic::Status;
 use crate::rest::{RestRequest, RestResponse, RestState};
 use crate::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
 
-/// Maximum accepted REST request body.
-pub const MAX_REST_BODY_BYTES: usize = 10 * 1024 * 1024;
+/// `FS-LIMIT-API-REQUEST-BYTES`: the largest API request Firestore accepts, measured on the
+/// message payload before protocol decode. It is an inclusive maximum, so a request of
+/// exactly this many bytes is accepted and one more byte is refused.
+///
+/// The three Firestore transports each apply it at their own decode boundary:
+/// [`MAX_REST_BODY_BYTES`] on a REST body, [`crate::webchannel::MAX_FORM_BYTES`] on a
+/// WebChannel form body, and [`MAX_GRPC_MESSAGE_BYTES`] on a gRPC message. Every one is the
+/// same number, and `tests/request_bytes.rs` keeps them tied to the catalog entry.
+pub const API_REQUEST_BYTES: usize = 10 * 1024 * 1024;
+
+/// Maximum accepted REST request body (`FS-LIMIT-API-REQUEST-BYTES`). The body is read
+/// through a bounded stream, so an over-long request is refused without ever being held
+/// whole in memory.
+pub const MAX_REST_BODY_BYTES: usize = API_REQUEST_BYTES;
+
+/// Maximum accepted gRPC message (`FS-LIMIT-API-REQUEST-BYTES`), applied by tonic before the
+/// protobuf is decoded.
+pub const MAX_GRPC_MESSAGE_BYTES: usize = API_REQUEST_BYTES;
 /// Maximum Firestore REST requests that may retain bodies while waiting for synchronous work.
 pub const MAX_BLOCKING_REST_REQUESTS: usize = 64;
 

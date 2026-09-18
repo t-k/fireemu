@@ -30,6 +30,7 @@ http-body-util = "0.1"
 bytes = "1"
 
 [dev-dependencies]
+prost = "0.13"
 tokio-stream = { version = "0.1", features = ["net"] }
 proptest.workspace = true
 

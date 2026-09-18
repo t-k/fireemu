@@ -30,6 +30,18 @@ pub const MAX_DEAD_LETTER_ATTEMPTS: u32 = 100;
 pub const DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS: i64 = 10;
 /// Default and maximum retry maximum backoff.
 pub const MAX_RETRY_BACKOFF_SECONDS: i64 = 600;
+/// Default minimum interval between two push deliveries of the same message when the
+/// subscription has no retry policy, in milliseconds.
+///
+/// The Pub/Sub documentation says a subscription without a retry policy redelivers "as soon as
+/// possible", and the interval the production service actually keeps between two push attempts
+/// has not been observed yet. This emulator protection keeps a failing push endpoint from being
+/// re-requested with no interval at all; it is documented as an emulator behaviour, not as
+/// observed production behaviour, and `0` restores unthrottled redelivery.
+pub const DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS: i64 = 100;
+/// Inclusive maximum for the configured minimum push redelivery interval, in milliseconds. It
+/// matches the maximum a retry policy may ask for.
+pub const MAX_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS: i64 = MAX_RETRY_BACKOFF_SECONDS * 1000;
 /// Upper bound on the number of retained entries a single subscription keeps in memory.
 pub const MAX_RETAINED_PER_SUB: usize = 100_000;
 /// Upper bound on message bytes retained by one subscription.
@@ -131,9 +143,20 @@ impl SubscriptionConfig {
         LogicalDuration::from_seconds(i64::from(self.ack_deadline_seconds))
     }
 
-    fn redelivery_backoff(&self, delivery_attempt: u32) -> LogicalDuration {
+    /// The delay before `delivery_attempt` may be repeated. A retry policy decides it by itself;
+    /// without one, a push subscription keeps at least `push_minimum` between two attempts, and a
+    /// pull subscription stays immediately redeliverable.
+    fn redelivery_backoff(
+        &self,
+        delivery_attempt: u32,
+        push_minimum: LogicalDuration,
+    ) -> LogicalDuration {
         let Some(policy) = self.retry_policy else {
-            return LogicalDuration::ZERO;
+            return if self.is_push() {
+                push_minimum
+            } else {
+                LogicalDuration::ZERO
+            };
         };
         if policy.minimum_backoff == LogicalDuration::ZERO
             || policy.maximum_backoff == LogicalDuration::ZERO
@@ -207,6 +230,9 @@ pub struct SubscriptionState {
     first_unacked: usize,
     outstanding: BTreeMap<String, usize>,
     retained_bytes: usize,
+    /// Minimum interval between two push deliveries of the same message while the subscription
+    /// has no retry policy. Registry-wide setting, copied in when the subscription is created.
+    push_minimum_redelivery_interval: LogicalDuration,
 }
 
 impl SubscriptionState {
@@ -219,7 +245,22 @@ impl SubscriptionState {
             first_unacked: 0,
             outstanding: BTreeMap::new(),
             retained_bytes: 0,
+            push_minimum_redelivery_interval: LogicalDuration::from_millis(
+                DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
+            ),
         }
+    }
+
+    /// Replaces the minimum push redelivery interval this subscription applies while it has no
+    /// retry policy. The registry sets it from the daemon configuration.
+    pub fn set_push_minimum_redelivery_interval(&mut self, interval: LogicalDuration) {
+        self.push_minimum_redelivery_interval = interval;
+    }
+
+    /// The minimum push redelivery interval in force for this subscription.
+    #[must_use]
+    pub const fn push_minimum_redelivery_interval(&self) -> LogicalDuration {
+        self.push_minimum_redelivery_interval
     }
 
     /// The configuration.
@@ -463,9 +504,10 @@ impl SubscriptionState {
             .collect();
         for ack_id in expired {
             if let Some(index) = self.outstanding.remove(&ack_id) {
-                let backoff = self
-                    .config
-                    .redelivery_backoff(self.entries[index].delivery_attempt);
+                let backoff = self.config.redelivery_backoff(
+                    self.entries[index].delivery_attempt,
+                    self.push_minimum_redelivery_interval,
+                );
                 let available_at = now.checked_add(backoff).unwrap_or(now);
                 self.entries[index].state = Delivery::Available { available_at };
             }
@@ -583,9 +625,10 @@ impl SubscriptionState {
             return;
         };
         if seconds == 0 {
-            let backoff = self
-                .config
-                .redelivery_backoff(self.entries[index].delivery_attempt);
+            let backoff = self.config.redelivery_backoff(
+                self.entries[index].delivery_attempt,
+                self.push_minimum_redelivery_interval,
+            );
             self.outstanding.remove(ack_id);
             self.entries[index].state = Delivery::Available {
                 available_at: now.checked_add(backoff).unwrap_or(now),
@@ -1202,5 +1245,139 @@ mod tests {
         let replayed = s.pull(10, now, &mut ids);
         assert_eq!(replayed.received.len(), 1);
         assert_eq!(replayed.received[0].message.message_id, "2");
+    }
+
+    fn push_cfg() -> SubscriptionConfig {
+        let mut config = cfg();
+        config.push_config = PushConfig {
+            push_endpoint: "http://127.0.0.1:1/push".to_owned(),
+        };
+        config
+    }
+
+    /// A push subscription with no retry policy: a nack must not make the message immediately
+    /// deliverable again, because the dispatcher would then hammer a failing endpoint.
+    #[test]
+    fn a_nacked_push_message_waits_the_minimum_redelivery_interval_without_a_retry_policy() {
+        let mut s = SubscriptionState::new(push_cfg());
+        let now = LogicalInstant::from_unix_seconds(100);
+        s.enqueue(stored("1", b"a", 100), now).unwrap();
+        let mut ids = counter();
+        let first = s.pull(1, now, &mut ids);
+        s.modify_ack_deadline(&first.received[0].ack_id, 0, now);
+
+        let interval =
+            LogicalDuration::from_millis(DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS);
+        let eligible_at = now.checked_add(interval).unwrap();
+        assert_eq!(s.next_available_at(), Some(eligible_at));
+        assert!(s.pull(1, now, &mut ids).received.is_empty());
+        assert_eq!(s.pull(1, eligible_at, &mut ids).received.len(), 1);
+    }
+
+    /// The same interval applies when the ack deadline expires rather than the subscriber nacking.
+    #[test]
+    fn an_expired_push_deadline_waits_the_minimum_redelivery_interval() {
+        let mut s = SubscriptionState::new(push_cfg());
+        let now = LogicalInstant::from_unix_seconds(100);
+        s.enqueue(stored("1", b"a", 100), now).unwrap();
+        let mut ids = counter();
+        s.pull(1, now, &mut ids);
+        let expired = now
+            .checked_add(LogicalDuration::from_seconds(i64::from(
+                DEFAULT_ACK_DEADLINE_SECONDS,
+            )))
+            .unwrap();
+        s.expire_deadlines(expired);
+
+        let interval =
+            LogicalDuration::from_millis(DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS);
+        assert_eq!(
+            s.next_available_at(),
+            Some(expired.checked_add(interval).unwrap())
+        );
+    }
+
+    /// A retry policy is the subscription's own contract, so it decides the backoff by itself.
+    #[test]
+    fn a_retry_policy_overrides_the_minimum_push_redelivery_interval() {
+        let mut config = push_cfg();
+        config.retry_policy = Some(RetryPolicy {
+            minimum_backoff: LogicalDuration::from_seconds(10),
+            maximum_backoff: LogicalDuration::from_seconds(10),
+        });
+        let mut s = SubscriptionState::new(config);
+        let now = LogicalInstant::from_unix_seconds(100);
+        s.enqueue(stored("1", b"a", 100), now).unwrap();
+        let mut ids = counter();
+        let first = s.pull(1, now, &mut ids);
+        s.modify_ack_deadline(&first.received[0].ack_id, 0, now);
+
+        assert_eq!(
+            s.next_available_at(),
+            Some(now.checked_add(LogicalDuration::from_seconds(10)).unwrap())
+        );
+    }
+
+    /// A retry policy whose backoff is zero keeps redelivering immediately: the policy wins even
+    /// when it asks for less than the emulator protection.
+    #[test]
+    fn a_zero_retry_policy_keeps_immediate_push_redelivery() {
+        let mut config = push_cfg();
+        config.retry_policy = Some(RetryPolicy {
+            minimum_backoff: LogicalDuration::ZERO,
+            maximum_backoff: LogicalDuration::ZERO,
+        });
+        let mut s = SubscriptionState::new(config);
+        let now = LogicalInstant::from_unix_seconds(100);
+        s.enqueue(stored("1", b"a", 100), now).unwrap();
+        let mut ids = counter();
+        let first = s.pull(1, now, &mut ids);
+        s.modify_ack_deadline(&first.received[0].ack_id, 0, now);
+
+        assert_eq!(s.pull(1, now, &mut ids).received.len(), 1);
+    }
+
+    /// A pull subscription is unaffected: the protection exists for the push dispatcher, which is
+    /// the only redelivery loop the emulator drives by itself.
+    #[test]
+    fn a_pull_subscription_still_redelivers_a_nacked_message_immediately() {
+        let mut s = SubscriptionState::new(cfg());
+        let now = LogicalInstant::from_unix_seconds(100);
+        s.enqueue(stored("1", b"a", 100), now).unwrap();
+        let mut ids = counter();
+        let first = s.pull(1, now, &mut ids);
+        s.modify_ack_deadline(&first.received[0].ack_id, 0, now);
+
+        assert_eq!(s.pull(1, now, &mut ids).received.len(), 1);
+    }
+
+    /// The interval is configurable, and zero restores the pre-protection behaviour exactly.
+    #[test]
+    fn a_zero_minimum_push_redelivery_interval_restores_immediate_redelivery() {
+        let mut s = SubscriptionState::new(push_cfg());
+        s.set_push_minimum_redelivery_interval(LogicalDuration::ZERO);
+        let now = LogicalInstant::from_unix_seconds(100);
+        s.enqueue(stored("1", b"a", 100), now).unwrap();
+        let mut ids = counter();
+        let first = s.pull(1, now, &mut ids);
+        s.modify_ack_deadline(&first.received[0].ack_id, 0, now);
+
+        assert_eq!(s.pull(1, now, &mut ids).received.len(), 1);
+    }
+
+    /// A subscription that becomes a push subscription through ModifyPushConfig is protected too.
+    #[test]
+    fn a_subscription_promoted_to_push_uses_the_minimum_redelivery_interval() {
+        let mut s = SubscriptionState::new(cfg());
+        s.set_push_config(PushConfig {
+            push_endpoint: "http://127.0.0.1:1/push".to_owned(),
+        });
+        let now = LogicalInstant::from_unix_seconds(100);
+        s.enqueue(stored("1", b"a", 100), now).unwrap();
+        let mut ids = counter();
+        let first = s.pull(1, now, &mut ids);
+        s.modify_ack_deadline(&first.received[0].ack_id, 0, now);
+
+        assert!(s.pull(1, now, &mut ids).received.is_empty());
     }
 }

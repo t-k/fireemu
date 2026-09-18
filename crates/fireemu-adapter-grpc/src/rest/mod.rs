@@ -253,7 +253,7 @@ fn database_uid(project: &str, database: &str) -> String {
     digest.update(b"/");
     digest.update(database.as_bytes());
     let bytes = digest.finalize();
-    let hex: String = bytes[..16].iter().map(|b| format!("{b:02x}")).collect();
+    let hex = fireemu_core_types::hash::hex_lower(&bytes[..16]);
     // Version 4 and the RFC 4122 variant, so the value is shaped like the one production
     // reports rather than an arbitrary 32 hexadecimal digits.
     format!(

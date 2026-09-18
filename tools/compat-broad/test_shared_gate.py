@@ -5,7 +5,13 @@ import os
 from urllib.parse import quote
 
 import pytest
-from shared_gate import Gate, create
+from shared_gate import (
+    Gate,
+    body_reference,
+    canonical_body_bytes,
+    create,
+    unconfirmed_creates,
+)
 
 
 def plan():
@@ -1229,7 +1235,7 @@ def test_a_commit_whose_answer_was_lost_is_never_treated_as_uncreated(tmp_path):
 
     with pytest.raises(TimeoutError):
         gate.dispatch(value["jobs"]["probe"]["observation"][0], False, deadline)
-    assert gate.snapshot()["jobs"]["probe"]["unconfirmedCreates"] == 1
+    assert unconfirmed_creates(gate.snapshot(), "probe") == 1
     gate.abandon_observation("transport-deadline")
     sent = []
 
@@ -1254,7 +1260,7 @@ def test_a_refused_commit_leaves_nothing_to_clean_and_spends_no_request(tmp_path
         False,
         lambda: (400, {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}),
     )
-    assert gate.snapshot()["jobs"]["probe"]["unconfirmedCreates"] == 0
+    assert unconfirmed_creates(gate.snapshot(), "probe") == 0
     gate.abandon_observation("over-boundary-refusal")
     before = gate.snapshot()
     result = gate.dispatch(
@@ -1441,3 +1447,182 @@ def test_a_nonce_bound_marker_requires_nonce_scoped_resources(tmp_path):
     ]
     with pytest.raises(ValueError, match="invalid shared allocation"):
         create(tmp_path / "unscoped", outside)
+
+
+# The three request sizes the campaign probes, either side of the 10 MiB limit.
+PROBE_SIZES = (10_485_759, 10_485_760, 10_485_761)
+
+
+def _sized_body(total):
+    """A body whose canonical encoding is exactly `total` bytes."""
+    body = {"b": "x" * (total - 8)}
+    assert len(canonical_body_bytes(body)) == total
+    return body
+
+
+def referenced_plan(sizes=PROBE_SIZES):
+    """A plan whose oversized request bodies are carried by reference."""
+    scope = "projects/p/databases/(default)/documents/owned/" + NONCE
+    resources = [f"{scope}/items/doc-{index:02d}" for index in range(len(sizes))]
+    bodies = [_sized_body(size) for size in sizes]
+    observation = [
+        {
+            "service": "firestore",
+            "method": "POST",
+            "path": "/v1/projects/p/databases/(default)/documents:commit",
+            "body": None,
+            "bodyRef": body_reference(body),
+            "privileged": True,
+            "form": False,
+        }
+        for body in bodies
+    ]
+    recovery = [
+        {
+            "service": "firestore",
+            "method": "GET",
+            "path": "/v1/" + name,
+            "body": None,
+            "privileged": True,
+            "form": False,
+        }
+        for name in resources
+    ]
+    return bodies, {
+        "contract": "shared-local-v1",
+        "nonce": NONCE,
+        "wallSeconds": 600,
+        "recoverySeconds": 300,
+        "observationRequests": len(sizes),
+        "costMicrousd": 10000,
+        "requestCostMicrousd": 1,
+        "intervalSeconds": 0.25,
+        "requestSeconds": 60,
+        "bodyReferenceThresholdBytes": 65536,
+        "jobs": {
+            "probe": {
+                "resources": resources,
+                "observation": observation,
+                "recovery": recovery,
+            }
+        },
+    }
+
+
+def test_a_ten_mebibyte_slot_dispatches_and_validates_by_digest(tmp_path):
+    """The body is verified against the reference the plan digest already binds."""
+    bodies, value = referenced_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    sent = []
+    for index, body in enumerate(bodies):
+        operation = {**value["jobs"]["probe"]["observation"][index], "body": body}
+        del operation["bodyRef"]
+        gate.dispatch(
+            operation,
+            False,
+            lambda operation=operation: (sent.append(operation["body"]), (200, {}))[1],
+        )
+    # Exactly the buffers that were verified are the ones the send received.
+    assert [id(body) for body in sent] == [id(body) for body in bodies]
+    assert gate.snapshot()["jobs"]["probe"]["observation"] == len(bodies)
+
+
+def test_a_one_byte_body_change_is_refused(tmp_path):
+    bodies, value = referenced_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    operation = {**value["jobs"]["probe"]["observation"][0], "body": bodies[0]}
+    del operation["bodyRef"]
+    longer = {"b": bodies[0]["b"] + "x"}
+    shorter = {"b": bodies[0]["b"][:-1]}
+    changed = {"b": "y" + bodies[0]["b"][1:]}
+    for body in (longer, shorter, changed):
+        with pytest.raises(ValueError, match="frozen reference"):
+            gate.dispatch({**operation, "body": body}, False, lambda: (200, {}))
+    assert gate.snapshot()["events"] == []
+
+
+def test_a_referenced_plan_keeps_the_gate_state_small(tmp_path):
+    """Three ten-mebibyte bodies inline would be twice the Ledger's receipt bound."""
+    bodies, value = referenced_plan()
+    create(tmp_path / "gate", value)
+    state = (tmp_path / "gate" / "state.json").stat().st_size
+    inline = sum(len(canonical_body_bytes(body)) for body in bodies)
+    assert state < 16 * 1024 * 1024 < inline
+
+
+def test_every_body_bearing_slot_carries_a_reference_and_no_inline_body(tmp_path):
+    """The structural walk the freeze requires, and the exact observed sizes."""
+    bodies, value = referenced_plan()
+    create(tmp_path / "gate", value)
+    plan = Gate(tmp_path / "gate", "probe").snapshot()["plan"]
+    carried = [
+        operation
+        for job in plan["jobs"].values()
+        for phase in ("observation", "recovery")
+        for operation in job[phase]
+        if operation.get("bodyRef") is not None
+    ]
+    assert len(carried) == len(bodies)
+    for operation, body, size in zip(carried, bodies, PROBE_SIZES, strict=True):
+        assert set(operation["bodyRef"]) == {"sha256", "bytes"}
+        assert operation["body"] is None
+        assert operation["bodyRef"]["bytes"] == size
+        assert operation["bodyRef"]["bytes"] == len(canonical_body_bytes(body))
+    assert [operation["bodyRef"]["bytes"] for operation in carried] == list(PROBE_SIZES)
+
+
+def test_an_inline_body_over_the_declared_threshold_is_refused(tmp_path):
+    bodies, value = referenced_plan()
+    operation = value["jobs"]["probe"]["observation"][0]
+    operation["body"] = bodies[0]
+    del operation["bodyRef"]
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "gate", value)
+
+
+def test_an_inline_body_under_the_threshold_behaves_as_before(tmp_path):
+    """The Commit and stream lanes carry small bodies inline and are untouched."""
+    _bodies, value = referenced_plan(sizes=(64,))
+    operation = value["jobs"]["probe"]["observation"][0]
+    small = _sized_body(64)
+    operation["body"] = small
+    del operation["bodyRef"]
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "probe")
+    gate.claim()
+    with pytest.raises(ValueError, match="closed scenario"):
+        gate.dispatch({**operation, "body": {"b": "z" * 56}}, False, lambda: (200, {}))
+    gate.dispatch({**operation}, False, lambda: (200, {}))
+    assert gate.snapshot()["jobs"]["probe"]["observation"] == 1
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        {"sha256": "0" * 64},
+        {"bytes": 10},
+        {"sha256": "0" * 64, "bytes": 0},
+        {"sha256": "0" * 64, "bytes": -1},
+        {"sha256": "0" * 63, "bytes": 10},
+        {"sha256": "0" * 64, "bytes": 10, "extra": 1},
+        {"sha256": "0" * 64, "bytes": True},
+        "0" * 64,
+        [],
+    ],
+)
+def test_a_malformed_body_reference_is_refused(tmp_path, reference):
+    _bodies, value = referenced_plan(sizes=(64,))
+    value["jobs"]["probe"]["observation"][0]["bodyRef"] = reference
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "gate", value)
+
+
+def test_a_slot_may_not_carry_both_a_body_and_a_reference(tmp_path):
+    bodies, value = referenced_plan(sizes=(64,))
+    value["jobs"]["probe"]["observation"][0]["body"] = bodies[0]
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        create(tmp_path / "gate", value)

@@ -19,7 +19,7 @@ from reservations import (
     conflicts,
 )
 from broad_contract import digest
-from shared_gate import Gate, _save, create
+from shared_gate import Gate, _save, create, unconfirmed_creates
 from shared_production import ProductionGate
 import shared_production
 
@@ -2100,7 +2100,7 @@ def test_a_dispatched_commit_with_no_answer_is_never_closed_as_abandoned(tmp_pat
     ledger, gate, ticket, record = _abandoned_cleanup(
         tmp_path, lost=True, cleanup=False
     )
-    assert gate.snapshot()["jobs"]["probe"]["unconfirmedCreates"] == 1
+    assert unconfirmed_creates(gate.snapshot(), "probe") == 1
     with pytest.raises(ValueError, match="abandoned cleanup"):
         ledger.close_after_abandon(ticket, record)
     assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"

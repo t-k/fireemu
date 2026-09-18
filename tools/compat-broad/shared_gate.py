@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -268,7 +269,10 @@ def _ceiling_honoured(plan, seconds):
             operation = plan["jobs"][name][entry["phase"]][entry["index"]]
             if (
                 isinstance(operation, dict)
-                and operation.get("body") is not None
+                and (
+                    operation.get("body") is not None
+                    or operation.get("bodyRef") is not None
+                )
                 and slot_seconds(entry, seconds) < ceiling
             ):
                 return False
@@ -334,6 +338,27 @@ def creating_outcome(state, job_name):
     return "refused" if seen else "none"
 
 
+def unconfirmed_creates(state, job_name):
+    """Creating requests this job dispatched whose outcome never came back.
+
+    Derived from the journal at every read rather than kept as a counter, so it
+    cannot drift from the events it describes. An event is counted while it is
+    open and once it has failed; a typed answer, whether it created or refused,
+    settles it.
+    """
+    indices = creating_slots(state["plan"], job_name)
+    if not indices:
+        return 0
+    return sum(
+        1
+        for event in state["events"]
+        if event.get("job") == job_name
+        and event.get("phase") == "observation"
+        and event.get("index") in indices
+        and (event.get("completed") is not True or type(event.get("status")) is not int)
+    )
+
+
 def abandoned_cleanup_complete(state):
     """The documents an abandoned run created, when every one is proven absent.
 
@@ -346,7 +371,7 @@ def abandoned_cleanup_complete(state):
     """
     created = []
     for name, job in state["jobs"].items():
-        if job.get("unconfirmedCreates", 0):
+        if unconfirmed_creates(state, name):
             # A request that could have written and never confirmed an outcome
             # leaves documents that may exist and cannot be proven absent here.
             return None
@@ -457,6 +482,7 @@ def create(path, plan):
         or not 1 <= slots <= MAX_JOB_SLOTS
         or not 1 <= len(jobs) <= slots
         or not _valid_request_seconds(plan, policy)
+        or not _valid_bodies(plan)
         or any(not _valid_schedule(job) for job in jobs.values())
         or not _ceiling_honoured(plan, seconds)
         or not _within_published(plan)
@@ -528,6 +554,70 @@ def create(path, plan):
 
 
 MARKER_BINDINGS = ("resource-name", "nonce")
+BODY_REFERENCE_FIELDS = {"sha256", "bytes"}
+
+
+def canonical_body_bytes(body):
+    """The exact wire bytes of a request body, as the campaigns encode them."""
+    return json.dumps(
+        body, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
+
+
+def body_reference(body):
+    """What a plan carries in place of a body too large to embed.
+
+    A campaign that probes a ten-mebibyte request cannot put three of those in a
+    plan that a bounded receipt has to carry, so the plan carries the digest and
+    the length instead. The reference enters the digested plan, so the plan digest
+    still binds the exact bytes, and `dispatch` refuses a body that does not
+    reproduce it.
+    """
+    encoded = canonical_body_bytes(body)
+    return {"sha256": hashlib.sha256(encoded).hexdigest(), "bytes": len(encoded)}
+
+
+def _valid_body_reference(operation):
+    reference = operation.get("bodyRef")
+    if reference is None:
+        return True
+    return (
+        isinstance(reference, dict)
+        and set(reference) == BODY_REFERENCE_FIELDS
+        and isinstance(reference["sha256"], str)
+        and re.fullmatch(r"[0-9a-f]{64}", reference["sha256"]) is not None
+        and type(reference["bytes"]) is int
+        and not isinstance(reference["bytes"], bool)
+        and reference["bytes"] > 0
+        # A slot carries its body one way or the other, never both.
+        and operation.get("body") is None
+    )
+
+
+def _valid_bodies(plan):
+    """Every reference is well formed, and nothing oversized is carried inline."""
+    threshold = plan.get("bodyReferenceThresholdBytes")
+    if threshold is not None and (
+        type(threshold) is not int or isinstance(threshold, bool) or threshold <= 0
+    ):
+        return False
+    for job in plan["jobs"].values():
+        for phase in PHASES:
+            for operation in job[phase]:
+                if not isinstance(operation, dict) or not _valid_body_reference(
+                    operation
+                ):
+                    return False
+                body = operation.get("body")
+                if (
+                    threshold is not None
+                    and body is not None
+                    and len(canonical_body_bytes(body)) > threshold
+                ):
+                    return False
+    return True
+
+
 # Why a slot was consumed without a wire call. Each names a fact from the
 # journal, never the absence of a creation proof: "no proof" is also what a lost
 # answer looks like, and that one must never be skippable.
@@ -558,6 +648,7 @@ def can_create(operation):
     method = operation.get("method")
     return (
         operation.get("body") is not None
+        or operation.get("bodyRef") is not None
         or (method == "PATCH" and path.endswith("?currentDocument.exists=false"))
         or (method == "POST" and path.endswith((":batchWrite", ":commit")))
     )
@@ -894,7 +985,7 @@ class Gate:
                 raise ValueError("job or environment stopped/uncertain")
             if schedule is None:
                 raise ValueError("a declared schedule is required to skip a slot")
-            if job.get("unconfirmedCreates", 0):
+            if unconfirmed_creates(state, self.job):
                 # Checked before the cursor moves, so a refused skip changes
                 # nothing.
                 raise ValueError("an unconfirmed write is outstanding")
@@ -1056,6 +1147,20 @@ class Gate:
                 source = resolve_version_source(
                     operations, index, expected.pop("versionFrom", None)
                 )
+                reference = expected.pop("bodyRef", None)
+                if reference is not None:
+                    # Verify the buffer that was handed in, and let the caller
+                    # send that same object: the Gate never re-reads a body from
+                    # a path, so there is exactly one copy of these bytes.
+                    encoded = canonical_body_bytes(operation.get("body"))
+                    if (
+                        len(encoded) != reference["bytes"]
+                        or hashlib.sha256(encoded).hexdigest() != reference["sha256"]
+                    ):
+                        raise ValueError(
+                            "request body differs from its frozen reference"
+                        )
+                    expected["body"] = operation.get("body")
                 valid_version = False
                 if source is not None:
                     capture = job["captures"].get(str(source))
@@ -1086,7 +1191,7 @@ class Gate:
             if (
                 recovery
                 and schedule is not None
-                and not job.get("unconfirmedCreates", 0)
+                and not unconfirmed_creates(state, self.job)
                 and resource not in job.get("creationProofs", {})
             ):
                 outcome = creating_outcome(state, self.job)
@@ -1172,10 +1277,6 @@ class Gate:
             job[phase] += 1
             if schedule is not None:
                 job["scheduleDone"] += 1
-                if slot.get("creates", True) is not False:
-                    # Counted before the send, because a request whose outcome is
-                    # lost is exactly the one that may have written.
-                    job["unconfirmedCreates"] = job.get("unconfirmedCreates", 0) + 1
             if recovery and resource in job["absent"]:
                 job["absent"].remove(resource)
             if recovery:
@@ -1210,10 +1311,6 @@ class Gate:
                 if type(status) is not int:
                     job["stopped"] = True
                     raise ValueError("typed HTTP status required")
-                if schedule is not None and slot.get("creates", True) is not False:
-                    # A typed answer settles the outcome, whether it created or
-                    # refused; only a lost one leaves the question open.
-                    job["unconfirmedCreates"] -= 1
                 if not recovery:
                     try:
                         proofs = _creation_proofs(operation, status, body, job, plan)

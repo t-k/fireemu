@@ -574,6 +574,14 @@ def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
         absent = status == 200 and not payload.get("users")
         mark_deleted(state, record["localId"], absence_verified=absent)
     checkpoint.write_bytes(checkpoint_bytes(state))
+    return build_report(rows, load_checkpoint(checkpoint.read_bytes()))
+
+
+def build_report(rows: dict[str, dict], state: dict[str, Any]) -> dict[str, Any]:
+    """Assemble the shadow ledger, refusing to publish a run with an unrecorded case."""
+    missing = [case["id"] for case in observation_cases() if case["id"] not in rows]
+    if missing:
+        raise RuntimeError(f"the shadow recorded no row for: {', '.join(missing)}")
     ordered = [rows[case["id"]] for case in observation_cases()]
     expectations = [
         {
@@ -596,7 +604,7 @@ def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
         "campaignId": CAMPAIGN_ID,
         "side": "local",
         "productionExecuted": False,
-        "recordingComplete": run_complete(load_checkpoint(checkpoint.read_bytes())),
+        "recordingComplete": run_complete(state),
         "provenance": compute_provenance(repository_root()),
         "worktree": describe_worktree(repository_root()),
         "rows": ordered,

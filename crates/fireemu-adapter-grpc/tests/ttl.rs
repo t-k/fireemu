@@ -14,6 +14,7 @@ use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
 use fireemu_core_firestore::ttl::TtlState;
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_session::tenancy::Scope;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::ids::CollectionId;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
@@ -37,6 +38,11 @@ fn backend(start: LogicalInstant) -> (Arc<LocalBackend>, Arc<Mutex<VirtualClock>
     let backend = LocalBackend::new(gateway, Arc::clone(&clock), 7)
         .with_ttl_sweep_interval(LogicalDuration::from_seconds(86_400));
     (Arc::new(backend), clock)
+}
+
+/// The scope of the default session: every project it was not told to exclude.
+fn everything() -> Scope {
+    Scope::AllExcept(std::collections::BTreeSet::new())
 }
 
 fn group(name: &str) -> CollectionId {
@@ -94,7 +100,7 @@ fn an_expired_document_stays_readable_until_the_sweep_interval_elapses() {
     backend
         .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
         .expect("enable ttl");
-    backend.start_ttl_sweeps(LogicalInstant::from_unix_seconds(1_000));
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
 
     // One second after expiry the document is gone in no emulator and in no production
     // project: the deletion is asynchronous and bounded by the sweep interval.
@@ -104,7 +110,7 @@ fn an_expired_document_stays_readable_until_the_sweep_interval_elapses() {
         .advance_to(LogicalInstant::from_unix_seconds(1_101))
         .expect("advance");
     assert_eq!(
-        backend.sweep_expired_documents(LogicalInstant::from_unix_seconds(1_101)),
+        backend.sweep_expired_documents(&everything(), LogicalInstant::from_unix_seconds(1_101)),
         0
     );
     assert!(exists(&backend, "sessions/s1"));
@@ -116,7 +122,7 @@ fn an_expired_document_stays_readable_until_the_sweep_interval_elapses() {
         .expect("clock")
         .advance_to(due)
         .expect("advance");
-    assert_eq!(backend.sweep_expired_documents(due), 1);
+    assert_eq!(backend.sweep_expired_documents(&everything(), due), 1);
     assert!(!exists(&backend, "sessions/s1"));
 }
 
@@ -127,9 +133,9 @@ fn an_unexpired_document_survives_a_sweep() {
     backend
         .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
         .expect("enable ttl");
-    backend.start_ttl_sweeps(LogicalInstant::from_unix_seconds(1_000));
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
     let due = LogicalInstant::from_unix_seconds(1_000 + 86_400);
-    assert_eq!(backend.sweep_expired_documents(due), 0);
+    assert_eq!(backend.sweep_expired_documents(&everything(), due), 0);
     assert!(exists(&backend, "sessions/future"));
 }
 
@@ -147,9 +153,12 @@ fn a_non_timestamp_ttl_value_is_ignored_rather_than_deleted() {
     backend
         .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
         .expect("enable ttl");
-    backend.start_ttl_sweeps(LogicalInstant::from_unix_seconds(1_000));
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
     assert_eq!(
-        backend.sweep_expired_documents_now(LogicalInstant::from_unix_seconds(9_000_000)),
+        backend.sweep_expired_documents_now(
+            &everything(),
+            LogicalInstant::from_unix_seconds(9_000_000)
+        ),
         0
     );
     assert!(exists(&backend, "sessions/text"));
@@ -163,9 +172,10 @@ fn an_immediate_sweep_deletes_without_waiting_for_the_interval() {
     backend
         .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
         .expect("enable ttl");
-    backend.start_ttl_sweeps(LogicalInstant::from_unix_seconds(1_000));
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
     assert_eq!(
-        backend.sweep_expired_documents_now(LogicalInstant::from_unix_seconds(1_101)),
+        backend
+            .sweep_expired_documents_now(&everything(), LogicalInstant::from_unix_seconds(1_101)),
         1
     );
     assert!(!exists(&backend, "sessions/s1"));
@@ -179,9 +189,10 @@ fn a_sweep_deletes_only_the_configured_collection_group() {
     backend
         .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
         .expect("enable ttl");
-    backend.start_ttl_sweeps(LogicalInstant::from_unix_seconds(1_000));
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
     assert_eq!(
-        backend.sweep_expired_documents_now(LogicalInstant::from_unix_seconds(1_101)),
+        backend
+            .sweep_expired_documents_now(&everything(), LogicalInstant::from_unix_seconds(1_101)),
         1
     );
     assert!(!exists(&backend, "sessions/s1"));
@@ -195,9 +206,10 @@ fn a_subcollection_of_the_same_name_is_swept_as_one_collection_group() {
     backend
         .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
         .expect("enable ttl");
-    backend.start_ttl_sweeps(LogicalInstant::from_unix_seconds(1_000));
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
     assert_eq!(
-        backend.sweep_expired_documents_now(LogicalInstant::from_unix_seconds(1_101)),
+        backend
+            .sweep_expired_documents_now(&everything(), LogicalInstant::from_unix_seconds(1_101)),
         1
     );
     assert!(!exists(&backend, "users/u1/sessions/s1"));
@@ -214,9 +226,12 @@ fn removing_the_policy_stops_the_sweep() {
         TtlState::Active
     );
     assert!(backend.disable_ttl(PROJECT, DATABASE, &group("sessions"), &field("expiresAt")));
-    backend.start_ttl_sweeps(LogicalInstant::from_unix_seconds(1_000));
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
     assert_eq!(
-        backend.sweep_expired_documents_now(LogicalInstant::from_unix_seconds(9_000_000)),
+        backend.sweep_expired_documents_now(
+            &everything(),
+            LogicalInstant::from_unix_seconds(9_000_000)
+        ),
         0
     );
     assert!(exists(&backend, "sessions/s1"));
@@ -229,10 +244,11 @@ fn a_swept_deletion_is_published_to_listeners() {
     backend
         .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
         .expect("enable ttl");
-    backend.start_ttl_sweeps(LogicalInstant::from_unix_seconds(1_000));
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
     let mut commits = backend.subscribe();
     assert_eq!(
-        backend.sweep_expired_documents_now(LogicalInstant::from_unix_seconds(1_101)),
+        backend
+            .sweep_expired_documents_now(&everything(), LogicalInstant::from_unix_seconds(1_101)),
         1
     );
     let notification = commits.try_recv().expect("a commit notification");
@@ -264,31 +280,149 @@ fn a_recorded_operation_can_be_polled_by_the_name_the_patch_returned() {
         DATABASE,
         "projects/demo-app/databases/(default)/collectionGroups/sessions/fields/expiresAt",
         LogicalInstant::from_unix_seconds(1_000),
+        serde_json::json!({"name": "a field"}),
     );
     assert!(name.starts_with("projects/demo-app/databases/(default)/operations/"));
-    let operation = backend.field_operation(&name).expect("operation");
+    let operation = backend.field_operation(PROJECT, &name).expect("operation");
     assert_eq!(operation.name, name);
-    assert_eq!(backend.field_operation("projects/x/operations/y"), None);
+    assert_eq!(operation.response, serde_json::json!({"name": "a field"}));
+    assert_eq!(
+        backend.field_operation(PROJECT, "projects/x/operations/y"),
+        None
+    );
+    // The record is per project, so another project never sees it.
+    assert_eq!(backend.field_operation("other-project", &name), None);
 }
 
 #[test]
 fn the_operation_record_is_bounded() {
     let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
     let mut first = String::new();
-    for i in 0..(fireemu_adapter_grpc::local::FIELD_OPERATIONS_RETAINED + 10) {
+    for i in 0..(fireemu_adapter_grpc::local::FIELD_OPERATIONS_RETAINED_PER_PROJECT + 10) {
         let name = backend.record_field_operation(
             PROJECT,
             DATABASE,
             &format!("field-{i}"),
             LogicalInstant::from_unix_seconds(1_000),
+            serde_json::Value::Null,
         );
         if i == 0 {
             first = name;
         }
     }
     assert_eq!(
-        backend.field_operations().len(),
-        fireemu_adapter_grpc::local::FIELD_OPERATIONS_RETAINED
+        backend.field_operations(PROJECT).len(),
+        fireemu_adapter_grpc::local::FIELD_OPERATIONS_RETAINED_PER_PROJECT
     );
-    assert_eq!(backend.field_operation(&first), None);
+    assert_eq!(backend.field_operation(PROJECT, &first), None);
+}
+
+#[test]
+fn operation_names_stay_unique_past_the_retention_bound() {
+    let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
+    // The clock never moves and the field never changes, so only the ordinal separates one
+    // record from the next. It must keep separating them after the bound starts evicting.
+    let mut names = std::collections::BTreeSet::new();
+    let total = fireemu_adapter_grpc::local::FIELD_OPERATIONS_RETAINED_PER_PROJECT + 2;
+    for _ in 0..total {
+        names.insert(backend.record_field_operation(
+            PROJECT,
+            DATABASE,
+            "projects/demo-app/databases/(default)/collectionGroups/sessions/fields/expiresAt",
+            LogicalInstant::from_unix_seconds(1_000),
+            serde_json::Value::Null,
+        ));
+    }
+    assert_eq!(names.len(), total);
+}
+
+#[test]
+fn the_operation_record_of_one_project_survives_another_projects_patches() {
+    let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
+    let mine = backend.record_field_operation(
+        PROJECT,
+        DATABASE,
+        "a field",
+        LogicalInstant::from_unix_seconds(1_000),
+        serde_json::Value::Null,
+    );
+    for i in 0..(fireemu_adapter_grpc::local::FIELD_OPERATIONS_RETAINED_PER_PROJECT + 10) {
+        backend.record_field_operation(
+            "noisy-project",
+            DATABASE,
+            &format!("field-{i}"),
+            LogicalInstant::from_unix_seconds(1_000),
+            serde_json::Value::Null,
+        );
+    }
+    assert!(backend.field_operation(PROJECT, &mine).is_some());
+    assert_eq!(backend.field_operations(PROJECT).len(), 1);
+}
+
+#[test]
+fn a_sweep_touches_only_the_projects_its_scope_owns() {
+    let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
+    for project in [PROJECT, "other-app"] {
+        let db = format!("projects/{project}/databases/(default)");
+        backend
+            .commit(&pb::CommitRequest {
+                database: db.clone(),
+                writes: vec![pb::Write {
+                    operation: Some(pb::write::Operation::Update(pb::Document {
+                        name: format!("{db}/documents/sessions/s1"),
+                        fields: [("expiresAt".to_owned(), timestamp(1_100))]
+                            .into_iter()
+                            .collect(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .expect("commit");
+        backend
+            .enable_ttl(project, DATABASE, group("sessions"), field("expiresAt"))
+            .expect("enable ttl");
+    }
+
+    let mine = Scope::Project(PROJECT.to_owned());
+    assert_eq!(
+        backend.sweep_expired_documents_now(&mine, LogicalInstant::from_unix_seconds(1_101)),
+        1
+    );
+    assert!(!exists(&backend, "sessions/s1"));
+    // The other project keeps the grace period between expiry and deletion that its own
+    // session's clock defines.
+    assert!(backend
+        .get_document(
+            &pb::GetDocumentRequest {
+                name: "projects/other-app/databases/(default)/documents/sessions/s1".to_owned(),
+                ..Default::default()
+            },
+            &fireemu_adapter_grpc::rules::allow_all_reads,
+        )
+        .is_ok());
+}
+
+#[test]
+fn a_sweep_deletes_at_most_the_configured_batch_and_the_next_one_continues() {
+    let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
+    let total = fireemu_adapter_grpc::local::MAX_SWEEP_DELETES_PER_RUN + 5;
+    for i in 0..total {
+        write_document(&backend, &format!("sessions/s{i}"), Some(timestamp(1_100)));
+    }
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .expect("enable ttl");
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
+
+    let due = LogicalInstant::from_unix_seconds(1_000 + 86_400);
+    assert_eq!(
+        backend.sweep_expired_documents(&everything(), due),
+        fireemu_adapter_grpc::local::MAX_SWEEP_DELETES_PER_RUN
+    );
+    // The truncated sweep did not record itself as having run, so the very next one
+    // continues instead of waiting another interval.
+    assert_eq!(backend.sweep_expired_documents(&everything(), due), 5);
+    assert_eq!(backend.sweep_expired_documents(&everything(), due), 0);
 }

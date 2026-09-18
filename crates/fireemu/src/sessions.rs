@@ -240,15 +240,19 @@ impl ProjectHooks for Projects {
         self.pubsub_handle.on_clock_changed();
     }
 
-    fn clock_settled(&self, now: fireemu_core_types::time::LogicalInstant) -> usize {
+    fn clock_settled(&self, scope: &Scope, now: fireemu_core_types::time::LogicalInstant) -> usize {
         // Expiry deletes are ordinary writes: they take admission, publish to listeners and
         // deliver triggers, so they run here rather than inside the exclusive clock
         // transition above.
-        self.backend.sweep_expired_documents(now)
+        self.backend.sweep_expired_documents(scope, now)
     }
 
-    fn sweep_expired_documents_now(&self, now: fireemu_core_types::time::LogicalInstant) -> usize {
-        self.backend.sweep_expired_documents_now(now)
+    fn sweep_expired_documents_now(
+        &self,
+        scope: &Scope,
+        now: fireemu_core_types::time::LogicalInstant,
+    ) -> usize {
+        self.backend.sweep_expired_documents_now(scope, now)
     }
 }
 
@@ -612,7 +616,11 @@ pub(crate) mod tests {
         // Just past expiry, nothing is deleted: the sweep interval has not elapsed.
         let soon = AT.checked_add(LogicalDuration::from_seconds(61)).unwrap();
         assert_eq!(
-            fireemu_adapter_http::control::ProjectHooks::clock_settled(&projects, soon),
+            fireemu_adapter_http::control::ProjectHooks::clock_settled(
+                &projects,
+                &Scope::AllExcept(BTreeSet::new()),
+                soon
+            ),
             0
         );
 
@@ -620,7 +628,11 @@ pub(crate) mod tests {
             .checked_add(LogicalDuration::from_seconds(86_400))
             .unwrap();
         assert_eq!(
-            fireemu_adapter_http::control::ProjectHooks::clock_settled(&projects, due),
+            fireemu_adapter_http::control::ProjectHooks::clock_settled(
+                &projects,
+                &Scope::AllExcept(BTreeSet::new()),
+                due
+            ),
             1
         );
     }
@@ -634,13 +646,17 @@ pub(crate) mod tests {
         let soon = AT.checked_add(LogicalDuration::from_seconds(61)).unwrap();
         assert_eq!(
             fireemu_adapter_http::control::ProjectHooks::sweep_expired_documents_now(
-                &projects, soon
+                &projects,
+                &Scope::AllExcept(BTreeSet::new()),
+                soon
             ),
             1
         );
         assert_eq!(
             fireemu_adapter_http::control::ProjectHooks::sweep_expired_documents_now(
-                &projects, soon
+                &projects,
+                &Scope::AllExcept(BTreeSet::new()),
+                soon
             ),
             0
         );

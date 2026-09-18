@@ -265,7 +265,7 @@ fn listing_with_the_ttl_filter_reports_only_the_configured_ttl_field() {
 }
 
 #[test]
-fn listing_the_explicit_overrides_reports_the_exempted_field_and_the_ttl_field() {
+fn listing_the_explicit_overrides_reports_only_the_exempted_field() {
     let mut indexes = IndexSet::default();
     indexes.add_exemption(&SingleFieldExemption {
         collection_group: fireemu_core_types::ids::CollectionId::try_new("sessions")
@@ -291,12 +291,11 @@ fn listing_the_explicit_overrides_reports_the_exempted_field_and_the_ttl_field()
         .iter()
         .filter_map(|field| field["name"].as_str())
         .collect();
+    // expiresAt carries a TTL policy but no index override of its own, so it still
+    // inherits its indexes and does not belong in a usesAncestorConfig:false listing.
     assert_eq!(
         names,
-        vec![
-            "projects/demo/databases/(default)/collectionGroups/sessions/fields/expiresAt",
-            "projects/demo/databases/(default)/collectionGroups/sessions/fields/payload",
-        ]
+        vec!["projects/demo/databases/(default)/collectionGroups/sessions/fields/payload"]
     );
     let payload = body["fields"]
         .as_array()
@@ -352,6 +351,172 @@ fn an_exempted_field_reports_the_modes_that_remain() {
         body["indexConfig"].get("usesAncestorConfig").is_none(),
         "{body}"
     );
+}
+
+#[test]
+fn listing_with_the_ancestor_filter_excludes_a_ttl_only_field() {
+    let state = state();
+    enable_ttl(&state);
+    let (status, body) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields?filter=indexConfig.usesAncestorConfig:false"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["fields"].as_array().map(Vec::len), Some(0), "{body}");
+}
+
+#[test]
+fn listing_without_a_filter_reports_the_ttl_field_and_the_overrides() {
+    let state = state();
+    enable_ttl(&state);
+    let (status, body) = call(&state, "GET", &format!("{GROUP}/fields"), Value::Null);
+    assert_eq!(status, 200, "{body}");
+    let names: Vec<&str> = body["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .filter_map(|field| field["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["projects/demo/databases/(default)/collectionGroups/sessions/fields/expiresAt"]
+    );
+}
+
+#[test]
+fn polling_an_operation_returns_the_same_response_the_patch_returned() {
+    let state = state();
+    let patched = enable_ttl(&state);
+    let name = patched["name"].as_str().expect("operation name");
+    let (status, polled) = call(&state, "GET", &format!("/v1/{name}"), Value::Null);
+    assert_eq!(status, 200, "{polled}");
+    assert_eq!(polled, patched);
+
+    // A later patch does not rewrite what the earlier operation answered.
+    let (status, cleared) = call(
+        &state,
+        "PATCH",
+        &format!("{GROUP}/fields/expiresAt?updateMask=ttlConfig"),
+        json!({}),
+    );
+    assert_eq!(status, 200, "{cleared}");
+    let (_, polled_again) = call(&state, "GET", &format!("/v1/{name}"), Value::Null);
+    assert_eq!(polled_again, patched);
+}
+
+#[test]
+fn admin_operations_require_owner_credentials() {
+    let state = state();
+    let operation = enable_ttl(&state);
+    let name = operation["name"].as_str().expect("operation name");
+    for path in [
+        format!("/v1/{name}"),
+        "/v1/projects/demo/databases/(default)/operations".to_owned(),
+    ] {
+        let (status, body) = call_as(
+            &state,
+            Some("Bearer someone-else"),
+            "GET",
+            &path,
+            Value::Null,
+        );
+        assert_eq!(status, 403, "{path}: {body}");
+        assert_eq!(
+            body["error"]["status"],
+            json!("PERMISSION_DENIED"),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn an_operation_of_another_project_is_not_found_through_this_projects_listing() {
+    let state = state();
+    let operation = enable_ttl(&state);
+    let name = operation["name"].as_str().expect("operation name");
+    let id = name.rsplit('/').next().expect("an operation id");
+    let (status, body) = call(
+        &state,
+        "GET",
+        &format!("/v1/projects/other/databases/(default)/operations/{id}"),
+        Value::Null,
+    );
+    assert_eq!(status, 404, "{body}");
+    let (status, listed) = call(
+        &state,
+        "GET",
+        "/v1/projects/other/databases/(default)/operations",
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{listed}");
+    assert_eq!(listed["operations"].as_array().map(Vec::len), Some(0));
+}
+
+#[test]
+fn a_patch_body_that_is_not_a_field_resource_is_refused() {
+    let state = state();
+    enable_ttl(&state);
+    for body in [json!([1, 2]), json!("ttlConfig"), json!(7)] {
+        let (status, answer) = call(
+            &state,
+            "PATCH",
+            &format!("{GROUP}/fields/expiresAt?updateMask=ttlConfig"),
+            body.clone(),
+        );
+        assert_eq!(status, 400, "{body}: {answer}");
+        assert_eq!(
+            answer["error"]["status"],
+            json!("INVALID_ARGUMENT"),
+            "{body}"
+        );
+    }
+    // The policy the malformed bodies did not name is still in force.
+    let (_, field) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields/expiresAt"),
+        Value::Null,
+    );
+    assert_eq!(field["ttlConfig"]["state"], json!("ACTIVE"));
+}
+
+#[test]
+fn a_ttl_patch_beyond_the_catalog_bound_is_resource_exhausted() {
+    let state = state();
+    for i in 0..fireemu_core_firestore::ttl::MAX_TTL_FIELDS_PER_DATABASE {
+        let (status, body) = call(
+            &state,
+            "PATCH",
+            &format!(
+                "/v1/projects/demo/databases/(default)/collectionGroups/g{i}/fields/expiresAt?updateMask=ttlConfig"
+            ),
+            json!({"ttlConfig": {}}),
+        );
+        assert_eq!(status, 200, "{i}: {body}");
+    }
+    let (status, body) = call(
+        &state,
+        "PATCH",
+        "/v1/projects/demo/databases/(default)/collectionGroups/one-too-many/fields/expiresAt?updateMask=ttlConfig",
+        json!({"ttlConfig": {}}),
+    );
+    assert_eq!(status, 429, "{body}");
+    assert_eq!(body["error"]["status"], json!("RESOURCE_EXHAUSTED"));
+}
+
+#[test]
+fn field_configuration_operations_are_not_served_for_a_non_standard_native_database() {
+    let state = state_with(FirestoreEdition::Enterprise, FirestoreApiMode::Native);
+    let (status, body) = call(
+        &state,
+        "GET",
+        "/v1/projects/demo/databases/(default)/operations",
+        Value::Null,
+    );
+    assert_eq!(status, 501, "{body}");
+    assert_eq!(body["error"]["status"], json!("UNIMPLEMENTED"));
 }
 
 #[test]

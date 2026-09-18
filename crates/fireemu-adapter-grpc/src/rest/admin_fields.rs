@@ -338,6 +338,11 @@ impl RestState {
         body: &Value,
         params: &BTreeMap<String, Vec<String>>,
     ) -> Result<RestResponse, Status> {
+        if !body.is_object() && !body.is_null() {
+            return Err(Status::invalid_argument(
+                "the request body must be a Field resource",
+            ));
+        }
         let mask: Vec<String> = match single(params, "updateMask")? {
             None => Vec::new(),
             Some(mask) => mask
@@ -400,27 +405,23 @@ impl RestState {
             );
         }
         let now = self.local.now();
+        // The response is recorded with the operation, so polling the operation later
+        // answers exactly what this patch answered even after a further patch changed the
+        // field. One generator renders both.
+        let mut field = self.field_json(selector);
+        field["@type"] = json!("type.googleapis.com/google.firestore.admin.v1.Field");
         let name = self.local.record_field_operation(
             &selector.project,
             &selector.database,
             &selector.resource_name(),
             now,
+            field,
         );
-        let at = timestamp_to_json(&encode_instant(now));
-        let mut field = self.field_json(selector);
-        field["@type"] = json!("type.googleapis.com/google.firestore.admin.v1.Field");
-        Ok(ok(json!({
-            "name": name,
-            "metadata": {
-                "@type": "type.googleapis.com/google.firestore.admin.v1.FieldOperationMetadata",
-                "field": selector.resource_name(),
-                "startTime": at,
-                "endTime": at,
-                "state": "SUCCESSFUL",
-            },
-            "done": true,
-            "response": field,
-        })))
+        let operation = self
+            .local
+            .field_operation(&selector.project, &name)
+            .ok_or_else(|| Status::internal("the field operation was not recorded"))?;
+        Ok(ok(operation_json(&operation)))
     }
 
     fn list_fields(
@@ -436,9 +437,10 @@ impl RestState {
         // Production lists only fields that carry a configuration of their own, and names the
         // two filters that select them. Any other filter is refused rather than silently
         // widened to a listing the caller did not ask for.
-        let ttl_only = match single(params, "filter")? {
-            None | Some("" | "indexConfig.usesAncestorConfig:false") => false,
-            Some("ttlConfig:*") => true,
+        let (ttl_only, ancestor_only) = match single(params, "filter")? {
+            None | Some("") => (false, false),
+            Some("indexConfig.usesAncestorConfig:false") => (false, true),
+            Some("ttlConfig:*") => (true, false),
             Some(other) => {
                 return Err(Status::invalid_argument(format!(
                     "filter {other} is not supported; use indexConfig.usesAncestorConfig:false \
@@ -470,9 +472,14 @@ impl RestState {
             Some(raw) => page_offset(binding, raw)?,
         };
         let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        let ttl = self.local.ttl_catalog(project, database);
-        if let Some(policy) = ttl.policy(&collection_group) {
-            names.insert(policy.field.canonical());
+        // `indexConfig.usesAncestorConfig:false` selects fields that carry an index
+        // configuration of their own. A field that only carries a TTL policy still inherits
+        // its indexes, so it does not belong in that listing.
+        if !ancestor_only {
+            let ttl = self.local.ttl_catalog(project, database);
+            if let Some(policy) = ttl.policy(&collection_group) {
+                names.insert(policy.field.canonical());
+            }
         }
         if !ttl_only {
             let indexes = self.local.indexes_for_project_database(project, database);
@@ -534,6 +541,14 @@ impl RestState {
                 "Admin operations require owner credentials",
             ));
         }
+        if self.gateway.ctx.edition != fireemu_core_types::edition::FirestoreEdition::Standard
+            || self.gateway.ctx.api_mode != fireemu_core_types::edition::FirestoreApiMode::Native
+        {
+            return Err(Status::unimplemented(
+                "field-configuration operations are supported only for Standard Native \
+                 databases",
+            ));
+        }
         let barrier = self.local.barrier();
         let _admitted = barrier.admit();
         match segments {
@@ -541,7 +556,7 @@ impl RestState {
                 let prefix = format!("projects/{project}/databases/{database}/operations/");
                 let operations: Vec<Value> = self
                     .local
-                    .field_operations()
+                    .field_operations(project)
                     .into_iter()
                     .filter(|operation| operation.name.starts_with(&prefix))
                     .map(|operation| operation_json(&operation))
@@ -551,7 +566,7 @@ impl RestState {
             [_, project, _, database, _, operation] => {
                 let name =
                     format!("projects/{project}/databases/{database}/operations/{operation}");
-                self.local.field_operation(&name).map_or_else(
+                self.local.field_operation(project, &name).map_or_else(
                     || {
                         Err(Status::not_found(format!(
                             "Operation '{name}' does not exist."
@@ -578,9 +593,6 @@ fn operation_json(operation: &crate::local::FieldOperation) -> Value {
             "state": "SUCCESSFUL",
         },
         "done": true,
-        "response": {
-            "@type": "type.googleapis.com/google.firestore.admin.v1.Field",
-            "name": operation.field,
-        },
+        "response": operation.response,
     })
 }

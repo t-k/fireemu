@@ -118,13 +118,14 @@ pub trait ProjectHooks: Send + Sync {
     fn clock_advanced(&self, _now: LogicalInstant) {}
     /// The clock move is complete and the session admission barrier is released again: run
     /// the work that has to take ordinary admission, such as the Firestore time-to-live
-    /// sweep, whose deletes are ordinary writes. Returns how many documents it deleted.
-    fn clock_settled(&self, _now: LogicalInstant) -> usize {
+    /// sweep, whose deletes are ordinary writes. Only `scope` is swept. Returns how many
+    /// documents it deleted.
+    fn clock_settled(&self, _scope: &Scope, _now: LogicalInstant) -> usize {
         0
     }
-    /// Runs one Firestore time-to-live sweep whether or not the interval has elapsed, and
-    /// returns how many documents it deleted.
-    fn sweep_expired_documents_now(&self, _now: LogicalInstant) -> usize {
+    /// Runs one Firestore time-to-live sweep over `scope` whether or not the interval has
+    /// elapsed, and returns how many documents it deleted.
+    fn sweep_expired_documents_now(&self, _scope: &Scope, _now: LogicalInstant) -> usize {
         0
     }
 }
@@ -585,7 +586,8 @@ pub fn handle_with(
 /// how production's deletion delay is reproduced. A test or a campaign that wants to observe
 /// the post-expiry state without advancing a whole day drives this route instead; it deletes
 /// only what has already expired, so it can never delete a document production would keep.
-fn ttl_sweep_route(state: &ControlState, method: &str) -> JsonResponse {
+/// It sweeps only the session's own project.
+fn ttl_sweep_route(state: &ControlState, method: &str, project: &str) -> JsonResponse {
     if method != "POST" {
         return error(
             400,
@@ -601,7 +603,7 @@ fn ttl_sweep_route(state: &ControlState, method: &str) -> JsonResponse {
     let Ok(now) = state.clock.lock().map(|clock| clock.now()) else {
         return error(500, "INTERNAL");
     };
-    let deleted = hooks.sweep_expired_documents_now(now);
+    let deleted = hooks.sweep_expired_documents_now(&scope_of(state, project), now);
     JsonResponse {
         status: 200,
         body: json!({ "deletedDocumentCount": deleted }),
@@ -990,7 +992,7 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         return rules_requests_route(state, method);
     }
     if action == "firestore/ttl:sweep" {
-        return ttl_sweep_route(state, method);
+        return ttl_sweep_route(state, method, &project);
     }
     if let Some(rest) = action.strip_prefix("firestore/text-indexes") {
         return text_index_route(state, session, &project, method, rest, body);
@@ -1019,7 +1021,9 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         // The expiry sweep deletes through the ordinary write path, which takes admission,
         // so it runs after the exclusive transition above has been released.
         if let (Some(hooks), Some(now)) = (&state.project_hooks, now) {
-            hooks.clock_settled(now);
+            // The sweep belongs to the session whose clock moved: another session's project
+            // keeps the grace period its own clock defines.
+            hooks.clock_settled(&scope_of(state, &project), now);
         }
         return response;
     }

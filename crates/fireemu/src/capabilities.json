@@ -564,7 +564,9 @@
       "ttlConfig is persisted per project and database, reported as ACTIVE on readback, refused for __name__, for the wildcard field and for a second field of one collection group, and bounded to 64 policies per database",
       "documents whose time-to-live field holds a timestamp earlier than the virtual clock are deleted by a sweep that runs one configurable interval after expiry (firestore.ttlSweepIntervalSeconds, default 86400, maximum 259200); the deletion is an ordinary delete that publishes to listeners and delivers triggers and evaluates no Security Rules",
       "an expired document stays readable until the sweep reaches it; a field whose value is not a timestamp is ignored rather than deleted or refused",
-      "the configuration survives export, import and a session snapshot restore"
+      "the configuration survives export, import and a session snapshot restore",
+      "the field-configuration operations are recorded per project, bounded to 64 each, and a poll answers exactly what the patch that minted it answered",
+      "a sweep is scoped to the session that asked for it and deletes at most 1024 documents per run, leaving the rest to the next run rather than holding the clock response open"
     ],
     "notes": [
       "local-only bounded adapter surface; it does not claim production parity, and no production observation of these methods has been made",
@@ -572,7 +574,9 @@
       "patching indexConfig is refused with UNIMPLEMENTED; single-field exemptions are taken from the project's index configuration and have no runtime transition",
       "the official Firestore emulator serves no field-configuration surface and performs no expiry sweep at all, so this capability diverges from it in the direction of production",
       "the expiry sweep runs when the shared virtual clock moves and on the control route POST /v1/sessions/{session}/firestore/ttl:sweep, which a test or a campaign uses to observe the post-expiry state without advancing a day",
-      "conformance input: the Firestore Admin v1 reference for collectionGroups.fields and the documented time-to-live semantics; the FS-CONFIG-LIFECYCLE campaign will compare them against production"
+      "conformance input: the Firestore Admin v1 reference for collectionGroups.fields and the documented time-to-live semantics; the FS-CONFIG-LIFECYCLE campaign will compare them against production",
+      "listing with indexConfig.usesAncestorConfig:false reports only fields that carry an index configuration of their own; a field with a TTL policy and no index override is reported by the unfiltered listing and by ttlConfig:*",
+      "the expiry sweep runs inside the control request that moved the clock, so a clock advance observes its own deletions; the per-run bound is what keeps that response short rather than making the sweep asynchronous"
     ],
     "precision": "bounded-local-semantics",
     "status": "implemented"

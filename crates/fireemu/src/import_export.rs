@@ -2874,6 +2874,14 @@ fn parse_field_config(text: &str) -> Result<FieldConfigCatalogs, String> {
         let database = entry["database"]
             .as_str()
             .ok_or_else(|| "a database entry has no database".to_owned())?;
+        // The identifiers become catalog keys and are written back on the next export, so
+        // they go through the same constructors a request would. An entry the runtime could
+        // never address would otherwise read back as ACTIVE through fields.get while no
+        // sweep could ever reach it.
+        let project = fireemu_core_types::ids::ProjectId::try_new(project)
+            .map_err(|error| format!("project {project:?}: {error}"))?;
+        let database = fireemu_core_types::ids::DatabaseId::try_new(database)
+            .map_err(|error| format!("database {database:?}: {error}"))?;
         let mut catalog = fireemu_core_firestore::ttl::TtlCatalog::new();
         let fields = entry["ttlFields"]
             .as_array()
@@ -2893,7 +2901,10 @@ fn parse_field_config(text: &str) -> Result<FieldConfigCatalogs, String> {
                 .enable(group, path)
                 .map_err(|error| error.to_string())?;
         }
-        catalogs.insert((project.to_owned(), database.to_owned()), catalog);
+        catalogs.insert(
+            (project.as_str().to_owned(), database.as_str().to_owned()),
+            catalog,
+        );
     }
     Ok(catalogs)
 }
@@ -3855,9 +3866,10 @@ const EXPORT_OWNED_ENTRIES: &[&str] = &[
 mod tests {
     use super::{
         civil_from_days, decode_base32, decode_base64, enforce_storage_object_count,
-        field_config_json, imported_instant, may_overwrite, parse_field_config,
+        field_config_json, imported_instant, may_overwrite, parse_field_config, read_field_config,
         read_inside_budgeted, read_inside_limited, rfc3339_instant, rfc3339_text, scan_import_tree,
-        tenant_config_from_settings, UnmanagedCopyBudget, IMPORT_STORAGE_OBJECT_COUNT_LIMIT,
+        tenant_config_from_settings, UnmanagedCopyBudget, FIELD_CONFIG_BYTES_LIMIT,
+        FIELD_CONFIG_FILE, IMPORT_STORAGE_OBJECT_COUNT_LIMIT,
     };
     use fireemu_core_auth::store::{ProjectAuthConfig, TenantMetadata};
     use fireemu_core_export::auth::{AuthConfig, AuthSettingsNamespace, AuthSettingsRecord};
@@ -5198,6 +5210,63 @@ mod tests {
         let text = r#"{"version":1,"databases":[{"project":"demo-app","database":"(default)","ttlFields":[{"collectionGroup":"sessions","field":"a..b"}]}]}"#;
         let error = parse_field_config(text).expect_err("refusal");
         assert!(error.contains("field path"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sidecar_larger_than_the_limit_is_refused_and_one_at_the_limit_is_read() {
+        let dir = TrustedTempDir::new("field-config-limit");
+        let path = dir.path().join(FIELD_CONFIG_FILE);
+
+        // One byte past the limit is refused without the content being parsed.
+        let padding = usize::try_from(FIELD_CONFIG_BYTES_LIMIT).expect("a usize limit");
+        let oversized = format!(
+            "{{\"version\":1,\"note\":\"{}\",\"databases\":[]}}",
+            "a".repeat(padding)
+        );
+        std::fs::write(&path, oversized).expect("write the oversized sidecar");
+        let error = read_field_config(dir.path()).expect_err("refusal");
+        assert!(error.to_string().contains(FIELD_CONFIG_FILE), "{error}");
+
+        // A sidecar inside the limit is read.
+        std::fs::write(&path, r#"{"version":1,"databases":[]}"#).expect("write a small sidecar");
+        assert_eq!(
+            read_field_config(dir.path()).expect("read"),
+            Some(std::collections::BTreeMap::new())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sidecar_that_is_a_symlink_is_refused() {
+        let dir = TrustedTempDir::new("field-config-symlink");
+        let target = dir.path().join("elsewhere.json");
+        std::fs::write(&target, r#"{"version":1,"databases":[]}"#).expect("write the target");
+        std::os::unix::fs::symlink(&target, dir.path().join(FIELD_CONFIG_FILE))
+            .expect("create the symlink");
+        let error = read_field_config(dir.path()).expect_err("refusal");
+        assert!(error.to_string().contains("no-symlink"), "{error}");
+    }
+
+    #[test]
+    fn a_sidecar_naming_an_invalid_project_is_refused() {
+        let text = r#"{"version":1,"databases":[{"project":"Not A Project","database":"(default)","ttlFields":[]}]}"#;
+        let error = parse_field_config(text).expect_err("refusal");
+        assert!(error.starts_with("project "), "{error}");
+    }
+
+    #[test]
+    fn a_sidecar_naming_an_invalid_database_is_refused() {
+        let text = r#"{"version":1,"databases":[{"project":"demo-app","database":"Invalid_Id","ttlFields":[]}]}"#;
+        let error = parse_field_config(text).expect_err("refusal");
+        assert!(error.starts_with("database "), "{error}");
+    }
+
+    #[test]
+    fn a_sidecar_carrying_a_control_character_in_an_identifier_is_refused() {
+        let text = "{\"version\":1,\"databases\":[{\"project\":\"demo\\u0000app\",\"database\":\"(default)\",\"ttlFields\":[]}]}";
+        let error = parse_field_config(text).expect_err("refusal");
+        assert!(error.starts_with("project "), "{error}");
     }
 
     #[test]

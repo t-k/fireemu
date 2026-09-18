@@ -3129,7 +3129,8 @@ impl RuntimeConfig {
                 .unwrap_or(u64::MAX);
                 if seconds == 0 || seconds > maximum {
                     return Err(ConfigError(format!(
-                        "firestore.ttlSweepIntervalSeconds must be between 1 and {maximum}, the                          documented outer bound on how long an expired document survives"
+                        "firestore.ttlSweepIntervalSeconds must be between 1 and {maximum}, \
+                         the documented outer bound on how long an expired document survives"
                     )));
                 }
                 cfg.ttl_sweep_interval =

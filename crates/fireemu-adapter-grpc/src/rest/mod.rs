@@ -26,9 +26,9 @@ use crate::gateway::Gateway;
 use crate::local::LocalBackend;
 use crate::rules::{self, Principal, RulesEnforcer};
 use json::{
-    aggregation_query_from_json, base64_decode, base64_encode, commit_to_json, document_from_json,
-    document_to_json, explain_options_from_json, mask_from_json, mask_from_paths,
-    optional_timestamp_to_json, precondition_from_json, request_options_from_json,
+    aggregation_query_from_json, base64_decode_field, base64_encode, commit_to_json,
+    document_from_json, document_to_json, explain_options_from_json, mask_from_json,
+    mask_from_paths, optional_timestamp_to_json, precondition_from_json, request_options_from_json,
     structured_query_from_json, transaction_options_from_json, value_to_json, write_from_json,
     write_result_to_json, JsonError,
 };
@@ -748,7 +748,7 @@ impl RestState {
                 }
                 (Some(t), None) => {
                     Some(pb::get_document_request::ConsistencySelector::Transaction(
-                        base64_decode(t).map_err(|e| bad(&e))?,
+                        base64_decode_field("transaction", t).map_err(|e| bad(&e))?,
                     ))
                 }
                 (None, Some(rt)) => Some(pb::get_document_request::ConsistencySelector::ReadTime(
@@ -814,7 +814,7 @@ impl RestState {
                 }
                 (Some(t), None) => Some(
                     pb::list_documents_request::ConsistencySelector::Transaction(
-                        base64_decode(t).map_err(|e| bad(&e))?,
+                        base64_decode_field("transaction", t).map_err(|e| bad(&e))?,
                     ),
                 ),
                 (None, Some(rt)) => {
@@ -945,7 +945,8 @@ impl RestState {
                 let token = self.local.begin_transaction(&pb::BeginTransactionRequest {
                     database,
                     options: Some(
-                        transaction_options_from_json(body.get("options")).map_err(|e| bad(&e))?,
+                        transaction_options_from_json(body.get("options"), "options")
+                            .map_err(|e| bad(&e))?,
                     ),
                     request_options: request_options_from_json(body.get("requestOptions"))
                         .map_err(|e| bad(&e))?,
@@ -1172,7 +1173,8 @@ impl RestState {
                 match body.get("newTransaction").filter(|value| !value.is_null()) {
                     Some(o) => Some(
                         pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
-                            transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
+                            transaction_options_from_json(Some(o), "new_transaction")
+                                .map_err(|e| bad(&e))?,
                         ),
                     ),
                     None => None,
@@ -1243,7 +1245,8 @@ impl RestState {
             } else {
                 match body.get("newTransaction").filter(|value| !value.is_null()) {
                     Some(o) => Some(pb::run_query_request::ConsistencySelector::NewTransaction(
-                        transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
+                        transaction_options_from_json(Some(o), "new_transaction")
+                            .map_err(|e| bad(&e))?,
                     )),
                     None => None,
                 }
@@ -1348,7 +1351,8 @@ impl RestState {
                 match body.get("newTransaction").filter(|value| !value.is_null()) {
                     Some(o) => Some(
                         pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
-                            transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
+                            transaction_options_from_json(Some(o), "new_transaction")
+                                .map_err(|e| bad(&e))?,
                         ),
                     ),
                     None => None,
@@ -1471,7 +1475,7 @@ fn exclusive_selectors(body: &Value) -> Result<(), Status> {
 fn transaction_bytes(v: Option<&Value>) -> Result<Vec<u8>, Status> {
     match v {
         None | Some(Value::Null) => Ok(Vec::new()),
-        Some(Value::String(s)) => base64_decode(s).map_err(|e| bad(&e)),
+        Some(Value::String(s)) => base64_decode_field("transaction", s).map_err(|e| bad(&e)),
         Some(_) => Err(Status::invalid_argument(
             "transaction must be a base64 string",
         )),

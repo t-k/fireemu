@@ -1226,7 +1226,7 @@
               "precision": "boundary-conformance"
             },
             {
-              "behaviour": "TOTP enrollment does not require a verified email: the official emulator has no TOTP route to measure it against and production behaviour is not inferred from the SMS result",
+              "behaviour": "TOTP enrollment requires a verified email, as phone enrollment does: mfaEnrollment:start and mfaEnrollment:finalize both refuse an unverified email with UNVERIFIED_EMAIL. The official emulator has no TOTP route to measure this against, and production has not been observed for this condition; the AUTH-MFA-AGE-TOTP-01 campaign will settle it",
               "precision": "boundary-conformance"
             },
             {

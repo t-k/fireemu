@@ -221,7 +221,7 @@
   "AUTH-MFA-TOTP-1": {
     "notes": [
       "window and enrollment TTL are local policies; an expired enrollment session answers SESSION_EXPIRED for one further session lifetime and is then reaped",
-      "the verified-email requirement of phone enrollment is not applied to TOTP enrollment: the official emulator has no TOTP route to measure it against, and production behaviour is not inferred from the SMS result",
+      "TOTP enrollment applies the verified-email requirement of phone enrollment: mfaEnrollment:start and mfaEnrollment:finalize both refuse an account whose email is unverified with UNVERIFIED_EMAIL, before any enrollment state is created or consumed. The official emulator has no TOTP route to measure this against, and production has not been observed for this condition; the AUTH-MFA-AGE-TOTP-01 campaign will settle it",
       "default snapshots carry no shared secret (INV-AUTH-003, ADR-034 amendment): an enrolled factor is captured with a detached secret and rebound on restore to the secret the live store still holds; a factor withdrawn in between is dropped from the restored account and reported on stderr, never restored unusable",
       "conformance: auth/mfa-error-shapes (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"
     ],

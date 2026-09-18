@@ -291,6 +291,20 @@
         "maxAttempts": { "type": "integer", "minimum": 1 }
       }
     },
+    "pubsub": {
+      "type": "object",
+      "description": "Pub/Sub emulator behaviour that the service configuration has no counterpart for.",
+      "additionalProperties": false,
+      "properties": {
+        "pushMinimumRedeliveryIntervalMillis": {
+          "description": "Minimum interval kept between two push deliveries of the same message while the subscription has no retry policy. An emulator protection rather than observed production behaviour: 0 restores unthrottled redelivery, and a retry policy always decides its own backoff.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 600000,
+          "default": 100
+        }
+      }
+    },
     "scheduler": {
       "type": "object",
       "additionalProperties": false,

@@ -2559,6 +2559,38 @@ mod tests {
         }
     }
 
+    /// The configured interval is daemon configuration, not session state: a reset keeps it.
+    #[test]
+    fn a_session_reset_keeps_the_configured_minimum_push_redelivery_interval() {
+        let mut state = PubSubState::new(42);
+        let interval = LogicalDuration::from_millis(250);
+        state.set_push_minimum_redelivery_interval(interval);
+        state.clear();
+
+        let now = LogicalInstant::from_unix_seconds(1000);
+        state
+            .create_topic(topic("demo-app", "push"), BTreeMap::new())
+            .unwrap();
+        let mut config = sub_cfg("demo-app", "after-reset", "push", Filter::always());
+        config.push_config = PushConfig {
+            push_endpoint: "http://127.0.0.1:1/push".to_owned(),
+        };
+        state.create_subscription(config).unwrap();
+        state
+            .publish(&topic("demo-app", "push"), vec![data(b"hello")], now)
+            .unwrap();
+        let subscription = SubscriptionName::new("demo-app", "after-reset").unwrap();
+        let received = state.pull(&subscription, 1, now).unwrap();
+        state
+            .modify_ack_deadline(&subscription, &[received[0].ack_id.clone()], 0, now)
+            .unwrap();
+
+        assert_eq!(
+            state.next_delivery_at(&subscription).unwrap(),
+            Some(now.checked_add(interval).unwrap())
+        );
+    }
+
     /// A negative interval is read as zero rather than moving redelivery into the past.
     #[test]
     fn a_negative_minimum_push_redelivery_interval_is_read_as_zero() {

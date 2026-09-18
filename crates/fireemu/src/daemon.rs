@@ -473,6 +473,18 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     let pubsub_state = Arc::new(Mutex::new(fireemu_core_pubsub::PubSubState::new(
         cfg.seed ^ 0x5053_5542,
     )));
+    {
+        // Without a retry policy a failed push would otherwise be redelivered with no interval
+        // at all (`pubsub.pushMinimumRedeliveryIntervalMillis`).
+        let mut state = pubsub_state
+            .lock()
+            .map_err(|_| "the Pub/Sub state lock is poisoned".to_owned())?;
+        state.set_push_minimum_redelivery_interval(
+            fireemu_core_types::time::LogicalDuration::from_millis(
+                cfg.pubsub_push_minimum_redelivery_interval_millis,
+            ),
+        );
+    }
     let pubsub_resources = if pubsub_listener.is_some() {
         if let Some(runtime) = &functions_runtime {
             let resources =

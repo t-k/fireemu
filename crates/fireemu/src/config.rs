@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use fireemu_core_auth::jwt::TokenAcceptance;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_firestore::index::IndexValidationPolicy;
+use fireemu_core_pubsub::subscription::MAX_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{Map, Value};
@@ -1093,6 +1094,11 @@ pub struct RuntimeConfig {
     pub functions_project_alias: Option<String>,
     /// Attempts per event for functions declared with `retry` (`events.maxAttempts`).
     pub events_max_attempts: u32,
+    /// Minimum interval kept between two push deliveries of the same Pub/Sub message while the
+    /// subscription has no retry policy (`pubsub.pushMinimumRedeliveryIntervalMillis`). It is an
+    /// emulator protection against re-requesting a failing push endpoint with no interval at all;
+    /// `0` restores unthrottled redelivery, and a retry policy always decides its own backoff.
+    pub pubsub_push_minimum_redelivery_interval_millis: i64,
     /// Schedule runs enqueued per clock change and job (`scheduler.maxCatchUpRuns`).
     pub scheduler_max_catch_up_runs: usize,
     /// Default time zone of schedules without one (`scheduler.defaultTimeZone`).
@@ -1305,6 +1311,8 @@ impl Default for RuntimeConfig {
             functions_unserved_triggers: "refuse".to_owned(),
             functions_project_alias: None,
             events_max_attempts: 4,
+            pubsub_push_minimum_redelivery_interval_millis:
+                fireemu_core_pubsub::subscription::DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
             scheduler_max_catch_up_runs: 1000,
             scheduler_default_time_zone: None,
             scheduler_overlap: "allow".to_owned(),
@@ -2558,6 +2566,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "appCheck",
     "storage",
     "events",
+    "pubsub",
     "scheduler",
     "functions",
     "trace",
@@ -2737,6 +2746,32 @@ impl RuntimeConfig {
         }
         if let Some(n) = e.get("maxAttempts").and_then(Value::as_u64) {
             cfg.events_max_attempts = u32::try_from(n).unwrap_or(u32::MAX).max(1);
+        }
+        Ok(())
+    }
+
+    fn parse_pubsub(p: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
+        for key in p.keys() {
+            if !["pushMinimumRedeliveryIntervalMillis"].contains(&key.as_str()) {
+                return Err(ConfigError(format!("unknown config key pubsub.{key}")));
+            }
+        }
+        if let Some(value) = p.get("pushMinimumRedeliveryIntervalMillis") {
+            let millis = value
+                .as_i64()
+                .filter(|millis| *millis >= 0)
+                .ok_or_else(|| {
+                    ConfigError(
+                        "pubsub.pushMinimumRedeliveryIntervalMillis must be a non-negative integer"
+                            .to_owned(),
+                    )
+                })?;
+            if millis > MAX_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS {
+                return Err(ConfigError(format!(
+                    "pubsub.pushMinimumRedeliveryIntervalMillis must not exceed {MAX_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS}"
+                )));
+            }
+            cfg.pubsub_push_minimum_redelivery_interval_millis = millis;
         }
         Ok(())
     }
@@ -3137,6 +3172,9 @@ impl RuntimeConfig {
         }
         if let Some(events) = obj.get("events").and_then(Value::as_object) {
             Self::parse_events(events, &mut cfg)?;
+        }
+        if let Some(pubsub) = obj.get("pubsub").and_then(Value::as_object) {
+            Self::parse_pubsub(pubsub, &mut cfg)?;
         }
         if let Some(scheduler) = obj.get("scheduler").and_then(Value::as_object) {
             Self::parse_scheduler(scheduler, &mut cfg)?;
@@ -3556,6 +3594,58 @@ mod tests {
         // The token semantics and the index policy have no key of their own: the profile is
         // the only way to ask for them, so an explicit limit switch never quietly loosens them.
         assert_eq!(cfg.token_acceptance, TokenAcceptance::Verified);
+    }
+
+    /// The minimum push redelivery interval is configurable, bounded and defaulted.
+    #[test]
+    fn pubsub_push_minimum_redelivery_interval_is_parsed_bounded_and_defaulted() {
+        let default = with_profile(json!({})).expect("a config without a pubsub section");
+        assert_eq!(
+            default.pubsub_push_minimum_redelivery_interval_millis,
+            fireemu_core_pubsub::subscription::DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS
+        );
+
+        let configured = with_profile(json!({
+            "pubsub": {"pushMinimumRedeliveryIntervalMillis": 0}
+        }))
+        .expect("zero restores unthrottled redelivery");
+        assert_eq!(configured.pubsub_push_minimum_redelivery_interval_millis, 0);
+
+        let configured = with_profile(json!({
+            "pubsub": {"pushMinimumRedeliveryIntervalMillis": 2_500}
+        }))
+        .expect("an explicit interval");
+        assert_eq!(
+            configured.pubsub_push_minimum_redelivery_interval_millis,
+            2_500
+        );
+
+        for (pubsub, expected) in [
+            (
+                json!({"pushMinimumRedeliveryIntervalMillis": -1}),
+                "pubsub.pushMinimumRedeliveryIntervalMillis must be a non-negative integer",
+            ),
+            (
+                json!({"pushMinimumRedeliveryIntervalMillis": "100"}),
+                "pubsub.pushMinimumRedeliveryIntervalMillis must be a non-negative integer",
+            ),
+            (
+                json!({"pushMinimumRedeliveryIntervalMillis":
+                    MAX_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS + 1}),
+                "pubsub.pushMinimumRedeliveryIntervalMillis must not exceed",
+            ),
+            (
+                json!({"pushMinRedeliveryIntervalMillis": 100}),
+                "unknown config key pubsub.pushMinRedeliveryIntervalMillis",
+            ),
+        ] {
+            let error = with_profile(json!({"pubsub": pubsub})).expect_err("malformed pubsub");
+            assert!(
+                error.0.contains(expected),
+                "expected {expected}, got {}",
+                error.0
+            );
+        }
     }
 
     #[test]

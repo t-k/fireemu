@@ -6,9 +6,12 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
+import credential_cases as cases
 from credential_cases import (
     ASSERTION_NAMES,
     CAMPAIGN_ID,
@@ -94,13 +97,31 @@ def test_same_second_observation_has_a_control_on_either_side() -> None:
     boundary = case_by_id(SAME_SECOND_CASE_ID)
     controls = boundary["boundaryControls"]
     assert set(controls) == {"below", "above"}
-    below, above = case_by_id(controls["below"]), case_by_id(controls["above"])
+    below = case_by_id(controls["below"]["case"])
+    above = case_by_id(controls["above"]["case"])
     assert below["kind"] == "control" and above["kind"] == "control"
     assert below["group"] == above["group"] == boundary["group"] == "revocation"
     # The lower control must be refused and the upper control accepted, or the
-    # boundary case proves nothing about where the boundary sits.
+    # boundary case proves nothing about where the boundary sits. The required
+    # outcome is declared here so the comparator can check it on each side rather
+    # than only checking that the two sides agreed.
+    assert controls["below"]["requires"] == "refused"
+    assert controls["above"]["requires"] == "accepted"
     assert below["expectedLocal"]["status"] >= 400
     assert above["expectedLocal"]["status"] == 200
+
+
+def test_a_control_may_only_require_a_declared_outcome() -> None:
+    with pytest.raises(ValueError, match="control must require"):
+        cases._case(
+            "x",
+            "revocation",
+            "observation",
+            "identity.accounts-lookup",
+            "intent",
+            {"status": 200, "errorCode": None, "assertions": []},
+            boundary_controls={"below": {"case": "y", "requires": "ignored"}},
+        )
 
 
 def test_session_cookie_duration_bounds_are_covered_on_both_sides() -> None:

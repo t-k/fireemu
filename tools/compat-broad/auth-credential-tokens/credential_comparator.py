@@ -11,14 +11,16 @@ Three rules carry most of the weight:
 * The same-second revocation boundary is classified `EXPECTED_NONDETERMINISM` unless both
   sides recorded that they pinned the boundary from server-reported values. A run that
   could not pin it observed something real but not the boundary.
-* The boundary row means nothing unless its neighbouring controls held. A refusal below
-  and an acceptance above are what place the boundary; without them the boundary row is
-  `INDETERMINATE` however the two sides happened to agree.
+* The boundary row means nothing unless its neighbouring controls held on each side
+  independently. A refusal below and an acceptance above are what place the boundary;
+  two sides that both accepted the older session agree with each other and have still
+  placed no boundary, so the row is `INDETERMINATE` however well they agreed.
 """
 
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any
 
 from credential_cases import CAMPAIGN_ID, case_by_id, observation_cases
@@ -97,6 +99,57 @@ def _pair_reason(local: Any, production: Any) -> str | None:
     return None
 
 
+def _whole_second(value: Any) -> int | None:
+    """Read a server-reported whole second, which may arrive as a string."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"-?[0-9]+", value):
+        return int(value)
+    return None
+
+
+def _boundary_pinned(row: dict[str, Any]) -> bool:
+    """Whether this side pinned the boundary from server-reported values.
+
+    The side's own boolean is not enough. A row claiming a pinned boundary while
+    reporting auth_time 100 against validSince 102 pinned nothing, and comparing it
+    would read a two-second gap as the same-second boundary.
+    """
+    if row.get("boundaryPinned") is not True:
+        return False
+    seconds = row.get("boundarySeconds")
+    if not isinstance(seconds, dict):
+        return False
+    auth_time = _whole_second(seconds.get("authTime"))
+    return auth_time is not None and auth_time == _whole_second(
+        seconds.get("validSince")
+    )
+
+
+def _control_holds(row: dict[str, Any], requires: str) -> bool:
+    """Whether one boundary control did on this side what places the boundary."""
+    status = row.get("status")
+    if isinstance(status, bool) or not isinstance(status, int):
+        return False
+    if requires == "accepted":
+        return status == 200 and row.get("errorCode") is None
+    # A 5xx is the service failing, not the session being refused by the rule.
+    return 400 <= status < 500 and isinstance(row.get("errorCode"), str)
+
+
+def _boundary_is_placed(
+    case: dict[str, Any], *sides: dict[str, dict[str, Any]]
+) -> bool:
+    """Whether both controls held independently on every side that recorded them."""
+    return all(
+        _control_holds(side[control["case"]], control["requires"])
+        for side in sides
+        for control in case["boundaryControls"].values()
+    )
+
+
 def _semantic(row: dict[str, Any]) -> dict[str, Any]:
     """The part of a row that is compared: everything but trust and pinning members."""
     dropped = {*TRUST_MEMBERS, *DIAGNOSTIC_MEMBERS, "boundaryPinned"}
@@ -140,23 +193,22 @@ def compare(local: Any, production: Any) -> dict[str, Any]:
             continue
         agree = _semantic(left[case_id]) == _semantic(right[case_id])
         if case["nondeterminism"] == "SAME_SECOND_BOUNDARY":
-            pinned = (
-                left[case_id].get("boundaryPinned") is True
-                and right[case_id].get("boundaryPinned") is True
-            )
-            classes[case_id] = (
-                ("MATCH" if agree else "DIFFERENT")
-                if pinned
-                else "EXPECTED_NONDETERMINISM"
-            )
+            if not _boundary_is_placed(case, left, right):
+                classes[case_id] = "INDETERMINATE"
+            elif _boundary_pinned(left[case_id]) and _boundary_pinned(right[case_id]):
+                classes[case_id] = "MATCH" if agree else "DIFFERENT"
+            else:
+                classes[case_id] = "EXPECTED_NONDETERMINISM"
         else:
             classes[case_id] = "MATCH" if agree else "DIFFERENT"
 
-    # A boundary row is only readable while the controls that place the boundary held.
+    # A boundary row is only readable while the controls that place it agreed as well.
+    # Holding on each side is necessary but not sufficient: two sides can each place a
+    # boundary and still disagree about where it sits.
     for case in observation_cases():
         controls = case.get("boundaryControls")
         if controls and any(
-            classes[control] != "MATCH" for control in controls.values()
+            classes[control["case"]] != "MATCH" for control in controls.values()
         ):
             classes[case["id"]] = "INDETERMINATE"
 

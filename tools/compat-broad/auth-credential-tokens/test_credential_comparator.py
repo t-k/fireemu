@@ -72,6 +72,29 @@ def _receipt(side: str, *, production_executed: bool | None = None) -> dict:
     )
 
 
+# --- each side must place the boundary for itself ------------------------------
+
+BOUNDARY_SECONDS = {"authTime": 1_800_000_000, "validSince": 1_800_000_000}
+
+
+def _pinned_pair(**boundary: object) -> tuple[dict, dict]:
+    local, production = _receipt("local"), _receipt("production")
+    for receipt in (local, production):
+        for row in receipt["rows"]:
+            if row["caseId"] == SAME_SECOND_CASE_ID:
+                row["boundaryPinned"] = True
+                row["boundarySeconds"] = dict(BOUNDARY_SECONDS)
+                row.update(boundary)
+    return local, production
+
+
+def _set_row(receipts: tuple[dict, ...], case_id: str, **members: object) -> None:
+    for receipt in receipts:
+        for row in receipt["rows"]:
+            if row["caseId"] == case_id:
+                row.update(members)
+
+
 def _classifications(report: dict) -> dict[str, str]:
     return {row["caseId"]: row["classification"] for row in report["rows"]}
 
@@ -103,20 +126,16 @@ def test_unpinned_same_second_boundary_is_expected_nondeterminism_not_a_match() 
 
 
 def test_pinned_same_second_boundary_can_match_or_differ() -> None:
-    local, production = _receipt("local"), _receipt("production")
-    for receipt in (local, production):
-        for row in receipt["rows"]:
-            if row["caseId"] == SAME_SECOND_CASE_ID:
-                row["boundaryPinned"] = True
+    local, production = _pinned_pair()
     assert _classifications(compare(local, production))[SAME_SECOND_CASE_ID] == "MATCH"
 
-    for row in production["rows"]:
-        if row["caseId"] == SAME_SECOND_CASE_ID:
-            row["status"], row["errorCode"], row["assertions"] = (
-                400,
-                "TOKEN_EXPIRED",
-                {},
-            )
+    _set_row(
+        (production,),
+        SAME_SECOND_CASE_ID,
+        status=400,
+        errorCode="TOKEN_EXPIRED",
+        assertions={},
+    )
     assert (
         _classifications(compare(local, production))[SAME_SECOND_CASE_ID] == "DIFFERENT"
     )
@@ -133,19 +152,15 @@ def test_boundary_needs_one_side_pinned_on_both_receipts() -> None:
     )
 
 
-def test_boundary_is_indeterminate_when_a_neighbouring_control_did_not_hold() -> None:
+def test_boundary_is_indeterminate_when_the_sides_disagree_on_a_control() -> None:
     controls = case_by_id(SAME_SECOND_CASE_ID)["boundaryControls"]
-    for control_id in controls.values():
-        local, production = _receipt("local"), _receipt("production")
-        for receipt in (local, production):
-            for row in receipt["rows"]:
-                if row["caseId"] == SAME_SECOND_CASE_ID:
-                    row["boundaryPinned"] = True
-        for row in production["rows"]:
-            if row["caseId"] == control_id:
-                row["status"] = 503
+    for control in controls.values():
+        local, production = _pinned_pair()
+        # The control holds on the local side and fails on the production side, so the
+        # two sides placed the boundary in different places.
+        _set_row((production,), control["case"], status=503, errorCode="UNAVAILABLE")
         classes = _classifications(compare(local, production))
-        assert classes[control_id] == "DIFFERENT"
+        assert classes[control["case"]] == "DIFFERENT"
         assert classes[SAME_SECOND_CASE_ID] == "INDETERMINATE"
 
 
@@ -263,3 +278,64 @@ def test_a_jwt_hidden_under_a_module_named_key_is_refused() -> None:
     report = compare(_receipt("local"), production)
     assert report["reason"] == "credential-material-present"
     assert "RAW_TOKEN_MATERIAL" not in json.dumps(report)
+
+
+def test_a_pinned_boundary_with_holding_controls_is_compared() -> None:
+    local, production = _pinned_pair()
+    assert _classifications(compare(local, production))[SAME_SECOND_CASE_ID] == "MATCH"
+
+
+def test_both_sides_accepting_the_older_session_does_not_place_the_boundary() -> None:
+    below = case_by_id(SAME_SECOND_CASE_ID)["boundaryControls"]["below"]["case"]
+    pair = _pinned_pair()
+    # Both sides make the same mistake, so the controls still agree with each other.
+    _set_row(pair, below, status=200, errorCode=None)
+    classes = _classifications(compare(*pair))
+    assert classes[below] == "MATCH"
+    assert classes[SAME_SECOND_CASE_ID] == "INDETERMINATE"
+
+
+def test_both_sides_refusing_the_newer_session_does_not_place_the_boundary() -> None:
+    above = case_by_id(SAME_SECOND_CASE_ID)["boundaryControls"]["above"]["case"]
+    pair = _pinned_pair()
+    _set_row(pair, above, status=400, errorCode="TOKEN_EXPIRED", assertions={})
+    classes = _classifications(compare(*pair))
+    assert classes[above] == "MATCH"
+    assert classes[SAME_SECOND_CASE_ID] == "INDETERMINATE"
+
+
+def test_a_control_refused_by_the_service_rather_than_the_rule_does_not_hold() -> None:
+    below = case_by_id(SAME_SECOND_CASE_ID)["boundaryControls"]["below"]["case"]
+    pair = _pinned_pair()
+    # A 503 is the service failing, not the older session being refused.
+    _set_row(pair, below, status=503, errorCode="UNAVAILABLE")
+    assert _classifications(compare(*pair))[SAME_SECOND_CASE_ID] == "INDETERMINATE"
+
+
+@pytest.mark.parametrize(
+    "seconds",
+    [
+        {"authTime": 100, "validSince": 102},
+        {"authTime": 100, "validSince": None},
+        {"authTime": 100},
+        {"authTime": None, "validSince": None},
+        "1800000000",
+    ],
+)
+def test_a_boundary_pinned_against_inconsistent_seconds_is_not_pinned(seconds) -> None:
+    local, production = _pinned_pair()
+    _set_row((production,), SAME_SECOND_CASE_ID, boundarySeconds=seconds)
+    assert (
+        _classifications(compare(local, production))[SAME_SECOND_CASE_ID]
+        == "EXPECTED_NONDETERMINISM"
+    )
+
+
+def test_a_boundary_second_reported_as_a_whole_number_string_still_pins() -> None:
+    local, production = _pinned_pair()
+    _set_row(
+        (production,),
+        SAME_SECOND_CASE_ID,
+        boundarySeconds={"authTime": 1_800_000_000, "validSince": "1800000000"},
+    )
+    assert _classifications(compare(local, production))[SAME_SECOND_CASE_ID] == "MATCH"

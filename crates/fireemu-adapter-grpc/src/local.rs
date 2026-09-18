@@ -241,6 +241,18 @@ pub const FIELD_OPERATIONS_RETAINED_PER_PROJECT: usize = 64;
 /// off and every eligible document is still deleted, one bounded batch at a time.
 pub const MAX_SWEEP_DELETES_PER_RUN: usize = 1024;
 
+/// The expiry-sweep bookkeeping of every attached database.
+///
+/// The schedules and the in-progress set live under one lock so that deciding a sweep is
+/// due and claiming it are a single step. Two callers that arrive together -- a clock move
+/// and the control route, or two control requests -- therefore never scan the same database
+/// twice for the same expiry.
+#[derive(Debug, Default)]
+struct TtlSweepState {
+    schedules: BTreeMap<(String, String), SweepSchedule>,
+    in_progress: BTreeSet<(String, String)>,
+}
+
 /// One completed `collectionGroups.fields.patch` long-running operation.
 ///
 /// The local runtime applies a field configuration synchronously, so every recorded
@@ -268,8 +280,9 @@ pub struct LocalBackend {
     /// Time-to-live field configuration per database, keyed like [`LocalBackend::indexes`]:
     /// a project-specific entry wins over the entry shared by every project.
     ttl: RwLock<BTreeMap<(Option<String>, String), TtlCatalog>>,
-    /// When each attached database was last swept for expired documents.
-    ttl_sweeps: Mutex<BTreeMap<(String, String), SweepSchedule>>,
+    /// When each attached database was last swept for expired documents, and which
+    /// databases a sweep is running against right now.
+    ttl_sweeps: Mutex<TtlSweepState>,
     /// How long an expired document stays readable before a sweep deletes it.
     ttl_sweep_interval: fireemu_core_types::time::LogicalDuration,
     /// The most recent completed field-configuration operations of each project, oldest
@@ -1496,7 +1509,7 @@ impl LocalBackend {
             gateway,
             indexes,
             ttl: RwLock::new(BTreeMap::new()),
-            ttl_sweeps: Mutex::new(BTreeMap::new()),
+            ttl_sweeps: Mutex::new(TtlSweepState::default()),
             ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
             field_operations: Mutex::new(BTreeMap::new()),
             field_operation_ordinals: std::sync::atomic::AtomicU64::new(0),
@@ -2695,18 +2708,18 @@ impl LocalBackend {
         // A restored policy is in force from the restore, so its sweep interval restarts
         // here rather than carrying the schedule of the run that captured it.
         let now = self.now();
-        let mut schedules = self
+        let mut state = self
             .ttl_sweeps
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        schedules.retain(|(project, _), _| !owned(project));
+        state.schedules.retain(|(project, _), _| !owned(project));
         for (key, catalog) in catalogs {
             if catalog.is_empty() || !owned(&key.0) {
                 continue;
             }
             let mut schedule = SweepSchedule::new(self.ttl_sweep_interval);
             schedule.start(now);
-            schedules.insert(key.clone(), schedule);
+            state.schedules.insert(key.clone(), schedule);
         }
     }
 
@@ -2733,6 +2746,7 @@ impl LocalBackend {
         self.ttl_sweeps
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .schedules
             .entry((project.to_owned(), database.to_owned()))
             .or_insert_with(|| SweepSchedule::new(self.ttl_sweep_interval))
             .start(now);
@@ -2871,7 +2885,7 @@ impl LocalBackend {
         let Ok(catalog) = self.database_catalog() else {
             return;
         };
-        let mut schedules = self
+        let mut state = self
             .ttl_sweeps
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -2879,7 +2893,8 @@ impl LocalBackend {
             if !scope.owns_project(&project) {
                 continue;
             }
-            schedules
+            state
+                .schedules
                 .entry((project, database))
                 .or_insert_with(|| SweepSchedule::new(self.ttl_sweep_interval))
                 .start(now);
@@ -2932,39 +2947,69 @@ impl LocalBackend {
             if policies.is_empty() {
                 continue;
             }
-            {
-                let mut schedules = self
-                    .ttl_sweeps
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let schedule = schedules
-                    .entry((project.clone(), database.clone()))
-                    .or_insert_with(|| SweepSchedule::new(self.ttl_sweep_interval));
-                if !force && !schedule.due(now) {
-                    schedule.start(now);
-                    continue;
-                }
-            }
             let budget = MAX_SWEEP_DELETES_PER_RUN.saturating_sub(deleted);
             if budget == 0 {
                 break;
             }
+            let key = (project.clone(), database.clone());
+            // Deciding the sweep is due and claiming it are one step under one lock, so a
+            // second caller that arrives while this one scans is turned away instead of
+            // scanning the same database for the same expiry.
+            let Some(previous) = self.claim_sweep(&key, now, force) else {
+                continue;
+            };
             let (swept, complete) =
                 self.sweep_one_database(&project, &database, &policies, now, budget);
             deleted += swept;
-            if complete {
-                // Only a sweep that reached the end of its work counts as having run. One
-                // that stopped at the budget leaves the schedule due, so the next clock
-                // move continues instead of waiting another interval.
-                self.ttl_sweeps
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .entry((project.clone(), database.clone()))
-                    .or_insert_with(|| SweepSchedule::new(self.ttl_sweep_interval))
-                    .mark(now);
-            }
+            // Only a sweep that reached the end of its work counts as having run. One that
+            // stopped at the budget gives the schedule back, so the next clock move
+            // continues instead of waiting another interval.
+            self.release_sweep(&key, previous, complete);
         }
         deleted
+    }
+
+    /// Claims one database's sweep, returning the schedule as it stood so that a truncated
+    /// sweep can give it back. `None` means this call must not sweep: either the interval
+    /// has not elapsed, or another caller is already sweeping this database.
+    fn claim_sweep(
+        &self,
+        key: &(String, String),
+        now: fireemu_core_types::time::LogicalInstant,
+        force: bool,
+    ) -> Option<SweepSchedule> {
+        let mut state = self
+            .ttl_sweeps
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.in_progress.contains(key) {
+            return None;
+        }
+        let schedule = state
+            .schedules
+            .entry(key.clone())
+            .or_insert_with(|| SweepSchedule::new(self.ttl_sweep_interval));
+        if !force && !schedule.due(now) {
+            schedule.start(now);
+            return None;
+        }
+        let previous = schedule.clone();
+        schedule.mark(now);
+        state.in_progress.insert(key.clone());
+        Some(previous)
+    }
+
+    /// Releases the claim [`Self::claim_sweep`] took. A sweep that did not finish its work
+    /// restores the schedule it found, so the database stays due.
+    fn release_sweep(&self, key: &(String, String), previous: SweepSchedule, complete: bool) {
+        let mut state = self
+            .ttl_sweeps
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.in_progress.remove(key);
+        if !complete {
+            state.schedules.insert(key.clone(), previous);
+        }
     }
 
     /// Sweeps one database, deleting at most `budget` documents. Returns how many were

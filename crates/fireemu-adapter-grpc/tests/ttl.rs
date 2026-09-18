@@ -426,3 +426,38 @@ fn a_sweep_deletes_at_most_the_configured_batch_and_the_next_one_continues() {
     assert_eq!(backend.sweep_expired_documents(&everything(), due), 5);
     assert_eq!(backend.sweep_expired_documents(&everything(), due), 0);
 }
+
+#[test]
+fn a_sweep_already_running_against_a_database_is_not_started_a_second_time() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let (backend, _clock) = backend(LogicalInstant::from_unix_seconds(1_000));
+    for i in 0..8 {
+        write_document(&backend, &format!("sessions/s{i}"), Some(timestamp(1_100)));
+    }
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .expect("enable ttl");
+    backend.start_ttl_sweeps(&everything(), LogicalInstant::from_unix_seconds(1_000));
+
+    // Two callers arrive together. Exactly one of them scans; the other is turned away by
+    // the claim, so no document is visited twice and the counts cannot double.
+    let deleted = Arc::new(AtomicUsize::new(0));
+    let due = LogicalInstant::from_unix_seconds(1_000 + 86_400);
+    std::thread::scope(|scope| {
+        for _ in 0..2 {
+            let backend = Arc::clone(&backend);
+            let deleted = Arc::clone(&deleted);
+            scope.spawn(move || {
+                deleted.fetch_add(
+                    backend.sweep_expired_documents(&everything(), due),
+                    Ordering::SeqCst,
+                );
+            });
+        }
+    });
+    assert_eq!(deleted.load(Ordering::SeqCst), 8);
+    for i in 0..8 {
+        assert!(!exists(&backend, &format!("sessions/s{i}")));
+    }
+}

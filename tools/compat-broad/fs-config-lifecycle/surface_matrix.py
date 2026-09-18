@@ -72,6 +72,24 @@ _IDS = "crates/fireemu-core-types/src/ids.rs"
 _FIELDS = "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs"
 _TTL = "crates/fireemu-core-firestore/src/ttl.rs"
 
+def _at(path: str, anchor: str) -> str:
+    """`file:line` of the one line of `path` containing `anchor`.
+
+    Citations are resolved from the source at build time rather than written as literal line
+    numbers, which drift silently every time an unrelated edit moves a function. An anchor
+    that no longer appears, or that appears more than once, fails the build instead of
+    producing a citation that points at a blank line.
+    """
+    root = Path(__file__).resolve().parents[3]
+    lines = (root / path).read_text(encoding="utf-8").splitlines()
+    hits = [index for index, line in enumerate(lines, start=1) if anchor in line]
+    if len(hits) != 1:
+        raise ValueError(
+            f"{path}: anchor {anchor!r} matches {len(hits)} lines, expected exactly one"
+        )
+    return f"{path}:{hits[0]}"
+
+
 _NOT_SERVED = "not-implemented"
 _IMPLEMENTED = "implemented"
 _PARTIAL = "partial"
@@ -90,7 +108,11 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "caller choose transaction, edition and read-time behavior the local runtime "
         "will then refuse or accept differently from production.",
         _PARTIAL,
-        (f"{_REST}:591", f"{_REST}:647", f"{_REST}:243"),
+        (
+            _at(_REST, "fn admin_inventory_route("),
+            _at(_REST, '"Project \'{project}\' or database \'{database}\' does not exist."'),
+            _at(_REST, "fn admin_database_json("),
+        ),
     ),
     _row(
         "databases.list",
@@ -100,7 +122,11 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "A database absent in production but present locally lets a caller address a "
         "database that would return NOT_FOUND against the real service.",
         _PARTIAL,
-        (f"{_REST}:591", f"{_REST}:626", f"{_REST}:635"),
+        (
+            _at(_REST, "fn admin_inventory_route("),
+            _at(_REST, "let databases: Vec<Value> = databases.iter()"),
+            _at(_REST, "databases.extend(self.local.declared_databases());"),
+        ),
     ),
     _row(
         "databases.create",
@@ -158,7 +184,10 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "The final post-state, absence of the deleted documents, is observable from the "
         "data plane; the local emulator wipe route is the local-safety counterpart.",
         _EXTENSION,
-        (f"{_REST}:441", f"{_REST}:451"),
+        (
+            _at(_REST, "fn emulator_route("),
+            _at(_REST, "self.local.clear_project_documents(project)?;"),
+        ),
     ),
     _row(
         "databases.exportDocuments",
@@ -169,7 +198,7 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "read and write what the official tooling produces, which is already covered by "
         "local format evidence.",
         _EXTENSION,
-        (f"{_IMPORT_EXPORT}:2763", f"{_EXPORT_FS}:480", f"{_METADATA}:142"),
+        (_at(_IMPORT_EXPORT, "pub fn export("), f"{_EXPORT_FS}:480", f"{_METADATA}:142"),
     ),
     _row(
         "databases.importDocuments",
@@ -229,7 +258,12 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "A caller can read back the TTL policy and the single-field index configuration, "
         "so the expiry and refusal behavior each implies is observable locally.",
         _IMPLEMENTED,
-        (f"{_FIELDS}:218", f"{_FIELDS}:314", f"{_FIELDS}:189", f"{_TTL}:127"),
+        (
+            _at(_FIELDS, "pub(super) fn admin_fields_route("),
+            _at(_FIELDS, "fn field_json(&self, selector: &FieldSelector)"),
+            _at(_FIELDS, "fn index_config_json("),
+            _at(_TTL, "pub struct TtlCatalog {"),
+        ),
     ),
     _row(
         "databases.collectionGroups.fields.list",
@@ -239,7 +273,11 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "Both documented filters are served and any other filter is refused, so an "
         "exemption set and a TTL policy set are each discoverable through a read path.",
         _IMPLEMENTED,
-        (f"{_FIELDS}:426", f"{_FIELDS}:137", f"{_INDEX}:133"),
+        (
+            _at(_FIELDS, "fn list_fields("),
+            _at(_FIELDS, "fn page_token("),
+            _at(_INDEX, "pub fn single_field_overrides("),
+        ),
     ),
     _row(
         "databases.collectionGroups.fields.patch",
@@ -252,7 +290,12 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "still accepts exemptions only from static configuration, so that half of the "
         "surface cannot be driven at runtime.",
         _PARTIAL,
-        (f"{_FIELDS}:335", f"{_TTL}:142", f"{_LOCAL}:2841", f"{_CONTROL}:148"),
+        (
+            _at(_FIELDS, "fn patch_field("),
+            _at(_TTL, "    pub fn enable("),
+            _at(_LOCAL, "fn sweep_ttl("),
+            _at(_CONTROL, "fn parse_field_overrides("),
+        ),
     ),
     _row(
         "databases.operations.get",
@@ -265,7 +308,11 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "remains managed infrastructure the runtime does not hold. A campaign must still "
         "bound its own polling, which the collector contract handles.",
         _PARTIAL,
-        (f"{_FIELDS}:527", f"{_LOCAL}:2747", f"{_LOCAL}:2783"),
+        (
+            _at(_FIELDS, "pub(super) fn admin_operations_route("),
+            _at(_LOCAL, "pub fn record_field_operation("),
+            _at(_LOCAL, "pub fn field_operation(&self, project: &str"),
+        ),
     ),
     _row(
         "databases.operations.list",
@@ -277,7 +324,10 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "enumerates the field-configuration operations alone, and the record is bounded, "
         "so a campaign must not treat it as the managed operation history.",
         _PARTIAL,
-        (f"{_FIELDS}:527", f"{_LOCAL}:2794"),
+        (
+            _at(_FIELDS, "pub(super) fn admin_operations_route("),
+            _at(_LOCAL, "pub fn field_operations(&self, project: &str"),
+        ),
     ),
     _row(
         "databases.operations.cancel",
@@ -481,7 +531,10 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "Its post-state is ordinary document absence, which the data-plane lanes already "
         "cover; the route itself must never be reachable against production.",
         _IMPLEMENTED,
-        (f"{_REST}:441", f"{_REST}:451"),
+        (
+            _at(_REST, "fn emulator_route("),
+            _at(_REST, "self.local.clear_project_documents(project)?;"),
+        ),
     ),
     _row(
         "config.firestoreIndexes",
@@ -513,7 +566,7 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "The on-disk format must match what official tooling writes, otherwise a real "
         "export cannot be loaded locally.",
         _IMPLEMENTED,
-        (f"{_IMPORT_EXPORT}:2763", f"{_IMPORT_EXPORT}:353", f"{_METADATA}:142"),
+        (_at(_IMPORT_EXPORT, "pub fn export("), f"{_IMPORT_EXPORT}:353", f"{_METADATA}:142"),
     ),
     _row(
         "cli.namedDatabaseExportExtension",
@@ -558,7 +611,7 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         "addresses.",
         "A mismatched name routes requests to a different database.",
         _IMPLEMENTED,
-        (f"{_REST}:245",),
+        (_at(_REST, '"name": format!("projects/{project}/databases/{database}")'),),
         True,
     ),
     _row(
@@ -567,7 +620,7 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         "FIRESTORE_NATIVE and DATASTORE_MODE expose different APIs entirely.",
         "A caller that trusts this field picks the wrong API surface.",
         _PARTIAL,
-        (f"{_REST}:247",),
+        (_at(_REST, '"type": "FIRESTORE_NATIVE"'),),
         True,
     ),
     _row(
@@ -578,7 +631,11 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         "The projection hardcodes STANDARD and does not reflect the configured edition "
         "enum, so an Enterprise run reports the wrong edition.",
         _PARTIAL,
-        (f"{_REST}:253", f"{_REST}:602", "crates/fireemu-core-types/src/edition.rs:12"),
+        (
+            _at(_REST, '"databaseEdition": edition.as_config_str()'),
+            _at(_REST, "database inventory is supported only for Standard Native"),
+            "crates/fireemu-core-types/src/edition.rs:12",
+        ),
         True,
     ),
     _row(
@@ -587,7 +644,7 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         "PESSIMISTIC and OPTIMISTIC change when a transaction blocks and when it aborts.",
         "Transaction contention and retry behavior depend on this value.",
         _PARTIAL,
-        (f"{_REST}:248",),
+        (_at(_REST, '"concurrencyMode": "PESSIMISTIC"'),),
         True,
     ),
     _row(
@@ -597,7 +654,7 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         "A read_time older than the retention window must be refused; a wrong period "
         "moves that boundary.",
         _PARTIAL,
-        (f"{_REST}:249",),
+        (_at(_REST, '"versionRetentionPeriod": "3600s"'),),
         True,
     ),
     _row(
@@ -619,7 +676,7 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         "range of accepted read_time values.",
         "The accepted read_time range changes with this setting.",
         _PARTIAL,
-        (f"{_REST}:251",),
+        (_at(_REST, '"pointInTimeRecoveryEnablement"'),),
         True,
     ),
     _row(
@@ -629,7 +686,7 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         "A disabled mode must refuse Listen; the local projection reports enabled "
         "unconditionally.",
         _PARTIAL,
-        (f"{_REST}:254",),
+        (_at(_REST, '"realtimeUpdatesMode"'),),
         True,
     ),
     _row(
@@ -659,7 +716,7 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         "It is echoed to callers, so a hardcoded value must be recognised as declared "
         "rather than observed; the local value is a constant.",
         _PARTIAL,
-        (f"{_REST}:246",),
+        (_at(_REST, '"locationId": "us-central1"'),),
         True,
     ),
     _row(
@@ -668,7 +725,7 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         "App Engine integration is a legacy managed binding with no local analogue.",
         "None; the local projection reports DISABLED as a declared constant.",
         _PARTIAL,
-        (f"{_REST}:250",),
+        (_at(_REST, '"appEngineIntegrationMode"'),),
         True,
     ),
     _row(
@@ -678,7 +735,7 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         "None; no data-plane request observes it. It is an abort precondition for any "
         "campaign that creates and deletes a database.",
         _PARTIAL,
-        (f"{_REST}:252",),
+        (_at(_REST, '"deleteProtectionState"'),),
         True,
     ),
     _row(
@@ -792,7 +849,7 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         "It reports whether the enhanced text search query mode is available, which "
         "changes which queries a caller may issue.",
         _PARTIAL,
-        (f"{_REST}:255",),
+        (_at(_REST, '"enhancedTextSearchQueryMode"'),),
         False,
     ),
 )
@@ -822,7 +879,11 @@ _REPAIR_TICKETS: tuple[dict[str, Any], ...] = (
         "projects/{project}/databases/(default) on the Firestore REST port. The response "
         "still reports STANDARD while the same route refuses non-Standard Native traffic "
         "a few lines earlier.",
-        (f"{_REST}:253", f"{_REST}:602", f"{_REST}:246"),
+        (
+            _at(_REST, '"databaseEdition": edition.as_config_str()'),
+            _at(_REST, "database inventory is supported only for Standard Native"),
+            _at(_REST, '"locationId": "us-central1"'),
+        ),
         DATA_PLANE,
     ),
     _ticket(
@@ -836,7 +897,7 @@ _REPAIR_TICKETS: tuple[dict[str, Any], ...] = (
         "tools/compat-broad/fixtures/database-settings-7be6cf08.json. The local body is a "
         "strict subset and would fail the identity check the batch contract applies.",
         (
-            f"{_REST}:243",
+            _at(_REST, "fn admin_database_json("),
             "tools/compat-broad/batch_contract.py:230",
             "tools/compat-broad/fixtures/database-settings-7be6cf08.json:1",
         ),
@@ -855,7 +916,11 @@ _REPAIR_TICKETS: tuple[dict[str, Any], ...] = (
         "projects/{project}/databases/(default)/collectionGroups/{group}/fields/{field} "
         "with updateMask=indexConfig and observe UNIMPLEMENTED, while production applies "
         "the exemption and reports usesAncestorConfig false on the next get.",
-        (f"{_FIELDS}:335", f"{_CONTROL}:148", f"{_INDEX}:133"),
+        (
+            _at(_FIELDS, "fn patch_field("),
+            _at(_CONTROL, "fn parse_field_overrides("),
+            _at(_INDEX, "pub fn single_field_override("),
+        ),
         DATA_PLANE,
     ),
     _ticket(
@@ -867,7 +932,10 @@ _REPAIR_TICKETS: tuple[dict[str, Any], ...] = (
         "Issue a Firestore REST read against "
         "projects/{project}/databases/Invalid_Id/documents/c/d and observe NOT_FOUND "
         "with the message naming the database.",
-        ("crates/fireemu-adapter-grpc/src/decode.rs:102", f"{_IDS}:183"),
+        (
+            _at("crates/fireemu-adapter-grpc/src/decode.rs", "DecodeError::UnknownDatabase {"),
+            f"{_IDS}:183",
+        ),
         DATA_PLANE,
     ),
 )

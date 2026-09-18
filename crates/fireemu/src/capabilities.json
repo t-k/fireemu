@@ -576,7 +576,8 @@
       "the expiry sweep runs when the shared virtual clock moves and on the control route POST /v1/sessions/{session}/firestore/ttl:sweep, which a test or a campaign uses to observe the post-expiry state without advancing a day",
       "conformance input: the Firestore Admin v1 reference for collectionGroups.fields and the documented time-to-live semantics; the FS-CONFIG-LIFECYCLE campaign will compare them against production",
       "listing with indexConfig.usesAncestorConfig:false reports only fields that carry an index configuration of their own; a field with a TTL policy and no index override is reported by the unfiltered listing and by ttlConfig:*",
-      "the expiry sweep runs inside the control request that moved the clock, so a clock advance observes its own deletions; the per-run bound is what keeps that response short rather than making the sweep asynchronous"
+      "the expiry sweep runs inside the control request that moved the clock, so a clock advance observes its own deletions; the per-run bound is what keeps that response short rather than making the sweep asynchronous",
+      "the name of each automatic single-field index reported under indexConfig.indexes is a derived synthetic value, a digest over the project, database, collection group, field, query scope and mode; production assigns a server-side id that no local run can reproduce, and whether a caller may depend on the name at all is a production observation this lane has not made"
     ],
     "precision": "bounded-local-semantics",
     "status": "implemented"

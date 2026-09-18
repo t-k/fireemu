@@ -12,7 +12,7 @@
       "field": "name",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:245"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:299"
         ],
         "status": "implemented"
       },
@@ -25,7 +25,7 @@
       "field": "type",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:247"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:304"
         ],
         "status": "partial"
       },
@@ -38,8 +38,8 @@
       "field": "databaseEdition",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:253",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:602",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:315",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:676",
           "crates/fireemu-core-types/src/edition.rs:12"
         ],
         "status": "partial"
@@ -53,7 +53,7 @@
       "field": "concurrencyMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:248"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:305"
         ],
         "status": "partial"
       },
@@ -66,7 +66,7 @@
       "field": "versionRetentionPeriod",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:249"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:306"
         ],
         "status": "partial"
       },
@@ -90,7 +90,7 @@
       "field": "pointInTimeRecoveryEnablement",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:251"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:309"
         ],
         "status": "partial"
       },
@@ -103,7 +103,7 @@
       "field": "realtimeUpdatesMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:254"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:316"
         ],
         "status": "partial"
       },
@@ -138,7 +138,7 @@
       "field": "locationId",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:246"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:303"
         ],
         "status": "partial"
       },
@@ -151,7 +151,7 @@
       "field": "appEngineIntegrationMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:250"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:308"
         ],
         "status": "partial"
       },
@@ -164,7 +164,7 @@
       "field": "deleteProtectionState",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:252"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:310"
         ],
         "status": "partial"
       },
@@ -298,7 +298,7 @@
       "field": "enhancedTextSearchQueryMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:255"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:317"
         ],
         "status": "partial"
       },
@@ -342,8 +342,8 @@
       "id": "emulator.clearFirestoreData",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:441",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:451"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:511",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:541"
         ],
         "status": "implemented"
       },
@@ -384,7 +384,7 @@
       "id": "cli.exportImport",
       "local": {
         "citations": [
-          "crates/fireemu/src/import_export.rs:2763",
+          "crates/fireemu/src/import_export.rs:2774",
           "crates/fireemu/src/import_export.rs:353",
           "crates/fireemu-core-export/src/metadata.rs:142"
         ],
@@ -488,8 +488,8 @@
       "dataPlaneConsequence": "The final post-state, absence of the deleted documents, is observable from the data plane; the local emulator wipe route is the local-safety counterpart.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:441",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:451"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:511",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:541"
         ],
         "status": "local-extension-only"
       },
@@ -566,9 +566,9 @@
       "dataPlaneConsequence": "Both documented filters are served and any other filter is refused, so an exemption set and a TTL policy set are each discoverable through a read path.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:426",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:427",
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:137",
-          "crates/fireemu-core-firestore/src/index.rs:133"
+          "crates/fireemu-core-firestore/src/index.rs:224"
         ],
         "status": "implemented"
       },
@@ -582,7 +582,7 @@
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:335",
           "crates/fireemu-core-firestore/src/ttl.rs:142",
-          "crates/fireemu-adapter-grpc/src/local.rs:2841",
+          "crates/fireemu-adapter-grpc/src/local.rs:2930",
           "crates/fireemu/src/control.rs:148"
         ],
         "status": "partial"
@@ -661,7 +661,7 @@
       "dataPlaneConsequence": "The written export format is a contract: fireemu's own export and import must read and write what the official tooling produces, which is already covered by local format evidence.",
       "local": {
         "citations": [
-          "crates/fireemu/src/import_export.rs:2763",
+          "crates/fireemu/src/import_export.rs:2774",
           "crates/fireemu-core-export/src/firestore.rs:480",
           "crates/fireemu-core-export/src/metadata.rs:142"
         ],
@@ -675,9 +675,9 @@
       "dataPlaneConsequence": "A wrong concurrencyMode, databaseEdition or versionRetentionPeriod makes a caller choose transaction, edition and read-time behavior the local runtime will then refuse or accept differently from production.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:591",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:647",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:243"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:661",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:736",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:286"
         ],
         "status": "partial"
       },
@@ -703,9 +703,9 @@
       "dataPlaneConsequence": "A database absent in production but present locally lets a caller address a database that would return NOT_FOUND against the real service.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:591",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:626",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:635"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:661",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:725",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:704"
         ],
         "status": "partial"
       },
@@ -737,9 +737,9 @@
       "dataPlaneConsequence": "A campaign that drives fields.patch can poll the operation it was handed, and it is always already done; every other long-running operation of the Admin API remains managed infrastructure the runtime does not hold. A campaign must still bound its own polling, which the collector contract handles.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:527",
-          "crates/fireemu-adapter-grpc/src/local.rs:2747",
-          "crates/fireemu-adapter-grpc/src/local.rs:2783"
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:534",
+          "crates/fireemu-adapter-grpc/src/local.rs:2781",
+          "crates/fireemu-adapter-grpc/src/local.rs:2823"
         ],
         "status": "partial"
       },
@@ -751,8 +751,8 @@
       "dataPlaneConsequence": "Enumeration is how an interrupted campaign resumes its cleanup. Locally it enumerates the field-configuration operations alone, and the record is bounded, so a campaign must not treat it as the managed operation history.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:527",
-          "crates/fireemu-adapter-grpc/src/local.rs:2794"
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:534",
+          "crates/fireemu-adapter-grpc/src/local.rs:2835"
         ],
         "status": "partial"
       },
@@ -917,9 +917,9 @@
     },
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:253",
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:602",
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:246"
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:315",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:676",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:303"
       ],
       "class": "data-plane-contract",
       "fixApplied": false,
@@ -931,7 +931,7 @@
     },
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:243",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:286",
         "tools/compat-broad/batch_contract.py:230",
         "tools/compat-broad/fixtures/database-settings-7be6cf08.json:1"
       ],
@@ -947,7 +947,7 @@
       "citations": [
         "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:335",
         "crates/fireemu/src/control.rs:148",
-        "crates/fireemu-core-firestore/src/index.rs:133"
+        "crates/fireemu-core-firestore/src/index.rs:201"
       ],
       "class": "data-plane-contract",
       "fixApplied": false,
@@ -959,7 +959,7 @@
     },
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/decode.rs:102",
+        "crates/fireemu-adapter-grpc/src/decode.rs:107",
         "crates/fireemu-core-types/src/ids.rs:183"
       ],
       "class": "data-plane-contract",

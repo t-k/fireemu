@@ -169,8 +169,32 @@ def test_expected_local_results_cite_the_classification_not_an_observation() -> 
         row = matrix[case["method"]]
         if expected["outcome"] == "served":
             assert row["local"]["status"] in {"implemented", "partial"}
+            assert "refusalReason" not in expected
+        elif "refusalReason" in expected:
+            # A partially served method refuses this particular request. Collapsing the
+            # method's status to a per-case outcome must say so rather than claim the
+            # refusal is an answer.
+            assert row["local"]["status"] == "partial"
+            assert expected["refusalReason"]
         else:
             assert row["local"]["status"] in {"not-implemented", "local-extension-only"}
+
+
+def test_the_index_config_patches_are_expected_to_be_refused_locally() -> None:
+    """OC-18 and OC-20 drive updateMask=indexConfig, which the local runtime refuses."""
+    refused = {
+        case["id"]
+        for case in compile_cases(NONCE)
+        if "refusalReason" in case["expectedLocal"]
+    }
+    assert refused == {"OC-18", "OC-20"}
+    for case in compile_cases(NONCE):
+        if case["id"] in refused:
+            assert case["expectedLocal"]["outcome"] == "not-served"
+            assert "UNIMPLEMENTED" in case["expectedLocal"]["refusalReason"]
+        if case["id"] in {"OC-14", "OC-16"}:
+            # The ttlConfig half of the same method is served.
+            assert case["expectedLocal"]["outcome"] == "served"
 
 
 def test_production_outcomes_are_declared_expectations_not_recorded_results() -> None:

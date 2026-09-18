@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from fs_config_lifecycle.surface_matrix import (
@@ -88,6 +89,48 @@ def test_every_local_citation_resolves_to_an_existing_line_in_this_checkout() ->
             )
             seen += 1
     assert seen >= 20
+
+
+def test_every_citation_points_at_code_and_not_at_whitespace() -> None:
+    """A citation that drifted onto a blank line or a closing brace proves nothing.
+
+    Every citation names the place a claim is implemented, so the line it resolves to must
+    carry code. It must also sit inside a named symbol: a Rust citation has a declaration
+    (`fn`, `struct`, `enum`, `impl`, `const`, `type`) at or above it in the same file, so a
+    reader following the citation lands somewhere they can name.
+    """
+    declaration = re.compile(
+        r"^\s*(pub(\([^)]*\))?\s+)?"
+        r"(async\s+|const\s+|unsafe\s+|extern\s+\S+\s+)*"
+        r"(fn|struct|enum|impl|trait|type|const|static|mod)\b"
+    )
+    matrix = build_matrix()
+    rows = matrix["methods"] + matrix["localSurfaces"] + matrix["databaseFields"]
+    checked = 0
+    for row in rows + matrix["repairTickets"]:
+        citations = (
+            row["local"]["citations"] if "local" in row else row["citations"]
+        )
+        for citation in citations:
+            path_text, _, line_text = citation.rpartition(":")
+            lines = (repo_root() / path_text).read_text(encoding="utf-8").splitlines()
+            index = int(line_text) - 1
+            line = lines[index]
+            assert line.strip(), f"{citation} is a blank line"
+            if not path_text.endswith(".rs"):
+                checked += 1
+                continue
+            assert line.strip() not in {"{", "}", "};", ")", ");"}, (
+                f"{citation} is a bare delimiter"
+            )
+            enclosing = [
+                above
+                for above in lines[: index + 1]
+                if declaration.match(above)
+            ]
+            assert enclosing, f"{citation} sits inside no named symbol"
+            checked += 1
+    assert checked >= 40
 
 
 def test_the_checked_in_specification_equals_the_compiled_matrix() -> None:

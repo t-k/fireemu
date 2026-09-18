@@ -676,10 +676,15 @@
             {
               "behaviour": "One sweep deletes at most 1024 documents and does not record itself as having run, so the next clock move continues from where it stopped. A sweep is scoped to the session that asked for it.",
               "reason": "The sweep runs inside the control request that moved the virtual clock, so a clock advance observes its own deletions and a test needs no quiescence wait. An unbounded sweep would hold that response open for as long as the store is large, and an unscoped one would take another session's grace period between expiry and deletion away."
+            },
+            {
+              "behaviour": "Each automatic single-field index reported under indexConfig.indexes carries a name whose id is a digest over the project, database, collection group, field, query scope and mode.",
+              "reason": "Production assigns an opaque server-side id to every index and a local run has no index resource to draw one from, so the name is derived rather than observed. It is stable across restarts of the same configuration and distinct for distinct indexes, which is what a caller that stores or compares the name needs; whether production's own names may be depended on is an observation this lane has not made."
             }
           ],
           "productionOnly": [
-            "the real deletion latency, its backfill cost and the billing of the deletes"
+            "the real deletion latency, its backfill cost and the billing of the deletes",
+            "the server-assigned ids of the automatic single-field indexes"
           ],
           "preview": []
         },

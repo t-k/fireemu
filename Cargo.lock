@@ -648,6 +648,7 @@ name = "fireemu-adapter-support"
 version = "0.7.1"
 dependencies = [
  "bytes",
+ "getrandom 0.3.4",
  "http",
  "http-body",
  "http-body-util",

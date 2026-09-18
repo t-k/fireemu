@@ -2091,16 +2091,8 @@ async fn terminate_signal() {
 /// A 128-bit secret from the operating system's entropy source; the daemon refuses to start
 /// without one (these values authorize control and runner access).
 fn random_secret() -> Result<String, String> {
-    use std::fmt::Write as _;
-    use std::io::Read as _;
-    let mut bytes = [0u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
-        .map_err(|e| format!("cannot read /dev/urandom for the control token: {e}"))?;
-    Ok(bytes.iter().fold(String::with_capacity(32), |mut acc, b| {
-        let _ = write!(acc, "{b:02x}");
-        acc
-    }))
+    fireemu_adapter_support::entropy::hex_128()
+        .map_err(|e| format!("cannot draw the control token: {e}"))
 }
 
 /// An unpredictable 128-bit project session epoch from the operating system CSPRNG (spec 7.2).

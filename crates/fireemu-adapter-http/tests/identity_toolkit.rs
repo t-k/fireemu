@@ -10979,3 +10979,224 @@ fn malformed_query_selectors_fail_closed_without_mutation() {
         assert!(tenant.lock().unwrap().user_by_email(&email).is_some());
     }
 }
+
+/// Reads back one account through the Admin lookup route.
+fn admin_lookup(state: &AuthState, uid: &str) -> Value {
+    let (status, users) = admin(
+        state,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": uid}),
+    );
+    assert_eq!(status, 200, "{users}");
+    users["users"][0].clone()
+}
+
+/// The provider ids an account record carries.
+fn provider_ids(record: &Value) -> Vec<String> {
+    record["providerUserInfo"]
+        .as_array()
+        .map(|providers| {
+            providers
+                .iter()
+                .filter_map(|p| p["providerId"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// An Admin `accounts:update` applies every part of the request or none of it. The MFA list
+/// is written after the custom claims and the provider links, so each condition that can
+/// refuse the list has to be decided before the first write; otherwise a 400 leaves the
+/// claims and the providers changed.
+#[test]
+fn admin_update_refused_for_a_bad_mfa_display_name_changes_nothing() {
+    let s = state();
+    let (_, signed_up) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "atomic-mfa@example.com", "password": "hunter22"}),
+    );
+    let uid = signed_up["localId"].as_str().unwrap().to_owned();
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "customAttributes": "{\"tier\":\"gold\"}"}),
+    );
+    assert_eq!(status, 200);
+
+    let request = |display_name: &str| {
+        json!({
+            "localId": uid,
+            "customAttributes": "{\"tier\":\"platinum\"}",
+            "linkProviderUserInfo": {"providerId": "oidc.acme", "rawId": "raw-acme-1"},
+            "mfa": {"enrollments": [{"phoneInfo": "+15550001111", "displayName": display_name}]},
+        })
+    };
+
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &request("work\u{1}phone"),
+    );
+    assert_eq!(status, 400, "{refused}");
+    let record = admin_lookup(&s, &uid);
+    assert_eq!(
+        record["customAttributes"], "{\"tier\":\"gold\"}",
+        "{record}"
+    );
+    assert!(
+        !provider_ids(&record).iter().any(|id| id == "oidc.acme"),
+        "{record}"
+    );
+    assert!(record.get("mfaInfo").is_none(), "{record}");
+
+    let (status, applied) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &request("work phone"),
+    );
+    assert_eq!(status, 200, "{applied}");
+    let record = admin_lookup(&s, &uid);
+    assert_eq!(
+        record["customAttributes"], "{\"tier\":\"platinum\"}",
+        "{record}"
+    );
+    assert!(
+        provider_ids(&record).iter().any(|id| id == "oidc.acme"),
+        "{record}"
+    );
+    assert_eq!(
+        record["mfaInfo"][0]["phoneInfo"], "+15550001111",
+        "{record}"
+    );
+    assert_eq!(
+        record["mfaInfo"][0]["displayName"], "work phone",
+        "{record}"
+    );
+}
+
+/// The per-user factor budget is a second condition the MFA list can fail on, and it is
+/// decided from the account the request would not otherwise have changed.
+#[test]
+fn admin_update_refused_for_an_over_budget_mfa_list_changes_nothing() {
+    let s = state();
+    let (_, signed_up) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "atomic-budget@example.com", "password": "hunter22"}),
+    );
+    let uid = signed_up["localId"].as_str().unwrap().to_owned();
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "customAttributes": "{\"tier\":\"gold\"}"}),
+    );
+    assert_eq!(status, 200);
+
+    let enrollments: Vec<Value> = (0..=fireemu_core_auth::mfa::MAX_FACTORS_PER_USER)
+        .map(|i| json!({"phoneInfo": format!("+1555000{i:04}")}))
+        .collect();
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({
+            "localId": uid,
+            "customAttributes": "{\"tier\":\"platinum\"}",
+            "mfa": {"enrollments": enrollments},
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    let record = admin_lookup(&s, &uid);
+    assert_eq!(
+        record["customAttributes"], "{\"tier\":\"gold\"}",
+        "{record}"
+    );
+    assert!(record.get("mfaInfo").is_none(), "{record}");
+}
+
+/// A disabled account refuses the enrollment, and that refusal has to be decided before the
+/// claims are written too.
+#[test]
+fn admin_update_refused_for_a_disabled_account_mfa_list_changes_nothing() {
+    let s = state();
+    let (_, signed_up) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "atomic-disabled@example.com", "password": "hunter22"}),
+    );
+    let uid = signed_up["localId"].as_str().unwrap().to_owned();
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "customAttributes": "{\"tier\":\"gold\"}", "disableUser": true}),
+    );
+    assert_eq!(status, 200);
+
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({
+            "localId": uid,
+            "customAttributes": "{\"tier\":\"platinum\"}",
+            "mfa": {"enrollments": [{"phoneInfo": "+15550002222"}]},
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    let record = admin_lookup(&s, &uid);
+    assert_eq!(
+        record["customAttributes"], "{\"tier\":\"gold\"}",
+        "{record}"
+    );
+    assert!(record.get("mfaInfo").is_none(), "{record}");
+}
+
+/// The mirror order: the provider link is refused while the MFA list is valid. The link is
+/// parsed before any write, so the accepted list is not written either.
+#[test]
+fn admin_update_refused_for_a_bad_provider_link_leaves_the_mfa_list_unchanged() {
+    let s = state();
+    let (_, signed_up) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "atomic-mirror@example.com", "password": "hunter22"}),
+    );
+    let uid = signed_up["localId"].as_str().unwrap().to_owned();
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "customAttributes": "{\"tier\":\"gold\"}"}),
+    );
+    assert_eq!(status, 200);
+
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({
+            "localId": uid,
+            "customAttributes": "{\"tier\":\"platinum\"}",
+            "linkProviderUserInfo": {"providerId": "oidc.acme", "rawId": "raw\u{1}acme"},
+            "mfa": {"enrollments": [{"phoneInfo": "+15550003333", "displayName": "work phone"}]},
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    let record = admin_lookup(&s, &uid);
+    assert_eq!(
+        record["customAttributes"], "{\"tier\":\"gold\"}",
+        "{record}"
+    );
+    assert!(
+        !provider_ids(&record).iter().any(|id| id == "oidc.acme"),
+        "{record}"
+    );
+    assert!(record.get("mfaInfo").is_none(), "{record}");
+}

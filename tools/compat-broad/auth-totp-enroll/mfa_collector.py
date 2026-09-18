@@ -32,13 +32,17 @@ _SENSITIVE_KEY_PARTS = (
     "otp",
     "sessioninfo",
 )
-_SENSITIVE_KEY_NAMES = frozenset({"code", "verificationcode", "smscode", "session", "pin"})
+_SENSITIVE_KEY_NAMES = frozenset(
+    {"code", "verificationcode", "smscode", "session", "pin"}
+)
 
 
 def is_sensitive_key(key: str) -> bool:
     """Return True when a field name names secret or credential material."""
     lowered = key.lower()
-    return lowered in _SENSITIVE_KEY_NAMES or any(part in lowered for part in _SENSITIVE_KEY_PARTS)
+    return lowered in _SENSITIVE_KEY_NAMES or any(
+        part in lowered for part in _SENSITIVE_KEY_PARTS
+    )
 
 
 class CheckpointError(RuntimeError):
@@ -154,7 +158,12 @@ def next_action(state: dict[str, Any], now: float) -> dict[str, Any]:
                 "waitSeconds": due_at - now,
                 "aborted": False,
             }
-        return {"action": "RUN", "stepId": step["id"], "dueAt": due_at, "aborted": False}
+        return {
+            "action": "RUN",
+            "stepId": step["id"],
+            "dueAt": due_at,
+            "aborted": False,
+        }
     if not cleanup_complete(state):
         return {
             "action": "CLEANUP",
@@ -166,7 +175,9 @@ def next_action(state: dict[str, Any], now: float) -> dict[str, Any]:
     return {"action": "DONE", "stepId": None, "dueAt": None, "aborted": False}
 
 
-def register_owned(state: dict[str, Any], kind: str, identifier: str, now: float) -> None:
+def register_owned(
+    state: dict[str, Any], kind: str, identifier: str, now: float
+) -> None:
     """Record a resource this run created, before it can be lost."""
     if any(resource["id"] == identifier for resource in state["ownedResources"]):
         return
@@ -181,7 +192,9 @@ def register_owned(state: dict[str, Any], kind: str, identifier: str, now: float
     )
 
 
-def mark_deleted(state: dict[str, Any], identifier: str, absence_verified: bool) -> None:
+def mark_deleted(
+    state: dict[str, Any], identifier: str, absence_verified: bool
+) -> None:
     """Mark one owned resource deleted; absence has to be proved separately."""
     for resource in state["ownedResources"]:
         if resource["id"] == identifier:
@@ -203,7 +216,9 @@ def record_step(
     if state["aborted"]:
         raise BudgetError(f"run aborted: {state['abortReason']}")
     if _contains_sensitive(observation):
-        raise SensitiveMaterialError("observations must not carry secret or credential material")
+        raise SensitiveMaterialError(
+            "observations must not carry secret or credential material"
+        )
     step = _step(state, step_id)
     if step["status"] != "pending":
         raise BudgetError(f"step already resolved: {step_id}")
@@ -218,7 +233,9 @@ def record_step(
     return state
 
 
-def skip_step(state: dict[str, Any], step_id: str, reason: str, now: float) -> dict[str, Any]:
+def skip_step(
+    state: dict[str, Any], step_id: str, reason: str, now: float
+) -> dict[str, Any]:
     """Resolve a step that a refused precondition makes unobservable."""
     step = _step(state, step_id)
     if step["status"] != "pending":

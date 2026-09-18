@@ -67,7 +67,11 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def _call(url: str, body: Any = None, token: str | None = None) -> tuple[int, dict]:
     parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
+    if parsed.scheme != "http" or parsed.hostname not in {
+        "127.0.0.1",
+        "::1",
+        "localhost",
+    }:
         raise ValueError("the local shadow only talks to loopback")
     headers = {}
     payload = None
@@ -113,7 +117,9 @@ class Instance:
 
     def emulator(self, path: str) -> tuple[int, dict]:
         # The inspection routes are served at the instance root, not under the API host prefix.
-        return _call(f"{self.origin}/emulator/v1/projects/{PROJECT}{path}", token=self.token)
+        return _call(
+            f"{self.origin}/emulator/v1/projects/{PROJECT}{path}", token=self.token
+        )
 
     def advance(self, seconds: float) -> None:
         status, _ = _call(
@@ -144,7 +150,13 @@ class Instance:
 
 
 def _row(case_id: str, status: int, code: str | None, **extra: Any) -> dict[str, Any]:
-    return {"id": case_id, "status": status, "errorCode": code, "outcome": "observed", **extra}
+    return {
+        "id": case_id,
+        "status": status,
+        "errorCode": code,
+        "outcome": "observed",
+        **extra,
+    }
 
 
 def _observe(instance: Instance, path: str, body: Any) -> tuple[int, dict, str | None]:
@@ -159,7 +171,11 @@ def create_account(instance: Instance, email: str, verified: bool = True) -> dic
             {"email": email, "password": "Shadow-Passw0rd!", "returnSecureToken": True},
         )
     )
-    account = {"localId": payload["localId"], "idToken": payload["idToken"], "email": email}
+    account = {
+        "localId": payload["localId"],
+        "idToken": payload["idToken"],
+        "email": email,
+    }
     if verified:
         instance.require(
             *instance.admin(
@@ -170,7 +186,11 @@ def create_account(instance: Instance, email: str, verified: bool = True) -> dic
         account["idToken"] = instance.require(
             *instance.public(
                 "/v1/accounts:signInWithPassword",
-                {"email": email, "password": "Shadow-Passw0rd!", "returnSecureToken": True},
+                {
+                    "email": email,
+                    "password": "Shadow-Passw0rd!",
+                    "returnSecureToken": True,
+                },
             )
         )["idToken"]
     return account
@@ -216,7 +236,10 @@ def phone_pending(instance: Instance, account: dict) -> dict:
     started = instance.require(
         *instance.public(
             "/v2/accounts/mfaEnrollment:start",
-            {"idToken": account["idToken"], "phoneEnrollmentInfo": {"phoneNumber": TEST_PHONE}},
+            {
+                "idToken": account["idToken"],
+                "phoneEnrollmentInfo": {"phoneNumber": TEST_PHONE},
+            },
         )
     )
     session = started["phoneSessionInfo"]["sessionInfo"]
@@ -253,7 +276,9 @@ def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
 
     def account_for(role: str, verified: bool = True) -> dict:
         if role not in accounts:
-            created = create_account(instance, f"o2-{role}-{suffix}@example.com", verified)
+            created = create_account(
+                instance, f"o2-{role}-{suffix}@example.com", verified
+            )
             accounts[role] = created
             register_owned(state, "account", created["localId"], time.time())
         return accounts[role]
@@ -282,7 +307,10 @@ def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
             "/v2/accounts/mfaSignIn:finalize",
             {
                 "mfaPendingCredential": held["pending"],
-                "phoneVerificationInfo": {"sessionInfo": session, "code": latest_code(instance)},
+                "phoneVerificationInfo": {
+                    "sessionInfo": session,
+                    "code": latest_code(instance),
+                },
             },
         )
     finish("baseline-fresh-finalize", status, code)
@@ -317,9 +345,16 @@ def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
                     },
                 },
             )
-            finish(f"age-{age}s-finalize", final_status, final_code, pendingAgeSeconds=float(age))
+            finish(
+                f"age-{age}s-finalize",
+                final_status,
+                final_code,
+                pendingAgeSeconds=float(age),
+            )
         else:
-            skip_step(state, f"age-{age}s-finalize", "its start was refused", time.time())
+            skip_step(
+                state, f"age-{age}s-finalize", "its start was refused", time.time()
+            )
             rows[f"age-{age}s-finalize"] = {
                 "id": f"age-{age}s-finalize",
                 "status": status,
@@ -349,7 +384,12 @@ def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
                     },
                 },
             )
-        finish(f"age-{age}s-same-account-fresh-control", status, code, pendingAgeSeconds=0.0)
+        finish(
+            f"age-{age}s-same-account-fresh-control",
+            status,
+            code,
+            pendingAgeSeconds=0.0,
+        )
 
     held = phone_pending(instance, control)
     status, payload, code = _observe(
@@ -368,7 +408,10 @@ def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
             "/v2/accounts/mfaSignIn:finalize",
             {
                 "mfaPendingCredential": held["pending"],
-                "phoneVerificationInfo": {"sessionInfo": session, "code": latest_code(instance)},
+                "phoneVerificationInfo": {
+                    "sessionInfo": session,
+                    "code": latest_code(instance),
+                },
             },
         )
     finish("final-fresh-finalize", status, code)
@@ -500,7 +543,9 @@ def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
     status, payload, code = _observe(
         instance, "/v1/accounts:lookup", {"idToken": subject["idToken"]}
     )
-    remaining = payload.get("users", [{}])[0].get("mfaInfo", []) if status == 200 else []
+    remaining = (
+        payload.get("users", [{}])[0].get("mfaInfo", []) if status == 200 else []
+    )
     finish("totp-withdraw-readback", status, code, factorCount=len(remaining))
     status, payload, code = _observe(
         instance,
@@ -526,7 +571,12 @@ def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
                 "displayName": "aged totp",
             },
         )
-        finish(f"totp-enroll-session-age-{age}s", status, code, sessionAgeSeconds=float(age))
+        finish(
+            f"totp-enroll-session-age-{age}s",
+            status,
+            code,
+            sessionAgeSeconds=float(age),
+        )
 
     # --- interaction ------------------------------------------------------------------
     unverified = account_for("interaction-unverified", verified=False)
@@ -631,10 +681,13 @@ def child(output: Path) -> int:
         origin, os.environ["FIREEMU_CONTROL_URL"], os.environ["FIREEMU_CONTROL_TOKEN"]
     )
     (output / "instance.json").write_text(
-        json.dumps({"childPid": os.getpid(), "parentPid": os.getppid()}), encoding="utf-8"
+        json.dumps({"childPid": os.getpid(), "parentPid": os.getppid()}),
+        encoding="utf-8",
     )
     report = run_sequence(instance, output)
-    (output / "shadow.json").write_text(json.dumps(report, indent=2, sort_keys=True), "utf-8")
+    (output / "shadow.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True), "utf-8"
+    )
     return 0
 
 
@@ -688,10 +741,18 @@ def parent(output: Path) -> int:
     for pid in [line for line in remaining.stdout.split() if line.isdigit()]:
         os.kill(int(pid), signal.SIGTERM)
     if not (output / "shadow.json").is_file():
-        print(f"no shadow ledger was written (exit {completed.returncode})", file=sys.stderr)
+        print(
+            f"no shadow ledger was written (exit {completed.returncode})",
+            file=sys.stderr,
+        )
         return 1
     report = json.loads((output / "shadow.json").read_text(encoding="utf-8"))
-    print(json.dumps({key: report[key] for key in ("recordingComplete", "disagreements")}, indent=2))
+    print(
+        json.dumps(
+            {key: report[key] for key in ("recordingComplete", "disagreements")},
+            indent=2,
+        )
+    )
     return 0
 
 

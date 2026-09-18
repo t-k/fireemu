@@ -28,7 +28,12 @@ SOURCES = MappingProxyType(
     }
 )
 
-FAMILIES = ("pending-age-causality", "totp-lifecycle", "enrollment-session-age", "interaction")
+FAMILIES = (
+    "pending-age-causality",
+    "totp-lifecycle",
+    "enrollment-session-age",
+    "interaction",
+)
 BASES = ("control", "diagnostic", "negative")
 
 # Local predictions are read from the fireemu sources named in the campaign document:
@@ -62,7 +67,11 @@ def _case(
         "account": account,
         "ageSeconds": age_seconds,
         "obligation": obligation,
-        "expectedLocal": {"status": status, "errorCode": error_code, "basis": "source-read"},
+        "expectedLocal": {
+            "status": status,
+            "errorCode": error_code,
+            "basis": "source-read",
+        },
         "productionExpectation": "unobserved",
     }
 

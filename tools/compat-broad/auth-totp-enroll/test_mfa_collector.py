@@ -47,7 +47,11 @@ def test_a_new_run_starts_on_the_first_case_and_charges_nothing() -> None:
 def test_a_scheduled_step_waits_without_sleeping_and_reports_its_due_time() -> None:
     state = fresh()
     record_step(
-        state, CASE_IDS[0], {"status": 200}, ORIGIN, schedule={"age-300s-start": ORIGIN + 300.0}
+        state,
+        CASE_IDS[0],
+        {"status": 200},
+        ORIGIN,
+        schedule={"age-300s-start": ORIGIN + 300.0},
     )
     action = next_action(state, ORIGIN + 1)
     assert action["action"] == "WAIT"
@@ -60,7 +64,11 @@ def test_a_scheduled_step_waits_without_sleeping_and_reports_its_due_time() -> N
 def test_a_checkpoint_round_trip_reproduces_the_same_decision() -> None:
     state = fresh()
     record_step(
-        state, CASE_IDS[0], {"status": 200}, ORIGIN, schedule={"age-300s-start": ORIGIN + 300.0}
+        state,
+        CASE_IDS[0],
+        {"status": 200},
+        ORIGIN,
+        schedule={"age-300s-start": ORIGIN + 300.0},
     )
     register_owned(state, "account", "uid-pending-control", ORIGIN)
     resumed = load_checkpoint(checkpoint_bytes(state))
@@ -94,15 +102,21 @@ def test_observations_carrying_secret_material_are_refused_before_storage() -> N
             record_step(state, CASE_IDS[0], observation, ORIGIN)
     assert state["steps"][0]["status"] == "pending" and state["requests"] == 0
     # The error code is the field the whole comparison rests on and must survive.
-    record_step(state, CASE_IDS[0], {"status": 400, "errorCode": "INVALID_CODE"}, ORIGIN)
+    record_step(
+        state, CASE_IDS[0], {"status": 400, "errorCode": "INVALID_CODE"}, ORIGIN
+    )
     assert state["steps"][0]["observation"]["errorCode"] == "INVALID_CODE"
 
 
 def test_the_request_budget_latches_an_abort_that_still_demands_cleanup() -> None:
     state = fresh()
     register_owned(state, "account", "uid-one", ORIGIN)
-    record_step(state, CASE_IDS[0], {"status": 200}, ORIGIN, requests=state["maxRequests"] + 1)
-    assert state["aborted"] is True and state["abortReason"] == "request-budget-exhausted"
+    record_step(
+        state, CASE_IDS[0], {"status": 200}, ORIGIN, requests=state["maxRequests"] + 1
+    )
+    assert (
+        state["aborted"] is True and state["abortReason"] == "request-budget-exhausted"
+    )
     action = next_action(state, ORIGIN + 1)
     assert action["action"] == "CLEANUP" and action["outstanding"] == ["uid-one"]
     with pytest.raises(BudgetError):
@@ -141,7 +155,9 @@ def test_a_skipped_step_resolves_without_pretending_it_was_observed() -> None:
     record_step(state, CASE_IDS[0], {"status": 200}, ORIGIN)
     skip_step(state, CASE_IDS[1], "its start was refused", ORIGIN + 1)
     assert state["steps"][1]["status"] == "skipped"
-    assert state["steps"][1]["observation"] == {"skippedReason": "its start was refused"}
+    assert state["steps"][1]["observation"] == {
+        "skippedReason": "its start was refused"
+    }
     with pytest.raises(BudgetError):
         skip_step(state, CASE_IDS[1], "again", ORIGIN + 2)
 

@@ -44,7 +44,12 @@ def campaign_manifest(nonce: str) -> dict:
         ],
         "stages": [{"id": stage, "status": "unresolved"} for stage in STAGE_IDS],
         "prerequisites": list(_PREREQUISITES),
-        "limits": {"proposedMaxRequests": 15, "proposedMaxWallSeconds": 600, "proposedMaxCostUsd": 2.0, "enforced": False},
+        "limits": {
+            "proposedMaxRequests": 15,
+            "proposedMaxWallSeconds": 600,
+            "proposedMaxCostUsd": 2.0,
+            "enforced": False,
+        },
     }
 
 

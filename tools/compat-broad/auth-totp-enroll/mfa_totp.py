@@ -42,7 +42,9 @@ def decode_shared_secret(shared_secret_key: str) -> bytes:
     if not compact:
         raise ValueError("sharedSecretKey must not be empty")
     body = compact.rstrip("=")
-    if not body or any(character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567" for character in body):
+    if not body or any(
+        character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567" for character in body
+    ):
         raise ValueError("sharedSecretKey must be RFC 4648 base32")
     padded = body + "=" * (-len(body) % 8)
     try:
@@ -63,7 +65,9 @@ def step_for(unix_seconds: int, period_seconds: int) -> int:
     return unix_seconds // period_seconds
 
 
-def hotp_code(key: bytes, counter: int, digits: int, algorithm: str = "HMAC_SHA1") -> str:
+def hotp_code(
+    key: bytes, counter: int, digits: int, algorithm: str = "HMAC_SHA1"
+) -> str:
     """Return the RFC 4226 HOTP value for one counter."""
     if not isinstance(key, bytes) or not key:
         raise ValueError("key must be non-empty bytes")
@@ -77,7 +81,9 @@ def hotp_code(key: bytes, counter: int, digits: int, algorithm: str = "HMAC_SHA1
     return str(truncated % (10**digits)).zfill(digits)
 
 
-def totp_code(shared_secret_key: str, unix_seconds: int, parameters: TotpParameters) -> str:
+def totp_code(
+    shared_secret_key: str, unix_seconds: int, parameters: TotpParameters
+) -> str:
     """Return the code a client would submit at `unix_seconds`."""
     key = decode_shared_secret(shared_secret_key)
     counter = step_for(unix_seconds, parameters.period_seconds)

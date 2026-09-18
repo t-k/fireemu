@@ -36,7 +36,12 @@ def test_the_checked_in_ledger_covers_every_case_without_secret_material() -> No
     assert ledger["disagreements"] == []
     assert ledger["recovery"]["remainingOwnedResources"] == 0
     serialized = json.dumps(ledger).lower()
-    for material in ("sharedsecretkey", "idtoken", "refreshtoken", "mfapendingcredential"):
+    for material in (
+        "sharedsecretkey",
+        "idtoken",
+        "refreshtoken",
+        "mfapendingcredential",
+    ):
         assert material not in serialized
 
 

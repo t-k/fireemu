@@ -49,7 +49,9 @@ def test_a_missing_bound_path_is_refused_rather_than_skipped(tmp_path: Path) -> 
         compute_provenance(tmp_path)
 
 
-def test_a_caller_supplied_binding_is_only_accepted_when_it_is_recomputed(tmp_path: Path) -> None:
+def test_a_caller_supplied_binding_is_only_accepted_when_it_is_recomputed(
+    tmp_path: Path,
+) -> None:
     fake_tree(tmp_path)
     truth = compute_provenance(tmp_path)
     assert verify_binding(truth, tmp_path) is True
@@ -64,9 +66,18 @@ def test_a_caller_supplied_binding_is_only_accepted_when_it_is_recomputed(tmp_pa
     assert verify_binding(dropped, tmp_path) is False
 
 
-def test_verification_refuses_records_that_are_not_shaped_like_provenance(tmp_path: Path) -> None:
+def test_verification_refuses_records_that_are_not_shaped_like_provenance(
+    tmp_path: Path,
+) -> None:
     fake_tree(tmp_path)
-    for record in (None, {}, [], "digest", {"digest": "a" * 64}, {"paths": {}, "digest": "a" * 64}):
+    for record in (
+        None,
+        {},
+        [],
+        "digest",
+        {"digest": "a" * 64},
+        {"paths": {}, "digest": "a" * 64},
+    ):
         assert verify_binding(record, tmp_path) is False
 
 

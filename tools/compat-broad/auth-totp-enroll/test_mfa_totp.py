@@ -31,8 +31,16 @@ def test_malformed_shared_secret_is_refused() -> None:
 
 def test_rfc4226_hotp_vectors() -> None:
     expected = [
-        "755224", "287082", "359152", "969429", "338314",
-        "254676", "287922", "162583", "399871", "520489",
+        "755224",
+        "287082",
+        "359152",
+        "969429",
+        "338314",
+        "254676",
+        "287922",
+        "162583",
+        "399871",
+        "520489",
     ]
     for counter, code in enumerate(expected):
         assert hotp_code(b"12345678901234567890", counter, digits=6) == code
@@ -72,7 +80,14 @@ def test_parameters_reject_unsupported_shapes() -> None:
         {"algorithm": "HMAC_SHA256"},
     ):
         with pytest.raises(ValueError):
-            TotpParameters(**{"period_seconds": 30, "digits": 6, "algorithm": "HMAC_SHA1", **kwargs})
+            TotpParameters(
+                **{
+                    "period_seconds": 30,
+                    "digits": 6,
+                    "algorithm": "HMAC_SHA1",
+                    **kwargs,
+                }
+            )
 
 
 def test_neighbouring_step_codes_are_available_for_a_window() -> None:
@@ -97,7 +112,9 @@ def test_a_wrong_code_is_derived_without_reusing_a_valid_step() -> None:
     assert len(wrong) == 6 and wrong.isdigit()
 
 
-def test_module_never_writes_secret_material_to_a_stream(capsys: pytest.CaptureFixture[str]) -> None:
+def test_module_never_writes_secret_material_to_a_stream(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     parameters = TotpParameters(period_seconds=30, digits=6, algorithm="HMAC_SHA1")
     totp_code(RFC_SECRET_B32, 1234567890, parameters)
     captured = capsys.readouterr()

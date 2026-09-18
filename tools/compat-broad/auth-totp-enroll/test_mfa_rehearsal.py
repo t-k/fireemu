@@ -35,7 +35,11 @@ def test_a_run_that_dies_mid_flight_resumes_from_its_checkpoint(tmp_path: Path) 
     state = initial_state(compile_campaign(NONCE), ORIGIN)
     register_owned(state, "account", "uid-aged", ORIGIN)
     record_step(
-        state, CASE_IDS[0], {"status": 200}, ORIGIN, schedule={CASE_IDS[1]: ORIGIN + 600.0}
+        state,
+        CASE_IDS[0],
+        {"status": 200},
+        ORIGIN,
+        schedule={CASE_IDS[1]: ORIGIN + 600.0},
     )
     checkpoint = tmp_path / "checkpoint.json"
     checkpoint.write_bytes(checkpoint_bytes(state))
@@ -49,7 +53,9 @@ def test_a_run_that_dies_mid_flight_resumes_from_its_checkpoint(tmp_path: Path) 
     assert resumed["ownedResources"][0]["id"] == "uid-aged"
 
 
-def test_an_abandoned_run_still_names_every_resource_it_must_delete(tmp_path: Path) -> None:
+def test_an_abandoned_run_still_names_every_resource_it_must_delete(
+    tmp_path: Path,
+) -> None:
     state = initial_state(compile_campaign(NONCE), ORIGIN)
     for index in range(3):
         register_owned(state, "account", f"uid-{index}", ORIGIN)
@@ -108,15 +114,15 @@ def test_the_shadow_only_addresses_loopback() -> None:
     assert instance.control == "http://127.0.0.1:9099"
     assert instance.identity.startswith("http://127.0.0.1:9099/")
     with pytest.raises(ValueError, match="loopback"):
-        Instance("https://identitytoolkit.googleapis.com", "http://127.0.0.1:9099/v1/", "t").public(
-            "/v1/accounts:signUp", {}
-        )
+        Instance(
+            "https://identitytoolkit.googleapis.com", "http://127.0.0.1:9099/v1/", "t"
+        ).public("/v1/accounts:signUp", {})
 
 
 def test_the_error_code_projection_keeps_only_the_canonical_prefix() -> None:
-    assert _code_of({"error": {"message": "INVALID_CODE : verification code already used"}}) == (
-        "INVALID_CODE"
-    )
+    assert _code_of(
+        {"error": {"message": "INVALID_CODE : verification code already used"}}
+    ) == ("INVALID_CODE")
     assert _code_of({"error": {"message": "SESSION_EXPIRED"}}) == "SESSION_EXPIRED"
     assert _code_of({}) is None
 
@@ -126,7 +132,12 @@ def test_a_ledger_missing_a_case_is_refused_rather_than_published() -> None:
 
     state = initial_state(compile_campaign(NONCE), ORIGIN)
     rows = {
-        case["id"]: {"id": case["id"], "status": 200, "errorCode": None, "outcome": "observed"}
+        case["id"]: {
+            "id": case["id"],
+            "status": 200,
+            "errorCode": None,
+            "outcome": "observed",
+        }
         for case in observation_cases()
     }
     report = build_report(rows, state)

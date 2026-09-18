@@ -177,7 +177,10 @@ def validate_campaign(plan: Any) -> bool:
         nonce = namespace.rsplit("/", 1)[-1]
         if not _NONCE.fullmatch(nonce) or canonical_digest(nonce) != nonce_digest:
             return False
-        if plan.get("productionExecuted") is not False or plan.get("productionAllowed") is not False:
+        if (
+            plan.get("productionExecuted") is not False
+            or plan.get("productionAllowed") is not False
+        ):
             return False
         return plan == compile_campaign(nonce, plan["project"])
     except (KeyError, TypeError, AttributeError, ValueError):

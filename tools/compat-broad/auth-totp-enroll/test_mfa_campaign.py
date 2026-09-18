@@ -113,14 +113,18 @@ def test_the_budget_stays_well_under_one_dollar_and_reserves_recovery() -> None:
     assert limits["enforced"] is True
     assert limits["estimatedCostUsd"] < 1.0
     assert limits["hardCostCeilingUsd"] < 1.0
-    assert limits["maxWallSeconds"] > max(SAMPLED_AGES_SECONDS) + limits["recoveryReserveSeconds"]
+    assert (
+        limits["maxWallSeconds"]
+        > max(SAMPLED_AGES_SECONDS) + limits["recoveryReserveSeconds"]
+    )
     assert limits["maxOwnedAccounts"] >= len(owned_accounts())
 
 
 def test_the_permission_envelope_names_only_identity_endpoints() -> None:
     envelope = compile_campaign(NONCE)["permissionEnvelope"]
     assert all(
-        endpoint.startswith(("accounts", "projects")) for endpoint in envelope["allowedEndpoints"]
+        endpoint.startswith(("accounts", "projects"))
+        for endpoint in envelope["allowedEndpoints"]
     )
     assert envelope["configurationMutation"]["restoreRequired"] is True
     assert any("Firestore" in item for item in envelope["forbidden"])
@@ -154,7 +158,9 @@ def test_a_bound_preparation_pair_is_preparation_only_and_never_a_match() -> Non
     assert result["rowDifferences"] == []
 
 
-def test_self_comparison_and_forged_provenance_are_indeterminate(tmp_path: Path) -> None:
+def test_self_comparison_and_forged_provenance_are_indeterminate(
+    tmp_path: Path,
+) -> None:
     local = receipt("local")
     assert compare(local, local)["classification"] == "INDETERMINATE"
     forged = receipt("production")
@@ -180,10 +186,14 @@ def test_incomplete_recording_cleanup_or_worktree_is_indeterminate() -> None:
     ):
         production = receipt("production")
         mutation(production)
-        assert compare(receipt("local"), production)["classification"] == "INDETERMINATE"
+        assert (
+            compare(receipt("local"), production)["classification"] == "INDETERMINATE"
+        )
 
 
-def test_a_real_row_difference_is_reported_only_for_an_executed_production_side() -> None:
+def test_a_real_row_difference_is_reported_only_for_an_executed_production_side() -> (
+    None
+):
     local = receipt("local")
     production = receipt("production")
     production["rows"][2].update(status=400, errorCode="INVALID_MFA_PENDING_CREDENTIAL")

@@ -28,7 +28,15 @@ CLASSIFICATIONS = (
     "INDETERMINATE",
 )
 # Values that legitimately differ between two correct runs.
-_NONDETERMINISTIC = ("localid", "uid", "email", "enrollmentid", "enrolledat", "elapsed", "age")
+_NONDETERMINISTIC = (
+    "localid",
+    "uid",
+    "email",
+    "enrollmentid",
+    "enrolledat",
+    "elapsed",
+    "age",
+)
 
 
 def _project(value: Any, key: str = "") -> Any:
@@ -45,7 +53,9 @@ def _project(value: Any, key: str = "") -> Any:
 
 
 def _digest(value: Any) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), default=str
+    ).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -84,9 +94,10 @@ def _receipt_problems(record: Any, side: str, root: Path) -> list[str]:
     else:
         if recovery.get("cleanupVerified") is not True:
             problems.append("cleanup was not verified")
-        if type(recovery.get("remainingOwnedResources")) is not int or recovery[
-            "remainingOwnedResources"
-        ] != 0:
+        if (
+            type(recovery.get("remainingOwnedResources")) is not int
+            or recovery["remainingOwnedResources"] != 0
+        ):
             problems.append("owned resources remain")
         if recovery.get("configurationRestored") is not True:
             problems.append("project configuration was not restored")
@@ -103,7 +114,8 @@ def compare(local: Any, production: Any, root: Path | None = None) -> dict[str, 
         "localProblems": local_problems,
         "productionProblems": production_problems,
         "productionExecuted": bool(
-            isinstance(production, dict) and production.get("productionExecuted") is True
+            isinstance(production, dict)
+            and production.get("productionExecuted") is True
         ),
         "rowDifferences": [],
     }
@@ -129,8 +141,14 @@ def compare(local: Any, production: Any, root: Path | None = None) -> dict[str, 
             differences.append(
                 {
                     "id": left["id"],
-                    "local": {"status": left["status"], "errorCode": left.get("errorCode")},
-                    "production": {"status": right["status"], "errorCode": right.get("errorCode")},
+                    "local": {
+                        "status": left["status"],
+                        "errorCode": left.get("errorCode"),
+                    },
+                    "production": {
+                        "status": right["status"],
+                        "errorCode": right.get("errorCode"),
+                    },
                 }
             )
         elif left != right:

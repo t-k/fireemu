@@ -15,11 +15,24 @@ def receipt(side: str) -> dict:
         "sourceBinding": {"commit": "a" * 40, "artifactSha256": "b" * 64},
         "recordingComplete": True,
         "stages": [
-            {"id": stage, "response": {"status": 400 if stage == "wrong-code" else 200, "errorCode": "INVALID_TOTP" if stage == "wrong-code" else None}}
+            {
+                "id": stage,
+                "response": {
+                    "status": 400 if stage == "wrong-code" else 200,
+                    "errorCode": "INVALID_TOTP" if stage == "wrong-code" else None,
+                },
+            }
             for stage in STAGE_IDS
         ],
-        "state": {"afterWrong": {"pendingSession": True, "factorCount": 0}, "afterSuccess": {"pendingSession": False, "factorCount": 1}},
-        "recovery": {"ownerVerified": True, "cleanupVerified": True, "remainingAccounts": 0},
+        "state": {
+            "afterWrong": {"pendingSession": True, "factorCount": 0},
+            "afterSuccess": {"pendingSession": False, "factorCount": 1},
+        },
+        "recovery": {
+            "ownerVerified": True,
+            "cleanupVerified": True,
+            "remainingAccounts": 0,
+        },
     }
 
 
@@ -30,10 +43,16 @@ def test_manifest_is_only_unbound_logical_preparation() -> None:
     assert manifest["productionAllowed"] is False
     assert manifest["sourceBinding"] == {"commit": None, "artifactSha256": None}
     assert manifest["limits"]["enforced"] is False
-    assert manifest["uniqueObligation"] == "same TOTP session after wrong-code retry and after successful replay, with account and factor readback"
+    assert (
+        manifest["uniqueObligation"]
+        == "same TOTP session after wrong-code retry and after successful replay, with account and factor readback"
+    )
     assert len(manifest["existingControls"]) == 3
     assert [stage["id"] for stage in manifest["stages"]] == list(STAGE_IDS)
-    assert all(not ({"method", "path", "body", "cleanupComplete", "ownedOnly"} & set(stage)) for stage in manifest["stages"])
+    assert all(
+        not ({"method", "path", "body", "cleanupComplete", "ownedOnly"} & set(stage))
+        for stage in manifest["stages"]
+    )
     assert "operations" not in manifest
 
 
@@ -92,7 +111,14 @@ def test_serialized_outputs_do_not_contain_secret_material() -> None:
         record["stages"][1]["response"]["sessionInfo"] = "RAW_SESSION_123"
     result = json.dumps(compare(local, production))
     manifest = json.dumps(campaign_manifest("a" * 32))
-    for material in ("RAW_SECRET_123", "123456", "RAW_PASSWORD_123", "RAW_TOKEN_123", "RAW_REFRESH_123", "RAW_SESSION_123"):
+    for material in (
+        "RAW_SECRET_123",
+        "123456",
+        "RAW_PASSWORD_123",
+        "RAW_TOKEN_123",
+        "RAW_REFRESH_123",
+        "RAW_SESSION_123",
+    ):
         assert material not in result + manifest
     assert compare(local, production)["classification"] == "INDETERMINATE"
 

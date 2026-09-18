@@ -166,6 +166,7 @@ fn escape_html(s: &str) -> String {
 /// as the original character. The result is HTML-escaped afterwards, as every other injected
 /// value is.
 fn escape_css_string(s: &str) -> String {
+    use std::fmt::Write as _;
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         let safe = c.is_ascii_alphanumeric()
@@ -198,7 +199,7 @@ fn escape_css_string(s: &str) -> String {
         } else {
             // The trailing space terminates the escape; CSS consumes exactly one, so a
             // literal space that follows survives.
-            out.push_str(&format!("\\{:x} ", c as u32));
+            let _ = write!(out, "\\{:x} ", c as u32);
         }
     }
     out

@@ -638,6 +638,41 @@ def retain_artifact(source: Path, destination: Path, expected: str) -> None:
         raise ValueError("retained artifact digest differs")
 
 
+DIRTY_CHECKOUT_PATH_LIMIT = 10
+
+
+class DirtyCheckoutError(ValueError):
+    """An artifact run was refused because the checkout is not committed."""
+
+
+def require_frozen_checkout() -> None:
+    """Refuse artifact execution unless HEAD alone describes the executed source.
+
+    Every artifact-backed record binds its evidence to the current commit, so an
+    uncommitted edit would publish a result no one can reproduce. Name the
+    offending paths: the bare refusal was repeatedly misread as a build timeout.
+    """
+    # Keep each line intact: the two status columns are fixed width, so stripping
+    # the whole output would eat the first entry's leading space and its path.
+    entries = [
+        line
+        for line in subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=ROOT, text=True
+        ).splitlines()
+        if line.strip()
+    ]
+    if not entries:
+        return
+    shown = ", ".join(entry[3:] for entry in entries[:DIRTY_CHECKOUT_PATH_LIMIT])
+    remaining = len(entries) - DIRTY_CHECKOUT_PATH_LIMIT
+    if remaining > 0:
+        shown += f", and {remaining} more"
+    raise DirtyCheckoutError(
+        "working tree is dirty; commit or discard changes before running "
+        f"artifact-backed tests ({len(entries)} uncommitted path(s): {shown})"
+    )
+
+
 def run(
     output,
     *,
@@ -649,8 +684,7 @@ def run(
     firestore_program=None,
     retain_executed_artifact=False,
 ):
-    if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).strip():
-        raise ValueError("freeze the checkout before artifact execution")
+    require_frozen_checkout()
     base_config = {
         **CONFIG,
         "daemon": {"authProjectNumbers": {}},

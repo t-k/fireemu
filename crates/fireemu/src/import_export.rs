@@ -2277,6 +2277,7 @@ fn note_password_updated_at(
 #[allow(clippy::too_many_lines)]
 fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, ArtifactError> {
     let refuse = |message: String| ArtifactError::new("auth", path, message);
+    header_safe_account(record, &refuse)?;
     if let Some((member, _)) = record.extra.first() {
         return Err(refuse(format!(
             "account {} contains unsupported member {member:?}; fireemu cannot preserve it during import",
@@ -2412,6 +2413,59 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
         totp_factors,
         phone_factors,
     })
+}
+
+/// Refuses the control characters an account may carry in the strings the Auth store does not
+/// check itself.
+///
+/// `AuthStore::import_user` already rejects them in the local id, the email, the display name,
+/// the photo URL and the phone number. The linked providers and the enrolled second factors go
+/// in unchecked, and every one of those strings is rendered back into an account response, a
+/// log line and a re-exported artifact, so the artifact boundary applies the same rule to them.
+/// The refusal names the field and never repeats the value.
+fn header_safe_account(
+    record: &UserRecord,
+    refuse: &impl Fn(String) -> ArtifactError,
+) -> Result<(), ArtifactError> {
+    let check = |field: &str, value: &str| -> Result<(), ArtifactError> {
+        if value.chars().any(char::is_control) {
+            Err(refuse(format!("{field} contains a control character")))
+        } else {
+            Ok(())
+        }
+    };
+    for provider in &record.provider_user_info {
+        check("providerUserInfo.providerId", &provider.provider_id)?;
+        check("providerUserInfo.rawId", &provider.raw_id)?;
+        for (field, value) in [
+            ("providerUserInfo.federatedId", &provider.federated_id),
+            ("providerUserInfo.email", &provider.email),
+            ("providerUserInfo.displayName", &provider.display_name),
+            ("providerUserInfo.photoUrl", &provider.photo_url),
+            ("providerUserInfo.phoneNumber", &provider.phone_number),
+            ("providerUserInfo.screenName", &provider.screen_name),
+        ] {
+            if let Some(value) = value {
+                check(field, value)?;
+            }
+        }
+    }
+    for enrollment in &record.mfa_info {
+        check("mfaInfo.mfaEnrollmentId", &enrollment.mfa_enrollment_id)?;
+        for (field, value) in [
+            ("mfaInfo.displayName", &enrollment.display_name),
+            ("mfaInfo.phoneInfo", &enrollment.phone_info),
+            (
+                "mfaInfo.unobfuscatedPhoneInfo",
+                &enrollment.unobfuscated_phone_info,
+            ),
+        ] {
+            if let Some(value) = value {
+                check(field, value)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The sign-in provider an account is attributed to, from the providers the export listed.

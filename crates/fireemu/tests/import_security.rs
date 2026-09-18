@@ -244,3 +244,102 @@ fn storage_metadata_with_control_characters_is_refused_naming_the_field_only() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// The Auth half of the same input boundary: an account from an artifact carries strings that
+/// are rendered into responses, logs and a re-export, so the fields the store checks for
+/// control characters (local id, email, display name, photo URL, phone number) must be checked
+/// on the fields it does not see either -- federated identities and enrolled second factors.
+/// The refusal names the field and never echoes the value.
+#[test]
+fn auth_metadata_with_control_characters_is_refused_naming_the_field_only() {
+    let crlf = "\\r\\n";
+    let nul = "\\u0000";
+    for (label, account, field) in [
+        (
+            "federated-display-name",
+            format!(
+                r#"{{"localId":"u","providerUserInfo":[{{"providerId":"google.com","rawId":"g-1","displayName":"Carol{crlf}marker-secret"}}]}}"#
+            ),
+            "providerUserInfo.displayName",
+        ),
+        (
+            "federated-raw-id",
+            format!(
+                r#"{{"localId":"u","providerUserInfo":[{{"providerId":"google.com","rawId":"g{nul}marker-secret"}}]}}"#
+            ),
+            "providerUserInfo.rawId",
+        ),
+        (
+            "federated-provider-id",
+            format!(
+                r#"{{"localId":"u","providerUserInfo":[{{"providerId":"google{nul}marker-secret","rawId":"g-1"}}]}}"#
+            ),
+            "providerUserInfo.providerId",
+        ),
+        (
+            "federated-email",
+            format!(
+                r#"{{"localId":"u","providerUserInfo":[{{"providerId":"google.com","rawId":"g-1","email":"c@example.com{crlf}marker-secret"}}]}}"#
+            ),
+            "providerUserInfo.email",
+        ),
+        (
+            "federated-photo-url",
+            format!(
+                r#"{{"localId":"u","providerUserInfo":[{{"providerId":"google.com","rawId":"g-1","photoUrl":"http://x/{nul}marker-secret"}}]}}"#
+            ),
+            "providerUserInfo.photoUrl",
+        ),
+        (
+            "phone-factor-number",
+            format!(
+                r#"{{"localId":"u","mfaInfo":[{{"mfaEnrollmentId":"f1","phoneInfo":"+15551234567{nul}marker-secret"}}]}}"#
+            ),
+            "mfaInfo.phoneInfo",
+        ),
+        (
+            "phone-factor-display-name",
+            format!(
+                r#"{{"localId":"u","mfaInfo":[{{"mfaEnrollmentId":"f1","phoneInfo":"+15551234567","displayName":"phone{crlf}marker-secret"}}]}}"#
+            ),
+            "mfaInfo.displayName",
+        ),
+        (
+            "enrollment-id",
+            format!(
+                r#"{{"localId":"u","mfaInfo":[{{"mfaEnrollmentId":"f{nul}marker-secret","phoneInfo":"+15551234567"}}]}}"#
+            ),
+            "mfaInfo.mfaEnrollmentId",
+        ),
+    ] {
+        let dir = scratch(label);
+        let export = dir.join("export");
+        std::fs::create_dir_all(export.join("auth_export")).unwrap();
+        std::fs::write(
+            export.join("firebase-export-metadata.json"),
+            r#"{"version":"15.28.2","auth":{"version":"15.28.2","path":"auth_export"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            export.join("auth_export/config.json"),
+            r#"{"signIn":{"allowDuplicateEmails":false},"emailPrivacyConfig":{"enableImprovedEmailPrivacy":false}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            export.join("auth_export/accounts.json"),
+            format!(r#"{{"kind":"identitytoolkit#DownloadAccountResponse","users":[{account}]}}"#),
+        )
+        .unwrap();
+
+        let output = import(&export);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{label}: {stderr}");
+        assert!(stderr.contains(field), "{label}: {stderr}");
+        assert!(stderr.contains("control character"), "{label}: {stderr}");
+        assert!(
+            !stderr.contains("marker-secret"),
+            "{label}: the refusal must not echo the value: {stderr}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

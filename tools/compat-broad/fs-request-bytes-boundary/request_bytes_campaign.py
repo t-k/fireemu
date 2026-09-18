@@ -111,6 +111,12 @@ REFUSAL_EXPECTATION: dict[str, Any] = {
     },
 }
 
+#: The fields that make up a refusal shape. A classification claiming the shape
+#: matched must compare every one of them; comparing a subset while saying
+#: "status, code and message" is a false report, not a shortcut.
+BASELINE_COMPARISON_FIELDS = ("httpStatus", "errorCode", "errorStatus", "message")
+
+
 #: What the local fireemu runtime does today, as observed by the local shadow
 #: rather than assumed. The limits layer now implements this condition: every
 #: Firestore transport applies the same bound at its own decode boundary, and
@@ -224,37 +230,92 @@ def _nonce_digest(nonce: str) -> str:
 
 
 def _request_accounting() -> dict[str, int]:
-    """Derive the billable unit counts from the fixed schedule shape.
+    """The billable unit counts under the outcome this campaign expects.
 
-    Per probe the schedule is 17 preflight reads, one Commit, 17 post-state
-    readbacks, then 17 ownership reads, 17 deletes and 17 absence reads.
+    This is a forecast, not a bound. It counts writes and deletes for the two
+    probes production is expected to accept. `_maximum_usage` is what the
+    permission and the reservation must cover, because an unexpected acceptance
+    of the over-boundary probe is exactly the outcome the campaign is run to
+    detect and must therefore be affordable.
     """
     probes = len(REQUEST_TARGETS)
     accepted = sum(1 for target in REQUEST_TARGETS if target <= REQUEST_LIMIT)
-    reads = probes * DOCUMENT_COUNT * 4
-    writes = accepted * DOCUMENT_COUNT
-    deletes = accepted * DOCUMENT_COUNT
-    # Four reads and one delete slot per owned resource, plus one Commit per
-    # probe. Delete slots on a refused probe are consumed as zero-wire skips,
-    # so this is a ceiling rather than the number that will be sent.
-    requests = probes * DOCUMENT_COUNT * 5 + probes
     return {
-        "documentReads": reads,
-        "documentWrites": writes,
-        "documentDeletes": deletes,
-        "httpRequests": requests,
+        "documentReads": probes * DOCUMENT_COUNT * 4,
+        "documentWrites": accepted * DOCUMENT_COUNT,
+        "documentDeletes": accepted * DOCUMENT_COUNT,
+        # Four reads and one delete slot per owned resource, plus one Commit per
+        # probe. Delete slots on a refused probe are consumed as zero-wire
+        # skips, so the request figure is the same under every outcome.
+        "httpRequests": probes * DOCUMENT_COUNT * 5 + probes,
         "uploadedBytes": sum(REQUEST_TARGETS),
     }
 
 
-def _cost(accounting: dict[str, int]) -> dict[str, Any]:
-    usd = (
-        accounting["documentReads"] * READ_USD_PER_UNIT
-        + accounting["documentWrites"] * WRITE_USD_PER_UNIT
-        + accounting["documentDeletes"] * DELETE_USD_PER_UNIT
-    )
+def _maximum_usage() -> dict[str, int]:
+    """The largest usage any legitimate outcome of this schedule can reach.
+
+    Every probe is accepted, including the over-boundary one. The collector
+    records that as a failure and still creates and recovers all 51 documents,
+    so the reservation has to cover 51 writes and 51 deletes. What does not
+    rise: the documents coexist 17 at a time because each probe is cleaned up
+    before the next begins, and the request count is fixed by the schedule.
+    """
+    probes = len(REQUEST_TARGETS)
     return {
-        "estimatedCostUsd": round(usd, 6),
+        "documentReads": probes * DOCUMENT_COUNT * 4,
+        "documentWrites": probes * DOCUMENT_COUNT,
+        "documentDeletes": probes * DOCUMENT_COUNT,
+        "httpRequests": probes * DOCUMENT_COUNT * 5 + probes,
+        "uploadedBytes": sum(REQUEST_TARGETS),
+        "peakLiveDocuments": DOCUMENT_COUNT,
+        "distinctResources": probes * DOCUMENT_COUNT,
+        "basis": "every probe accepted, which is the outcome the campaign exists to detect",
+    }
+
+
+def _accept_combinations() -> list[tuple[bool, ...]]:
+    """Every accept/refuse combination of the three probes."""
+    return [
+        tuple(bool(index >> position & 1) for position in range(len(REQUEST_TARGETS)))
+        for index in range(2 ** len(REQUEST_TARGETS))
+    ]
+
+
+def probe_usage(accepted: tuple[bool, ...]) -> dict[str, int]:
+    """Creates and recovery deletes for one accept/refuse combination.
+
+    The schedule is positional, so a refused probe still consumes its delete
+    slots as zero-wire skips. Only the documents an accepted probe creates need
+    a write and a version-bound delete.
+    """
+    if len(accepted) != len(REQUEST_TARGETS):
+        raise ValueError("one flag per compiled probe is required")
+    live = sum(1 for flag in accepted if flag)
+    return {
+        "documentWrites": live * DOCUMENT_COUNT,
+        "documentDeletes": live * DOCUMENT_COUNT,
+        "documentReads": len(REQUEST_TARGETS) * DOCUMENT_COUNT * 4,
+        "httpRequests": len(REQUEST_TARGETS) * DOCUMENT_COUNT * 5
+        + len(REQUEST_TARGETS),
+        "peakLiveDocuments": DOCUMENT_COUNT if live else 0,
+    }
+
+
+def _usage_cost(usage: dict[str, int]) -> float:
+    return (
+        usage["documentReads"] * READ_USD_PER_UNIT
+        + usage["documentWrites"] * WRITE_USD_PER_UNIT
+        + usage["documentDeletes"] * DELETE_USD_PER_UNIT
+    )
+
+
+def _cost(accounting: dict[str, int]) -> dict[str, Any]:
+    return {
+        "estimatedCostUsd": round(_usage_cost(accounting), 6),
+        # What the run can cost if every probe is accepted. The ceiling has to
+        # clear this figure, not the forecast.
+        "maximumCostUsd": round(_usage_cost(_maximum_usage()), 6),
         "hardCostCeilingUsd": 0.5,
         "networkCostUsd": 0.0,
         "networkNote": EGRESS_NOTE,
@@ -268,18 +329,25 @@ def _cost(accounting: dict[str, int]) -> dict[str, Any]:
 
 
 def _budget(accounting: dict[str, int]) -> dict[str, Any]:
+    # Permission and reservation are sized by the maximum, never by the
+    # forecast. Budgeting the expected outcome would make the campaign unable
+    # to pay for the one result it exists to detect.
+    maximum = _maximum_usage()
     return {
         "maxRuns": 1,
         "maxConcurrency": 1,
         "maxInFlightRequests": 1,
         "maxAccounts": 1,
-        "maxDocuments": accounting["documentWrites"],
-        "maxDistinctResources": len(REQUEST_TARGETS) * DOCUMENT_COUNT,
-        "maxPeakLiveDocuments": DOCUMENT_COUNT,
-        "maxReads": accounting["documentReads"],
-        "maxWrites": accounting["documentWrites"],
-        "maxDeletes": accounting["documentDeletes"],
-        "maxHttpRequests": accounting["httpRequests"],
+        "maxDocuments": maximum["documentWrites"],
+        "maxDistinctResources": maximum["distinctResources"],
+        "maxPeakLiveDocuments": maximum["peakLiveDocuments"],
+        "maxReads": maximum["documentReads"],
+        "maxWrites": maximum["documentWrites"],
+        "maxDeletes": maximum["documentDeletes"],
+        "maxHttpRequests": maximum["httpRequests"],
+        "expectedWrites": accounting["documentWrites"],
+        "expectedDeletes": accounting["documentDeletes"],
+        "budgetBasis": "maxima cover every probe being accepted; expectedWrites and expectedDeletes are the forecast under the expected outcome and bind nothing",
         "maxRequestBytes": max(REQUEST_TARGETS),
         "maxResponseBytes": 2 * 1024 * 1024,
         "perRequestTimeoutSeconds": TRANSPORT_TIMEOUT_SECONDS,
@@ -408,6 +476,7 @@ def compile_request_bytes_campaign(
         },
         "ownerPreconditions": _owner_preconditions(project, database),
         "accounting": accounting,
+        "maximumUsage": _maximum_usage(),
         "planBounds": plan["bounds"],
         "transportDeadline": TRANSPORT_DEADLINE,
         "cost": _cost(accounting),
@@ -619,6 +688,25 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
     accounting = campaign.get("accounting")
     if accounting != _request_accounting():
         raise ValueError("request accounting drifted from the fixed schedule shape")
+    maximum = campaign.get("maximumUsage")
+    if maximum != _maximum_usage():
+        raise ValueError("maximum usage drifted from the fixed schedule shape")
+    # The campaign must be able to pay for the outcome it exists to detect: an
+    # over-boundary probe that production unexpectedly accepts creates and then
+    # recovers all 51 documents.
+    if maximum["documentWrites"] != len(REQUEST_TARGETS) * DOCUMENT_COUNT:
+        raise ValueError("the maximum must cover every probe being accepted")
+    if maximum["documentDeletes"] != maximum["documentWrites"]:
+        raise ValueError("every document the maximum creates must be recoverable")
+    for key in ("documentReads", "documentWrites", "documentDeletes", "httpRequests"):
+        if maximum[key] < accounting[key]:
+            raise ValueError(f"the maximum is below the forecast for {key}")
+    # These two do not rise with the outcome: probes are cleaned up one at a
+    # time, and a refused probe's delete slots are consumed as zero-wire skips.
+    if maximum["peakLiveDocuments"] != DOCUMENT_COUNT:
+        raise ValueError("peak coexisting documents must stay at one probe's set")
+    if maximum["httpRequests"] != accounting["httpRequests"]:
+        raise ValueError("the request bound does not depend on the outcome")
     bounds = campaign.get("planBounds")
     if not isinstance(bounds, dict):
         raise TypeError("missing compiled schedule bounds")
@@ -635,6 +723,17 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
         raise TypeError("missing cost estimate")
     estimate = cost.get("estimatedCostUsd")
     ceiling = cost.get("hardCostCeilingUsd")
+    worst = cost.get("maximumCostUsd")
+    if not isinstance(worst, (int, float)) or isinstance(worst, bool):
+        raise TypeError("the maximum cost must be published alongside the forecast")
+    if abs(worst - round(_usage_cost(_maximum_usage()), 6)) > 1e-9:
+        raise ValueError("the maximum cost does not follow from the maximum usage")
+    if worst < estimate:
+        raise ValueError("the maximum cost cannot be below the forecast")
+    # The ceiling has to clear what the run can actually cost, not what it is
+    # expected to cost. Only the forecast was checked against it before.
+    if ceiling < worst:
+        raise ValueError("the hard ceiling must clear the maximum cost")
     if not isinstance(estimate, (int, float)) or isinstance(estimate, bool):
         raise TypeError("cost estimate malformed")
     if not isinstance(ceiling, (int, float)) or estimate >= ceiling:
@@ -649,19 +748,37 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
         raise ValueError("this campaign is a single serial run")
     if budget.get("maxRequestBytes") != max(REQUEST_TARGETS):
         raise ValueError("budget request cap drifted")
-    for key in ("maxReads", "maxWrites", "maxDeletes", "maxHttpRequests"):
-        if (
-            budget.get(key)
-            != accounting[
-                {
-                    "maxReads": "documentReads",
-                    "maxWrites": "documentWrites",
-                    "maxDeletes": "documentDeletes",
-                    "maxHttpRequests": "httpRequests",
-                }[key]
-            ]
+    # Sized by the maximum, never by the forecast.
+    for key, source in (
+        ("maxReads", "documentReads"),
+        ("maxWrites", "documentWrites"),
+        ("maxDeletes", "documentDeletes"),
+        ("maxHttpRequests", "httpRequests"),
+        ("maxDocuments", "documentWrites"),
+        ("maxDistinctResources", "distinctResources"),
+        ("maxPeakLiveDocuments", "peakLiveDocuments"),
+    ):
+        if budget.get(key) != maximum[source]:
+            raise ValueError(f"budget {key} is not the maximum for {source}")
+    if budget.get("expectedWrites") != accounting["documentWrites"]:
+        raise ValueError("the forecast writes drifted")
+    if budget.get("expectedDeletes") != accounting["documentDeletes"]:
+        raise ValueError("the forecast deletes drifted")
+    if not budget.get("budgetBasis"):
+        raise ValueError("the budget must say what its maxima cover")
+    for combination in _accept_combinations():
+        usage = probe_usage(combination)
+        for key, source in (
+            ("maxWrites", "documentWrites"),
+            ("maxDeletes", "documentDeletes"),
+            ("maxReads", "documentReads"),
+            ("maxHttpRequests", "httpRequests"),
+            ("maxPeakLiveDocuments", "peakLiveDocuments"),
         ):
-            raise ValueError(f"budget {key} does not match the accounting")
+            if usage[source] > budget[key]:
+                raise ValueError(
+                    f"outcome {combination} needs more {source} than the budget allows"
+                )
     deadline = campaign.get("transportDeadline")
     if not isinstance(deadline, dict):
         raise TypeError("the campaign must publish the transport deadline")
@@ -712,8 +829,20 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
             raise ValueError(f"recovery window is missing {key}")
     if window["reserveSeconds"] >= budget.get("maxDurationSeconds", 0):
         raise ValueError("the recovery reserve must fit inside the run duration")
-    if window["reserveDeletes"] < accounting["documentDeletes"]:
-        raise ValueError("the recovery reserve cannot cover fewer deletes than planned")
+    # The reserve exists for the worst legitimate outcome, so it is sized by the
+    # maximum. Checking it against the forecast let reserveDeletes 34 stand
+    # beside maxDeletes 51.
+    if window["reserveDeletes"] < maximum["documentDeletes"]:
+        raise ValueError(
+            "the recovery reserve cannot cover fewer deletes than the maximum"
+        )
+    # Recovery reads each owned resource twice: one ownership read and one
+    # absence proof. Without this guard any positive number was accepted.
+    if window["reserveReads"] < maximum["distinctResources"] * 2:
+        raise ValueError(
+            "the recovery reserve must cover an ownership read and an absence "
+            "proof for every owned resource"
+        )
 
     digest_plan = campaign.get("planDigest")
     if not isinstance(digest_plan, str) or len(digest_plan) != 64:

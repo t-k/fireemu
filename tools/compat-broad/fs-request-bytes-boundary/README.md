@@ -86,7 +86,25 @@ rather than observed, which is what this campaign exists to settle, so
 legacy 413 from a strict-profile build is `local-boundary-enforced-shape-differs`
 and now means the implemented shape was lost. An accepted over probe is
 `local-boundary-not-enforced`. A refusal without a typed envelope is
-`local-untyped-transport-refusal`. Anything else is a shadow failure.
+`local-untyped-transport-refusal`, which covers every complete refusal that is
+not the typed over-boundary envelope, including a status outside 400 and 413
+such as 500, 429 or 403. Those report `recordingComplete` false and
+`stateValidation` true, because nothing was written but the boundary question is
+unanswered. `shadow-failure` is not the bucket for an unfamiliar status: it is
+reached only by a result the collector could not have produced.
+
+The comparison is field by field. `BASELINE_COMPARISON_FIELDS` names the HTTP
+status, the error code, the error status and the message, and a verdict claiming
+a match has compared all four; the collector records the message with the
+response byte count and digest so the verdict rests on the bytes that arrived. A
+mismatch lists the differing fields in `refusalFieldMismatches` and sets only
+`matchesBaseline` false, leaving the recording and recovery facts intact.
+
+The budget separates the forecast from the maximum. The maxima cover every probe
+being accepted, 51 writes and 51 deletes, because an unexpectedly accepted
+over-boundary Commit is the outcome the campaign exists to detect and must be
+affordable. Peak coexisting documents and the 258-request bound do not rise with
+the outcome.
 Neither module authorizes production execution.
 
 Run the offline tests with:

@@ -18,8 +18,10 @@ from request_bytes_campaign import (
     CASE_IDS,
     LOCAL_EXPECTATION,
     REFUSAL_EXPECTATION,
+    _accept_combinations,
     campaign_digest,
     compile_request_bytes_campaign,
+    probe_usage,
     validate_request_bytes_campaign,
 )
 from request_bytes_compiler import (
@@ -500,6 +502,170 @@ def test_the_untyped_refusal_is_never_a_refusal_proof(campaign: dict) -> None:
     ],
 )
 def test_validator_rejects_deadline_drift(campaign: dict, mutate) -> None:
+    mutated = copy.deepcopy(campaign)
+    mutate(mutated)
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        validate_request_bytes_campaign(mutated)
+
+
+# --- Budget must cover the outcome the campaign exists to detect --------------
+
+
+def test_the_budget_maxima_cover_every_probe_being_accepted(campaign: dict) -> None:
+    """An unexpected over-success creates and recovers all 51 documents."""
+    budget = campaign["budget"]
+    assert budget["maxWrites"] == 3 * DOCUMENT_COUNT
+    assert budget["maxDeletes"] == 3 * DOCUMENT_COUNT
+    assert budget["maxDocuments"] == 3 * DOCUMENT_COUNT
+
+
+def test_the_forecast_is_published_but_binds_nothing(campaign: dict) -> None:
+    budget = campaign["budget"]
+    assert budget["expectedWrites"] == 2 * DOCUMENT_COUNT
+    assert budget["expectedDeletes"] == 2 * DOCUMENT_COUNT
+    assert budget["expectedWrites"] < budget["maxWrites"]
+    assert campaign["accounting"]["documentWrites"] == budget["expectedWrites"]
+    assert campaign["maximumUsage"]["documentWrites"] == budget["maxWrites"]
+    assert budget["budgetBasis"]
+
+
+def test_the_request_bound_and_peak_live_set_do_not_rise(campaign: dict) -> None:
+    """Probes are cleaned up one at a time and refused deletes are zero-wire."""
+    budget = campaign["budget"]
+    assert budget["maxHttpRequests"] == 258
+    assert budget["maxPeakLiveDocuments"] == DOCUMENT_COUNT
+    assert campaign["maximumUsage"]["httpRequests"] == 258
+    assert campaign["maximumUsage"]["peakLiveDocuments"] == DOCUMENT_COUNT
+
+
+def test_the_recovery_reserve_covers_the_maximum_not_the_forecast(
+    campaign: dict,
+) -> None:
+    window = campaign["budget"]["recoveryWindow"]
+    assert window["reserveDeletes"] >= campaign["maximumUsage"]["documentDeletes"]
+
+
+def test_the_ceiling_clears_the_maximum_cost(campaign: dict) -> None:
+    cost = campaign["cost"]
+    assert cost["maximumCostUsd"] >= cost["estimatedCostUsd"]
+    assert cost["maximumCostUsd"] < cost["hardCostCeilingUsd"]
+
+
+@pytest.mark.parametrize(
+    "accepted",
+    [
+        pytest.param(combination, id="".join("A" if f else "R" for f in combination))
+        for combination in _accept_combinations()
+    ],
+)
+def test_every_accept_refuse_combination_fits_the_reservation(
+    campaign: dict, accepted: tuple
+) -> None:
+    """Each probe accepted needs 17 creates and 17 version-bound recoveries."""
+    budget = campaign["budget"]
+    usage = probe_usage(accepted)
+    live = sum(1 for flag in accepted if flag)
+    assert usage["documentWrites"] == live * DOCUMENT_COUNT
+    assert usage["documentDeletes"] == usage["documentWrites"]
+    assert usage["documentWrites"] <= budget["maxWrites"]
+    assert usage["documentDeletes"] <= budget["maxDeletes"]
+    assert usage["documentReads"] <= budget["maxReads"]
+    assert usage["httpRequests"] <= budget["maxHttpRequests"]
+    assert usage["peakLiveDocuments"] <= budget["maxPeakLiveDocuments"]
+    assert usage["documentDeletes"] <= budget["recoveryWindow"]["reserveDeletes"]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(
+            lambda c: c["budget"].update(maxWrites=34), id="budget-assumes-the-outcome"
+        ),
+        pytest.param(
+            lambda c: c["budget"].update(maxDeletes=34), id="deletes-assume-the-outcome"
+        ),
+        pytest.param(
+            lambda c: c["budget"].update(maxDocuments=34), id="documents-assume-outcome"
+        ),
+        pytest.param(
+            lambda c: c["maximumUsage"].update(documentDeletes=34),
+            id="maximum-cannot-recover-what-it-creates",
+        ),
+        pytest.param(
+            lambda c: c["maximumUsage"].update(documentWrites=34),
+            id="maximum-below-all-accepted",
+        ),
+        pytest.param(
+            lambda c: c["maximumUsage"].update(peakLiveDocuments=51),
+            id="peak-live-inflated",
+        ),
+        pytest.param(lambda c: c.pop("maximumUsage"), id="maximum-not-published"),
+        pytest.param(
+            lambda c: c["budget"].update(expectedWrites=51), id="forecast-drift"
+        ),
+        pytest.param(lambda c: c["budget"].pop("budgetBasis"), id="basis-unstated"),
+        pytest.param(
+            lambda c: c["cost"].pop("maximumCostUsd"), id="maximum-cost-not-published"
+        ),
+        pytest.param(
+            lambda c: c["cost"].update(maximumCostUsd=0.9),
+            id="maximum-cost-over-the-ceiling",
+        ),
+    ],
+)
+def test_validator_rejects_a_budget_that_assumes_the_outcome(
+    campaign: dict, mutate
+) -> None:
+    mutated = copy.deepcopy(campaign)
+    mutate(mutated)
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        validate_request_bytes_campaign(mutated)
+
+
+# --- The reserve and the ceiling are sized by the maximum ---------------------
+
+
+def test_the_recovery_reserve_covers_two_reads_per_owned_resource(
+    campaign: dict,
+) -> None:
+    """An ownership read and an absence proof for each of the 51 resources."""
+    window = campaign["budget"]["recoveryWindow"]
+    assert window["reserveReads"] >= campaign["maximumUsage"]["distinctResources"] * 2
+
+
+def test_the_hard_ceiling_clears_the_maximum_cost(campaign: dict) -> None:
+    cost = campaign["cost"]
+    assert cost["hardCostCeilingUsd"] >= cost["maximumCostUsd"]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(
+            lambda c: c["budget"]["recoveryWindow"].update(reserveDeletes=34),
+            id="reserve-deletes-sized-by-the-forecast",
+        ),
+        pytest.param(
+            lambda c: c["budget"]["recoveryWindow"].update(reserveReads=1),
+            id="reserve-reads-unbounded",
+        ),
+        pytest.param(
+            lambda c: c["budget"]["recoveryWindow"].update(reserveReads=101),
+            id="reserve-reads-one-short",
+        ),
+        pytest.param(
+            lambda c: c["cost"].update(hardCostCeilingUsd=0.0002),
+            id="ceiling-below-the-maximum-cost",
+        ),
+        pytest.param(
+            lambda c: c["cost"].update(maximumCostUsd=0.0000001),
+            id="maximum-cost-below-the-forecast",
+        ),
+    ],
+)
+def test_validator_rejects_a_reserve_or_ceiling_sized_by_the_forecast(
+    campaign: dict, mutate
+) -> None:
     mutated = copy.deepcopy(campaign)
     mutate(mutated)
     with pytest.raises((ValueError, TypeError, KeyError)):

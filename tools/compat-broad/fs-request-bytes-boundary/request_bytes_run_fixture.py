@@ -32,7 +32,33 @@ TYPED_413 = {
     "status": 413,
     "body": {"error": {"code": 413, "status": "INVALID_ARGUMENT"}},
 }
+EXPECTED_MESSAGE = "Request payload size exceeds the limit: 10485760 bytes."
+
 TYPED_400 = {
+    "status": 400,
+    "body": {
+        "error": {
+            "code": 400,
+            "message": EXPECTED_MESSAGE,
+            "status": "INVALID_ARGUMENT",
+        }
+    },
+}
+
+#: The expected status and code with someone else's wording.
+TYPED_400_OTHER_MESSAGE = {
+    "status": 400,
+    "body": {
+        "error": {
+            "code": 400,
+            "message": "The request is too large.",
+            "status": "INVALID_ARGUMENT",
+        }
+    },
+}
+
+#: The expected status and code with no message at all.
+TYPED_400_NO_MESSAGE = {
     "status": 400,
     "body": {"error": {"code": 400, "status": "INVALID_ARGUMENT"}},
 }

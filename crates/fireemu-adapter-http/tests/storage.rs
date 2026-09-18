@@ -26,6 +26,9 @@ use serde_json::{json, Value};
 
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
 const BUCKET: &str = "demo-app.appspot.com";
+/// A ruleset that admits every end-user request, for the fixtures whose subject is not the
+/// authorization decision. A run with no loaded ruleset denies them all.
+const ALLOW_ALL_RULES: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if true; } } }";
 
 struct RefusingStorageEvents;
 
@@ -2034,7 +2037,7 @@ fn fault_plans_fail_storage_operations() {
 
 #[test]
 fn storage_tokens_are_bound_to_the_buckets_project() {
-    let mut s = state(None);
+    let mut s = state(Some(ALLOW_ALL_RULES));
     let mut tenancy = fireemu_core_session::tenancy::Tenancy::new("demo-app");
     tenancy.register("demo-b", &[], &[]).unwrap();
     s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
@@ -3315,4 +3318,98 @@ fn a_status_check_of_a_finalized_resumable_upload_answers_the_committed_object()
         .status,
         400
     );
+}
+
+/// SNORULE-1: a run with no loaded Storage ruleset denies every end-user request instead of
+/// admitting it. Production has no rules-absent state and its default rules admit no
+/// anonymous access, and the official emulator refuses an SDK request with no loaded ruleset
+/// as well, so the open default was the one configuration where forgetting `storage.rules`
+/// silently published every object. The owner credential keeps its documented Rules bypass.
+#[test]
+fn a_run_with_no_loaded_ruleset_denies_every_end_user_request() {
+    let s = state(None);
+
+    // Seed an object through the privileged JSON API, on which rules never run.
+    let seeded = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=seeded.txt"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", "text/plain"),
+            ],
+            b"seeded",
+        ),
+    );
+    assert_eq!(
+        seeded.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&seeded.body)
+    );
+
+    assert_eq!(anonymous_multipart_upload(&s, "anon.txt").status, 403);
+    assert_eq!(
+        handle(
+            &s,
+            req("GET", &format!("/v0/b/{BUCKET}/o/seeded.txt"), &[], b"")
+        )
+        .status,
+        403
+    );
+    assert_eq!(
+        handle(
+            &s,
+            req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/seeded.txt?alt=media"),
+                &[],
+                b"",
+            ),
+        )
+        .status,
+        403
+    );
+    assert_eq!(
+        handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o"), &[], b"")).status,
+        403
+    );
+    assert_eq!(
+        handle(
+            &s,
+            req("DELETE", &format!("/v0/b/{BUCKET}/o/seeded.txt"), &[], b""),
+        )
+        .status,
+        403
+    );
+
+    // The owner credential is unaffected on the Firebase dialect.
+    for (method, path) in [
+        ("GET", format!("/v0/b/{BUCKET}/o/seeded.txt")),
+        ("GET", format!("/v0/b/{BUCKET}/o")),
+    ] {
+        let r = handle(
+            &s,
+            req(method, &path, &[("authorization", "Bearer owner")], b""),
+        );
+        assert_eq!(
+            r.status,
+            200,
+            "{method} {path}: {}",
+            String::from_utf8_lossy(&r.body)
+        );
+    }
+
+    // The object survived every refusal.
+    let r = handle(
+        &s,
+        req(
+            "GET",
+            &format!("/v0/b/{BUCKET}/o/seeded.txt"),
+            &[("authorization", "Bearer owner")],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 200);
 }

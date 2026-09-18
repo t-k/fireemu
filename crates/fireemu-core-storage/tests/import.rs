@@ -327,7 +327,7 @@ fn imported_metadata_with_a_control_character_is_refused_field_by_field() {
         (
             "cacheControl",
             Box::new(|o: &mut ImportedObject| {
-                o.cache_control = Some("public\u{0}max-age=60".into())
+                o.cache_control = Some("public\u{0}max-age=60".into());
             }),
         ),
         (

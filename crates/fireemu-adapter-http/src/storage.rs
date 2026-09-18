@@ -1775,7 +1775,17 @@ impl StorageState {
             .snapshot()
             .map_err(|_| error_response(Dialect::Firebase, 500, "rules poisoned"))?;
         let Some(ruleset) = &rules.ruleset else {
-            return Ok(());
+            // A slot with no parsed ruleset is a run started without `storage.rules`, or one
+            // whose rules the control API explicitly dropped. Production has no such state,
+            // and the rules a project is created with admit no anonymous access, so the
+            // end-user surface fails closed here rather than publishing every object; the
+            // owner credential returned above keeps its documented bypass. The official
+            // emulator refuses an SDK request with no loaded ruleset in the same way.
+            return Err(error_response(
+                Dialect::Firebase,
+                403,
+                "Permission denied. Storage Emulator has no loaded ruleset.",
+            ));
         };
         if method == Method::List && ruleset.version.as_deref() != Some("2") {
             // Storage list requests exist only under rules_version = '2'; a v1 `read` never

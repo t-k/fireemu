@@ -85,11 +85,11 @@ The shadow owns the artifact it measures: it copies the binary into a private di
 
 | Item | Value |
 | --- | --- |
-| Collector source commit | `2e804dd820e38d93827d82d271022d6572bf459a` |
+| Collector source commit | `2603d39b8f82e3a44902bc7b1f8c1ce21d90a4d2` |
 | Artifact SHA-256 | `bad6b9280e895f90484b5a89056c62ce7c4f3f44e8571891f5175986e99f53a6` (version 0.7.0) |
 | Artifact binding | `retained-external`; not rebuilt from the collector source commit |
 | Campaign package SHA-256 | `d2c440583ac4132e6caf0c2ab7c17f85da66fe26d613889c21f127f55b8f23aa` |
-| Receipt SHA-256 | `653ec88117015c9d63a3821a9f5481de84a9db1407e6c4ca49e50d9c7a71c356` |
+| Receipt SHA-256 | `77995020571e0f8a7356da831da45b05f77fa15ebd1c3e29b3a962da13762438` |
 | Result | 26 stages recorded, cleanup complete, 0 accounts remaining, process exit 0, listeners closed |
 
 The artifact binding is the honest limit of this evidence, and it is now enforced rather than described. The receipt carries the binding kind alongside the digests, the shadow records `unbound` for a binary it did not build, and the comparator refuses a verdict unless the receipt says `built-from-source` and names the same commit twice. Filling a retained digest into the binding can no longer buy a verdict. Rebuilding the artifact from the execution commit remains an owner precondition, not a step this package performed.

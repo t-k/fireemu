@@ -3656,17 +3656,10 @@ fn gcs_resumable_put(
             return Ok(foreign_session(Dialect::Gcs));
         }
     }
-    match store.upload_phase(&id, now) {
-        Err(StorageError::UploadNotFound) => return Ok(plain_status(404)),
-        Err(e) => return Ok(gcs_core_err(e)),
-        Ok(UploadPhase::Finalized(_) | UploadPhase::Denied(_) | UploadPhase::Cancelled(_)) => {
-            return Ok(plain_status(400));
-        }
-        Ok(UploadPhase::Active(_)) => {}
-    }
-    if store.upload_bucket(&id, now).is_ok_and(|b| b != bucket) {
-        return Ok(plain_status(404));
-    }
+    // The Content-Range is read before the phase is judged: a status check
+    // (`bytes */...`) of a finalized session is the documented way to recover a lost final
+    // response, and the `@google-cloud/storage` client always retries that way, so it must
+    // reach `upload_status` and be answered with the committed object rather than refused.
     let range = match req.header("content-range") {
         Some(cr) => parse_content_range(cr).ok_or_else(|| {
             gcs_json_error(400, &format!("invalid Content-Range {cr:?}"), "invalid")
@@ -3677,6 +3670,21 @@ fn gcs_resumable_put(
             total: Some(chunk.len() as u64),
         },
     };
+    let status_check = matches!(range, ContentRange::Status);
+    match store.upload_phase(&id, now) {
+        Err(StorageError::UploadNotFound) => return Ok(plain_status(404)),
+        Err(e) => return Ok(gcs_core_err(e)),
+        // Only a finalized session has an object to report; a refused or cancelled session
+        // never published one, and a chunk sent into any terminal session is still a 400.
+        Ok(UploadPhase::Finalized(_)) if status_check => {}
+        Ok(UploadPhase::Finalized(_) | UploadPhase::Denied(_) | UploadPhase::Cancelled(_)) => {
+            return Ok(plain_status(400));
+        }
+        Ok(UploadPhase::Active(_)) => {}
+    }
+    if store.upload_bucket(&id, now).is_ok_and(|b| b != bucket) {
+        return Ok(plain_status(404));
+    }
     let (start, end, total) = match range {
         ContentRange::Status => {
             let (received, committed) = store.upload_status(&id, now).map_err(gcs_core_err)?;

@@ -3214,3 +3214,105 @@ fn set_rules_refuses_a_body_beyond_the_control_port_limit() {
     assert_eq!(response.status, 413);
     assert_eq!(anonymous_multipart_upload(&s, "oversized.txt").status, 403);
 }
+
+/// RESST-1: a `Content-Range: bytes */...` status check of a finalized resumable upload is
+/// answered with the committed object, as the resumable protocol documents it. The Node
+/// `@google-cloud/storage` client sends exactly this after losing the final response, so a
+/// 400 here reports a successful upload as a failure. A data-bearing PUT into a finalized
+/// session stays a 400.
+#[test]
+fn a_status_check_of_a_finalized_resumable_upload_answers_the_committed_object() {
+    let s = state(None);
+    let start = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=recovered.bin"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", "application/json"),
+                ("x-upload-content-type", "application/pdf"),
+            ],
+            b"{}",
+        ),
+    );
+    assert_eq!(start.status, 200);
+    let location = header(&start, "location")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+
+    let first = handle(
+        &s,
+        req(
+            "PUT",
+            &location,
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-range", "bytes 0-2/6"),
+            ],
+            b"abc",
+        ),
+    );
+    assert_eq!(first.status, 308);
+    let commit = handle(
+        &s,
+        req(
+            "PUT",
+            &location,
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-range", "bytes 3-5/6"),
+            ],
+            b"def",
+        ),
+    );
+    assert_eq!(
+        commit.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&commit.body)
+    );
+
+    for range in ["bytes */6", "bytes */*"] {
+        let status = handle(
+            &s,
+            req(
+                "PUT",
+                &location,
+                &[("authorization", "Bearer owner"), ("content-range", range)],
+                b"",
+            ),
+        );
+        assert_eq!(
+            status.status,
+            200,
+            "{range}: {}",
+            String::from_utf8_lossy(&status.body)
+        );
+        let body = json_body(&status);
+        assert_eq!(body["name"], "recovered.bin", "{range}");
+        assert_eq!(body["size"], "6", "{range}");
+        assert_eq!(body["contentType"], "application/pdf", "{range}");
+        assert_eq!(body, json_body(&commit), "{range}");
+    }
+
+    // A chunk sent into the finalized session is still a 400.
+    assert_eq!(
+        handle(
+            &s,
+            req(
+                "PUT",
+                &location,
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-range", "bytes 3-5/6"),
+                ],
+                b"def",
+            ),
+        )
+        .status,
+        400
+    );
+}

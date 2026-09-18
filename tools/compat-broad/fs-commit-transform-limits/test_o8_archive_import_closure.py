@@ -41,6 +41,8 @@ SOURCES = {
     "shared_production": ROOT / "tools/compat-broad/shared_production.py",
     "shared_production_pair": ROOT / "tools/compat-broad/shared_production_pair.py",
     "reservations": ROOT / "tools/compat-broad/production-admission/reservations.py",
+    "o8_admission": ROOT / "tools/compat-broad/o8-core/o8_admission.py",
+    "o8_campaign": ROOT / "tools/compat-broad/o8-core/o8_campaign.py",
     "evidence_common": ROOT / "tools/compat-inventory/evidence_common.py",
     "owned_runner": ROOT / "tools/compat-inventory/owned_runner.py",
     "production_plan": ROOT / "tools/compat-broad/fs-write-limits/production_plan.py",
@@ -134,10 +136,10 @@ def test_gate_adapter_imports_first_from_exact_archive_member(tmp_path: Path) ->
 def test_parent_imports_remain_inside_inherited_archive(tmp_path: Path) -> None:
     """A dirty checkout and PYTHONPATH must not supply executable modules."""
     main = b"""import importlib, json, sys
-names = ('commit_o8', 'commit_acquisition', 'commit_reserved_adapter', 'gate_adapter', 'commit_remote_transport', 'local_transport', 'owned_transform_runner')
+names = ('commit_o8', 'commit_acquisition', 'commit_reserved_adapter', 'gate_adapter', 'commit_remote_transport', 'local_transport', 'owned_transform_runner', 'o8_admission', 'o8_campaign')
 for name in names:
     importlib.import_module(name)
-print(json.dumps({name: sys.modules[name].__file__ for name in sys.modules if name in ('commit_o8', 'commit_acquisition', 'commit_reserved_adapter', 'gate_adapter', 'commit_remote_transport', 'local_transport', 'owned_transform_runner', 'broad_contract', 'shared_gate', 'reservations', 'broad')}, sort_keys=True))
+print(json.dumps({name: sys.modules[name].__file__ for name in sys.modules if name in ('commit_o8', 'commit_acquisition', 'commit_reserved_adapter', 'gate_adapter', 'commit_remote_transport', 'local_transport', 'owned_transform_runner', 'o8_admission', 'o8_campaign', 'broad_contract', 'shared_gate', 'reservations', 'broad')}, sort_keys=True))
 """
     (tmp_path / "__main__.py").write_bytes(main)
     manifest = {"__main__.py": hashlib.sha256(main).hexdigest()}

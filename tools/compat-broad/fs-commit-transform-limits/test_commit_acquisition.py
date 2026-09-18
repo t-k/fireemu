@@ -658,6 +658,8 @@ def test_reservation_records_the_source_generation_it_was_acquired_under(
         "commit_reserved_adapter.py",
         "gate_adapter.py",
         "commit_acquisition.py",
+        "o8_admission.py",
+        "o8_campaign.py",
     }
     for name in acquisition.ABORT_CLOSURE_SOURCES:
         short = Path(name).name

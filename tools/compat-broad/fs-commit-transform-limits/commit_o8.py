@@ -172,8 +172,8 @@ def execute(args: argparse.Namespace) -> dict:
             ledger_root=args.ledger,
             artifact_path=args.artifact,
             launcher_path=Path(__file__),
-            archive_fd=archive_fd,
-            archive_sha256=archive_sha256,
+            binding=archive_fd,
+            binding_digest=archive_sha256,
         )
         try:
             handoff = _read_handoff(args)

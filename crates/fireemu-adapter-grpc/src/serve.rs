@@ -44,6 +44,48 @@ pub const MAX_GRPC_MESSAGE_BYTES: usize = API_REQUEST_BYTES;
 /// Maximum Firestore REST requests that may retain bodies while waiting for synchronous work.
 pub const MAX_BLOCKING_REST_REQUESTS: usize = 64;
 
+/// The refusal a request over [`API_REQUEST_BYTES`] gets.
+///
+/// Documented, production observation pending. The Firestore quotas page states the 10 MiB
+/// maximum but not the answer to exceeding it, and no production receipt for that refusal
+/// exists in this repository (`tools/compat-broad/fs-request-bytes-boundary/README.md` says
+/// as much about its own sources). The strict profile therefore answers, on every transport,
+/// the shape Google's API infrastructure documents for an oversized payload: HTTP 400 with
+/// the canonical code `INVALID_ARGUMENT`, which is the `google.rpc.Code` that maps to 400.
+/// One shape on all three transports is one thing for the request-byte campaign to confirm
+/// or correct.
+///
+/// The `emulator` profile keeps the 413 the local runtime has always answered. The boundary
+/// is identical under both: only the shape of the refusal differs.
+fn api_request_too_large_message() -> String {
+    format!("Request payload size exceeds the limit: {API_REQUEST_BYTES} bytes.")
+}
+
+/// The legacy refusal, kept for the `emulator` profile.
+pub const API_REQUEST_TOO_LARGE_LEGACY: &str = "request body too large";
+
+fn api_request_too_large(enforce_limits: bool) -> RestResponse {
+    if enforce_limits {
+        RestResponse {
+            status: 400,
+            body: fireemu_adapter_support::api_error::google_rpc(
+                400,
+                &api_request_too_large_message(),
+                "INVALID_ARGUMENT",
+            ),
+        }
+    } else {
+        RestResponse {
+            status: 413,
+            body: fireemu_adapter_support::api_error::google_rpc(
+                413,
+                API_REQUEST_TOO_LARGE_LEGACY,
+                "INVALID_ARGUMENT",
+            ),
+        }
+    }
+}
+
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type OutBody = UnsyncBoxBody<Bytes, BoxError>;
 
@@ -159,14 +201,7 @@ async fn rest_call(
         .collect();
     let Ok(bytes) = read_body(req, MAX_REST_BODY_BYTES).await else {
         return Ok(json_response(
-            &RestResponse {
-                status: 413,
-                body: fireemu_adapter_support::api_error::google_rpc(
-                    413,
-                    "request body too large",
-                    "INVALID_ARGUMENT",
-                ),
-            },
+            &api_request_too_large(state.gateway.enforce_limits),
             origin.as_deref(),
         ));
     };
@@ -247,6 +282,7 @@ async fn channel_call(
     hub: Arc<Hub>,
     kind: StreamKind,
     req: Request<Incoming>,
+    enforce_limits: bool,
 ) -> Response<OutBody> {
     let origin = header(&req, "origin").map(str::to_owned);
     let method = req.method().as_str().to_owned();
@@ -261,17 +297,7 @@ async fn channel_call(
         .map(|v| v.to_str().unwrap_or_default().to_owned())
         .collect();
     let Ok(bytes) = read_body(req, crate::webchannel::MAX_FORM_BYTES).await else {
-        return json_response(
-            &RestResponse {
-                status: 413,
-                body: fireemu_adapter_support::api_error::google_rpc(
-                    413,
-                    "request body too large",
-                    "INVALID_ARGUMENT",
-                ),
-            },
-            origin.as_deref(),
-        );
+        return json_response(&api_request_too_large(enforce_limits), origin.as_deref());
     };
     let body = String::from_utf8_lossy(&bytes).into_owned();
     let response = hub.handle(&ChannelRequest {
@@ -332,19 +358,41 @@ fn is_grpc(req: &Request<Incoming>) -> bool {
     header(req, "content-type").is_some_and(|ct| ct.starts_with("application/grpc"))
 }
 
-fn normalize_prost_recursion_status(headers: &mut HeaderMap) {
+/// Whether a status is prost's recursion guard firing while it decoded a request.
+fn is_prost_recursion(status: &Status) -> bool {
+    status.code() == tonic::Code::Internal
+        && status
+            .message()
+            .starts_with("failed to decode Protobuf message:")
+        && status.message().ends_with("recursion limit reached")
+}
+
+/// Whether a status is tonic refusing a message over [`MAX_GRPC_MESSAGE_BYTES`].
+///
+/// tonic answers `OUT_OF_RANGE` with its own wording. The boundary is right and the refusal
+/// happens before prost decodes anything, so only the shape is rewritten, and only in the
+/// strict profile. Matching tonic's text is how this module already recognises prost's
+/// recursion guard; `tests/request_bytes.rs` asserts both the raw and the rewritten wording,
+/// so a tonic upgrade that changes it fails there rather than silently passing the raw status
+/// through.
+fn is_decoded_message_too_large(status: &Status) -> bool {
+    status.code() == tonic::Code::OutOfRange
+        && status
+            .message()
+            .starts_with("Error, decoded message length too large")
+}
+
+fn normalize_transport_status(headers: &mut HeaderMap, enforce_limits: bool) {
     let Some(status) = Status::from_header_map(headers) else {
         return;
     };
-    if status.code() != tonic::Code::Internal
-        || !status
-            .message()
-            .starts_with("failed to decode Protobuf message:")
-        || !status.message().ends_with("recursion limit reached")
-    {
+    let replacement = if is_prost_recursion(&status) {
+        Status::invalid_argument(status.message().to_owned())
+    } else if enforce_limits && is_decoded_message_too_large(&status) {
+        Status::invalid_argument(api_request_too_large_message())
+    } else {
         return;
-    }
-    let replacement = Status::invalid_argument(status.message().to_owned());
+    };
     let mut replacement_headers = HeaderMap::new();
     if replacement.add_header(&mut replacement_headers).is_err() {
         return;
@@ -358,9 +406,9 @@ fn normalize_prost_recursion_status(headers: &mut HeaderMap) {
     }
 }
 
-fn normalize_prost_recursion_frame(mut frame: Frame<Bytes>) -> Frame<Bytes> {
+fn normalize_transport_frame(mut frame: Frame<Bytes>, enforce_limits: bool) -> Frame<Bytes> {
     if let Some(trailers) = frame.trailers_mut() {
-        normalize_prost_recursion_status(trailers);
+        normalize_transport_status(trailers, enforce_limits);
     }
     frame
 }
@@ -417,7 +465,8 @@ where
                             Ok(r) => r,
                             Err(never) => match never {},
                         };
-                        normalize_prost_recursion_status(response.headers_mut());
+                        let enforce_limits = rest.gateway.enforce_limits;
+                        normalize_transport_status(response.headers_mut(), enforce_limits);
                         if response
                             .headers()
                             .contains_key(crate::local::DROP_CONNECTION_KEY)
@@ -427,9 +476,11 @@ where
                             return Err(dropped());
                         }
                         return Ok::<_, std::io::Error>(response.map(|b| {
-                            b.map_frame(normalize_prost_recursion_frame)
-                                .map_err(|e| Box::new(e) as BoxError)
-                                .boxed_unsync()
+                            b.map_frame(move |frame| {
+                                normalize_transport_frame(frame, enforce_limits)
+                            })
+                            .map_err(|e| Box::new(e) as BoxError)
+                            .boxed_unsync()
                         }));
                     }
                     if let Some(origin) = header(&req, "origin") {
@@ -452,7 +503,8 @@ where
                         return Ok(readiness(header(&req, "origin")));
                     }
                     if let Some(kind) = channel_kind(req.uri().path()) {
-                        return Ok(channel_call(hub, kind, req).await);
+                        let enforce_limits = rest.gateway.enforce_limits;
+                        return Ok(channel_call(hub, kind, req, enforce_limits).await);
                     }
                     rest_call(rest, req).await
                 }
@@ -480,7 +532,7 @@ mod tests {
         drop(peer);
     }
 
-    use super::{normalize_prost_recursion_status, try_admit_rest_work};
+    use super::{api_request_too_large_message, normalize_transport_status, try_admit_rest_work};
     use bytes::Bytes;
     use hyper::HeaderMap;
     use tonic::{Code, Status};
@@ -499,7 +551,7 @@ mod tests {
             Bytes::from_static(b"details"),
         );
         let mut ordinary_headers = headers(&ordinary);
-        normalize_prost_recursion_status(&mut ordinary_headers);
+        normalize_transport_status(&mut ordinary_headers, true);
         let unchanged = Status::from_header_map(&ordinary_headers).unwrap();
         assert_eq!(unchanged.code(), Code::Internal);
         assert_eq!(unchanged.message(), "backend failed");
@@ -508,7 +560,7 @@ mod tests {
         let already_client_error =
             Status::invalid_argument("failed to decode Protobuf message: recursion limit reached");
         let mut client_headers = headers(&already_client_error);
-        normalize_prost_recursion_status(&mut client_headers);
+        normalize_transport_status(&mut client_headers, true);
         assert_eq!(
             Status::from_header_map(&client_headers).unwrap().message(),
             already_client_error.message()
@@ -520,7 +572,7 @@ mod tests {
             Bytes::from_static(b"stale-internal-details"),
         );
         let mut prost_headers = headers(&prost);
-        normalize_prost_recursion_status(&mut prost_headers);
+        normalize_transport_status(&mut prost_headers, true);
         let normalized = Status::from_header_map(&prost_headers).unwrap();
         assert_eq!(normalized.code(), Code::InvalidArgument);
         assert_eq!(
@@ -528,6 +580,41 @@ mod tests {
             "failed to decode Protobuf message: Value.value_type: recursion limit reached"
         );
         assert!(normalized.details().is_empty());
+    }
+
+    /// The decode-size refusal keeps tonic's own answer under the `emulator` profile and
+    /// takes the documented production shape under `strict`. Only the shape changes: the
+    /// boundary tonic enforces is the same one either way.
+    #[test]
+    fn the_decode_size_refusal_is_reshaped_only_in_the_strict_profile() {
+        let tonic_wording =
+            "Error, decoded message length too large: found 10485761 bytes, the limit is: 10485760 bytes";
+        let too_large = || Status::new(Code::OutOfRange, tonic_wording);
+
+        let mut emulator = headers(&too_large());
+        normalize_transport_status(&mut emulator, false);
+        let kept = Status::from_header_map(&emulator).unwrap();
+        assert_eq!(kept.code(), Code::OutOfRange);
+        assert_eq!(kept.message(), tonic_wording);
+
+        let mut strict = headers(&too_large());
+        normalize_transport_status(&mut strict, true);
+        let reshaped = Status::from_header_map(&strict).unwrap();
+        assert_eq!(reshaped.code(), Code::InvalidArgument);
+        assert_eq!(reshaped.message(), api_request_too_large_message());
+        assert_eq!(
+            api_request_too_large_message(),
+            "Request payload size exceeds the limit: 10485760 bytes."
+        );
+
+        // An unrelated OUT_OF_RANGE is never touched, in either profile.
+        for enforce_limits in [true, false] {
+            let mut unrelated = headers(&Status::new(Code::OutOfRange, "cursor past the end"));
+            normalize_transport_status(&mut unrelated, enforce_limits);
+            let kept = Status::from_header_map(&unrelated).unwrap();
+            assert_eq!(kept.code(), Code::OutOfRange);
+            assert_eq!(kept.message(), "cursor past the end");
+        }
     }
 
     #[test]

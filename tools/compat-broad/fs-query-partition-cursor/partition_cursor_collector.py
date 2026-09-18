@@ -32,7 +32,7 @@ _TIMESTAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$")
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
-def _validate_origin(origin: Any) -> None:
+def validate_origin(origin: Any) -> None:
     """Fail closed before any directory is created or any request is sent."""
     if not isinstance(origin, str):
         raise PermissionError("origin must be a loopback URL")
@@ -378,7 +378,7 @@ def collect_local(
 ) -> dict[str, Any]:
     """Drive the compiled plan against one owned loopback artifact."""
     validate_plan(plan)
-    _validate_origin(origin)
+    validate_origin(origin)
     directory = Path(directory)
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
     (directory / "raw").mkdir(mode=0o700)

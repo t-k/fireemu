@@ -1,0 +1,1236 @@
+{
+  "schema": "o6-listen-observation-v1",
+  "caseId": "FS-LISTEN-SDK",
+  "campaignDigest": null,
+  "catalogDigest": "84d1546aef0addc873845230aab8852aad751b44e175be4e90413115c251f462",
+  "productionExecuted": false,
+  "environment": {
+    "kind": "local-fireemu",
+    "node": "24.14.0",
+    "sourceCommit": "ffc787dfb69d38ea0987db32d5393d7b52759e32",
+    "firebaseSdk": "12.18.0",
+    "projectId": "demo-o6",
+    "nonceDigest": "6779766e9a2af6dd06061d7f2d7e0b03190f79baccc888020f6913fcf088744c"
+  },
+  "budget": {
+    "used": {
+      "reads": 0,
+      "writes": 21,
+      "deletes": 1,
+      "snapshots": 44,
+      "listeners": 15
+    },
+    "limits": {
+      "reads": 600,
+      "writes": 60,
+      "deletes": 80,
+      "snapshots": 120,
+      "listeners": 40
+    },
+    "deadlineMs": 240000,
+    "exceeded": [],
+    "exhausted": false
+  },
+  "cleanupBudget": {
+    "used": {
+      "reads": 80,
+      "writes": 0,
+      "deletes": 15,
+      "snapshots": 0,
+      "listeners": 0
+    },
+    "limits": {
+      "reads": 200,
+      "writes": 0,
+      "deletes": 100,
+      "snapshots": 0,
+      "listeners": 0
+    },
+    "deadlineMs": 9007199254740991,
+    "exceeded": [],
+    "exhausted": false
+  },
+  "cleanup": {
+    "complete": true,
+    "rows": [
+      {
+        "name": "alpha",
+        "path": "o6_listen/8a7ae3be961541980473afd0315f407b/docs/alpha",
+        "outcome": "not-created",
+        "detail": null
+      },
+      {
+        "name": "beta",
+        "path": "o6_listen/8a7ae3be961541980473afd0315f407b/docs/beta",
+        "outcome": "not-created",
+        "detail": null
+      },
+      {
+        "name": "gamma",
+        "path": "o6_listen/8a7ae3be961541980473afd0315f407b/docs/gamma",
+        "outcome": "not-created",
+        "detail": null
+      },
+      {
+        "name": "absent",
+        "path": "o6_listen/8a7ae3be961541980473afd0315f407b/docs/absent",
+        "outcome": "not-created",
+        "detail": null
+      },
+      {
+        "name": "private",
+        "path": "o6_listen_private/YPX32g6ng2ZDQFQZDCqhOsRRwz9q",
+        "outcome": "not-created",
+        "detail": null
+      }
+    ],
+    "unproven": []
+  },
+  "cases": [
+    {
+      "caseId": "FS-LISTEN-SDK-101",
+      "role": "observation",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 2,
+      "baselineAt": 0,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-101C",
+      "role": "control",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 2,
+      "baselineAt": 0,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-102",
+      "role": "observation",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": true,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": true,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 4,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-102C",
+      "role": "control",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 3,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-103",
+      "role": "observation",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "beta",
+              "oldIndex": -1,
+              "newIndex": 0
+            }
+          ],
+          "docs": [
+            "beta",
+            "alpha"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "modified",
+              "doc": "beta",
+              "oldIndex": 0,
+              "newIndex": 1
+            }
+          ],
+          "docs": [
+            "alpha",
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "removed",
+              "doc": "alpha",
+              "oldIndex": 0,
+              "newIndex": -1
+            }
+          ],
+          "docs": [
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "alpha",
+              "oldIndex": -1,
+              "newIndex": 0
+            }
+          ],
+          "docs": [
+            "alpha"
+          ],
+          "exists": null,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "beta",
+              "oldIndex": -1,
+              "newIndex": 0
+            }
+          ],
+          "docs": [
+            "beta",
+            "alpha"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "modified",
+              "doc": "beta",
+              "oldIndex": 0,
+              "newIndex": 1
+            }
+          ],
+          "docs": [
+            "alpha",
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "removed",
+              "doc": "alpha",
+              "oldIndex": 0,
+              "newIndex": -1
+            }
+          ],
+          "docs": [
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 5,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-103C",
+      "role": "control",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "alpha",
+              "oldIndex": -1,
+              "newIndex": 0
+            }
+          ],
+          "docs": [
+            "alpha"
+          ],
+          "exists": null,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 2,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-104",
+      "role": "observation",
+      "comparison": "aggregate-changes",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "aggregate",
+          "changes": [
+            {
+              "type": "modified",
+              "doc": "alpha",
+              "oldIndex": null,
+              "newIndex": null
+            },
+            {
+              "type": "added",
+              "doc": "gamma",
+              "oldIndex": null,
+              "newIndex": null
+            }
+          ],
+          "docs": [
+            "beta",
+            "alpha",
+            "gamma"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null,
+          "fromCacheTransitions": [
+            true,
+            false
+          ]
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "alpha",
+              "oldIndex": -1,
+              "newIndex": 0
+            },
+            {
+              "type": "added",
+              "doc": "beta",
+              "oldIndex": -1,
+              "newIndex": 1
+            }
+          ],
+          "docs": [
+            "alpha",
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha",
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha",
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "gamma",
+              "oldIndex": -1,
+              "newIndex": 2
+            },
+            {
+              "type": "modified",
+              "doc": "alpha",
+              "oldIndex": 0,
+              "newIndex": 1
+            }
+          ],
+          "docs": [
+            "beta",
+            "alpha",
+            "gamma"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 4,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-104C",
+      "role": "control",
+      "comparison": "aggregate-changes",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "aggregate",
+          "changes": [
+            {
+              "type": "modified",
+              "doc": "alpha",
+              "oldIndex": null,
+              "newIndex": null
+            },
+            {
+              "type": "added",
+              "doc": "gamma",
+              "oldIndex": null,
+              "newIndex": null
+            }
+          ],
+          "docs": [
+            "beta",
+            "alpha",
+            "gamma"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null,
+          "fromCacheTransitions": [
+            false
+          ]
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "alpha",
+              "oldIndex": -1,
+              "newIndex": 0
+            },
+            {
+              "type": "added",
+              "doc": "beta",
+              "oldIndex": -1,
+              "newIndex": 1
+            }
+          ],
+          "docs": [
+            "alpha",
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha",
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "gamma",
+              "oldIndex": -1,
+              "newIndex": 2
+            }
+          ],
+          "docs": [
+            "alpha",
+            "beta",
+            "gamma"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "modified",
+              "doc": "alpha",
+              "oldIndex": 0,
+              "newIndex": 1
+            }
+          ],
+          "docs": [
+            "beta",
+            "alpha",
+            "gamma"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 4,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-105",
+      "role": "observation",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "witness",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "witness",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "witness",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "witness",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 5,
+      "baselineAt": 4,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-105C",
+      "role": "control",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "witness",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "witness",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "witness",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "witness",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 6,
+      "baselineAt": 4,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-106",
+      "role": "observation",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "error",
+          "changes": [],
+          "docs": [],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": "permission-denied"
+        },
+        {
+          "listener": "recovered",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "error",
+          "changes": [],
+          "docs": [],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": "permission-denied"
+        },
+        {
+          "listener": "recovered",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "recovered",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 5,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-106N",
+      "role": "negative",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "error",
+          "changes": [],
+          "docs": [],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": "permission-denied"
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "error",
+          "changes": [],
+          "docs": [],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": "permission-denied"
+        }
+      ],
+      "rawEventCount": 2,
+      "baselineAt": 0,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    }
+  ],
+  "complete": true,
+  "sourceDigests": {
+    "tools/compat-broad/fs-listen-resume/listen_collector.mjs": "6dd8e9ccad6194fdaa808642f1fe7e1bb54ff8a5908203a17ce9aee08623c35d",
+    "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs": "0ba5f19441a364f8130c933a0e4ff3308c58c4fe2282213ab424a0d249a8da74"
+  }
+}

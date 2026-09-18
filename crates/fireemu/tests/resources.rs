@@ -19,7 +19,16 @@ struct Daemon {
 
 impl Daemon {
     fn start() -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        Self::start_with_path(None)
+    }
+
+    /// Starts the daemon, optionally replacing `PATH`: a minimal container has no `ps` on it.
+    fn start_with_path(path: Option<&str>) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+        if let Some(path) = path {
+            command.env("PATH", path);
+        }
+        let mut child = command
             .args([
                 "up",
                 "--firestore-port",
@@ -191,6 +200,44 @@ fn the_daemon_reports_every_service_and_a_fresh_session_is_quiescent() {
 
     drop(daemon);
     census::assert_no_owned_descendants("the resources daemon", Duration::from_secs(10));
+}
+
+/// RSSPS-1: a host with nothing on `PATH` (a minimal container) still gets a complete
+/// report. The resident set size is one gauge, so its source being absent removes the gauge
+/// and counts a refusal instead of failing every other service's numbers.
+#[test]
+fn the_resource_report_is_complete_on_a_host_with_no_ps() {
+    let daemon = Daemon::start_with_path(Some(""));
+    let (status, report) = daemon.request("GET", "/v1/sessions/default/resources", None, "");
+    assert_eq!(status, 200, "{report}");
+    assert_eq!(report["complete"], true, "{report}");
+    let process = report["services"]
+        .as_array()
+        .expect("services")
+        .iter()
+        .find(|s| s["service"] == "process")
+        .expect("the process service reports");
+    let gauges = process["gauges"].as_array().expect("gauges");
+    if let Some(gauge) = gauges.first() {
+        assert_eq!(gauge["id"], "process.resident_set_bytes", "{process}");
+        assert!(gauge["current"].as_u64().unwrap_or(0) > 0, "{process}");
+    } else {
+        assert_eq!(
+            process["refusals"],
+            serde_json::json!([{"reason": "process.resident_set_bytes.unavailable", "count": 1}]),
+            "{process}"
+        );
+    }
+    let (status, body) = daemon.request(
+        "POST",
+        "/v1/sessions/default/resources:assertQuiescent",
+        None,
+        "{}",
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["quiescent"], true, "{body}");
+    drop(daemon);
+    census::assert_no_owned_descendants("the no-ps daemon", Duration::from_secs(10));
 }
 
 #[test]

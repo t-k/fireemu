@@ -27,6 +27,16 @@ def _typed_error(status: Any, body: Any, code: int, name: str) -> bool:
     )
 
 
+def owned_documents(plan: dict) -> list[dict]:
+    """Documents this campaign owns and must reclaim.
+
+    A name that exceeds a request-stage identifier limit is probed but never
+    owned: the API does not consider it a resource, so typed absence cannot be
+    proven for it and the Gate cannot release it.
+    """
+    return [document for document in plan["documents"].values() if document["owned"]]
+
+
 def preflight_count(plan: dict) -> int:
     """Number of leading typed-absence preflights; every owned document has one."""
     count = 0
@@ -34,7 +44,7 @@ def preflight_count(plan: dict) -> int:
         if request["kind"] != "preflight-typed-absence":
             break
         count += 1
-    if count != len(plan["documents"]):
+    if count != len(owned_documents(plan)):
         raise ValueError("every owned document needs a leading absence preflight")
     return count
 
@@ -116,6 +126,10 @@ def _row_reason(
     if kind == "create-only-patch" and expect["positive"] is False:
         if not _typed_error(status, body, 400, "INVALID_ARGUMENT"):
             return "negative boundary was not refused with INVALID_ARGUMENT"
+        return None
+    if kind == "refusal-consistency-readback":
+        if not _typed_error(status, body, 400, "INVALID_ARGUMENT"):
+            return "a read of the refused name was not refused the same way"
         return None
     if expect.get("status") == 404:
         if not typed_absence(status, body):
@@ -342,5 +356,5 @@ def validate_local_receipt(receipt: dict, plan: dict) -> bool:
         and not evaluate_rows(rows, plan)
         and validate_cleanup(receipt, plan)
         and receipt.get("resourceAbsence")
-        == {d["resource"]: True for d in plan["documents"].values()}
+        == {d["resource"]: True for d in owned_documents(plan)}
     )

@@ -97,6 +97,9 @@ class Responder:
             return self._batch_write(operation["body"]["writes"])
         resource, _, query = path.removeprefix("/v1/").partition("?")
         if method == "GET":
+            error = _path_error(resource)
+            if error:
+                return 400, _invalid(error)
             document = self.documents.get(resource)
             return (200, copy.deepcopy(document)) if document else (404, NOT_FOUND)
         if method == "DELETE":
@@ -172,6 +175,14 @@ def test_campaign_covers_exactly_the_two_declared_residues():
         for document in plan["documents"].values()
         if "limitId" in document
     }
+    refused = [
+        document for document in plan["documents"].values() if not document["owned"]
+    ]
+    assert len(refused) == 3
+    assert all(
+        document["resource"] not in plan["localGatePlan"]["jobs"]["limits"]["resources"]
+        for document in refused
+    )
     assert limits == {
         "FS-LIMIT-COLLECTION-ID",
         "FS-LIMIT-SUBCOLLECTION-DEPTH",
@@ -240,16 +251,18 @@ def test_plan_is_deterministic_bounded_and_nonce_isolated():
     other = plan_for("b")
     assert all("a" * 32 not in json.dumps(request) for request in other["requests"])
     accounting = first["budgetAccounting"]
-    assert accounting["observationRequests"] == 35
-    assert accounting["recoveryRequests"] == 39
-    assert accounting["ownedDocuments"] == 13
+    assert accounting["observationRequests"] == 32
+    assert accounting["recoveryRequests"] == 30
+    assert accounting["ownedDocuments"] == 10
+    assert accounting["probedNames"] == 3
     assert accounting["productionReady"] is False
-    assert preflight_count(first) == 13
+    assert preflight_count(first) == 10
     kinds = [request["kind"] for request in first["requests"]]
-    assert kinds[:13] == ["preflight-typed-absence"] * 13
+    assert kinds[:10] == ["preflight-typed-absence"] * 10
     assert kinds.count("batch-write") == 3
     assert kinds.count("create-only-patch") == 6
-    assert kinds.count("cleanup-conditional-delete") == 13
+    assert kinds.count("refusal-consistency-readback") == 3
+    assert kinds.count("cleanup-conditional-delete") == 10
 
 
 def test_every_batch_write_is_create_only_and_namespace_marked():
@@ -263,7 +276,7 @@ def test_every_batch_write_is_create_only_and_namespace_marked():
             assert write["currentDocument"] == {"exists": False}
             name = write["update"]["name"]
             assert write["update"]["fields"]["_sharedOwner"] == {"referenceValue": name}
-            assert name in [d["resource"] for d in plan["documents"].values()]
+            assert name in plan["localGatePlan"]["jobs"]["limits"]["resources"]
 
 
 def test_catalog_drift_is_refused(monkeypatch):
@@ -292,7 +305,7 @@ def test_unproven_namespace_cannot_authorize_any_mutation():
             "body": NOT_FOUND,
             "request": observation[index],
         }
-        for index in range(13)
+        for index in range(10)
     ]
     assert writes_safe(rows, plan) is True
     rows[7]["body"] = {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}

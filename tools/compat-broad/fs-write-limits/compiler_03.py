@@ -204,12 +204,21 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
 
     documents: dict[str, Any] = {}
 
-    def add(label: str, resource: str, fields: dict[str, Any] | None) -> dict[str, Any]:
+    def add(
+        label: str, resource: str, fields: dict[str, Any] | None, *, owned: bool = True
+    ) -> dict[str, Any]:
         document = {
             "resource": resource,
             "fields": fields,
             "nameBytes": resource_name_bytes(resource),
             "depth": subcollection_depth(resource),
+            # A name that exceeds a request-stage identifier limit is not a
+            # resource the API will read back, so it cannot be an owned Gate
+            # resource: typed absence is unprovable for it. It is probed, not
+            # owned, and an unexpected acceptance stops the campaign through the
+            # Gate's own creation-proof check and is handed to the recovery
+            # owner.
+            "owned": owned,
         }
         documents[label] = document
         return document
@@ -258,14 +267,17 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
     for index, limit in enumerate(limits):
         for side in ("accept", "refuse"):
             resource = limit[side]
-            document = add(f"{limit['label']}-{side}", resource, None)
+            document = add(
+                f"{limit['label']}-{side}", resource, None, owned=side == "accept"
+            )
             document["fields"] = _fields(resource, 100 + index)
             document["limitId"] = limit["id"]
 
     _check_no_confound(documents, limits)
 
+    owned = [document for document in documents.values() if document["owned"]]
     requests: list[dict[str, Any]] = []
-    for document in documents.values():
+    for document in owned:
         requests.append(_preflight(document["resource"]))
 
     # R3-1: a write with no operation between two valid create-only writes.
@@ -368,7 +380,18 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
         requests.append(_create_only_patch(accept, positive=True))
         requests.append(_create_only_patch(refuse, positive=False))
         requests.append(
-            _readback(refuse["resource"], present=False, kind="typed-readback")
+            {
+                "kind": "refusal-consistency-readback",
+                "service": "firestore",
+                "method": "GET",
+                "path": "/v1/" + refuse["resource"],
+                "body": None,
+                # The refused name is not a resource, so a read of it must be
+                # refused the same way the write was. This is the post-state
+                # evidence for a request-stage identifier limit: no document
+                # exists because no such document can be named.
+                "expect": {"status": 400, "typed": "INVALID_ARGUMENT"},
+            }
         )
         requests.append(
             _readback(
@@ -377,7 +400,7 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
         )
 
     observation_count = len(requests)
-    for document in documents.values():
+    for document in owned:
         index = len(requests) - observation_count
         resource = document["resource"]
         requests.append(
@@ -424,13 +447,13 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
         "nonce": nonce,
         "jobs": {
             "limits": {
-                "resources": [d["resource"] for d in documents.values()],
+                "resources": [d["resource"] for d in owned],
                 "observation": operations[:observation_count],
                 "recovery": recovery_operations,
             }
         },
-        "wallSeconds": 1200,
-        "recoverySeconds": 600,
+        "wallSeconds": 1000,
+        "recoverySeconds": 450,
         "observationRequests": observation_count,
         "intervalSeconds": 0.25,
         "requestCostMicrousd": 100,
@@ -455,7 +478,8 @@ def compile_limits_plan(project: str, database: str, nonce: str) -> dict[str, An
             "requestUpperBound": len(requests),
             "observationRequests": observation_count,
             "recoveryRequests": len(recovery_operations),
-            "ownedDocuments": len(documents),
+            "ownedDocuments": len(owned),
+            "probedNames": len(documents) - len(owned),
             "requestBodyUpperBoundBytes": max(request_sizes),
             "transportRequestUpperBoundBytes": max(request_sizes),
             "responseUpperBoundBytes": sum(

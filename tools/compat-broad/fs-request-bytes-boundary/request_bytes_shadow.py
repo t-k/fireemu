@@ -1,9 +1,10 @@
 """Bounded local artifact shadow for the 10 MiB request-byte boundary.
 
 The shadow runs the reviewed compiler plan and collector against an owned local
-fireemu artifact built from this checkout. The local runtime does not implement
-FS-LIMIT-API-REQUEST-BYTES yet, so the over-boundary probe is expected to be
-accepted locally. The shadow records that difference explicitly instead of
+fireemu artifact built from this checkout. The observed local behaviour is that
+the boundary is enforced at exactly 10 MiB by the REST transport body cap, not
+by the limits layer, and that the refusal is a typed 413 where production is
+expected to answer 400. The shadow records that difference explicitly instead of
 relaxing the expectation to make the run look clean.
 
 No production request, credential or reservation is involved.
@@ -58,7 +59,7 @@ def source_inputs() -> dict[str, str]:
 
 
 def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Compare a collector result against the declared pending-implementation expectation.
+    """Classify a collector result against the observed local baseline.
 
     Three outcomes are recognised, and none of them relaxes the production
     expectation:
@@ -122,6 +123,27 @@ def classify_local_result(result: dict[str, Any]) -> dict[str, Any]:
         "differenceMasked": False,
         "productionExecuted": False,
         "formalCompatibilityClaim": False,
+    }
+
+
+def shadow_gates(
+    result: dict[str, Any], shadow: dict[str, Any], *, source_bound: bool
+) -> dict[str, bool]:
+    """Decide the two gates the supervisor reads before calling a run complete.
+
+    A recognised local outcome with full absence proofs and an unchanged source
+    binding is a proof of the declared state invariants. A `shadow-failure` is
+    not, and keeps the run incomplete rather than handing over a receipt that
+    proved nothing.
+    """
+    absence = result.get("resourceAbsence") is True
+    return {
+        "recordingComplete": result.get("cleanupComplete") is True and absence,
+        "stateValidation": (
+            source_bound
+            and absence
+            and shadow.get("classification") != "shadow-failure"
+        ),
     }
 
 
@@ -193,6 +215,7 @@ def _child(output: Path, nonce: str) -> None:
     bound = before == after
     if not bound:
         shadow = {**shadow, "classification": "shadow-failure", "sourceBinding": False}
+    gates = shadow_gates(result, shadow, source_bound=bound)
 
     save(
         output / "result.json",
@@ -209,11 +232,15 @@ def _child(output: Path, nonce: str) -> None:
             "rawHttpMetricStatus": "observation hypothesis",
             "collector": result,
             "shadow": shadow,
+            "recordingComplete": gates["recordingComplete"],
+            "stateValidation": gates["stateValidation"],
             "sourceInputs": before,
             "sourceInputsAfter": after,
             "sourceBinding": bound,
         },
     )
+    recording_complete = gates["recordingComplete"]
+    state_validation = gates["stateValidation"]
     save(
         output / "cases.json",
         {
@@ -223,6 +250,8 @@ def _child(output: Path, nonce: str) -> None:
             "project": project,
             "productionExecuted": False,
             "formalCompatibilityClaim": False,
+            "recordingComplete": recording_complete,
+            "stateValidation": state_validation,
             "cases": [
                 {
                     "id": case["id"],

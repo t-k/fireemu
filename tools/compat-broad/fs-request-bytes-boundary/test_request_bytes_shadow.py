@@ -16,7 +16,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 from request_bytes_campaign import LOCAL_EXPECTATION
-from request_bytes_shadow import classify_local_result
+from request_bytes_shadow import classify_local_result, shadow_gates
 
 REFUSAL_413 = {
     "httpStatus": 413,
@@ -125,3 +125,43 @@ def test_classification_never_claims_production() -> None:
     verdict = classify_local_result(dict(BASELINE))
     assert verdict["productionExecuted"] is False
     assert verdict["formalCompatibilityClaim"] is False
+
+
+def test_gates_pass_on_a_recognised_outcome_with_full_absence() -> None:
+    verdict = classify_local_result(dict(BASELINE))
+    gates = shadow_gates(dict(BASELINE), verdict, source_bound=True)
+    assert gates == {"recordingComplete": True, "stateValidation": True}
+
+
+def test_gates_fail_when_the_source_binding_broke() -> None:
+    verdict = classify_local_result(dict(BASELINE))
+    gates = shadow_gates(dict(BASELINE), verdict, source_bound=False)
+    assert gates["stateValidation"] is False
+
+
+def test_gates_fail_on_a_shadow_failure() -> None:
+    result = {**BASELINE, "overRefusal": {"httpStatus": 500}}
+    verdict = classify_local_result(result)
+    gates = shadow_gates(result, verdict, source_bound=True)
+    assert verdict["classification"] == "shadow-failure"
+    assert gates["stateValidation"] is False
+
+
+def test_gates_fail_when_resources_were_left_behind() -> None:
+    result = {**BASELINE, "resourceAbsence": False, "cleanupComplete": False}
+    verdict = classify_local_result(result)
+    gates = shadow_gates(result, verdict, source_bound=True)
+    assert gates == {"recordingComplete": False, "stateValidation": False}
+
+
+def test_an_unenforced_boundary_still_validates_state_when_cleaned_up() -> None:
+    result = {
+        "completed": False,
+        "cleanupComplete": True,
+        "resourceAbsence": True,
+        "failures": ["over:unexpected-success"],
+    }
+    verdict = classify_local_result(result)
+    gates = shadow_gates(result, verdict, source_bound=True)
+    assert verdict["classification"] == "local-boundary-not-enforced"
+    assert gates["stateValidation"] is True

@@ -12,7 +12,7 @@
       "field": "name",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:245"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:299"
         ],
         "status": "implemented"
       },
@@ -25,7 +25,7 @@
       "field": "type",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:247"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:304"
         ],
         "status": "partial"
       },
@@ -38,8 +38,8 @@
       "field": "databaseEdition",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:253",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:602",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:315",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:676",
           "crates/fireemu-core-types/src/edition.rs:12"
         ],
         "status": "partial"
@@ -53,7 +53,7 @@
       "field": "concurrencyMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:248"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:305"
         ],
         "status": "partial"
       },
@@ -66,7 +66,7 @@
       "field": "versionRetentionPeriod",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:249"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:306"
         ],
         "status": "partial"
       },
@@ -90,7 +90,7 @@
       "field": "pointInTimeRecoveryEnablement",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:251"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:309"
         ],
         "status": "partial"
       },
@@ -103,7 +103,7 @@
       "field": "realtimeUpdatesMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:254"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:316"
         ],
         "status": "partial"
       },
@@ -138,7 +138,7 @@
       "field": "locationId",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:246"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:303"
         ],
         "status": "partial"
       },
@@ -151,7 +151,7 @@
       "field": "appEngineIntegrationMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:250"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:308"
         ],
         "status": "partial"
       },
@@ -164,7 +164,7 @@
       "field": "deleteProtectionState",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:252"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:310"
         ],
         "status": "partial"
       },
@@ -298,7 +298,7 @@
       "field": "enhancedTextSearchQueryMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:255"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:317"
         ],
         "status": "partial"
       },
@@ -342,8 +342,8 @@
       "id": "emulator.clearFirestoreData",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:441",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:451"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:511",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:541"
         ],
         "status": "implemented"
       },
@@ -384,7 +384,7 @@
       "id": "cli.exportImport",
       "local": {
         "citations": [
-          "crates/fireemu/src/import_export.rs:2763",
+          "crates/fireemu/src/import_export.rs:2774",
           "crates/fireemu/src/import_export.rs:353",
           "crates/fireemu-core-export/src/metadata.rs:142"
         ],
@@ -488,8 +488,8 @@
       "dataPlaneConsequence": "The final post-state, absence of the deleted documents, is observable from the data plane; the local emulator wipe route is the local-safety counterpart.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:441",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:451"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:511",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:541"
         ],
         "status": "local-extension-only"
       },
@@ -548,33 +548,44 @@
     },
     {
       "class": "data-plane-contract",
-      "dataPlaneConsequence": "A caller cannot read back whether TTL or an exemption is in force, so the expiry and refusal behavior it implies stays unverifiable.",
+      "dataPlaneConsequence": "A caller can read back the TTL policy and the single-field index configuration, so the expiry and refusal behavior each implies is observable locally.",
       "local": {
-        "citations": [],
-        "status": "not-implemented"
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:218",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:314",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:189",
+          "crates/fireemu-core-firestore/src/ttl.rs:127"
+        ],
+        "status": "implemented"
       },
       "locator": "firestore.projects.databases.collectionGroups.fields.get",
       "rationale": "Field configuration carries the TTL policy and the single-field index exemption, both of which change document lifetime and query acceptance."
     },
     {
       "class": "data-plane-contract",
-      "dataPlaneConsequence": "Divergent exemption sets change which queries are refused without any read path exposing the difference.",
+      "dataPlaneConsequence": "Both documented filters are served and any other filter is refused, so an exemption set and a TTL policy set are each discoverable through a read path.",
       "local": {
-        "citations": [],
-        "status": "not-implemented"
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:427",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:137",
+          "crates/fireemu-core-firestore/src/index.rs:224"
+        ],
+        "status": "implemented"
       },
       "locator": "firestore.projects.databases.collectionGroups.fields.list",
       "rationale": "Enumeration with the ttlConfig and indexConfig filters is how tooling discovers every non-default field policy affecting the data plane."
     },
     {
       "class": "data-plane-contract",
-      "dataPlaneConsequence": "The local runtime accepts exemptions only from static configuration and has no TTL concept at all, so neither transition can be driven at runtime.",
+      "dataPlaneConsequence": "The ttlConfig transition is driven at runtime and an expiry sweep applies it. The indexConfig transition is refused with UNIMPLEMENTED: the local runtime still accepts exemptions only from static configuration, so that half of the surface cannot be driven at runtime.",
       "local": {
         "citations": [
-          "crates/fireemu/src/control.rs:148",
-          "crates/fireemu-core-firestore/src/index.rs:133"
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:335",
+          "crates/fireemu-core-firestore/src/ttl.rs:142",
+          "crates/fireemu-adapter-grpc/src/local.rs:2930",
+          "crates/fireemu/src/control.rs:148"
         ],
-        "status": "local-extension-only"
+        "status": "partial"
       },
       "locator": "firestore.projects.databases.collectionGroups.fields.patch",
       "rationale": "Patching ttlConfig schedules server-side document deletion and patching indexConfig exempts a field from single-field indexing; both change what later reads and queries return."
@@ -650,7 +661,7 @@
       "dataPlaneConsequence": "The written export format is a contract: fireemu's own export and import must read and write what the official tooling produces, which is already covered by local format evidence.",
       "local": {
         "citations": [
-          "crates/fireemu/src/import_export.rs:2763",
+          "crates/fireemu/src/import_export.rs:2774",
           "crates/fireemu-core-export/src/firestore.rs:480",
           "crates/fireemu-core-export/src/metadata.rs:142"
         ],
@@ -664,9 +675,9 @@
       "dataPlaneConsequence": "A wrong concurrencyMode, databaseEdition or versionRetentionPeriod makes a caller choose transaction, edition and read-time behavior the local runtime will then refuse or accept differently from production.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:591",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:647",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:243"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:661",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:736",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:286"
         ],
         "status": "partial"
       },
@@ -692,9 +703,9 @@
       "dataPlaneConsequence": "A database absent in production but present locally lets a caller address a database that would return NOT_FOUND against the real service.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:591",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:626",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:635"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:661",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:725",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:704"
         ],
         "status": "partial"
       },
@@ -723,23 +734,30 @@
     },
     {
       "class": "managed-infrastructure",
-      "dataPlaneConsequence": "Any campaign that drives a management method must still bound its own polling, which the collector contract handles rather than the runtime.",
+      "dataPlaneConsequence": "A campaign that drives fields.patch can poll the operation it was handed, and it is always already done; every other long-running operation of the Admin API remains managed infrastructure the runtime does not hold. A campaign must still bound its own polling, which the collector contract handles.",
       "local": {
-        "citations": [],
-        "status": "not-implemented"
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:534",
+          "crates/fireemu-adapter-grpc/src/local.rs:2781",
+          "crates/fireemu-adapter-grpc/src/local.rs:2823"
+        ],
+        "status": "partial"
       },
       "locator": "firestore.projects.databases.operations.get",
-      "rationale": "Long-running operation state belongs to the managed control plane; the local runtime performs configuration changes synchronously at startup."
+      "rationale": "Long-running operation state belongs to the managed control plane; the local runtime applies a field configuration synchronously and records the resulting operation only so the name its patch returned can still be polled."
     },
     {
       "class": "managed-infrastructure",
-      "dataPlaneConsequence": "Enumeration is how an interrupted campaign resumes its cleanup, so the collector depends on it even though the runtime does not implement it.",
+      "dataPlaneConsequence": "Enumeration is how an interrupted campaign resumes its cleanup. Locally it enumerates the field-configuration operations alone, and the record is bounded, so a campaign must not treat it as the managed operation history.",
       "local": {
-        "citations": [],
-        "status": "not-implemented"
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:534",
+          "crates/fireemu-adapter-grpc/src/local.rs:2835"
+        ],
+        "status": "partial"
       },
       "locator": "firestore.projects.databases.operations.list",
-      "rationale": "Operation enumeration reflects managed scheduling and retention, not any behavior a local emulator can hold."
+      "rationale": "Operation enumeration reflects managed scheduling and retention, not any behavior a local emulator can hold; the local listing reports only the bounded tail of field-configuration operations this runtime produced."
     },
     {
       "class": "managed-infrastructure",
@@ -899,9 +917,9 @@
     },
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:253",
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:602",
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:246"
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:315",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:676",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:303"
       ],
       "class": "data-plane-contract",
       "fixApplied": false,
@@ -913,7 +931,7 @@
     },
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:243",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:286",
         "tools/compat-broad/batch_contract.py:230",
         "tools/compat-broad/fixtures/database-settings-7be6cf08.json:1"
       ],
@@ -927,20 +945,21 @@
     },
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:683",
-        "crates/fireemu/src/control.rs:148"
+        "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:335",
+        "crates/fireemu/src/control.rs:148",
+        "crates/fireemu-core-firestore/src/index.rs:201"
       ],
       "class": "data-plane-contract",
       "fixApplied": false,
       "id": "FS-CONFIG-RT-004",
-      "reproduction": "Search the crates tree for ttlConfig or expirationOffset; there is no match. A document with an elapsed TTL field is returned by an ordinary get, while production deletes it within the documented delay.",
+      "reproduction": "Issue PATCH on projects/{project}/databases/(default)/collectionGroups/{group}/fields/{field} with updateMask=indexConfig and observe UNIMPLEMENTED, while production applies the exemption and reports usesAncestorConfig false on the next get.",
       "status": "OPEN",
-      "summary": "collectionGroups.fields is not served and no ttlConfig or expiration sweep exists anywhere in the runtime, so a document whose TTL has elapsed is still returned locally.",
-      "title": "No field configuration surface exists, so TTL is unreachable"
+      "summary": "The field configuration surface is served and the ttlConfig half is complete: the policy is stored per database, read back as ACTIVE, and an expiry sweep on the virtual clock deletes documents whose TTL field has elapsed. Patching indexConfig is refused with UNIMPLEMENTED, because single-field exemptions are still taken from the project's index configuration at startup and there is no runtime path that changes them.",
+      "title": "The indexConfig half of fields.patch has no runtime transition"
     },
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/decode.rs:102",
+        "crates/fireemu-adapter-grpc/src/decode.rs:107",
         "crates/fireemu-core-types/src/ids.rs:183"
       ],
       "class": "data-plane-contract",

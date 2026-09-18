@@ -77,6 +77,13 @@
         "indexFile": { "type": "string" },
         "textIndexDefinitionFile": { "type": "string" },
         "enforceLimits": { "type": "boolean" },
+        "ttlSweepIntervalSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 259200,
+          "default": 86400,
+          "description": "How long a document whose time-to-live field has expired stays readable before the expiry sweep deletes it. Production deletes an expired document typically within 24 hours and within 72 hours at worst, so the default is 86400 and the maximum is the documented outer bound of 259200."
+        },
         "explain": { "type": "boolean" },
         "pipeline": {
           "type": "object",

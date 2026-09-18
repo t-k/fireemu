@@ -117,6 +117,18 @@ pub trait ProjectHooks: Send + Sync {
     /// The shared virtual clock moved: release Firestore history that no retention root can
     /// still observe. The default is a no-op for embedders without a Firestore backend.
     fn clock_advanced(&self, _now: LogicalInstant) {}
+    /// The clock move is complete and the session admission barrier is released again: run
+    /// the work that has to take ordinary admission, such as the Firestore time-to-live
+    /// sweep, whose deletes are ordinary writes. Only `scope` is swept. Returns how many
+    /// documents it deleted.
+    fn clock_settled(&self, _scope: &Scope, _now: LogicalInstant) -> usize {
+        0
+    }
+    /// Runs one Firestore time-to-live sweep over `scope` whether or not the interval has
+    /// elapsed, and returns how many documents it deleted.
+    fn sweep_expired_documents_now(&self, _scope: &Scope, _now: LogicalInstant) -> usize {
+        0
+    }
 }
 
 /// One adapter's part of a session snapshot: an opaque copy of its state.
@@ -573,6 +585,36 @@ pub fn handle_with(
     }
 }
 
+/// `POST /v1/sessions/{session}/firestore/ttl:sweep`: runs one expiry sweep at once.
+///
+/// The sweep otherwise runs when the virtual clock passes the configured interval, which is
+/// how production's deletion delay is reproduced. A test or a campaign that wants to observe
+/// the post-expiry state without advancing a whole day drives this route instead; it deletes
+/// only what has already expired, so it can never delete a document production would keep.
+/// It sweeps only the session's own project.
+fn ttl_sweep_route(state: &ControlState, method: &str, project: &str) -> JsonResponse {
+    if method != "POST" {
+        return error(
+            400,
+            "INVALID_ARGUMENT : a time-to-live sweep is started with POST",
+        );
+    }
+    let Some(hooks) = &state.project_hooks else {
+        return error(
+            400,
+            "FAILED_PRECONDITION : this daemon serves no Firestore backend",
+        );
+    };
+    let Ok(now) = state.clock.lock().map(|clock| clock.now()) else {
+        return error(500, "INTERNAL");
+    };
+    let deleted = hooks.sweep_expired_documents_now(&scope_of(state, project), now);
+    JsonResponse {
+        status: 200,
+        body: json!({ "deletedDocumentCount": deleted }),
+    }
+}
+
 /// `GET /v1/sessions/{s}/rules/requests`: the last requests Security Rules decided, newest
 /// first, each with what every expression evaluated to while it was being decided
 /// (`RULES-PARITY-04`).
@@ -975,6 +1017,9 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
     if action == "rules/requests" {
         return rules_requests_route(state, method, is_default);
     }
+    if action == "firestore/ttl:sweep" {
+        return ttl_sweep_route(state, method, &project);
+    }
     if let Some(rest) = action.strip_prefix("firestore/text-indexes") {
         return text_index_route(state, session, &project, method, rest, body);
     }
@@ -982,16 +1027,29 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         // Moving the shared clock and compacting every Firestore database is one admission
         // transition. No read, write or listener can enter after the new time is visible but
         // before all retention floors have advanced.
-        let _exclusive = state.barrier.as_ref().map(|barrier| barrier.exclusive());
-        let response = clock_route(state, session, method, action, body);
-        if response.status == 200 {
-            let now = state.clock.lock().ok().map(|clock| clock.now());
-            if let (Some(hooks), Some(now)) = (&state.project_hooks, now) {
-                hooks.clock_advanced(now);
-            }
-            if let Some(functions) = &state.functions {
-                functions.on_clock_changed();
-            }
+        let (response, now) = {
+            let _exclusive = state.barrier.as_ref().map(|barrier| barrier.exclusive());
+            let response = clock_route(state, session, method, action, body);
+            let now = if response.status == 200 {
+                let now = state.clock.lock().ok().map(|clock| clock.now());
+                if let (Some(hooks), Some(now)) = (&state.project_hooks, now) {
+                    hooks.clock_advanced(now);
+                }
+                if let Some(functions) = &state.functions {
+                    functions.on_clock_changed();
+                }
+                now
+            } else {
+                None
+            };
+            (response, now)
+        };
+        // The expiry sweep deletes through the ordinary write path, which takes admission,
+        // so it runs after the exclusive transition above has been released.
+        if let (Some(hooks), Some(now)) = (&state.project_hooks, now) {
+            // The sweep belongs to the session whose clock moved: another session's project
+            // keeps the grace period its own clock defines.
+            hooks.clock_settled(&scope_of(state, &project), now);
         }
         return response;
     }

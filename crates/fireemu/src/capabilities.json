@@ -555,9 +555,33 @@
     ],
     "notes": [
       "local-only bounded adapter surface; it does not claim production parity",
-      "Enterprise databases, create/update/delete, indexes, TTL, backups, import/export and long-running operations are outside this capability",
+      "Enterprise databases, create/update/delete, indexes, backups, import/export and long-running operations are outside this capability; the time-to-live field configuration is FS-FIELD-CONFIG-1",
       "database metadata projection is the stable local field subset documented in docs/compatibility/firestore-admin-inventory.md; unsupported identity and billing fields are omitted",
       "conformance input: spec/compatibility/upstream/2026-09-09-retry/discovery.json and the historical database projection v2 reference"
+    ],
+    "precision": "bounded-local-semantics",
+    "status": "implemented"
+  },
+  "FS-FIELD-CONFIG-1": {
+    "implemented": [
+      "Firestore Admin REST GET, PATCH and LIST on projects/{project}/databases/{database}/collectionGroups/{group}/fields, and GET on the field-configuration operations the patches returned",
+      "ttlConfig is persisted per project and database, reported as ACTIVE on readback, refused for __name__, for the wildcard field and for a second field of one collection group, and bounded to 64 policies per database",
+      "documents whose time-to-live field holds a timestamp earlier than the virtual clock are deleted by a sweep that runs one configurable interval after expiry (firestore.ttlSweepIntervalSeconds, default 86400, maximum 259200); the deletion is an ordinary delete that publishes to listeners and delivers triggers and evaluates no Security Rules",
+      "an expired document stays readable until the sweep reaches it; a field whose value is not a timestamp is ignored rather than deleted or refused",
+      "the configuration survives export, import and a session snapshot restore",
+      "the field-configuration operations are recorded per project, bounded to 64 each, and a poll answers exactly what the patch that minted it answered",
+      "a sweep is scoped to the session that asked for it and deletes at most 1024 documents per run, leaving the rest to the next run rather than holding the clock response open"
+    ],
+    "notes": [
+      "local-only bounded adapter surface; it does not claim production parity, and no production observation of these methods has been made",
+      "production applies a field configuration through a long-running operation, so the intermediate CREATING and the NEEDS_REPAIR states exist in the shape but are never observable locally: the patch returns an operation that is already done",
+      "patching indexConfig is refused with UNIMPLEMENTED; single-field exemptions are taken from the project's index configuration and have no runtime transition",
+      "the official Firestore emulator serves no field-configuration surface and performs no expiry sweep at all, so this capability diverges from it in the direction of production",
+      "the expiry sweep runs when the shared virtual clock moves and on the control route POST /v1/sessions/{session}/firestore/ttl:sweep, which a test or a campaign uses to observe the post-expiry state without advancing a day",
+      "conformance input: the Firestore Admin v1 reference for collectionGroups.fields and the documented time-to-live semantics; the FS-CONFIG-LIFECYCLE campaign will compare them against production",
+      "listing with indexConfig.usesAncestorConfig:false reports only fields that carry an index configuration of their own; a field with a TTL policy and no index override is reported by the unfiltered listing and by ttlConfig:*",
+      "the expiry sweep runs inside the control request that moved the clock, so a clock advance observes its own deletions; the per-run bound is what keeps that response short rather than making the sweep asynchronous",
+      "the name of each automatic single-field index reported under indexConfig.indexes is a derived synthetic value, a digest over the project, database, collection group, field, query scope and mode; production assigns a server-side id that no local run can reproduce, and whether a caller may depend on the name at all is a production observation this lane has not made"
     ],
     "precision": "bounded-local-semantics",
     "status": "implemented"

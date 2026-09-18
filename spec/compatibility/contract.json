@@ -643,6 +643,52 @@
           "preview": []
         },
         {
+          "id": "FS-CLAIM-FIELD-CONFIG",
+          "statement": "The Firestore Admin field-configuration surface is served for time-to-live policies, and a document whose time-to-live field has expired is deleted by a sweep on the virtual clock after a configurable delay rather than staying readable forever.",
+          "capabilities": [
+            {
+              "id": "FS-FIELD-CONFIG-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu-adapter-grpc/src/rest/admin_fields_tests.rs",
+              "crates/fireemu-adapter-grpc/tests/ttl.rs",
+              "crates/fireemu-core-firestore/src/ttl.rs",
+              "crates/fireemu/src/snapshots.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the official emulator serves no collectionGroups.fields surface and performs no expiry sweep, so a document whose time-to-live has elapsed stays readable there for the life of the run"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "The expiry sweep interval is configurable (firestore.ttlSweepIntervalSeconds, default 86400, maximum 259200) and a control route POST /v1/sessions/{session}/firestore/ttl:sweep runs one sweep at once, so a test observes the post-expiry state without advancing the virtual clock by a day.",
+              "reason": "Production's deletion delay is documented as typically 24 hours and at most 72 hours, which is not a boundary a deterministic local run can wait out; the configurable interval and the immediate sweep make both ends of that window reachable without inventing a deletion production would not perform."
+            },
+            {
+              "behaviour": "A fields.patch returns a long-running operation that is already done, and the readback reports ACTIVE at once; patching indexConfig is refused with UNIMPLEMENTED.",
+              "reason": "The local runtime applies a configuration change synchronously, so the intermediate CREATING state has no local duration to observe. Single-field exemptions come from the project's index configuration and have no runtime transition, so accepting the patch would report an exemption that never took effect."
+            },
+            {
+              "behaviour": "One sweep deletes at most 1024 documents and does not record itself as having run, so the next clock move continues from where it stopped. A sweep is scoped to the session that asked for it.",
+              "reason": "The sweep runs inside the control request that moved the virtual clock, so a clock advance observes its own deletions and a test needs no quiescence wait. An unbounded sweep would hold that response open for as long as the store is large, and an unscoped one would take another session's grace period between expiry and deletion away."
+            },
+            {
+              "behaviour": "Each automatic single-field index reported under indexConfig.indexes carries a name whose id is a digest over the project, database, collection group, field, query scope and mode.",
+              "reason": "Production assigns an opaque server-side id to every index and a local run has no index resource to draw one from, so the name is derived rather than observed. It is stable across restarts of the same configuration and distinct for distinct indexes, which is what a caller that stores or compares the name needs; whether production's own names may be depended on is an observation this lane has not made."
+            }
+          ],
+          "productionOnly": [
+            "the real deletion latency, its backfill cost and the billing of the deletes",
+            "the server-assigned ids of the automatic single-field indexes"
+          ],
+          "preview": []
+        },
+        {
           "id": "FS-CLAIM-VECTOR",
           "statement": "Firestore Standard/Native findNearest vector queries are implemented locally on both the v1 gRPC RunQuery and Firestore REST :runQuery surfaces. The local implementation supports Euclidean, cosine and dot-product distance measures, optional distance-result projection, finite distance thresholds, a result limit from 1 through 1000, ordinary query projection, filters, offsets and limits before nearest ranking, and the declared vector-index policy: strict production planning requires a dimensioned vector index matching the query vector and a matching composite vector index when prefilters are present, while the emulator profile assumes the vector index. This is a local implementation mapping: production parity and SDK execution are unobserved, and findNearest is refused for Listen/WebChannel targets.",
           "capabilities": [

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from fs_config_lifecycle.surface_matrix import (
@@ -46,10 +47,24 @@ def test_classes_are_closed_and_each_row_carries_a_rationale_and_consequence() -
 
 
 def test_managed_infrastructure_rows_never_claim_a_local_obligation_to_serve() -> None:
+    """A managed row may be partly served, but never claims to reproduce the managed surface.
+
+    Classifying a method as managed-infrastructure says fireemu is not obliged to serve it.
+    It does not forbid serving a bounded slice: the field-configuration operations the local
+    runtime produced are answered at operations.get and operations.list so the name a patch
+    returned can be polled. What stays forbidden is "implemented", which would claim the
+    whole managed surface, including the operations, retention and scheduling only Google
+    holds.
+    """
     matrix = build_matrix()
     for row in matrix["methods"]:
         if row["class"] == "managed-infrastructure":
-            assert row["local"]["status"] in {"not-implemented", "local-extension-only"}
+            assert row["local"]["status"] in {
+                "not-implemented",
+                "local-extension-only",
+                "partial",
+            }
+            assert row["local"]["status"] != "implemented"
 
 
 def test_every_local_citation_resolves_to_an_existing_line_in_this_checkout() -> None:
@@ -74,6 +89,48 @@ def test_every_local_citation_resolves_to_an_existing_line_in_this_checkout() ->
             )
             seen += 1
     assert seen >= 20
+
+
+def test_every_citation_points_at_code_and_not_at_whitespace() -> None:
+    """A citation that drifted onto a blank line or a closing brace proves nothing.
+
+    Every citation names the place a claim is implemented, so the line it resolves to must
+    carry code. It must also sit inside a named symbol: a Rust citation has a declaration
+    (`fn`, `struct`, `enum`, `impl`, `const`, `type`) at or above it in the same file, so a
+    reader following the citation lands somewhere they can name.
+    """
+    declaration = re.compile(
+        r"^\s*(pub(\([^)]*\))?\s+)?"
+        r"(async\s+|const\s+|unsafe\s+|extern\s+\S+\s+)*"
+        r"(fn|struct|enum|impl|trait|type|const|static|mod)\b"
+    )
+    matrix = build_matrix()
+    rows = matrix["methods"] + matrix["localSurfaces"] + matrix["databaseFields"]
+    checked = 0
+    for row in rows + matrix["repairTickets"]:
+        citations = (
+            row["local"]["citations"] if "local" in row else row["citations"]
+        )
+        for citation in citations:
+            path_text, _, line_text = citation.rpartition(":")
+            lines = (repo_root() / path_text).read_text(encoding="utf-8").splitlines()
+            index = int(line_text) - 1
+            line = lines[index]
+            assert line.strip(), f"{citation} is a blank line"
+            if not path_text.endswith(".rs"):
+                checked += 1
+                continue
+            assert line.strip() not in {"{", "}", "};", ")", ");"}, (
+                f"{citation} is a bare delimiter"
+            )
+            enclosing = [
+                above
+                for above in lines[: index + 1]
+                if declaration.match(above)
+            ]
+            assert enclosing, f"{citation} sits inside no named symbol"
+            checked += 1
+    assert checked >= 40
 
 
 def test_the_checked_in_specification_equals_the_compiled_matrix() -> None:

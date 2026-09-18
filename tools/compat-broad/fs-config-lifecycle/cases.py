@@ -90,17 +90,40 @@ def _case(
     }
 
 
+# A partially served method serves some requests and refuses others. The matrix records the
+# method; this records which requests fall on the refused side, so that collapsing "partial"
+# to a served/not-served outcome per case never claims a refusal is an answer.
+_PARTIAL_REFUSALS = {
+    f"{_M}databases.collectionGroups.fields.patch": (
+        lambda request: "indexConfig" in str(request.get("updateMask", ""))
+        or "indexConfig" in request.get("field", {}),
+        "the local runtime refuses a fields.patch naming indexConfig with UNIMPLEMENTED: "
+        "single-field exemptions are taken from the project's index configuration and have "
+        "no runtime transition (FS-CONFIG-RT-004)",
+    ),
+}
+
+
 def _expected_local(
-    method: str, matrix_rows: dict[str, dict[str, Any]]
+    method: str, request: dict[str, Any], matrix_rows: dict[str, dict[str, Any]]
 ) -> dict[str, Any]:
     row = matrix_rows[method]
     served = row["local"]["status"] in {"implemented", "partial"}
-    return {
+    refusal = None
+    if served and row["local"]["status"] == "partial":
+        predicate = _PARTIAL_REFUSALS.get(method)
+        if predicate is not None and predicate[0](request):
+            served = False
+            refusal = predicate[1]
+    expected = {
         "outcome": _SERVED if served else _NOT_SERVED,
         "basis": "classification-matrix",
         "class": row["class"],
         "citations": list(row["local"]["citations"]),
     }
+    if refusal is not None:
+        expected["refusalReason"] = refusal
+    return expected
 
 
 def compile_cases(nonce: str) -> list[dict[str, Any]]:
@@ -442,7 +465,9 @@ def compile_cases(nonce: str) -> list[dict[str, Any]]:
     matrix_rows = {row["locator"]: row for row in build_matrix()["methods"]}
     for case in cases:
         case["caseId"] = CASE_ID
-        case["expectedLocal"] = _expected_local(case["method"], matrix_rows)
+        case["expectedLocal"] = _expected_local(
+            case["method"], case["request"], matrix_rows
+        )
     return cases
 
 

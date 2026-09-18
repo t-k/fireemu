@@ -20,10 +20,12 @@ _SHADOW_COMMAND = (
 )
 
 _LOCAL_REFUSAL = (
-    "The Firestore REST port serves only databases.get and databases.list among the "
-    "management methods. Every other path that is not a documents path is answered with "
-    "a plain 404, so a collector must record that refusal rather than treat it as a "
-    "transport failure."
+    "The Firestore REST port serves databases.get, databases.list, the "
+    "collectionGroups.fields methods and the field-configuration operations among the "
+    "management methods; every one of them requires an owner credential. A fields.patch "
+    "naming indexConfig is refused with UNIMPLEMENTED rather than served. Every other "
+    "path that is not a documents path is answered with a plain 404, so a collector must "
+    "record that refusal rather than treat it as a transport failure."
 )
 
 _NOT_PROVEN = (

@@ -1910,6 +1910,20 @@
         ]
       },
       "note": "The project and tenant Admin v2 handlers exercise parent-mask versus leaf-mask semantics, omitted/default and explicit values, validation-before-mutation and provider-field isolation. Production SAML configuration PATCH parity remains unobserved."
+    },
+    {
+      "id": "INV-FS-TTL-001",
+      "statement": "A document whose configured time-to-live field holds a timestamp earlier than the current virtual clock is deleted by the expiry sweep, stays readable until that sweep runs, and is never deleted when the field holds a value that is not a timestamp.",
+      "criticality": "important",
+      "owner": "core-firestore",
+      "status": "implemented",
+      "note": "The sweep runs when the shared virtual clock moves past one sweep interval since the policy took effect, and on the control route that runs one immediately. Its deletes go through the ordinary write path, so they publish to listeners and deliver triggers and evaluate no Security Rules, which is what production's own expiry does. The configuration is bounded to 64 policies per database.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-grpc/tests/ttl.rs",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields_tests.rs"
+        ]
+      }
     }
   ]
 }

@@ -1327,6 +1327,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // strict profile every other named database is refused until a create path (an import
         // or a snapshot restore) materializes it.
         .with_declared_databases(cfg.firestore_databases.keys().cloned())
+        .with_ttl_sweep_interval(cfg.ttl_sweep_interval)
         .with_implicit_database_creation(cfg.implicit_database_creation));
         for (database, files) in &cfg.firestore_databases {
             if database != fireemu_core_types::ids::DatabaseId::DEFAULT {

@@ -9,6 +9,9 @@
 pub mod coverage;
 pub mod json;
 
+pub mod admin_fields;
+#[cfg(test)]
+mod admin_fields_tests;
 #[cfg(test)]
 mod admin_inventory_tests;
 #[cfg(test)]
@@ -798,6 +801,35 @@ impl RestState {
             )
         {
             return self.admin_inventory_route(req, path, &params);
+        }
+        // The field-configuration and operation routes live under the database resource and
+        // carry no `/documents` segment, so they are matched before the document-route guard.
+        if action.is_none()
+            && matches!(
+                segments.as_slice(),
+                [
+                    "projects",
+                    _,
+                    "databases",
+                    _,
+                    "collectionGroups",
+                    _,
+                    "fields",
+                    ..
+                ]
+            )
+        {
+            return self.admin_fields_route(req, &segments, &params);
+        }
+        if req.method == "GET"
+            && action.is_none()
+            && matches!(
+                segments.as_slice(),
+                ["projects", _, "databases", _, "operations"]
+                    | ["projects", _, "databases", _, "operations", _]
+            )
+        {
+            return self.admin_operations_route(req, &segments);
         }
         if !path.contains("/documents") {
             return Ok(not_found_text());

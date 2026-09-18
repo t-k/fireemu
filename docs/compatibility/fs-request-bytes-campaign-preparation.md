@@ -211,8 +211,8 @@ has lost the implemented shape.
 
 The recorded run is published as
 `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, at source
-`02e1a51c31580de493ee2d103d03c1d06231612d`, artifact SHA-256
-`e95e323ec078e48d0e738c14e77c83ee06b569e65dd93466c77bdba024f0c341`, nonce `14a76ead49f448b8834bbb2fa311b739`, with supervisor status
+`90ea7a064b5b5713a78925ea287184e3d968f55c`, artifact SHA-256
+`10cf147139e3f450b24f07239261d0356eec3850ea70bc75151701c689164c4e`, nonce `885bcd20e1754210865e4d3c9c3e9651`, with supervisor status
 `completed`, `recordingComplete` and `stateValidation` true, the owned process
 stopped and all listeners closed. It completed 105 observation rows and 153
 recovery rows, sent 241 of the 258 bounded requests, and proved all 51 owned

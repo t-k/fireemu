@@ -7870,6 +7870,55 @@ fn routed_project_config_uses_selected_store_and_publishes_only_successful_write
     }
 }
 
+/// ITKM-5. Email enumeration protection hides an unknown address from an anonymous caller.
+/// An Admin link generator is already authenticated and reads every account, so the silent
+/// 200 only costs it the link it asked for: it gets `EMAIL_NOT_FOUND`, as it does with the
+/// protection off. Production's answer for this pair is unobserved; this is the documented
+/// Admin SDK contract (`generatePasswordResetLink` rejects an unknown address).
+#[test]
+fn improved_email_privacy_still_reports_an_unknown_address_to_an_admin_link_generator() {
+    let s = state();
+    let enabled = handle_with(
+        &s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig",
+        &owner(),
+        &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}}),
+    );
+    assert_eq!(enabled.status, 200, "{}", enabled.body);
+
+    // The end-user route still answers as if a mail had been sent, and creates no code.
+    let (status, hidden) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "nobody@example.com"}),
+    );
+    assert_eq!(status, 200, "{hidden}");
+    assert_eq!(hidden["email"], "nobody@example.com");
+    assert!(hidden.get("oobLink").is_none(), "{hidden}");
+
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "nobody@example.com", "returnOobLink": true}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "EMAIL_NOT_FOUND");
+
+    // A known address still yields the link.
+    sign_up(&s, "known@example.com");
+    let (status, generated) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "known@example.com", "returnOobLink": true}),
+    );
+    assert_eq!(status, 200, "{generated}");
+    assert!(generated["oobLink"].as_str().is_some_and(|l| !l.is_empty()));
+    assert!(get(&s, &format!("{EMU}/oobCodes")).1["oobCodes"]
+        .as_array()
+        .is_some_and(|codes| codes.len() == 1));
+}
+
 #[test]
 fn routed_project_saml_uses_selected_store_for_first_and_existing_requests() {
     for existing in [false, true] {

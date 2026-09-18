@@ -8381,8 +8381,10 @@ fn send_oob_code(
             match store.user_by_email(&email) {
                 Some(u) => (email.clone(), Some(u.local_id.clone()), None),
                 // Improved email privacy: an unknown address is answered as if a mail had
-                // been sent, and no code is created.
-                None if store.config().enable_improved_email_privacy => {
+                // been sent, and no code is created. An Admin link generator is already
+                // authenticated and can read every account, so hiding the address from it
+                // would only withhold the link it asked for: it keeps `EMAIL_NOT_FOUND`.
+                None if store.config().enable_improved_email_privacy && !return_oob_link => {
                     return JsonResponse {
                         status: 200,
                         body: json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email}),

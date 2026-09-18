@@ -216,6 +216,10 @@ def _project_stage(
     if not isinstance(body, dict):
         row["bodyType"] = type(body).__name__
         return row
+    if status != 200 and message is None:
+        # An error shape nobody predicted is worth keeping, redacted, because a
+        # production run may answer in a form this matrix does not model yet.
+        row["unexpectedBody"] = redact(body)
     if stage["id"] in _LINK_STAGES:
         value = body.get("oobCode")
         row["oobCodeReturned"] = isinstance(value, str) and bool(value)
@@ -397,11 +401,23 @@ def _assert_no_secret_leaked(receipt: dict[str, Any], run: _Run) -> None:
             continue
         if isinstance(value, str) and len(value) > 3 and value in serialized:
             raise CollectorError("secret value reached the receipt: " + name)
-    for field in SECRET_FIELDS:
-        # A key position would carry a value; the same name inside a `keys`
-        # list is the response shape this campaign exists to compare.
-        if '"' + field + '":' in serialized:
-            raise CollectorError("secret field name reached the receipt: " + field)
+    # A secret-named key may only hold the redaction marker. The same name
+    # inside a `keys` list is the response shape this campaign compares.
+    for field in _secret_slots(receipt):
+        raise CollectorError("secret field name reached the receipt: " + field)
+
+
+def _secret_slots(value: Any, path: str = "$"):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            here = path + "." + key
+            if key in SECRET_FIELDS and item != REDACTED:
+                yield here
+            else:
+                yield from _secret_slots(item, here)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _secret_slots(item, f"{path}[{index}]")
 
 
 def build_parser() -> argparse.ArgumentParser:

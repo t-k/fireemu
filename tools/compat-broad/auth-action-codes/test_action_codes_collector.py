@@ -412,3 +412,25 @@ def test_a_credential_bearing_request_is_never_redirected() -> None:
     )
     with pytest.raises(CollectorError, match="redirected"):
         handler.redirect_request(None, None, 302, "Found", {}, "http://elsewhere.test/")
+
+
+def test_an_unmodelled_error_shape_is_kept_redacted() -> None:
+    class Strange(FakeService):
+        def _resetPassword(self, body: dict):
+            if "newPassword" in body:
+                return 403, {
+                    "reason": "policy",
+                    "oobCode": "leaked",
+                    "detail": {"idToken": "t"},
+                }
+            return super()._resetPassword(body)
+
+    _, receipt = run(Strange(), tolerate_failure=True)
+    rows = {row["id"]: row for row in receipt["stages"]}
+    unexpected = rows["reset-weak-password"]["unexpectedBody"]
+    assert unexpected == {
+        "reason": "policy",
+        "oobCode": "[REDACTED]",
+        "detail": {"idToken": "[REDACTED]"},
+    }
+    assert "leaked" not in json.dumps(receipt)

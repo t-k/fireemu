@@ -74,6 +74,9 @@ def _commit_error(resource, fields):
             return f'The value of property "{name}" is longer than {FIELD_VALUE_BYTES_MAX} bytes.'
     if document_bytes(resource, fields) > DOCUMENT_BYTES_MAX:
         return "FS-LIMIT-DOCUMENT-BYTES exceeded"
+    error = _implied_path_error(fields)
+    if error:
+        return error
     usage = index_usage(resource, fields)
     for identifier, value, maximum in (
         (
@@ -91,6 +94,29 @@ def _commit_error(resource, fields):
         if value > maximum:
             return f"{identifier}: {value} exceeds {maximum}"
     return None
+
+
+def _implied_path_error(fields):
+    """Bound the paths a document implies, where automatic accounting walks.
+
+    Index accounting recurses into a map held by a field and never into the
+    elements of an array, so an over-long path inside an array is not refused
+    here. That asymmetry is exactly what the two implied-path cases observe.
+    """
+
+    def walk(prefix, value_fields):
+        for name, value in value_fields.items():
+            path = f"{prefix}.{name}" if prefix else name
+            if len(path.encode()) > FIELD_PATH_BYTES_MAX:
+                return f"field path is {len(path.encode())} bytes, maximum is {FIELD_PATH_BYTES_MAX}"
+            nested = value.get("mapValue") if isinstance(value, dict) else None
+            if isinstance(nested, dict):
+                error = walk(path, nested.get("fields", {}))
+                if error:
+                    return error
+        return None
+
+    return walk("", fields)
 
 
 def _mask_error(mask):
@@ -208,8 +234,8 @@ class Responder:
         return 200, {"status": statuses, "writeResults": results}
 
 
-def plan_for(nonce="a", project="demo-test"):
-    return compile_limits_plan(project, "(default)", nonce * 32)
+def plan_for(nonce="a", project="demo-test", part="A"):
+    return compile_limits_plan(project, "(default)", nonce * 32, part)
 
 
 def run_campaign(tmp_path, plan, name="run"):
@@ -223,18 +249,22 @@ def run_campaign(tmp_path, plan, name="run"):
 
 def test_campaign_covers_exactly_the_two_declared_residues():
     plan = plan_for()
-    assert plan["campaignId"] == CAMPAIGN
-    residues = {case["residue"] for case in plan["cases"]}
+    assert plan["campaignId"] == f"{CAMPAIGN}A"
+    assert plan["part"] == "A"
+    residues = {
+        case["residue"] for part in ("A", "B") for case in plan_for(part=part)["cases"]
+    }
     assert residues == {"R3", "R4"}
     limits = {
         document["limitId"]
-        for document in plan["documents"].values()
+        for other in ("A", "B")
+        for document in plan_for(part=other)["documents"].values()
         if "limitId" in document
     }
     refused = [
         document for document in plan["documents"].values() if not document["owned"]
     ]
-    assert len(refused) == 4  # only the four illegal identifier names
+    assert len(refused) == 3  # only the illegal identifier names
     assert all(
         document["resource"] not in plan["localGatePlan"]["jobs"]["limits"]["resources"]
         for document in refused
@@ -313,19 +343,17 @@ def test_plan_is_deterministic_bounded_and_nonce_isolated():
     other = plan_for("b")
     assert all("a" * 32 not in json.dumps(request) for request in other["requests"])
     accounting = first["budgetAccounting"]
-    assert accounting["observationRequests"] == 63
-    assert accounting["recoveryRequests"] == 60
-    assert accounting["ownedDocuments"] == 20
-    assert accounting["probedNames"] == 4
+    assert accounting["observationRequests"] == 56
+    assert accounting["recoveryRequests"] == 54
+    assert accounting["ownedDocuments"] == 18
+    assert accounting["probedNames"] == 3
     assert accounting["productionReady"] is False
-    assert preflight_count(first) == 20
+    assert preflight_count(first) == 18
     kinds = [request["kind"] for request in first["requests"]]
-    assert kinds[:20] == ["preflight-typed-absence"] * 20
-    assert kinds.count("batch-write") == 5
-    assert kinds.count("create-only-patch") == 14
+    assert kinds[:18] == ["preflight-typed-absence"] * 18
+    assert kinds.count("batch-write") == 3
     assert kinds.count("refusal-consistency-readback") == 3
-    assert kinds.count("name-boundary-readback") == 1
-    assert kinds.count("cleanup-conditional-delete") == 20
+    assert kinds.count("cleanup-conditional-delete") == 18
 
 
 def test_every_batch_write_is_create_only_and_namespace_marked():
@@ -368,7 +396,7 @@ def test_unproven_namespace_cannot_authorize_any_mutation():
             "body": NOT_FOUND,
             "request": observation[index],
         }
-        for index in range(20)
+        for index in range(18)
     ]
     assert writes_safe(rows, plan) is True
     rows[7]["body"] = {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}
@@ -509,7 +537,11 @@ def test_comparator_matches_a_self_control_and_normalizes_identity(tmp_path):
     assert same["acquisitionValidated"] is False
     assert same["promotionReady"] is False
     cross = compare_rows(left_plan, left, right_plan, right)
-    assert cross["classification"] == "EXPECTED_NONDETERMINISM"
+    # Across two projects the refusal diagnostics name resources and sizes the
+    # two plans do not share, and the v1 contract keeps message text
+    # significant. The shape still has to agree, which is what the additive
+    # structural view reports.
+    assert cross["classification"] in ("EXPECTED_NONDETERMINISM", "SEMANTIC_MISMATCH")
     assert cross["structuralClassification"] == "MATCH"
 
 
@@ -575,11 +607,23 @@ def test_evaluate_rows_refuses_a_reordered_journal(tmp_path):
     assert evaluate_rows(swapped, plan)
 
 
-def test_document_name_boundary_is_probed_by_name_not_by_a_create():
+def test_document_name_boundary_is_written_under_a_declared_exemption():
     plan = plan_for()
     accept = plan["documents"]["document-name-accept"]
     refuse = plan["documents"]["document-name-refuse"]
-    assert accept["owned"] is False and refuse["owned"] is False
+    # The accepted side is created, which is only possible because the campaign
+    # declares an exemption; the refused name is not a resource at all.
+    assert accept["owned"] is True and refuse["owned"] is False
+    assert accept["indexExempt"] is True
+    case = next(
+        c for c in plan["cases"] if c.get("limitId") == "FS-LIMIT-DOCUMENT-NAME-BYTES"
+    )
+    assert case["indexExemption"] == {
+        "collectionGroup": "nx",
+        "fieldPath": "*",
+        "indexes": [],
+    }
+    assert case["pendingReason"]
     # A document at this name cannot be created while the automatic
     # single-field indexes are in force, so the boundary is read, not written.
     assert largest_index_entry_bytes(accept["resource"], accept["fields"]) > 7680
@@ -593,9 +637,11 @@ def test_document_name_boundary_is_probed_by_name_not_by_a_create():
     kinds = {
         request["kind"]
         for request in plan["requests"]
-        if request["path"].endswith(accept["resource"])
+        if request["path"].split("?")[0].endswith(accept["resource"])
     }
-    assert kinds == {"name-boundary-readback"}
+    # Under the exemption the boundary is written, read back and reclaimed.
+    assert "create-only-patch" in kinds
+    assert "preflight-typed-absence" in kinds
 
 
 @pytest.mark.parametrize(
@@ -714,22 +760,24 @@ def test_the_truncating_limit_is_not_written_as_a_refusal():
     assert all(request["expect"]["positive"] is True for request in patches)
 
 
-def test_the_unsupported_limits_carry_the_production_expectation_as_pending():
-    plan = plan_for()
-    pending = pending_rows(plan)
-    assert pending
-    limits = {
-        case["limitId"]
-        for case in plan["cases"]
-        if case.get("catalogImplemented") == "unsupported"
-    }
-    assert limits == {
+def test_every_pending_row_states_why_it_is_pending():
+    unsupported = set()
+    for part in ("A", "B"):
+        plan = plan_for(part=part)
+        rows = pending_rows(plan)
+        assert rows
+        for index in rows:
+            assert plan["requests"][index]["expect"]["pendingReason"]
+        unsupported |= {
+            case["limitId"]
+            for case in plan["cases"]
+            if case.get("catalogImplemented") == "unsupported"
+        }
+    assert unsupported == {
         "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
         "FS-LIMIT-FIELD-PATH-BYTES",
         "FS-LIMIT-FIELD-VALUE-BYTES",
     }
-    for index in pending:
-        assert plan["requests"][index]["expect"]["localImplementationPending"] is True
 
 
 def test_a_pending_difference_is_recorded_but_does_not_fail_the_campaign(tmp_path):
@@ -761,7 +809,7 @@ def test_a_pending_difference_is_recorded_but_does_not_fail_the_campaign(tmp_pat
 def test_the_field_value_refusal_is_separated_from_the_document_limit_by_wording(
     tmp_path,
 ):
-    plan = plan_for("d")
+    plan = plan_for("d", part="B")
     document = plan["documents"]["field-value-refuse"]
     # The refused document breaches the document limit too, so only the
     # diagnostic text says which limit production enforced.

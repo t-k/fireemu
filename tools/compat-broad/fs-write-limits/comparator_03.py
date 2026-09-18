@@ -34,9 +34,9 @@ def _exact(a, b):
 
 
 def _validated(plan, rows):
-    resource = plan["documents"]["batch-malformed-prefix"]["resource"]
+    resource = next(iter(plan["documents"].values()))["resource"]
     parts = resource.split("/")
-    expected = compile_limits_plan(parts[1], parts[3], plan["nonce"])
+    expected = compile_limits_plan(parts[1], parts[3], plan["nonce"], plan["part"])
     if not _exact(plan, expected):
         raise ValueError("compiler plan drift")
     operations = plan["localGatePlan"]["jobs"]["limits"]["observation"]

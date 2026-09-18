@@ -721,3 +721,36 @@ def test_a_preflight_read_that_proves_nothing_stops_the_run():
         options(), transport, advance=advances([]), monotonic=lambda: 0.0
     )
     assert receipt["failure"] == "incomplete-response"
+
+
+def test_a_readback_keeps_the_document_body_in_the_receipt():
+    endpoint = StatefulEndpoint()
+    receipt, _ = run_against(endpoint)
+    verified = [row for row in receipt["rows"] if row.get("verifiesCase")]
+    assert verified
+    for row in verified:
+        document = row["document"]
+        assert document["exists"] is True
+        assert document["fields"]["role"]["stringValue"] == row["role"]
+        assert isinstance(document["updateTimeOrdinal"], int)
+
+
+def test_a_recorded_body_carries_no_run_bound_identity():
+    endpoint = StatefulEndpoint()
+    receipt, _ = run_against(endpoint)
+    rendered = repr([row.get("document") for row in receipt["rows"]])
+    assert NONCE not in rendered
+    assert OWNER not in rendered
+    assert PROJECT not in rendered
+
+
+def test_the_state_a_case_left_behind_is_recorded_next_to_that_case():
+    endpoint = StatefulEndpoint()
+    receipt, _ = run_against(endpoint)
+    states = {
+        row["verifiesCase"]: row["document"]["fields"]["state"]["stringValue"]
+        for row in receipt["rows"]
+        if row.get("verifiesCase") and row["document"]["exists"]
+    }
+    assert states["idle-expiry/commit-before-idle"] == "committed-before-idle"
+    assert states["idle-expiry/lock-released-after-idle"] == "written-after-expiry"

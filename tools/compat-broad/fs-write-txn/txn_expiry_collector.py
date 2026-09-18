@@ -33,6 +33,16 @@ WALL_CLOCK = "wall-clock"
 CONTROL_CLOCK = "control-clock"
 TIMING_MODES = (WALL_CLOCK, CONTROL_CLOCK)
 
+#: Fixed stand-ins for the identities that differ between any two runs. The
+#: recorded body keeps its values and types; only the run-bound resource names
+#: and the instants are replaced, so two receipts stay comparable.
+RESOURCE_SLOT = "<fireemu:o3-txn-expiry:resource>"
+TOKEN_SLOT = "<fireemu:o3-txn-expiry:token>"
+OWNER_SLOT = "<fireemu:o3-txn-expiry:owner>"
+
+#: Document keys that carry an instant rather than a value.
+INSTANT_KEYS = ("updateTime", "createTime", "readTime")
+
 LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
 PRODUCTION_HOST = "firestore.googleapis.com"
 
@@ -192,6 +202,7 @@ class Collection:
         self.checkpoints = []
         self.created = {}
         self.established = {}
+        self.update_times = {}
         self.preconditions = []
         self.failure_sites = []
         self.failure = None
@@ -273,6 +284,57 @@ class Collection:
             write["currentDocument"] = {"exists": False}
         return write
 
+    # -- observed document bodies -------------------------------------------
+
+    def _scrub(self, value):
+        """Replace this run's identities inside a recorded value."""
+        if isinstance(value, dict):
+            return {key: self._scrub(entry) for key, entry in value.items()}
+        if isinstance(value, list):
+            return [self._scrub(entry) for entry in value]
+        if not isinstance(value, str):
+            return value
+        for needle, slot in (
+            (owner_marker(self.options["ownerId"]), OWNER_SLOT),
+            (self.plan["documentPrefix"], RESOURCE_SLOT),
+            (self.options["nonce"], TOKEN_SLOT),
+            (self.options["ownerId"], OWNER_SLOT),
+            (self.options["projectId"], RESOURCE_SLOT),
+        ):
+            if needle:
+                value = value.replace(needle, slot)
+        return value
+
+    def _version_ordinal(self, role, instant):
+        """Where this instant sits in the versions observed for one document.
+
+        The instant itself is volatile, but whether it changed between two
+        readings is exactly the relation a post-state comparison needs, and an
+        ordinal carries that across two runs.
+        """
+        seen = self.update_times.setdefault(role, [])
+        if instant is None:
+            return None
+        if instant not in seen:
+            seen.append(instant)
+        return seen.index(instant)
+
+    def _observed_document(self, role, response):
+        code = response.get("code")
+        if code == NOT_FOUND:
+            return {"exists": False, "code": code}
+        if code != OK:
+            return {"exists": None, "code": code}
+        body = response.get("body") or {}
+        return {
+            "exists": True,
+            "code": code,
+            "name": RESOURCE_SLOT,
+            "updateTime": TOKEN_SLOT,
+            "updateTimeOrdinal": self._version_ordinal(role, body.get("updateTime")),
+            "fields": self._scrub(body.get("fields") or {}),
+        }
+
     # -- row recording ------------------------------------------------------
 
     def _record(self, step, response, *, waited=None, detail=None):
@@ -294,6 +356,10 @@ class Collection:
         for key in ("blocked", "incomplete"):
             if response.get(key):
                 row[key] = response[key]
+        if step.get("verifiesCase"):
+            row["verifiesCase"] = step["verifiesCase"]
+        if step["rpc"] == "GetDocument" and step["role"]:
+            row["document"] = self._observed_document(step["role"], response)
         tag = step.get("idleOfTransaction")
         if tag is not None and tag in self.locked_at:
             row["idleSeconds"] = self._campaign_now() - self.locked_at[tag]
@@ -464,13 +530,16 @@ class Collection:
                     "updateTime": (results[0] or {}).get("updateTime"),
                 }
                 self.created[role] = True
+                self._version_ordinal(role, self.established[role]["updateTime"])
                 self._record_precondition(role, created=True)
                 return None
             self._record_precondition(role, created=False)
             if code == ALREADY_EXISTS:
                 return "conditional-create-refused-already-exists"
             return "conditional-create-refused"
-        if slot.startswith("readback/"):
+        if slot.startswith(("readback/", "verify/")):
+            # A readback records what it saw. An absent or unreadable document
+            # is an observation about the case before it, not a setup failure.
             return None
         if code == OK:
             return None
@@ -507,7 +576,7 @@ class Collection:
             return self._commit(
                 [self._write_marker(step["role"], "created", create=True)]
             )
-        if slot.startswith("readback/"):
+        if slot.startswith(("readback/", "verify/")):
             return self._get(step["role"])
         if slot.startswith("idle/begin/"):
             return self._open(step, {"readWrite": {}})

@@ -38,8 +38,13 @@ EXPECTED_NONDETERMINISM = "EXPECTED_NONDETERMINISM"
 SEMANTIC_MISMATCH = "SEMANTIC_MISMATCH"
 INDETERMINATE = "INDETERMINATE"
 
-RESOURCE_SLOT = "<fireemu:o3-txn-expiry:resource>"
-TOKEN_SLOT = "<fireemu:o3-txn-expiry:token>"
+RESOURCE_SLOT = collector.RESOURCE_SLOT
+TOKEN_SLOT = collector.TOKEN_SLOT
+
+#: The suffix a post-state entry carries in a difference or disagreement map,
+#: so a reader can tell "the backend answered differently" from "the backend
+#: left the document in a different state".
+POST_STATE = "#postState"
 
 #: Strings that must never appear in a receipt handed to the comparator.
 CREDENTIAL_MARKERS = ("refresh_token", "client_secret", "ya29.", "Bearer ")
@@ -86,6 +91,25 @@ def _projection(receipt):
             "role": row["role"],
         }
     return projected
+
+
+def _post_states(receipt):
+    """The document each case left behind, keyed by the case it verifies."""
+    states = {}
+    for row in receipt.get("rows", []):
+        case_id = row.get("verifiesCase")
+        if case_id:
+            states[case_id] = {"role": row.get("role"), "document": row.get("document")}
+    return states
+
+
+def _observed_state(entry):
+    """The marker state a readback found, or None when there is no document."""
+    document = (entry or {}).get("document") or {}
+    if not document.get("exists"):
+        return None
+    field = (document.get("fields") or {}).get("state") or {}
+    return field.get("stringValue")
 
 
 def _identities(receipt):
@@ -208,6 +232,7 @@ def _elapsed_reasons(receipt, side):
                 }
             )
     reasons += _wait_reasons(receipt, side)
+    reasons += _post_state_reasons(receipt, side)
     return reasons
 
 
@@ -268,6 +293,14 @@ def compare(production, local):
         for case_id in sorted(set(production_projection) | set(local_projection))
         if production_projection.get(case_id) != local_projection.get(case_id)
     }
+    production_states = _post_states(production)
+    local_states = _post_states(local)
+    for case_id in sorted(set(production_states) | set(local_states)):
+        if production_states.get(case_id) != local_states.get(case_id):
+            differences[case_id + POST_STATE] = {
+                "production": production_states.get(case_id),
+                "local": local_states.get(case_id),
+            }
     timing = {
         "production": _timing(production),
         "local": _timing(local),
@@ -284,6 +317,8 @@ def compare(production, local):
         "localSourceDigest": local.get("sourceDigest"),
         "productionProjectionDigest": digest(production_projection),
         "localProjectionDigest": digest(local_projection),
+        "productionPostStateDigest": digest(_post_states(production)),
+        "localPostStateDigest": digest(_post_states(local)),
     }
     if differences:
         return {
@@ -308,6 +343,68 @@ def compare(production, local):
         "bindings": bindings,
         "casesCompared": sorted(production_projection),
     }
+
+
+def _post_state_reasons(receipt, side):
+    """A declared post state that was never read back proves nothing.
+
+    This is an incomplete receipt, not a disagreement, so it makes the whole
+    comparison indeterminate rather than reporting a mismatch nobody observed.
+    """
+    states = _post_states(receipt)
+    reasons = []
+    for case in cases.CASES:
+        declared = case["postState"]
+        if not declared:
+            continue
+        entry = states.get(case["id"])
+        if entry is None:
+            reasons.append(
+                {
+                    "code": "post-state-not-read",
+                    "side": side,
+                    "detail": {"case": case["id"]},
+                }
+            )
+        elif entry["role"] not in declared:
+            reasons.append(
+                {
+                    "code": "post-state-reads-another-resource",
+                    "side": side,
+                    "detail": {"case": case["id"], "role": entry["role"]},
+                }
+            )
+    return reasons
+
+
+def _post_state_disagreements(local):
+    """Check each case's declared post state against the readback that follows it.
+
+    A code is what the backend said. The declared post state is what the case
+    claims the backend did. A commit that returns OK without writing, and a
+    refusal that writes anyway, both agree on the code and disagree here.
+    """
+    states = _post_states(local)
+    found = {}
+    for case in cases.CASES:
+        declared = case["postState"]
+        if not declared:
+            continue
+        key = case["id"] + POST_STATE
+        entry = states.get(case["id"])
+        if entry is None:
+            continue
+        expected = declared.get(entry["role"])
+        if expected is None:
+            continue
+        observed = _observed_state(entry)
+        if observed != expected:
+            found[key] = {
+                "expected": expected,
+                "observed": observed,
+                "role": entry["role"],
+            }
+    return found
 
 
 def local_self_contract(local):
@@ -337,6 +434,7 @@ def local_self_contract(local):
         )
         if not agrees:
             disagreements[case["id"]] = {"expected": expected, "observed": observed}
+    disagreements.update(_post_state_disagreements(local))
     return {
         "kind": "txn-expiry-local-self-contract-v1",
         "classification": SEMANTIC_MISMATCH if disagreements else MATCH,

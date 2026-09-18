@@ -1,5 +1,6 @@
 """The comparator separates infrastructure failure from semantic disagreement."""
 
+import base64
 import copy
 import sys
 from pathlib import Path
@@ -55,6 +56,36 @@ def receipt(target, *, project, nonce, timing):
             row["idleSeconds"] = required
             row["idleOfTransaction"] = "a"
         rows.append(row)
+        if not case["resources"]:
+            continue
+        role = case["resources"][0]
+        state = (case["postState"] or {}).get(role, "created")
+        rows.append(
+            {
+                "slot": f"verify/{case['id']}",
+                "phase": "readback",
+                "caseId": None,
+                "verifiesCase": case["id"],
+                "rpc": "GetDocument",
+                "role": role,
+                "observed": {"code": 0, "status": "OK", "message": None},
+                "complete": True,
+                "waited": None,
+                "document": {
+                    "exists": True,
+                    "code": 0,
+                    "name": collector.RESOURCE_SLOT,
+                    "updateTime": collector.TOKEN_SLOT,
+                    "updateTimeOrdinal": 0,
+                    "fields": {
+                        "owner": {"stringValue": collector.OWNER_SLOT},
+                        "role": {"stringValue": role},
+                        "nonce": {"stringValue": collector.TOKEN_SLOT},
+                        "state": {"stringValue": state},
+                    },
+                },
+            }
+        )
     return {
         "kind": collector.CONTRACT,
         "campaign": cases.CAMPAIGN,
@@ -111,10 +142,15 @@ def test_identical_identities_and_semantics_are_a_match():
     assert comparison.compare(value, other)["classification"] == comparison.MATCH
 
 
+def case_row(receipt, case_id):
+    return next(row for row in receipt["rows"] if row["caseId"] == case_id)
+
+
 def test_a_different_code_is_a_semantic_mismatch():
     value = local()
-    value["rows"][1]["observed"]["code"] = 0
-    value["rows"][1]["observed"]["status"] = "OK"
+    row = case_row(value, "idle-expiry/commit-after-idle")
+    row["observed"]["code"] = 0
+    row["observed"]["status"] = "OK"
     result = comparison.compare(production(), value)
     assert result["classification"] == comparison.SEMANTIC_MISMATCH
     assert "idle-expiry/commit-after-idle" in result["differences"]
@@ -247,7 +283,7 @@ def test_local_self_contract_accepts_the_frozen_expected_results():
 
 def test_local_self_contract_reports_a_disagreeing_case():
     value = local()
-    value["rows"][1]["observed"]["code"] = 0
+    case_row(value, "idle-expiry/commit-after-idle")["observed"]["code"] = 0
     result = comparison.local_self_contract(value)
     assert result["classification"] == comparison.SEMANTIC_MISMATCH
     assert "idle-expiry/commit-after-idle" in result["disagreements"]
@@ -263,7 +299,7 @@ def test_the_synthetic_receipt_shape_matches_a_real_collector_receipt():
     synthetic = local()
     assert set(synthetic) <= set(real), set(synthetic) - set(real)
     real_case_rows = [row for row in real["rows"] if row["caseId"]]
-    synthetic_row = synthetic["rows"][0]
+    synthetic_row = next(row for row in synthetic["rows"] if row["caseId"])
     assert set(synthetic_row) <= set(real_case_rows[0]) | {
         "idleSeconds",
         "idleOfTransaction",
@@ -295,3 +331,180 @@ def test_a_production_receipt_measured_by_a_no_op_sleeper_is_refused():
     codes = {r["code"] for r in result["reasons"]}
     assert "wait-shorter-than-requested" in codes
     assert "elapsed-time-not-reached" in codes
+
+
+class CaseAwareEndpoint:
+    """A backend that answers every case with the code the table expects.
+
+    It exists to separate the two things a receipt has to carry. Every response
+    code is correct, so nothing a code-only comparison looks at can disagree.
+    What changes is what the backend actually did to the documents, which is the
+    thing a post-state readback is there to catch.
+    """
+
+    def __init__(self, *, silent_success=None, mutating_refusal=None):
+        self.silent_success = silent_success
+        self.mutating_refusal = mutating_refusal
+        self.documents = {}
+        self.issued = 0
+        self.steps = None
+        self.rows = None
+
+    def attach(self, collection):
+        self.rows = collection.rows
+        self.steps = [
+            step for step in collection.plan["operations"] if step["phase"] != "cleanup"
+        ]
+
+    def _step(self):
+        index = len(self.rows)
+        return self.steps[index] if index < len(self.steps) else None
+
+    def __call__(self, request):
+        step = self._step()
+        slot = step["slot"] if step else "cleanup"
+        case = collector.CASE_BY_ID.get(step["caseId"]) if step else None
+        code = case["expectedLocal"]["code"] if case else 0
+        message = case["expectedLocal"]["message"] if case else None
+        rpc = request["rpc"]
+        body = request.get("body") or {}
+        reply = {"code": code, "status": "", "message": message, "complete": True}
+        if rpc == "BeginTransaction":
+            if code:
+                return {**reply, "body": {}}
+            self.issued += 1
+            token = base64.b64encode(f"token-{self.issued}".encode()).decode()
+            return {**reply, "body": {"transaction": token}}
+        if rpc == "Rollback":
+            return {**reply, "body": {}}
+        if rpc == "GetDocument":
+            name = request["name"]
+            if name not in self.documents:
+                return {
+                    "code": 5,
+                    "status": "NOT_FOUND",
+                    "message": "not found",
+                    "complete": True,
+                }
+            fields, version = self.documents[name]
+            return {
+                "code": 0,
+                "status": "OK",
+                "message": None,
+                "complete": True,
+                "body": {
+                    "name": name,
+                    "fields": dict(fields),
+                    "updateTime": f"2026-09-18T00:00:{version:02d}.000001Z",
+                },
+            }
+        if rpc == "Commit":
+            writes = body["writes"]
+            for write in writes:
+                name = write.get("delete") or write["update"]["name"]
+                current = write.get("currentDocument") or {}
+                if current.get("exists") is False and name in self.documents:
+                    return {
+                        "code": 6,
+                        "status": "ALREADY_EXISTS",
+                        "message": "already exists",
+                        "complete": True,
+                    }
+            applies = code == 0 or slot == self.mutating_refusal
+            if applies and slot != self.silent_success:
+                for write in writes:
+                    if "delete" in write:
+                        self.documents.pop(write["delete"], None)
+                    else:
+                        name = write["update"]["name"]
+                        version = self.documents.get(name, (None, 0))[1] + 1
+                        self.documents[name] = (
+                            dict(write["update"]["fields"]),
+                            version,
+                        )
+            if code:
+                return {**reply, "body": {}}
+            return {
+                **reply,
+                "body": {
+                    "writeResults": [
+                        {"updateTime": "2026-09-18T00:00:00.000001Z"} for _ in writes
+                    ]
+                },
+            }
+        raise AssertionError(rpc)
+
+
+def collect_with(endpoint, *, target="local"):
+    nonce = (
+        "o3expiry-0000000000000001"
+        if target == "local"
+        else "o3expiry-0000000000000002"
+    )
+    project = "fireemu-test" if target == "local" else "oracle-project"
+    value = {
+        "target": target,
+        "host": "127.0.0.1" if target == "local" else collector.PRODUCTION_HOST,
+        "projectId": project,
+        "database": "(default)",
+        "nonce": nonce,
+        "ownerId": "11111111222233334444555566667777",
+        "timing": collector.CONTROL_CLOCK
+        if target == "local"
+        else collector.WALL_CLOCK,
+        "deadlineSeconds": 300,
+    }
+    plan = plan_module.compile_plan(nonce, value["ownerId"], project=project)
+    clock = {"now": 0.0}
+
+    def tick(seconds):
+        clock["now"] += seconds
+        return seconds
+
+    collection = collector.Collection(
+        value,
+        plan,
+        endpoint,
+        advance=tick,
+        sleeper=tick,
+        monotonic=lambda: clock["now"],
+        wall=lambda: 1_800_000_000 + clock["now"],
+    )
+    endpoint.attach(collection)
+    return collection.run()
+
+
+def test_a_faithful_pair_of_runs_agrees_on_every_post_state():
+    produced = collect_with(CaseAwareEndpoint(), target="production")
+    local = collect_with(CaseAwareEndpoint())
+    report = comparison.compare(produced, local)
+    assert report["classification"] == comparison.EXPECTED_NONDETERMINISM, report
+    assert comparison.local_self_contract(local)["classification"] == comparison.MATCH
+
+
+def test_a_commit_that_succeeds_without_updating_its_document_is_detected():
+    endpoint = CaseAwareEndpoint(silent_success="idle/commit-before")
+    local = collect_with(endpoint)
+    rows = {row["caseId"]: row for row in local["rows"] if row["caseId"]}
+    assert rows["idle-expiry/commit-before-idle"]["observed"]["code"] == 0
+    contract = comparison.local_self_contract(local)
+    assert contract["classification"] == comparison.SEMANTIC_MISMATCH
+    assert "idle-expiry/commit-before-idle#postState" in contract["disagreements"]
+    produced = collect_with(CaseAwareEndpoint(), target="production")
+    report = comparison.compare(produced, local)
+    assert report["classification"] == comparison.SEMANTIC_MISMATCH
+    assert "idle-expiry/commit-before-idle#postState" in report["differences"]
+
+
+def test_a_refusal_that_nevertheless_changes_its_document_is_detected():
+    endpoint = CaseAwareEndpoint(mutating_refusal="idle/commit-after")
+    local = collect_with(endpoint)
+    rows = {row["caseId"]: row for row in local["rows"] if row["caseId"]}
+    assert rows["idle-expiry/commit-after-idle"]["observed"]["code"] == 10
+    contract = comparison.local_self_contract(local)
+    assert contract["classification"] == comparison.SEMANTIC_MISMATCH
+    assert "idle-expiry/commit-after-idle#postState" in contract["disagreements"]
+    produced = collect_with(CaseAwareEndpoint(), target="production")
+    report = comparison.compare(produced, local)
+    assert report["classification"] == comparison.SEMANTIC_MISMATCH
+    assert "idle-expiry/commit-after-idle#postState" in report["differences"]

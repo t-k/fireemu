@@ -31,9 +31,9 @@ use super::{
     exit_code, functions, hub, hub_emulators, import_export, load_rules, load_storage_rules,
     logical_system_time, print_banner, print_rules_status, random_secret, reportable_exit_code,
     runtime_thread_counts, service_admission, session_rsa_cache, spawn_child,
-    start_firestore_config_reload_supervisors, stop_child, storage_state, terminate_signal, ui,
-    wait_child, BoundAddrs, ExecPlan, Exporter, Listeners, Options, RedactedRuntimeConfig,
-    RuntimeConfig, Selection, Verbosity,
+    start_firestore_config_reload_supervisors, stop_child, storage_state, ui, wait_child,
+    BoundAddrs, ExecPlan, Exporter, Listeners, Options, RedactedRuntimeConfig, RuntimeConfig,
+    Selection, ShutdownSignals, Verbosity,
 };
 
 struct BoundStartup {
@@ -914,7 +914,15 @@ struct ReadySuite {
     pubsub: fireemu_adapter_pubsub::PubSubHandle,
 }
 
-async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, String> {
+async fn serve_suite(
+    ready: ReadySuite,
+    exec: Option<ExecPlan>,
+    signals: ShutdownSignals,
+) -> Result<i32, String> {
+    let ShutdownSignals {
+        mut interrupt,
+        mut terminate,
+    } = signals;
     let ReadySuite {
         log_bus,
         cfg,
@@ -930,7 +938,7 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
         functions_runtime,
         exporter,
         hub_state,
-        locator: _locator,
+        locator,
         addrs,
         control_token,
         storage_admin_capability,
@@ -1150,13 +1158,13 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
             Ok(status) => Ok(Some(exit_code(status))),
             Err(e) => Err(format!("waiting for the command: {e}")),
         },
-        _ = tokio::signal::ctrl_c() => {
+        () = interrupt.recv() => {
             if !quiet {
                 println!("shutting down");
             }
             Ok::<Option<i32>, String>(None)
         }
-        () = terminate_signal() => {
+        () = terminate.recv() => {
             if !quiet {
                 println!("shutting down (SIGTERM)");
             }
@@ -1213,6 +1221,13 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
     pubsub.shutdown_push_dispatcher().await;
     servers.abort_all();
     while servers.join_next().await.is_some() {}
+    // Discovery is retired as an explicit, ordered step of shutdown, while the runtime is
+    // still up and every server that answered on the advertised origin has stopped. Dropping
+    // the locator on the way out is kept as a fallback, not as the mechanism: a destructor
+    // cannot be relied on to run at all.
+    if let Some(note) = locator.and_then(hub::Locator::release) {
+        eprintln!("warning: {note}");
+    }
     outcome.map(|_| code)
 }
 
@@ -1269,6 +1284,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         }
     };
     let result = runtime.block_on(async move {
+        // The stop signals are installed before anything else: everything below this line
+        // can advertise readiness, and a SIGTERM that arrives before its handler exists
+        // terminates the process without running a destructor.
+        let signals = ShutdownSignals::install();
         let clock = Arc::new(Mutex::new(VirtualClock::new(cfg.clock_start)));
         let gateway = Gateway {
             enforce_limits: cfg.enforce_limits,
@@ -1550,7 +1569,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 functions_runtime,
             })?;
         let ready = assemble_suite(assembly, exec.is_some())?;
-        serve_suite(ready, exec).await
+        serve_suite(ready, exec, signals).await
     });
     match result {
         Ok(code) => ExitCode::from(reportable_exit_code(code)),

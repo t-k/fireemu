@@ -2929,16 +2929,24 @@ impl AuthStore {
         })
     }
 
-    /// Replaces the phone factors (Admin `mfa.enrollments`).
-    pub fn set_phone_factors(
-        &mut self,
+    /// Every condition on which [`Self::set_phone_factors`] refuses a list, decided without
+    /// touching the store.
+    ///
+    /// A caller that writes something else before it replaces the factors has to run this
+    /// first, so a refused request applies none of itself: the Admin `accounts:update` route
+    /// saves custom claims and links providers before it reaches the factors.
+    ///
+    /// # Errors
+    ///
+    /// The refusal `set_phone_factors` would return for the same list.
+    pub fn check_phone_factors(
+        &self,
         uid: &LocalId,
-        factors: Vec<(String, Option<String>)>,
-        now: LogicalInstant,
+        factors: &[(String, Option<String>)],
     ) -> Result<(), MfaError> {
         // The whole list is checked before the existing factors are dropped: `enroll_phone_factor`
         // refuses an entry on its own, but by then the clear has already happened.
-        for (phone, display_name) in &factors {
+        for (phone, display_name) in factors {
             Self::validate_phone_number(phone).map_err(|_| MfaError::InvalidCode)?;
             crate::mfa::validate_factor_display_name(display_name.as_deref())?;
         }
@@ -2957,6 +2965,21 @@ impl AuthStore {
                 return Err(MfaError::TooManyFactors);
             }
         }
+        Ok(())
+    }
+
+    /// Replaces the phone factors (Admin `mfa.enrollments`).
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::check_phone_factors`]; a refused list leaves the account unchanged.
+    pub fn set_phone_factors(
+        &mut self,
+        uid: &LocalId,
+        factors: Vec<(String, Option<String>)>,
+        now: LogicalInstant,
+    ) -> Result<(), MfaError> {
+        self.check_phone_factors(uid, &factors)?;
         if let Some(user) = self.users.get_mut(uid).map(Arc::make_mut) {
             user.mfa.phone_factors_mut().clear();
         }

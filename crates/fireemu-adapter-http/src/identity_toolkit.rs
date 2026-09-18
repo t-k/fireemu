@@ -7169,6 +7169,26 @@ fn update(
             return error(400, "FEDERATED_USER_ID_ALREADY_LINKED");
         }
     }
+    // Every refusal a later step of this update can raise is decided here, before the first
+    // write. The store calls below run in a fixed order (claims, providers, factors,
+    // address, ...), so a condition checked only by the step that owns it would let the
+    // steps ahead of it land and then return 400. The order of the checks is the order of
+    // the writes they stand for, which keeps the error a request with several faults gets.
+    if let Some(claims) = &plan.claims {
+        if let Err(e) = claims.check_size() {
+            return auth_error(&AuthError::LimitExceeded(e));
+        }
+    }
+    if let Some(factors) = &plan.phone_factors {
+        if let Err(e) = store.check_phone_factors(&uid, factors) {
+            return mfa_error(&e);
+        }
+    }
+    if let Some(email) = &plan.email {
+        if let Err(e) = store.validate_email_update(&uid, email) {
+            return auth_error(&e);
+        }
+    }
     if let Some(claims) = plan.claims {
         if let Err(e) = store.set_custom_claims(&uid, claims) {
             return auth_error(&e);

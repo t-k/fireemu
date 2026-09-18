@@ -1,8 +1,11 @@
 """Offline recompare of a saved receipt under a repaired comparator."""
 
+import hashlib
 import json
-import subprocess
+import os
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -81,7 +84,7 @@ def test_saved_recompare_refuses_a_comparator_root_without_sources(
     inputs, output, reference = _saved(tmp_path, monkeypatch)
     empty = tmp_path / "empty-comparator-root"
     empty.mkdir()
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(ValueError, match="comparator source required"):
         recompare.recompare_saved(
             output,
             reference,
@@ -89,3 +92,147 @@ def test_saved_recompare_refuses_a_comparator_root_without_sources(
             comparator_root=empty,
             expected_execution_kind="injected-transport",
         )
+
+
+SLEEP_SECONDS = 2.0
+SWAP_AFTER_SECONDS = 0.5
+
+_FORCE_MISMATCH = """
+
+_UNREPAIRED_COMPARE_ROWS = compare_rows
+
+
+def compare_rows(*args, **kwargs):  # noqa: F811
+    value = _UNREPAIRED_COMPARE_ROWS(*args, **kwargs)
+    value["classification"] = "SEMANTIC_MISMATCH"
+    for row in value["rows"]:
+        row["classification"] = "SEMANTIC_MISMATCH"
+    return value
+"""
+
+
+def _comparator_root(directory, *, slow):
+    """A real, runnable comparator root the test owns and may rewrite."""
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in ("transform_comparator.py", "transform_compiler.py"):
+        (directory / name).write_bytes((LANE / name).read_bytes())
+    if slow:
+        path = directory / "transform_comparator.py"
+        path.write_text(
+            path.read_text()
+            + f"\n\nimport time  # noqa: E402\n\ntime.sleep({SLEEP_SECONDS})\n"
+        )
+    return directory
+
+
+def _sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _replace_during_run(path, data):
+    """Atomically swap one file from another thread while the recompare runs."""
+    path = Path(path)
+    failures = []
+
+    def swap():
+        try:
+            time.sleep(SWAP_AFTER_SECONDS)
+            staging = path.with_name(path.name + ".incoming")
+            staging.write_bytes(data)
+            os.replace(staging, path)
+        except OSError as error:  # pragma: no cover - reported by the test
+            failures.append(error)
+
+    thread = threading.Thread(target=swap)
+    thread.start()
+    return thread, failures
+
+
+def _recompare(inputs, output, reference, root):
+    return recompare.recompare_saved(
+        output,
+        reference,
+        expected_inputs_digest=inputs["inputsDigest"],
+        comparator_root=root,
+        expected_execution_kind="injected-transport",
+    )
+
+
+def test_a_quiet_run_records_the_hashes_of_the_sources_it_executed(
+    tmp_path, monkeypatch
+):
+    inputs, output, reference = _saved(tmp_path, monkeypatch)
+    root = _comparator_root(tmp_path / "comparator-a", slow=True)
+    record = _recompare(inputs, output, reference, root)
+    assert record["repaired"]["classification"] == "MATCH"
+    assert record["binding"]["comparatorSourceSha256"] == {
+        name: _sha256(root / name)
+        for name in ("transform_comparator.py", "transform_compiler.py")
+    }
+    assert record["binding"]["referenceSha256"] == _sha256(reference)
+
+
+def test_a_comparator_swapped_mid_run_cannot_be_recorded_as_the_one_that_ran(
+    tmp_path, monkeypatch
+):
+    inputs, output, reference = _saved(tmp_path, monkeypatch)
+    root = _comparator_root(tmp_path / "comparator-a", slow=True)
+    original = (root / "transform_comparator.py").read_bytes()
+    other = original + _FORCE_MISMATCH.encode()
+    assert other != original
+    thread, failures = _replace_during_run(root / "transform_comparator.py", other)
+    try:
+        with pytest.raises(ValueError, match="changed while the recompare ran"):
+            _recompare(inputs, output, reference, root)
+    finally:
+        thread.join()
+    assert failures == []
+    # The swapped-in comparator really does classify differently, so recording
+    # its hash beside the original's result would have been a false binding.
+    assert (
+        _recompare(inputs, output, reference, root)["repaired"]["classification"]
+        == "SEMANTIC_MISMATCH"
+    )
+
+
+def test_a_compiler_swapped_mid_run_cannot_be_recorded_as_the_one_that_ran(
+    tmp_path, monkeypatch
+):
+    inputs, output, reference = _saved(tmp_path, monkeypatch)
+    root = _comparator_root(tmp_path / "comparator-a", slow=True)
+    compiler = root / "transform_compiler.py"
+    original = compiler.read_bytes()
+    other = original + b"\n# a byte-different compiler with the same behavior\n"
+    assert other != original
+    thread, failures = _replace_during_run(compiler, other)
+    try:
+        with pytest.raises(ValueError, match="changed while the recompare ran"):
+            _recompare(inputs, output, reference, root)
+    finally:
+        thread.join()
+    assert failures == []
+    assert compiler.read_bytes() == other
+
+
+def test_a_reference_swapped_mid_run_cannot_be_recorded_as_the_one_that_ran(
+    tmp_path, monkeypatch
+):
+    inputs, output, reference = _saved(tmp_path, monkeypatch)
+    root = _comparator_root(tmp_path / "comparator-a", slow=True)
+    original = reference.read_bytes()
+    value = json.loads(original)
+    value["rows"][2]["status"] = 201
+    other = json.dumps(value).encode()
+    assert other != original
+    thread, failures = _replace_during_run(reference, other)
+    try:
+        with pytest.raises(ValueError, match="changed while the recompare ran"):
+            _recompare(inputs, output, reference, root)
+    finally:
+        thread.join()
+    assert failures == []
+    # The swapped-in reference really does compare differently.
+    assert (
+        _recompare(inputs, output, reference, root)["repaired"]["classification"]
+        == "SEMANTIC_MISMATCH"
+    )

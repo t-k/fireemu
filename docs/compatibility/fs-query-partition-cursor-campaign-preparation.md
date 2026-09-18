@@ -55,7 +55,7 @@ Setup and baseline, five slots: typed absence of the root, conditional creation,
 one commit of twenty documents, the database-wide collection-group query ordered
 by `__name__`, and the `cur` collection ordered by `n`.
 
-Partitions, twelve slots: `partitionCount` one and four, a paged request with
+Partitions, thirteen slots: `partitionCount` one and four, a paged request with
 `pageSize` two, a continuation bound to the returned page token, six negative
 controls (document parent, no `allDescendants`, a filter, `partitionCount` zero, a
 limit, an offset), one ordering control on an indexed field, and two
@@ -108,47 +108,58 @@ always refuses; `validate_permission` accepts no permission while they stand.
 ## Local shadow
 
 The plan was driven against a `fireemu` built in the lane worktree. The runner
-records that binding itself and refuses a binary from another checkout. A debug
-build is not bit-reproducible, so the digest identifies one build instance rather
-than the source.
+records that binding itself, refuses a binary from another checkout, and writes
+the committed record at
+[`fs-query-partition-cursor-local-shadow.json`](../../spec/compatibility/broad-runs/fs-query-partition-cursor-local-shadow.json).
+A debug build is not bit-reproducible, so the digest identifies one build
+instance rather than the source.
 
 | Binding | Value |
 | --- | --- |
-| Lane source commit | `846603968` |
+| Source commit | `d4d92c5be` |
 | Rust sources | unchanged from base `3d0e56bdf` |
-| Artifact SHA-256 | `479124dd1ee7685b0be949269f530d4bbfe134bad140bab31236d9edb79350bb` |
-| Template plan digest | `496fbb0ad7661a8395b83669b97fdb831a2c24cf792d979d37d6907e69fb06b7` |
+| Artifact SHA-256 | `5523cde837b3b0c02e873d1400101e41ffd046003eace990fadeb2c9ae0244f1` |
 
-All 37 slots were dispatched, 37 raw sidecars were published and verified,
-cleanup completed, and an independent residual scan found zero owned documents.
-The owned process stopped and its listener closed.
+All 37 slots were dispatched and all 37 raw sidecars were published and verified,
+cleanup completed, and an independent residual scan proved zero owned documents
+with an explicit typed absence. The owned process stopped and its listener
+closed. A run that retains no wire bytes, or whose residual scan cannot prove
+absence, is reported as indeterminate rather than as a match.
 
-The reconstruction check held: the two ranges derived from the single split point
-returned six and six documents whose concatenation equals the twelve-document
-baseline in the same order.
+The reconstruction check is made by the tooling, not by hand: the collector
+concatenates the dispatched ranges and compares them to the recorded baseline in
+order. The run derived two ranges from one split point and their concatenation
+reproduced all twelve baseline documents. A range set that fails to rebuild the
+baseline fails the run.
 
 Four interrupted-run rehearsals failed the transport at the creation, at the
 first baseline query, at a partition query and at a cursor query. Each ended with
 zero residual owned documents. The run that lost its creation receipt skipped its
 deletions with `no-current-run-ownership` rather than issuing an unproven delete.
 
-## Local differences found, all unobserved in production
+## Local differences found, both unobserved in production
 
-Three cursor-validation conditions differ from the documented REST contract and
-are open repair tickets. Each expectation in the plan stays as the typed refusal,
-because confirming the production answer is the point of the campaign.
+Two cursor-validation conditions differ from the documented REST contract and are
+open repair tickets under `docs.local/issues/open/`. Each expectation in the plan
+stays as the typed refusal, because confirming the production answer is the point
+of the campaign.
 
-- `O4-REPAIR-001`, `cursor-too-many-values`: a cursor with two values against a
-  single order clause is accepted and returns documents from the first value.
 - `O4-REPAIR-002`, `cursor-reference-type-mismatch`: a string value against a
   `__name__` order is accepted and returns the whole collection.
 - `O4-REPAIR-003`, `cursor-foreign-reference`: a reference outside the query's
   collection is accepted and returns an empty result.
 
-A fourth observation is recorded without a ticket: a `PartitionQuery` whose query
-orders by a filtered field is refused locally for a missing index rather than for
-its shape, so the two admission checks are ordered differently from what a
-shape-first reading would predict.
+A third ticket was withdrawn. `O4-REPAIR-001` claimed that a cursor carrying more
+values than its order clauses was accepted, but the case sent only two values
+against an order that Firestore normalizes to `[n, __name__]`, so it never tested
+cardinality; the second value was a type mismatch in the `__name__` position,
+which is `O4-REPAIR-002`. With the case corrected to three values, the runtime
+refuses it with `INVALID_ARGUMENT` and the condition holds.
+
+A fourth observation carries no ticket: a `PartitionQuery` whose query orders by a
+filtered field is refused locally for a missing index rather than for its shape,
+so the two admission checks are ordered differently from what a shape-first
+reading would predict.
 
 ## What this record does not claim
 

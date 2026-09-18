@@ -75,7 +75,7 @@ The credential this campaign needs is `roles/firebaseauth.admin` on the single a
 
 ## Recovery contract
 
-Recovery is keyed on the owned address, not on a runtime identifier. It first looks both addresses up in one privileged request, deletes whatever that discovery names, and then requires a second lookup to show both addresses absent. The address is the only ownership key that survives a lost create response: an account the backend stored before the answer was lost has no identifier this collector ever saw, and a recovery keyed on `localId` would silently skip it while reporting proven cleanup. A delete refused because a stage already removed that account is recorded and tolerated; proven absence is the requirement. A failed lookup, a transport failure, or any address still present leaves `cleanupComplete` false and `absenceProven` false, and the comparator refuses such a receipt a verdict in either direction.
+Recovery is keyed on the owned address, not on a runtime identifier. It first looks both addresses up in one privileged request, deletes whatever that discovery names, and then requires a second lookup to show both addresses absent. The address is the only ownership key that survives a lost create response: an account the backend stored before the answer was lost has no identifier this collector ever saw, and a recovery keyed on `localId` would silently skip it while reporting proven cleanup. An address the discovery proved absent is never deleted again: a stage removes account B on purpose, and asking the backend to delete it a second time would only collect a refusal for a run that did everything right. Proven absence, not a delete status, is the requirement. A failed lookup, a transport failure, or any address still present leaves `cleanupComplete` false and `absenceProven` false, and the comparator refuses such a receipt a verdict in either direction.
 
 A rehearsal exercised that path and is committed as evidence. With a transport failure injected at the email-link sign-in stage, the run stopped after 18 of 26 stages, both addresses were proven absent, and the owned process exited with its listeners closed. The [rehearsal receipt](../../spec/compatibility/broad-runs/auth-action-codes-oob-boundary-01-local-shadow-rehearsal.json) records it.
 
@@ -85,14 +85,14 @@ The shadow owns the artifact it measures: it copies the binary into a private di
 
 | Item | Value |
 | --- | --- |
-| Collector source commit | `2603d39b8f82e3a44902bc7b1f8c1ce21d90a4d2` |
+| Collector source commit | `c02955212ac3456704262be44fe8506fc566a2c8` |
 | Artifact SHA-256 | `bad6b9280e895f90484b5a89056c62ce7c4f3f44e8571891f5175986e99f53a6` (version 0.7.0) |
-| Artifact binding | `retained-external`; not rebuilt from the collector source commit |
+| Artifact binding | receipt `unbound`; the file is `retained-external` and was not rebuilt from the collector source commit |
 | Campaign package SHA-256 | `d2c440583ac4132e6caf0c2ab7c17f85da66fe26d613889c21f127f55b8f23aa` |
-| Receipt SHA-256 | `77995020571e0f8a7356da831da45b05f77fa15ebd1c3e29b3a962da13762438` |
+| Receipt SHA-256 | `b3aaad333b9df9cd4c551ed7529e54eaa2e2c8deb0f2abc90e3b9af3d42ced7b` |
 | Result | 26 stages recorded, cleanup complete, 0 accounts remaining, process exit 0, listeners closed |
 
-The artifact binding is the honest limit of this evidence, and it is now enforced rather than described. The receipt carries the binding kind alongside the digests, the shadow records `unbound` for a binary it did not build, and the comparator refuses a verdict unless the receipt says `built-from-source` and names the same commit twice. Filling a retained digest into the binding can no longer buy a verdict. Rebuilding the artifact from the execution commit remains an owner precondition, not a step this package performed.
+The artifact binding is the honest limit of this evidence, and it is now enforced rather than described. The receipt carries the binding kind alongside the digests, the shadow records `unbound` for a binary it did not build, and the comparator refuses a verdict unless the receipt says `built-from-source` and names the same commit twice. Filling a retained digest into the binding can no longer buy a verdict. Rebuilding the artifact from the execution commit remains an owner precondition, not a step this package performed. The shadow never builds anything: its `--built-from-source-commit` option is the caller's assertion about a binary built elsewhere, and without it the receipt says `unbound`.
 
 ## Comparator contract
 

@@ -40,7 +40,8 @@ def test_the_local_shadow_evidence_claims_no_production_observation() -> None:
     assert evidence["productionObserved"] == "none"
     assert evidence["boundary"]["promotion"] == "AUTH-ACTION remains WAITING_ORACLE"
     assert evidence["artifact"]["builtFromSourceCommit"] is None
-    assert evidence["artifact"]["binding"] == "retained-external"
+    assert evidence["artifact"]["binding"] == "unbound"
+    assert evidence["artifact"]["provenance"] == "retained-external"
 
 
 def test_the_local_shadow_recorded_every_stage_and_recovered() -> None:
@@ -51,10 +52,18 @@ def test_the_local_shadow_recorded_every_stage_and_recovered() -> None:
     assert observation["remainingAccounts"] == 0
     assert observation["stagesRecorded"] == len(STAGE_IDS)
     assert observation["observationRequests"] == len(STAGE_IDS)
-    assert observation["recoveryRequests"] == 4
+    # A skipped delete costs no request, so recovery stays inside its reserve.
+    assert observation["recoveryRequests"] == 3
     assert observation["absenceProven"] is True
+    # A clean run collects no delete failure, so a verdict stays reachable.
+    assert observation["deleteFailures"] == 0
     assert observation["deliveredMessages"] == 0
     assert evidence["recovery"][0]["id"] == "recover-discover"
+    # Account B is deleted by a stage, so recovery never asks for it again.
+    deleted_b = next(
+        row for row in evidence["recovery"] if row["id"] == "recover-delete-accountB"
+    )
+    assert deleted_b["skipped"] == "absent at discovery"
     assert evidence["recovery"][-1]["presentAddresses"] == 0
     assert [row["id"] for row in evidence["localStages"]] == list(STAGE_IDS)
     assert evidence["ownedProcess"] == {
@@ -88,7 +97,8 @@ def test_neither_committed_receipt_claims_provenance_it_lacks() -> None:
         evidence = json.loads(path.read_bytes())
         assert evidence["receiptSourceBinding"]["binding"] == "unbound"
         assert evidence["receiptSourceBinding"]["builtFromSourceCommit"] is None
-        assert evidence["artifact"]["binding"] == "retained-external"
+        assert evidence["artifact"]["binding"] == "unbound"
+        assert evidence["artifact"]["provenance"] == "retained-external"
         assert evidence["productionExecuted"] is False
 
 

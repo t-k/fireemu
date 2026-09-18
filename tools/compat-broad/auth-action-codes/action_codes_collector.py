@@ -366,8 +366,26 @@ def _recover(
         if name + ".localId" not in run.secrets and isinstance(identifier, str):
             run.secrets[name + ".localId"] = identifier
 
+    present_names = (
+        {owned_emails[email] for email in discovered}
+        if discovered is not None
+        else None
+    )
     for name in manifest["ownedAccounts"]:
         row = by_id["recover-delete-" + name]
+        if present_names is not None and name not in present_names:
+            # A stage may delete an owned account on purpose. Asking the backend
+            # to delete it again only collects a refusal for a run that did
+            # everything right, so a proven-absent address is never deleted.
+            rows.append(
+                {
+                    "id": row["id"],
+                    "account": name,
+                    "status": None,
+                    "skipped": "absent at discovery",
+                }
+            )
+            continue
         if name + ".localId" not in run.secrets:
             rows.append(
                 {

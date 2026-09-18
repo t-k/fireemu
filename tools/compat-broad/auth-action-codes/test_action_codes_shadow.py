@@ -95,12 +95,26 @@ def test_the_real_local_shadow_records_and_recovers(tmp_path: Path) -> None:
     assert report["ownedProcess"]["exitCode"] == 0
     assert report["ownedProcess"]["listenersClosed"] is True
     receipt = report["receipt"]
+    # The label the report shows and the label the receipt carries are one word.
+    assert report["artifact"]["binding"] == receipt["sourceBinding"]["binding"]
+    assert report["artifact"]["provenance"] == "retained-external"
     assert receipt["recordingComplete"] is True
     assert receipt["cleanupComplete"] is True
     assert receipt["remainingAccounts"] == 0
     # A secret name may be listed as an observed response key, never as a key.
     assert '"oobCode":' not in json.dumps(receipt)
-    assert report["artifact"]["binding"] == "retained-external"
+    # A binary this package did not build binds nothing, so no verdict is possible.
+    assert report["artifact"]["binding"] == "unbound"
+
+
+def test_the_shadow_never_builds_so_a_commit_is_a_caller_assertion() -> None:
+    parser = build_parser()
+    option = next(
+        action
+        for action in parser._actions
+        if action.dest == "built_from_source_commit"
+    )
+    assert "asserted" in option.help or "built from" in option.help
 
 
 def test_a_retained_artifact_is_never_recorded_as_built_from_source() -> None:

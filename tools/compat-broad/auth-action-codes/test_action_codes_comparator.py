@@ -204,14 +204,10 @@ def test_a_delivered_message_can_never_be_a_match() -> None:
     result = pair(deliveredMessages=1)
     assert result["classification"] == "INDETERMINATE"
     assert "delivered" in result["reason"]
-    # A per-stage claim is compared too, rather than silently ignored.
-    production = receipt("production")
-    production["stages"][2]["deliveredMessages"] = 1
-    local = receipt("local")
-    local["stages"][2]["deliveredMessages"] = 0
-    outcome = compare(local, production)
-    assert outcome["classification"] == "SEMANTIC_MISMATCH"
-    assert "deliveredMessages" in outcome["stages"][2]["differences"]
+    # Delivery is a property of the run, so it is gated once, not compared per
+    # stage: no stage response can say whether a message was sent.
+    assert "deliveredMessages" not in SEMANTIC_FIELDS
+    assert pair(deliveredMessages=True)["classification"] == "INDETERMINATE"
 
 
 def test_an_unproven_absence_can_never_be_a_match() -> None:
@@ -230,3 +226,63 @@ def test_a_malformed_foreign_receipt_is_classified_not_raised() -> None:
     production = receipt("production")
     production["stages"] = production["stages"][:-1]
     assert compare(receipt("local"), production)["classification"] == "INDETERMINATE"
+
+
+def _collected(**behaviour) -> dict:
+    """One real collection against a fake runtime that refuses unknown deletes."""
+    import sys
+
+    sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
+    from action_codes_collector import collect
+    from test_action_codes_collector import FakeService
+
+    class RealisticDeletes(FakeService):
+        def _delete(self, body: dict):
+            if body["localId"] not in self.accounts:
+                return 400, {"error": {"message": "USER_NOT_FOUND"}}
+            return super()._delete(body)
+
+    return collect(
+        origin="http://127.0.0.1:9099",
+        project="demo-auth-action",
+        nonce=NONCE,
+        send=RealisticDeletes(**behaviour).send,
+        sleep=lambda _: None,
+        source_binding={
+            "commit": "a" * 40,
+            "artifactSha256": "b" * 64,
+            "binding": "built-from-source",
+            "builtFromSourceCommit": "a" * 40,
+        },
+    )
+
+
+def test_a_clean_run_against_a_real_runtime_reaches_a_verdict() -> None:
+    """The deliberate mid-run delete must not make every clean run unverdictable."""
+    local = _collected()
+    assert local["deleteFailures"] == 0
+    production = {
+        **copy.deepcopy(local),
+        "side": "production",
+        "productionExecuted": True,
+        "permissionReference": "owner-permission-2026-09-18",
+    }
+    result = compare(local, production)
+    assert result["classification"] == "MATCH"
+    assert result["productionCompared"] is True
+    assert result["comparedStages"] == len(STAGE_IDS)
+
+
+def test_a_real_difference_in_that_pair_is_still_a_mismatch() -> None:
+    local = _collected()
+    production = {
+        **copy.deepcopy(local),
+        "side": "production",
+        "productionExecuted": True,
+        "permissionReference": "owner-permission-2026-09-18",
+    }
+    production["stages"][11]["status"] = 400
+    production["stages"][11]["errorCode"] = "INVALID_OOB_CODE"
+    result = compare(local, production)
+    assert result["classification"] == "SEMANTIC_MISMATCH"
+    assert result["differingStages"] == ["reset-after-password-change"]

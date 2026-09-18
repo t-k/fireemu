@@ -419,7 +419,13 @@ def test_an_unbound_stage_input_is_recorded_rather_than_raised() -> None:
     assert service.accounts == {}
 
 
-def test_a_refused_delete_is_tolerated_when_absence_is_proven() -> None:
+def test_an_account_a_stage_already_removed_is_not_deleted_again() -> None:
+    """A real runtime refuses a delete for an identifier it no longer knows.
+
+    Account B is deleted on purpose mid-run, so a recovery that asked again
+    would collect a refusal for a run that did everything right.
+    """
+
     class AlreadyGone(FakeService):
         def _delete(self, body: dict):
             if body["localId"] not in self.accounts:
@@ -428,8 +434,14 @@ def test_a_refused_delete_is_tolerated_when_absence_is_proven() -> None:
 
     service = AlreadyGone()
     _, receipt = run(service)
-    assert receipt["deleteFailures"] == 1
+    rows = {row["id"]: row for row in receipt["recovery"]}
+    assert rows["recover-discover"]["presentAddresses"] == 1
+    assert rows["recover-delete-accountB"]["skipped"] == "absent at discovery"
+    assert rows["recover-delete-accountB"]["status"] is None
+    assert rows["recover-delete-accountA"]["deleted"] is True
+    assert receipt["deleteFailures"] == 0
     assert receipt["remainingAccounts"] == 0
+    assert receipt["absenceProven"] is True
     assert receipt["cleanupComplete"] is True
 
 

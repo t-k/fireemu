@@ -230,6 +230,7 @@ def run(
         config = private / "config.json"
         config.write_text(json.dumps(CONFIG, sort_keys=True))
         config.chmod(0o400)
+        binding = artifact_source_binding(digest, built_from_source_commit)
         environment = parent_environment(dict(os.environ))
         command = artifact_command(
             copied,
@@ -278,12 +279,17 @@ def run(
                 "artifact": {
                     "sha256": digest,
                     "version": version,
-                    "binding": (
-                        "built-from-source"
+                    # The same word the receipt uses, so the two cannot disagree.
+                    "binding": binding["binding"],
+                    "builtFromSourceCommit": built_from_source_commit,
+                    # Where the file came from, which is not a provenance claim:
+                    # this package never builds, so a commit passed on the
+                    # command line is the caller's assertion, not our evidence.
+                    "provenance": (
+                        "built-elsewhere, commit asserted by the caller"
                         if built_from_source_commit
                         else "retained-external"
                     ),
-                    "builtFromSourceCommit": built_from_source_commit,
                 },
                 "configuration": CONFIG,
                 "instance": instance,

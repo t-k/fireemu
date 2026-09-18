@@ -43,7 +43,8 @@ SEMANTIC_FIELDS = (
     "emailMatchesRequest",
 )
 
-SEMANTIC_FIELDS = SEMANTIC_FIELDS + ("deliveredMessages",)
+# Delivery is a property of the run, gated in `_shaped`, not of a stage: no
+# response says whether a message left the building, so no stage row claims it.
 
 # Visible, never decisive: diagnostic grammar and the opaque code length.
 INFORMATIONAL_FIELDS = ("errorMessage", "oobCodeLength")

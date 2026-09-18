@@ -1,7 +1,8 @@
 {
   "artifact": {
-    "binding": "retained-external",
+    "binding": "unbound",
     "builtFromSourceCommit": null,
+    "provenance": "retained-external",
     "sha256": "bad6b9280e895f90484b5a89056c62ce7c4f3f44e8571891f5175986e99f53a6",
     "version": "0.7.0"
   },
@@ -15,17 +16,17 @@
     "path": "spec/compatibility/broad-runs/auth-action-codes-oob-boundary-01.json",
     "sha256": "d2c440583ac4132e6caf0c2ab7c17f85da66fe26d613889c21f127f55b8f23aa"
   },
-  "collectorSourceCommit": "2603d39b8f82e3a44902bc7b1f8c1ce21d90a4d2",
+  "collectorSourceCommit": "c02955212ac3456704262be44fe8506fc566a2c8",
   "collectorSources": {
-    "action_codes_collector.py": "a994c4ef54272969fea690f46e37d72dd202544630c6cef60509099822c6709e",
-    "action_codes_comparator.py": "eb1dfca2cf662228301f98aff958613435fc2f3fdfb31910b273926b47a4a12e",
+    "action_codes_collector.py": "0d5157291da8a749024f1a03b6f3e2a3869e4228128ab80afa05c77369d536c3",
+    "action_codes_comparator.py": "ce5c801eaa5318bde8bffdf446e99ef1a4687f30a2673432d6585b7dbe2e1aee",
     "action_codes_plan.py": "8cfce99b0198bf15888e0c3267f7fe44befd432eac177a72db7acfc3bca110ae",
-    "action_codes_shadow.py": "33d3c2b19079068479f7e243e8864ab83ef05766ed01bd498ca7dc69227f6df6",
-    "test_action_codes_collector.py": "859c2aee8aca27c2865974b1169883dcf068ca8465c86e056d764331f9806c9a",
-    "test_action_codes_comparator.py": "224b45fd3c5e04a2a4ae7d6a72fbfd393fd75dbbe8eff416466870d2d5d4a5b6",
-    "test_action_codes_evidence.py": "460538225c6e7d161ccf6ee44dac493c04c8aa2d156dbf8ef8b77c148497c636",
+    "action_codes_shadow.py": "3a418cdfa4f37ec9f38c72640b9810c2a62af018189b186ddb5ecaf09b6e0b19",
+    "test_action_codes_collector.py": "83acec28a09ea734945954ba7679c8abc453358e3083b30a0976301a70e6594f",
+    "test_action_codes_comparator.py": "449cdd07e534e73058a9ffa0c07e8866b0c8c21e511c89140bc4defd49653c69",
+    "test_action_codes_evidence.py": "260b5bd8d208f91a784fada7c42d8f744cf4800c6934d379fa20032d33646f1a",
     "test_action_codes_plan.py": "028dea43c401fe41c7fed9702838e6b81245bbc044c38634188bd42d9cb23f60",
-    "test_action_codes_shadow.py": "ecd233fb660a44c2376abdf0663d02bced771f9edb823ed262a65a7e43a41735"
+    "test_action_codes_shadow.py": "8785ac0fc6e7e9fc4ddf75fb49517071884354df263593dc305adf7127702610"
   },
   "configuration": {
     "profile": "strict",
@@ -143,10 +144,11 @@
       "status": 200
     }
   ],
-  "manifestDigest": "7fdadbf8120cdbaf27718c17f4cacddd753ca87602713997592553c9c7a135cd",
+  "manifestDigest": "e33a5b3908580aa0ac2aac01f6eae9846ca502025ca87b404b25ea6a53a0c17a",
   "observation": {
     "absenceProven": true,
     "cleanupComplete": true,
+    "deleteFailures": 0,
     "deliveredMessages": 0,
     "observationRequests": 19,
     "recordingComplete": false,
@@ -162,7 +164,7 @@
   },
   "productionExecuted": false,
   "productionObserved": "none",
-  "receiptSha256": "1edcf26bc4a0d54286131820fb5d4970842719494d03b4fce88bd592d9d50c0c",
+  "receiptSha256": "6e6e846889881e98bd07919e4d1aab0d15fe1532d42d081ecdf5e66d657a501e",
   "receiptSourceBinding": {
     "artifactSha256": null,
     "binding": "unbound",
@@ -175,6 +177,7 @@
       "deleted": null,
       "id": "recover-discover",
       "presentAddresses": 2,
+      "skipped": null,
       "status": 200
     },
     {
@@ -182,6 +185,7 @@
       "deleted": true,
       "id": "recover-delete-accountA",
       "presentAddresses": null,
+      "skipped": null,
       "status": 200
     },
     {
@@ -189,6 +193,7 @@
       "deleted": true,
       "id": "recover-delete-accountB",
       "presentAddresses": null,
+      "skipped": null,
       "status": 200
     },
     {
@@ -196,6 +201,7 @@
       "deleted": null,
       "id": "recover-absence",
       "presentAddresses": 0,
+      "skipped": null,
       "status": 200
     }
   ],

@@ -1042,3 +1042,36 @@ def test_skipped_cleanup_requires_exact_nondispatch_evidence(
         skipped["job"] = "unrelated"
     with pytest.raises(ValueError, match="skipped cleanup"):
         validate_record(record)
+
+
+def test_the_metadata_route_table_comes_from_the_campaign(boundary, tmp_path):
+    """One core serves several campaigns, so the closed table cannot be a literal."""
+    from shared_gate import create
+
+    p, _backend, _ = boundary
+    plan = production.schedule(p["nonce"])
+    plan["permissionDigest"] = digest(p)
+    create(tmp_path / "gate", plan)
+    gate = production.ProductionGate(tmp_path / "gate", "partial")
+    default = production.Coordinator(
+        p, p["nonce"], tmp_path / "default", gate, "fixture-key"
+    )
+    assert sorted(default.metadata_routes().values()) == [
+        "auth",
+        "database",
+        "key",
+        "project",
+    ]
+    routes = {"example.googleapis.com/v1/owned/thing": "thing"}
+    custom = production.Coordinator(
+        p, p["nonce"], tmp_path / "custom", gate, "fixture-key", routes=routes
+    )
+    assert custom.metadata_routes() == routes
+    before = gate.snapshot()
+    for coordinator, path in (
+        (custom, next(iter(default.metadata_routes()))),
+        (default, next(iter(routes))),
+    ):
+        with pytest.raises(ValueError, match="closed metadata request"):
+            coordinator.request("metadata", path, None, method="GET", privileged=True)
+    assert gate.snapshot() == before

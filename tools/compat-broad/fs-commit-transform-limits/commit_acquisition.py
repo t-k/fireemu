@@ -3,6 +3,12 @@
 The caller supplies an independent owner permission, retained artifact, clean
 source snapshot and existing shared Ledger. Injectable communication is only a
 transport boundary; it cannot replace permission, reservations or Gate charging.
+
+The O7 admission checks, the frozen-input record and the one-shot production
+wire capability are not Commit-specific and live in the campaign-generic core
+under `tools/compat-broad/o8-core`. This module is that core's first client: it
+declares the Commit campaign descriptor at the bottom of the file and keeps only
+the Commit file, git, Ledger, baseline, collector and comparator handling.
 """
 
 from __future__ import annotations
@@ -10,23 +16,22 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import math
 import os
-import platform
 import re
 import subprocess
 import sys
 import time
-import types
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT / "tools/compat-broad"))
 sys.path.insert(0, str(ROOT / "tools/compat-broad/production-admission"))
+sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 
 import commit_baseline
 import commit_remote_transport
+import o8_admission
 from batch_contract import DATABASE_PROJECTION, NUMBER, PROJECT, validate_owner_baseline
 from broad_contract import digest
 from commit_production import _save, collect_commit
@@ -45,8 +50,48 @@ from gate_adapter import (
     production_cost_model,
     production_gate_plan,
 )
+from o8_admission import (
+    MAX_CAPABILITY_SCAN,
+    PLACEHOLDER_OWNER_IDENTITIES,
+    ProductionWireCapability,
+    execution_host,
+    issued_capability,
+    revoke_production_capability,
+    validate_owner_identity,
+)
+from o8_campaign import BASE_APPROVAL_FIELDS, CampaignDescriptor
 from owned_transform_runner import validate_retained_artifact
 from reservations import Ledger
+
+__all__ = [
+    "ABORT_CLOSURE_SOURCES",
+    "APPROVAL_FIELDS",
+    "APPROVAL_KIND",
+    "BUDGET",
+    "CAMPAIGN_SECONDS",
+    "COMMIT",
+    "MANIFEST_KIND",
+    "MAX_CAPABILITY_SCAN",
+    "PLACEHOLDER_OWNER_IDENTITIES",
+    "RECOVERY_SECONDS",
+    "REVIEWED_ARTIFACT_PROFILE",
+    "WINDOW_SECONDS",
+    "ProductionWireCapability",
+    "abort_generation",
+    "compare_saved",
+    "execution_host",
+    "freeze_inputs",
+    "issue_production_capability",
+    "permission_bindings",
+    "revoke_production_capability",
+    "run_acquisition",
+    "validate_frozen_inputs",
+    "validate_o7_admission",
+    "validate_owner_identity",
+]
+
+# The live registry of issued capabilities, shared with the generic core.
+_ISSUED = o8_admission._ISSUED
 
 DATA_REQUESTS = 17
 METADATA_ACTIONS = ("project", "database", "auth", "key")
@@ -56,8 +101,16 @@ BUDGET = {
     "resources": 2,
     "costMicrousd": production_cost_model()["totalCostMicrousd"],
 }
+FROZEN_BOUNDS = {
+    "dataRequests": 17,
+    "metadataRequests": 8,
+    "credentialRequests": 2,
+    "totalRequests": 27,
+}
 
-
+CAMPAIGN_ID = "FS-DATA-WRITE-COMMIT-TRANSFORMS-03"
+FROZEN_INPUTS_KIND = "commit-frozen-inputs-v2"
+PERMISSION_KIND = "commit-owner-execution-permission-v1"
 APPROVAL_KIND = "commit-o8-approval-v1"
 MANIFEST_KIND = "commit-o8-manifest-v1"
 REVIEWED_ARTIFACT_PROFILE = "repaired-567565bdd"
@@ -65,8 +118,13 @@ CAMPAIGN_SECONDS = 1200
 RECOVERY_SECONDS = 180
 # An approved window has to hold the whole campaign and its recovery allocation.
 # A window sized to the wall budget alone admits a run that cannot finish its
-# recovery inside the time the owner approved.
+# recovery inside the time the owner approved. The core derives the same value
+# from the descriptor; this name is kept for callers that read it.
 WINDOW_SECONDS = CAMPAIGN_SECONDS + RECOVERY_SECONDS
+# The Commit approval keeps the original 16-key schema: its campaign identity is
+# bound through the frozen plan, which the admission core checks against the
+# descriptor. A campaign-generic approval carries `campaignId` as a 17th key.
+APPROVAL_FIELDS = BASE_APPROVAL_FIELDS
 # The source files whose digests a reservation records, so that a later abort
 # proves it runs the same closure the acquisition ran.
 ABORT_CLOSURE_SOURCES = (
@@ -75,51 +133,13 @@ ABORT_CLOSURE_SOURCES = (
     "tools/compat-broad/fs-commit-transform-limits/commit_reserved_adapter.py",
     "tools/compat-broad/fs-commit-transform-limits/gate_adapter.py",
     "tools/compat-broad/fs-commit-transform-limits/commit_acquisition.py",
+    "tools/compat-broad/o8-core/o8_admission.py",
+    "tools/compat-broad/o8-core/o8_campaign.py",
 )
-# Owner provenance must be a value the owner supplied. These are the shapes an
-# agent or an unfilled template leaves behind, and admission refuses them.
-PLACEHOLDER_OWNER_IDENTITIES = frozenset(
-    {
-        "agent",
-        "ai",
-        "assistant",
-        "claude",
-        "codex",
-        "none",
-        "owner",
-        "owner-current-conversation",
-        "owner-current-session",
-        "placeholder",
-        "tbd",
-        "todo",
-        "unknown",
-    }
+COLLECTOR_ENTRY = "tools/compat-broad/fs-commit-transform-limits/commit_production.py"
+COMPARATOR_ENTRY = (
+    "tools/compat-broad/fs-commit-transform-limits/transform_comparator.py"
 )
-APPROVAL_FIELDS = frozenset(
-    {
-        "kind",
-        "status",
-        "manifestSha256",
-        "inputsDigest",
-        "permissionDigest",
-        "sourceCommit",
-        "sourceInputsDigest",
-        "artifactSha256",
-        "planDigest",
-        "nonceDigest",
-        "ledgerRoot",
-        "launcherSha256",
-        "artifactProfile",
-        "windowStartsAt",
-        "windowExpiresAt",
-        "executionHost",
-    }
-)
-MAX_CAPABILITY_SCAN = 64
-_CAPABILITY_TOKEN = object()
-# Identity registry of live, unconsumed capabilities. Membership, never shape,
-# is the admission test: a look-alike object with the same attributes fails.
-_ISSUED: set = set()
 
 
 def _load_bundle():
@@ -136,381 +156,70 @@ def _load_bundle():
     return module
 
 
-class ProductionWireCapability:
-    """One-shot record confining a production campaign to its O7 admission.
+def _verify_worker_archive(binding, binding_digest, frozen):
+    """Verify the live archive descriptor against the frozen worker closure."""
+    _load_bundle().verify_worker_archive_fd(binding, binding_digest, frozen)
 
-    The object is not the wire authority and neither is the archive descriptor:
-    the archive holds only plain repository sources that anyone may rebuild, so
-    the descriptor is an integrity binding that pins which bytes the worker
-    executes, not a secret. The actual authority remains the private credential
-    handoff and the shared Ledger reservation. What this object adds is that one
-    fully admitted O7 approval can be spent exactly once, on its own campaign,
-    frozen inputs, shared Ledger root and approval window.
-    """
 
-    __slots__ = (
-        "_archive_fd",
-        "_consumed",
-        "approval_digest",
-        "archive_sha256",
-        "campaign_id",
-        "inputs_digest",
-        "ledger_root",
-        "window_expires_at",
-        "window_starts_at",
+def _transmit_bound(value, *, binding, binding_digest):
+    """Run one bounded request in a worker loaded only from the bound archive."""
+    return remote_request_bound(
+        value, archive_fd=binding, archive_sha256=binding_digest
     )
 
-    def __init__(
-        self,
-        token,
-        *,
-        archive_fd,
-        archive_sha256,
-        campaign_id,
-        inputs_digest,
-        ledger_root,
-        window_starts_at,
-        window_expires_at,
-        approval_digest,
-    ):
-        if token is not _CAPABILITY_TOKEN:
-            raise TypeError("the O8 production capability is not constructible")
-        self._archive_fd = archive_fd
-        self._consumed = False
-        self.archive_sha256 = archive_sha256
-        self.campaign_id = campaign_id
-        self.inputs_digest = inputs_digest
-        self.ledger_root = ledger_root
-        self.window_starts_at = window_starts_at
-        self.window_expires_at = window_expires_at
-        self.approval_digest = approval_digest
 
-    def __copy__(self):
-        raise TypeError("the O8 production capability is not copyable")
-
-    def __deepcopy__(self, memo):
-        raise TypeError("the O8 production capability is not copyable")
-
-    def __reduce__(self):
-        raise TypeError("the O8 production capability is not serializable")
-
-    def __repr__(self):
-        return f"<ProductionWireCapability campaign={self.campaign_id!r}>"
-
-    def _consume(self, *, campaign_id, inputs_digest, ledger_root):
-        """Spend this admission on exactly one campaign execution."""
-        if self._consumed:
-            raise ValueError("the O8 production capability is one-shot")
-        if self.campaign_id != campaign_id:
-            raise ValueError("production capability belongs to another campaign")
-        if self.inputs_digest != inputs_digest:
-            raise ValueError("production capability belongs to other frozen inputs")
-        if self.ledger_root != str(Path(ledger_root).resolve(strict=False)):
-            raise ValueError("production capability belongs to another shared Ledger")
-        now = time.time()
-        if (
-            not self.window_starts_at <= now
-            or now + WINDOW_SECONDS > self.window_expires_at
-        ):
-            raise ValueError("O7 execution window expired")
-        self._consumed = True
-        _ISSUED.discard(self)
-
-    def _transmit(self, value):
-        """Run one bounded request in a worker loaded only from the bound archive."""
-        if not self._consumed:
-            raise ValueError("unconsumed O8 production capability")
-        return remote_request_bound(
-            value,
-            archive_fd=self._archive_fd,
-            archive_sha256=self.archive_sha256,
-        )
+def _retained_artifact(artifact_path, manifest_path, profile):
+    """Validate the retained artifact through this module's bound validator."""
+    return validate_retained_artifact(artifact_path, manifest_path, profile=profile)
 
 
-def execution_host():
-    """The host an approval is bound to; the campaign runs on this host only.
+def _forbidden_transports():
+    """Objects an injected preparation transport must not be able to reach."""
+    return (remote_request, remote_request_bound, commit_remote_transport)
 
-    The worker's process supervision and `/proc` assumptions are verified on one
-    platform only, so an approval issued there must not authorize a run
-    elsewhere. Prose in the package cannot enforce that; this binding can.
+
+def _plan_compiler(nonce):
+    return compiler_plan(PROJECT, "(default)", nonce)
+
+
+def _collect(gate, plan, output, *, transmit):
+    return collect_commit(gate, plan, output, transmit=transmit)
+
+
+def _descriptor(descriptor):
+    """The campaign this call runs under; the Commit descriptor unless overridden.
+
+    An explicit descriptor exists so tests and a second campaign can drive the
+    same code path. It is not a weakening of the Commit boundary: `commit_o8`
+    never passes one, and any in-process caller able to pass a descriptor here
+    could equally call the generic core directly.
     """
-    return {"platform": platform.system().lower(), "machine": platform.machine()}
+    return COMMIT if descriptor is None else descriptor
 
 
-def abort_generation(inputs):
-    """The source closure this acquisition records on its reservation.
-
-    A reservation is retired after a preflight stop by proving the closure it
-    was acquired under, so the binding must be derived from the frozen inputs of
-    this campaign rather than from a constant of an earlier generation. Proving
-    it establishes that the aborting caller runs identical sources to the
-    acquisition, not that those sources were reviewed.
-    """
-    sources = inputs["sourceInputs"]
-    if not isinstance(sources, dict) or any(
-        name not in sources for name in ABORT_CLOSURE_SOURCES
-    ):
-        raise ValueError("frozen acquisition source closure required")
-    return {
-        "sourceCommit": inputs["sourceCommit"],
-        "collectorSourceDigest": digest(sources),
-        "sourceDigests": {
-            Path(name).name: sources[name] for name in ABORT_CLOSURE_SOURCES
-        },
-    }
+def abort_generation(inputs, *, descriptor=None):
+    """The source closure this acquisition records on its reservation."""
+    return o8_admission.abort_generation(_descriptor(descriptor), inputs)
 
 
-def validate_owner_identity(value, *, field):
-    """Refuse an absent or placeholder-shaped owner supplied identity."""
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"owner supplied {field} required")
-    text = value.strip()
-    if (
-        text.startswith("<<")
-        or text.endswith(">>")
-        or text.casefold() in PLACEHOLDER_OWNER_IDENTITIES
-    ):
-        raise ValueError(f"owner supplied {field} required")
-
-
-def _regular_file_digest(path):
-    """Digest a regular file without following a replaceable symlink."""
-    path = Path(path)
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("bound regular file required")
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-def validate_frozen_inputs(inputs) -> None:
+def validate_frozen_inputs(inputs, *, descriptor=None) -> None:
     """The frozen O7 input self-consistency check used by every admission path."""
-    if not isinstance(inputs, dict) or inputs.get("kind") != "commit-frozen-inputs-v2":
-        raise ValueError("O7 frozen approval binding required")
-    required = {
-        "permission",
-        "permissionDigest",
-        "plan",
-        "planDigest",
-        "sourceCommit",
-        "sourceInputs",
-        "artifactSha256",
-        "inputsDigest",
-    }
-    if (
-        not required.issubset(inputs)
-        or inputs["permission"].get("kind") != "commit-owner-execution-permission-v1"
-    ):
-        raise ValueError("O7 frozen approval binding required")
-    unsigned = {key: value for key, value in inputs.items() if key != "inputsDigest"}
-    if (
-        inputs["inputsDigest"] != digest(unsigned)
-        or inputs["permissionDigest"] != digest(inputs["permission"])
-        or inputs["planDigest"] != digest(inputs["plan"])
-        or not isinstance(inputs["sourceInputs"], dict)
-        or not isinstance(inputs["sourceCommit"], str)
-        or not isinstance(inputs["artifactSha256"], str)
-    ):
-        raise ValueError("O7 frozen approval binding differs")
+    o8_admission.validate_frozen_inputs(_descriptor(descriptor), inputs)
 
 
-def validate_o7_admission(
-    *,
-    inputs,
-    approval,
-    manifest,
-    manifest_bytes,
-    manifest_path,
-    permission,
-    ledger_root,
-    artifact_path,
-    launcher_path,
-):
-    """The complete O7 admission check set, shared by the O8 CLI and by issuance.
-
-    This is the single definition of "the O7 checks passed". The CLI and
-    `issue_production_capability` call exactly this function, so a capability can
-    never be issued on a weaker check set than the CLI enforces.
-    """
-    validate_frozen_inputs(inputs)
-    if not isinstance(approval, dict) or not isinstance(manifest, dict):
-        raise ValueError("O7 approval artifact required")  # noqa: TRY004 -- admission boundary collapses malformed input to one refusal class
-    if set(approval) != set(APPROVAL_FIELDS) or approval["kind"] != APPROVAL_KIND:
-        raise ValueError("O7 approval artifact required")
-    if manifest.get("kind") != MANIFEST_KIND:
-        raise ValueError("O7 manifest artifact required")
-    if approval["status"] != "approved":
-        raise ValueError("O7 approval is not approved")
-    if approval["artifactProfile"] != REVIEWED_ARTIFACT_PROFILE:
-        raise ValueError("O7 artifact profile differs")
-    if not isinstance(manifest_bytes, bytes):
-        raise ValueError("retained O7 manifest bytes required")  # noqa: TRY004 -- admission boundary collapses malformed input to one refusal class
-    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
-    if manifest_sha256 != approval["manifestSha256"]:
-        raise ValueError("O7 manifest digest differs")
-    resolved_ledger = str(Path(ledger_root).resolve(strict=False))
-    bindings = {
-        "inputsDigest": inputs["inputsDigest"],
-        "permissionDigest": inputs["permissionDigest"],
-        "sourceCommit": inputs["sourceCommit"],
-        "sourceInputsDigest": digest(inputs["sourceInputs"]),
-        "artifactSha256": inputs["artifactSha256"],
-        "planDigest": inputs["planDigest"],
-        "nonceDigest": digest(inputs["plan"]["nonce"]),
-        "ledgerRoot": resolved_ledger,
-        # The launcher digest must bind the launcher that is actually running,
-        # not whichever copy happens to sit next to this module.
-        "launcherSha256": _regular_file_digest(launcher_path),
-    }
-    if any(approval[key] != value for key, value in bindings.items()):
-        raise ValueError("O7 approval binding differs")
-    if approval["executionHost"] != execution_host():
-        raise ValueError("O7 execution host differs")
-    if (
-        permission.get("wallSeconds") != CAMPAIGN_SECONDS
-        or permission.get("recoverySeconds") != RECOVERY_SECONDS
-    ):
-        raise ValueError("O7 campaign window binding differs")
-    if digest(permission) != inputs["permissionDigest"]:
-        raise ValueError("stale O7 permission binding")
-    if manifest.get("inputsDigest") != inputs["inputsDigest"]:
-        raise ValueError("O7 manifest binding differs")
-    for key in ("windowStartsAt", "windowExpiresAt"):
-        if (
-            type(approval[key]) not in (int, float)
-            or isinstance(approval[key], bool)
-            or not math.isfinite(approval[key])
-        ):
-            raise ValueError("O7 execution window invalid")
-    if (
-        not approval["windowStartsAt"] <= time.time()
-        or time.time() + WINDOW_SECONDS > approval["windowExpiresAt"]
-        or approval["windowStartsAt"] + WINDOW_SECONDS > approval["windowExpiresAt"]
-    ):
-        raise ValueError("O7 execution window expired")
-    retained = validate_retained_artifact(
-        artifact_path, manifest_path, profile=REVIEWED_ARTIFACT_PROFILE
-    )
-    if (
-        retained.get("artifactSha256") != inputs["artifactSha256"]
-        or retained.get("retainedManifestSha256") != manifest_sha256
-    ):
-        raise ValueError("retained v7 artifact binding differs")
-    return {
-        "ledgerRoot": resolved_ledger,
-        "windowStartsAt": approval["windowStartsAt"],
-        "windowExpiresAt": approval["windowExpiresAt"],
-        "retained": retained,
-    }
+def validate_o7_admission(*, descriptor=None, **bindings):
+    """The complete O7 admission check set, shared by the O8 CLI and by issuance."""
+    return o8_admission.validate_o7_admission(_descriptor(descriptor), **bindings)
 
 
-def issue_production_capability(
-    *,
-    inputs,
-    approval,
-    manifest,
-    manifest_bytes,
-    manifest_path,
-    permission,
-    ledger_root,
-    artifact_path,
-    launcher_path,
-    archive_fd,
-    archive_sha256,
-):
-    """Issue the production wire capability for one fully admitted O7 campaign.
-
-    Issuance runs the complete `validate_o7_admission` check set, so it is never
-    a weaker gate than the O8 CLI. The returned object is not itself the
-    authority: it records which campaign, frozen inputs, shared Ledger root and
-    approval window this execution is confined to, and which archive bytes the
-    worker must load. The wire authority remains the private credential handoff
-    and the shared Ledger reservation.
-    """
-    admitted = validate_o7_admission(
-        inputs=inputs,
-        approval=approval,
-        manifest=manifest,
-        manifest_bytes=manifest_bytes,
-        manifest_path=manifest_path,
-        permission=permission,
-        ledger_root=ledger_root,
-        artifact_path=artifact_path,
-        launcher_path=launcher_path,
-    )
-    _load_bundle().verify_worker_archive_fd(
-        archive_fd, archive_sha256, inputs["sourceInputs"]
-    )
-    campaign_id = inputs["plan"].get("campaignId")
-    if not isinstance(campaign_id, str) or not campaign_id:
-        raise ValueError("frozen campaign identity required")
-    capability = ProductionWireCapability(
-        _CAPABILITY_TOKEN,
-        archive_fd=archive_fd,
-        archive_sha256=archive_sha256,
-        campaign_id=campaign_id,
-        inputs_digest=inputs["inputsDigest"],
-        ledger_root=admitted["ledgerRoot"],
-        window_starts_at=admitted["windowStartsAt"],
-        window_expires_at=admitted["windowExpiresAt"],
-        approval_digest=digest(approval),
-    )
-    _ISSUED.add(capability)
-    return capability
+def issue_production_capability(*, descriptor=None, **bindings):
+    """Issue the production wire capability for one fully admitted O7 campaign."""
+    return o8_admission.issue_production_capability(_descriptor(descriptor), **bindings)
 
 
-def revoke_production_capability(capability) -> None:
-    """Withdraw an issued capability that will not be executed."""
-    _ISSUED.discard(capability)
-
-
-def _reject_production_transport(transmit):
-    """Refuse any injected callable that reaches the fixed production wire.
-
-    The production wire is unreachable without an archive descriptor, so this is
-    defense in depth: a preparation callback must not even name that path.
-    """
-    if not callable(transmit):
-        raise ValueError("injected local transport must be callable")  # noqa: TRY004 -- admission boundary collapses malformed input to one refusal class
-    fixed = (remote_request, remote_request_bound, ProductionWireCapability._transmit)
-    seen: set = set()
-    pending = [transmit]
-    while pending and len(seen) < MAX_CAPABILITY_SCAN:
-        item = pending.pop()
-        if id(item) in seen:
-            continue
-        seen.add(id(item))
-        if any(item is entry for entry in fixed) or item is commit_remote_transport:
-            raise ValueError("injected transport must not reach the production wire")
-        if isinstance(item, ProductionWireCapability):
-            raise ValueError(  # noqa: TRY004 -- refusal class, not a type report
-                "injected transport must not reach the production wire"
-            )
-        for attribute in ("func", "__wrapped__", "__func__", "__self__"):
-            nested = getattr(item, attribute, None)
-            if nested is not None:
-                pending.append(nested)
-        for cell in getattr(item, "__closure__", None) or ():
-            try:
-                pending.append(cell.cell_contents)
-            except ValueError:
-                continue
-        pending.extend(getattr(item, "__defaults__", None) or ())
-        pending.extend((getattr(item, "__kwdefaults__", None) or {}).values())
-        code = getattr(item, "__code__", None)
-        if code is None:
-            continue
-        namespace = getattr(item, "__globals__", None) or {}
-        for name in code.co_names:
-            if name in namespace:
-                pending.append(namespace[name])
-        for value in list(pending):
-            if isinstance(value, types.ModuleType):
-                pending.extend(
-                    getattr(value, name)
-                    for name in code.co_names
-                    if hasattr(value, name)
-                )
-    return transmit
+def _reject_production_transport(transmit, *, descriptor=None):
+    """Refuse any injected callable that reaches the fixed production wire."""
+    return o8_admission.reject_production_transport(_descriptor(descriptor), transmit)
 
 
 def _read(path):
@@ -528,8 +237,9 @@ def _artifact(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def _provenance(source_root, expected_commit, expected_inputs):
+def _provenance(source_root, expected_commit, expected_inputs, descriptor=None):
     source_root = Path(source_root).resolve()
+    campaign = _descriptor(descriptor)
 
     def git(*args):
         return subprocess.check_output(["git", "-C", str(source_root), *args])
@@ -537,7 +247,7 @@ def _provenance(source_root, expected_commit, expected_inputs):
     if (
         git("rev-parse", "HEAD").decode().strip() != expected_commit
         or git("status", "--porcelain", "--untracked-files=all").strip()
-        or expected_inputs != source_inputs()
+        or expected_inputs != campaign.source_map()
     ):
         raise ValueError("clean frozen source snapshot required")
     for name, sha in expected_inputs.items():
@@ -613,7 +323,9 @@ def _approve(permission, plan, source_commit, artifact_digest, inputs, baseline=
     validate_owner_identity(permission.get("recoveryOwner"), field="recoveryOwner")
 
 
-def freeze_inputs(permission_path, plan, *, source_root, artifact_path, baseline=None):
+def freeze_inputs(
+    permission_path, plan, *, source_root, artifact_path, baseline=None, descriptor=None
+):
     """Freeze independently read permission and verified on-disk source/artifact.
 
     `baseline` is the production baseline recomputed from named observation
@@ -621,35 +333,21 @@ def freeze_inputs(permission_path, plan, *, source_root, artifact_path, baseline
     available, and omitted when a frozen record is revalidated later; the
     permission's own provenance block is required either way.
     """
+    campaign = _descriptor(descriptor)
     permission = _read(permission_path)
-    inputs = source_inputs()
+    inputs = campaign.source_map()
     commit = subprocess.check_output(
         ["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True
     ).strip()
     artifact = _artifact(artifact_path)
-    _provenance(source_root, commit, inputs)
+    _provenance(source_root, commit, inputs, campaign)
     _approve(permission, plan, commit, artifact, inputs, baseline)
-    value = {
-        "kind": "commit-frozen-inputs-v2",
-        "permission": permission,
-        "permissionDigest": digest(permission),
-        "plan": copy.deepcopy(plan),
-        "planDigest": digest(plan),
-        "sourceCommit": commit,
-        "sourceInputs": inputs,
-        "artifactSha256": artifact,
-        "bounds": {
-            "dataRequests": 17,
-            "metadataRequests": 8,
-            "credentialRequests": 2,
-            "totalRequests": 27,
-        },
-    }
-    value["inputsDigest"] = digest(value)
-    return value
+    return o8_admission.freeze_inputs(
+        campaign, permission, plan, source_commit=commit, artifact_sha256=artifact
+    )
 
 
-def _validate(inputs, permission_path, source_root, artifact_path):
+def _validate(inputs, permission_path, source_root, artifact_path, descriptor=None):
     if inputs.get("inputsDigest") != digest(
         {k: v for k, v in inputs.items() if k != "inputsDigest"}
     ):
@@ -664,6 +362,7 @@ def _validate(inputs, permission_path, source_root, artifact_path):
         inputs["plan"],
         source_root=source_root,
         artifact_path=artifact_path,
+        descriptor=descriptor,
     )
     if digest(inputs) != digest(expected):
         raise ValueError("frozen binding differs")
@@ -750,6 +449,7 @@ def run_acquisition(
     credential_handoff,
     capability=None,
     injected_transport=None,
+    descriptor=None,
 ):
     """Run an admitted acquisition. There is deliberately no implicit wire/ADC call.
 
@@ -763,9 +463,10 @@ def run_acquisition(
             "exactly one of an O7 production capability or a local "
             "injected transport is required"
         )
+    campaign = _descriptor(descriptor)
     if capability is None:
-        _reject_production_transport(injected_transport)
-    elif type(capability) is not ProductionWireCapability or capability not in _ISSUED:
+        _reject_production_transport(injected_transport, descriptor=campaign)
+    elif not issued_capability(capability):
         raise ValueError("unissued O7 production capability")
     inputs = copy.deepcopy(inputs)
     if capability is None:
@@ -781,7 +482,7 @@ def run_acquisition(
             ledger_root=ledger_root,
         )
         transmit = capability._transmit
-    _validate(inputs, permission_path, source_root, artifact_path)
+    _validate(inputs, permission_path, source_root, artifact_path, campaign)
     validate_handoff(credential_handoff, inputs["permission"], api_key)
     ledger = Ledger(ledger_root)
     permission, plan = (
@@ -797,12 +498,12 @@ def run_acquisition(
         "collectorSourceDigest": source_digest(),
     }
     projected = production_gate_plan(plan, binding)
-    locks = _locks(plan)
+    locks = campaign.lock_scopes(plan)
     envelope = {
         "permissionDigest": inputs["permissionDigest"],
         "issuedAt": permission["issuedAt"],
         "expiresAt": permission["expiresAt"],
-        "limits": copy.deepcopy(BUDGET),
+        "limits": copy.deepcopy(campaign.budget),
         "concurrency": 1,
         "scopes": locks,
     }
@@ -813,10 +514,10 @@ def run_acquisition(
         "gatePath": str((output / "gate").resolve()),
         "gatePlanDigest": digest(projected),
         "locks": locks,
-        "budget": copy.deepcopy(BUDGET),
-        "durationSeconds": 1200,
+        "budget": copy.deepcopy(campaign.budget),
+        "durationSeconds": campaign.campaign_seconds,
     }
-    generation = abort_generation(inputs)
+    generation = abort_generation(inputs, descriptor=campaign)
     ticket = ledger.reserve(envelope, claim, projected, generation=generation)
     gate = coordinator = collection = None
     failure = None
@@ -846,14 +547,14 @@ def run_acquisition(
             wire_ran = True
             return transmit(value)
 
-        collection = collect_commit(
+        collection = campaign.collector(
             gate, plan, output / "collection", transmit=coordinator.bind_wire(wire)
         )
         coordinator.budget.recovery = True
         coordinator.recover_credentials()
         coordinator.preflight()
         postflight = True
-        _validate(inputs, permission_path, source_root, artifact_path)
+        _validate(inputs, permission_path, source_root, artifact_path, campaign)
     except Exception as error:  # noqa: BLE001 -- sanitized receipt; retain ownership
         failure = type(error).__name__
     snapshot = gate.snapshot() if gate is not None else None
@@ -884,7 +585,7 @@ def run_acquisition(
         if capability is not None
         else "injected-transport",
         "productionExecuted": bool(wire_ran and capability is not None),
-        "workerArchiveSha256": capability.archive_sha256 if capability else None,
+        "workerArchiveSha256": capability.binding_digest if capability else None,
         "acquisitionValidated": False,
         "promotionReady": False,
         "failure": failure,
@@ -1066,3 +767,34 @@ def compare_saved(
         "executionKind": expected_execution_kind,
         "productionExecuted": produced,
     }
+
+
+# The Commit campaign, the generic O8 core's first client. Every binding the
+# admission checks depend on is declared here, in one hard-coded place; the core
+# refuses a descriptor that is missing any of them.
+COMMIT = CampaignDescriptor(
+    campaign_id=CAMPAIGN_ID,
+    frozen_inputs_kind=FROZEN_INPUTS_KIND,
+    permission_kind=PERMISSION_KIND,
+    approval_kind=APPROVAL_KIND,
+    manifest_kind=MANIFEST_KIND,
+    approval_fields=APPROVAL_FIELDS,
+    artifact_profile=REVIEWED_ARTIFACT_PROFILE,
+    campaign_seconds=CAMPAIGN_SECONDS,
+    recovery_seconds=RECOVERY_SECONDS,
+    source_map=source_inputs,
+    abort_closure_sources=ABORT_CLOSURE_SOURCES,
+    required_source_entries=(COLLECTOR_ENTRY, COMPARATOR_ENTRY),
+    frozen_bounds=FROZEN_BOUNDS,
+    budget=BUDGET,
+    plan_compiler=_plan_compiler,
+    lock_scopes=_locks,
+    collector=_collect,
+    comparator=compare_saved,
+    cost_model=production_cost_model,
+    permission_bindings=permission_bindings,
+    transport_bound=_transmit_bound,
+    binding_verifier=_verify_worker_archive,
+    retained_artifact_validator=_retained_artifact,
+    forbidden_transports=_forbidden_transports,
+)

@@ -72,6 +72,10 @@ def source_inputs():
     ]
     paths.append(ROOT / "tools/compat-broad/production-admission/reservations.py")
     paths.append(ROOT / "tools/compat-broad/fs-write-txn/credential_prep.py")
+    # The campaign-generic admission core is executable code this acquisition
+    # runs, so it is frozen by name rather than left to a directory glob.
+    paths.append(ROOT / "tools/compat-broad/o8-core/o8_admission.py")
+    paths.append(ROOT / "tools/compat-broad/o8-core/o8_campaign.py")
     values = {
         str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in paths

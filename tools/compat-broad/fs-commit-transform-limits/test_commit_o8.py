@@ -142,7 +142,10 @@ def _frozen_inputs(tmp_path):
     plan = {"campaignId": "FS-DATA-WRITE-COMMIT-TRANSFORMS-03", "nonce": "a" * 32}
     source_inputs = {
         name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-        for name in o8_bundle.WORKER_SOURCES
+        for name in (
+            *o8_bundle.WORKER_SOURCES,
+            *commit_o8.acquisition.COMMIT.required_source_entries,
+        )
     }
     inputs = {
         "kind": "commit-frozen-inputs-v2",
@@ -270,7 +273,7 @@ def test_cli_issues_an_archive_bound_capability_without_a_public_secret(
     assert "injected_transport" not in calls
     capability = calls["capability"]
     assert isinstance(capability, commit_o8.acquisition.ProductionWireCapability)
-    assert capability.archive_sha256 == expected_sha
+    assert capability.binding_digest == expected_sha
     assert capability.campaign_id == inputs["plan"]["campaignId"]
     assert capability.inputs_digest == inputs["inputsDigest"]
     assert calls["api_key"] == secret

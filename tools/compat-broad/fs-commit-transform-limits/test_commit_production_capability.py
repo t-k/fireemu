@@ -25,6 +25,15 @@ sys.path.insert(0, str(HERE))
 import commit_acquisition as acquisition
 import commit_remote_transport as transport
 from broad_contract import digest
+from o8_campaign import CampaignDescriptor
+
+
+def descriptor_for(campaign: str) -> CampaignDescriptor:
+    """The Commit descriptor rebound to one test campaign identity."""
+    return CampaignDescriptor(
+        **{**acquisition.COMMIT.members(), "campaign_id": campaign}
+    )
+
 
 _SPEC = importlib.util.spec_from_file_location("o8_bundle", HERE / "o8_bundle.py")
 assert _SPEC is not None and _SPEC.loader is not None
@@ -42,7 +51,10 @@ def frozen_inputs(campaign: str = "campaign-a") -> dict:
     plan = {"campaignId": campaign, "nonce": "a" * 32}
     source_inputs = {
         name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-        for name in o8_bundle.WORKER_SOURCES
+        for name in (
+            *o8_bundle.WORKER_SOURCES,
+            *acquisition.COMMIT.required_source_entries,
+        )
     }
     value = {
         "kind": "commit-frozen-inputs-v2",
@@ -87,6 +99,7 @@ class Admission:
 
     def __init__(self, tmp_path: Path, monkeypatch, campaign: str = "campaign-a"):
         self.inputs = frozen_inputs(campaign)
+        self.descriptor = descriptor_for(campaign)
         self.ledger = tmp_path / f"ledger-{campaign}"
         self.manifest = {
             "kind": acquisition.MANIFEST_KIND,
@@ -116,6 +129,7 @@ class Admission:
         permission = overrides.pop("permission", self.permission)
         ledger = overrides.pop("ledger_root", self.ledger)
         launcher = overrides.pop("launcher_path", HERE / "commit_o8.py")
+        descriptor = overrides.pop("descriptor", self.descriptor)
         manifest = {**self.manifest, **(overrides.pop("manifest", None) or {})}
         manifest_bytes = (
             self.manifest_bytes
@@ -123,6 +137,7 @@ class Admission:
             else json.dumps(manifest).encode()
         )
         return acquisition.issue_production_capability(
+            descriptor=descriptor,
             inputs=inputs,
             approval={**self.approval, **overrides},
             manifest=manifest,
@@ -132,8 +147,8 @@ class Admission:
             ledger_root=ledger,
             artifact_path=self.artifact_path,
             launcher_path=launcher,
-            archive_fd=fd,
-            archive_sha256=sha,
+            binding=fd,
+            binding_digest=sha,
         )
 
 
@@ -197,7 +212,7 @@ def test_capability_is_issued_only_for_a_complete_o7_binding(tmp_path, monkeypat
     with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
         capability = admission.issue(fd, sha)
         assert capability.campaign_id == inputs["plan"]["campaignId"]
-        assert capability.archive_sha256 == sha
+        assert capability.binding_digest == sha
         for override in (
             {"status": "pending"},
             {"kind": "other"},
@@ -251,6 +266,7 @@ def test_approval_must_bind_the_running_execution_host(tmp_path, monkeypatch):
     }
     with pytest.raises(ValueError, match="approval artifact"):
         acquisition.validate_o7_admission(
+            descriptor=admission.descriptor,
             inputs=admission.inputs,
             approval=without,
             manifest=admission.manifest,
@@ -323,7 +339,7 @@ def test_a_forged_capability_with_matching_attributes_is_refused(tmp_path, monke
 
     class Forged:
         campaign_id = inputs["plan"]["campaignId"]
-        archive_sha256 = sha
+        binding_digest = sha
         inputs_digest = inputs["inputsDigest"]
 
         def _transmit(self, value):  # pragma: no cover -- must never run
@@ -353,9 +369,10 @@ def test_a_forged_capability_with_matching_attributes_is_refused(tmp_path, monke
         with pytest.raises(TypeError):
             acquisition.ProductionWireCapability(
                 object(),
-                archive_fd=fd,
-                archive_sha256=sha,
+                binding=fd,
+                binding_digest=sha,
                 campaign_id=capability.campaign_id,
+                window_seconds=capability.window_seconds,
                 inputs_digest=capability.inputs_digest,
                 ledger_root=capability.ledger_root,
                 window_starts_at=capability.window_starts_at,

@@ -30,7 +30,7 @@ use json::{
     document_from_json, document_to_json, explain_options_from_json, mask_from_json,
     mask_from_paths, optional_timestamp_to_json, precondition_from_json, request_options_from_json,
     structured_query_from_json, transaction_options_from_json, value_to_json, write_from_json,
-    write_result_to_json, JsonError,
+    write_result_to_json, FieldPath, JsonError,
 };
 
 /// Shared REST state.
@@ -852,14 +852,16 @@ impl RestState {
             parent: parent.to_owned(),
             collection_id: collection_id.to_owned(),
             document_id: document_id.to_owned(),
-            document: Some(document_from_json(body).map_err(|e| {
-                let status = bad(&e);
-                document_resource
-                    .as_deref()
-                    .map_or(status.clone(), |resource| {
-                        crate::local::rest_limit_diagnostic(&status, resource)
-                    })
-            })?),
+            document: Some(
+                document_from_json(body, &FieldPath::root("document")).map_err(|e| {
+                    let status = bad(&e);
+                    document_resource
+                        .as_deref()
+                        .map_or(status.clone(), |resource| {
+                            crate::local::rest_limit_diagnostic(&status, resource)
+                        })
+                })?,
+            ),
             mask: mask_from_paths(params.get("mask.fieldPaths").map_or(&[][..], Vec::as_slice)),
             request_options: None,
         };
@@ -884,7 +886,8 @@ impl RestState {
         params: &BTreeMap<String, Vec<String>>,
         body: &Value,
     ) -> Result<RestResponse, Status> {
-        let mut document = document_from_json(body).map_err(|e| bad(&e))?;
+        let mut document =
+            document_from_json(body, &FieldPath::root("document")).map_err(|e| bad(&e))?;
         if document.name.is_empty() {
             name.clone_into(&mut document.name);
         } else if document.name != name {
@@ -1485,11 +1488,15 @@ fn transaction_bytes(v: Option<&Value>) -> Result<Vec<u8>, Status> {
 fn writes_from_json(body: &Value) -> Result<Vec<pb::Write>, Status> {
     match body.get("writes") {
         None | Some(Value::Null) => Ok(Vec::new()),
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(write_from_json)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| bad(&e)),
+        Some(Value::Array(items)) => {
+            let path = FieldPath::root("writes");
+            items
+                .iter()
+                .enumerate()
+                .map(|(at, item)| write_from_json(item, &path.index(at)))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| bad(&e))
+        }
         Some(_) => Err(Status::invalid_argument("writes must be an array")),
     }
 }

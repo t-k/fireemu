@@ -102,6 +102,87 @@ pub fn base64_decode_field(field: &str, text: &str) -> Result<Vec<u8>, JsonError
     })
 }
 
+/// The proto path of the field a request value came from, built as the parser descends.
+///
+/// Production names a malformed value by its path in the request *message*, in proto
+/// spelling, not by the JSON the client sent: `writes[0].update.fields[0].value.bytes_value`
+/// for a bad `bytesValue` in the first write of a commit
+/// (conformance/firestore-production-matrix.json, errors/rest-shapes, `write-bad-base64`,
+/// recorded 2026-09-07). Repeated fields and map entries are indexed; every other segment is
+/// the `snake_case` proto field name.
+///
+/// The path is a borrowed chain rather than a `String` so that descending costs nothing: it
+/// is walked into text only when a value is actually refused.
+#[derive(Clone, Copy)]
+pub struct FieldPath<'a> {
+    parent: Option<&'a FieldPath<'a>>,
+    segment: Segment<'a>,
+}
+
+#[derive(Clone, Copy)]
+enum Segment<'a> {
+    /// One or more dot-joined proto field names.
+    Field(&'a str),
+    /// A repeated-field or map-entry position, rendered `[n]`.
+    Index(usize),
+}
+
+impl<'a> FieldPath<'a> {
+    /// The path of a top-level request field.
+    #[must_use]
+    pub const fn root(name: &'a str) -> Self {
+        Self {
+            parent: None,
+            segment: Segment::Field(name),
+        }
+    }
+
+    /// A field below this one. `name` may be dot-joined to add several segments at once.
+    #[must_use]
+    pub const fn field<'b>(&'b self, name: &'b str) -> FieldPath<'b> {
+        FieldPath {
+            parent: Some(self),
+            segment: Segment::Field(name),
+        }
+    }
+
+    /// A repeated-field or map-entry position below this one.
+    #[must_use]
+    pub const fn index(&self, at: usize) -> FieldPath<'_> {
+        FieldPath {
+            parent: Some(self),
+            segment: Segment::Index(at),
+        }
+    }
+
+    fn write_into(&self, out: &mut String) {
+        if let Some(parent) = self.parent {
+            parent.write_into(out);
+        }
+        match self.segment {
+            Segment::Field(name) => {
+                if !out.is_empty() {
+                    out.push('.');
+                }
+                out.push_str(name);
+            }
+            Segment::Index(at) => {
+                out.push('[');
+                out.push_str(&at.to_string());
+                out.push(']');
+            }
+        }
+    }
+
+    /// The path as production spells it.
+    #[must_use]
+    pub fn to_proto_path(&self) -> String {
+        let mut out = String::new();
+        self.write_into(&mut out);
+        out
+    }
+}
+
 // ------------------------------------------------------------------------------------------
 // timestamps
 // ------------------------------------------------------------------------------------------
@@ -320,9 +401,19 @@ pub fn value_to_json(v: &pb::Value) -> Value {
     }
 }
 
-/// JSON → protobuf value.
+/// JSON → protobuf value, for a position whose request field path is not established.
+///
+/// Query filters, cursors and `findNearest` reach this entry; production's own path form for
+/// them is recorded for other value types (`structured_query.where.field_filter.value.
+/// integer_value`) but not for a malformed `bytesValue`, and a nested composite filter has no
+/// recording at all, so those refusals keep the bare decoder message rather than a guess.
 pub fn value_from_json(v: &Value) -> Result<pb::Value, JsonError> {
-    value_from_json_at(v, 0)
+    value_from_json_at(v, 0, None)
+}
+
+/// JSON → protobuf value, naming `path` if the value is refused.
+pub fn value_from_json_in(v: &Value, path: &FieldPath<'_>) -> Result<pb::Value, JsonError> {
+    value_from_json_at(v, 0, Some(path))
 }
 
 fn nested_depth(parent_depth: u32) -> Result<u32, JsonError> {
@@ -338,6 +429,7 @@ fn nested_depth(parent_depth: u32) -> Result<u32, JsonError> {
 fn vector_map_from_json(
     inner: &Value,
     parent_depth: u32,
+    path: Option<&FieldPath<'_>>,
 ) -> Result<Option<pb::MapValue>, JsonError> {
     let Some(fields) = inner.get("fields").and_then(Value::as_object) else {
         return Ok(None);
@@ -362,11 +454,20 @@ fn vector_map_from_json(
         return err("arrayValue must be an object");
     }
     strict_keys(array, &["values"])?;
+    // The two entries are held sorted, so `value` is the second; the vector's elements sit
+    // under its `arrayValue`.
+    let entry = path.map(|p| p.field("map_value.fields"));
+    let entry = entry.as_ref().map(|p| p.index(1));
+    let values_path = entry.as_ref().map(|p| p.field("value.array_value.values"));
     let values = match array.get("values") {
         None | Some(Value::Null) => Vec::new(),
         Some(Value::Array(items)) => items
             .iter()
-            .map(|value| value_from_json_at(value, parent_depth))
+            .enumerate()
+            .map(|(at, value)| {
+                let element = values_path.as_ref().map(|p| p.index(at));
+                value_from_json_at(value, parent_depth, element.as_ref())
+            })
             .collect::<Result<Vec<_>, _>>()?,
         Some(_) => return err("arrayValue.values must be an array"),
     };
@@ -389,7 +490,11 @@ fn vector_map_from_json(
 }
 
 #[allow(clippy::too_many_lines)]
-fn value_from_json_at(v: &Value, parent_depth: u32) -> Result<pb::Value, JsonError> {
+fn value_from_json_at(
+    v: &Value,
+    parent_depth: u32,
+    path: Option<&FieldPath<'_>>,
+) -> Result<pb::Value, JsonError> {
     use pb::value::ValueType as V;
     let Some(obj) = v.as_object() else {
         return err("a value must be an object with exactly one *Value key");
@@ -450,9 +555,15 @@ fn value_from_json_at(v: &Value, parent_depth: u32) -> Result<pb::Value, JsonErr
                 .to_owned(),
         ),
         "bytesValue" => {
-            V::BytesValue(base64_decode(inner.as_str().ok_or_else(|| {
-                JsonError("bytesValue must be a base64 string".into())
-            })?)?)
+            let text = inner
+                .as_str()
+                .ok_or_else(|| JsonError("bytesValue must be a base64 string".into()))?;
+            V::BytesValue(match path {
+                Some(path) => {
+                    base64_decode_field(&path.field("bytes_value").to_proto_path(), text)?
+                }
+                None => base64_decode(text)?,
+            })
         }
         "referenceValue" => V::ReferenceValue(
             inner
@@ -476,18 +587,22 @@ fn value_from_json_at(v: &Value, parent_depth: u32) -> Result<pb::Value, JsonErr
                 longitude: coordinate("longitude", 180.0)?,
             })
         }
-        "arrayValue" => V::ArrayValue(array_from_json(inner, parent_depth)?),
+        "arrayValue" => {
+            let values = path.map(|p| p.field("array_value.values"));
+            V::ArrayValue(array_from_json(inner, parent_depth, values.as_ref())?)
+        }
         "mapValue" => {
             if !inner.is_object() {
                 return err("mapValue must be an object");
             }
             strict_keys(inner, &["fields"])?;
-            if let Some(vector) = vector_map_from_json(inner, parent_depth)? {
+            if let Some(vector) = vector_map_from_json(inner, parent_depth, path)? {
                 V::MapValue(vector)
             } else {
                 let depth = nested_depth(parent_depth)?;
+                let fields = path.map(|p| p.field("map_value.fields"));
                 V::MapValue(pb::MapValue {
-                    fields: fields_from_json_at(inner.get("fields"), depth)?,
+                    fields: fields_from_json_at(inner.get("fields"), depth, fields.as_ref())?,
                 })
             }
         }
@@ -498,7 +613,11 @@ fn value_from_json_at(v: &Value, parent_depth: u32) -> Result<pb::Value, JsonErr
     })
 }
 
-fn array_from_json(inner: &Value, parent_depth: u32) -> Result<pb::ArrayValue, JsonError> {
+fn array_from_json(
+    inner: &Value,
+    parent_depth: u32,
+    path: Option<&FieldPath<'_>>,
+) -> Result<pb::ArrayValue, JsonError> {
     if !inner.is_object() {
         return err("arrayValue must be an object");
     }
@@ -508,7 +627,11 @@ fn array_from_json(inner: &Value, parent_depth: u32) -> Result<pb::ArrayValue, J
         None | Some(Value::Null) => Vec::new(),
         Some(Value::Array(items)) => items
             .iter()
-            .map(|value| value_from_json_at(value, depth))
+            .enumerate()
+            .map(|(at, value)| {
+                let element = path.map(|p| p.index(at));
+                value_from_json_at(value, depth, element.as_ref())
+            })
             .collect::<Result<_, _>>()?,
         Some(_) => return err("arrayValue.values must be an array"),
     };
@@ -517,12 +640,15 @@ fn array_from_json(inner: &Value, parent_depth: u32) -> Result<pb::ArrayValue, J
 
 /// `fields` object → protobuf map.
 pub fn fields_from_json(v: Option<&Value>) -> Result<HashMap<String, pb::Value>, JsonError> {
-    fields_from_json_at(v, 0)
+    fields_from_json_at(v, 0, None)
 }
 
+/// `path` names the `fields` map itself; each entry is `[n].value` below it, the way
+/// production spells a map entry.
 fn fields_from_json_at(
     v: Option<&Value>,
     parent_depth: u32,
+    path: Option<&FieldPath<'_>>,
 ) -> Result<HashMap<String, pb::Value>, JsonError> {
     let mut out = HashMap::new();
     let Some(v) = v.filter(|value| !value.is_null()) else {
@@ -531,8 +657,10 @@ fn fields_from_json_at(
     let Some(obj) = v.as_object() else {
         return err("fields must be an object");
     };
-    for (k, v) in obj {
-        let value = value_from_json_at(v, parent_depth).map_err(|error| {
+    for (at, (k, v)) in obj.iter().enumerate() {
+        let entry = path.map(|p| p.index(at));
+        let entry = entry.as_ref().map(|p| p.field("value"));
+        let value = value_from_json_at(v, parent_depth, entry.as_ref()).map_err(|error| {
             if parent_depth == 0 && error.0.starts_with("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH ") {
                 JsonError(format!("{}; property={k}", error.0))
             } else {
@@ -566,17 +694,21 @@ pub fn document_to_json(d: &pb::Document) -> Value {
 }
 
 /// JSON → protobuf document (`name` may be absent for create).
-pub fn document_from_json(v: &Value) -> Result<pb::Document, JsonError> {
+///
+/// `path` is the document's own field in the request that carries it: `writes[0].update` in
+/// a commit, `document` on the document routes.
+pub fn document_from_json(v: &Value, path: &FieldPath<'_>) -> Result<pb::Document, JsonError> {
     if !v.is_object() {
         return err("document must be an object");
     }
+    let fields = path.field("fields");
     Ok(pb::Document {
         name: v
             .get("name")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned(),
-        fields: fields_from_json(v.get("fields"))?,
+        fields: fields_from_json_at(v.get("fields"), 0, Some(&fields))?,
         create_time: None,
         update_time: None,
     })
@@ -644,14 +776,17 @@ pub fn precondition_from_json(v: Option<&Value>) -> Result<Option<pb::Preconditi
     Ok(Some(pb::Precondition { condition_type }))
 }
 
-fn transform_from_json(v: &Value) -> Result<pb::document_transform::FieldTransform, JsonError> {
+fn transform_from_json(
+    v: &Value,
+    path: &FieldPath<'_>,
+) -> Result<pb::document_transform::FieldTransform, JsonError> {
     use pb::document_transform::field_transform::TransformType as T;
     let field_path = v
         .get("fieldPath")
         .and_then(Value::as_str)
         .ok_or_else(|| JsonError("fieldTransform.fieldPath is required".into()))?
         .to_owned();
-    let array = |key: &str| -> Result<pb::ArrayValue, JsonError> {
+    let array = |key: &str, proto: &str| -> Result<pb::ArrayValue, JsonError> {
         let Some(inner) = v.get(key).filter(|value| !value.is_null()) else {
             return Ok(pb::ArrayValue::default());
         };
@@ -659,12 +794,15 @@ fn transform_from_json(v: &Value) -> Result<pb::document_transform::FieldTransfo
             return err(format!("{key} must be an object"));
         }
         strict_keys(inner, &["values"])?;
+        let proto = path.field(proto);
+        let values_path = proto.field("values");
         Ok(pb::ArrayValue {
             values: match inner.get("values") {
                 None | Some(Value::Null) => Vec::new(),
                 Some(Value::Array(items)) => items
                     .iter()
-                    .map(value_from_json)
+                    .enumerate()
+                    .map(|(at, value)| value_from_json_in(value, &values_path.index(at)))
                     .collect::<Result<_, _>>()?,
                 Some(_) => return err(format!("{key}.values must be an array")),
             },
@@ -704,21 +842,21 @@ fn transform_from_json(v: &Value) -> Result<pb::document_transform::FieldTransfo
                     .ok_or_else(|| JsonError("unknown setToServerValue".into()))?,
             )
         } else if let Some(x) = v.get("increment").filter(|value| !value.is_null()) {
-            T::Increment(value_from_json(x)?)
+            T::Increment(value_from_json_in(x, &path.field("increment"))?)
         } else if let Some(x) = v.get("maximum").filter(|value| !value.is_null()) {
-            T::Maximum(value_from_json(x)?)
+            T::Maximum(value_from_json_in(x, &path.field("maximum"))?)
         } else if let Some(x) = v.get("minimum").filter(|value| !value.is_null()) {
-            T::Minimum(value_from_json(x)?)
+            T::Minimum(value_from_json_in(x, &path.field("minimum"))?)
         } else if v
             .get("appendMissingElements")
             .is_some_and(|value| !value.is_null())
         {
-            T::AppendMissingElements(array("appendMissingElements")?)
+            T::AppendMissingElements(array("appendMissingElements", "append_missing_elements")?)
         } else if v
             .get("removeAllFromArray")
             .is_some_and(|value| !value.is_null())
         {
-            T::RemoveAllFromArray(array("removeAllFromArray")?)
+            T::RemoveAllFromArray(array("removeAllFromArray", "remove_all_from_array")?)
         } else {
             return err("fieldTransform without a transform");
         };
@@ -729,7 +867,9 @@ fn transform_from_json(v: &Value) -> Result<pb::document_transform::FieldTransfo
 }
 
 /// JSON → write.
-pub fn write_from_json(v: &Value) -> Result<pb::Write, JsonError> {
+///
+/// `path` is the write's own position in the request that carries it, `writes[n]`.
+pub fn write_from_json(v: &Value, path: &FieldPath<'_>) -> Result<pb::Write, JsonError> {
     strict_keys(
         v,
         &[
@@ -751,7 +891,10 @@ pub fn write_from_json(v: &Value) -> Result<pb::Write, JsonError> {
         return err("Payload isn't valid for request.");
     }
     let operation = if let Some(d) = v.get("update").filter(|value| !value.is_null()) {
-        Some(pb::write::Operation::Update(document_from_json(d)?))
+        Some(pb::write::Operation::Update(document_from_json(
+            d,
+            &path.field("update"),
+        )?))
     } else if let Some(n) = v.get("delete").filter(|value| !value.is_null()) {
         Some(pb::write::Operation::Delete(
             n.as_str()
@@ -777,10 +920,14 @@ pub fn write_from_json(v: &Value) -> Result<pb::Write, JsonError> {
                 .to_owned(),
             field_transforms: match t.get("fieldTransforms") {
                 None | Some(Value::Null) => Vec::new(),
-                Some(Value::Array(items)) => items
-                    .iter()
-                    .map(transform_from_json)
-                    .collect::<Result<_, _>>()?,
+                Some(Value::Array(items)) => {
+                    let transforms = path.field("transform.field_transforms");
+                    items
+                        .iter()
+                        .enumerate()
+                        .map(|(at, item)| transform_from_json(item, &transforms.index(at)))
+                        .collect::<Result<_, _>>()?
+                }
                 Some(_) => return err("fieldTransforms must be an array"),
             },
         }))
@@ -791,10 +938,14 @@ pub fn write_from_json(v: &Value) -> Result<pb::Write, JsonError> {
         update_mask: mask_from_json(v.get("updateMask"))?,
         update_transforms: match v.get("updateTransforms") {
             None | Some(Value::Null) => Vec::new(),
-            Some(Value::Array(items)) => items
-                .iter()
-                .map(transform_from_json)
-                .collect::<Result<_, _>>()?,
+            Some(Value::Array(items)) => {
+                let transforms = path.field("update_transforms");
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(at, item)| transform_from_json(item, &transforms.index(at)))
+                    .collect::<Result<_, _>>()?
+            }
             Some(_) => return err("updateTransforms must be an array"),
         },
         current_document: precondition_from_json(v.get("currentDocument"))?,
@@ -1501,10 +1652,14 @@ pub fn write_request_from_json(v: &Value) -> Result<pb::WriteRequest, JsonError>
     )?;
     let writes = match v.get("writes") {
         None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(write_from_json)
-            .collect::<Result<_, _>>()?,
+        Some(Value::Array(items)) => {
+            let path = FieldPath::root("writes");
+            items
+                .iter()
+                .enumerate()
+                .map(|(at, item)| write_from_json(item, &path.index(at)))
+                .collect::<Result<_, _>>()?
+        }
         Some(_) => return err("writes must be an array"),
     };
     Ok(pb::WriteRequest {
@@ -1606,6 +1761,13 @@ pub fn write_response_to_json(r: &pb::WriteResponse) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// These unit tests predate the request field path and do not assert one; they parse a
+    /// write as the first write of a commit.
+    fn write_from_json_for_test(v: &Value) -> Result<pb::Write, JsonError> {
+        let writes = FieldPath::root("writes");
+        write_from_json(v, &writes.index(0))
+    }
 
     fn nested_map(levels: u32) -> Value {
         let mut value = json!({"integerValue": "1"});
@@ -1752,7 +1914,7 @@ mod tests {
         .expect("numeric distance enum values use the protobuf wire numbers");
         assert_eq!(nearest.find_nearest.unwrap().distance_measure, 1);
 
-        let write = write_from_json(&json!({
+        let write = write_from_json_for_test(&json!({
             "transform": {
                 "document": "projects/demo/databases/(default)/documents/items/one",
                 "fieldTransforms": [{
@@ -1805,7 +1967,7 @@ mod tests {
         .expect("null oneof members are unset");
         assert!(listen.target_change.is_none());
 
-        let transform_error = write_from_json(&json!({
+        let transform_error = write_from_json_for_test(&json!({
             "update": {"name": "projects/demo/databases/(default)/documents/items/one"},
             "updateTransforms": "not-an-array"
         }))
@@ -1814,7 +1976,7 @@ mod tests {
             .0
             .contains("updateTransforms must be an array"));
 
-        let transform_message_error = write_from_json(&json!({
+        let transform_message_error = write_from_json_for_test(&json!({
             "transform": "not-an-object"
         }))
         .expect_err("DocumentTransform is a message and must be an object");
@@ -1822,7 +1984,7 @@ mod tests {
             .0
             .contains("transform must be an object"));
 
-        let field_transform_error = write_from_json(&json!({
+        let field_transform_error = write_from_json_for_test(&json!({
             "transform": {
                 "document": "projects/demo/databases/(default)/documents/items/one",
                 "fieldTransforms": "not-an-array"
@@ -1854,7 +2016,7 @@ mod tests {
             .0
             .contains("aggregations must be an array"));
 
-        let write = write_from_json(&json!({
+        let write = write_from_json_for_test(&json!({
             "transform": {
                 "document": "projects/demo/databases/(default)/documents/items/one",
                 "fieldTransforms": [{

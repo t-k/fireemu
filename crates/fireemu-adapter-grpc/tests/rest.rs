@@ -2156,6 +2156,185 @@ fn transaction_option_accepts_concurrency_mode_enum() {
     }
 }
 
+/// The same refusal for a `bytesValue` inside a written document. Production names the
+/// write, the document, the map entry and the proto value field:
+/// `Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64
+/// decoding failed for "!!!"` (conformance/firestore-production-matrix.json,
+/// errors/rest-shapes, `write-bad-base64`, recorded against production 2026-09-07; the
+/// probe writes a single field `a`).
+#[test]
+fn malformed_bytes_value_is_refused_in_productions_wording() {
+    let s = state(None);
+    let (status, response) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{
+            "update": {
+                "name": format!("{DOCS}/err/x"),
+                "fields": {"a": {"bytesValue": "!!!"}}
+            }
+        }]}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["status"], "INVALID_ARGUMENT",
+        "{response}"
+    );
+    assert_eq!(
+        response["error"]["message"],
+        concat!(
+            "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), ",
+            "Base64 decoding failed for \"!!!\""
+        ),
+        "{response}"
+    );
+}
+
+/// The write index is the position in the request, not a constant.
+#[test]
+fn a_malformed_bytes_value_names_the_write_it_came_from() {
+    let s = state(None);
+    let good = json!({
+        "update": {"name": format!("{DOCS}/err/first"), "fields": {"a": {"integerValue": "1"}}}
+    });
+    let bad = json!({
+        "update": {"name": format!("{DOCS}/err/second"), "fields": {"a": {"bytesValue": "!!!"}}}
+    });
+    let (status, response) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [good, bad]}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        concat!(
+            "Invalid value at 'writes[1].update.fields[0].value.bytes_value' (TYPE_BYTES), ",
+            "Base64 decoding failed for \"!!!\""
+        ),
+        "{response}"
+    );
+}
+
+/// Production has not been recorded on a nested value, so these paths continue the recorded
+/// form with the proto spelling of the nested messages. They are an inference, and this test
+/// is where a production observation would land.
+#[test]
+fn a_nested_malformed_bytes_value_continues_the_recorded_path_form() {
+    let s = state(None);
+    for (field, expected) in [
+        (
+            json!({"arrayValue": {"values": [{"integerValue": "1"}, {"bytesValue": "!!!"}]}}),
+            "writes[0].update.fields[0].value.array_value.values[1].bytes_value",
+        ),
+        (
+            json!({"mapValue": {"fields": {"inner": {"bytesValue": "!!!"}}}}),
+            "writes[0].update.fields[0].value.map_value.fields[0].value.bytes_value",
+        ),
+    ] {
+        let (status, response) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:commit"),
+            json!({"writes": [{
+                "update": {"name": format!("{DOCS}/err/x"), "fields": {"a": field}}
+            }]}),
+        );
+        assert_eq!(status, 400, "{response}");
+        assert_eq!(
+            response["error"]["message"],
+            format!(
+                "Invalid value at '{expected}' (TYPE_BYTES), Base64 decoding failed for \"!!!\""
+            ),
+            "{response}"
+        );
+    }
+}
+
+/// A document written through the REST document routes rather than a commit. The request
+/// message names the document `document`, which production has not been recorded on.
+#[test]
+fn a_malformed_bytes_value_in_a_patched_document_names_the_document_field() {
+    let s = state(None);
+    let (status, response) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/err/x"),
+        json!({"fields": {"a": {"bytesValue": "!!!"}}}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        concat!(
+            "Invalid value at 'document.fields[0].value.bytes_value' (TYPE_BYTES), ",
+            "Base64 decoding failed for \"!!!\""
+        ),
+        "{response}"
+    );
+}
+
+/// A transform carries values too. Unrecorded, so the path continues the same proto form.
+#[test]
+fn a_malformed_bytes_value_in_a_transform_names_the_transform() {
+    let s = state(None);
+    let (status, response) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{
+            "transform": {
+                "document": format!("{DOCS}/err/x"),
+                "fieldTransforms": [{
+                    "fieldPath": "a",
+                    "appendMissingElements": {"values": [{"bytesValue": "!!!"}]}
+                }]
+            }
+        }]}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        concat!(
+            "Invalid value at 'writes[0].transform.field_transforms[0]",
+            ".append_missing_elements.values[0].bytes_value' (TYPE_BYTES), ",
+            "Base64 decoding failed for \"!!!\""
+        ),
+        "{response}"
+    );
+}
+
+/// A known difference from production, pinned so it is not mistaken for correct. The map
+/// entry index is the position among the parsed `fields`, and this parser holds them sorted
+/// by key, while production indexes the entries in the order the request spelled them. The
+/// two agree for the single-field document production was recorded on, and disagree here:
+/// production would name `fields[1]` for `a`, which is written second.
+#[test]
+fn the_map_entry_index_follows_this_parsers_field_order() {
+    let s = state(None);
+    let (status, response) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{
+            "update": {
+                "name": format!("{DOCS}/err/x"),
+                "fields": {"z": {"integerValue": "1"}, "a": {"bytesValue": "!!!"}}
+            }
+        }]}),
+    );
+    assert_eq!(status, 400, "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        concat!(
+            "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), ",
+            "Base64 decoding failed for \"!!!\""
+        ),
+        "{response}"
+    );
+}
+
 /// Production refuses an undecodable `bytes` field by naming the request field, its proto
 /// type and the offending value, rather than with a bare decoder message:
 /// `Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for "not base64!"`

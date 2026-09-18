@@ -45,11 +45,11 @@ def test_the_classification_document_carries_every_repair_ticket() -> None:
 def test_the_campaign_document_agrees_with_the_compiled_manifest() -> None:
     text = _read(CAMPAIGN_DOC)
     manifest = compile_manifest(NONCE)
-    assert str(manifest["caseCount"]) in text
-    assert str(manifest["budget"]["hardCeilingUsd"]) in text
-    assert str(manifest["operationPolling"]["deadlineSeconds"]) in text
-    assert str(len(REQUIRED_PERMISSIONS)) in text
-    assert str(len(FORBIDDEN_PERMISSIONS)) in text
+    assert f"{manifest['caseCount']} abstract cases" in text
+    assert f"US${manifest['budget']['hardCeilingUsd']}" in text
+    assert f"{manifest['operationPolling']['deadlineSeconds']} seconds" in text
+    assert f"{len(REQUIRED_PERMISSIONS)} permissions are required" in text
+    assert f"{len(FORBIDDEN_PERMISSIONS)} permissions are explicitly excluded" in text
 
 
 def test_the_campaign_document_lists_every_case_identifier() -> None:

@@ -6,7 +6,7 @@ This page prepares the second half of the blocking condition on the `FS-CONFIG-L
 
 ## What the campaign would observe
 
-Twenty-two abstract cases, compiled by `tools/compat-broad/fs-config-lifecycle/cases.py` from one 32-character hexadecimal nonce. They cover the database inventory contract, one full create and delete lifecycle for a throwaway named database, the two field-configuration transitions that change data-plane behavior, and the error shapes for identities that must be refused.
+22 abstract cases, compiled by `tools/compat-broad/fs-config-lifecycle/cases.py` from one 32-character hexadecimal nonce. They cover the database inventory contract, one full create and delete lifecycle for a throwaway named database, the two field-configuration transitions that change data-plane behavior, and the error shapes for identities that must be refused.
 
 | Group | Cases | What it separates |
 | --- | --- | --- |
@@ -38,7 +38,7 @@ The owner confirms all of the following before the run starts. The collector nev
 
 ## Permission envelope
 
-Ten permissions are required, all of them configuration reads and writes: create, delete, get, read metadata for, list and update databases, get and list indexes, and get and list operations. Fourteen permissions are explicitly excluded, including every document permission, export, import, restore and all three backup permissions, along with service-account key creation and project deletion or policy changes. A collector defect therefore cannot read or destroy data, because it never holds a permission that would let it.
+10 permissions are required, all of them configuration reads and writes: create, delete, get, read metadata for, list and update databases, get and list indexes, and get and list operations. 14 permissions are explicitly excluded, including every document permission, export, import, restore and all three backup permissions, along with service-account key creation and project deletion or policy changes. A collector defect therefore cannot read or destroy data, because it never holds a permission that would let it.
 
 ## Abort rules and cleanup
 

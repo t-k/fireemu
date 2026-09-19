@@ -214,19 +214,26 @@ def _cli_fixture(tmp_path, monkeypatch, calls, *, approval_overrides=None):
     handoff = tmp_path / "handoff.json"
     handoff.write_text(json.dumps({"apiKey": secret, "adc": {"private": "value"}}))
     handoff.chmod(0o600)
-    monkeypatch.setattr(
-        commit_o8.acquisition,
-        "run_acquisition",
-        lambda output, frozen, **kwargs: (
-            calls.update(kwargs)
-            or {
-                "failure": None,
-                "releaseEligible": True,
-                "reservationReleased": True,
-                "acquisitionValidated": False,
+    def fake_acquisition(output, frozen, **kwargs):
+        calls.update(kwargs)
+        capability = kwargs.get("capability")
+        if capability is not None:
+            calls["capabilitySnapshot"] = {
+                "binding_digest": capability.binding_digest,
+                "campaign_id": capability.campaign_id,
+                "inputs_digest": capability.inputs_digest,
+                "ledger_root": capability.ledger_root,
+                "window_starts_at": capability.window_starts_at,
+                "window_expires_at": capability.window_expires_at,
             }
-        ),
-    )
+        return {
+            "failure": None,
+            "releaseEligible": True,
+            "reservationReleased": True,
+            "acquisitionValidated": False,
+        }
+
+    monkeypatch.setattr(commit_o8.acquisition, "run_acquisition", fake_acquisition)
     monkeypatch.setattr(
         commit_o8.acquisition,
         "validate_retained_artifact",
@@ -273,9 +280,10 @@ def test_cli_issues_an_archive_bound_capability_without_a_public_secret(
     assert "injected_transport" not in calls
     capability = calls["capability"]
     assert isinstance(capability, commit_o8.acquisition.ProductionWireCapability)
-    assert capability.binding_digest == expected_sha
-    assert capability.campaign_id == inputs["plan"]["campaignId"]
-    assert capability.inputs_digest == inputs["inputsDigest"]
+    snapshot = calls["capabilitySnapshot"]
+    assert snapshot["binding_digest"] == expected_sha
+    assert snapshot["campaign_id"] == inputs["plan"]["campaignId"]
+    assert snapshot["inputs_digest"] == inputs["inputsDigest"]
     assert calls["api_key"] == secret
     assert calls["credential_handoff"]["apiKey"] == secret
     public = capsys.readouterr()
@@ -373,7 +381,7 @@ def test_the_cli_binds_the_capability_to_its_ledger_root_and_window(
     _inputs, argv, _secret = _cli_fixture(tmp_path, monkeypatch, calls)
     ledger = Path(argv[argv.index("--ledger") + 1])
     assert commit_o8.main(argv) == 0
-    capability = calls["capability"]
-    assert capability.ledger_root == str(ledger.resolve(strict=False))
-    assert capability.window_starts_at <= time.time()
-    assert capability.window_expires_at > time.time() + commit_o8.CAMPAIGN_SECONDS
+    snapshot = calls["capabilitySnapshot"]
+    assert snapshot["ledger_root"] == str(ledger.resolve(strict=False))
+    assert snapshot["window_starts_at"] <= time.time()
+    assert snapshot["window_expires_at"] > time.time() + commit_o8.CAMPAIGN_SECONDS

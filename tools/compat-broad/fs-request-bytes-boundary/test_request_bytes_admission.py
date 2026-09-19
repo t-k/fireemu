@@ -565,7 +565,7 @@ def test_the_bound_transport_refuses_a_binding_that_is_not_the_reviewed_worker()
         "operation": {},
         "token": "t",
     }
-    with pytest.raises(ValueError, match="worker source"):
+    with pytest.raises(ValueError, match="active O7 production capability"):
         campaign.transport_bound(
             call, binding=b"other", binding_digest=hashlib.sha256(b"other").hexdigest()
         )

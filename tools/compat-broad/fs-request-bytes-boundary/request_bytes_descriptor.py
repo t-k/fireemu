@@ -36,6 +36,7 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 sys.path.insert(0, str(HERE))
 
 import request_bytes_remote_transport
+from o8_admission import authorize_transport
 from batch_contract import NUMBER, PROJECT
 from broad_contract import digest
 from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
@@ -624,6 +625,13 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
         "token",
     }:
         raise ValueError("closed request-byte wire call required")
+    if capability is None:
+        raise ValueError("active O7 production capability required")
+    authorize_transport(
+        capability,
+        binding=binding,
+        binding_digest=binding_digest,
+    )
     verify_worker_binding(binding, binding_digest, None)
     bounds = budget_document()["budget"]
     if (

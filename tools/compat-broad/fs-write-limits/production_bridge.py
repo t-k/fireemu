@@ -127,6 +127,7 @@ def bind_wire(
             raise ValueError("production bridge requires fixed remote transport")
         if not isinstance(coordinator, ReservedCoordinator):
             raise ValueError("reserved O7 coordinator required for production")
+        coordinator.validate_reservation()
         if not isinstance(artifact, (str, Path)) or not isinstance(
             artifact_sha256, str
         ):
@@ -205,6 +206,8 @@ def bind_wire(
             raise ValueError("collector position differs")
         phase_deadline = bound_gate.consume_wire(operation, recovery)
         validate(recovery)
+        if production:
+            coordinator.validate_reservation()
         if production:
             with artifact.open("rb") as stream:
                 current_artifact = hashlib.file_digest(stream, "sha256").hexdigest()

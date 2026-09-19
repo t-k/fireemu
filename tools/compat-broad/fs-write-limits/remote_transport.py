@@ -8,9 +8,7 @@ worker independently match every request to the closed compiler operation.
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -126,60 +124,22 @@ def _request(value, *, _session_id=None):
     encoded = _json(value)
     if len(encoded.encode()) > INPUT_CAP:
         raise ValueError("wire input limit")
-    read_fd, write_fd = os.pipe()
-    try:
-        os.write(write_fd, _session_id.encode("ascii"))
-    finally:
-        os.close(write_fd)
-    try:
-        child = subprocess.run(
-            [
-                sys.executable,
-                "-I",
-                str(Path(__file__).resolve()),
-                "--worker",
-                str(read_fd),
-            ],
-            input=encoded,
-            text=True,
-            capture_output=True,
-            env={},
-            pass_fds=(read_fd,),
-            timeout=TIMEOUT,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return {"kind": "deadline-exceeded", "complete": False}
-    finally:
-        os.close(read_fd)
-    if child.returncode != 0:
-        return {"kind": "worker-error", "complete": False}
-    try:
-        result = json.loads(child.stdout)
-    except (ValueError, UnicodeDecodeError):
-        return {"kind": "worker-error", "complete": False}
-    return result
+    # Network I/O stays in this already-admitted bridge process. A separately
+    # launchable worker cannot prove the parent gate's capability and is
+    # therefore intentionally not part of the production path.
+    del encoded
+    prepared = prepare(value)
+    return _exchange(**prepared, timeout=TIMEOUT)
 
 
 def main():
-    raw = sys.stdin.buffer.read(INPUT_CAP + 1)
-    if len(raw) > INPUT_CAP:
-        raise ValueError("wire input limit")
-    args = prepare(json.loads(raw))
-    print(json.dumps(_exchange(**args, timeout=TIMEOUT), allow_nan=False))
+    raise ValueError("production worker entrypoint disabled; use bridge admission")
 
 
 if __name__ == "__main__":
     try:
         if len(sys.argv) != 3 or sys.argv[1] != "--worker":
             raise ValueError("worker entrypoint only")
-        fd = int(sys.argv[2])
-        with os.fdopen(fd, "rb", closefd=True) as stream:
-            session_id = stream.read(64)
-        if len(session_id) != 64 or not re.fullmatch(
-            rb"[a-f0-9]{64}", session_id
-        ):
-            raise ValueError("worker capability handoff required")
         main()
     except Exception:
         sys.exit(2)

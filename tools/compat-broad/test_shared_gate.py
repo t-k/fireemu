@@ -1564,6 +1564,58 @@ def test_an_unscheduled_lost_create_answer_blocks_normal_finish_after_recovery(
         gate.finish()
 
 
+@pytest.mark.parametrize("shape", ["commit", "patch"])
+@pytest.mark.parametrize("failure", ["timeout", 500, 504])
+def test_unscheduled_unknown_create_stays_owned_after_complete_recovery(
+    tmp_path, shape, failure
+):
+    """Legacy jobs retain uncertain Commit and PATCH writes through finish."""
+    value, resources = commit_plan(writes=1)
+    probe = value["jobs"]["probe"]
+    if shape == "patch":
+        update = probe["observation"][0]["body"]["writes"][0]["update"]
+        probe["observation"][0] = {
+            "service": "firestore",
+            "method": "PATCH",
+            "path": "/v1/" + resources[0] + "?currentDocument.exists=false",
+            "body": {
+                "name": resources[0],
+                "fields": update["fields"],
+            },
+            "privileged": True,
+            "form": False,
+        }
+    path = tmp_path / f"{shape}-{failure}"
+    create(path, value)
+    gate = Gate(path, "probe")
+    gate.claim()
+
+    def lost_answer():
+        if failure == "timeout":
+            raise TimeoutError("transport deadline")
+        return failure, {"error": {"code": failure, "status": "INTERNAL"}}
+
+    if failure == "timeout":
+        with pytest.raises(TimeoutError):
+            gate.dispatch(probe["observation"][0], False, lost_answer)
+    else:
+        gate.dispatch(probe["observation"][0], False, lost_answer)
+
+    # Finish the legacy recovery sequence: ownership read, versionless delete
+    # (the Gate must retain responsibility rather than silently skip it), then
+    # the final absence proof.
+    recovery = probe["recovery"]
+    gate = Gate(path, "probe")
+    gate.dispatch(recovery[0], True, _absent)
+    delete = dict(recovery[1])
+    delete.pop("versionFrom", None)
+    gate.dispatch(delete, True, _absent)
+    assert gate.snapshot()["jobs"]["probe"]["absent"] == resources
+    assert unconfirmed_creates(gate.snapshot(), "probe") == 1
+    with pytest.raises(ValueError, match="cleanup incomplete"):
+        gate.finish()
+
+
 def test_a_nonce_bound_marker_requires_nonce_scoped_resources(tmp_path):
     """The binding is only adequate because the path scopes it, so check the path."""
     value, _resources = commit_plan(marker="nonce")

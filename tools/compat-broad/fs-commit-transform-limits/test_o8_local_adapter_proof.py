@@ -35,6 +35,12 @@ def test_local_adapter_proves_full_lifecycle_without_production_execution(
     monkeypatch.setattr(
         production_transport, "request_bound", unexpected_production_transport
     )
+    # commit_acquisition imports these symbols as aliases; guard those aliases
+    # too so this local proof fails closed if the injected path drifts.
+    monkeypatch.setattr(acquisition, "remote_request", unexpected_production_transport)
+    monkeypatch.setattr(
+        acquisition, "remote_request_bound", unexpected_production_transport
+    )
 
     result = acquisition.run_acquisition(tmp_path / "output", inputs, **kwargs)
 

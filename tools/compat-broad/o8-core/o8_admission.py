@@ -55,6 +55,7 @@ _CAPABILITY_TOKEN = object()
 # is the admission test: a look-alike object with the same attributes fails.
 _ISSUED: set = set()
 _ACTIVE: set = set()
+_CAPABILITY_STATE: dict = {}
 
 
 def execution_host():
@@ -312,17 +313,7 @@ class ProductionWireCapability:
     """
 
     __slots__ = (
-        "_binding",
-        "_consumed",
-        "_transport_bound",
-        "approval_digest",
-        "binding_digest",
-        "campaign_id",
-        "inputs_digest",
-        "ledger_root",
-        "window_expires_at",
-        "window_seconds",
-        "window_starts_at",
+        "_identity",
     )
 
     def __init__(
@@ -342,17 +333,39 @@ class ProductionWireCapability:
     ):
         if token is not _CAPABILITY_TOKEN:
             raise TypeError("the O8 production capability is not constructible")
-        self._binding = binding
-        self._consumed = False
-        self._transport_bound = transport_bound
-        self.binding_digest = binding_digest
-        self.campaign_id = campaign_id
-        self.window_seconds = window_seconds
-        self.inputs_digest = inputs_digest
-        self.ledger_root = ledger_root
-        self.window_starts_at = window_starts_at
-        self.window_expires_at = window_expires_at
-        self.approval_digest = approval_digest
+        object.__setattr__(self, "_identity", object())
+        _CAPABILITY_STATE[self] = {
+            "binding": binding,
+            "consumed": False,
+            "transport": transport_bound,
+            "binding_digest": binding_digest,
+            "campaign_id": campaign_id,
+            "inputs_digest": inputs_digest,
+            "ledger_root": ledger_root,
+            "window_starts_at": window_starts_at,
+            "window_expires_at": window_expires_at,
+            "window_seconds": window_seconds,
+            "approval_digest": approval_digest,
+        }
+
+    def _state(self):
+        try:
+            return _CAPABILITY_STATE[self]
+        except KeyError as exc:
+            raise ValueError("unknown or revoked O8 production capability") from exc
+
+    def __getattr__(self, name):
+        if name in {
+            "binding_digest", "campaign_id", "inputs_digest", "ledger_root",
+            "window_starts_at", "window_expires_at", "window_seconds",
+            "approval_digest",
+        }:
+            return self._state()[name]
+        raise AttributeError(name)
+
+    @property
+    def _binding(self):
+        return self._state()["binding"]
 
     def __copy__(self):
         raise TypeError("the O8 production capability is not copyable")
@@ -368,21 +381,22 @@ class ProductionWireCapability:
 
     def _consume(self, *, campaign_id, inputs_digest, ledger_root):
         """Spend this admission on exactly one campaign execution."""
-        if self._consumed:
+        state = self._state()
+        if state["consumed"]:
             raise ValueError("the O8 production capability is one-shot")
-        if self.campaign_id != campaign_id:
+        if state["campaign_id"] != campaign_id:
             raise ValueError("production capability belongs to another campaign")
-        if self.inputs_digest != inputs_digest:
+        if state["inputs_digest"] != inputs_digest:
             raise ValueError("production capability belongs to other frozen inputs")
-        if self.ledger_root != str(Path(ledger_root).resolve(strict=False)):
+        if state["ledger_root"] != str(Path(ledger_root).resolve(strict=False)):
             raise ValueError("production capability belongs to another shared Ledger")
         now = time.time()
         if (
-            not self.window_starts_at <= now
-            or now + self.window_seconds > self.window_expires_at
+            not state["window_starts_at"] <= now
+            or now + state["window_seconds"] > state["window_expires_at"]
         ):
             raise ValueError("O7 execution window expired")
-        self._consumed = True
+        state["consumed"] = True
         _ISSUED.discard(self)
         _ACTIVE.add(self)
 
@@ -395,17 +409,18 @@ class ProductionWireCapability:
         worker from source. Either way it is an integrity binding, not a secret
         and not an authority.
         """
-        if not self._consumed:
+        state = self._state()
+        if not state["consumed"]:
             raise ValueError("unconsumed O8 production capability")
         if self not in _ACTIVE:
             raise ValueError("revoked or inactive O7 production capability")
         now = time.time()
-        if not self.window_starts_at <= now <= self.window_expires_at:
+        if not state["window_starts_at"] <= now <= state["window_expires_at"]:
             raise ValueError("O7 execution window expired")
-        return self._transport_bound(
+        return state["transport"](
             value,
-            binding=self._binding,
-            binding_digest=self.binding_digest,
+            binding=state["binding"],
+            binding_digest=state["binding_digest"],
             capability=self,
         )
 
@@ -469,6 +484,7 @@ def revoke_production_capability(capability) -> None:
     """Withdraw an issued capability that will not be executed."""
     _ISSUED.discard(capability)
     _ACTIVE.discard(capability)
+    _CAPABILITY_STATE.pop(capability, None)
 
 
 def authorize_transport(capability, *, binding, binding_digest) -> None:

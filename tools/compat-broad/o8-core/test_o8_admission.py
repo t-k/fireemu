@@ -360,6 +360,31 @@ def test_a_capability_is_one_shot_and_bound_to_its_admission(tmp_path):
         )
 
 
+def test_capability_binding_cannot_be_replaced_after_issue(tmp_path):
+    admission = Admission(tmp_path)
+    capability = admission.issue()
+    capability._consume(
+        campaign_id=CAMPAIGN_A,
+        inputs_digest=admission.inputs["inputsDigest"],
+        ledger_root=admission.ledger,
+    )
+    for name, value in (
+        ("_transport_bound", lambda value, **_: {"echo": value}),
+        ("_binding", object()),
+        ("binding_digest", "forged"),
+        ("window_expires_at", time.time() + 999999),
+    ):
+        with pytest.raises(AttributeError):
+            object.__setattr__(capability, name, value)
+    with pytest.raises(ValueError, match="binding differs"):
+        o8_admission.authorize_transport(
+            capability, binding=object(), binding_digest="forged"
+        )
+    o8_admission.revoke_production_capability(capability)
+    with pytest.raises(ValueError, match="revoked"):
+        capability._transmit({"request": 1})
+
+
 def test_an_issued_capability_can_be_revoked(tmp_path):
     admission = Admission(tmp_path)
     capability = admission.issue()

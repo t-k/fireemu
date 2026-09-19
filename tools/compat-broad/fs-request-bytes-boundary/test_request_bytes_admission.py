@@ -583,13 +583,15 @@ def consumed(built):
 
 def test_the_collector_callable_walks_the_frozen_schedule_in_order(tmp_path):
     built = Admission(tmp_path)
-    capability = consumed(built)
     sent = []
-    object.__setattr__(
-        capability,
-        "_transport_bound",
-        lambda value, **_: (sent.append(value), {"status": 200})[1],
-    )
+    class FixtureCapability:
+        _consumed = True
+
+        def _transmit(self, value, **_):
+            sent.append(value)
+            return {"status": 200}
+
+    capability = FixtureCapability()
     execute = admission.bind_execute(capability, built.execution_plan, "offline-token")
     schedule = built.execution_plan["executionSchedule"]
     for expected in schedule[:4]:
@@ -603,10 +605,14 @@ def test_the_collector_callable_walks_the_frozen_schedule_in_order(tmp_path):
 
 def test_the_collector_callable_cannot_outrun_the_schedule(tmp_path):
     built = Admission(tmp_path)
-    capability = consumed(built)
-    object.__setattr__(
-        capability, "_transport_bound", lambda value, **_: {"status": 200}
-    )
+
+    class FixtureCapability:
+        _consumed = True
+
+        def _transmit(self, value, **_):
+            return {"status": 200}
+
+    capability = FixtureCapability()
     execute = admission.bind_execute(
         capability,
         built.plan,

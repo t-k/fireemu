@@ -347,11 +347,11 @@ def test_a_capability_is_one_shot_and_bound_to_its_admission(tmp_path):
         ledger_root=admission.ledger,
     )
     assert o8_admission.issued_capability(capability) is False
-    assert capability._transmit({"request": 1}) == {
-        "echo": {"request": 1},
-        "binding": 7,
-        "binding_digest": "c" * 64,
-    }
+    transmitted = capability._transmit({"request": 1})
+    assert transmitted["echo"] == {"request": 1}
+    assert transmitted["binding"] == 7
+    assert transmitted["binding_digest"] == "c" * 64
+    assert transmitted["capability"] is capability
     with pytest.raises(ValueError, match="one-shot"):
         capability._consume(
             campaign_id=CAMPAIGN_A,

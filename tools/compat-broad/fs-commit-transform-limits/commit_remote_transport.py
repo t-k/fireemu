@@ -315,6 +315,7 @@ def _request_bound_unchecked(
     *,
     archive_fd: int,
     archive_sha256: str,
+    capability=None,
     local_origin: str | None = None,
     timeout: float = TIMEOUT,
 ) -> dict:
@@ -323,6 +324,13 @@ def _request_bound_unchecked(
     The descriptor is re-verified immediately before every spawn, and the child
     re-verifies it again before it reads the credential envelope or performs I/O.
     """
+    try:
+        from o8_admission import authorize_transport
+    except ImportError as error:
+        raise ValueError("O7 transport admission unavailable") from error
+    authorize_transport(
+        capability, binding=archive_fd, binding_digest=archive_sha256
+    )
     timeout = _timeout(timeout)
     prepare(value, local_origin=local_origin)
     _verify_archive_fd(archive_fd, archive_sha256)
@@ -357,6 +365,7 @@ def request_bound(
         value,
         archive_fd=archive_fd,
         archive_sha256=archive_sha256,
+        capability=capability,
         local_origin=local_origin,
         timeout=timeout,
     )

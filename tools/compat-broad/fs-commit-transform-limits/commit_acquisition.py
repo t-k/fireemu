@@ -178,7 +178,12 @@ def _retained_artifact(artifact_path, manifest_path, profile):
 
 def _forbidden_transports():
     """Objects an injected preparation transport must not be able to reach."""
-    return (remote_request, remote_request_bound, commit_remote_transport)
+    return (
+        remote_request,
+        remote_request_bound,
+        commit_remote_transport,
+        commit_remote_transport._request_bound_unchecked,
+    )
 
 
 def _plan_compiler(nonce):

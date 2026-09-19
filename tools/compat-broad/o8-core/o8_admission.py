@@ -397,6 +397,11 @@ class ProductionWireCapability:
         """
         if not self._consumed:
             raise ValueError("unconsumed O8 production capability")
+        if self not in _ACTIVE:
+            raise ValueError("revoked or inactive O7 production capability")
+        now = time.time()
+        if not self.window_starts_at <= now <= self.window_expires_at:
+            raise ValueError("O7 execution window expired")
         return self._transport_bound(
             value,
             binding=self._binding,
@@ -470,6 +475,9 @@ def authorize_transport(capability, *, binding, binding_digest) -> None:
     """Authorize one transport call from an admitted, consumed capability."""
     if type(capability) is not ProductionWireCapability or capability not in _ACTIVE:
         raise ValueError("unadmitted O7 production capability")
+    now = time.time()
+    if not capability.window_starts_at <= now <= capability.window_expires_at:
+        raise ValueError("O7 execution window expired")
     if capability._binding != binding or capability.binding_digest != binding_digest:
         raise ValueError("production capability binding differs")
 

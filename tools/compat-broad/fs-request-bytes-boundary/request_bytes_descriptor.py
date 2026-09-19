@@ -608,7 +608,7 @@ def comparator(result, shadow=None):
     }
 
 
-def transport_bound(value, *, binding, binding_digest):
+def transport_bound(value, *, binding, binding_digest, capability=None):
     """Adapt one bound wire call to the reviewed transport's own signature.
 
     `value` carries the frozen slot coordinates and the bearer token for exactly

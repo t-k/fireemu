@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 from typing import ClassVar
+from unittest.mock import patch
 
 import pytest
 
@@ -89,6 +90,12 @@ def closed_loopback_origin() -> str:
     return f"http://127.0.0.1:{port}"
 
 
+def unchecked_bound(value, **kwargs):
+    """Exercise worker mechanics while keeping the public gate under test."""
+    with patch("o8_admission.authorize_transport"):
+        return transport._request_bound_unchecked(value, **kwargs)
+
+
 def test_production_request_refuses_the_pathname_worker_entirely():
     """Only an archive-bound capability may reach the fixed production origin."""
     with pytest.raises(TypeError):
@@ -111,7 +118,7 @@ def test_bound_wire_completes_against_an_owned_loopback_server():
                     archive_sha256=sha,
                     local_origin=server.origin,
                 )
-            result = transport._request_bound_unchecked(
+            result = unchecked_bound(
                 payload(token=TOKEN),
                 archive_fd=fd,
                 archive_sha256=sha,
@@ -188,7 +195,7 @@ def test_bound_wire_refuses_an_unowned_descriptor_before_any_request(
         else:
             handle = os.open(tmp_path, os.O_RDONLY)
         with pytest.raises(ValueError):
-            transport._request_bound_unchecked(
+            unchecked_bound(
                 payload(token=TOKEN),
                 archive_fd=handle,
                 archive_sha256=sha,
@@ -211,7 +218,7 @@ def test_bound_wire_refuses_archive_digest_drift_before_any_request():
             o8_bundle.unlinked_archive_fd(archive, sha) as fd,
             pytest.raises(ValueError),
         ):
-            transport._request_bound_unchecked(
+            unchecked_bound(
                 payload(token=TOKEN),
                 archive_fd=fd,
                 archive_sha256="0" * 64,
@@ -270,7 +277,7 @@ def test_bound_wire_deadline_terminates_and_reaps_the_worker():
     server = Loopback(slow=True)
     try:
         with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
-            result = transport._request_bound_unchecked(
+            result = unchecked_bound(
                 payload(token=TOKEN),
                 archive_fd=fd,
                 archive_sha256=sha,

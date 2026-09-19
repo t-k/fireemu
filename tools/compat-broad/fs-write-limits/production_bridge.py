@@ -18,7 +18,7 @@ import time
 import threading
 
 from production_plan import production_plan
-from remote_transport import prepare, request
+from remote_transport import _request, prepare
 from shadow import source_inputs
 
 from batch_adapter import observer_digest
@@ -99,7 +99,15 @@ def execution_plan(permission, nonce):
     return plan
 
 
-def bind_wire(coordinator, plan, *, transmit=request):
+def bind_wire(
+    coordinator,
+    plan,
+    *,
+    transmit=_request,
+    artifact=None,
+    artifact_sha256=None,
+    production=False,
+):
     """Return the collector wire callback, called inside Gate.dispatch after waiting.
 
     No callback below reacquires a Gate lock or refreshes credentials. The
@@ -110,6 +118,20 @@ def bind_wire(coordinator, plan, *, transmit=request):
         coordinator.gate, LimitsGate
     ):
         raise TypeError("existing production Coordinator required")
+    if production:
+        if transmit is not _request:
+            raise ValueError("production bridge requires fixed remote transport")
+        if not isinstance(artifact, (str, Path)) or not isinstance(
+            artifact_sha256, str
+        ):
+            raise ValueError("production artifact binding required")
+        artifact = Path(artifact).resolve()
+        if artifact.is_symlink() or not artifact.is_file():
+            raise ValueError("regular production artifact required")
+        with artifact.open("rb") as stream:
+            initial_artifact = hashlib.file_digest(stream, "sha256").hexdigest()
+        if initial_artifact != artifact_sha256:
+            raise ValueError("production artifact binding changed")
     frozen = json.loads(json.dumps(plan, allow_nan=False))
     nonce = frozen.get("nonce")
     if (
@@ -120,6 +142,10 @@ def bind_wire(coordinator, plan, *, transmit=request):
         raise ValueError("closed limits execution plan required")
     bound_gate = coordinator.gate
     key_digest = coordinator.key_digest
+    def send_value(value):
+        if production:
+            return _request(value)
+        return transmit(value)
 
     def validate(recovery):
         expiry = coordinator.permission.get("expiresAt")
@@ -158,6 +184,11 @@ def bind_wire(coordinator, plan, *, transmit=request):
             raise ValueError("collector position differs")
         phase_deadline = bound_gate.consume_wire(operation, recovery)
         validate(recovery)
+        if production:
+            with artifact.open("rb") as stream:
+                current_artifact = hashlib.file_digest(stream, "sha256").hexdigest()
+            if current_artifact != artifact_sha256:
+                raise ValueError("production artifact binding changed")
         value = {
             "nonce": nonce,
             "phase": phase,
@@ -168,7 +199,7 @@ def bind_wire(coordinator, plan, *, transmit=request):
         prepare(value)
         if time.monotonic() + 13 > phase_deadline:
             raise ValueError("phase deadline after shared admission wait")
-        result = transmit(value)
+        result = send_value(value)
         if result.get("status") in {401, 403}:
             # Retain the complete response for the collector before it stops.
             # Never refresh/reuse a principal already rejected by production.
@@ -246,12 +277,27 @@ class ReservedCoordinator(Coordinator):
             raise ValueError("reserved production binding changed")
 
 
-def bind_reserved_wire(coordinator, plan, *, transmit=request):
+def bind_reserved_wire(
+    coordinator,
+    plan,
+    *,
+    transmit=_request,
+    artifact=None,
+    artifact_sha256=None,
+    production=False,
+):
     """The outer runner must use this lease-bound variant after O7 admission."""
     if not isinstance(coordinator, ReservedCoordinator):
         raise TypeError("shared-reservation Coordinator required")
     coordinator.validate_reservation()
-    wire = bind_wire(coordinator, plan, transmit=transmit)
+    wire = bind_wire(
+        coordinator,
+        plan,
+        transmit=transmit,
+        artifact=artifact,
+        artifact_sha256=artifact_sha256,
+        production=production,
+    )
 
     def reserved(operation, recovery, index, request_index):
         coordinator.validate_reservation()

@@ -2,6 +2,7 @@
 """Offline real-Gate bridge tests; synthetic credentials never reach a network."""
 
 import time
+import hashlib
 
 import pytest
 
@@ -141,6 +142,43 @@ def test_bound_wire_cannot_send_outside_gate_dispatch(tmp_path):
     with pytest.raises(ValueError):
         wire(operation, False, 0, 0)
     assert sent == []
+
+
+def test_production_binding_requires_fixed_transport_and_artifact(tmp_path):
+    coordinator, _gate, plan = setup_bridge(tmp_path)
+    artifact = tmp_path / "fireemu"
+    artifact.write_bytes(b"artifact-v1")
+    artifact_hash = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="fixed remote transport"):
+        bind_wire(
+            coordinator,
+            plan,
+            transmit=lambda value: value,
+            artifact=artifact,
+            artifact_sha256=artifact_hash,
+            production=True,
+        )
+    with pytest.raises(ValueError, match="artifact binding required"):
+        bind_wire(coordinator, plan, production=True)
+
+
+def test_production_artifact_drift_is_rejected_before_network(tmp_path):
+    coordinator, gate, plan = setup_bridge(tmp_path)
+    artifact = tmp_path / "fireemu"
+    artifact.write_bytes(b"artifact-v1")
+    artifact_hash = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    wire = bind_wire(
+        coordinator,
+        plan,
+        artifact=artifact,
+        artifact_sha256=artifact_hash,
+        production=True,
+    )
+    artifact.write_bytes(b"artifact-v2")
+    operation = plan["jobs"]["limits"]["observation"][0]
+    with pytest.raises(ValueError, match="artifact binding changed"):
+        gate.dispatch(operation, False, lambda: wire(operation, False, 0, 0))
+    assert gate.snapshot()["events"][0]["completed"] is False
 
 
 def test_binding_change_after_gate_wait_is_rejected(tmp_path):
@@ -287,7 +325,7 @@ def test_service_failure_after_controls_stops_later_writes(tmp_path, status):
     )
     assert result["expectationMismatches"] == []
     assert result["collectionComplete"] is False
-    assert result["cleanupComplete"] is True
+    assert result["cleanupComplete"] is False
     assert coordinator.credential.failed is False
     assert stored == {}
     assert [index for phase, index in attempts if phase == "observation"] == list(

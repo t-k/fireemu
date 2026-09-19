@@ -508,7 +508,13 @@ def execute(permission, local_directory, artifact, output, api_key):
             gate,
             compiled,
             output / "collection",
-            bind_reserved_wire(coordinator, plan),
+            bind_reserved_wire(
+                coordinator,
+                plan,
+                artifact=artifact,
+                artifact_sha256=local["artifactSha256"],
+                production=True,
+            ),
             before_recovery=coordinator.recover_credentials,
         )
     except Exception as error:  # noqa: BLE001 -- Keep failed acquisition evidence without credential-bearing messages.

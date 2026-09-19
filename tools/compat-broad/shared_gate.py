@@ -299,7 +299,14 @@ def creating_slots(plan, job_name):
     """The observation slots of a job that its plan says could write."""
     schedule = job_schedule(plan["jobs"][job_name])
     if schedule is None:
-        return None
+        # Legacy plans omit a schedule and use the fixed observation-then-
+        # recovery order. Infer creating slots from the frozen operation shape
+        # so uncertain writes remain owned in that format too.
+        return {
+            index
+            for index, operation in enumerate(plan["jobs"][job_name]["observation"])
+            if can_create(operation)
+        }
     return {
         entry["index"]
         for entry in schedule

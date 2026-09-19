@@ -1531,6 +1531,39 @@ def test_a_lost_create_answer_blocks_normal_finish(tmp_path):
         gate.finish()
 
 
+def test_an_unscheduled_lost_create_answer_blocks_normal_finish_after_recovery(
+    tmp_path,
+):
+    """Legacy plans must retain ownership even without a schedule declaration."""
+    value, resources = commit_plan(writes=1)
+    path = tmp_path / "gate"
+    create(path, value)
+    gate = Gate(path, "probe")
+    gate.claim()
+    probe = value["jobs"]["probe"]
+
+    with pytest.raises(TimeoutError):
+        gate.dispatch(
+            probe["observation"][0],
+            False,
+            lambda: (_ for _ in ()).throw(TimeoutError("transport deadline")),
+        )
+    assert unconfirmed_creates(gate.snapshot(), "probe") == 1
+
+    # Complete the full legacy recovery sequence: a typed absence read, the
+    # unavailable version-bound delete skipped by the Gate, and final absence.
+    gate.dispatch(probe["recovery"][0], True, _absent)
+    delete = dict(probe["recovery"][1])
+    delete.pop("versionFrom")
+    gate.dispatch(delete, True, _absent)
+    state = gate.snapshot()
+    assert state["jobs"]["probe"]["absent"] == resources
+    assert state["jobs"]["probe"]["recovery"] == len(probe["recovery"])
+    assert unconfirmed_creates(state, "probe") == 1
+    with pytest.raises(ValueError, match="cleanup incomplete"):
+        gate.finish()
+
+
 def test_a_nonce_bound_marker_requires_nonce_scoped_resources(tmp_path):
     """The binding is only adequate because the path scopes it, so check the path."""
     value, _resources = commit_plan(marker="nonce")

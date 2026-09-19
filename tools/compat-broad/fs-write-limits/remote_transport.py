@@ -107,7 +107,15 @@ def prepare(value):
 
 
 def request(value):
-    """One already-admitted wire operation; secrets travel on stdin, never argv/env."""
+    """Public transport entrypoint; production admission is bridge-owned."""
+    raise TypeError("production transport is bridge-only")
+
+
+def _request(value):
+    """Private fixed-target worker used only by the closed production bridge.
+
+    Secrets travel on stdin, never argv or the environment.
+    """
     prepare(value)
     encoded = _json(value)
     if len(encoded.encode()) > INPUT_CAP:

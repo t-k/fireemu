@@ -20,9 +20,8 @@ import threading
 
 from production_plan import production_plan
 from remote_transport import (
-    _install_bridge_session,
+    _ACTIVE_BRIDGE_SESSIONS,
     _request,
-    _revoke_bridge_session,
     prepare,
 )
 from shadow import source_inputs
@@ -193,7 +192,7 @@ def bind_wire(
                 raise ValueError("production artifact binding changed")
 
         assert session_id is not None
-        _install_bridge_session(session_id, validate_session)
+        _ACTIVE_BRIDGE_SESSIONS[session_id] = validate_session
 
     def wire(operation, recovery, index, request_index):
         # Gate has already waited and charged the attempt. Reject drift before I/O.
@@ -238,7 +237,7 @@ def bind_wire(
     if production:
         def close_session():
             assert session_id is not None
-            _revoke_bridge_session(session_id)
+            _ACTIVE_BRIDGE_SESSIONS.pop(session_id, None)
 
         wire.close = close_session
     return wire

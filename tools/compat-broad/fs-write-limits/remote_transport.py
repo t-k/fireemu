@@ -8,6 +8,7 @@ worker independently match every request to the closed compiler operation.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -27,18 +28,6 @@ ORIGIN = "https://firestore.googleapis.com"
 TIMEOUT = 12
 INPUT_CAP = 4 * 1024 * 1024
 _ACTIVE_BRIDGE_SESSIONS = {}
-
-
-def _install_bridge_session(session_id, validator):
-    if not isinstance(session_id, str) or not re.fullmatch(r"[a-f0-9]{64}", session_id):
-        raise ValueError("invalid bridge session")
-    if not callable(validator) or session_id in _ACTIVE_BRIDGE_SESSIONS:
-        raise ValueError("invalid bridge session")
-    _ACTIVE_BRIDGE_SESSIONS[session_id] = validator
-
-
-def _revoke_bridge_session(session_id):
-    _ACTIVE_BRIDGE_SESSIONS.pop(session_id, None)
 
 
 def _json(value):
@@ -137,18 +126,32 @@ def _request(value, *, _session_id=None):
     encoded = _json(value)
     if len(encoded.encode()) > INPUT_CAP:
         raise ValueError("wire input limit")
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, _session_id.encode("ascii"))
+    finally:
+        os.close(write_fd)
     try:
         child = subprocess.run(
-            [sys.executable, "-I", str(Path(__file__).resolve()), "--worker"],
+            [
+                sys.executable,
+                "-I",
+                str(Path(__file__).resolve()),
+                "--worker",
+                str(read_fd),
+            ],
             input=encoded,
             text=True,
             capture_output=True,
             env={},
+            pass_fds=(read_fd,),
             timeout=TIMEOUT,
             check=False,
         )
     except subprocess.TimeoutExpired:
         return {"kind": "deadline-exceeded", "complete": False}
+    finally:
+        os.close(read_fd)
     if child.returncode != 0:
         return {"kind": "worker-error", "complete": False}
     try:
@@ -168,8 +171,15 @@ def main():
 
 if __name__ == "__main__":
     try:
-        if sys.argv[1:] != ["--worker"]:
+        if len(sys.argv) != 3 or sys.argv[1] != "--worker":
             raise ValueError("worker entrypoint only")
+        fd = int(sys.argv[2])
+        with os.fdopen(fd, "rb", closefd=True) as stream:
+            session_id = stream.read(64)
+        if len(session_id) != 64 or not re.fullmatch(
+            rb"[a-f0-9]{64}", session_id
+        ):
+            raise ValueError("worker capability handoff required")
         main()
     except Exception:
         sys.exit(2)

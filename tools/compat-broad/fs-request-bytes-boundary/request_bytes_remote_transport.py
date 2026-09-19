@@ -332,6 +332,9 @@ def _request_impl(
     exchange: Exchange | None = None,
     timeout: float = TIMEOUT,
     clock: Clock = time.monotonic,
+    capability=None,
+    binding=None,
+    binding_digest=None,
 ) -> dict[str, Any]:
     """Time one operation and return its receipt.
 
@@ -354,6 +357,9 @@ def _request_impl(
         exchange=exchange,
         timeout=timeout,
         clock=clock,
+        capability=capability,
+        binding=binding,
+        binding_digest=binding_digest,
     )
     if isinstance(receipt, dict) and "elapsedSeconds" not in receipt:
         receipt["elapsedSeconds"] = clock() - started
@@ -370,6 +376,9 @@ def _dispatch(
     exchange: Exchange | None = None,
     timeout: float = TIMEOUT,
     clock: Clock = time.monotonic,
+    capability=None,
+    binding=None,
+    binding_digest=None,
 ) -> dict[str, Any]:
     """Send one fixed-origin operation, or return a typed transport failure.
 
@@ -381,6 +390,14 @@ def _dispatch(
         raise TypeError(f"timeout must be a finite number in 0..{TIMEOUT:g} seconds")
     if not math.isfinite(timeout) or not 0 < timeout <= TIMEOUT:
         raise ValueError(f"timeout must be a finite number in 0..{TIMEOUT:g} seconds")
+    if exchange is None:
+        if capability is None:
+            raise ValueError("active O7 production capability required")
+        authorize_transport(
+            capability,
+            binding=binding,
+            binding_digest=binding_digest,
+        )
     url, method, body, headers = prepare(plan, phase, index, operation, token)
     deadline = clock() + timeout
     try:
@@ -445,5 +462,14 @@ def request(
         binding_digest=binding_digest,
     )
     return _request_impl(
-        plan, phase, index, operation, token, timeout=timeout, exchange=None
+        plan,
+        phase,
+        index,
+        operation,
+        token,
+        timeout=timeout,
+        exchange=None,
+        capability=capability,
+        binding=binding,
+        binding_digest=binding_digest,
     )

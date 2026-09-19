@@ -13,6 +13,7 @@ import pytest
 
 sys.path.insert(0, "tools/compat-broad/fs-request-bytes-boundary")
 
+import request_bytes_remote_transport
 from request_bytes_collector import collect_local
 from request_bytes_compiler import compile_request_bytes_plan
 from request_bytes_compiler import validate_request_bytes_plan as validate_plan
@@ -39,7 +40,7 @@ def request(*args, exchange=None, **kwargs):
     if exchange is None:
         if "capability" in kwargs:
             return production_request(*args, **kwargs)
-        return _request_impl(*args, **kwargs)
+        return _request_impl(*args, exchange=_fixture_exchange, **kwargs)
     return _request_impl(*args, exchange=exchange, **kwargs)
 
 
@@ -76,6 +77,19 @@ class FakeResponse:
 
     def close(self):
         self.closed = True
+
+
+def _fixture_exchange(url, method, body, headers, timeout, response_cap):
+    status, response_headers, raw, failure = request_bytes_remote_transport._process_exchange(
+        url,
+        method,
+        body,
+        headers,
+        time.monotonic() + timeout,
+        response_cap,
+    )
+    error = OSError(failure) if failure else None
+    return FakeResponse(status or 500, response_headers, raw, error=error)
 
 
 class FakeClock:
@@ -808,7 +822,12 @@ def test_timing_does_not_change_a_refusal_or_the_deadline(monkeypatch):
     monkeypatch.setattr("request_bytes_remote_transport._run_process_exchange", process)
     timed = request(plan, "observation", 17, operation, "secret-test-credential")
     untimed = _dispatch(
-        plan, "observation", 17, operation, "secret-test-credential", exchange=None
+        plan,
+        "observation",
+        17,
+        operation,
+        "secret-test-credential",
+        exchange=_fixture_exchange,
     )
     assert timed["status"] == 400
     assert timed["complete"] is True

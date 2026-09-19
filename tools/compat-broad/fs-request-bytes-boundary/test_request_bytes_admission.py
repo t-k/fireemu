@@ -585,7 +585,7 @@ def test_the_collector_callable_walks_the_frozen_schedule_in_order(tmp_path):
     built = Admission(tmp_path)
     sent = []
     class FixtureCapability:
-        _consumed = True
+        consumed = True
 
         def _transmit(self, value, **_):
             sent.append(value)
@@ -607,7 +607,7 @@ def test_the_collector_callable_cannot_outrun_the_schedule(tmp_path):
     built = Admission(tmp_path)
 
     class FixtureCapability:
-        _consumed = True
+        consumed = True
 
         def _transmit(self, value, **_):
             return {"status": 200}

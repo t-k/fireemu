@@ -355,7 +355,7 @@ def bind_execute(capability, plan, token, *, schedule=None):
     slot coordinates come from the schedule, never from the operation, so a
     caller cannot move a request to another slot by reshaping it.
     """
-    if not issued_capability(capability) and not capability._consumed:
+    if not issued_capability(capability) and not getattr(capability, "consumed", False):
         raise ValueError("unissued O7 production capability")
     if schedule is None and "executionSchedule" not in plan:
         raise ValueError("bind_execute requires the compiled plan, not its reference")

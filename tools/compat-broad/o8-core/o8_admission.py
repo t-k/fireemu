@@ -356,10 +356,13 @@ class ProductionWireCapability:
 
     def __getattr__(self, name):
         if name in {
+            "consumed",
             "binding_digest", "campaign_id", "inputs_digest", "ledger_root",
             "window_starts_at", "window_expires_at", "window_seconds",
             "approval_digest",
         }:
+            if name == "consumed":
+                return self._state()["consumed"]
             return self._state()[name]
         raise AttributeError(name)
 

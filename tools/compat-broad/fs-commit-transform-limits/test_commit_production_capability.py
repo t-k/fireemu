@@ -499,7 +499,11 @@ def test_an_expired_or_future_window_cannot_be_issued_or_spent(tmp_path, monkeyp
                 admission.issue(fd, sha, **override)
         capability = admission.issue(fd, sha)
         # The window is rechecked when the admission is spent, not only at issue.
-        capability.window_expires_at = time.time() + 5
+        monkeypatch.setattr(
+            acquisition.time,
+            "time",
+            lambda: capability.window_expires_at + 1,
+        )
         with pytest.raises(ValueError, match="window"):
             capability._consume(
                 campaign_id=inputs["plan"]["campaignId"],

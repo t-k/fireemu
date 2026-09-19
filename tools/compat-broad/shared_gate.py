@@ -370,6 +370,7 @@ def abandoned_cleanup_complete(state):
     point of separating the two.
     """
     created = []
+    abandoned_created = False
     for name, job in state["jobs"].items():
         if unconfirmed_creates(state, name):
             # A request that could have written and never confirmed an outcome
@@ -377,6 +378,12 @@ def abandoned_cleanup_complete(state):
             return None
         proofs = job.get("creationProofs") or {}
         if not proofs:
+            if job.get("complete") is True and job.get("stopReason") is None:
+                # A normally completed no-write job may be one member of a
+                # campaign whose other job was stopped after creating data. Its
+                # terminal state is already proven by Gate.finish(); do not make
+                # the abandoned close pretend that this job was abandoned too.
+                continue
             if job["observation"] or job["recovery"]:
                 # It ran and proved no creation: that is a no-data stop or an
                 # uncertain one, and neither is this.
@@ -385,19 +392,27 @@ def abandoned_cleanup_complete(state):
         schedule = job_schedule(state["plan"]["jobs"][name])
         if (
             schedule is None
-            or job.get("stopReason") is None
             or job.get("scheduleDone", 0) != len(schedule)
             or job["inflight"]
             or set(proofs) != set(job["resources"])
             or set(job.get("absent") or []) != set(job["resources"])
         ):
             return None
+        stopped = job.get("stopReason") is not None
+        if not stopped and job.get("complete") is not True:
+            # A created job that was neither abandoned nor normally finished
+            # has no terminal ownership proof for this close path.
+            return None
+        abandoned_created = abandoned_created or stopped
         try:
             validate_absence_proofs(state, name)
         except Exception:  # noqa: BLE001 -- any failure to validate means the claim is unsupported
             return None
         created.extend(proofs)
-    return sorted(created) or None
+    # The abandoned close is deliberately disjoint from the normal close. A
+    # campaign whose created jobs all finished normally must use Ledger.finish;
+    # at least one created job must have an explicit stop reason here.
+    return sorted(created) if created and abandoned_created else None
 
 
 def non_creating_dispatches(state):

@@ -19,7 +19,13 @@ from reservations import (
     conflicts,
 )
 from broad_contract import digest
-from shared_gate import Gate, _save, create, unconfirmed_creates
+from shared_gate import (
+    Gate,
+    _save,
+    abandoned_cleanup_complete,
+    create,
+    unconfirmed_creates,
+)
 from shared_production import ProductionGate
 import shared_production
 
@@ -2062,6 +2068,49 @@ def test_an_abandoned_run_that_cleaned_up_retires_without_an_attestation(tmp_pat
         ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
         == "closed-after-abandon"
     )
+
+
+def test_abandoned_cleanup_accepts_mixed_normal_and_stopped_jobs_after_reload(
+    tmp_path,
+):
+    """A normal terminal job must not require a stop marker for its sibling."""
+    _ledger, gate, _ticket, _record = _abandoned_cleanup(tmp_path)
+    state = gate.snapshot()
+    abandoned = state["jobs"]["probe"]
+    normal = {
+        "resources": [],
+        "pid": None,
+        "stopped": False,
+        "inflight": False,
+        "observation": 1,
+        "recovery": 1,
+        "owned": [],
+        "creationProofs": {},
+        "absent": [],
+        "captures": {},
+        "complete": True,
+    }
+    state["plan"]["jobs"]["normal"] = {
+        "observation": [{"id": "normal-observation"}],
+        "recovery": [{"id": "normal-recovery"}],
+        "resources": [],
+        "schedule": [
+            {"phase": "observation", "index": 0, "creates": False},
+            {"phase": "recovery", "index": 0, "creates": False},
+        ],
+    }
+    normal["scheduleDone"] = 2
+    state["jobs"]["normal"] = normal
+    state_path = gate.path / "state.json"
+    state_path.write_text(json.dumps(state))
+
+    reloaded = json.loads(state_path.read_text())
+    assert abandoned_cleanup_complete(reloaded) == sorted(abandoned["creationProofs"])
+
+    abandoned["stopReason"] = None
+    abandoned["complete"] = True
+    state_path.write_text(json.dumps(state))
+    assert abandoned_cleanup_complete(json.loads(state_path.read_text())) is None
 
 
 def test_a_created_document_still_present_keeps_the_escalation_exit(tmp_path):

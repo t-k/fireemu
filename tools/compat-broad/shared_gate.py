@@ -677,8 +677,24 @@ def can_create(operation):
     path = operation.get("path")
     path = path if isinstance(path, str) else ""
     method = operation.get("method")
+    body = operation.get("body")
+    # A transform is non-creating only when every write is explicitly bound
+    # to an existing document. Keep malformed or mixed batches conservative:
+    # an incomplete precondition must retain ownership for recovery.
+    if (
+        isinstance(body, dict)
+        and isinstance(body.get("writes"), list)
+        and body["writes"]
+        and all(
+            isinstance(write, dict)
+            and isinstance(write.get("transform"), dict)
+            and write.get("currentDocument") == {"exists": True}
+            for write in body["writes"]
+        )
+    ):
+        return False
     return (
-        operation.get("body") is not None
+        body is not None
         or operation.get("bodyRef") is not None
         or (method == "PATCH" and path.endswith("?currentDocument.exists=false"))
         or (method == "POST" and path.endswith((":batchWrite", ":commit")))

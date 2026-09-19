@@ -8,6 +8,7 @@ import pytest
 from shared_gate import (
     Gate,
     body_reference,
+    can_create,
     canonical_body_bytes,
     create,
     unconfirmed_creates,
@@ -906,6 +907,37 @@ def test_a_malformed_published_allocation_is_refused(tmp_path, allocation):
 
 NONCE = "n" * 32
 VERSION = "2026-09-18T00:00:00.000000Z"
+
+
+def test_transform_with_exists_true_is_not_a_potential_create():
+    operation = {
+        "kind": "commit-transform",
+        "service": "firestore",
+        "method": "POST",
+        "path": "/v1/projects/p/databases/(default)/documents:commit",
+        "body": {
+            "writes": [
+                {
+                    "transform": {"document": "projects/p/databases/(default)/documents/owned/doc"},
+                    "currentDocument": {"exists": True},
+                }
+            ]
+        },
+    }
+    assert can_create(operation) is False
+
+
+def test_transform_without_exists_precondition_remains_a_potential_create():
+    operation = {
+        "kind": "commit-transform",
+        "service": "firestore",
+        "method": "POST",
+        "path": "/v1/projects/p/databases/(default)/documents:commit",
+        "body": {
+            "writes": [{"transform": {"document": "projects/p/databases/(default)/documents/owned/doc"}}]
+        },
+    }
+    assert can_create(operation) is True
 
 
 def commit_plan(marker="shared", writes=2, alias=True):

@@ -65,7 +65,8 @@ def _commit(resource: str, count: int, outcome: str) -> dict[str, Any]:
                         {"fieldPath": f"t{i}", "increment": {"integerValue": "1"}}
                         for i in range(start, start + size)
                     ],
-                }
+                },
+                "currentDocument": {"exists": True},
             }
         )
         start += size

@@ -181,7 +181,7 @@ def execute(args: argparse.Namespace) -> dict:
             if not isinstance(api_key, str):
                 raise ValueError("private credential handoff required")
             validate_handoff(handoff, permission, api_key)
-            return acquisition.run_acquisition(
+            result = acquisition.run_acquisition(
                 args.output,
                 inputs,
                 permission_path=args.permission,
@@ -192,6 +192,8 @@ def execute(args: argparse.Namespace) -> dict:
                 credential_handoff=handoff,
                 capability=capability,
             )
+            acquisition.revoke_production_capability(capability)
+            return result
         except BaseException:
             # An admission that will not be executed must not stay issued.
             acquisition.revoke_production_capability(capability)

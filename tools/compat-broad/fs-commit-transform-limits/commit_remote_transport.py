@@ -310,7 +310,7 @@ def request(value: dict, *, local_origin: str, timeout: float = TIMEOUT) -> dict
     )
 
 
-def request_bound(
+def _request_bound_unchecked(
     value: dict,
     *,
     archive_fd: int,
@@ -333,6 +333,32 @@ def request_bound(
         encoded,
         timeout,
         (archive_fd,),
+    )
+
+
+def request_bound(
+    value: dict,
+    *,
+    archive_fd: int,
+    archive_sha256: str,
+    capability=None,
+    local_origin: str | None = None,
+    timeout: float = TIMEOUT,
+) -> dict:
+    """Run the production worker only through an admitted O7 capability."""
+    try:
+        from o8_admission import authorize_transport
+    except ImportError as error:
+        raise ValueError("O7 transport admission unavailable") from error
+    authorize_transport(
+        capability, binding=archive_fd, binding_digest=archive_sha256
+    )
+    return _request_bound_unchecked(
+        value,
+        archive_fd=archive_fd,
+        archive_sha256=archive_sha256,
+        local_origin=local_origin,
+        timeout=timeout,
     )
 
 

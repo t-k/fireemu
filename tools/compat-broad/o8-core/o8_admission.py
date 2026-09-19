@@ -54,6 +54,7 @@ _CAPABILITY_TOKEN = object()
 # Identity registry of live, unconsumed capabilities. Membership, never shape,
 # is the admission test: a look-alike object with the same attributes fails.
 _ISSUED: set = set()
+_ACTIVE: set = set()
 
 
 def execution_host():
@@ -383,6 +384,7 @@ class ProductionWireCapability:
             raise ValueError("O7 execution window expired")
         self._consumed = True
         _ISSUED.discard(self)
+        _ACTIVE.add(self)
 
     def _transmit(self, value):
         """Run one bounded request through the campaign's own integrity binding.
@@ -399,6 +401,7 @@ class ProductionWireCapability:
             value,
             binding=self._binding,
             binding_digest=self.binding_digest,
+            capability=self,
         )
 
 
@@ -460,6 +463,15 @@ def issue_production_capability(
 def revoke_production_capability(capability) -> None:
     """Withdraw an issued capability that will not be executed."""
     _ISSUED.discard(capability)
+    _ACTIVE.discard(capability)
+
+
+def authorize_transport(capability, *, binding, binding_digest) -> None:
+    """Authorize one transport call from an admitted, consumed capability."""
+    if type(capability) is not ProductionWireCapability or capability not in _ACTIVE:
+        raise ValueError("unadmitted O7 production capability")
+    if capability._binding != binding or capability.binding_digest != binding_digest:
+        raise ValueError("production capability binding differs")
 
 
 def reject_production_transport(descriptor, transmit):

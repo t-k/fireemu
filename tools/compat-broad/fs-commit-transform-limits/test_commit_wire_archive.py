@@ -104,7 +104,14 @@ def test_bound_wire_completes_against_an_owned_loopback_server():
     server = Loopback()
     try:
         with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
-            result = transport.request_bound(
+            with pytest.raises(ValueError, match="capability"):
+                transport.request_bound(
+                    payload(token=TOKEN),
+                    archive_fd=fd,
+                    archive_sha256=sha,
+                    local_origin=server.origin,
+                )
+            result = transport._request_bound_unchecked(
                 payload(token=TOKEN),
                 archive_fd=fd,
                 archive_sha256=sha,
@@ -181,7 +188,7 @@ def test_bound_wire_refuses_an_unowned_descriptor_before_any_request(
         else:
             handle = os.open(tmp_path, os.O_RDONLY)
         with pytest.raises(ValueError):
-            transport.request_bound(
+            transport._request_bound_unchecked(
                 payload(token=TOKEN),
                 archive_fd=handle,
                 archive_sha256=sha,
@@ -204,7 +211,7 @@ def test_bound_wire_refuses_archive_digest_drift_before_any_request():
             o8_bundle.unlinked_archive_fd(archive, sha) as fd,
             pytest.raises(ValueError),
         ):
-            transport.request_bound(
+            transport._request_bound_unchecked(
                 payload(token=TOKEN),
                 archive_fd=fd,
                 archive_sha256="0" * 64,
@@ -263,7 +270,7 @@ def test_bound_wire_deadline_terminates_and_reaps_the_worker():
     server = Loopback(slow=True)
     try:
         with o8_bundle.unlinked_archive_fd(archive, sha) as fd:
-            result = transport.request_bound(
+            result = transport._request_bound_unchecked(
                 payload(token=TOKEN),
                 archive_fd=fd,
                 archive_sha256=sha,

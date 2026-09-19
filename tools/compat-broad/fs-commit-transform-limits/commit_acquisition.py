@@ -161,10 +161,13 @@ def _verify_worker_archive(binding, binding_digest, frozen):
     _load_bundle().verify_worker_archive_fd(binding, binding_digest, frozen)
 
 
-def _transmit_bound(value, *, binding, binding_digest):
+def _transmit_bound(value, *, binding, binding_digest, capability):
     """Run one bounded request in a worker loaded only from the bound archive."""
     return remote_request_bound(
-        value, archive_fd=binding, archive_sha256=binding_digest
+        value,
+        archive_fd=binding,
+        archive_sha256=binding_digest,
+        capability=capability,
     )
 
 

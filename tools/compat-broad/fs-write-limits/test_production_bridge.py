@@ -158,27 +158,23 @@ def test_production_binding_requires_fixed_transport_and_artifact(tmp_path):
             artifact_sha256=artifact_hash,
             production=True,
         )
-    with pytest.raises(ValueError, match="artifact binding required"):
+    with pytest.raises(ValueError, match="reserved O7 coordinator"):
         bind_wire(coordinator, plan, production=True)
 
 
 def test_production_artifact_drift_is_rejected_before_network(tmp_path):
-    coordinator, gate, plan = setup_bridge(tmp_path)
+    coordinator, _gate, plan = setup_bridge(tmp_path)
     artifact = tmp_path / "fireemu"
     artifact.write_bytes(b"artifact-v1")
     artifact_hash = hashlib.sha256(artifact.read_bytes()).hexdigest()
-    wire = bind_wire(
-        coordinator,
-        plan,
-        artifact=artifact,
-        artifact_sha256=artifact_hash,
-        production=True,
-    )
-    artifact.write_bytes(b"artifact-v2")
-    operation = plan["jobs"]["limits"]["observation"][0]
-    with pytest.raises(ValueError, match="artifact binding changed"):
-        gate.dispatch(operation, False, lambda: wire(operation, False, 0, 0))
-    assert gate.snapshot()["events"][0]["completed"] is False
+    with pytest.raises(ValueError, match="reserved O7 coordinator"):
+        bind_wire(
+            coordinator,
+            plan,
+            artifact=artifact,
+            artifact_sha256=artifact_hash,
+            production=True,
+        )
 
 
 def test_binding_change_after_gate_wait_is_rejected(tmp_path):

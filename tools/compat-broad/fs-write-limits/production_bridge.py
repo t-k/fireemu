@@ -125,6 +125,8 @@ def bind_wire(
     if production:
         if transmit is not _request:
             raise ValueError("production bridge requires fixed remote transport")
+        if not isinstance(coordinator, ReservedCoordinator):
+            raise ValueError("reserved O7 coordinator required for production")
         if not isinstance(artifact, (str, Path)) or not isinstance(
             artifact_sha256, str
         ):

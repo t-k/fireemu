@@ -1249,6 +1249,82 @@ def test_a_commit_whose_answer_was_lost_is_never_treated_as_uncreated(tmp_path):
     assert gate.snapshot().get("skips", []) == []
 
 
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (500, {"error": {"code": 500, "status": "INTERNAL"}}),
+        (504, "<html>gateway timeout</html>"),
+    ],
+)
+def test_a_completed_server_failure_keeps_create_recovery_required(
+    tmp_path, status, body
+):
+    """A 5xx response does not prove that a conditional Commit was not applied."""
+    value, _resources = scheduled_commit_plan()
+    path = tmp_path / "gate"
+    create(path, value)
+    gate = Gate(path, "probe")
+    gate.claim()
+    gate.dispatch(
+        value["jobs"]["probe"]["observation"][0],
+        False,
+        lambda: (status, body),
+    )
+    state = gate.snapshot()
+    assert state["events"][0]["creationOutcome"] == "unknown"
+    assert unconfirmed_creates(state, "probe") == 1
+    gate.abandon_observation("server-failure")
+
+    # Reload from the durable state before entering recovery.  The ownership
+    # read must still be sent, and the following delete slot cannot be consumed
+    # as a zero-wire refusal while the create outcome is unknown.
+    reloaded = Gate(path, "probe")
+    read = value["jobs"]["probe"]["recovery"][0]
+    sent = []
+    reloaded.dispatch(
+        read,
+        True,
+        lambda: (sent.append(True) or (404, {"error": {"code": 404, "status": "NOT_FOUND"}})),
+    )
+    assert sent == [True]
+    delete = dict(value["jobs"]["probe"]["recovery"][1])
+    delete.pop("versionFrom")
+    with pytest.raises(ValueError, match="unconfirmed write"):
+        reloaded.skip_scheduled_slot(delete, True, "unknown server outcome")
+
+
+def test_an_incomplete_success_acknowledgement_keeps_create_recovery_required(
+    tmp_path,
+):
+    """A 200 without all write results is an unknown create, not a refusal."""
+    value, _resources = scheduled_commit_plan()
+    path = tmp_path / "gate"
+    create(path, value)
+    gate = Gate(path, "probe")
+    gate.claim()
+    with pytest.raises(ValueError, match="acknowledgement incomplete"):
+        gate.dispatch(
+            value["jobs"]["probe"]["observation"][0],
+            False,
+            lambda: _commit_response(0),
+        )
+    state = gate.snapshot()
+    assert state["events"][0]["creationOutcome"] == "unknown"
+    assert unconfirmed_creates(state, "probe") == 1
+    gate.abandon_observation("incomplete-acknowledgement")
+    reloaded = Gate(path, "probe")
+    read = value["jobs"]["probe"]["recovery"][0]
+    reloaded.dispatch(
+        read,
+        True,
+        lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+    )
+    delete = dict(value["jobs"]["probe"]["recovery"][1])
+    delete.pop("versionFrom")
+    with pytest.raises(ValueError, match="unconfirmed write"):
+        reloaded.skip_scheduled_slot(delete, True, "incomplete server outcome")
+
+
 def test_a_refused_commit_leaves_nothing_to_clean_and_spends_no_request(tmp_path):
     """A typed refusal settles the outcome, so its slots are zero-wire skips."""
     value, _resources = scheduled_commit_plan()
@@ -1260,7 +1336,9 @@ def test_a_refused_commit_leaves_nothing_to_clean_and_spends_no_request(tmp_path
         False,
         lambda: (400, {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}),
     )
-    assert unconfirmed_creates(gate.snapshot(), "probe") == 0
+    state = gate.snapshot()
+    assert state["events"][0]["creationOutcome"] == "refused"
+    assert unconfirmed_creates(state, "probe") == 0
     gate.abandon_observation("over-boundary-refusal")
     before = gate.snapshot()
     result = gate.dispatch(

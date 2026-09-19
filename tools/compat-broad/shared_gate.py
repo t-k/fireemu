@@ -328,13 +328,21 @@ def creating_outcome(state, job_name):
         ):
             continue
         seen += 1
-        status = event.get("status")
-        if (
-            event.get("completed") is not True
-            or type(status) is not int
-            or 200 <= status < 300
-        ):
+        # New journals carry the result of the creation-specific response
+        # validation.  A received HTTP response is not enough to establish
+        # that a conditional write was refused: 5xx responses and malformed
+        # success bodies can both follow a server-side write.
+        outcome = event.get("creationOutcome")
+        if outcome == "refused":
+            continue
+        if outcome == "created":
             return "unsettled"
+        if outcome in ("pending", "unknown"):
+            return "unsettled"
+        # Archived journals predate creationOutcome.  They cannot carry the
+        # response body needed to prove a refusal, so fail closed and retain
+        # recovery responsibility instead of inferring it from the status.
+        return "unsettled"
     return "refused" if seen else "none"
 
 
@@ -355,7 +363,8 @@ def unconfirmed_creates(state, job_name):
         if event.get("job") == job_name
         and event.get("phase") == "observation"
         and event.get("index") in indices
-        and (event.get("completed") is not True or type(event.get("status")) is not int)
+        and event.get("creationOutcome") != "refused"
+        and event.get("creationOutcome") != "created"
     )
 
 
@@ -886,6 +895,26 @@ def _creation_proofs(operation, status, body, job, plan):
     return proofs
 
 
+def _typed_create_refusal(status, body):
+    """Whether a completed create response proves that no write was applied.
+
+    A transport-level status is not a write outcome.  In particular, a 500 or
+    504 can be returned after the server has committed the write.  The shared
+    Gate only treats the narrow, typed request rejection used by the reviewed
+    boundary campaigns as a refusal; every other response remains recoverable
+    as an outcome-unknown create.
+    """
+    error = body.get("error") if isinstance(body, dict) else None
+    return (
+        type(status) is int
+        and status == 400
+        and isinstance(error, dict)
+        and type(error.get("code")) is int
+        and error.get("code") == 400
+        and error.get("status") == "INVALID_ARGUMENT"
+    )
+
+
 class Gate:
     def __init__(self, path, job):
         self.path, self.job = Path(path), job
@@ -1307,6 +1336,12 @@ class Gate:
                 "method": operation["method"],
                 "completed": False,
             }
+            if not recovery and index in (creating_slots(plan, self.job) or ()):
+                # Keep this pending until the response body has been checked.
+                # A complete HTTP response alone does not settle a conditional
+                # create: the server may have applied it before a 5xx or a
+                # malformed acknowledgement was returned.
+                event["creationOutcome"] = "pending"
             state["events"].append(event)
             _save(
                 self.path, state
@@ -1324,14 +1359,25 @@ class Gate:
                 status, body = result
                 event.update(status=status, responseDigest=digest(body), completed=True)
                 if type(status) is not int:
+                    if not recovery and "creationOutcome" in event:
+                        event["creationOutcome"] = "unknown"
                     job["stopped"] = True
                     raise ValueError("typed HTTP status required")
                 if not recovery:
                     try:
                         proofs = _creation_proofs(operation, status, body, job, plan)
                     except ValueError:
+                        if "creationOutcome" in event:
+                            event["creationOutcome"] = "unknown"
                         job["stopped"] = True
                         raise
+                    if "creationOutcome" in event:
+                        if proofs:
+                            event["creationOutcome"] = "created"
+                        elif _typed_create_refusal(status, body):
+                            event["creationOutcome"] = "refused"
+                        else:
+                            event["creationOutcome"] = "unknown"
                     for proof in proofs:
                         # Never replace a creation version with a later read or write.
                         job["creationProofs"].setdefault(proof["name"], proof)

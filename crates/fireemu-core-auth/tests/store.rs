@@ -3,7 +3,7 @@
 
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{
-    AuthError, AuthStore, LocalId, NewUser, PendingSignInId, ProjectAuthConfig,
+    AuthError, AuthStore, LocalId, NewUser, PendingSignInId, ProjectAuthConfig, Provider,
 };
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
@@ -75,14 +75,11 @@ fn explicit_local_ids_are_validated_and_unique() {
         .map(|user| user.local_id.as_str())
         .collect();
     assert_eq!(page, [longest.as_str(), e.as_str()]);
-    // Deleting removes the user and its refresh tokens; unknown users are an error.
+    // Deleting removes live credentials but retains their rejection-only identity.
     let token = s.issue_refresh_token(&e, t(2)).unwrap();
     assert!(s.redeem_refresh_token(&token).is_ok());
     s.delete_user_by_id(e.as_str()).unwrap();
-    assert_eq!(
-        s.redeem_refresh_token(&token),
-        Err(AuthError::InvalidRefreshToken)
-    );
+    assert_eq!(s.redeem_refresh_token(&token), Err(AuthError::UserNotFound));
     assert_eq!(s.delete_user_by_id("nobody"), Err(AuthError::UserNotFound));
     assert_eq!(s.all_user_ids().len(), 3);
     assert!(s
@@ -133,7 +130,11 @@ fn emails_and_phone_numbers_are_validated_and_unique_across_users() {
     s.set_email(&b, "b2@example.com").unwrap();
     assert_eq!(s.user_by_email("b2@example.com").unwrap().local_id, b);
     assert!(s.user_by_email("b@example.com").is_none());
-    assert!(s.user_by_email("B2@example.com").is_none(), "exact match");
+    assert_eq!(
+        s.user_by_email("B2@example.com").unwrap().local_id,
+        b,
+        "email lookup is case-insensitive"
+    );
     // E.164: `+` and 7..=15 digits.
     for ok in ["+1234567", "+123456789012345"] {
         assert_eq!(AuthStore::validate_phone_number(ok), Ok(()), "{ok}");
@@ -169,6 +170,26 @@ fn emails_and_phone_numbers_are_validated_and_unique_across_users() {
     assert_eq!(
         s.set_phone_number(&ghost, None),
         Err(AuthError::UserNotFound)
+    );
+}
+
+#[test]
+fn email_creation_canonicalizes_storage_and_rejects_case_variant_duplicates() {
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("MixedCase@example.com"), t0())
+        .unwrap();
+    assert_eq!(
+        s.user(&uid).and_then(|user| user.email.as_deref()),
+        Some("mixedcase@example.com")
+    );
+    assert_eq!(
+        s.user_by_email("MIXEDCASE@EXAMPLE.COM").unwrap().local_id,
+        uid
+    );
+    assert_eq!(
+        s.create_user(NewUser::email("mixedcase@example.com"), t(1)),
+        Err(AuthError::EmailExists)
     );
 }
 
@@ -357,6 +378,72 @@ fn passwords_are_validated_hashed_and_verified() {
 }
 
 #[test]
+fn password_policy_counts_utf16_units_and_rejects_invalid_values_before_storage() {
+    assert_eq!(
+        AuthStore::validate_password("a".repeat(4095).as_str()),
+        Ok(())
+    );
+    assert_eq!(
+        AuthStore::validate_password("a".repeat(4096).as_str()),
+        Ok(())
+    );
+    assert!(AuthStore::validate_password("a".repeat(4097).as_str()).is_err());
+    assert_eq!(
+        AuthStore::validate_password("😀".repeat(2048).as_str()),
+        Ok(())
+    );
+    assert!(AuthStore::validate_password("😀".repeat(2049).as_str()).is_err());
+    assert_eq!(AuthStore::validate_password("123456"), Ok(()));
+    assert!(AuthStore::validate_password("12345").is_err());
+    assert!(AuthStore::validate_password("12345\u{0000}").is_err());
+
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("password-boundary@example.com"), t0())
+        .unwrap();
+    s.set_password(&uid, "original-password", t0()).unwrap();
+    assert!(s.set_password(&uid, &"a".repeat(4097), t(1)).is_err());
+    assert_eq!(
+        s.verify_password("password-boundary@example.com", "original-password", t(2)),
+        Ok(uid)
+    );
+}
+
+#[test]
+fn refresh_revocation_boundary_preserves_stateless_and_disabled_precedence() {
+    for issued in [2, 3, 4] {
+        let mut s = store();
+        let uid = s
+            .create_user(NewUser::email("boundary@example.com"), t0())
+            .unwrap();
+        let other = s
+            .create_user(NewUser::email("other@example.com"), t0())
+            .unwrap();
+        let token = s.issue_refresh_token(&uid, t(issued)).unwrap();
+        let other_token = s.issue_refresh_token(&other, t(1)).unwrap();
+        s.revoke_tokens(&uid, t(3)).unwrap();
+        let expected = if issued < 3 {
+            Err(AuthError::ExpiredRefreshToken)
+        } else {
+            Ok(uid.clone())
+        };
+        assert_eq!(s.redeem_refresh_token(&token), expected);
+        assert!(s.stateless_refresh_session(&token).is_ok());
+        assert_eq!(s.redeem_refresh_token(&other_token), Ok(other));
+        assert_eq!(
+            s.redeem_refresh_token("unknown"),
+            Err(AuthError::InvalidRefreshToken)
+        );
+        s.user_mut(&uid).unwrap().disabled = true;
+        assert_eq!(s.redeem_refresh_token(&token), Err(AuthError::UserDisabled));
+        assert_eq!(
+            s.stateless_refresh_session(&token).unwrap_err(),
+            AuthError::UserDisabled
+        );
+    }
+}
+
+#[test]
 fn refresh_tokens_and_id_tokens_respect_revocation_and_disablement() {
     let mut s = store();
     let ghost = ghost(&mut s);
@@ -389,7 +476,7 @@ fn refresh_tokens_and_id_tokens_respect_revocation_and_disablement() {
     s.revoke_tokens(&b, t(3)).unwrap();
     assert_eq!(
         s.redeem_refresh_token(&tb),
-        Err(AuthError::InvalidRefreshToken)
+        Err(AuthError::ExpiredRefreshToken)
     );
     assert_eq!(s.redeem_refresh_token(&tb2), Ok(b.clone()));
     assert_eq!(s.revoke_tokens(&ghost, t(3)), Err(AuthError::UserNotFound));
@@ -503,7 +590,7 @@ fn refresh_ownership_index_removes_all_and_only_the_target_users_sessions() {
     for token in &a_tokens {
         assert_eq!(
             restored.redeem_refresh_token(token),
-            Err(AuthError::InvalidRefreshToken)
+            Err(AuthError::UserNotFound)
         );
     }
     for token in &b_tokens {
@@ -650,6 +737,57 @@ fn a_verified_email_recycles_an_unverified_account() {
     // The verified IdP email took over: the password is gone and the email is verified.
     assert!(!s.has_password(&uid));
     assert!(s.user(&uid).unwrap().email_verified);
+    assert_eq!(
+        s.user(&uid).unwrap().provider,
+        Provider::Federated("oidc.x".to_owned())
+    );
+}
+
+#[test]
+fn verified_idp_recycling_removes_all_old_credentials_and_indexes() {
+    use fireemu_core_auth::store::IdpSignIn;
+
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("recycle@example.com"), t0())
+        .unwrap();
+    s.set_password(&uid, "hunter22", t(0)).unwrap();
+    s.set_phone_number(&uid, Some("+15550000001")).unwrap();
+    s.link_federated(
+        &uid,
+        federated("oidc.old", "old-subject", Some("recycle@example.com")),
+    )
+    .unwrap();
+    let old_refresh = s.issue_refresh_token(&uid, t(1)).unwrap();
+
+    let outcome = s
+        .sign_in_with_idp(
+            federated("oidc.new", "new-subject", Some("recycle@example.com")),
+            true,
+            t(2),
+        )
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        IdpSignIn::SignedIn {
+            uid: ref signed,
+            is_new: false,
+            ..
+        } if signed == &uid
+    ));
+
+    let user = s.user(&uid).unwrap();
+    assert_eq!(user.provider, Provider::Federated("oidc.new".to_owned()));
+    assert!(!s.has_password(&uid));
+    assert!(user.phone_number.is_none());
+    assert!(user.federated.iter().all(|f| f.provider_id == "oidc.new"));
+    assert!(s.user_by_phone("+15550000001").is_none());
+    assert!(s.user_by_federated("oidc.old", "old-subject").is_none());
+    assert!(s.user_by_federated("oidc.new", "new-subject").is_some());
+    assert_eq!(
+        s.redeem_refresh_token(&old_refresh),
+        Err(AuthError::ExpiredRefreshToken)
+    );
 }
 
 // ------------------------------------------------------------------------------------------

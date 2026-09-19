@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "f6e31fd28a7c05651df454843fe5c40c48b4e70552617b796f1398c702b0d2ec",
+  "sourceCommit": "f54ce460f2b743354400cddd56554a3164f30b7b",
+  "scope": "Display name setting, replacement and deletion through REST using end-user tokens; no tenant; local strict profile and recorded production configuration; only the recorded artifact, configuration and auth-display-name corpus revision 1 twelve cases; approved as redacted semantic observations matching the published checks.",
+  "cases": [
+    "signup",
+    "initial-lookup",
+    "set-name",
+    "set-name-lookup",
+    "replace-name",
+    "replace-name-lookup",
+    "invalid-token-update",
+    "unchanged-state",
+    "delete-name",
+    "deleted-name-lookup",
+    "delete",
+    "deleted-account-absent"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-10",
+  "decision": "approve"
+}

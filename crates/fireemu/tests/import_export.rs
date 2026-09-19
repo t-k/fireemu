@@ -6,6 +6,10 @@
 
 mod census;
 
+use fireemu_core_export::firestore::{
+    read_output, write_output, ExportDocument, OverallMetadata, PartitionMetadata, EXPORT_NAME,
+};
+use fireemu_core_firestore::value::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -57,6 +61,91 @@ fn copy_tree(from: &Path, to: &Path) {
             std::fs::copy(entry.path(), &target).unwrap();
         }
     }
+}
+
+fn add_named_database_references(section: &Path) {
+    let partition = section.join("all_namespaces/all_kinds");
+    let output_path = partition.join("output-0");
+    let mut documents = read_output(&std::fs::read(&output_path).unwrap()).unwrap();
+    let document = documents
+        .iter_mut()
+        .find(|document| document.relative_path() == "cities/SF")
+        .expect("the fixture has a cities/SF document");
+    document.fields.insert(
+        "default_ref".to_owned(),
+        Value::Reference(
+            "projects/demo-export/databases/(default)/documents/cities/default".to_owned(),
+        ),
+    );
+    document.fields.insert(
+        "named_ref".to_owned(),
+        Value::Reference(
+            "projects/demo-export/databases/analytics/documents/cities/analytics".to_owned(),
+        ),
+    );
+    document.fields.insert(
+        "cross_ref".to_owned(),
+        Value::Reference(
+            "projects/demo-export/databases/(default)/documents/cities/cross".to_owned(),
+        ),
+    );
+    let bytes = write_output(&documents).unwrap();
+    std::fs::write(&output_path, &bytes).unwrap();
+
+    let overall_path = section.join("firestore_export.overall_export_metadata");
+    let mut overall = OverallMetadata::parse(&std::fs::read(&overall_path).unwrap()).unwrap();
+    overall.byte_count = bytes.len() as u64;
+    std::fs::write(overall_path, overall.to_bytes()).unwrap();
+}
+
+fn write_partition(section: &Path, name: &str, documents: &[ExportDocument]) -> OverallMetadata {
+    let partition = section.join(name);
+    std::fs::create_dir_all(&partition).unwrap();
+    let output = write_output(documents).unwrap();
+    std::fs::write(partition.join("output-0"), &output).unwrap();
+    std::fs::write(
+        partition.join("partition.export_metadata"),
+        PartitionMetadata {
+            export_name: EXPORT_NAME.to_owned(),
+            start_micros: 0,
+            end_micros: 0,
+            output_files: vec!["output-0".to_owned()],
+        }
+        .to_bytes(),
+    )
+    .unwrap();
+    OverallMetadata {
+        metadata_file: format!("{name}/partition.export_metadata"),
+        entity_count: documents.len() as u64,
+        byte_count: output.len() as u64,
+    }
+}
+
+fn assert_named_database_references(section: &Path) {
+    let output = section.join("all_namespaces/all_kinds/output-0");
+    let documents = read_output(&std::fs::read(output).unwrap()).unwrap();
+    let document = documents
+        .iter()
+        .find(|document| document.relative_path() == "cities/SF")
+        .expect("the exported section has a cities/SF document");
+    assert_eq!(
+        document.fields.get("default_ref"),
+        Some(&Value::Reference(
+            "projects/demo-export/databases/(default)/documents/cities/default".to_owned()
+        ))
+    );
+    assert_eq!(
+        document.fields.get("named_ref"),
+        Some(&Value::Reference(
+            "projects/demo-export/databases/analytics/documents/cities/analytics".to_owned()
+        ))
+    );
+    assert_eq!(
+        document.fields.get("cross_ref"),
+        Some(&Value::Reference(
+            "projects/demo-export/databases/(default)/documents/cities/cross".to_owned()
+        ))
+    );
 }
 
 fn free_port() -> u16 {
@@ -358,6 +447,7 @@ fn a_section_of_an_unselected_product_is_skipped_with_a_notice() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn a_named_firestore_database_and_a_second_bucket_survive_the_round_trip() {
     let dir = scratch("named-database");
     let export = copy_fixture("official-multiproduct", &dir);
@@ -368,6 +458,7 @@ fn a_named_firestore_database_and_a_second_bucket_survive_the_round_trip() {
         &export.join("firestore_export"),
         &export.join("firestore_export_analytics"),
     );
+    add_named_database_references(&export.join("firestore_export_analytics"));
     let manifest = export.join("firebase-export-metadata.json");
     let manifest_text = std::fs::read_to_string(&manifest).unwrap();
     let with_extension = manifest_text.trim_end().trim_end_matches('}').to_owned()
@@ -455,6 +546,7 @@ fn a_named_firestore_database_and_a_second_bucket_survive_the_round_trip() {
             .unwrap()
             .contains("second.appspot.com")
     );
+    assert_named_database_references(&out.join("firestore_export_analytics"));
 
     // And it imports again with the same shape.
     let second = exec()
@@ -470,6 +562,252 @@ fn a_named_firestore_database_and_a_second_bucket_survive_the_round_trip() {
         "{log}"
     );
     assert!(log.contains("storage: 4 object(s) in 2 bucket(s)"), "{log}");
+}
+
+#[test]
+fn all_firestore_partitions_import_and_preserve_every_document() {
+    let dir = scratch("firestore-partitions");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let section = export.join("firestore_export");
+    let source = section.join("all_namespaces/all_kinds/output-0");
+    let documents = read_output(&std::fs::read(&source).unwrap()).unwrap();
+    let split = documents.len() / 2;
+    std::fs::remove_dir_all(section.join("all_namespaces")).unwrap();
+    let overall = vec![
+        write_partition(&section, "partition-0", &documents[..split]),
+        write_partition(&section, "partition-1", &documents[split..]),
+    ];
+    std::fs::write(
+        section.join("firestore_export.overall_export_metadata"),
+        OverallMetadata::to_bytes_many(&overall),
+    )
+    .unwrap();
+
+    let out = dir.join("out");
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    assert!(
+        log.contains("firestore: 30 document(s) in 1 database(s)"),
+        "{log}"
+    );
+
+    let imported = read_output(
+        &std::fs::read(out.join("firestore_export/all_namespaces/all_kinds/output-0")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        imported
+            .iter()
+            .map(|document| format!("{document:?}"))
+            .collect::<std::collections::BTreeSet<_>>(),
+        documents
+            .iter()
+            .map(|document| format!("{document:?}"))
+            .collect::<std::collections::BTreeSet<_>>()
+    );
+}
+
+#[test]
+fn duplicate_firestore_partition_references_are_refused() {
+    let dir = scratch("duplicate-firestore-partition");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let section = export.join("firestore_export");
+    let source = section.join("all_namespaces/all_kinds/output-0");
+    let documents = read_output(&std::fs::read(&source).unwrap()).unwrap();
+    std::fs::remove_dir_all(section.join("all_namespaces")).unwrap();
+    let partition = write_partition(&section, "partition-0", &documents);
+    std::fs::write(
+        section.join("firestore_export.overall_export_metadata"),
+        OverallMetadata::to_bytes_many(&[partition.clone(), partition]),
+    )
+    .unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&output, "firestore", "partition metadata file");
+    assert!(text(&output).contains("more than once"));
+}
+
+#[test]
+fn conflicting_firestore_partition_references_are_refused() {
+    let dir = scratch("conflicting-firestore-partition");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let section = export.join("firestore_export");
+    let source = section.join("all_namespaces/all_kinds/output-0");
+    let documents = read_output(&std::fs::read(&source).unwrap()).unwrap();
+    std::fs::remove_dir_all(section.join("all_namespaces")).unwrap();
+    let partition = write_partition(&section, "partition-0", &documents);
+    let mut conflicting = partition.clone();
+    conflicting.entity_count = conflicting.entity_count.saturating_add(1);
+    std::fs::write(
+        section.join("firestore_export.overall_export_metadata"),
+        OverallMetadata::to_bytes_many(&[partition, conflicting]),
+    )
+    .unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&output, "firestore", "partition metadata file");
+    assert!(text(&output).contains("conflicting counts"));
+}
+
+#[test]
+fn output_files_cannot_be_referenced_by_distinct_partition_metadata_files() {
+    let dir = scratch("duplicate-firestore-output");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let section = export.join("firestore_export");
+    let source = section.join("all_namespaces/all_kinds/output-0");
+    let documents = read_output(&std::fs::read(&source).unwrap()).unwrap();
+    std::fs::remove_dir_all(section.join("all_namespaces")).unwrap();
+    let first = write_partition(&section, "partition-0", &documents);
+    let alias_metadata = section.join("partition-0/alias.export_metadata");
+    std::fs::write(
+        &alias_metadata,
+        PartitionMetadata {
+            export_name: EXPORT_NAME.to_owned(),
+            start_micros: 0,
+            end_micros: 0,
+            output_files: vec!["output-0".to_owned()],
+        }
+        .to_bytes(),
+    )
+    .unwrap();
+    let second = OverallMetadata {
+        metadata_file: "partition-0/alias.export_metadata".to_owned(),
+        entity_count: documents.len() as u64,
+        byte_count: first.byte_count,
+    };
+    std::fs::write(
+        section.join("firestore_export.overall_export_metadata"),
+        OverallMetadata::to_bytes_many(&[first, second]),
+    )
+    .unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&output, "firestore", "output-0");
+    assert!(text(&output).contains("more than one partition metadata file"));
+}
+
+#[test]
+fn normalized_output_aliases_are_rejected_before_reading_documents() {
+    let dir = scratch("aliased-firestore-output");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let section = export.join("firestore_export");
+    let source = section.join("all_namespaces/all_kinds/output-0");
+    let documents = read_output(&std::fs::read(&source).unwrap()).unwrap();
+    std::fs::remove_dir_all(section.join("all_namespaces")).unwrap();
+    let first = write_partition(&section, "partition-0", &documents);
+    let alias_metadata = section.join("partition-0/alias.export_metadata");
+    std::fs::write(
+        &alias_metadata,
+        PartitionMetadata {
+            export_name: EXPORT_NAME.to_owned(),
+            start_micros: 0,
+            end_micros: 0,
+            output_files: vec!["./output-0".to_owned()],
+        }
+        .to_bytes(),
+    )
+    .unwrap();
+    let second = OverallMetadata {
+        metadata_file: "partition-0/alias.export_metadata".to_owned(),
+        entity_count: documents.len() as u64,
+        byte_count: first.byte_count,
+    };
+    std::fs::write(
+        section.join("firestore_export.overall_export_metadata"),
+        OverallMetadata::to_bytes_many(&[first, second]),
+    )
+    .unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&output, "firestore", "output-0");
+}
+
+#[test]
+fn a_missing_firestore_partition_is_refused_before_starting_the_command() {
+    let dir = scratch("missing-firestore-partition");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let section = export.join("firestore_export");
+    let source = section.join("all_namespaces/all_kinds/output-0");
+    let documents = read_output(&std::fs::read(&source).unwrap()).unwrap();
+    std::fs::remove_dir_all(section.join("all_namespaces")).unwrap();
+    let first = write_partition(&section, "partition-0", &documents);
+    let missing = OverallMetadata {
+        metadata_file: "partition-missing/partition.export_metadata".to_owned(),
+        entity_count: 0,
+        byte_count: 0,
+    };
+    std::fs::write(
+        section.join("firestore_export.overall_export_metadata"),
+        OverallMetadata::to_bytes_many(&[first, missing]),
+    )
+    .unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&output, "firestore", "partition-missing");
+}
+
+#[test]
+fn a_corrupt_later_firestore_partition_is_refused_before_starting_the_command() {
+    let dir = scratch("corrupt-later-firestore-partition");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let section = export.join("firestore_export");
+    let source = section.join("all_namespaces/all_kinds/output-0");
+    let documents = read_output(&std::fs::read(&source).unwrap()).unwrap();
+    std::fs::remove_dir_all(section.join("all_namespaces")).unwrap();
+    let split = documents.len() / 2;
+    let first = write_partition(&section, "partition-0", &documents[..split]);
+    let second = write_partition(&section, "partition-1", &documents[split..]);
+    let corrupt_output = section.join("partition-1/output-0");
+    let mut corrupt_bytes = std::fs::read(&corrupt_output).unwrap();
+    let last = corrupt_bytes.len() - 1;
+    corrupt_bytes[last] ^= 0xff;
+    std::fs::write(corrupt_output, corrupt_bytes).unwrap();
+    std::fs::write(
+        section.join("firestore_export.overall_export_metadata"),
+        OverallMetadata::to_bytes_many(&[first, second]),
+    )
+    .unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&output, "firestore", "partition-1/output-0");
 }
 
 // --------------------------------------------------------------------------------------
@@ -549,6 +887,131 @@ fn a_malformed_auth_section_refuses_the_whole_import() {
         .output()
         .unwrap();
     assert_refused(&output, "auth", "accounts.json");
+}
+
+#[test]
+fn malformed_auth_types_are_refused_before_startup() {
+    let cases = [
+        (
+            "providerUserInfo",
+            r#"{"users":[{"localId":"u","providerUserInfo":{}}]}"#,
+        ),
+        (
+            "providerUserInfo-field",
+            r#"{"users":[{"localId":"u","providerUserInfo":[{"providerId":"google.com","email":false}]}]}"#,
+        ),
+        ("mfaInfo", r#"{"users":[{"localId":"u","mfaInfo":{}}]}"#),
+        (
+            "mfaInfo-field",
+            r#"{"users":[{"localId":"u","mfaInfo":[{"mfaEnrollmentId":"factor","enrolledAt":false}]}]}"#,
+        ),
+        (
+            "createdAt",
+            r#"{"users":[{"localId":"u","createdAt":false}]}"#,
+        ),
+        (
+            "lastLoginAt",
+            r#"{"users":[{"localId":"u","lastLoginAt":false}]}"#,
+        ),
+        (
+            "validSince",
+            r#"{"users":[{"localId":"u","validSince":false}]}"#,
+        ),
+    ];
+    for (name, accounts) in cases {
+        let dir = scratch(&format!("malformed-auth-{name}"));
+        let export = copy_fixture("official-multiproduct", &dir);
+        std::fs::write(export.join("auth_export/accounts.json"), accounts).unwrap();
+        let output = exec()
+            .args(["--import"])
+            .arg(&export)
+            .args(["--", "true"])
+            .output()
+            .unwrap();
+        assert_refused(&output, "auth", "accounts.json");
+    }
+}
+
+#[test]
+fn an_unsupported_password_hash_is_refused_before_startup() {
+    let dir = scratch("unsupported-password-hash");
+    let export = copy_fixture("official-multiproduct", &dir);
+    std::fs::write(
+        export.join("auth_export/accounts.json"),
+        r#"{
+          "kind": "identitytoolkit#DownloadAccountResponse",
+          "users": [{
+            "localId": "opaque-hash-user",
+            "email": "opaque@example.com",
+            "salt": "official-salt",
+            "passwordHash": "scrypt$N=16384$r=8$p=1$opaque-digest",
+            "providerUserInfo": [{
+              "providerId": "password",
+              "rawId": "opaque@example.com",
+              "federatedId": "opaque@example.com"
+            }]
+          }]
+        }"#,
+    )
+    .unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert_refused(&output, "auth", "accounts.json");
+    assert!(
+        log.contains("passwordHash"),
+        "the refusal explains the hash: {log}"
+    );
+    assert!(
+        log.contains("reversible form"),
+        "the refusal explains the limitation: {log}"
+    );
+}
+
+#[test]
+fn malformed_auth_config_boolean_is_refused_before_startup() {
+    let dir = scratch("malformed-auth-config-bool");
+    let export = copy_fixture("official-multiproduct", &dir);
+    std::fs::write(
+        export.join("auth_export/config.json"),
+        r#"{"signIn":{"allowDuplicateEmails":"false"}}"#,
+    )
+    .unwrap();
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&output, "auth", "config.json");
+}
+
+#[test]
+fn an_unknown_auth_member_is_refused_instead_of_silently_dropped() {
+    let dir = scratch("unknown-auth-member");
+    let export = copy_fixture("official-multiproduct", &dir);
+    std::fs::write(
+        export.join("auth_export/accounts.json"),
+        r#"{"users":[{"localId":"u","futureField":{"preserve":true}}]}"#,
+    )
+    .unwrap();
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&output, "auth", "accounts.json");
+    assert!(
+        text(&output).contains("unsupported member"),
+        "the refusal explains the unsupported data: {}",
+        text(&output)
+    );
 }
 
 #[cfg(unix)]
@@ -899,6 +1362,402 @@ fn tenant_accounts_import_and_export_in_isolated_files() {
     assert_eq!(tenant["users"][0]["tenantId"], "customer-a");
     let default = std::fs::read_to_string(out.join("auth_export/accounts.json")).unwrap();
     assert!(!default.contains("tenant-user"));
+}
+
+#[test]
+fn federated_only_account_export_does_not_invent_an_email_link_provider() {
+    let dir = scratch("federated-only-auth-export");
+    let source = copy_fixture("official-multiproduct", &dir);
+    let out = dir.join("out");
+    let output = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&source)
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    let accounts: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("auth_export/accounts.json")).unwrap(),
+    )
+    .unwrap();
+    let user = accounts["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|user| user["localId"] == "user-federated")
+        .expect("the federated account is exported");
+    let providers = user["providerUserInfo"]
+        .as_array()
+        .expect("the federated provider is exported");
+    assert_eq!(providers.len(), 1, "{user}");
+    assert_eq!(providers[0]["providerId"], "google.com");
+    assert!(user.get("emailLinkSignin").is_none(), "{user}");
+}
+
+#[test]
+fn api_created_password_account_keeps_password_provider_without_hash() {
+    let dir = scratch("api-password-auth-round-trip");
+    let source = copy_fixture("official-multiproduct", &dir);
+    let out = dir.join("out");
+    let output = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&source)
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "sh", "-c"])
+        .arg(r#"curl -s -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key" -H 'Content-Type: application/json' -d '{"email":"api-password@example.com","password":"hunter22"}'"#)
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+
+    let accounts: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("auth_export/accounts.json")).unwrap(),
+    )
+    .unwrap();
+    let user = accounts["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|user| user["email"] == "api-password@example.com")
+        .expect("the API-created password account is exported");
+    assert!(user.get("passwordHash").is_none(), "{user}");
+    assert_eq!(user["providerUserInfo"][0]["providerId"], "password");
+    assert!(user.get("emailLinkSignin").is_none(), "{user}");
+
+    let again = dir.join("again");
+    let second = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&out)
+        .arg("--export-on-exit")
+        .arg(&again)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let second_log = text(&second);
+    assert!(second.status.success(), "{second_log}");
+    let reexport: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(again.join("auth_export/accounts.json")).unwrap(),
+    )
+    .unwrap();
+    let user = reexport["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|user| user["email"] == "api-password@example.com")
+        .expect("the password account is re-exported");
+    assert_eq!(user["providerUserInfo"][0]["providerId"], "password");
+    assert!(user.get("emailLinkSignin").is_none(), "{user}");
+}
+
+#[test]
+fn removed_password_provider_is_not_reintroduced_by_export_round_trip() {
+    let dir = scratch("removed-password-auth-round-trip");
+    let source = copy_fixture("official-multiproduct", &dir);
+    let out = dir.join("out");
+    let output = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&source)
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "sh", "-c"])
+        .arg(
+            r#"curl -s -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/projects/demo-export/accounts:update" -H 'Authorization: Bearer owner' -H 'Content-Type: application/json' -d '{"localId":"user-password","deleteAttribute":["PASSWORD"]}'"#,
+        )
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+
+    let accounts: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("auth_export/accounts.json")).unwrap(),
+    )
+    .unwrap();
+    let user = accounts["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|user| user["localId"] == "user-password")
+        .expect("the updated account is exported");
+    assert!(user.get("passwordHash").is_none(), "{user}");
+    assert!(user["providerUserInfo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|provider| provider["providerId"] != "password"));
+    assert!(user["providerUserInfo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|provider| provider["providerId"] == "phone"));
+
+    let again = dir.join("again");
+    let second = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&out)
+        .arg("--export-on-exit")
+        .arg(&again)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let second_log = text(&second);
+    assert!(second.status.success(), "{second_log}");
+    let reexport: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(again.join("auth_export/accounts.json")).unwrap(),
+    )
+    .unwrap();
+    let user = reexport["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|user| user["localId"] == "user-password")
+        .expect("the updated account is re-exported");
+    assert!(user["providerUserInfo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|provider| provider["providerId"] != "password"));
+}
+
+#[test]
+fn email_link_account_import_preserves_provider_and_export_marker() {
+    let dir = scratch("email-link-auth-round-trip");
+    let source = copy_fixture("official-multiproduct", &dir);
+    std::fs::write(
+        source.join("auth_export/accounts.json"),
+        r#"{
+          "kind": "identitytoolkit#DownloadAccountResponse",
+          "users": [{
+            "localId": "email-link-user",
+            "email": "link@example.com",
+            "emailVerified": true,
+            "emailLinkSignin": true,
+            "providerUserInfo": [{
+              "providerId": "password",
+              "rawId": "link@example.com",
+              "federatedId": "link@example.com",
+              "email": "link@example.com"
+            }]
+          }]
+        }"#,
+    )
+    .unwrap();
+    let out = dir.join("out");
+    let probe = r#"curl -s -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=fake-api-key" -H 'Content-Type: application/json' -d '{"identifier":"link@example.com","continueUri":"http://localhost/continue"}'"#;
+    let output = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&source)
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "sh", "-c"])
+        .arg(probe)
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    assert!(
+        log.contains(r#""signinMethods":["emailLink"]"#),
+        "email-link provider was not restored: {log}"
+    );
+    let accounts: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("auth_export/accounts.json")).unwrap(),
+    )
+    .unwrap();
+    let user = &accounts["users"][0];
+    assert_eq!(user["providerUserInfo"][0]["providerId"], "password");
+    assert_eq!(user["emailLinkSignin"], true);
+    assert!(user.get("passwordHash").is_none(), "{user}");
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn auth_artifact_round_trip_preserves_tenant_scoped_account_state() {
+    let dir = scratch("auth-rich-round-trip");
+    let source = copy_fixture("official-multiproduct", &dir);
+    let long_password = "a".repeat(4_097);
+    let default_hash = format!("fakeHash:salt=default-salt:password={long_password}");
+    let default_accounts = serde_json::json!({
+        "kind": "identitytoolkit#DownloadAccountResponse",
+        "users": [{
+            "localId": "shared-uid",
+            "email": "default@example.com",
+            "emailVerified": true,
+            "displayName": "Default user",
+            "photoUrl": "https://example.com/default.png",
+            "phoneNumber": "+15555550111",
+            "disabled": false,
+            "passwordHash": default_hash,
+            "salt": "default-salt",
+            "passwordUpdatedAt": 1_111_111_111_111_i64,
+            "validSince": "1111111111",
+            "createdAt": "1111111111000",
+            "lastLoginAt": "1111111111222",
+            "lastRefreshAt": "2005-03-18T01:58:31Z",
+            "customAttributes": "{\"tier\":\"default\"}",
+            "providerUserInfo": [
+                {"providerId":"password","rawId":"default@example.com","federatedId":"default@example.com","email":"default@example.com"},
+                {"providerId":"google.com","rawId":"google-default","federatedId":"google-default","email":"default@example.com","displayName":"Default user"}
+            ],
+        }]
+    });
+    std::fs::write(
+        source.join("auth_export/accounts.json"),
+        serde_json::to_vec(&default_accounts).unwrap(),
+    )
+    .unwrap();
+    let tenant_accounts = serde_json::json!({
+        "kind": "identitytoolkit#DownloadAccountResponse",
+        "users": [{
+            "localId": "shared-uid",
+            "tenantId": "customer-a",
+            "email": "tenant@example.com",
+            "emailVerified": true,
+            "disabled": true,
+            "passwordHash": "fakeHash:salt=tenant-salt:password=tenant-password",
+            "salt": "tenant-salt",
+            "passwordUpdatedAt": 2_222_222_222_222_i64,
+            "validSince": "2222222222",
+            "createdAt": "2222222222000",
+            "providerUserInfo": [
+                {"providerId":"password","rawId":"tenant@example.com","federatedId":"tenant@example.com","email":"tenant@example.com"}
+            ],
+            "mfaInfo": [
+                {"mfaEnrollmentId":"phone-factor","displayName":"phone","phoneInfo":"+15555550112","unobfuscatedPhoneInfo":"+15555550112","enrolledAt":"2005-03-18T01:58:31Z"},
+                {"mfaEnrollmentId":"totp-factor","displayName":"totp","enrolledAt":"2005-03-18T01:58:31Z","totpInfo":{"sharedSecretKey":"JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"}}
+            ]
+        }]
+    });
+    std::fs::write(
+        source.join("auth_export/accounts-customer-a.json"),
+        serde_json::to_vec(&tenant_accounts).unwrap(),
+    )
+    .unwrap();
+
+    let out = dir.join("out");
+    let probe = format!(
+        r#"curl -s -X POST "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key" -H 'Content-Type: application/json' -d '{{"email":"default@example.com","password":"{long_password}","returnSecureToken":true}}'"#
+    );
+    let output = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&source)
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "sh", "-c"])
+        .arg(&probe)
+        .output()
+        .unwrap();
+    let output_text = text(&output);
+    assert!(
+        output.status.success(),
+        "rich auth import command failed: status {:?}",
+        output.status.code()
+    );
+    assert!(
+        output_text.contains("\"localId\":\"shared-uid\"") && output_text.contains("\"idToken\":"),
+        "long-password sign-in did not return an ID token"
+    );
+
+    let read_user = |path: &Path| -> serde_json::Value {
+        let text = std::fs::read_to_string(path).unwrap();
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["users"][0].clone()
+    };
+    let default = read_user(&out.join("auth_export/accounts.json"));
+    let tenant = read_user(&out.join("auth_export/accounts-customer-a.json"));
+    assert_eq!(default["localId"], "shared-uid");
+    assert_eq!(default["passwordUpdatedAt"], 1_111_111_111_111_i64);
+    assert_eq!(default["disabled"], false);
+    assert_eq!(default["emailVerified"], true);
+    assert_eq!(default["customAttributes"], "{\"tier\":\"default\"}");
+    assert_eq!(default["providerUserInfo"].as_array().unwrap().len(), 3);
+    assert_eq!(default["providerUserInfo"][0]["providerId"], "password");
+    assert_eq!(
+        default["providerUserInfo"][0]["rawId"],
+        "default@example.com"
+    );
+    assert_eq!(
+        default["providerUserInfo"][0]["federatedId"],
+        "default@example.com"
+    );
+    assert_eq!(default["providerUserInfo"][1]["providerId"], "phone");
+    assert_eq!(default["providerUserInfo"][1]["rawId"], "+15555550111");
+    assert_eq!(default["providerUserInfo"][2]["providerId"], "google.com");
+    assert_eq!(default["providerUserInfo"][2]["rawId"], "google-default");
+    assert_eq!(
+        default["providerUserInfo"][2]["federatedId"],
+        "google-default"
+    );
+    assert_eq!(
+        default["providerUserInfo"][2]["email"],
+        "default@example.com"
+    );
+    assert!(
+        default["passwordHash"].as_str() == Some(default_hash.as_str()),
+        "default password hash changed during import/export"
+    );
+    assert_eq!(tenant["localId"], "shared-uid");
+    assert_eq!(tenant["tenantId"], "customer-a");
+    assert_eq!(tenant["emailVerified"], true);
+    assert_eq!(tenant["disabled"], true);
+    assert_eq!(tenant["passwordUpdatedAt"], 2_222_222_222_222_i64);
+    assert_eq!(tenant["providerUserInfo"][0]["providerId"], "password");
+    assert_eq!(tenant["providerUserInfo"][0]["rawId"], "tenant@example.com");
+    assert!(
+        tenant["mfaInfo"]
+            .as_array()
+            .is_some_and(|factors| factors.len() == 2),
+        "tenant MFA factor count changed during import/export"
+    );
+    assert_eq!(tenant["mfaInfo"][0]["mfaEnrollmentId"], "phone-factor");
+    assert_eq!(tenant["mfaInfo"][0]["displayName"], "phone");
+    assert_eq!(tenant["mfaInfo"][0]["phoneInfo"], "+15555550112");
+    assert_eq!(
+        tenant["mfaInfo"][0]["unobfuscatedPhoneInfo"],
+        "+15555550112"
+    );
+    assert_eq!(
+        tenant["mfaInfo"][0]["enrolledAt"],
+        "2005-03-18T01:58:31.000Z"
+    );
+    assert_eq!(tenant["mfaInfo"][1]["mfaEnrollmentId"], "totp-factor");
+    assert_eq!(tenant["mfaInfo"][1]["displayName"], "totp");
+    assert_eq!(
+        tenant["mfaInfo"][1]["enrolledAt"],
+        "2005-03-18T01:58:31.000Z"
+    );
+    assert!(
+        tenant["mfaInfo"][1]["totpInfo"]["sharedSecretKey"] == "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+        "tenant TOTP secret changed during import/export"
+    );
+
+    let again = dir.join("again");
+    let second = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&out)
+        .arg("--export-on-exit")
+        .arg(&again)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert!(
+        second.status.success(),
+        "second auth import command failed: status {:?}",
+        second.status.code()
+    );
+    let again_default = read_user(&again.join("auth_export/accounts.json"));
+    let again_tenant = read_user(&again.join("auth_export/accounts-customer-a.json"));
+    assert!(
+        again_default == default,
+        "default account changed across repeated import/export"
+    );
+    assert!(
+        again_tenant == tenant,
+        "tenant account changed across repeated import/export"
+    );
+    assert_eq!(again_default["passwordUpdatedAt"], 1_111_111_111_111_i64);
+    assert_eq!(again_tenant["passwordUpdatedAt"], 2_222_222_222_222_i64);
 }
 
 #[test]
@@ -1506,4 +2365,148 @@ fn document_only_import_peak_rss_is_within_one_point_two_times_the_artifact() {
         u128::from(incremental) * 10 <= u128::from(artifact_bytes) * 12,
         "baseline={baseline}, loaded={loaded_rss}, incremental={incremental}, artifact={artifact_bytes}"
     );
+}
+
+/// EXPREL-1: a bare relative directory name is resolved against the working directory.
+///
+/// `--export-on-exit out` used to reach the publication stage as the one-element relative path
+/// `out`, whose parent is the empty path. Restricting the permissions of "" fails with
+/// ENOENT, so the export was never written and the command still exited with the child's
+/// status, which made a seed-refresh job look successful while refreshing nothing.
+#[test]
+fn export_on_exit_accepts_a_bare_relative_directory_name() {
+    let dir = scratch("bare-relative");
+    let output = exec()
+        .current_dir(&dir)
+        .args(["--export-on-exit", "out", "--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{log}");
+    assert!(
+        !log.contains("cannot restrict export parent permissions"),
+        "{log}"
+    );
+    let metadata = dir.join("out").join("firebase-export-metadata.json");
+    assert!(
+        metadata.is_file(),
+        "the export was not written to {}: {log}",
+        metadata.display()
+    );
+}
+
+/// LOC-2: `emulators:export` reads the Hub locator from a directory every user on the host can
+/// write, and reaching the origin it names means presenting this run's control token. So the
+/// document is believed only when it is this user's own regular file, and the origin is
+/// contacted only when it is loopback.
+#[test]
+fn emulators_export_refuses_a_locator_it_must_not_believe() {
+    let dir = scratch("locator-trust");
+    let out = dir.join("out");
+
+    let run = |project: &str| {
+        Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args(["emulators:export"])
+            .arg(&out)
+            .args(["--project", project])
+            .output()
+            .unwrap()
+    };
+    // The locator path is derived from the project name, so each case gets its own name and
+    // cleans up after itself rather than colliding with a concurrently running suite.
+    let locator_for = |suffix: &str| {
+        let project = format!("demo-locator-{suffix}-{}", std::process::id());
+        let path = std::env::temp_dir().join(format!("hub-{project}.json"));
+        let _ = std::fs::remove_file(&path);
+        (project, path)
+    };
+    let genuine = br#"{"pid": 1, "origins": ["http://127.0.0.1:4400"], "fireemuControlToken": "secret-control-token"}"#;
+
+    // An origin that is not loopback is refused before any connection is attempted, so the
+    // control token never leaves the host.
+    let (project, path) = locator_for("routable");
+    std::fs::write(
+        &path,
+        br#"{"pid": 1, "origins": ["http://attacker.example:80"], "fireemuControlToken": "secret-control-token"}"#,
+    )
+    .unwrap();
+    let output = run(&project);
+    let log = text(&output);
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(output.status.code(), Some(1), "{log}");
+    assert!(log.contains("loopback"), "{log}");
+    assert!(!log.contains("secret-control-token"), "{log}");
+    assert!(
+        !log.contains("the export request"),
+        "the routable origin was contacted: {log}"
+    );
+
+    // A symlink, even one pointing at a locator this user owns, is not the locator.
+    #[cfg(unix)]
+    {
+        let (target_project, target) = locator_for("symlink-target");
+        std::fs::write(&target, genuine).unwrap();
+        let (project, path) = locator_for("symlink");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        let output = run(&project);
+        let log = text(&output);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&target);
+        let _ = target_project;
+        assert_eq!(output.status.code(), Some(1), "{log}");
+        assert!(log.contains("is not a regular file"), "{log}");
+    }
+
+    // A locator another user can write is not this run's locator.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (project, path) = locator_for("world-writable");
+        std::fs::write(&path, genuine).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let output = run(&project);
+        let log = text(&output);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(output.status.code(), Some(1), "{log}");
+        assert!(log.contains("writable"), "{log}");
+    }
+}
+
+/// EXPEXIT-1: a refused `--export-on-exit` warns and leaves the command's exit code alone.
+///
+/// The export runs after the command, so its refusal is only ever a warning: the official
+/// CLI's `exportOnExit` catches the failure, logs "Automatic export to ... failed, going to
+/// exit now" and lets the script's own status stand, and the compatibility contract claims
+/// that behaviour for this flag. Reporting the refusal in the exit code was considered and
+/// rejected for parity, so this scenario pins the parity rule rather than leaving it implied
+/// by the scenarios that exercise a refused export for other reasons.
+#[cfg(unix)]
+#[test]
+fn a_failed_export_on_exit_warns_and_preserves_the_command_exit_code() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = scratch("export-on-exit-failure");
+    // The export target's parent has to be created at exit, inside a directory this user
+    // cannot write to, so the export fails after the command has already succeeded.
+    let sealed = dir.join("sealed");
+    std::fs::create_dir_all(&sealed).unwrap();
+    let target = sealed.join("inner").join("out");
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+    let output = exec()
+        .arg("--export-on-exit")
+        .arg(&target)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    assert!(
+        output.status.success(),
+        "the command's exit code is preserved: {log}"
+    );
+    assert!(log.contains("going to exit now"), "{log}");
+    assert!(log.contains(&target.display().to_string()), "{log}");
+    assert!(!target.exists(), "{log}");
 }

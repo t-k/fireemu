@@ -1,0 +1,1459 @@
+{
+  "cases": [
+    {
+      "caseId": "FS-LISTEN-SDK-101",
+      "collapseMetadataOnly": true,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "comparison": "ordered-events",
+      "controlFor": null,
+      "dimension": "document-event-order",
+      "discriminators": [
+        "snapshotKind",
+        "exists"
+      ],
+      "documents": [
+        "alpha"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "error": null,
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "initial"
+        }
+      ],
+      "ignoreCachedPrefix": false,
+      "invariants": [],
+      "listeners": [
+        {
+          "includeMetadataChanges": true,
+          "kind": "document",
+          "metadataIsCompared": false,
+          "name": "primary",
+          "target": "alpha"
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": false,
+      "role": "observation",
+      "steps": [
+        {
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a0"
+          },
+          "kind": "seed"
+        },
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "awaitServer",
+          "listener": "primary"
+        }
+      ],
+      "title": "Document listener delivers one server snapshot for an existing document"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-101C",
+      "collapseMetadataOnly": true,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "comparison": "ordered-events",
+      "controlFor": "FS-LISTEN-SDK-101",
+      "dimension": "document-event-order",
+      "discriminators": [
+        "exists"
+      ],
+      "documents": [
+        "absent"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [],
+          "docs": [],
+          "error": null,
+          "exists": false,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "initial"
+        }
+      ],
+      "ignoreCachedPrefix": false,
+      "invariants": [],
+      "listeners": [
+        {
+          "includeMetadataChanges": true,
+          "kind": "document",
+          "metadataIsCompared": false,
+          "name": "primary",
+          "target": "absent"
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": false,
+      "role": "control",
+      "steps": [
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "awaitServer",
+          "listener": "primary"
+        }
+      ],
+      "title": "Document listener on an absent document still delivers a non-existent snapshot"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-102",
+      "collapseMetadataOnly": true,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
+      "comparison": "ordered-events",
+      "controlFor": null,
+      "dimension": "pending-writes",
+      "discriminators": [
+        "hasPendingWrites"
+      ],
+      "documents": [
+        "beta"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "error": null,
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": true,
+          "listener": "primary",
+          "snapshotKind": "delta"
+        },
+        {
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "error": null,
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "delta"
+        }
+      ],
+      "ignoreCachedPrefix": false,
+      "invariants": [],
+      "listeners": [
+        {
+          "includeMetadataChanges": true,
+          "kind": "document",
+          "metadataIsCompared": true,
+          "name": "primary",
+          "target": "beta"
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": false,
+      "role": "observation",
+      "steps": [
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "awaitServer",
+          "listener": "primary"
+        },
+        {
+          "kind": "baseline"
+        },
+        {
+          "client": "primary",
+          "doc": "beta",
+          "fields": {
+            "rank": 2,
+            "value": "b0"
+          },
+          "kind": "write"
+        },
+        {
+          "events": 2,
+          "kind": "await",
+          "listener": "primary"
+        }
+      ],
+      "title": "Local write raises hasPendingWrites before the acknowledged snapshot"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-102C",
+      "collapseMetadataOnly": true,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
+      "comparison": "ordered-events",
+      "controlFor": "FS-LISTEN-SDK-102",
+      "dimension": "pending-writes",
+      "discriminators": [
+        "hasPendingWrites"
+      ],
+      "documents": [
+        "beta"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "error": null,
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "delta"
+        }
+      ],
+      "ignoreCachedPrefix": false,
+      "invariants": [],
+      "listeners": [
+        {
+          "includeMetadataChanges": true,
+          "kind": "document",
+          "metadataIsCompared": true,
+          "name": "primary",
+          "target": "beta"
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": false,
+      "role": "control",
+      "steps": [
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "awaitServer",
+          "listener": "primary"
+        },
+        {
+          "kind": "baseline"
+        },
+        {
+          "client": "witness",
+          "doc": "beta",
+          "fields": {
+            "rank": 2,
+            "value": "b0"
+          },
+          "kind": "write"
+        },
+        {
+          "events": 1,
+          "kind": "await",
+          "listener": "primary"
+        }
+      ],
+      "title": "A write from a second client never raises hasPendingWrites on this listener"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-103",
+      "collapseMetadataOnly": true,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
+      "comparison": "ordered-events",
+      "controlFor": null,
+      "dimension": "query-change-order",
+      "discriminators": [
+        "changes",
+        "docs"
+      ],
+      "documents": [
+        "alpha",
+        "beta"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [
+            {
+              "doc": "beta",
+              "newIndex": 0,
+              "oldIndex": -1,
+              "type": "added"
+            }
+          ],
+          "docs": [
+            "beta",
+            "alpha"
+          ],
+          "error": null,
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "delta"
+        },
+        {
+          "changes": [
+            {
+              "doc": "beta",
+              "newIndex": 1,
+              "oldIndex": 0,
+              "type": "modified"
+            }
+          ],
+          "docs": [
+            "alpha",
+            "beta"
+          ],
+          "error": null,
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "delta"
+        },
+        {
+          "changes": [
+            {
+              "doc": "alpha",
+              "newIndex": -1,
+              "oldIndex": 0,
+              "type": "removed"
+            }
+          ],
+          "docs": [
+            "beta"
+          ],
+          "error": null,
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "delta"
+        }
+      ],
+      "ignoreCachedPrefix": false,
+      "invariants": [],
+      "listeners": [
+        {
+          "includeMetadataChanges": true,
+          "kind": "query",
+          "limit": 10,
+          "metadataIsCompared": false,
+          "name": "primary",
+          "orderBy": [
+            "rank",
+            "asc"
+          ],
+          "target": "docs",
+          "where": [
+            "rank",
+            "<",
+            10
+          ]
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": false,
+      "role": "observation",
+      "steps": [
+        {
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a0"
+          },
+          "kind": "seed"
+        },
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "awaitServer",
+          "listener": "primary"
+        },
+        {
+          "kind": "baseline"
+        },
+        {
+          "client": "witness",
+          "doc": "beta",
+          "fields": {
+            "rank": 0,
+            "value": "b0"
+          },
+          "kind": "write"
+        },
+        {
+          "events": 1,
+          "kind": "await",
+          "listener": "primary"
+        },
+        {
+          "client": "witness",
+          "doc": "beta",
+          "fields": {
+            "rank": 3,
+            "value": "b1"
+          },
+          "kind": "write"
+        },
+        {
+          "events": 2,
+          "kind": "await",
+          "listener": "primary"
+        },
+        {
+          "client": "witness",
+          "doc": "alpha",
+          "kind": "delete"
+        },
+        {
+          "events": 3,
+          "kind": "await",
+          "listener": "primary"
+        }
+      ],
+      "title": "Query listener reports added, modified with reordering, and removed"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-103C",
+      "collapseMetadataOnly": true,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
+      "comparison": "ordered-events",
+      "controlFor": "FS-LISTEN-SDK-103",
+      "dimension": "query-change-order",
+      "discriminators": [
+        "docs"
+      ],
+      "documents": [
+        "alpha",
+        "gamma"
+      ],
+      "expectedLocal": [],
+      "ignoreCachedPrefix": false,
+      "invariants": [
+        "no-event-after-quiet-window"
+      ],
+      "listeners": [
+        {
+          "includeMetadataChanges": true,
+          "kind": "query",
+          "limit": 10,
+          "metadataIsCompared": false,
+          "name": "primary",
+          "orderBy": [
+            "rank",
+            "asc"
+          ],
+          "target": "docs",
+          "where": [
+            "rank",
+            "<",
+            10
+          ]
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": false,
+      "role": "control",
+      "steps": [
+        {
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a0"
+          },
+          "kind": "seed"
+        },
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "awaitServer",
+          "listener": "primary"
+        },
+        {
+          "kind": "baseline"
+        },
+        {
+          "client": "witness",
+          "doc": "gamma",
+          "fields": {
+            "rank": 99,
+            "value": "g0"
+          },
+          "kind": "write"
+        },
+        {
+          "kind": "quiet",
+          "listener": "primary",
+          "seconds": 3
+        }
+      ],
+      "title": "A document outside the query predicate produces no event in the quiet window"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-104",
+      "collapseMetadataOnly": true,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "comparison": "aggregate-changes",
+      "controlFor": null,
+      "dimension": "resume-after-break",
+      "discriminators": [
+        "changes",
+        "docs",
+        "fromCacheTransitions"
+      ],
+      "documents": [
+        "alpha",
+        "beta",
+        "gamma"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [
+            {
+              "doc": "alpha",
+              "newIndex": null,
+              "oldIndex": null,
+              "type": "modified"
+            },
+            {
+              "doc": "gamma",
+              "newIndex": null,
+              "oldIndex": null,
+              "type": "added"
+            }
+          ],
+          "docs": [
+            "beta",
+            "alpha",
+            "gamma"
+          ],
+          "error": null,
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "aggregate"
+        }
+      ],
+      "ignoreCachedPrefix": false,
+      "invariants": [
+        "no-duplicate-added-for-unchanged-document",
+        "from-cache-true-then-false-across-break",
+        "terminal-document-set-complete"
+      ],
+      "listeners": [
+        {
+          "includeMetadataChanges": true,
+          "kind": "query",
+          "limit": 10,
+          "metadataIsCompared": true,
+          "name": "primary",
+          "orderBy": [
+            "rank",
+            "asc"
+          ],
+          "target": "docs",
+          "where": [
+            "rank",
+            "<",
+            10
+          ]
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": false,
+      "role": "observation",
+      "steps": [
+        {
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a0"
+          },
+          "kind": "seed"
+        },
+        {
+          "doc": "beta",
+          "fields": {
+            "rank": 2,
+            "value": "b0"
+          },
+          "kind": "seed"
+        },
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "awaitServer",
+          "listener": "primary"
+        },
+        {
+          "kind": "baseline"
+        },
+        {
+          "client": "primary",
+          "kind": "break",
+          "mode": "disable-network"
+        },
+        {
+          "client": "witness",
+          "doc": "gamma",
+          "fields": {
+            "rank": 5,
+            "value": "g0"
+          },
+          "kind": "write"
+        },
+        {
+          "client": "witness",
+          "doc": "alpha",
+          "fields": {
+            "rank": 4,
+            "value": "a1"
+          },
+          "kind": "write"
+        },
+        {
+          "client": "primary",
+          "kind": "resume",
+          "mode": "enable-network"
+        },
+        {
+          "kind": "settle",
+          "listener": "primary",
+          "seconds": 5
+        }
+      ],
+      "title": "Resume after a forced stream break delivers only the documents that changed"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-104C",
+      "collapseMetadataOnly": true,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "comparison": "aggregate-changes",
+      "controlFor": "FS-LISTEN-SDK-104",
+      "dimension": "resume-after-break",
+      "discriminators": [
+        "changes",
+        "docs"
+      ],
+      "documents": [
+        "alpha",
+        "beta",
+        "gamma"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [
+            {
+              "doc": "alpha",
+              "newIndex": null,
+              "oldIndex": null,
+              "type": "modified"
+            },
+            {
+              "doc": "gamma",
+              "newIndex": null,
+              "oldIndex": null,
+              "type": "added"
+            }
+          ],
+          "docs": [
+            "beta",
+            "alpha",
+            "gamma"
+          ],
+          "error": null,
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "aggregate"
+        }
+      ],
+      "ignoreCachedPrefix": false,
+      "invariants": [
+        "no-duplicate-added-for-unchanged-document",
+        "no-from-cache-transition"
+      ],
+      "listeners": [
+        {
+          "includeMetadataChanges": true,
+          "kind": "query",
+          "limit": 10,
+          "metadataIsCompared": true,
+          "name": "primary",
+          "orderBy": [
+            "rank",
+            "asc"
+          ],
+          "target": "docs",
+          "where": [
+            "rank",
+            "<",
+            10
+          ]
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": false,
+      "role": "control",
+      "steps": [
+        {
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a0"
+          },
+          "kind": "seed"
+        },
+        {
+          "doc": "beta",
+          "fields": {
+            "rank": 2,
+            "value": "b0"
+          },
+          "kind": "seed"
+        },
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "awaitServer",
+          "listener": "primary"
+        },
+        {
+          "kind": "baseline"
+        },
+        {
+          "client": "witness",
+          "doc": "gamma",
+          "fields": {
+            "rank": 5,
+            "value": "g0"
+          },
+          "kind": "write"
+        },
+        {
+          "client": "witness",
+          "doc": "alpha",
+          "fields": {
+            "rank": 4,
+            "value": "a1"
+          },
+          "kind": "write"
+        },
+        {
+          "kind": "settle",
+          "listener": "primary",
+          "seconds": 5
+        }
+      ],
+      "title": "The same mutations without a break reach the same terminal set with no cache transition"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-105",
+      "collapseMetadataOnly": true,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "comparison": "ordered-events",
+      "controlFor": null,
+      "dimension": "unsubscribe",
+      "discriminators": [
+        "listener",
+        "snapshotKind"
+      ],
+      "documents": [
+        "alpha"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "error": null,
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "witness",
+          "snapshotKind": "delta"
+        }
+      ],
+      "ignoreCachedPrefix": false,
+      "invariants": [
+        "no-event-after-unsubscribe",
+        "repeated-unsubscribe-is-a-no-op"
+      ],
+      "listeners": [
+        {
+          "includeMetadataChanges": true,
+          "kind": "document",
+          "metadataIsCompared": false,
+          "name": "primary",
+          "target": "alpha"
+        },
+        {
+          "includeMetadataChanges": true,
+          "kind": "document",
+          "metadataIsCompared": false,
+          "name": "witness",
+          "target": "alpha"
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": false,
+      "role": "observation",
+      "steps": [
+        {
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a0"
+          },
+          "kind": "seed"
+        },
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "listen",
+          "listener": "witness"
+        },
+        {
+          "kind": "awaitServer",
+          "listener": "primary"
+        },
+        {
+          "kind": "awaitServer",
+          "listener": "witness"
+        },
+        {
+          "kind": "baseline"
+        },
+        {
+          "kind": "unsubscribe",
+          "listener": "primary"
+        },
+        {
+          "kind": "unsubscribe",
+          "listener": "primary",
+          "repeat": true
+        },
+        {
+          "client": "witness",
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a1"
+          },
+          "kind": "write"
+        },
+        {
+          "events": 1,
+          "kind": "await",
+          "listener": "witness"
+        },
+        {
+          "kind": "quiet",
+          "listener": "primary",
+          "seconds": 3
+        }
+      ],
+      "title": "Unsubscribe stops callbacks while a witness listener still observes the write"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-105C",
+      "collapseMetadataOnly": true,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "comparison": "ordered-events",
+      "controlFor": "FS-LISTEN-SDK-105",
+      "dimension": "unsubscribe",
+      "discriminators": [
+        "listener"
+      ],
+      "documents": [
+        "alpha"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "error": null,
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "delta"
+        },
+        {
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "error": null,
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "witness",
+          "snapshotKind": "delta"
+        }
+      ],
+      "ignoreCachedPrefix": false,
+      "invariants": [],
+      "listeners": [
+        {
+          "includeMetadataChanges": true,
+          "kind": "document",
+          "metadataIsCompared": false,
+          "name": "primary",
+          "target": "alpha"
+        },
+        {
+          "includeMetadataChanges": true,
+          "kind": "document",
+          "metadataIsCompared": false,
+          "name": "witness",
+          "target": "alpha"
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": false,
+      "role": "control",
+      "steps": [
+        {
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a0"
+          },
+          "kind": "seed"
+        },
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "listen",
+          "listener": "witness"
+        },
+        {
+          "kind": "awaitServer",
+          "listener": "primary"
+        },
+        {
+          "kind": "awaitServer",
+          "listener": "witness"
+        },
+        {
+          "kind": "baseline"
+        },
+        {
+          "client": "witness",
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a1"
+          },
+          "kind": "write"
+        },
+        {
+          "events": 1,
+          "kind": "await",
+          "listener": "primary"
+        },
+        {
+          "events": 1,
+          "kind": "await",
+          "listener": "witness"
+        }
+      ],
+      "title": "Without unsubscribe the same listener observes the same write"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-106",
+      "collapseMetadataOnly": true,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "comparison": "ordered-events",
+      "controlFor": null,
+      "dimension": "auth-switch",
+      "discriminators": [
+        "error",
+        "snapshotKind"
+      ],
+      "documents": [
+        "private"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [],
+          "docs": [],
+          "error": "permission-denied",
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "error"
+        },
+        {
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "error": null,
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "recovered",
+          "snapshotKind": "initial"
+        }
+      ],
+      "ignoreCachedPrefix": false,
+      "invariants": [
+        "no-event-after-listener-error"
+      ],
+      "listeners": [
+        {
+          "includeMetadataChanges": true,
+          "kind": "document",
+          "metadataIsCompared": false,
+          "name": "primary",
+          "target": "private"
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": true,
+      "role": "observation",
+      "steps": [
+        {
+          "account": "throwaway",
+          "client": "primary",
+          "kind": "signIn"
+        },
+        {
+          "doc": "private",
+          "fields": {
+            "value": "p0"
+          },
+          "kind": "seed"
+        },
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "awaitServer",
+          "listener": "primary"
+        },
+        {
+          "kind": "baseline"
+        },
+        {
+          "client": "primary",
+          "kind": "signOut"
+        },
+        {
+          "kind": "awaitError",
+          "listener": "primary"
+        },
+        {
+          "account": "throwaway",
+          "client": "primary",
+          "kind": "signIn"
+        },
+        {
+          "kind": "listen",
+          "listener": "recovered"
+        },
+        {
+          "kind": "awaitServer",
+          "listener": "recovered"
+        }
+      ],
+      "title": "Signing out mid-listen terminates a Rules-protected listener with permission-denied"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-106N",
+      "collapseMetadataOnly": true,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "comparison": "ordered-events",
+      "controlFor": "FS-LISTEN-SDK-106",
+      "dimension": "auth-switch",
+      "discriminators": [
+        "error"
+      ],
+      "documents": [
+        "private"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [],
+          "docs": [],
+          "error": "permission-denied",
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "error"
+        }
+      ],
+      "ignoreCachedPrefix": true,
+      "invariants": [
+        "no-server-snapshot-before-error"
+      ],
+      "listeners": [
+        {
+          "includeMetadataChanges": true,
+          "kind": "document",
+          "metadataIsCompared": false,
+          "name": "primary",
+          "target": "private"
+        }
+      ],
+      "requiresAuth": false,
+      "requiresRules": true,
+      "role": "negative",
+      "steps": [
+        {
+          "client": "primary",
+          "kind": "signOut"
+        },
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "awaitError",
+          "listener": "primary"
+        }
+      ],
+      "title": "A listener started while signed out fails without ever reading the server"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-107",
+      "collapseMetadataOnly": false,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "comparison": "ordered-events",
+      "controlFor": null,
+      "dimension": "default-subscription",
+      "discriminators": [
+        "docs",
+        "exists"
+      ],
+      "documents": [
+        "alpha"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "error": null,
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "initial"
+        },
+        {
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "error": null,
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "delta"
+        }
+      ],
+      "ignoreCachedPrefix": false,
+      "invariants": [],
+      "listeners": [
+        {
+          "includeMetadataChanges": false,
+          "kind": "document",
+          "metadataIsCompared": false,
+          "name": "primary",
+          "target": "alpha"
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": false,
+      "role": "observation",
+      "steps": [
+        {
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a0"
+          },
+          "kind": "seed"
+        },
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "settle",
+          "listener": "primary",
+          "seconds": 3
+        },
+        {
+          "client": "witness",
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a1"
+          },
+          "kind": "write"
+        },
+        {
+          "kind": "settle",
+          "listener": "primary",
+          "seconds": 3
+        }
+      ],
+      "title": "A default-mode listener raises one callback per data change"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-107C",
+      "collapseMetadataOnly": false,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "comparison": "ordered-events",
+      "controlFor": "FS-LISTEN-SDK-107",
+      "dimension": "default-subscription",
+      "discriminators": [
+        "docs"
+      ],
+      "documents": [
+        "alpha"
+      ],
+      "expectedLocal": [
+        {
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "error": null,
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "listener": "primary",
+          "snapshotKind": "initial"
+        }
+      ],
+      "ignoreCachedPrefix": false,
+      "invariants": [
+        "no-event-after-quiet-window"
+      ],
+      "listeners": [
+        {
+          "includeMetadataChanges": false,
+          "kind": "document",
+          "metadataIsCompared": false,
+          "name": "primary",
+          "target": "alpha"
+        }
+      ],
+      "requiresAuth": true,
+      "requiresRules": false,
+      "role": "control",
+      "steps": [
+        {
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a0"
+          },
+          "kind": "seed"
+        },
+        {
+          "kind": "listen",
+          "listener": "primary"
+        },
+        {
+          "kind": "settle",
+          "listener": "primary",
+          "seconds": 3
+        },
+        {
+          "client": "witness",
+          "doc": "alpha",
+          "fields": {
+            "rank": 1,
+            "value": "a0"
+          },
+          "kind": "write"
+        },
+        {
+          "kind": "quiet",
+          "listener": "primary",
+          "seconds": 3
+        }
+      ],
+      "title": "A default-mode listener raises no callback for a write that changes no data"
+    }
+  ],
+  "catalogDigest": "7326915491f0d03e5b6e58ee3bdacce966a1f4829e714677ee491b0e779508f6",
+  "docsSubcollection": "docs",
+  "privateCollection": "o6_listen_private",
+  "requiredRulesDigest": "767ffbe957f1991cb17d282a9e15b1ec43d82d7fb52f8c8d5876b9f2262ea740",
+  "requiredRulesFragment": "match /o6_listen/{uid}/runs/{runId}/docs/{docId} {\n  allow read, write: if request.auth != null && uid == request.auth.uid;\n}\nmatch /o6_listen_private/{uid} {\n  allow read, write: if request.auth != null && request.auth.uid == uid;\n}\n",
+  "runCollection": "o6_listen",
+  "schema": "o6-listen-sdk-cases-v1",
+  "unobservedPaths": [
+    {
+      "path": "browser-webchannel",
+      "plan": "A separate browser campaign driving the same case catalog through a headless Chromium page against the same oracle project, with the WebChannel request log captured from the page rather than from Node.",
+      "reason": "The Node SDK build selects the gRPC transport; WebChannel framing, long-poll fallback and browser tab lifecycle are not exercised."
+    },
+    {
+      "path": "android-sdk",
+      "plan": "An instrumented Android test module that replays the same case catalog and emits the same normalized event rows for comparison.",
+      "reason": "No Android runtime, Gradle toolchain or device is available to this lane."
+    },
+    {
+      "path": "apple-sdk",
+      "plan": "An XCTest target replaying the same case catalog and emitting the same normalized event rows.",
+      "reason": "No iOS or macOS SDK harness exists in this repository."
+    },
+    {
+      "path": "cross-identity-isolation",
+      "plan": "A second throwaway account and a case in which A opens a listener on B's o6_listen_private document and on B's run prefix, expecting permission-denied in both, with a control proving B's own listener succeeds. It needs maxAccounts raised to two and a second sign-in in the adapter.",
+      "reason": "The campaign budget allows one account, and both auth cases sign the same principal out and back in. No case has user A listen to user B's document, so tenant and principal isolation under Rules is not observed and a MATCH must not be read as covering it."
+    },
+    {
+      "path": "raw-resume-token",
+      "plan": "A direct gRPC Listen probe that supplies a chosen resume token and records the TargetChange response, kept as a separate case from SDK-level resume.",
+      "reason": "The Node client SDK owns the resume token; it is not exposed to application code, so RESET and stale-token behavior cannot be driven here."
+    }
+  ]
+}

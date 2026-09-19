@@ -56,6 +56,7 @@ fn harness(mode: BaselineMode) -> Harness {
         app_check_policy: fixture::policy(&app_check, "storage", mode),
         admin_capability: Some("storage-capability".to_owned()),
         token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+        control_token: None,
     };
     Harness {
         storage,

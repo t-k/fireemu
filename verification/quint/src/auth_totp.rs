@@ -514,6 +514,10 @@ fn classified_mfa_error(error: &MfaError) -> anyhow::Error {
         MfaError::TooManyFactors => "TooManyFactors",
         MfaError::TooManyPending => "TooManyPending",
         MfaError::LimitExceeded(_) => "LimitExceeded",
+        // This driver enrolls TOTP factors only, and a TOTP enrollment stores no display
+        // name, so the refusal is unreachable here. It is named rather than swept into a
+        // wildcard so that a new refusal class cannot reach the model unclassified.
+        MfaError::ControlCharacterInText(_) => "ControlCharacterInText",
     };
     invalid_data(class)
 }

@@ -4,10 +4,10 @@ use core::fmt;
 
 use fireemu_core_firestore::index::{
     decide, validate_aggregation_query as validate_aggregation_index_query, IndexDecision,
-    IndexSet, PlanningContext,
+    IndexSet, IndexValidationPolicy, PlanningContext,
 };
 use fireemu_core_firestore::query::{Query, QueryLimitViolation};
-use fireemu_core_firestore::store::Aggregation;
+use fireemu_core_firestore::store::{normalize_aggregation_query, Aggregation};
 use fireemu_core_types::edition::FirestoreEdition;
 
 use crate::decode::DecodeError;
@@ -149,8 +149,8 @@ impl Gateway {
     }
 
     /// Runs every strict check for an aggregation query with a borrowed database-specific index
-    /// catalog. Sum and average fields participate in index validation only; the accepted query
-    /// remains the original executable query.
+    /// catalog. Preserve caller ordering for Rules metadata; index planning and the store
+    /// executor derive the same aggregation ordering with the shared normalizer.
     pub fn validate_aggregation_query_with_indexes(
         &self,
         query: &Query,
@@ -172,6 +172,20 @@ impl Gateway {
         indexes: &IndexSet,
         aggregations: Option<&[Aggregation]>,
     ) -> Result<AcceptedQuery, Rejection> {
+        if aggregations.is_some() && canonical.find_nearest.is_some() {
+            return Err(Rejection::Unsupported(
+                "findNearest is unsupported for aggregation queries".to_owned(),
+            ));
+        }
+        // Production refuses a cursor whose `__name__` value is not a document reference,
+        // or whose reference names a document the query does not select. The compatibility
+        // contract keeps production-only refusals out of the `emulator` profile, and the
+        // production index policy is exactly what the strict profile selects.
+        if self.ctx.policy == IndexValidationPolicy::Production {
+            canonical
+                .check_production_cursor_constraints()
+                .map_err(|error| Rejection::InvalidQuery(error.to_string()))?;
+        }
         let disjunctions = canonical.dnf_disjunction_count();
         if disjunctions > fireemu_core_firestore::query::MAX_MATERIALIZED_DISJUNCTIONS {
             return Err(Rejection::InvalidQuery(format!(
@@ -200,10 +214,16 @@ impl Gateway {
                 );
             }
         }
+        // Limits above count the caller's clauses, not implicit aggregation orders.
+        let execution_query = match aggregations {
+            Some(aggregations) => normalize_aggregation_query(&canonical, aggregations)
+                .map_err(|error| Rejection::InvalidQuery(error.to_string()))?,
+            None => canonical.clone(),
+        };
         let decision = aggregations.map_or_else(
             || decide(&canonical, indexes, &self.ctx),
             |aggregations| {
-                validate_aggregation_index_query(&canonical, aggregations, indexes, &self.ctx)
+                validate_aggregation_index_query(&execution_query, aggregations, indexes, &self.ctx)
             },
         );
         match &decision {

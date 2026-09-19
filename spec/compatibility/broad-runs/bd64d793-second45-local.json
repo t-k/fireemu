@@ -1,0 +1,425 @@
+{
+  "kind": "second45-local-validation-v1",
+  "executionCommit": "bd64d7935f039eed02b1dcb3fbb6e806a2507cf9",
+  "productionExecuted": false,
+  "artifactSha256": "fe2da11a80e9730b3541075dae88757d9bad1c9855a2360b9a818fe7841fd2da",
+  "runtimeInputsDigest": "5f732114e5a3a2ec39480036aefd9688edce3d00d9a8dad96e6b475d904b8813",
+  "configuration": {
+    "schemaVersion": 1,
+    "profile": "strict",
+    "firestore": {
+      "edition": "standard",
+      "apiMode": "native",
+      "indexFile": "<owned-private-index-file>"
+    },
+    "daemon": {
+      "authProjectNumbers": {
+        "fireemu-35fe6": "592603257417"
+      }
+    }
+  },
+  "configurationDigest": "942b18a5b7fa56764c8b5bfb45d4df0add2f1f3981b5d8ce7156e659d577ff68",
+  "indexConfigurationSha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
+  "supervision": {
+    "timeoutSeconds": 2430,
+    "recoveryGraceSeconds": 300
+  },
+  "ownedControlRequests": 2,
+  "pairWallSecondsIncludingBuild": 172.22,
+  "durationNote": "Side intervals use file creation/final-write wall timestamps; request admission separately enforces monotonic deadlines. Pair time is /usr/bin/time real, including build and cleanup.",
+  "ownedProcess": {
+    "pid": 85870,
+    "stopped": true,
+    "listenersClosed": true
+  },
+  "sides": {
+    "direct": {
+      "recordingComplete": true,
+      "cleanupComplete": true,
+      "safety": true,
+      "rows": 45,
+      "counts": {
+        "auth": 302,
+        "firestore": 28,
+        "metadata": 0,
+        "recovery": 17,
+        "total": 330
+      },
+      "observerDigest": "8bd1a239a9fe165829f842374af5f31ce4580e6424f94cc6221b43bc9a941c8b",
+      "runtimeIdentity": {
+        "artifactSha256": "fe2da11a80e9730b3541075dae88757d9bad1c9855a2360b9a818fe7841fd2da",
+        "executionCommit": "bd64d7935f039eed02b1dcb3fbb6e806a2507cf9",
+        "configurationDigest": "942b18a5b7fa56764c8b5bfb45d4df0add2f1f3981b5d8ce7156e659d577ff68"
+      },
+      "privateResultSha256": "95e6ffe36c742955356f06156b4f089224067d4c4ddfce6175f5654db2a5302f",
+      "fileWallSpanSeconds": 84.444,
+      "retainedResponseBytes": 197064,
+      "largestResponseBytes": 857,
+      "firestoreMethods": {
+        "GET": 16,
+        "PATCH": 6,
+        "DELETE": 4,
+        "POST": 2
+      },
+      "unrecovered": []
+    },
+    "mapped": {
+      "recordingComplete": true,
+      "cleanupComplete": true,
+      "safety": true,
+      "rows": 45,
+      "counts": {
+        "auth": 302,
+        "firestore": 28,
+        "metadata": 0,
+        "recovery": 17,
+        "total": 330
+      },
+      "observerDigest": "8bd1a239a9fe165829f842374af5f31ce4580e6424f94cc6221b43bc9a941c8b",
+      "runtimeIdentity": {
+        "artifactSha256": "fe2da11a80e9730b3541075dae88757d9bad1c9855a2360b9a818fe7841fd2da",
+        "executionCommit": "bd64d7935f039eed02b1dcb3fbb6e806a2507cf9",
+        "configurationDigest": "942b18a5b7fa56764c8b5bfb45d4df0add2f1f3981b5d8ce7156e659d577ff68"
+      },
+      "privateResultSha256": "c9eb09bd27ad10383853dec1186458405b4e7249acd84042b7777d774922a050",
+      "fileWallSpanSeconds": 84.302,
+      "retainedResponseBytes": 198191,
+      "largestResponseBytes": 857,
+      "firestoreMethods": {
+        "GET": 16,
+        "PATCH": 6,
+        "DELETE": 4,
+        "POST": 2
+      },
+      "unrecovered": []
+    }
+  },
+  "comparison": {
+    "kind": "second45-mapping-comparison-v1",
+    "semanticContract": "second45-received-json-semantics-v1",
+    "manifestDigest": "ff2ae95690a72a54b4e39ffc4077e3c39dd86564a8adc530ab144b5e0d086bab",
+    "recordingComplete": true,
+    "safety": true,
+    "mapping": "match",
+    "rows": [
+      {
+        "id": "second/auth/01",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/02",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/03",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/04",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/05",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/06",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/07",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/08",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/09",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/10",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/11",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/12",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/13",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/14",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/15",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/16",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/17",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/18",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/19",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/20",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/21",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/22",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/23",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/24",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/25",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/26",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/27",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/28",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/29",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/30",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/31",
+        "mapping": "match"
+      },
+      {
+        "id": "second/auth/32",
+        "mapping": "match"
+      },
+      {
+        "id": "second/masks/ancestor-overlap-state/normal",
+        "mapping": "match"
+      },
+      {
+        "id": "second/masks/ancestor-overlap-state/before",
+        "mapping": "match"
+      },
+      {
+        "id": "second/masks/ancestor-overlap-state/diagnostic",
+        "mapping": "match"
+      },
+      {
+        "id": "second/masks/ancestor-overlap-state/after",
+        "mapping": "match"
+      },
+      {
+        "id": "second/preconditions/stale-delete-state/original",
+        "mapping": "match"
+      },
+      {
+        "id": "second/preconditions/stale-delete-state/normal",
+        "mapping": "match"
+      },
+      {
+        "id": "second/preconditions/stale-delete-state/before",
+        "mapping": "match"
+      },
+      {
+        "id": "second/preconditions/stale-delete-state/diagnostic",
+        "mapping": "match"
+      },
+      {
+        "id": "second/preconditions/stale-delete-state/after",
+        "mapping": "match"
+      },
+      {
+        "id": "second/transforms/invalid-path-state/normal",
+        "mapping": "match"
+      },
+      {
+        "id": "second/transforms/invalid-path-state/before",
+        "mapping": "match"
+      },
+      {
+        "id": "second/transforms/invalid-path-state/diagnostic",
+        "mapping": "match"
+      },
+      {
+        "id": "second/transforms/invalid-path-state/after",
+        "mapping": "match"
+      }
+    ],
+    "errors": [],
+    "productionCompatibility": "unobserved",
+    "inputDigests": [
+      "a8b8c62d943e3cef45259a44a0317c541883dc7fa8dca641138a779fd7ea22d8",
+      "0808ef854e1c927e128ee2720fcc3a784345deb784960282f58272ee8a0791ac"
+    ]
+  },
+  "first46Regression": {
+    "executionCommit": "bd64d7935f039eed02b1dcb3fbb6e806a2507cf9",
+    "artifactSha256": "cf4f6e1874ef5c84ed4bb6e63f7bf321ea2e3ec2ea3439b5cca1c24948abd3e7",
+    "recordingComplete": true,
+    "compatibility": "match",
+    "matchedRows": 46,
+    "savedProductionExecutionCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
+    "originalComparison": {
+      "match": 35,
+      "mismatch": 11
+    },
+    "ownedProcess": {
+      "pid": 90502,
+      "stopped": true,
+      "listenersClosed": true
+    },
+    "comparisonSha256": "9d341c5e0c75a5cac7c2e72b78680959cf3fa0d873519e52d13af4959104f13f"
+  },
+  "verification": {
+    "pytest": {
+      "commit": "257c88a2f471cfa737574a7abc5a89c7574eac72",
+      "pass": 165,
+      "fail": 0,
+      "skip": 0
+    },
+    "finalWirePytest": {
+      "commit": "bd64d7935f039eed02b1dcb3fbb6e806a2507cf9",
+      "pass": 6,
+      "fail": 0,
+      "skip": 0
+    },
+    "mutation": {
+      "executionCommit": "257c88a2f471cfa737574a7abc5a89c7574eac72",
+      "mutations": [
+        {
+          "mutation": "typed-operation-guard",
+          "exitCode": 1,
+          "killed": true,
+          "test": "test_second_admission.py"
+        },
+        {
+          "mutation": "service-recovery-reserve",
+          "exitCode": 1,
+          "killed": true,
+          "test": "test_second_admission.py"
+        },
+        {
+          "mutation": "detached-trace-accepted",
+          "exitCode": 1,
+          "killed": true,
+          "test": "test_second_mapping.py"
+        },
+        {
+          "mutation": "recovery-grace-removed",
+          "exitCode": 1,
+          "killed": true,
+          "test": "test_second_lifecycle.py"
+        }
+      ]
+    },
+    "ruff": "pass",
+    "ty": "pass",
+    "nodeSyntax": "pass",
+    "oxlint": "pass",
+    "oxfmt": "pass",
+    "independentReview": {
+      "commit": "257c88a2f471cfa737574a7abc5a89c7574eac72",
+      "decision": "approved",
+      "remainingMustFix": 0,
+      "finalChange": "JS formatting only; syntax and wire tests rechecked"
+    },
+    "notRun": [
+      "full Rust workspace tests",
+      "lifetime production observations",
+      "new oracle operations"
+    ]
+  },
+  "productionProposal": {
+    "caseManifest": "spec/compatibility/broad-second45-local-admission.json",
+    "manifestDigest": "ff2ae95690a72a54b4e39ffc4077e3c39dd86564a8adc530ab144b5e0d086bab",
+    "observerDigest": "8bd1a239a9fe165829f842374af5f31ce4580e6424f94cc6221b43bc9a941c8b",
+    "comparisonContract": "second45-mapping-comparison-v1",
+    "semanticContract": "second45-received-json-semantics-v1",
+    "project": "fireemu-35fe6",
+    "projectNumber": "592603257417",
+    "database": "(default)",
+    "edition": "Standard Native",
+    "rows": 45,
+    "ownerIdentity": null,
+    "permissionReference": null,
+    "permissionWindow": null,
+    "productionNonce": null,
+    "currentLocation": null,
+    "currentDatabaseProjectionDigest": null,
+    "currentAuthConfigurationDigest": null,
+    "currentApiKeyOwnership": null,
+    "approvedTariffs": null,
+    "approvedCostUpperUsd": null,
+    "limits": {
+      "auth": 400,
+      "firestore": 100,
+      "metadata": 100,
+      "recovery": 60,
+      "total": 660,
+      "wallSeconds": 1200,
+      "recoverySeconds": 300,
+      "accounts": 2,
+      "documentsAtOnce": 1,
+      "costCeilingUsd": 1
+    },
+    "costUnitsPerProductionSide": {
+      "nominalReadAttempts": 16,
+      "nominalWriteAttempts": 8,
+      "nominalDeleteAttempts": 4,
+      "newEmailPasswordMau": 2,
+      "queryScans": 0
+    },
+    "remaining": [
+      "Fresh explicitly permitted environment/configuration/key checks",
+      "Location tariffs and explicit storage/egress/unrecovered-resource duration conditions",
+      "Explicit one-batch owner approval, fresh nonce and validity window",
+      "Any future remote entry remains disabled in this local-only CLI; no fallback or inherited approval"
+    ]
+  },
+  "preservedHistory": [
+    "original35match11mismatch",
+    "first46repaired46match",
+    "193historicalcomparisons",
+    "26localinvariants",
+    "23historicalindeterminate",
+    "revision3/GAP-AUTH-007/AUTH-U03"
+  ]
+}

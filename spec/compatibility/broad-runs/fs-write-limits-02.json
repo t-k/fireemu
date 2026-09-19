@@ -1,0 +1,265 @@
+{
+  "budgets": {
+    "costCapUsd": 1.0,
+    "maxConcurrency": 1,
+    "maxOwnedDocuments": 4,
+    "maxResponseBytes": 8388608,
+    "maxWallSeconds": 180,
+    "observationRequests": 12,
+    "planningCostUsd": 0.02,
+    "recoveryRequests": 8,
+    "recoveryReserveSeconds": 90,
+    "requestUpperBound": 24,
+    "tariffsConfirmed": false
+  },
+  "campaignId": "FS-DATA-WRITE-LIMITS-02",
+  "cases": [
+    {
+      "expected": [
+        "write succeeds",
+        "readback matches payload digest",
+        "no other owned resource changes"
+      ],
+      "id": "FS-DATA-WRITE-LIMITS-02/exact-document-boundary",
+      "kind": "positive-control",
+      "resource": "projects/{project}/databases/{database}/documents/oracle/{freshNonce}/limits-02/exact",
+      "semantics": "A generated document at the published logical-byte boundary is accepted and read back with its ownership marker and typed fields intact.",
+      "steps": [
+        "Preflight typed NOT_FOUND and bind database configuration.",
+        "Generate payload from the bound limit catalog and record payload digest.",
+        "Commit the exact-boundary document once.",
+        "Read back and validate marker, fields and response shape."
+      ]
+    },
+    {
+      "expected": [
+        "write is refused",
+        "over-boundary resource is absent",
+        "accepted control remains unchanged"
+      ],
+      "id": "FS-DATA-WRITE-LIMITS-02/over-document-boundary",
+      "kind": "negative-control",
+      "resource": "projects/{project}/databases/{database}/documents/oracle/{freshNonce}/limits-02/over",
+      "semantics": "A minimally oversized document is rejected atomically and leaves no document.",
+      "steps": [
+        "Preflight typed NOT_FOUND.",
+        "Submit a minimally oversized payload derived from the same catalog.",
+        "Record the structured refusal without retrying.",
+        "Read back and require typed NOT_FOUND.",
+        "Read exact control and require unchanged marker/digest."
+      ]
+    },
+    {
+      "expected": [
+        "write succeeds",
+        "nested response matches digest"
+      ],
+      "id": "FS-DATA-WRITE-LIMITS-02/exact-nested-boundary",
+      "kind": "positive-control",
+      "resource": "projects/{project}/databases/{database}/documents/oracle/{freshNonce}/limits-02/nested-exact",
+      "semantics": "A nested document whose individually valid fields meet the documented nesting boundary is accepted and read back.",
+      "steps": [
+        "Preflight typed NOT_FOUND.",
+        "Commit generated nested boundary payload.",
+        "Read back and validate canonical nested field paths and marker."
+      ]
+    },
+    {
+      "expected": [
+        "write is refused",
+        "no partial nested document exists",
+        "controls remain unchanged"
+      ],
+      "id": "FS-DATA-WRITE-LIMITS-02/over-nested-boundary",
+      "kind": "negative-control",
+      "resource": "projects/{project}/databases/{database}/documents/oracle/{freshNonce}/limits-02/nested-over",
+      "semantics": "A nested payload exceeding the boundary is rejected without partial publication.",
+      "steps": [
+        "Preflight typed NOT_FOUND.",
+        "Submit minimally oversized nested payload.",
+        "Record refusal without retry.",
+        "Read back and require typed NOT_FOUND.",
+        "Read both accepted controls and require unchanged digests."
+      ]
+    }
+  ],
+  "cleanup": {
+    "owner": "named recovery owner required",
+    "procedure": [
+      "Read each resource and verify ownership marker.",
+      "Bind exact updateTime/version before conditional delete.",
+      "Delete only owned resources with matching precondition.",
+      "Read each resource and require typed NOT_FOUND.",
+      "On uncertain read, marker mismatch or drift, stop and preserve journal."
+    ],
+    "recovery": "No unconditional delete; unresolved resources remain assigned to recovery owner."
+  },
+  "collectorBinding": {
+    "digest": "5f42ec0ad88d350aff0925a435049cdb05a67f97bc1825888ccfe0c2ebff0d36",
+    "path": "tools/compat-broad/batch_adapter.py",
+    "productionCollector": null,
+    "scope": "REST document limit request/readback and typed post-state only",
+    "status": "local-only",
+    "technicalBlocker": "No frozen production collector and no current artifact digest are bound. Production execution is prohibited until O7 supplies both."
+  },
+  "comparatorBinding": {
+    "contract": "Versioned typed status/error/body, payload digest, accepted-control post-state, rejected-resource absence and cleanup outcome. Numeric timestamps are compared by semantic type/value contract, not raw bytes.",
+    "path": "tools/compat-broad/shared_production_pair.py",
+    "productionComparator": null,
+    "status": "preparation-only",
+    "technicalBlocker": "No dedicated immutable production comparison binding is frozen for this independent limits campaign."
+  },
+  "configuration": {
+    "requiredReadback": [
+      "project/database identity",
+      "edition",
+      "API mode",
+      "location"
+    ],
+    "requiredValues": {
+      "apiMode": "NATIVE",
+      "edition": "STANDARD"
+    },
+    "restoration": "No configuration changes are permitted; drift stops the campaign.",
+    "writes": 0
+  },
+  "dependency": {
+    "blocks": [
+      "FS-DATA-WRITE-LIMITS-03"
+    ],
+    "parallelWith": [
+      "FS-TRANSACTION-SDK-RETRY-01"
+    ],
+    "reason": "Independent owned data namespace and no shared setting mutation.",
+    "requires": [],
+    "overlapWith": {
+      "campaignId": "FS-WRITE-TXN-PRECEDENCE-01-V9",
+      "surfaces": [
+        "FS-LIMIT-DOCUMENT-BYTES",
+        "FS-LIMIT-NESTING"
+      ],
+      "resolution": "Do not schedule both campaigns for production. O3 must retain these surfaces in exactly one frozen campaign; this package is the independent limits owner for FS-DATA-WRITE closure."
+    }
+  },
+  "evidenceBoundary": {
+    "local": "planned shadow and local tests only",
+    "model": "limit catalog and generated payload model only",
+    "officialEmulator": "unobserved",
+    "production": "unobserved",
+    "savedProductionReference": "none"
+  },
+  "executionMode": {
+    "exclusive": false,
+    "parallelCampaigns": true,
+    "reason": "Fresh document namespace; no transaction, index, Rules or shared configuration mutation. It conflicts only with campaigns using the same nonce or owned prefix."
+  },
+  "gate": {
+    "executionWindow": null,
+    "owner": null,
+    "permissionReference": null,
+    "productionAuthorization": false,
+    "productionNonce": null,
+    "requiredInputs": [
+      "owner identity and explicit permission reference covering this owned-data campaign",
+      "project/database/tenant and configuration readback",
+      "fresh nonce",
+      "current release artifact SHA-256",
+      "collector and comparator digests",
+      "recovery owner and tariff acceptance"
+    ],
+    "stopConditions": [
+      "binding drift",
+      "unexpected resource",
+      "budget exhaustion",
+      "cleanup uncertainty",
+      "incomplete receipt"
+    ]
+  },
+  "kind": "firestore-write-limits-oracle-preparation-v1",
+  "localShadow": {
+    "artifact": "Use a locally built current-head fireemu artifact with a digest bound before execution.",
+    "commands": [
+      "cargo nextest run --locked -p fireemu-adapter-grpc --test rest --profile pr",
+      "cargo nextest run --locked -p fireemu-adapter-grpc --test local --profile pr",
+      "uv run --project tools/compat-inventory --locked pytest tools/compat-broad/test_fs_write_limits_campaign.py"
+    ],
+    "productionExecuted": false,
+    "status": "prepared-local-only"
+  },
+  "locks": [
+    {
+      "key": "firestore/(default)/documents/oracle/{freshNonce}/limits-02/*",
+      "mode": "WRITE"
+    },
+    {
+      "key": "firestore/(default)/indexes",
+      "mode": "READ"
+    },
+    {
+      "key": "firestore/(default)/ruleset",
+      "mode": "READ"
+    }
+  ],
+  "parentFeatureGroups": [
+    "FS-DATA-WRITE"
+  ],
+  "preflight": [
+    "Owner-authorized target, database and tenant are required before Gate admission.",
+    "Bind current artifact digest after a release build; no production run may use a null artifact binding.",
+    "Verify nonce is fresh and absent from every current/next/backlog campaign.",
+    "Reserve request, response, time and recovery budgets."
+  ],
+  "productionExecuted": false,
+  "promotion": {
+    "remaining": [
+      "complete local shadow on current artifact",
+      "freeze artifact/collector/comparator binding",
+      "obtain owner envelope fields",
+      "production observation and immutable receipt",
+      "comparison and mismatch triage",
+      "cleanup verification",
+      "independent review",
+      "final artifact regression"
+    ],
+    "state": "WAITING_ORACLE"
+  },
+  "requirementSurfaces": [
+    "FS-LIMIT-DOCUMENT-BYTES",
+    "FS-LIMIT-NESTING"
+  ],
+  "safetyClass": "OWNED_DATA",
+  "sourceBinding": {
+    "artifactBuild": {
+      "command": "CARGO_TARGET_DIR=target/o3-fs-write-limits-02 cargo build --locked --release -p fireemu",
+      "relativePath": "target/o3-fs-write-limits-02/release/fireemu",
+      "sha256": null
+    },
+    "artifactKind": "unbuilt-current-head",
+    "artifactSha256": null,
+    "codeSourceHead": "9830ccaf53def5d51bb620411648e2a30337a32f",
+    "featureHead": "9830ccaf53def5d51bb620411648e2a30337a32f",
+    "runtimeSourceDigests": {
+      "crates/fireemu-adapter-grpc/tests/local.rs": "821b82abab52cd3b1ab5ed2fe51d1d380e518d9946d04298a80f2c078823c493",
+      "crates/fireemu-adapter-grpc/tests/rest.rs": "bbe99465fc6dd776f303d20c75d9fb8d14403f3c48068ed17f10745a42b68730",
+      "spec/limits/firestore-standard-2026-08-25.json": "2c29e7492fd581e236ce9f044294bf59e9a6b89f2c4dc3c48d9f74beb291d406",
+      "tools/compat-broad/batch_adapter.py": "5f42ec0ad88d350aff0925a435049cdb05a67f97bc1825888ccfe0c2ebff0d36",
+      "tools/compat-broad/shared_gate.py": "f4724b420f1a2da2db0fec200478f8b78aeaa394b1c1e4194533047fa74c91ea"
+    },
+    "runtimeSourcePaths": [
+      "crates/fireemu-adapter-grpc/tests/rest.rs",
+      "crates/fireemu-adapter-grpc/tests/local.rs",
+      "spec/limits/firestore-standard-2026-08-25.json",
+      "tools/compat-broad/batch_adapter.py",
+      "tools/compat-broad/shared_gate.py"
+    ]
+  },
+  "status": "BLOCKED_OWNER",
+  "target": {
+    "configuration": "read-only preflight; no config mutation",
+    "database": null,
+    "projectId": null,
+    "tenant": null
+  },
+  "technicalStatus": "BLOCKED_TECHNICAL",
+  "version": "v1"
+}

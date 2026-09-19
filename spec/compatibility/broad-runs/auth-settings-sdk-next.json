@@ -1,0 +1,89 @@
+{
+  "id": "auth-settings-sdk-next",
+  "version": 1,
+  "status": "WAITING_ORACLE",
+  "productionExecuted": false,
+  "parentFeatureGroups": ["AUTH-CONFIG-SDK", "AUTH-ACCOUNT", "AUTH-CREDENTIAL", "AUTH-ACTION", "AUTH-TENANT-BLOCKING"],
+  "safetyClass": "AUTH_ACCOUNT",
+  "sdk": {"firebase": "12.18.0", "firebaseAdmin": "14.3.0", "node": ">=20"},
+  "localShadow": {
+    "runner": "tools/sdk-smoke/auth-settings-sdk-oracle.mjs",
+    "artifactBinding": "FIREEMU_ARTIFACT plus FIREEMU_ARTIFACT_SHA256",
+    "transport": "real-fireemu-artifact only; fixture responses are rejected",
+    "authHost": "loopback only",
+    "cleanup": "fireemu exec owns the daemon and all owned resources"
+  },
+  "comparator": {
+    "id": "auth-settings-v1",
+    "classifications": ["MATCH", "SEMANTIC_MISMATCH", "INDETERMINATE", "EXPECTED_NONDETERMINISM"],
+    "binds": ["sdkVersion", "artifactSha256", "projectId", "tenantId", "operation", "responseShape", "postState", "cleanup"],
+    "productionObserved": false,
+    "savedProductionReference": null
+  },
+  "cases": [
+    {
+      "id": "account-linking-duplicate-email",
+      "meaning": "Linking a provider or password credential to an existing email has the documented collision result and leaves the account unchanged on refusal.",
+      "operation": "client SDK linkWithCredential plus Admin lookup control",
+      "negative": "duplicate email collision and wrong-principal lookup",
+      "control": "distinct owned accounts link successfully",
+      "ownedResources": "two generated local accounts; no production account",
+      "cleanup": "delete both owned UIDs and verify lookup absence"
+    },
+    {
+      "id": "client-permission-and-email-privacy",
+      "meaning": "Client SDK policy/config reads use the client route and do not gain Admin project-config privileges; email privacy changes affect only the documented client behavior.",
+      "operation": "client Auth config/policy read plus Admin readback control",
+      "negative": "client attempts Admin-only config mutation",
+      "control": "owner/Admin update and client observation on the same local project",
+      "ownedResources": "none; configuration snapshot required before any local mutation",
+      "cleanup": "restore local configuration digest and verify readback"
+    },
+    {
+      "id": "blocking-selection-and-token-forwarding",
+      "meaning": "Blocking selection and token/claim forwarding are tied to the authenticated project/tenant and cannot be selected by a caller-supplied localId.",
+      "operation": "client signup/signin through blocking fixture and token readback",
+      "negative": "unauthenticated localId selection and wrong tenant",
+      "control": "owner-bound project/tenant flow with explicit claim",
+      "ownedResources": "one generated account per namespace",
+      "cleanup": "delete all generated accounts and verify no token remains usable"
+    },
+    {
+      "id": "signup-quota-boundary",
+      "meaning": "Signup quota simulation reports the bounded response without turning fixture acceptance into a service quota claim.",
+      "operation": "finite local signup sequence with explicit quota profile",
+      "negative": "quota rejection does not create an account or issue a token",
+      "control": "below-bound signup and lookup/readback",
+      "ownedResources": "bounded generated accounts",
+      "cleanup": "recover every UID, including after uncertain responses"
+    }
+  ],
+  "campaignEnvelope": {
+    "owner": null,
+    "permissionReference": null,
+    "project": null,
+    "database": null,
+    "tenant": null,
+    "executionWindow": null,
+    "freshNonce": null,
+    "collectorCommit": null,
+    "manifestDigest": "computed after owner inputs and collector freeze",
+    "comparatorDigest": "auth-settings-v1",
+    "artifactDigest": null,
+    "maxHttpCredentialOperations": 40,
+    "maxAccounts": 8,
+    "maxDocuments": 0,
+    "requestRate": 1,
+    "concurrency": 1,
+    "maxElapsedSeconds": 180,
+    "maxEstimatedCostUsd": 10,
+    "recoveryReservation": "required from owner",
+    "recoveryOwner": null,
+    "allowedProductionObservationsPerCase": 1,
+    "postFixConfirmation": "at most one per approved case; saved reference preferred",
+    "configurationChanges": "none in local shadow; production email privacy/blocking changes require exclusive CONFIG_MUTATING approval",
+    "stopConditions": ["owner/project/tenant ambiguity", "configuration digest drift", "credential ambiguity", "unexpected permission expansion", "cleanup uncertainty", "budget overrun", "transport or receipt incomplete"]
+  },
+  "ownerInputsRequired": ["owner identity", "permission reference", "project and tenant scope", "execution window", "fresh nonce", "configuration acceptance/restoration owner", "credential/API-key binding"],
+  "evidenceBoundary": {"local": "shadow only", "officialEmulator": "unobserved", "production": "unobserved", "savedProduction": "none", "promotion": "not eligible"}
+}

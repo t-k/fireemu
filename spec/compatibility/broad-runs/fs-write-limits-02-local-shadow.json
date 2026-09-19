@@ -1,0 +1,57 @@
+{
+  "artifactSha256": null,
+  "campaignId": "FS-DATA-WRITE-LIMITS-02",
+  "cases": [
+    {
+      "control": "positive-control",
+      "expected": [
+        "write succeeds",
+        "readback matches payload digest",
+        "no other owned resource changes"
+      ],
+      "id": "FS-DATA-WRITE-LIMITS-02/exact-document-boundary"
+    },
+    {
+      "control": "negative-control",
+      "expected": [
+        "write is refused",
+        "over-boundary resource is absent",
+        "accepted control remains unchanged"
+      ],
+      "id": "FS-DATA-WRITE-LIMITS-02/over-document-boundary"
+    },
+    {
+      "control": "positive-control",
+      "expected": [
+        "write succeeds",
+        "nested response matches digest"
+      ],
+      "id": "FS-DATA-WRITE-LIMITS-02/exact-nested-boundary"
+    },
+    {
+      "control": "negative-control",
+      "expected": [
+        "write is refused",
+        "no partial nested document exists",
+        "controls remain unchanged"
+      ],
+      "id": "FS-DATA-WRITE-LIMITS-02/over-nested-boundary"
+    }
+  ],
+  "codeSourceHead": "9830ccaf53def5d51bb620411648e2a30337a32f",
+  "execution": {
+    "artifact": "Use a locally built current-head fireemu artifact with a digest bound before execution.",
+    "commands": [
+      "cargo nextest run --locked -p fireemu-adapter-grpc --test rest --profile pr",
+      "cargo nextest run --locked -p fireemu-adapter-grpc --test local --profile pr",
+      "uv run --project tools/compat-inventory --locked pytest tools/compat-broad/test_fs_write_limits_campaign.py"
+    ],
+    "productionExecuted": false,
+    "status": "prepared-local-only"
+  },
+  "kind": "firestore-write-limits-local-shadow-v1",
+  "manifestSha256": "41b065a0eceaf9a06ef682576e6f3975a1d5585f0c5025d8f83f82719d673d1e",
+  "productionExecuted": false,
+  "sourceCommit": "9830ccaf53def5d51bb620411648e2a30337a32f",
+  "status": "prepared-local-only"
+}

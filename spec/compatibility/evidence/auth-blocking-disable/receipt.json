@@ -1,0 +1,212 @@
+{
+  "acceptance": "candidate",
+  "corpus": {
+    "cases": [
+      "baseline-b-fresh-finalize",
+      "hook-c-first-signin",
+      "hook-c-token-lookup",
+      "hook-c-token-refresh",
+      "hook-c-disabled-readback",
+      "hook-c-second-signin",
+      "hook-a-first-finalize",
+      "hook-a-token-lookup",
+      "hook-a-token-refresh",
+      "hook-a-disabled-readback",
+      "hook-a-second-signin",
+      "final-b-fresh-finalize"
+    ],
+    "revision": 1,
+    "slice": "auth-blocking-disable"
+  },
+  "production": {
+    "cases": [
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 8571,
+        "httpStatus": 200,
+        "id": "baseline-b-fresh-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 8926,
+        "httpStatus": 400,
+        "id": "hook-c-first-signin",
+        "observedError": "USER_DISABLED",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 8927,
+        "httpStatus": null,
+        "id": "hook-c-token-lookup",
+        "observedError": null,
+        "outcome": "skipped",
+        "skipped": true
+      },
+      {
+        "checks": {},
+        "elapsedMs": 8927,
+        "httpStatus": null,
+        "id": "hook-c-token-refresh",
+        "observedError": null,
+        "outcome": "skipped",
+        "skipped": true
+      },
+      {
+        "checks": {
+          "disabledPersisted": false
+        },
+        "elapsedMs": 9258,
+        "httpStatus": 200,
+        "id": "hook-c-disabled-readback",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 9627,
+        "httpStatus": 400,
+        "id": "hook-c-second-signin",
+        "observedError": "USER_DISABLED",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 10549,
+        "httpStatus": 400,
+        "id": "hook-a-first-finalize",
+        "observedError": "USER_DISABLED",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 10549,
+        "httpStatus": null,
+        "id": "hook-a-token-lookup",
+        "observedError": null,
+        "outcome": "skipped",
+        "skipped": true
+      },
+      {
+        "checks": {},
+        "elapsedMs": 10549,
+        "httpStatus": null,
+        "id": "hook-a-token-refresh",
+        "observedError": null,
+        "outcome": "skipped",
+        "skipped": true
+      },
+      {
+        "checks": {
+          "disabledPersisted": true
+        },
+        "elapsedMs": 11007,
+        "httpStatus": 200,
+        "id": "hook-a-disabled-readback",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 11312,
+        "httpStatus": 400,
+        "id": "hook-a-second-signin",
+        "observedError": "USER_DISABLED",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 12614,
+        "httpStatus": 200,
+        "id": "final-b-fresh-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      }
+    ],
+    "cleanup": {
+      "emailAbsent": true,
+      "uidAbsent": true
+    },
+    "configDigestMatches": true,
+    "configRestored": true,
+    "configRestoredReadback": {
+      "blockingFunctions": {
+        "forwardInboundCredentials": {}
+      },
+      "mfa": {
+        "state": "DISABLED"
+      },
+      "phoneNumber": {},
+      "smsRegionConfig": {
+        "allowlistOnly": {}
+      }
+    },
+    "configuration": {
+      "adminPasswordPolicyAbsent": true,
+      "blockingTriggersAbsent": true,
+      "emailEnabled": true,
+      "improvedEmailPrivacy": true,
+      "passwordRequired": true,
+      "sha256": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2"
+    },
+    "functionRemoved": true,
+    "hook": {
+      "deployed": true,
+      "triggerReadback": true
+    },
+    "privateReceiptSha256": "edac8e45d0c2be99ecb942c7391d0c9765e82d76a9f7665d5bc1980615bbfa02",
+    "probeSourceCommit": "7ba905d3f98085430ef38c590b8c57c2ec0d07b5",
+    "recordedAt": "2026-09-11T06:18:59.976441+00:00",
+    "recordedWith": {
+      "probeSourceCommit": "7ba905d3f98085430ef38c590b8c57c2ec0d07b5",
+      "recorderCommit": "08002f594930ca29e3e414bc8fcf4413f657a0a7",
+      "recorderInputs": {
+        "tools/auth-blocking-disable/blocking_contract.py": "21dce7a69f1f127fba85c17233fd64e1ef3d1d4a3b688a351aa4935c2994c30d",
+        "tools/auth-blocking-disable/blocking_recorder.py": "fc36961b603d9d2ec774aa7811f9f0e4ef45e21dac5253327e5f3778ce909c69",
+        "tools/auth-blocking-disable/function/firebase.json": "49c19d130e80e61431e32150379d650f97d706787f2e7d2c8ded0e8bef91c9e0",
+        "tools/auth-blocking-disable/function/index.js": "b425a5ce1af740d0e29e2e4fde895f41907c7920a11bf2697c6bb56a654e9cc6",
+        "tools/auth-blocking-disable/function/package.json": "3b28694d57dfcaab702636e02212728502a9a6063991c89ffddb92ac6413564b"
+      }
+    },
+    "reevaluatedWith": {
+      "commit": "ea67fc66ed928a47794b98dab1b5dafc123db465",
+      "contractSha256": "946eaacc3e8f14c90b3d211bf7297f60778913e37be2c734b371364f704d82ef"
+    },
+    "setup": {
+      "a": true,
+      "b": true,
+      "c": true
+    },
+    "target": "production"
+  },
+  "publicationContractSha256": "2a0d0200754ca8a6f1a4b30af7df62ccc14ff0c866e6352c648058e9954026c7",
+  "schemaVersion": 1,
+  "scope": "Twelve sequential REST observations in production only with a first-generation beforeSignIn blocking function deployed for the run: it answers disabled: true for accounts carrying a dedicated custom claim and passes every other sign-in through. Target C (no second factor, claim) signs in with a password; target A (phone factor, claim) completes a phone MFA finalize; control B (phone factor, no claim) completes before and after. Any returned tokens are used for lookup and refresh, the disabled flag is read back through Admin, and a second sign-in follows. Phone MFA with test phone numbers, no tenant, one function shape, one run. The function was removed and the configuration, including the trigger registration, restored with a digest comparison. Admin is used for owned account setup, readback and cleanup. No human approval, no local artifact comparison, no rejecting function or beforeCreate, and no propagation claim about the persisted flag.",
+  "sourceReviewSha256": "6d9e080c2e5df6c9b90c4bd00614b07e5e1a721a5e29399cefbaf65686a19200"
+}

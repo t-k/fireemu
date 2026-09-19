@@ -1,0 +1,162 @@
+{
+  "backlog": [
+    {
+      "campaignId": "AUTH-CREDENTIAL-REFRESH-AUTHTIME-01",
+      "productionRequired": "likely; finite case and owner envelope required",
+      "reason": "Same-second authTime/refresh/session boundary remains production-unobserved and is not required to freeze the current settings package.",
+      "status": "BACKLOG"
+    },
+    {
+      "campaignId": "AUTH-ACTION-OOB-DELIVERY-BOUNDARY-01",
+      "productionRequired": "yes for backend delivery semantics",
+      "reason": "Delivery-boundary and code transition semantics remain unobserved; existing OOB local cases must not be duplicated.",
+      "status": "BACKLOG"
+    },
+    {
+      "campaignId": "AUTH-CREDENTIAL-PROVIDER-HASH-ROUNDTRIP-01",
+      "productionRequired": "only where saved evidence cannot cover backend format behavior",
+      "reason": "Provider/hash export restrictions and lifecycle transitions need a finite case; plaintext/hash inference is forbidden.",
+      "status": "BACKLOG"
+    }
+  ],
+  "current": {
+    "campaignId": "AUTH-SETTINGS-CURRENT-HEAD-REBIND-05",
+    "nextAction": "Build a fireemu artifact from the bound feature head, bind artifact/configuration/comparator digests, execute local shadows with cleanup, then submit complete manifests to O7.",
+    "packages": [
+      {
+        "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v5.json",
+        "sha256": "8df39bbfb351c33ac5d0c6fd072ccd9656f0f9ff2b62163dc198e92f3fa1aecf"
+      },
+      {
+        "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v5.json",
+        "sha256": "cbebb125734aa25b5874c8ce5f5bc2ee40c7fb99fbfe2bdf04582b410a5e5fe4"
+      }
+    ],
+    "productionRequiredNow": false,
+    "purpose": "Rebind Auth Core Oracle preparation to the exact final feature HEAD after O3 v4 integration.",
+    "status": "BLOCKED_OWNER"
+  },
+  "evidenceBoundary": {
+    "localArtifactShadow": "pending for both v5 packages",
+    "officialEmulator": "unobserved",
+    "productionObserved": "none added",
+    "promotion": "no parent or child goal eligible for COMPAT_VERIFIED",
+    "savedProductionReference": "historical receipts and replay retained without current-head promotion",
+    "sdkLocal": "runner tests are source-bound; settings runner case-level execution remains pending"
+  },
+  "featureHead": "dcd58cea79b1571da082c9d3cceb06afb91b1865",
+  "frozenAt": "2026-09-16T22:15:00Z",
+  "gitStatus": "clean at freeze",
+  "id": "auth-core-oracle-preparation-current-head-20260917-v4",
+  "kind": "auth-core-oracle-preparation-current-head-rebind-report",
+  "next": {
+    "campaignId": "AUTH-CORE-SAVED-REFERENCE-REPLAY-05",
+    "ownerDecisionRequired": false,
+    "priorReplay": {
+      "classification": "saved-production-reference MATCH only; current source recompare remains required",
+      "path": "spec/compatibility/broad-runs/515f0cf4-auth-saved-reference-replay.json",
+      "sha256": "5d7c9e8aad4bc749d05e7d211609793854966c7f05704d68aba50885848f19c9",
+      "sourceCommit": "515f0cf4afa1b12e887b84552aa20851ab3142ae"
+    },
+    "productionRequired": false,
+    "purpose": "Recompare immutable Auth saved corpora through an artifact built from this source head; no new production operation is required by default.",
+    "savedReferences": [
+      "spec/compatibility/evidence/auth-basic-v2/receipt.json",
+      "spec/compatibility/evidence/auth-password/receipt.json",
+      "spec/compatibility/evidence/auth-profile/receipt.json",
+      "spec/compatibility/evidence/auth-display-name/receipt.json"
+    ],
+    "status": "PENDING_LOCAL_ARTIFACT"
+  },
+  "parentClosure": {
+    "compatVerified": "0 / 14",
+    "nearestAuthConditions": [
+      "current-head final artifact regression for Auth settings",
+      "required production comparisons for AUTH-CONFIG-SDK and related Auth flows",
+      "known mismatch repair and independent review"
+    ],
+    "ownerDecisionRequired": [
+      "owner identity and permission reference",
+      "project/tenant scope and execution window",
+      "fresh nonce and configuration acceptance",
+      "recovery owner/reserve and complete budget envelope"
+    ]
+  },
+  "priorReport": {
+    "path": "spec/compatibility/broad-runs/auth-core-oracle-preparation-current-head-20260917-v3.json",
+    "preserved": true,
+    "sha256": "2b94194e241d9da67baa9479db6b791c50fefe0f4c0dd82249fbfed3fef19a17"
+  },
+  "productionExecuted": false,
+  "productionStatus": "BLOCKED_OWNER",
+  "rebindPackages": [
+    {
+      "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v5.json",
+      "prior": {
+        "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v4.json",
+        "preserved": true,
+        "sha256": "9127ea1bc95808e17477a8d451ffeecffaca7813f8023b9d4cc2e73ed55584a9"
+      },
+      "sha256": "8df39bbfb351c33ac5d0c6fd072ccd9656f0f9ff2b62163dc198e92f3fa1aecf",
+      "status": "BLOCKED_OWNER"
+    },
+    {
+      "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v5.json",
+      "prior": {
+        "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v4.json",
+        "preserved": true,
+        "sha256": "c524db079afe4b1a63ca61778c230d87b5800226150ef34d3f2c222417d72b30"
+      },
+      "sha256": "cbebb125734aa25b5874c8ce5f5bc2ee40c7fb99fbfe2bdf04582b410a5e5fe4",
+      "status": "BLOCKED_OWNER"
+    }
+  ],
+  "runtimeSourceComparison": {
+    "authRuntimeChanged": false,
+    "basis": "git diff --name-status from prior Auth current-head binding; only O3 Firestore campaign docs/tests changed after v4",
+    "changedPaths": [
+      "docs/compatibility/fs-write-transaction-campaign-preparation.md",
+      "spec/compatibility/broad-runs/fs-write-txn-precedence-01-v4-binding.json",
+      "spec/compatibility/broad-runs/fs-write-txn-precedence-01-v4-local-shadow.json",
+      "spec/compatibility/broad-runs/fs-write-txn-precedence-01-v4.json",
+      "tools/compat-broad/test_fs_write_campaign_v4.py"
+    ],
+    "from": "c4883258c06d769cec9d3e2081c2160bd4794ba2",
+    "to": "dcd58cea79b1571da082c9d3cceb06afb91b1865"
+  },
+  "safety": {
+    "cloudReadPerformed": false,
+    "configurationMutationPerformed": false,
+    "historicalArtifactRewritten": false,
+    "nonceReused": false,
+    "privateCredentialStored": false,
+    "productionOperationPerformed": false
+  },
+  "staleBindings": [
+    {
+      "action": "Preserve unchanged; use v5 for current-head Gate binding.",
+      "path": "spec/compatibility/broad-runs/auth-password-policy-sdk-next-v4.json",
+      "reason": "Version 4 binds source head c4883258c, not the exact final HEAD.",
+      "sha256": "9127ea1bc95808e17477a8d451ffeecffaca7813f8023b9d4cc2e73ed55584a9"
+    },
+    {
+      "action": "Preserve unchanged; use v5 for current-head Gate binding.",
+      "path": "spec/compatibility/broad-runs/auth-settings-sdk-next-v4.json",
+      "reason": "Version 4 binds source head c4883258c, not the exact final HEAD.",
+      "sha256": "c524db079afe4b1a63ca61778c230d87b5800226150ef34d3f2c222417d72b30"
+    },
+    {
+      "action": "Preserve unchanged; use this v4 report for the current binding.",
+      "path": "spec/compatibility/broad-runs/auth-core-oracle-preparation-current-head-20260917-v3.json",
+      "reason": "Version 3 report records the prior current-head binding.",
+      "sha256": "2b94194e241d9da67baa9479db6b791c50fefe0f4c0dd82249fbfed3fef19a17"
+    },
+    {
+      "action": "Do not rewrite; perform a new saved-reference recompare when an artifact is available.",
+      "path": "spec/compatibility/broad-runs/515f0cf4-auth-saved-reference-replay.json",
+      "reason": "Valid immutable saved-production replay bound to source 515f0cf4, not current-head evidence.",
+      "sha256": "5d7c9e8aad4bc749d05e7d211609793854966c7f05704d68aba50885848f19c9"
+    }
+  ],
+  "version": 4
+}

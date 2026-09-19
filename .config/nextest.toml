@@ -35,6 +35,18 @@ fail-fast = true
 slow-timeout = { period = "10s" }
 leak-timeout = { period = "30s", result = "fail" }
 
+[[profile.pr.overrides]]
+filter = 'test(/(nested_run_fails_when_a_child_keeps_captured_stdout|the_census_sees_a_child_that_redirected_its_output|a_timed_out_blocking_handler_releases_admission_and_recycles_its_runner|pubsub_bridge_capacity_refusal_keeps_the_broker_batch_invisible|pubsub_dead_letter_retry_is_woken_by_functions_capacity_recovery)$/)'
+test-group = "process-contention"
+
+# These scenarios must be able to start or recycle their real Python runner and receive its hello
+# while the workspace is otherwise saturated. Reserve the run's execution slots instead of
+# extending the protocol timeout. Every AtomicCommitOutbox Connect test except the pure
+# action-inventory check constructs the same real runner during initialization.
+[[profile.pr.overrides]]
+filter = 'binary(atomic_commit_outbox_connect) & test(/(staging_is_invisible_until_one_real_atomic_commit|real_multi_write_rejection_publishes_neither_documents_nor_changes|real_adapter_capacity_refusal_preserves_source_and_publishes_no_event|disabled_actions_preserve_every_projected_field|projection_fault_changes_exactly_one_field|deterministic_scenarios_cover_all_actions|every_projection_field_detects_drift|generated_traces_match_the_real_firestore_state)$/)'
+threads-required = "num-cpus"
+
 [profile.ci]
 retries = 0
 fail-fast = false
@@ -61,3 +73,6 @@ fail-fast = false
 retries = 0
 fail-fast = false
 leak-timeout = { period = "200ms", result = "fail" }
+
+[test-groups.process-contention]
+max-threads = 1

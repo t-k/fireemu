@@ -1,0 +1,700 @@
+"""Production preparation admission tests; never call an oracle."""
+
+import importlib.util
+from pathlib import Path
+
+import pytest
+
+
+def contract():
+    path = Path(__file__).with_name("batch_contract.py")
+    assert path.exists(), "batch admission contract required before remote transport"
+    spec = importlib.util.spec_from_file_location("batch_contract", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_candidate_keeps_all_new_checks_and_bounds_owned_scans():
+    c = contract()
+    m = c.candidate()
+    assert m["diagnosticRows"] == {"auth": 19, "firestore": 27}
+    assert m["resources"]["documents"] == 8
+    assert m["resources"]["accounts"] == 3
+    assert m["cost"]["scanDocumentsPerQuery"] == 1
+    assert m["cost"]["upperEstimateUsd"] < 1
+    assert m["productionApproval"] is None
+    mapped = c.compile_firestore(m, "a" * 32)
+    assert len(mapped) == 2
+    query = next(s for s in mapped[0]["steps"] if s["id"] == "zero-limit")
+    assert query["body"]["structuredQuery"]["from"] == [{"collectionId": "broad"}]
+    assert query["path"].endswith("/broad_runs/" + "a" * 32 + "-0:runQuery")
+    assert all("/broad_runs/" in name for p in mapped for name in p["targets"])
+
+
+def test_changed_source_or_namespace_cannot_be_compiled():
+    c = contract()
+    m = c.candidate()
+    m["firestorePrograms"][0]["steps"][0]["path"] += "/foreign"
+    with pytest.raises(ValueError):
+        c.compile_firestore(m, "a" * 32)
+    changed = c.candidate()
+    changed["firestorePrograms"][0]["seed"][0]["fields"]["n"]["integerValue"] = "999"
+    with pytest.raises(ValueError, match="unrecognized candidate"):
+        c.compile_firestore(changed, "a" * 32)
+    for nonce in ["", "../outside", "a" * 31, "A" * 32]:
+        with pytest.raises(ValueError):
+            c.compile_firestore(c.candidate(), nonce)
+
+
+def test_budget_reserves_recovery_and_counts_auth_commands():
+    c = contract()
+    b = c.Budget(start=0)
+    b.reserve("metadata", 0, duration=80)
+    assert b.counts["metadata"] == 1
+    with pytest.raises(ValueError):
+        b.reserve("metadata", 830, duration=80)
+    b.recovery = True
+    with pytest.raises(ValueError):
+        b.reserve("metadata", 1190, duration=20)
+    for _ in range(299):
+        b.reserve("auth", 900, duration=1)
+    b.reserve("auth", 900, duration=1)
+    with pytest.raises(ValueError):
+        b.reserve("auth", 900, duration=1)
+
+
+def test_approval_is_manifest_observer_nonce_and_time_bound():
+    c = contract()
+    m = c.candidate()
+    with pytest.raises(ValueError):
+        c.approve(m, {}, "a" * 32, "b" * 64, 1000)
+
+
+def test_expiry_failure_latches_and_privileged_use_requires_full_deadline():
+    c = contract()
+    assert hasattr(c, "Credential"), "verified expiry state required"
+    token = c.Credential()
+    token.accept("opaque", {"expires_in": "30"}, 100)
+    assert token.usable(116, 12)
+    assert not token.usable(118, 12)
+    token.fail()
+    assert not token.usable(100, 1)
+    with pytest.raises(ValueError):
+        token.accept("replacement", {"expires_in": "3600"}, 100)
+
+
+def test_real_transport_bounds_redirect_body_and_total_deadline():
+    import http.server
+    import threading
+    import time
+
+    path = Path(__file__).with_name("batch_adapter.py")
+    assert path.exists(), "bounded adapter required"
+    import batch_adapter as adapter
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_GET(self):
+            if self.path == "/redirect":
+                self.send_response(302)
+                self.send_header("Location", "/sink")
+                self.end_headers()
+            elif self.path == "/large":
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"x" * 65537)
+            elif self.path == "/slow":
+                time.sleep(1)
+            else:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok":true}')
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    origin = f"http://127.0.0.1:{server.server_port}"
+    try:
+        assert adapter.wire(origin + "/ok", "GET", None, {}, local=True)[1] == {
+            "ok": True
+        }
+        for suffix in ("/redirect", "/large", "/slow"):
+            started = time.monotonic()
+            with pytest.raises(ValueError):
+                adapter.wire(origin + suffix, "GET", None, {}, local=True, timeout=0.4)
+            assert time.monotonic() - started < 0.8
+        with pytest.raises(ValueError):
+            adapter.wire("https://example.com/", "GET", None, {}, local=True)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_unjournaled_resources_and_foreign_auth_selectors_fail_before_transport(
+    tmp_path,
+):
+    import batch_adapter as a
+
+    c = contract()
+    run = a.Adapter(
+        c.candidate(),
+        "a" * 32,
+        tmp_path / "run",
+        local_origins={
+            "auth": "http://127.0.0.1:12345",
+            "firestore": "http://127.0.0.1:12346",
+        },
+    )
+    with pytest.raises(ValueError, match="journaled"):
+        run.doc("projects/foreign/databases/(default)/documents/a/b", method="DELETE")
+    for path, body, admin in [
+        (
+            "/identitytoolkit.googleapis.com/v1/accounts:update?key=fake",
+            {"idToken": "foreign"},
+            False,
+        ),
+        ("/identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=fake", {}, False),
+        (
+            "/identitytoolkit.googleapis.com/v1/projects/demo-firestore-probe/accounts:delete",
+            {"localId": "foreign"},
+            True,
+        ),
+    ]:
+        with pytest.raises(ValueError):
+            run.auth_call(path, body, admin)
+    assert run.budget.counts["total"] == 0
+    assert not run.journal.exists()
+
+
+def test_cleanup_never_deletes_a_document_replaced_after_conditional_seed(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as a
+
+    c = contract()
+    name = "projects/demo-firestore-probe/databases/(default)/documents/broad_runs/owned/tf/doc"
+    fields = {"_sharedOwner": {"referenceValue": name}, "marker": {"stringValue": "owned"}}
+    created = {"name": name, "fields": fields, "updateTime": "2026-09-16T00:00:00Z"}
+    foreign = {"name": name, "fields": {"marker": {"stringValue": "foreign"}}, "updateTime": "2026-09-16T00:00:01Z"}
+    calls = []
+
+    def fake_wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
+        calls.append((method, url, body))
+        if method == "GET" and len(calls) == 1:
+            return 404, {"error": {"status": "NOT_FOUND"}}, "application/json"
+        if method == "PATCH":
+            return 200, created, "application/json"
+        if method == "GET":
+            return 200, foreign, "application/json"
+        pytest.fail("foreign replacement must never receive DELETE")
+
+    run = a.Adapter(
+        c.candidate(),
+        "a" * 32,
+        tmp_path / "run",
+        local_origins={
+            "auth": "http://127.0.0.1:12345",
+            "firestore": "http://127.0.0.1:12346",
+        },
+    )
+    run.compiled = [{
+        "parent": name.rsplit("/tf/doc", 1)[0],
+        "targets": [name],
+        "seed": [{"path": "/v1/" + name, "fields": fields}],
+        "steps": [],
+    }]
+    monkeypatch.setattr(a, "wire", fake_wire)
+
+    run.firestore()
+    run.cleanup()
+
+    assert calls[-1][0] == "GET"
+    assert run.unrecovered == [{"kind": "document", "name": name}]
+
+
+def test_conditional_seed_race_keeps_existing_document_unowned(tmp_path, monkeypatch):
+    import batch_adapter as a
+
+    c = contract()
+    name = "projects/demo-firestore-probe/databases/(default)/documents/broad_runs/owned/tf/doc"
+    fields = {"marker": {"stringValue": "owned"}}
+    foreign = {
+        "name": name,
+        "fields": {"marker": {"stringValue": "foreign"}},
+        "updateTime": "2026-09-16T00:00:01Z",
+    }
+    calls = []
+
+    def fake_wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
+        calls.append((method, url, body))
+        if method == "GET" and len(calls) == 1:
+            return 404, {"error": {"status": "NOT_FOUND"}}, "application/json"
+        if method == "PATCH":
+            return 400, {"error": {"status": "ALREADY_EXISTS"}}, "application/json"
+        if method == "GET":
+            return 200, foreign, "application/json"
+        pytest.fail("preflight race must never receive DELETE")
+
+    run = a.Adapter(
+        c.candidate(),
+        "a" * 32,
+        tmp_path / "run",
+        local_origins={
+            "auth": "http://127.0.0.1:12345",
+            "firestore": "http://127.0.0.1:12346",
+        },
+    )
+    run.compiled = [{
+        "parent": name.rsplit("/tf/doc", 1)[0],
+        "targets": [name],
+        "seed": [{"path": "/v1/" + name, "fields": fields}],
+        "steps": [],
+    }]
+    monkeypatch.setattr(a, "wire", fake_wire)
+
+    with pytest.raises(ValueError, match="conditional creation"):
+        run.firestore()
+    run.cleanup()
+
+    assert run.unrecovered == [{"kind": "document", "name": name}]
+    assert all(method != "DELETE" for method, _url, _body in calls)
+
+
+def test_cleanup_never_deletes_same_version_document_with_changed_fields(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as a
+
+    c = contract()
+    name = "projects/demo-firestore-probe/databases/(default)/documents/broad_runs/owned/tf/doc"
+    fields = {"marker": {"stringValue": "owned"}}
+    foreign = {"marker": {"stringValue": "foreign"}}
+    calls = []
+
+    def fake_wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
+        calls.append((method, url, body))
+        if method == "GET" and len(calls) == 1:
+            return 404, {"error": {"status": "NOT_FOUND"}}, "application/json"
+        if method == "PATCH":
+            return 200, {
+                "name": name,
+                "fields": fields,
+                "updateTime": "2026-09-16T00:00:00Z",
+            }, "application/json"
+        if method == "GET":
+            return 200, {
+                "name": name,
+                "fields": foreign,
+                "updateTime": "2026-09-16T00:00:00Z",
+            }, "application/json"
+        pytest.fail("same-version field replacement must never receive DELETE")
+
+    run = a.Adapter(
+        c.candidate(),
+        "a" * 32,
+        tmp_path / "run",
+        local_origins={
+            "auth": "http://127.0.0.1:12345",
+            "firestore": "http://127.0.0.1:12346",
+        },
+    )
+    run.compiled = [{
+        "parent": name.rsplit("/tf/doc", 1)[0],
+        "targets": [name],
+        "seed": [{"path": "/v1/" + name, "fields": fields}],
+        "steps": [],
+    }]
+    monkeypatch.setattr(a, "wire", fake_wire)
+
+    run.firestore()
+    run.cleanup()
+
+    assert calls[-1][0] == "GET"
+    assert run.unrecovered == [{"kind": "document", "name": name}]
+
+
+def test_firestore_proves_and_cleans_up_every_successful_commit_document(
+    tmp_path, monkeypatch
+):
+    from urllib.parse import quote
+
+    import batch_adapter as a
+
+    c = contract()
+    base = "projects/demo-firestore-probe/databases/(default)/documents/broad_runs/owned/tf"
+    names = [base + "/" + label for label in ("doc", "extrema", "created", "sat", "nan")]
+    seed_fields = {"marker": {"stringValue": "seed"}}
+    writes = [
+        {"update": {"name": names[0], "fields": {"marker": {"stringValue": "mutated"}}}},
+        {"update": {"name": names[1], "fields": {"marker": {"stringValue": "extrema"}}}},
+        {"transform": {"document": names[2], "fieldTransforms": [{"fieldPath": "count", "increment": {"integerValue": "1"}}]}},
+        {"update": {"name": names[3], "fields": {"marker": {"stringValue": "sat"}}}},
+        {"update": {"name": names[4], "fields": {"marker": {"stringValue": "nan"}}}},
+    ]
+    versions = {name: f"2026-09-16T00:00:{index + 1:02d}Z" for index, name in enumerate(names)}
+    created_documents = {
+        names[0]: {"marker": {"stringValue": "mutated"}},
+        names[1]: {"marker": {"stringValue": "extrema"}},
+        names[2]: {"count": {"integerValue": "1"}},
+        names[3]: {"marker": {"stringValue": "sat"}},
+        names[4]: {"marker": {"stringValue": "nan"}},
+    }
+    current = {}
+    calls = []
+
+    def fake_wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
+        calls.append((method, url, body))
+        path = url.split("/v1/", 1)[-1]
+        if method == "GET" and path in names and path not in current:
+            return 404, {"error": {"status": "NOT_FOUND"}}, "application/json"
+        if method == "GET" and path in names:
+            return 200, {
+                "name": path,
+                "fields": current[path],
+                "updateTime": versions[path],
+            }, "application/json"
+        if method == "PATCH":
+            current[names[0]] = seed_fields
+            versions[names[0]] = "2026-09-16T00:00:00Z"
+            return 200, {
+                "name": names[0],
+                "fields": seed_fields,
+                "updateTime": versions[names[0]],
+            }, "application/json"
+        if method == "POST" and path.endswith(":commit"):
+            current.update(created_documents)
+            return 200, {
+                "writeResults": [{"updateTime": versions[name]} for name in names],
+                "commitTime": "2026-09-16T00:01:00Z",
+            }, "application/json"
+        if method == "DELETE":
+            name = path.split("?", 1)[0]
+            assert name in names
+            assert "currentDocument.updateTime=" + quote(versions[name], safe="") in path
+            current.pop(name, None)
+            return 200, {}, "application/json"
+        pytest.fail(f"unexpected request: {method} {url}")
+
+    run = a.Adapter(
+        c.candidate(),
+        "a" * 32,
+        tmp_path / "run",
+        local_origins={
+            "auth": "http://127.0.0.1:12345",
+            "firestore": "http://127.0.0.1:12346",
+        },
+    )
+    run.compiled = [{
+        "id": "owned-documents",
+        "parent": base,
+        "targets": names,
+        "seed": [{"path": "/v1/" + names[0], "fields": seed_fields}],
+        "steps": [
+            {
+                "id": "create-and-mutate",
+                "method": "POST",
+                "path": "/v1/" + base + ":commit",
+                "body": {"writes": writes},
+            },
+            *[
+                {"id": "read-" + name.rsplit("/", 1)[-1], "method": "GET", "path": "/v1/" + name}
+                for name in names
+            ],
+        ],
+    }]
+    monkeypatch.setattr(a, "wire", fake_wire)
+
+    run.firestore()
+    assert set(run.creation_proofs) == set(names)
+    assert all(proof["fieldsDigest"] for proof in run.creation_proofs.values())
+    run.cleanup()
+
+    assert run.unrecovered == []
+    assert not current
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_failed_commit_keeps_creation_uncertain_without_unsafe_cleanup(
+    tmp_path, monkeypatch, partial
+):
+    import batch_adapter as a
+
+    c = contract()
+    base = "projects/demo-firestore-probe/databases/(default)/documents/broad_runs/owned/tf"
+    seed = base + "/seed"
+    candidate = base + "/candidate"
+    fields = {"marker": {"stringValue": "owned"}}
+    foreign = {"marker": {"stringValue": "unknown"}}
+    current = {}
+    calls = []
+
+    def fake_wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
+        calls.append((method, url, body))
+        path = url.split("/v1/", 1)[-1]
+        if method == "GET" and path.split("?", 1)[0] in (seed, candidate):
+            name = path.split("?", 1)[0]
+            if name not in current:
+                return 404, {"error": {"status": "NOT_FOUND"}}, "application/json"
+            return 200, {
+                "name": name,
+                "fields": current[name],
+                "updateTime": "2026-09-16T00:00:00Z",
+            }, "application/json"
+        if method == "PATCH":
+            current[seed] = fields
+            return 200, {
+                "name": seed,
+                "fields": fields,
+                "updateTime": "2026-09-16T00:00:00Z",
+            }, "application/json"
+        if method == "POST" and path.endswith(":commit"):
+            if partial:
+                current[candidate] = foreign
+            return 400, {"error": {"status": "FAILED_PRECONDITION"}}, "application/json"
+        if method == "DELETE":
+            name = path.split("?", 1)[0]
+            assert name == seed
+            current.pop(name, None)
+            return 200, {}, "application/json"
+        pytest.fail(f"unexpected request: {method} {url}")
+
+    run = a.Adapter(
+        c.candidate(),
+        "a" * 32,
+        tmp_path / "run",
+        local_origins={
+            "auth": "http://127.0.0.1:12345",
+            "firestore": "http://127.0.0.1:12346",
+        },
+    )
+    run.compiled = [{
+        "id": "failed-commit",
+        "parent": base,
+        "targets": [seed, candidate],
+        "seed": [{"path": "/v1/" + seed, "fields": fields}],
+        "steps": [{
+            "id": "failed-create",
+            "method": "POST",
+            "path": "/v1/" + base + ":commit",
+            "body": {"writes": [{"update": {"name": candidate, "fields": foreign}}]},
+        }],
+    }]
+    monkeypatch.setattr(a, "wire", fake_wire)
+
+    run.firestore()
+
+    assert candidate not in run.creation_proofs
+    run.cleanup()
+    if partial:
+        assert {entry["name"] for entry in run.unrecovered} == {candidate}
+        assert all(
+            method != "DELETE" or seed in url
+            for method, url, _body in calls
+        )
+    else:
+        assert run.unrecovered == []
+
+
+def test_remote_adapter_cannot_be_constructed_without_permission(tmp_path):
+    import batch_adapter as a
+
+    with pytest.raises(ValueError, match="approval"):
+        a.Adapter(contract().candidate(), "a" * 32, tmp_path / "remote")
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_privileged_http_refusal_stops_transport_and_preserves_unconfirmed_cleanup(
+    tmp_path, status
+):
+    import http.server
+    import json
+    import threading
+    import time
+
+    import batch_adapter as a
+
+    calls = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_GET(self):
+            calls.append(self.path)
+            self.send_response(status)
+            self.end_headers()
+            self.wfile.write(
+                json.dumps({"error": {"status": "PERMISSION_DENIED"}}).encode()
+            )
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    origin = f"http://127.0.0.1:{server.server_port}"
+    try:
+        # Every statement that can raise stays inside the block that stops the
+        # server; a stranded loopback server used to survive the whole session.
+        run = a.Adapter(
+            contract().candidate(),
+            "a" * 32,
+            tmp_path / "run",
+            local_origins={"auth": origin, "firestore": origin},
+        )
+        run.credential.accept("verified", {"expires_in": 3600}, time.monotonic())
+        name = run.compiled[0]["targets"][0]
+        run.documents.add(name)
+        run.record({"kind": "document-attempt", "name": name})
+        with pytest.raises(ValueError, match="credential rejected"):
+            run.request("firestore", "/v1/" + name, method="GET", privileged=True)
+        assert run.credential.failed
+        captured = json.loads(
+            (run.output / "responses.jsonl").read_text().splitlines()[0]
+        )
+        assert captured["response"]["httpStatus"] == status
+        assert captured["response"]["body"]["error"]["status"] == "PERMISSION_DENIED"
+        assert (run.output / "responses.jsonl").stat().st_mode & 0o777 == 0o600
+        result = run.execute()
+        assert not result["completed"]
+        assert result["unrecovered"] == [{"kind": "document", "name": name}]
+        assert len(calls) == 1
+        assert run.credential.attempts == 0
+        # Intentional caller refusals do not invalidate administrator credentials.
+        other = a.Adapter(
+            contract().candidate(),
+            "b" * 32,
+            tmp_path / "other",
+            local_origins={"auth": origin, "firestore": origin},
+        )
+        assert other.request("auth", "unprivileged", method="GET")[0] == status
+        assert not other.credential.failed
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_mapping_comparator_preserves_identity_types_and_array_order():
+    import importlib.util
+
+    assert importlib.util.find_spec("batch_comparison"), (
+        "mapped response comparison required"
+    )
+    from batch_comparison import normalize
+
+    parent = "projects/fireemu-35fe6/databases/(default)/documents/broad_runs/owned"
+    body = {
+        "name": parent + "/tf/doc",
+        "fields": {"ordered": [True, 1, None]},
+        "createTime": "2026-09-12T00:00:00Z",
+    }
+    got = normalize(body, parent)
+    assert (
+        got["name"]
+        == "projects/demo-firestore-probe/databases/(default)/documents/tf/doc"
+    )
+    assert got["fields"]["ordered"] == [True, 1, None]
+    assert type(got["fields"]["ordered"][0]) is bool
+    assert got["createTime"] == "<now>"
+    assert (
+        normalize({"name": "projects/foreign/doc"}, parent)["name"]
+        == "projects/foreign/doc"
+    )
+
+
+def test_finite_phase_and_intersecting_budget_boundaries():
+    import itertools
+
+    c = contract()
+    checked = 0
+    for recovery, elapsed, total, service_count in itertools.product(
+        [False, True], [880, 900, 1190], [2099, 2100, 2399, 2400], [399, 400]
+    ):
+        b = c.Budget(0)
+        b.recovery = recovery
+        b.counts.update(total=total, auth=service_count)
+        allowed = (
+            elapsed + 12 <= (1200 if recovery else 900)
+            and total < (2400 if recovery else 2100)
+            and service_count < 400
+        )
+        if allowed:
+            b.reserve("auth", elapsed)
+            assert b.counts["auth"] == service_count + 1
+            assert b.counts["total"] == total + 1
+        else:
+            with pytest.raises(ValueError):
+                b.reserve("auth", elapsed)
+            assert b.counts["total"] == total
+        checked += 1
+    assert checked == 48
+
+
+def test_valid_permission_and_each_binding_rejection():
+    c = contract()
+    m = c.candidate()
+    permission = {
+        "kind": "owner-execution-permission",
+        "comparisonContractDigest": c.digest(__import__("batch_pair").binding(m)),
+        "manifestSha256": c.digest(m),
+        "observerSha256": "b" * 64,
+        "nonce": "a" * 32,
+        "project": c.PROJECT,
+        "projectNumber": c.NUMBER,
+        "quotaProject": c.PROJECT,
+        "tariffsConfirmedBelowPlanningCeilings": True,
+        "issuedAt": 900,
+        "expiresAt": 9000,
+        "ownerIdentity": "unit-test-only-not-real-permission",
+        "permissionReference": "offline-fixture",
+        "authConfigDigest": "c" * 64,
+        "databaseProjection": {
+            "name": "projects/fireemu-35fe6/databases/(default)",
+            "uid": "fixture",
+            "type": "FIRESTORE_NATIVE",
+            "databaseEdition": "STANDARD",
+            "locationId": "us-central1",
+        },
+        "databaseProjectionContractDigest": c.digest(c.DATABASE_PROJECTION),
+        "pricingLocation": "us-central1",
+        "pricingCheckedAt": "2026-09-12",
+    }
+    permission["databaseProjectionDigest"] = c.digest(permission["databaseProjection"])
+    c.approve(m, permission, "a" * 32, "b" * 64, 1000)
+    for key, value in [
+        ("manifestSha256", "x"),
+        ("observerSha256", "x"),
+        ("nonce", "x"),
+        ("projectNumber", "0"),
+        ("quotaProject", "foreign-project"),
+        ("quotaProject", None),
+        ("tariffsConfirmedBelowPlanningCeilings", 1),
+        ("expiresAt", 1100),
+        ("issuedAt", 1100),
+        ("permissionReference", ""),
+    ]:
+        with pytest.raises(ValueError):
+            c.approve(m, {**permission, key: value}, "a" * 32, "b" * 64, 1000)
+
+
+def test_request_headers_bind_only_remote_privileged_quota():
+    from batch_adapter import request_headers
+
+    for local in (False, True):
+        for token in (None, "offline-token"):
+            for form in (False, True):
+                headers = request_headers(token, local=local, form=form)
+                assert headers.get("x-goog-user-project") == (
+                    "fireemu-35fe6" if token and not local else None
+                )
+                assert headers.get("Authorization") == (
+                    "Bearer offline-token" if token else None
+                )
+                assert headers["Content-Type"] == (
+                    "application/x-www-form-urlencoded" if form else "application/json"
+                )

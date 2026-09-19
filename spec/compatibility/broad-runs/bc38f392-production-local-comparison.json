@@ -1,0 +1,243 @@
+{
+  "mode": "production-versus-local",
+  "evidenceKind": "recorded-observations",
+  "recordingComplete": true,
+  "bindingsValid": true,
+  "bindingErrors": [],
+  "cleanupComplete": true,
+  "compatibility": "mismatch",
+  "rows": [
+    {
+      "id": "firestore:broad/refusal-preserves-state#read-normal",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#refused-overwrite",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#read-after-refusal",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#empty-commit",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#zero-limit",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#negative-limit",
+      "status": "mismatch",
+      "firstDifference": "$.body"
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#read-after-query-refusal",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#server-timestamp-and-increments",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-increments",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#maximum-and-minimum-invalid-field-path",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-invalid-max-min",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#maximum-and-minimum",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-max-min",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#array-transforms",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-array-transforms",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#transform-only-write-creates",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-transform-created",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#transform-write-with-exists-precondition",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#increment-with-non-numeric-operand",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#server-timestamp-on-a-delete",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#set-and-transform-same-field",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-set-and-transform",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#integer-increment-saturates",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-saturated",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#increment-on-nan",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#two-transforms-on-one-field-in-one-write",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:writes/transforms#read-dup",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/create-a",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/create-b",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/short-password-refused",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/refused-create-absent",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/self-admin-field",
+      "status": "mismatch",
+      "firstDifference": "$.body.keys"
+    },
+    {
+      "id": "auth:broad/other-user-selector",
+      "status": "mismatch",
+      "firstDifference": "$.body.keys"
+    },
+    {
+      "id": "auth:broad/unauthenticated-update",
+      "status": "mismatch",
+      "firstDifference": "$.body.error.errors[0].message.machineCode"
+    },
+    {
+      "id": "auth:broad/refusal-state-a",
+      "status": "mismatch",
+      "firstDifference": "$.body.users[0].keys"
+    },
+    {
+      "id": "auth:broad/refusal-state-b",
+      "status": "mismatch",
+      "firstDifference": "$.body.users[0].keys"
+    },
+    {
+      "id": "auth:broad/admin-update",
+      "status": "mismatch",
+      "firstDifference": "$.body.keys"
+    },
+    {
+      "id": "auth:broad/self-sees-admin-state",
+      "status": "mismatch",
+      "firstDifference": "$.body.users[0].keys"
+    },
+    {
+      "id": "auth:broad/password-change",
+      "status": "mismatch",
+      "firstDifference": "$.body.keys"
+    },
+    {
+      "id": "auth:broad/old-password",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/new-password",
+      "status": "mismatch",
+      "firstDifference": "$.body.displayName"
+    },
+    {
+      "id": "auth:broad/refresh-after-change",
+      "status": "mismatch",
+      "firstDifference": "$.body.project_id"
+    },
+    {
+      "id": "auth:broad/delete-a",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/deleted-absent-a",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/delete-b",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "auth:broad/deleted-absent-b",
+      "status": "match",
+      "firstDifference": null
+    }
+  ],
+  "manifestDigest": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+  "comparisonContractDigest": "ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc"
+}

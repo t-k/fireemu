@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_session::loopback::PrivilegedAdmission;
 use fireemu_core_session::tenancy::Scope;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::edition::FirestoreEdition;
@@ -116,6 +117,18 @@ pub trait ProjectHooks: Send + Sync {
     /// The shared virtual clock moved: release Firestore history that no retention root can
     /// still observe. The default is a no-op for embedders without a Firestore backend.
     fn clock_advanced(&self, _now: LogicalInstant) {}
+    /// The clock move is complete and the session admission barrier is released again: run
+    /// the work that has to take ordinary admission, such as the Firestore time-to-live
+    /// sweep, whose deletes are ordinary writes. Only `scope` is swept. Returns how many
+    /// documents it deleted.
+    fn clock_settled(&self, _scope: &Scope, _now: LogicalInstant) -> usize {
+        0
+    }
+    /// Runs one Firestore time-to-live sweep over `scope` whether or not the interval has
+    /// elapsed, and returns how many documents it deleted.
+    fn sweep_expired_documents_now(&self, _scope: &Scope, _now: LogicalInstant) -> usize {
+        0
+    }
 }
 
 /// One adapter's part of a session snapshot: an opaque copy of its state.
@@ -173,14 +186,29 @@ pub trait SnapshotHook: Send + Sync {
     fn shared(&self) -> bool {
         false
     }
-    /// Captures what `scope` owns. Never mutates: the restore protocol also uses it to
-    /// take the pre-image it rolls back to.
+    /// Captures what `scope` owns for a named, user-visible snapshot. Never mutates.
     fn capture(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure>;
+    /// Captures an exact, transient pre-image for compensating rollback.
+    ///
+    /// The default reuses the user-visible snapshot shape. A hook whose published snapshot
+    /// deliberately removes secrets or whose normal restore rotates credentials overrides this
+    /// method; the returned part exists only for the duration of one restore request.
+    fn capture_rollback(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        self.capture(scope)
+    }
     /// Whether `part` belongs to this hook and `scope` can be restored right now, without
     /// mutating anything. Every hook is validated before any hook applies.
     fn validate(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure>;
     /// Puts a captured part back for `scope`.
     fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure>;
+    /// Restores a rollback pre-image after a later hook refused the operation.
+    ///
+    /// Most stores can use the normal restore operation. Stores whose successful restore has
+    /// an intentional side effect, such as rotating a credential lifecycle value, override
+    /// this method so a failed multi-store transition remains observationally exact.
+    fn rollback(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        self.restore(scope, part)
+    }
     /// A cheap, saturating estimate of the heap bytes `part` retains, for the per-session
     /// byte budget (`SNAP-MEM-01`). The default is zero: a hook whose part is negligible
     /// (the clock, the ruleset slot, the functions marker) need not implement it. A part
@@ -237,7 +265,10 @@ pub struct ControlState {
     pub storage_rules: Arc<crate::storage::StorageRulesRegistry>,
     /// Hooks run by a reset of the default session after its scope is wiped (the shared
     /// parts: the functions runtime).
-    pub reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>>,
+    /// The default session's shared parts. A hook reports a refusal instead of panicking:
+    /// it runs holding the locks the services it resets are behind, so a panic here poisons
+    /// them and every later request against those services panics in turn.
+    pub reset_hooks: Vec<Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     /// Snapshot capture / restore, one hook per adapter.
     pub snapshot_hooks: Vec<Arc<dyn SnapshotHook>>,
     /// Snapshots kept in memory, by session then name (at most
@@ -289,42 +320,55 @@ pub const RESOURCES_SUFFIX: &str = "/resources";
 /// The quiescence assertion on the same report.
 pub const RESOURCES_ASSERT_SUFFIX: &str = "/resources:assertQuiescent";
 
+/// Where the Security Rules request trace is served. Privileged for every method like the
+/// resource report: the trace carries what every expression evaluated to, including the
+/// subject of `request.auth` and the document fields a rule read, for every request the
+/// daemon decided.
+pub const RULES_REQUESTS_SUFFIX: &str = "/rules/requests";
+
 /// Whether a response to `path` must carry `Cache-Control: no-store`.
 #[must_use]
 pub fn is_no_store_path(path: &str) -> bool {
     let path = path.split('?').next().unwrap_or(path);
     path.starts_with("/v1/sessions/")
-        && (path.ends_with(APP_CHECK_OBSERVATIONS_SUFFIX) || is_resources_path(path))
+        && (path.ends_with(APP_CHECK_OBSERVATIONS_SUFFIX)
+            || is_resources_path(path)
+            || is_rules_requests_path(path))
 }
 
-/// The resource report is privileged for pages on every method (see [`RESOURCES_SUFFIX`]);
-/// this check is repeated after the query string is stripped so it cannot depend on the
-/// browser guard's spelling alone.
-fn resources_guard(
+/// The diagnostics routes are privileged for pages on every method, read included (see
+/// [`RESOURCES_SUFFIX`] and [`RULES_REQUESTS_SUFFIX`]); this check is repeated after the
+/// query string is stripped so it cannot depend on the browser guard's spelling alone.
+fn diagnostics_guard(
     state: &ControlState,
     path: &str,
     headers: &RequestHeaders,
 ) -> Option<JsonResponse> {
-    if !is_resources_path(path) || headers.origin.is_none() {
+    let refusal = if is_resources_path(path) {
+        "CONTROL_TOKEN_REQUIRED : resource diagnostics need Authorization: Bearer <control token> on every method"
+    } else if is_rules_requests_path(path) {
+        "CONTROL_TOKEN_REQUIRED : the Security Rules request trace needs Authorization: Bearer <control token> on every method"
+    } else {
         return None;
-    }
+    };
+    headers.origin.as_ref()?;
     let presented = headers
         .authorization
         .as_deref()
         .and_then(|a| a.strip_prefix("Bearer "))
         .map(str::trim);
-    (!token_matches(presented, &state.control_token)).then(|| {
-        error(
-            403,
-            "CONTROL_TOKEN_REQUIRED : resource diagnostics need Authorization: Bearer <control token> on every method",
-        )
-    })
+    (!token_matches(presented, &state.control_token)).then(|| error(403, refusal))
 }
 
 /// Whether a query-stripped path is one of the resource diagnostics routes.
 fn is_resources_path(path: &str) -> bool {
     path.starts_with("/v1/sessions/")
         && (path.ends_with(RESOURCES_SUFFIX) || path.ends_with(RESOURCES_ASSERT_SUFFIX))
+}
+
+/// Whether a query-stripped path is the Security Rules request trace route.
+fn is_rules_requests_path(path: &str) -> bool {
+    path.starts_with("/v1/sessions/") && path.ends_with(RULES_REQUESTS_SUFFIX)
 }
 
 fn error(status: u16, message: &str) -> JsonResponse {
@@ -445,7 +489,7 @@ pub fn handle_with(
         return refusal;
     }
     let path = path.split('?').next().unwrap_or(path);
-    if let Some(refusal) = resources_guard(state, path, headers) {
+    if let Some(refusal) = diagnostics_guard(state, path, headers) {
         return refusal;
     }
     match (method, path) {
@@ -541,23 +585,62 @@ pub fn handle_with(
     }
 }
 
+/// `POST /v1/sessions/{session}/firestore/ttl:sweep`: runs one expiry sweep at once.
+///
+/// The sweep otherwise runs when the virtual clock passes the configured interval, which is
+/// how production's deletion delay is reproduced. A test or a campaign that wants to observe
+/// the post-expiry state without advancing a whole day drives this route instead; it deletes
+/// only what has already expired, so it can never delete a document production would keep.
+/// It sweeps only the session's own project.
+fn ttl_sweep_route(state: &ControlState, method: &str, project: &str) -> JsonResponse {
+    if method != "POST" {
+        return error(
+            400,
+            "INVALID_ARGUMENT : a time-to-live sweep is started with POST",
+        );
+    }
+    let Some(hooks) = &state.project_hooks else {
+        return error(
+            400,
+            "FAILED_PRECONDITION : this daemon serves no Firestore backend",
+        );
+    };
+    let Ok(now) = state.clock.lock().map(|clock| clock.now()) else {
+        return error(500, "INTERNAL");
+    };
+    let deleted = hooks.sweep_expired_documents_now(&scope_of(state, project), now);
+    JsonResponse {
+        status: 200,
+        body: json!({ "deletedDocumentCount": deleted }),
+    }
+}
+
 /// `GET /v1/sessions/{s}/rules/requests`: the last requests Security Rules decided, newest
 /// first, each with what every expression evaluated to while it was being decided
 /// (`RULES-PARITY-04`).
 ///
 /// This is fireemu's own route rather than an official one, and it carries the guard every
-/// privileged control route carries. What it publishes is the same class of information the
+/// privileged control route carries: a page needs the control token for it on every method,
+/// like the resource report. The ruleset and its diagnostics are shared by the whole daemon,
+/// so only the default session that owns them serves the trace; another session is refused
+/// rather than shown the decisions of every project. What it publishes is the same class of information the
 /// official emulator prints in a denial message and serves from `:ruleCoverage`: positions,
 /// counts and evaluated values. It never carries a token, a signature or a claim other than
 /// the subject the rule saw as `request.auth.uid`.
 ///
 /// `limit` caps the number of requests returned (default and maximum
 /// [`fireemu_core_rules::coverage::REQUEST_TRACE_CAPACITY`]).
-fn rules_requests_route(state: &ControlState, method: &str) -> JsonResponse {
+fn rules_requests_route(state: &ControlState, method: &str, is_default: bool) -> JsonResponse {
     use fireemu_core_rules::coverage::{ExprValue, REQUEST_TRACE_CAPACITY};
 
     if method != "GET" {
         return error(400, "INVALID_ARGUMENT : the request trace is read with GET");
+    }
+    if !is_default {
+        return error(
+            400,
+            "FAILED_PRECONDITION : the ruleset and its request trace belong to the default session; use /v1/sessions/default/rules/requests",
+        );
     }
     let Ok(rules) = state.rules.snapshot() else {
         return error(500, "INTERNAL");
@@ -932,7 +1015,10 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         return fault_plan_route(state, session, &project, method, body);
     }
     if action == "rules/requests" {
-        return rules_requests_route(state, method);
+        return rules_requests_route(state, method, is_default);
+    }
+    if action == "firestore/ttl:sweep" {
+        return ttl_sweep_route(state, method, &project);
     }
     if let Some(rest) = action.strip_prefix("firestore/text-indexes") {
         return text_index_route(state, session, &project, method, rest, body);
@@ -941,16 +1027,29 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         // Moving the shared clock and compacting every Firestore database is one admission
         // transition. No read, write or listener can enter after the new time is visible but
         // before all retention floors have advanced.
-        let _exclusive = state.barrier.as_ref().map(|barrier| barrier.exclusive());
-        let response = clock_route(state, session, method, action, body);
-        if response.status == 200 {
-            let now = state.clock.lock().ok().map(|clock| clock.now());
-            if let (Some(hooks), Some(now)) = (&state.project_hooks, now) {
-                hooks.clock_advanced(now);
-            }
-            if let Some(functions) = &state.functions {
-                functions.on_clock_changed();
-            }
+        let (response, now) = {
+            let _exclusive = state.barrier.as_ref().map(|barrier| barrier.exclusive());
+            let response = clock_route(state, session, method, action, body);
+            let now = if response.status == 200 {
+                let now = state.clock.lock().ok().map(|clock| clock.now());
+                if let (Some(hooks), Some(now)) = (&state.project_hooks, now) {
+                    hooks.clock_advanced(now);
+                }
+                if let Some(functions) = &state.functions {
+                    functions.on_clock_changed();
+                }
+                now
+            } else {
+                None
+            };
+            (response, now)
+        };
+        // The expiry sweep deletes through the ordinary write path, which takes admission,
+        // so it runs after the exclusive transition above has been released.
+        if let (Some(hooks), Some(now)) = (&state.project_hooks, now) {
+            // The sweep belongs to the session whose clock moved: another session's project
+            // keeps the grace period its own clock defines.
+            hooks.clock_settled(&scope_of(state, &project), now);
         }
         return response;
     }
@@ -1044,7 +1143,12 @@ fn reset_session(
     if is_default {
         // The shared parts (functions) belong to the default session.
         for hook in &state.reset_hooks {
-            hook();
+            if let Err(e) = hook() {
+                return error(
+                    500,
+                    &format!("INTERNAL : resetting session {session:?}: {e}"),
+                );
+            }
         }
         return ok(
             json!({"session": session, "project": project, "reset": true, "scope": "default", "hooks": state.reset_hooks.len()}),
@@ -1513,7 +1617,16 @@ fn fault_plan_route(
                 .iter()
                 .map(|r| json!({"operation": r.operation, "occurrence": r.occurrence, "functionOccurrence": r.function_occurrence, "function": r.function, "action": r.action.to_string()}))
                 .collect();
-            ok(json!({"session": session, "plan": plan, "fired": fired, "counters": f.counters()}))
+            // `fired` is a bounded ring (`fireemu_core_session::fault::MAX_FIRED_RECORDS`), so
+            // the reader is told how many records fell out of it rather than being served a
+            // silently shortened history.
+            ok(json!({
+                "session": session,
+                "plan": plan,
+                "fired": fired,
+                "droppedFired": f.dropped_fired(),
+                "counters": f.counters(),
+            }))
         }
         "PUT" => {
             let seed = body.get("seed").and_then(Value::as_u64).unwrap_or(0);
@@ -1932,7 +2045,7 @@ fn restore_parts(
     }
     let mut pre_image = Vec::with_capacity(applicable.len());
     for (hook, _) in applicable {
-        pre_image.push(hook.capture(scope).map_err(|e| {
+        pre_image.push(hook.capture_rollback(scope).map_err(|e| {
             format!("INTERNAL : preparing the rollback of {e}; nothing was restored")
         })?);
     }
@@ -1942,7 +2055,7 @@ fn restore_parts(
         };
         let mut rollback: Vec<String> = Vec::new();
         for ((earlier, _), pre) in applicable[..i].iter().zip(&pre_image).rev() {
-            if let Err(e) = earlier.restore(scope, pre) {
+            if let Err(e) = earlier.rollback(scope, pre) {
                 rollback.push(e.to_string());
             }
         }
@@ -2308,6 +2421,13 @@ fn base64_encode(data: &[u8]) -> String {
 /// The browser policy of every control route (also applied by the asynchronous
 /// `awaitIdle` path): foreign origins are refused, and a page on a loopback origin needs
 /// the control token for anything but reads.
+///
+/// The decision itself is [`fireemu_core_session::loopback::privileged_route_admission`], the
+/// one privileged-route policy every surface applies; this function only decides which routes
+/// of the control API are privileged. The browser test is `Origin` alone here because that is
+/// the only browser field [`RequestHeaders`] carries; surfaces whose transport forwards the
+/// rest pass [`fireemu_core_session::loopback::carries_browser_metadata`] instead, which is
+/// strictly wider.
 #[must_use]
 pub fn browser_guard(
     state: &ControlState,
@@ -2316,25 +2436,26 @@ pub fn browser_guard(
     headers: &RequestHeaders,
 ) -> Option<JsonResponse> {
     let origin = headers.origin.as_deref()?;
-    if !crate::identity_toolkit::origin_is_local(origin) {
-        return Some(error(403, "FORBIDDEN_ORIGIN"));
-    }
     // Decide on the same path the router matches: a query string must not change which
     // routes are privileged.
     let path = path.split('?').next().unwrap_or(path);
-    let privileged = (method != "GET" && !path.starts_with("/health/")) || is_resources_path(path);
+    let privileged = (method != "GET" && !path.starts_with("/health/"))
+        || is_resources_path(path)
+        || is_rules_requests_path(path);
     let presented = headers
         .authorization
         .as_deref()
         .and_then(|a| a.strip_prefix("Bearer "))
         .map(str::trim);
-    if privileged && !token_matches(presented, &state.control_token) {
-        return Some(error(
+    let token_ok = !privileged || token_matches(presented, &state.control_token);
+    match fireemu_core_session::loopback::privileged_route_admission(true, Some(origin), token_ok) {
+        PrivilegedAdmission::Admit => None,
+        PrivilegedAdmission::ForeignOrigin => Some(error(403, "FORBIDDEN_ORIGIN")),
+        PrivilegedAdmission::ControlTokenRequired => Some(error(
             403,
             "CONTROL_TOKEN_REQUIRED : browser requests need Authorization: Bearer <control token>",
-        ));
+        )),
     }
-    None
 }
 
 /// `POST /v1/sessions/{s}:awaitIdle`: waits until the functions runtime has no outstanding

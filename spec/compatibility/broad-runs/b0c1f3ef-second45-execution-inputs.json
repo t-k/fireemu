@@ -1,0 +1,698 @@
+{
+  "kind": "second45-prepared-inputs-not-permission-v1",
+  "frozenCommit": "b0c1f3ef9646cdee400d25a5a61ec818e32daa1f",
+  "manifest": {
+    "kind": "second45-production-admission-v1",
+    "seed": 20260913,
+    "project": "fireemu-35fe6",
+    "projectNumber": "592603257417",
+    "authCases": [
+      {
+        "id": "second/auth/01",
+        "dimension": "selector",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": "$sentinel"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/02",
+        "dimension": "selector",
+        "actor": "b",
+        "selector": "self",
+        "fields": {
+          "displayName": "$sentinel"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/03",
+        "dimension": "selector",
+        "actor": "b",
+        "selector": "other",
+        "fields": {
+          "displayName": "$sentinel"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/04",
+        "dimension": "selector",
+        "actor": "b",
+        "selector": "null",
+        "fields": {
+          "displayName": "$sentinel"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/05",
+        "dimension": "selector",
+        "actor": "b",
+        "selector": "number",
+        "fields": {
+          "displayName": "$sentinel"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/06",
+        "dimension": "selector",
+        "actor": "b",
+        "selector": "object",
+        "fields": {
+          "displayName": "$sentinel"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/07",
+        "dimension": "selector",
+        "actor": "b",
+        "selector": "array",
+        "fields": {
+          "displayName": "$sentinel"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/08",
+        "dimension": "displayName-shape",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": "$missing"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/09",
+        "dimension": "displayName-shape",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": null
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/10",
+        "dimension": "displayName-shape",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": 0
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/11",
+        "dimension": "displayName-shape",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": false
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/12",
+        "dimension": "displayName-shape",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": []
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/13",
+        "dimension": "displayName-shape",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": {}
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/14",
+        "dimension": "verification-shape",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": "$sentinel",
+          "emailVerified": true
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/15",
+        "dimension": "verification-shape",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": "$sentinel",
+          "emailVerified": false
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/16",
+        "dimension": "verification-shape",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": "$sentinel",
+          "emailVerified": null
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/17",
+        "dimension": "verification-shape",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": "$sentinel",
+          "emailVerified": "true"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/18",
+        "dimension": "verification-shape",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": "$sentinel",
+          "emailVerified": {}
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/19",
+        "dimension": "restricted-mix",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": "$sentinel",
+          "emailVerified": true,
+          "customAttributes": "{\"admin\":true}"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/20",
+        "dimension": "restricted-mix",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": "$sentinel",
+          "emailVerified": true,
+          "customAttributes": ""
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/21",
+        "dimension": "restricted-mix",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": "$sentinel",
+          "emailVerified": true,
+          "customAttributes": null
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/22",
+        "dimension": "restricted-mix",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": "$sentinel",
+          "emailVerified": true,
+          "customAttributes": {}
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/23",
+        "dimension": "principal",
+        "actor": "missing",
+        "selector": "other",
+        "fields": {
+          "displayName": "$sentinel"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/24",
+        "dimension": "principal",
+        "actor": "null",
+        "selector": "other",
+        "fields": {
+          "displayName": "$sentinel"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/25",
+        "dimension": "principal",
+        "actor": "number",
+        "selector": "other",
+        "fields": {
+          "displayName": "$sentinel"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/26",
+        "dimension": "principal",
+        "actor": "invalid",
+        "selector": "other",
+        "fields": {
+          "displayName": "$sentinel"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/27",
+        "dimension": "admin-control",
+        "actor": "admin",
+        "selector": "self",
+        "fields": {
+          "displayName": "$sentinel",
+          "emailVerified": true
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/28",
+        "dimension": "admin-control",
+        "actor": "admin",
+        "selector": "self",
+        "fields": {
+          "displayName": "$sentinel",
+          "emailVerified": false
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/29",
+        "dimension": "selector",
+        "actor": "a",
+        "selector": "self",
+        "fields": {
+          "displayName": "$sentinel"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/30",
+        "dimension": "selector",
+        "actor": "a",
+        "selector": "other",
+        "fields": {
+          "displayName": "$sentinel"
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/31",
+        "dimension": "restricted-mix",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": "$sentinel",
+          "disableUser": true
+        },
+        "productionExpectation": null
+      },
+      {
+        "id": "second/auth/32",
+        "dimension": "restricted-mix",
+        "actor": "b",
+        "selector": "missing",
+        "fields": {
+          "displayName": "$sentinel",
+          "disableUser": null
+        },
+        "productionExpectation": null
+      }
+    ],
+    "firestorePrograms": [
+      {
+        "id": "second/masks/ancestor-overlap-state",
+        "area": "masks",
+        "seed": [
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c",
+            "fields": {
+              "n": {
+                "integerValue": "2"
+              },
+              "g": {
+                "stringValue": "q"
+              },
+              "a": {
+                "mapValue": {
+                  "fields": {
+                    "b": {
+                      "integerValue": "7"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": "normal",
+            "method": "PATCH",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c?updateMask.fieldPaths=a.b",
+            "body": {
+              "fields": {
+                "n": {
+                  "integerValue": "999"
+                },
+                "a": {
+                  "mapValue": {
+                    "fields": {
+                      "b": {
+                        "integerValue": "8"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "id": "before",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c"
+          },
+          {
+            "id": "diagnostic",
+            "method": "PATCH",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c?updateMask.fieldPaths=a&updateMask.fieldPaths=a.b",
+            "body": {
+              "fields": {
+                "n": {
+                  "integerValue": "999"
+                },
+                "a": {
+                  "mapValue": {
+                    "fields": {
+                      "b": {
+                        "integerValue": "9"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "id": "after",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c"
+          }
+        ]
+      },
+      {
+        "id": "second/preconditions/stale-delete-state",
+        "area": "preconditions",
+        "seed": [
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c",
+            "fields": {
+              "n": {
+                "integerValue": "2"
+              },
+              "g": {
+                "stringValue": "q"
+              },
+              "a": {
+                "mapValue": {
+                  "fields": {
+                    "b": {
+                      "integerValue": "7"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": "original",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c"
+          },
+          {
+            "id": "normal",
+            "method": "PATCH",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c",
+            "body": {
+              "fields": {
+                "n": {
+                  "integerValue": "9"
+                }
+              }
+            }
+          },
+          {
+            "id": "before",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c"
+          },
+          {
+            "id": "diagnostic",
+            "method": "DELETE",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c?currentDocument.updateTime={{original.updateTime}}"
+          },
+          {
+            "id": "after",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c"
+          }
+        ]
+      },
+      {
+        "id": "second/transforms/invalid-path-state",
+        "area": "transforms",
+        "seed": [
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c",
+            "fields": {
+              "n": {
+                "integerValue": "2"
+              },
+              "g": {
+                "stringValue": "q"
+              },
+              "a": {
+                "mapValue": {
+                  "fields": {
+                    "b": {
+                      "integerValue": "7"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": "normal",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": [
+                {
+                  "transform": {
+                    "document": "projects/PROJECT/databases/(default)/documents/cur/c",
+                    "fieldTransforms": [
+                      {
+                        "fieldPath": "t0",
+                        "increment": {
+                          "integerValue": "1"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "before",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c"
+          },
+          {
+            "id": "diagnostic",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": [
+                {
+                  "transform": {
+                    "document": "projects/PROJECT/databases/(default)/documents/cur/c",
+                    "fieldTransforms": [
+                      {
+                        "fieldPath": "bad..path",
+                        "increment": {
+                          "integerValue": "1"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "after",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c"
+          }
+        ]
+      }
+    ],
+    "diagnosticRows": 45,
+    "limits": {
+      "auth": 400,
+      "firestore": 100,
+      "metadata": 100,
+      "recovery": 60,
+      "total": 660
+    },
+    "recoveryReservations": {
+      "auth": 12,
+      "firestore": 12,
+      "metadata": 36
+    },
+    "wallSeconds": 1200,
+    "recoverySeconds": 300,
+    "productionExecutable": true,
+    "productionApproval": null,
+    "transport": "second45-bounded-production-http-v1",
+    "mode": "mapped",
+    "localAdmissionDigest": "ff2ae95690a72a54b4e39ffc4077e3c39dd86564a8adc530ab144b5e0d086bab",
+    "resources": {
+      "ownedAccounts": 2,
+      "concurrentDocuments": 1,
+      "seedDocuments": 3,
+      "requestBytes": 16384,
+      "responseBytes": 65536
+    },
+    "cost": {
+      "maximumUSD": 1,
+      "currency": "USD",
+      "planningUnitCeilings": {
+        "documentReadUSD": 1e-05,
+        "documentWriteUSD": 2e-05,
+        "documentDeleteUSD": 1e-05,
+        "authMauUSD": 0.01
+      },
+      "maximumRetentionHours": 24,
+      "ownerMustConfirmStorageAndNetwork": true
+    }
+  },
+  "manifestSha256": "6f275645a8a0c7fb957bd37242a28eacf81af3734444912770edc3f28a494d98",
+  "observerSha256": "8774e7c20cc7a21f718a7624506f9f8d05aafa2a07959b1922dad2580aeeb526",
+  "comparisonContract": {
+    "kind": "second45-production-local-comparison-v1",
+    "manifestDigest": "6f275645a8a0c7fb957bd37242a28eacf81af3734444912770edc3f28a494d98",
+    "localAdmissionDigest": "ff2ae95690a72a54b4e39ffc4077e3c39dd86564a8adc530ab144b5e0d086bab",
+    "normalization": "second45-scoped-values-original-version-v1",
+    "independentRecipes": "second45-local-admission-v1",
+    "receipt": "bounded-http-v1"
+  },
+  "comparisonContractDigest": "99fa75e87625e9af687a9be9c19819406475d784180e411fd85e91a72d4ee29d",
+  "databaseProjectionContract": {
+    "version": "database-settings-v2",
+    "excludedResponseFields": [
+      "earliestVersionTime",
+      "etag"
+    ],
+    "retainedFields": "all other fields, including unknown fields and field presence/types",
+    "requiredIdentityFields": [
+      "name",
+      "uid",
+      "databaseEdition",
+      "type",
+      "locationId"
+    ],
+    "hashEncoding": "canonical typed JSON SHA256"
+  },
+  "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
+  "project": "fireemu-35fe6",
+  "projectNumber": "592603257417",
+  "quotaProject": "fireemu-35fe6",
+  "ownerIdentity": null,
+  "permissionReference": null,
+  "nonce": null,
+  "issuedAt": null,
+  "expiresAt": null,
+  "databaseProjection": null,
+  "databaseProjectionDigest": null,
+  "authConfigDigest": null,
+  "pricingLocation": null,
+  "pricingCheckedAt": null,
+  "tariffsConfirmedBelowPlanningCeilings": null,
+  "costAssumptions": null,
+  "productionExecuted": false,
+  "localReference": {
+    "artifactSha256": "4736579f44e710da8255612051cfa1e0087a1cb558b01af51a100b7d12cb0d58",
+    "runtimeIdentity": {
+      "artifactSha256": "4736579f44e710da8255612051cfa1e0087a1cb558b01af51a100b7d12cb0d58",
+      "executionCommit": "b0c1f3ef9646cdee400d25a5a61ec818e32daa1f",
+      "configurationDigest": "fd84a08c1006e57c2aa3fd7c80b854a5119c4de0404959b62b1d3a302c117bb5"
+    },
+    "observerSha256": "8774e7c20cc7a21f718a7624506f9f8d05aafa2a07959b1922dad2580aeeb526",
+    "privateResultSha256": "50c03b29d19c57c12ccf72f57836ac27d28094aacc4697bf466d3d499fe8af98",
+    "privateResultLocation": "Retained privately; do not publish credential bindings."
+  },
+  "requestedDecision": "Read-only preflight, then only if every approved condition matches one mapped45 execution, owned cleanup, postflight and comparison; no automatic retry.",
+  "apiKeyOwnershipCurrentConfirmation": null,
+  "budgetAccounting": {
+    "normalDataHttp": 330,
+    "normalMetadataHttp": 8,
+    "normalCredentialCommands": 1,
+    "normalTokeninfoHttp": 1,
+    "normalBudgetUnits": 340,
+    "atMostTwoAcquisitionsBudgetUnits": 342,
+    "atMostTwoAcquisitionsHttpRequests": 340,
+    "recoveryIncludedInServiceCounters": true,
+    "productionValuesBasis": "Offline communication fixture, not production measurement",
+    "localObservedCounts": {
+      "auth": 302,
+      "firestore": 28,
+      "metadata": 0,
+      "recovery": 17,
+      "total": 330
+    },
+    "terminalRecoveryConditionalSeconds": 270,
+    "rateRequestsPerSecond": 4,
+    "concurrency": 1
+  },
+  "pendingInputs": [
+    "Explicit owner identity and permission reference",
+    "Fresh unused production nonce and permission window",
+    "Approved Database settings-v2 projection and Auth config digest",
+    "Current project/database/API-key ownership match during permitted preflight",
+    "Current location-specific tariffs below planning ceilings",
+    "Owner-approved document/index storage, network, retention duration and computed USD upper bound"
+  ]
+}

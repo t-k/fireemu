@@ -1,0 +1,799 @@
+"""Campaign descriptor for the request-byte boundary observation.
+
+This module declares, in one hard-coded place, every binding the shared O8
+admission core checks for `FS-LIMIT-API-REQUEST-BYTES`: the schema kinds, the
+window, the source map, the plan compiler, the budget, the Ledger lock scopes,
+the collector and comparator the campaign runs, the cost model, the abort
+closure, and the integrity binding of the worker that performs the HTTPS
+exchange.
+
+It authorizes nothing. It changes none of the reviewed lane modules: the
+compiler, the collector and the remote transport are used exactly as they are,
+and the transport member below only adapts the core's one-argument wire call to
+the transport's own `(plan, phase, index, operation, token)` signature.
+
+The worker integrity binding is this lane's own, not the Commit lane's. The
+Commit worker runs from an unlinked read-only archive descriptor; this lane's
+worker is a single reviewed source file whose bytes the transport pins by
+digest before it spawns an isolated interpreter. The core takes either, because
+it treats the binding as opaque and asks the descriptor to verify it.
+"""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import math
+import re
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[2]
+sys.path.insert(0, str(ROOT / "tools/compat-broad"))
+sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
+sys.path.insert(0, str(HERE))
+
+import request_bytes_remote_transport
+from batch_contract import NUMBER, PROJECT
+from broad_contract import digest
+from o8_admission import authorize_transport
+from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
+from request_bytes_campaign import campaign_digest, compile_request_bytes_campaign
+from request_bytes_collector import collect_local
+from request_bytes_compiler import (
+    CAMPAIGN,
+    compile_request_bytes_plan,
+    validate_request_bytes_plan,
+)
+from request_bytes_shadow import classify_local_result
+
+
+def _load(name: str, path: Path):
+    """Load one reviewed module by exact path, without touching sys.path.
+
+    Prepending another lane's directory would outlive this import and shadow
+    same-named modules for every lane loaded afterwards in the same process.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"reviewed module unavailable: {name}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# The baseline derivation is the Commit lane's reviewed implementation, reused
+# rather than reimplemented: it already refuses a literal, a replay journal and
+# a recovery-phase line.
+BASELINE_MODULE = "tools/compat-broad/fs-commit-transform-limits/commit_baseline.py"
+commit_baseline = _load("_request_bytes_commit_baseline", ROOT / BASELINE_MODULE)
+
+DATABASE = "(default)"
+_NONCE = re.compile(r"^[0-9a-f]{32}$")
+BUDGET_PATH = "spec/compatibility/fs-request-bytes-budget.json"
+FROZEN_INPUTS_KIND = "request-bytes-frozen-inputs-v1"
+PERMISSION_KIND = "request-bytes-owner-execution-permission-v1"
+APPROVAL_KIND = "request-bytes-o8-approval-v1"
+MANIFEST_KIND = "request-bytes-o8-manifest-v1"
+SHADOW_RECORD = "spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json"
+# The published local shadow is the comparison reference, so the artifact
+# profile names the build that shadow ran, derived from the record rather than
+# typed in. The digest still proves only which bytes the owner retained.
+MINIMUM_WINDOW_SECONDS = 1200
+RECEIPT_KIND = "request-bytes-acquisition-receipt-v1"
+
+COLLECTOR_ENTRY = (
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_collector.py"
+)
+COMPARATOR_ENTRY = (
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_shadow.py"
+)
+WORKER_ENTRY = (
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_https_worker.py"
+)
+TRANSPORT_ENTRY = (
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_remote_transport.py"
+)
+# Every top-level module of the lane is swept, test modules included, so that a
+# test edit is visible in the frozen digest rather than silently outside it.
+# The seven boundSources of the published budget are a subset and are checked.
+LANE_DIRECTORY = "tools/compat-broad/fs-request-bytes-boundary"
+SHARED_SOURCES = (
+    BASELINE_MODULE,
+    "tools/compat-broad/broad_contract.py",
+    "tools/compat-broad/batch_contract.py",
+    "tools/compat-broad/shared_gate.py",
+    "tools/compat-broad/production-admission/reservations.py",
+    "tools/compat-broad/o8-core/o8_admission.py",
+    "tools/compat-broad/o8-core/o8_campaign.py",
+)
+# The closure a reservation records, so a later abort proves it runs the same
+# sources the acquisition ran.
+ABORT_CLOSURE_SOURCES = (
+    "tools/compat-broad/shared_gate.py",
+    "tools/compat-broad/production-admission/reservations.py",
+    "tools/compat-broad/o8-core/o8_admission.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_admission.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_descriptor.py",
+)
+
+
+def shadow_record() -> dict:
+    """The published local shadow this campaign's production run is compared to."""
+    path = ROOT / SHADOW_RECORD
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("published local shadow record required")
+    value = json.loads(path.read_bytes())
+    runtime = value.get("runtime") if isinstance(value, dict) else None
+    if (
+        not isinstance(runtime, dict)
+        or value.get("campaignId") != CAMPAIGN
+        or not isinstance(runtime.get("sourceCommit"), str)
+        or len(runtime["sourceCommit"]) != 40
+    ):
+        raise ValueError("published local shadow record required")
+    return value
+
+
+# The lane has no reviewed build profile registry. This states, in the code O7
+# reads, exactly what the profile does and does not establish, so accepting it
+# is a decision the gatekeeper makes on the record rather than an omission.
+ARTIFACT_PROFILE_BASIS = {
+    "kind": "request-bytes-artifact-profile-v1",
+    "registry": "none",
+    "derivedFrom": "the published local shadow record's runtime.sourceCommit",
+    "establishes": (
+        "which build the comparison reference was produced by, and that the "
+        "retained bytes hash to the digest the approval binds"
+    ),
+    "doesNotEstablish": (
+        "that the build was reviewed; no profile registry entry exists for this "
+        "lane and O7 must accept the profile explicitly"
+    ),
+    "ownerAcceptanceRequired": True,
+}
+
+
+def artifact_profile() -> str:
+    """The build the comparison is bound to, named by the shadow's own Rust SHA."""
+    return "request-bytes-" + shadow_record()["runtime"]["sourceCommit"][:9]
+
+
+def artifact_profile_basis() -> dict:
+    """What the profile establishes, for the record O7 accepts it on."""
+    return {
+        **copy.deepcopy(ARTIFACT_PROFILE_BASIS),
+        "profile": artifact_profile(),
+        "sourceCommit": shadow_record()["runtime"]["sourceCommit"],
+        "shadowArtifactSha256": shadow_record()["runtime"]["artifactSha256"],
+    }
+
+
+def budget_document() -> dict:
+    """The published budget, read from the spec rather than restated here."""
+    path = ROOT / BUDGET_PATH
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("published request-byte budget required")
+    value = json.loads(path.read_bytes())
+    if (
+        not isinstance(value, dict)
+        or value.get("schema") != "fs-request-bytes-budget-v1"
+        or value.get("campaignId") != CAMPAIGN
+    ):
+        raise ValueError("published request-byte budget required")
+    return value
+
+
+def _budget_numbers():
+    published = budget_document()
+    budget = published["budget"]
+    cost = published["cost"]
+    micro = math.ceil(cost["estimatedCostUsd"] * 1_000_000)
+    return published, budget, cost, micro
+
+
+def campaign_seconds() -> int:
+    return int(_budget_numbers()[1]["maxDurationSeconds"])
+
+
+def recovery_seconds() -> int:
+    return int(_budget_numbers()[1]["recoveryWindow"]["reserveSeconds"])
+
+
+def transport_deadline_seconds() -> float:
+    """The per-request wire ceiling, taken from the spec and checked against code."""
+    published = budget_document()
+    declared = published["transportDeadline"]["perRequestSeconds"]
+    enforced = request_bytes_remote_transport.TIMEOUT
+    if declared != enforced or published["budget"]["perRequestTimeoutSeconds"] != (
+        enforced
+    ):
+        raise ValueError("published transport deadline differs from the enforced one")
+    return float(enforced)
+
+
+def budget() -> dict:
+    """The published budget object, unmodified."""
+    return copy.deepcopy(budget_document()["budget"])
+
+
+def recovery_reserve_microusd() -> int:
+    """What the declared recovery reserve costs at the published unit prices."""
+    published = budget_document()
+    reserve = published["budget"]["recoveryWindow"]
+    prices = published["cost"]["unitPricesUsd"]
+    usd = (
+        reserve["reserveDeletes"] * prices["documentDelete"]
+        + reserve["reserveReads"] * prices["documentRead"]
+    )
+    return math.ceil(usd * 1_000_000)
+
+
+def ledger_budget() -> dict:
+    """The four Ledger dimensions, with recovery already inside every one.
+
+    `requests` is 258 because the compiled schedule is 105 observation slots
+    plus 153 recovery slots; a recovery reserve on top would double-count the
+    same wire calls. `accounts` is 1, matching the published `maxAccounts`: this
+    campaign spends one authorized principal's quota, where the Commit campaign
+    claimed 0 because it consumed no account-scoped resource at all. The cost
+    covers the maximum usage, every probe accepted, plus the declared recovery
+    reserve, and not the expected forecast, which the published budget says
+    binds nothing.
+    """
+    _published, published_budget, cost, _micro = _budget_numbers()
+    maximum = math.ceil(cost["maximumCostUsd"] * 1_000_000)
+    return {
+        "requests": int(published_budget["maxHttpRequests"]),
+        "accounts": int(published_budget["maxAccounts"]),
+        "resources": int(published_budget["maxDistinctResources"]),
+        "costMicrousd": maximum + recovery_reserve_microusd(),
+    }
+
+
+def frozen_bounds() -> dict:
+    """The bounded shape of one run, every figure taken from the published budget."""
+    published, published_budget, _cost, _micro = _budget_numbers()
+    # The maximum, every probe accepted, is what a bound must cover; the
+    # published `accounting` is the forecast under the expected outcome, and the
+    # budget itself says it binds nothing.
+    maximum = published["maximumUsage"]
+    accounting = published["accounting"]
+    return {
+        "dataRequests": int(maximum["httpRequests"]),
+        "observationRequests": 105,
+        "recoveryRequests": 153,
+        "documentWrites": int(maximum["documentWrites"]),
+        "documentReads": int(maximum["documentReads"]),
+        "documentDeletes": int(maximum["documentDeletes"]),
+        "uploadedBytes": int(maximum["uploadedBytes"]),
+        "expectedWrites": int(accounting["documentWrites"]),
+        "expectedDeletes": int(accounting["documentDeletes"]),
+        "totalRequests": int(published_budget["maxHttpRequests"]),
+        "distinctResources": int(published_budget["maxDistinctResources"]),
+        "peakLiveDocuments": int(published_budget["maxPeakLiveDocuments"]),
+        "maxRequestBytes": int(published_budget["maxRequestBytes"]),
+        "maxResponseBytes": int(published_budget["maxResponseBytes"]),
+        "perRequestTimeoutSeconds": transport_deadline_seconds(),
+    }
+
+
+def cost_model() -> dict:
+    """Planning ceilings from the published budget, never a quoted tariff."""
+    _published, published_budget, cost, micro = _budget_numbers()
+    return {
+        "campaignId": CAMPAIGN,
+        "estimatedCostMicrousd": micro,
+        "maximumCostMicrousd": math.ceil(cost["maximumCostUsd"] * 1_000_000),
+        "recoveryReserveMicrousd": recovery_reserve_microusd(),
+        "hardCeilingMicrousd": math.ceil(cost["hardCostCeilingUsd"] * 1_000_000),
+        "unitPricesUsd": dict(cost["unitPricesUsd"]),
+        "totalCostMicrousd": ledger_budget()["costMicrousd"],
+        "requests": int(published_budget["maxHttpRequests"]),
+        "basis": cost["basis"],
+    }
+
+
+_PLAN_CACHE: dict[str, tuple[dict, str]] = {}
+
+
+def compile_execution_plan(nonce: str) -> tuple[dict, str]:
+    """The lane's real compiled plan and its published digest, for one nonce.
+
+    The plan carries the three canonical request bodies and is about 63 MB of
+    JSON, so it is never written into a frozen record; it is recompiled from the
+    nonce, which is the only free variable, and checked against the digest the
+    record froze.
+    """
+    cached = _PLAN_CACHE.get(nonce)
+    if cached is None:
+        plan = compile_request_bytes_plan(PROJECT, DATABASE, nonce)
+        cached = (plan, _plan_digest(plan))
+        _PLAN_CACHE[nonce] = cached
+    return cached
+
+
+def _plan_digest(plan: dict) -> str:
+    """The lane's own published plan digest, computed the way the lane computes it."""
+    payload = json.dumps(
+        plan, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def plan_compiler(nonce: str) -> dict:
+    """The plan as the admission sees it: a reference, not 63 MB of request bodies.
+
+    Every field here is derived from the nonce by the reviewed compiler, so the
+    reference names exactly one compiled plan and an executor can rebuild it.
+    """
+    plan, plan_digest = compile_execution_plan(nonce)
+    return {
+        "schemaVersion": plan["schemaVersion"],
+        "campaignId": plan["campaignId"],
+        "catalogId": plan["catalogId"],
+        "project": plan["project"],
+        "database": plan["database"],
+        "nonce": nonce,
+        "planDigest": plan_digest,
+        "ownedScope": plan["ownedScope"],
+        "ownedResourceCount": len(plan["ownedResources"]),
+        "bounds": copy.deepcopy(plan["bounds"]),
+    }
+
+
+def execution_plan(reference: dict) -> dict:
+    """Recompile the plan a frozen reference names, and refuse any other bytes."""
+    nonce = reference.get("nonce") if isinstance(reference, dict) else None
+    if not isinstance(nonce, str) or _NONCE.fullmatch(nonce) is None:
+        raise ValueError("frozen request-byte plan reference required")
+    canonical = plan_compiler(nonce)
+    plan, plan_digest = compile_execution_plan(nonce)
+    if digest(reference) != digest(canonical) or reference["planDigest"] != plan_digest:
+        raise ValueError("frozen request-byte plan reference differs")
+    validate_request_bytes_plan(plan)
+    return plan
+
+
+def lock_scopes(plan: dict) -> list[dict]:
+    """The owned document namespace, plus the read scopes a preflight observes."""
+    nonce = plan["nonce"]
+    scope = f"project/{PROJECT}"
+    firestore = f"{scope}/firestore/{DATABASE}"
+    return [
+        {
+            "key": (f"{firestore}/documents/oracle/{nonce}/request-bytes-01/*"),
+            "mode": "WRITE",
+        },
+        *[
+            {"key": f"{firestore}/{kind}", "mode": "READ"}
+            for kind in ("indexes", "ruleset", "database")
+        ],
+        {"key": f"{scope}/auth/config", "mode": "READ"},
+        {"key": f"{scope}/api-key-binding", "mode": "READ"},
+    ]
+
+
+def lane_sources() -> tuple[str, ...]:
+    """Every top-level module of the lane, in a stable order."""
+    directory = ROOT / LANE_DIRECTORY
+    return tuple(
+        sorted(f"{LANE_DIRECTORY}/{path.name}" for path in directory.glob("*.py"))
+    )
+
+
+PROBE_SCOPES = ("probe-u01", "probe-e01", "probe-o01")
+PROBE_OBSERVATIONS = 35
+PROBE_RECOVERY = 51
+GATE_CONTRACT = "shared-local-v2"
+GATE_INTERVAL_SECONDS = 0.25
+GATE_REQUEST_COST_MICROUSD = 1
+
+
+def gate_job_name(probe: str) -> str:
+    return f"request-bytes-{probe}"
+
+
+def _probe_slice(plan, probe_index):
+    """One probe's own operations, in the compiler's fixed per-probe order."""
+    observation = plan["observation"][
+        probe_index * PROBE_OBSERVATIONS : (probe_index + 1) * PROBE_OBSERVATIONS
+    ]
+    recovery = plan["recovery"][
+        probe_index * PROBE_RECOVERY : (probe_index + 1) * PROBE_RECOVERY
+    ]
+    if len(observation) != PROBE_OBSERVATIONS or len(recovery) != PROBE_RECOVERY:
+        raise ValueError("compiled plan does not carry three equal probes")
+    return observation, recovery
+
+
+def _probe_schedule(
+    plan,
+    probe_index,
+    *,
+    upload_seconds,
+    observation_slot_seconds,
+    recovery_slot_seconds,
+):
+    """The campaign schedule projected onto one probe's own slot indices.
+
+    The campaign's `executionSchedule` indexes the whole plan; a Gate job indexes
+    its own lists. The projection keeps the campaign's order and renumbers, and
+    each slot declares what the Gate needs in order to charge it honestly: its
+    own reservation, and whether it can create a document. Only the one Commit
+    per probe carries a body and can write; the 17 ownership reads, the 17
+    readbacks and every recovery read and delete cannot.
+    """
+    bounds = {"observation": PROBE_OBSERVATIONS, "recovery": PROBE_RECOVERY}
+    entries = []
+    for entry in plan["executionSchedule"]:
+        span = bounds[entry["phase"]]
+        if entry["index"] // span != probe_index:
+            continue
+        operation = plan[entry["phase"]][entry["index"]]
+        carries_body = operation.get("body") is not None
+        small = (
+            observation_slot_seconds
+            if entry["phase"] == "observation"
+            else recovery_slot_seconds
+        )
+        slot = {
+            "phase": entry["phase"],
+            "index": entry["index"] % span,
+            "seconds": upload_seconds if carries_body else small,
+        }
+        if operation["method"] != "POST":
+            # Absent means creating, so only a slot that cannot write says so.
+            slot["creates"] = False
+        entries.append(slot)
+    return entries
+
+
+def gate_plan(
+    plan,
+    *,
+    upload_seconds,
+    observation_slot_seconds,
+    recovery_slot_seconds,
+    wall_seconds=None,
+):
+    """Project the compiled campaign onto the shared Gate schema.
+
+    Both reservations are required arguments with no default. The three 10 MiB
+    Commits are bounded by the transport at 60 seconds while the other 255
+    requests are small, and no single plan-wide reservation is an upper bound for
+    both: the recovery window forces at most 1.71 seconds per slot, which is not
+    a bound on a 60 second upload. Neither number may be invented here, so the
+    caller states both and this function proves the arithmetic fits.
+    """
+    for name, value in (
+        ("upload_seconds", upload_seconds),
+        ("observation_slot_seconds", observation_slot_seconds),
+        ("recovery_slot_seconds", recovery_slot_seconds),
+    ):
+        if type(value) not in (int, float) or isinstance(value, bool) or value <= 0:
+            raise ValueError(f"declared {name} required")
+    if upload_seconds > transport_deadline_seconds():
+        raise ValueError("upload reservation above the enforced transport ceiling")
+    jobs = {}
+    for index, probe in enumerate(PROBE_SCOPES):
+        observation, recovery = _probe_slice(plan, index)
+        schedule = _probe_schedule(
+            plan,
+            index,
+            upload_seconds=upload_seconds,
+            observation_slot_seconds=observation_slot_seconds,
+            recovery_slot_seconds=recovery_slot_seconds,
+        )
+        jobs[gate_job_name(probe)] = {
+            "resources": [
+                name for name in plan["ownedResources"] if f"/{probe}/" in name
+            ],
+            "observation": copy.deepcopy(observation),
+            "recovery": copy.deepcopy(recovery),
+            "schedule": schedule,
+        }
+    recovery_time = math.ceil(
+        sum(
+            slot["seconds"] + GATE_INTERVAL_SECONDS
+            for job in jobs.values()
+            for slot in job["schedule"]
+            if slot["phase"] == "recovery"
+        )
+    )
+    wall = int(wall_seconds if wall_seconds is not None else campaign_seconds())
+    observation_time = math.ceil(
+        sum(
+            slot["seconds"] + GATE_INTERVAL_SECONDS
+            for job in jobs.values()
+            for slot in job["schedule"]
+            if slot["phase"] == "observation"
+        )
+    )
+    # The deficit is named, because "does not fit" is the message that sends
+    # someone to guess at the numbers instead of reading them.
+    if not 0 < recovery_time < wall or observation_time > wall - recovery_time:
+        raise ValueError(
+            "declared reservations do not fit the campaign wall: observation "
+            f"{observation_time} s and recovery {recovery_time} s need "
+            f"{observation_time + recovery_time} s against a published wall of "
+            f"{wall} s"
+        )
+    return {
+        "contract": GATE_CONTRACT,
+        "campaignId": CAMPAIGN,
+        "nonce": plan["nonce"],
+        "jobSlots": len(PROBE_SCOPES),
+        # The plan-wide fallback for a slot that declares none; every slot in
+        # this schedule declares its own, so this is the floor, not the figure.
+        "requestSeconds": min(observation_slot_seconds, recovery_slot_seconds),
+        "wallSeconds": wall,
+        "recoverySeconds": recovery_time,
+        "intervalSeconds": GATE_INTERVAL_SECONDS,
+        "observationRequests": len(PROBE_SCOPES) * PROBE_OBSERVATIONS,
+        "requestCostMicrousd": GATE_REQUEST_COST_MICROUSD,
+        "costMicrousd": ledger_budget()["costMicrousd"],
+        "receiptKind": RECEIPT_KIND,
+        # The wire ceiling every body-carrying slot must reserve, so the 60 on
+        # the three Commits is checkable rather than conventional and a later
+        # edit cannot quietly shrink it.
+        "transportCeilingSeconds": transport_deadline_seconds(),
+        # The owner supplies the bearer token, so this campaign acquires no
+        # credential and takes no management slot at all.
+        "management": {
+            "observation": [],
+            "recovery": [],
+            "credentialIds": [],
+            "credentialSlots": [],
+        },
+        "jobs": jobs,
+    }
+
+
+def source_map() -> dict[str, str]:
+    """Digest every source this campaign binds: the whole lane, plus the closure."""
+    values = {}
+    for name in (*lane_sources(), *SHARED_SOURCES):
+        path = ROOT / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("frozen campaign source missing")
+        values[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    bound = budget_document()["boundSources"]
+    if any(name not in values for name in bound):
+        raise ValueError("frozen source map omits a published bound source")
+    return values
+
+
+def collector(gate, plan, output, *, transmit):
+    """Drive the reviewed collector; the Gate argument is accepted, never used.
+
+    The collector's own contract is a plan, a one-argument callable and an
+    output directory. It is not given the Gate, because this lane's charging
+    authority is unresolved; see `request_bytes_admission.reservation_claim`.
+    """
+    return collect_local(plan, transmit, output)
+
+
+def comparator(result, shadow=None):
+    """Compare a production result's classification with the published shadow's.
+
+    The published local shadow is the reference this campaign is bound to, so a
+    comparison is not a classification of one result: it is whether the two
+    classifications agree, and on what. This establishes agreement, never a
+    compatibility claim; that remains an owner decision on the evidence.
+    """
+    published = shadow_record() if shadow is None else shadow
+    observed = classify_local_result(result)
+    reference = {
+        "classification": published.get("shadow", {}).get("classification")
+        if isinstance(published.get("shadow"), dict)
+        else None,
+        "probeOutcomes": published.get("probeOutcomes"),
+    }
+    if reference["classification"] is None:
+        reference["classification"] = classify_local_result(
+            published.get("observation", {})
+        ).get("classification")
+    return {
+        "campaignId": CAMPAIGN,
+        "production": observed,
+        "shadow": reference,
+        "classificationAgrees": observed.get("classification")
+        == reference["classification"],
+        "shadowRecordDigest": digest(published),
+        "formalCompatibilityClaim": False,
+    }
+
+
+def transport_bound(value, *, binding, binding_digest, capability=None):
+    """Adapt one bound wire call to the reviewed transport's own signature.
+
+    `value` carries the frozen slot coordinates and the bearer token for exactly
+    one request. The binding is the reviewed worker source, and its digest is
+    re-checked here as well as inside the transport, so a capability issued
+    against other bytes cannot reach the wire through this path.
+    """
+    if not isinstance(value, dict) or set(value) != {
+        "plan",
+        "phase",
+        "index",
+        "operation",
+        "token",
+    }:
+        raise ValueError("closed request-byte wire call required")
+    if capability is None:
+        raise ValueError("active O7 production capability required")
+    authorize_transport(
+        capability,
+        binding=binding,
+        binding_digest=binding_digest,
+    )
+    verify_worker_binding(binding, binding_digest, None)
+    bounds = budget_document()["budget"]
+    if (
+        request_bytes_remote_transport.MAX_REQUEST_BYTES != bounds["maxRequestBytes"]
+        or request_bytes_remote_transport.MAX_RESPONSE_BYTES
+        != bounds["maxResponseBytes"]
+    ):
+        raise ValueError("transport byte caps differ from the published budget")
+    return request_bytes_remote_transport.request(
+        value["plan"],
+        value["phase"],
+        value["index"],
+        value["operation"],
+        value["token"],
+        timeout=transport_deadline_seconds(),
+        capability=capability,
+        binding=binding,
+        binding_digest=binding_digest,
+    )
+
+
+def verify_worker_binding(binding, binding_digest, frozen) -> None:
+    """Check the reviewed worker bytes against the transport and the frozen map.
+
+    The binding is the worker source itself. It must hash to the digest the
+    capability carries, that digest must be the one the reviewed transport pins,
+    and, when a frozen source map is supplied, it must equal the digest the O7
+    inputs froze for that file. Three independent statements of the same bytes.
+    """
+    if not isinstance(binding, bytes) or not binding:
+        raise ValueError("reviewed worker source required")
+    observed = hashlib.sha256(binding).hexdigest()
+    pinned = request_bytes_remote_transport._WORKER_SHA256
+    if observed != binding_digest or observed != pinned:
+        raise ValueError("worker source digest differs from the reviewed transport")
+    if frozen is not None and frozen.get(WORKER_ENTRY) != observed:
+        raise ValueError("worker source digest differs from the frozen inputs")
+
+
+def worker_binding() -> tuple[bytes, str]:
+    """Read the reviewed worker source and its digest from the lane."""
+    source = (ROOT / WORKER_ENTRY).read_bytes()
+    return source, hashlib.sha256(source).hexdigest()
+
+
+def retained_artifact_validator(artifact_path, manifest_path, profile):
+    """Bind the retained artifact and manifest by digest.
+
+    This is weaker than the Commit lane's validator, which resolves a reviewed
+    build profile registry. Here the profile is a label: the digests prove which
+    bytes the owner retained, not that the build behind them was reviewed.
+    """
+    if profile != artifact_profile():
+        raise ValueError("retained artifact profile differs")
+    values = {}
+    for key, path in (
+        ("artifactSha256", artifact_path),
+        ("retainedManifestSha256", manifest_path),
+    ):
+        path = Path(path)
+        if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+            raise ValueError("retained regular artifact required")
+        values[key] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return values
+
+
+def forbidden_transports():
+    """Objects an injected preparation transport must not be able to reach."""
+    return (
+        request_bytes_remote_transport,
+        request_bytes_remote_transport.request,
+        request_bytes_remote_transport.prepare,
+        transport_bound,
+    )
+
+
+def campaign_digest_for(nonce: str) -> str:
+    """The lane's own campaign digest for one nonce, computed by the lane."""
+    return campaign_digest(compile_request_bytes_campaign(PROJECT, DATABASE, nonce))
+
+
+def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
+    """Required non-authorizing fields for an independently supplied permission.
+
+    When a derived production baseline is supplied, the values the repository
+    cannot recompute are required to equal what a named production observation
+    produced. A literal that no recorded observation produces is refused here,
+    offline, rather than after a run spends its budget discovering it.
+    """
+    canonical = plan_compiler(plan["nonce"])
+    if digest(plan) != digest(canonical):
+        raise ValueError("fixed production project/database required")
+    published_budget = budget_document()["budget"]
+    required = {
+        "kind": PERMISSION_KIND,
+        "campaignId": CAMPAIGN,
+        "project": PROJECT,
+        "projectNumber": NUMBER,
+        "quotaProject": PROJECT,
+        "database": DATABASE,
+        "nonce": plan["nonce"],
+        "planDigest": plan["planDigest"],
+        "sourceCommit": source_commit,
+        "sourceInputs": inputs,
+        "collectorSourceDigest": digest(inputs),
+        "artifactSha256": artifact_digest,
+        "collectorSha256": inputs[COLLECTOR_ENTRY],
+        "comparatorSha256": inputs[COMPARATOR_ENTRY],
+        "workerSha256": inputs[WORKER_ENTRY],
+        "campaignDigest": campaign_digest_for(plan["nonce"]),
+        "budget": budget(),
+        "ledgerBudget": ledger_budget(),
+        "ownedScope": plan["ownedScope"],
+        "ownedResourceCount": plan["ownedResourceCount"],
+        # `wallSeconds` is the name the shared admission core checks; the
+        # gatekeeper's `campaignSeconds` is the same number under its own name,
+        # carried so both readings are explicit rather than assumed equal.
+        "wallSeconds": campaign_seconds(),
+        "campaignSeconds": campaign_seconds(),
+        "recoverySeconds": recovery_seconds(),
+        "perRequestTimeoutSeconds": transport_deadline_seconds(),
+        "maxRequestBytes": int(published_budget["maxRequestBytes"]),
+        "maxResponseBytes": int(published_budget["maxResponseBytes"]),
+        "concurrency": 1,
+        "tariffsConfirmedBelowPlanningCeilings": True,
+        "costModel": cost_model(),
+        "artifactProfileBasis": artifact_profile_basis(),
+    }
+    if baseline is not None:
+        required.update(commit_baseline.permission_baseline(baseline))
+        required["baselineProvenance"] = baseline["provenance"]
+    return required
+
+
+def descriptor() -> CampaignDescriptor:
+    """The request-byte campaign as the shared admission core sees it."""
+    window = campaign_seconds() + recovery_seconds()
+    if window < MINIMUM_WINDOW_SECONDS:
+        raise ValueError("approved window below the campaign minimum")
+    return CampaignDescriptor(
+        campaign_id=CAMPAIGN,
+        frozen_inputs_kind=FROZEN_INPUTS_KIND,
+        permission_kind=PERMISSION_KIND,
+        approval_kind=APPROVAL_KIND,
+        manifest_kind=MANIFEST_KIND,
+        approval_fields=CAMPAIGN_APPROVAL_FIELDS,
+        artifact_profile=artifact_profile(),
+        campaign_seconds=campaign_seconds(),
+        recovery_seconds=recovery_seconds(),
+        source_map=source_map,
+        abort_closure_sources=ABORT_CLOSURE_SOURCES,
+        required_source_entries=(COLLECTOR_ENTRY, COMPARATOR_ENTRY, WORKER_ENTRY),
+        frozen_bounds=frozen_bounds(),
+        budget=budget(),
+        plan_compiler=plan_compiler,
+        lock_scopes=lock_scopes,
+        collector=collector,
+        comparator=comparator,
+        cost_model=cost_model,
+        permission_bindings=permission_bindings,
+        transport_bound=transport_bound,
+        binding_verifier=verify_worker_binding,
+        retained_artifact_validator=retained_artifact_validator,
+        forbidden_transports=forbidden_transports,
+    )

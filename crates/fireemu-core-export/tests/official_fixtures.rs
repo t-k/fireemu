@@ -122,8 +122,10 @@ fn the_recorded_multi_product_export_is_read_section_by_section() {
     assert_eq!(
         config,
         AuthConfig {
-            allow_duplicate_emails: false,
+            allow_duplicate_emails: Some(false),
             enable_improved_email_privacy: Some(false),
+            disabled_user_signup: None,
+            disabled_user_deletion: None,
         }
     );
 

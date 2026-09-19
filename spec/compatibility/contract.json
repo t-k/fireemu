@@ -432,7 +432,7 @@
       }
     }
   },
-  "profileStatus": "The profile is a runtime switch, and its sets list exactly what the daemon derives from it: firestore.enforceLimits (a Standard query limit violation is reported as an FS_LIMIT_OBSERVED warning / refuses the query). Three further derived settings have no configuration key: how composite indexes are validated (every index a query needs is assumed, as the official emulator does / production's rules, verified against a real project, including the index merges production performs), how a caller's ID token is verified on the Firestore and Storage Security Rules surfaces (the official emulators' unsigned mock tokens are admitted / the full verification against the Auth store stands), and whether Auth refresh tokens remain stateless like the official emulator or are revoked after privileged account mutations. An explicit configuration key always wins over the profile's default for it. A unit test in crates/fireemu/src/config.rs reads this file and fails when a profile's sets and what set_profile derives disagree. Every other key a profile names is under declared, with a status: hand-written means the loader reads the key but does not derive it from the profile, not-implemented means the loader refuses the value or reads nothing of the section, so the value is a statement of intent and not a switch. fireemu capabilities and GET /v1/capabilities publish the active profile and the start banner prints it. tools/compat-check CC-08 checks every key and value under sets and declared against spec/config/fireemu.schema.json, requires a status and a note on each declared key, refuses a key that is both set and declared, and checks that the profile names declared here are exactly the values that schema's profile key accepts.",
+  "profileStatus": "The profile is a runtime switch, and its sets list exactly what the daemon derives from it: firestore.enforceLimits (a Standard query limit violation is reported as an FS_LIMIT_OBSERVED warning / refuses the query). Four further derived settings have no configuration key: how composite indexes are validated (every index a query needs is assumed, as the official emulator does / production's rules, verified against a real project, including the index merges production performs), how a caller's ID token is verified on the Firestore and Storage Security Rules surfaces (the official emulators' unsigned mock tokens are admitted / the full verification against the Auth store stands), whether Auth refresh tokens remain stateless like the official emulator or are revoked after privileged account mutations, and whether a Firestore data-plane request materializes a database nothing created (any syntactically valid database id is served, as the official emulator does / the default database and the databases a firebase.json firestore entry names are served and every other one answers the NOT_FOUND production answers until an import or a snapshot restore materializes it). An explicit configuration key always wins over the profile's default for it. A unit test in crates/fireemu/src/config.rs reads this file and fails when a profile's sets and what set_profile derives disagree. Every other key a profile names is under declared, with a status: hand-written means the loader reads the key but does not derive it from the profile, not-implemented means the loader refuses the value or reads nothing of the section, so the value is a statement of intent and not a switch. fireemu capabilities and GET /v1/capabilities publish the active profile and the start banner prints it. tools/compat-check CC-08 checks every key and value under sets and declared against spec/config/fireemu.schema.json, requires a status and a note on each declared key, refuses a key that is both set and declared, and checks that the profile names declared here are exactly the values that schema's profile key accepts.",
   "vocabulary": {
     "scopes": {
       "active": "In the supported-surface milestone. Either parity is claimed with evidence, the surface is a fireemu addition, or it is an open gap that blocks the complete-suite claim.",
@@ -460,11 +460,11 @@
     "sharedTerms": [
       {
         "term": "ExecutePipeline",
-        "status": "implemented",
+        "status": "partial",
         "owners": [
           "FS-PIPE-RPC-1"
         ],
-        "qualifier": "validation-only: a well-formed pipeline is answered UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY"
+        "qualifier": "finite local latest-read collection / optional single where(equal(top-level field, scalar literal)) / optional top-level field-reference select / optional non-negative int32 offset / optional limit execution; other execution semantics and production parity remain unsupported or unobserved"
       },
       {
         "term": "Storage triggers",
@@ -481,6 +481,15 @@
           "APPCHECK-REPLAY-1"
         ],
         "qualifier": "limitedUse: true fails closed with 501 APP_CHECK_REPLAY_UNSUPPORTED"
+      },
+      {
+        "term": "expirationOffset",
+        "status": "implemented",
+        "owners": [
+          "FS-FIELD-CONFIG-1"
+        ],
+        "qualifier": "ttlConfig.expirationOffset is read, stored, reported back and applied to the sweep condition; the expiration time is the stored timestamp plus the offset",
+        "mustAppearInClaim": true
       }
     ]
   },
@@ -581,12 +590,17 @@
             {
               "id": "FS-REST-1",
               "status": "implemented"
+            },
+            {
+              "id": "FS-ADMIN-INVENTORY-1",
+              "status": "implemented"
             }
           ],
           "evidence": {
             "tests": [],
             "integration": [
               "crates/fireemu-adapter-grpc/tests/rest.rs",
+              "crates/fireemu-adapter-grpc/src/rest/admin_inventory_tests.rs",
               "conformance/firestore-matrix.json"
             ],
             "conformance": [
@@ -635,6 +649,109 @@
             }
           ],
           "productionOnly": [],
+          "preview": []
+        },
+        {
+          "id": "FS-CLAIM-FIELD-CONFIG",
+          "statement": "The Firestore Admin field-configuration surface is served for time-to-live policies, including the ttlConfig.expirationOffset that decides a document's expiration time, and a document whose expiration time has passed is deleted by a sweep on the virtual clock after a configurable delay rather than staying readable forever. A sweep deletion is decided under the policy and the document version current in the section that commits it, so a document whose configuration or time-to-live field moved after the sweep chose it is kept.",
+          "capabilities": [
+            {
+              "id": "FS-FIELD-CONFIG-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu-adapter-grpc/src/rest/admin_fields_tests.rs",
+              "crates/fireemu-adapter-grpc/tests/ttl.rs",
+              "crates/fireemu-core-firestore/src/ttl.rs",
+              "crates/fireemu/src/snapshots.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the official emulator serves no collectionGroups.fields surface and performs no expiry sweep, so a document whose time-to-live has elapsed stays readable there for the life of the run"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "The expiry sweep interval is configurable (firestore.ttlSweepIntervalSeconds, default 86400, maximum 259200) and a control route POST /v1/sessions/{session}/firestore/ttl:sweep runs one sweep at once, so a test observes the post-expiry state without advancing the virtual clock by a day.",
+              "reason": "Production's deletion delay is documented as typically 24 hours and at most 72 hours, which is not a boundary a deterministic local run can wait out; the configurable interval and the immediate sweep make both ends of that window reachable without inventing a deletion production would not perform."
+            },
+            {
+              "behaviour": "A fields.patch returns a long-running operation that is already done, and the readback reports ACTIVE at once; patching indexConfig is refused with UNIMPLEMENTED.",
+              "reason": "The local runtime applies a configuration change synchronously, so the intermediate CREATING state has no local duration to observe. Single-field exemptions come from the project's index configuration and have no runtime transition, so accepting the patch would report an exemption that never took effect."
+            },
+            {
+              "behaviour": "One sweep deletes at most 1024 documents and does not record itself as having run, so the next clock move continues from where it stopped. A sweep is scoped to the session that asked for it.",
+              "reason": "The sweep runs inside the control request that moved the virtual clock, so a clock advance observes its own deletions and a test needs no quiescence wait. An unbounded sweep would hold that response open for as long as the store is large, and an unscoped one would take another session's grace period between expiry and deletion away."
+            },
+            {
+              "behaviour": "The export sidecar that carries the time-to-live configuration declares version 2 when at least one policy carries an expirationOffset and version 1 otherwise, and a reader refuses a version-1 artifact that carries one.",
+              "reason": "The official export format has no field-configuration section at all, so the sidecar is a fireemu addition and its versioning is fireemu's own. An older reader that silently dropped an offset would sweep every document of that collection group up to one offset early, so the version is what turns that data loss into a refusal."
+            },
+            {
+              "behaviour": "Each automatic single-field index reported under indexConfig.indexes carries a name whose id is a digest over the project, database, collection group, field, query scope and mode.",
+              "reason": "Production assigns an opaque server-side id to every index and a local run has no index resource to draw one from, so the name is derived rather than observed. It is stable across restarts of the same configuration and distinct for distinct indexes, which is what a caller that stores or compares the name needs; whether production's own names may be depended on is an observation this lane has not made."
+            }
+          ],
+          "productionOnly": [
+            "the real deletion latency, its backfill cost and the billing of the deletes",
+            "the server-assigned ids of the automatic single-field indexes",
+            "the observed refusal statuses and messages for an out-of-range or sub-second ttlConfig.expirationOffset; the range and precision rule is taken from the Firestore v1 discovery document and has not been compared against a production project"
+          ],
+          "preview": []
+        },
+        {
+          "id": "FS-CLAIM-VECTOR",
+          "statement": "Firestore Standard/Native findNearest vector queries are implemented locally on both the v1 gRPC RunQuery and Firestore REST :runQuery surfaces. The local implementation supports Euclidean, cosine and dot-product distance measures, optional distance-result projection, finite distance thresholds, a result limit from 1 through 1000, ordinary query projection, filters, offsets and limits before nearest ranking, and the declared vector-index policy: strict production planning requires a dimensioned vector index matching the query vector and a matching composite vector index when prefilters are present, while the emulator profile assumes the vector index. This is a local implementation mapping: production parity and SDK execution are unobserved, and findNearest is refused for Listen/WebChannel targets.",
+          "capabilities": [
+            {
+              "id": "FS-QRY-1",
+              "status": "implemented"
+            },
+            {
+              "id": "FS-REST-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [
+              "rest_run_query_supports_standard_find_nearest",
+              "grpc_run_query_supports_standard_find_nearest",
+              "grpc_find_nearest_applies_ordinary_offset_and_limit_before_ranking",
+              "nearest_vector_query_orders_euclidean_cosine_and_dot_product",
+              "nearest_projection_controls_synthesized_distance_field",
+              "nearest_vector_query_limit_and_threshold_are_applied",
+              "vector_queries_require_a_dimensioned_vector_index_in_production",
+              "vector_query_prefilters_require_the_same_composite_vector_index",
+              "emulator_vector_queries_assume_a_vector_index_without_using_name_index"
+            ],
+            "integration": [
+              "crates/fireemu-adapter-grpc/tests/rest.rs",
+              "crates/fireemu-adapter-grpc/tests/local.rs",
+              "crates/fireemu-adapter-grpc/tests/webchannel.rs",
+              "crates/fireemu-core-firestore/tests/execute.rs",
+              "crates/fireemu-core-firestore/tests/index.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the pinned official Firestore emulator refuses findNearest on its REST surface; this contract records fireemu's REST implementation as a local capability rather than official-emulator parity"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "REST and gRPC findNearest execution with projection, Euclidean/cosine/dot-product distance, finite thresholds, limits and ordinary pre-ranking query stages; Listen and WebChannel reject findNearest targets explicitly",
+              "precision": "finite-local-read-subset"
+            },
+            {
+              "behaviour": "Non-document-name explicit ordering materializes at most offset + limit <= 1000 ordinary rows before nearest ranking; unbounded offsets require document-name ordering or a top-level limit",
+              "precision": "resource-safety-divergence"
+            }
+          ],
+          "productionOnly": [
+            "production vector-search execution, index-build/backfill behaviour, and production error or ranking parity"
+          ],
           "preview": []
         },
         {
@@ -715,7 +832,11 @@
             "tests": [],
             "integration": [
               "crates/fireemu-core-limits/tests/evaluate.rs",
-              "crates/fireemu-core-limits/tests/catalog.rs"
+              "crates/fireemu-core-limits/tests/catalog.rs",
+              "crates/fireemu-core-firestore/tests/enforced_limits.rs",
+              "crates/fireemu-core-firestore/tests/write_path_limits.rs",
+              "crates/fireemu-adapter-grpc/tests/write_path_limits.rs",
+              "crates/fireemu-adapter-grpc/tests/request_bytes.rs"
             ],
             "conformance": []
           },
@@ -726,6 +847,10 @@
             {
               "behaviour": "boundary-exact limit catalogs with a per-limit disposition and warning thresholds",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "two strict-profile-only write-path refusals, published here as the contract requires. First, a map or array field value whose storage size exceeds FS-LIMIT-FIELD-VALUE-BYTES (1,048,487 logical bytes): production documents that limit but has only been observed refusing a single oversized string or bytes payload, which is measured on its raw payload and refused under both profiles. Second, a field path over FS-LIMIT-FIELD-PATH-BYTES (1,500 bytes) implied through an array element: the equivalent path implied through nested maps was already refused under both profiles by automatic index accounting, which does not walk into arrays. Both are documented, production observation pending.",
+              "precision": "documented-not-observed"
             }
           ],
           "productionOnly": [
@@ -833,27 +958,33 @@
         },
         {
           "id": "FS-CLAIM-PIPELINE",
-          "statement": "ExecutePipeline is decoded, identified and validated against the documented stage registry; a well-formed pipeline is answered UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY rather than executed, and an unknown stage is refused rather than skipped.",
+          "statement": "ExecutePipeline validates the documented stage registry and executes a finite Enterprise local latest-read subset: collection, optional single where(equal(top-level field reference, scalar literal)), optional top-level field-reference select aliases, optional non-negative int32 offset and optional limit, in that order. Offset skips matching rows once before limit while reusing the existing paged stream. Unsupported execution stages, expressions and consistency selectors are refused rather than ignored; production execution, ordering and exact production error parity are unobserved.",
           "capabilities": [
             {
               "id": "FS-PIPE-RPC-1",
-              "status": "implemented"
+              "status": "partial"
             }
           ],
           "evidence": {
             "tests": [
-              "pipelines_are_identified_and_misplaced_or_unknown_stages_refused"
+              "pipelines_are_identified_and_misplaced_or_unknown_stages_refused",
+              "execute_pipeline_reads_collection_projects_field_aliases_and_applies_limit",
+              "execute_pipeline_where_equal_executes_scalar_matrix_and_rejects_missing_fields",
+              "execute_pipeline_where_equal_pushes_filter_before_limit",
+              "execute_pipeline_where_equal_refusals_preserve_status_context_and_documents",
+              "execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_preserves_state"
             ],
             "integration": [
-              "crates/fireemu-core-firestore/tests/validation_only.rs"
+              "crates/fireemu-core-firestore/tests/validation_only.rs",
+              "crates/fireemu-adapter-grpc/tests/local.rs"
             ],
             "conformance": []
           },
           "officialLimitations": [],
           "fireemuOnly": [
             {
-              "behaviour": "strict decode-and-validate with a canonical form in the refusal",
-              "precision": "strict-validation-only"
+              "behaviour": "finite latest-read collection / optional single where(equal(top-level field, scalar literal)) / optional top-level field-reference select / optional non-negative int32 offset / optional limit execution with explicit unsupported-operation refusal",
+              "precision": "finite-local-read-subset"
             }
           ],
           "productionOnly": [],
@@ -959,10 +1090,14 @@
       "claims": [
         {
           "id": "AUTH-CLAIM-IDENTITY-TOOLKIT",
-          "statement": "The Identity Toolkit REST subset the Auth emulator serves is reproduced with the official error envelopes, including the Admin account routes real projects use (create, lookup, update, batchGet, batchCreate, batchDelete, query, session cookies, link generators), the client account routes (sign-up, sign-in, update, delete) and the emulator-only routes that read out-of-band codes and verification codes and read or change the project configuration. An unpinned daemon advances Auth request time monotonically, so a self-service credential change in a later second invalidates an earlier session cookie through validSince just as the Admin SDK observes on the official emulator.",
+          "statement": "The Identity Toolkit REST subset the Auth emulator serves is reproduced with the official error envelopes, including the Admin account routes real projects use (create, lookup, update, batchGet, batchCreate, batchDelete, query, session cookies, link generators), the client account routes (sign-up, sign-in, update, delete) and the emulator-only routes that read out-of-band codes and verification codes and read or change the project configuration. The local implementation validates new password policy before mutation on sign-up, client and Admin update, password reset, and batch import, with a six-character minimum, a 4096 UTF-16-unit maximum and control-character rejection; trusted artifact restoration preserves recorded credentials without applying new-password policy. Saved production evidence for these rules is limited to the approved end-user client accounts:update corpus, including finite 4095/4096/4097 UTF-16-unit maximum cases and six/five-character ASCII controls. Other routes and local malformed/control/minimum cases remain production-unobserved, so this claim does not transfer client-update evidence across routes. An unpinned daemon advances Auth request time monotonically, so a self-service credential change in a later second invalidates an earlier session cookie through validSince just as the Admin SDK observes on the official emulator.",
           "capabilities": [
             {
               "id": "AUTH-CORE-1",
+              "status": "implemented"
+            },
+            {
+              "id": "AUTH-ACCOUNT-LIFECYCLE-1",
               "status": "implemented"
             },
             {
@@ -994,7 +1129,7 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "codes are deterministic from the session seed rather than random",
+              "behaviour": "normal daemon starts re-key generated credential handles from a CSPRNG lifecycle incarnation so restart or namespace recreation cannot replay them; tests may inject a fixed incarnation for reproducibility",
               "precision": "exact-for-local-semantics"
             },
             {
@@ -1012,6 +1147,59 @@
           ],
           "productionOnly": [
             "real identity provider round trips and provider-side account state"
+          ],
+          "preview": []
+        },
+        {
+          "id": "AUTH-CLAIM-PROVIDER-CONFIG",
+          "statement": "Project and tenant OAuth IdP and inbound SAML provider configuration resources implement create, get, list, update and delete under the public v2 Identity Platform paths, with owner-only access, namespace and provider-kind isolation, creation-order pagination, validation before mutation and secret-safe snapshots. This is a local implementation contract; production response parity and external identity-provider exchanges are not attested.",
+          "capabilities": [
+            {
+              "id": "AUTH-PROVIDER-CONFIG-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the pinned official Auth emulator does not serve project or tenant OAuth IdP and inbound SAML configuration resources"
+          ],
+          "fireemuOnly": [],
+          "productionOnly": [
+            "live provider discovery, redirects, assertion exchange and production configuration parity"
+          ],
+          "preview": []
+        },
+        {
+          "id": "AUTH-CLAIM-FEDERATION-ASSERTION-LOCAL",
+          "statement": "An opt-in local adapter path verifies one caller-pinned RS256 OIDC key and binds issuer, subject, audience, authorized party, tenant, provider, expiry, issued-at, not-before and nonce before account mutation. Mixed bearer access or refresh credentials are refused before mutation. This is finite local trust-boundary evidence and does not attest production federation parity, provider discovery, hosted redirects, authorization-code exchange, SAML or external identity-provider behavior.",
+          "capabilities": [
+            {
+              "id": "AUTH-FEDERATION-ASSERTION-LOCAL",
+              "status": "partial"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu-adapter-http/tests/auth_oidc_assertions.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [],
+          "fireemuOnly": [
+            {
+              "behaviour": "the opt-in test boundary accepts one explicitly pinned local RS256 JWK and performs no discovery or external identity-provider traffic",
+              "precision": "exact-for-local-semantics"
+            }
+          ],
+          "productionOnly": [
+            "production provider configuration and discovery, hosted redirects, authorization-code exchange, SAML, key rotation and external identity-provider behavior"
           ],
           "preview": []
         },
@@ -1106,7 +1294,7 @@
               "precision": "boundary-conformance"
             },
             {
-              "behaviour": "TOTP enrollment does not require a verified email: the official emulator has no TOTP route to measure it against and production behaviour is not inferred from the SMS result",
+              "behaviour": "TOTP enrollment requires a verified email, as phone enrollment does: mfaEnrollment:start and mfaEnrollment:finalize both refuse an unverified email with UNVERIFIED_EMAIL. The official emulator has no TOTP route to measure this against, and production has not been observed for this condition; the AUTH-MFA-AGE-TOTP-01 campaign will settle it",
               "precision": "boundary-conformance"
             },
             {
@@ -1842,7 +2030,7 @@
         },
         {
           "id": "CLI-CLAIM-IMPORT-EXPORT",
-          "statement": "An export directory firebase emulators:export wrote with firebase-tools 15.28.2 imports into fireemu with its Firestore documents, Auth accounts and Storage objects intact, and an export fireemu writes imports back into the official suite the same way: the firebase-export-metadata.json manifest, the Firestore managed export, the Identity Toolkit accounts and config documents and the Storage bucket, blob and metadata files are the pinned formats. --import, --export-on-exit and emulators:export behave as the official commands do, an import across products is all or nothing, and a section of a deferred product is refused rather than silently dropped.",
+          "statement": "An export directory firebase emulators:export wrote with firebase-tools 15.28.2 imports into fireemu with its Firestore documents, Auth accounts and Storage objects intact, and an export fireemu writes imports back into the official suite the same way: the firebase-export-metadata.json manifest, every Firestore managed-export output partition referenced by overall_export_metadata, the Identity Toolkit accounts and config documents and the Storage bucket, blob and metadata files are the pinned formats. --import, --export-on-exit and emulators:export behave as the official commands do, an import across products is all or nothing, and corrupt metadata, duplicate or aliased partition outputs, a partition-count overflow, and a section of a deferred product are refused before any imported state is published rather than silently dropped.",
           "capabilities": [
             {
               "id": "DATA-1",
@@ -1982,7 +2170,7 @@
       "officialDefaultPort": 4500,
       "officialTraits": [],
       "state": "claimed",
-      "decision": "Active supported surface: an RFC 6455 WebSocket on the logging port serves the EmulatorLog wire format the official UI's Logs page reads, fed by the functions runner's output and the emulators' lifecycle lines; loopback-only and with a bounded history, both documented divergences.",
+      "decision": "Active supported surface: an RFC 6455 WebSocket on the logging port serves the EmulatorLog wire format the official UI's Logs page reads, fed by the functions runner's output and the emulators' lifecycle lines; loopback-only for both the Host header and any browser Origin, with a bounded history, and with a handshake bounded in time and size, all documented divergences.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/install_and_configure",
         "https://firebase.google.com/docs/functions/writing-and-viewing-logs",
@@ -2025,6 +2213,14 @@
             {
               "behaviour": "the WebSocket handshake is refused unless the Host header names loopback (the same DNS-rebinding guard the other fireemu listeners apply); the official server has none",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "a WebSocket handshake carrying a browser Origin header that is not an HTTP(S) loopback origin is refused with 403 before any frame is written, the same browser-origin policy the Auth/control listener and the Hub apply; a handshake with no Origin (a non-browser client such as firebase-tools) still connects. A repeated Host or Origin header is refused rather than resolved to one of its values, as RFC 7230 requires, and a header name that is not an RFC 7230 token is refused instead of skipped. WebSocket handshakes are exempt from the same-origin policy, so without this guard any web page could read the stream, which carries the Auth out-of-band links and SMS codes the official emulator also streams. The official UI Logs page connects from a loopback origin, and the streamed content itself stays at parity",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "the handshake request head must arrive whole inside a ten-second deadline and within 8 KiB, otherwise the connection is answered 408 or 431 and closed before any frame is written; the official server bounds the handshake in neither time nor size, so one stalled peer holds a connection open indefinitely. A well-formed handshake is a few hundred bytes sent in one write, so no real client approaches either bound",
+              "precision": "conservative"
             },
             {
               "behaviour": "the retained history is bounded to the most recent 1000 frames rather than unbounded, so an unbounded producer cannot exhaust memory",
@@ -2096,6 +2292,7 @@
             "tests": [
               "publish_pull_ack_round_trip",
               "redelivery_after_ack_deadline_on_virtual_clock",
+              "push_without_a_retry_policy_waits_exactly_the_minimum_redelivery_interval",
               "streaming_pull_delivers_and_acks",
               "rest_put_routes_preserve_every_supported_subscription_field",
               "rest_update_mask_is_atomic_scoped_and_rejects_unsupported_fields",

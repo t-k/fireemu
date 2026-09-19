@@ -146,24 +146,10 @@ fn management_route(path: &str) -> Option<(&str, &str, Option<&str>)> {
     Some((project, app_id, token))
 }
 
-/// `%XX` decoded. Unlike form decoding, `+` stays a plus: it is a legal path character.
+/// `%XX` decoded through the shared codec. Unlike form decoding, `+` stays a plus: it is a
+/// legal path character.
 fn decode_segment(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let digit = |b: u8| (b as char).to_digit(16);
-            if let (Some(hi), Some(lo)) = (digit(bytes[i + 1]), digit(bytes[i + 2])) {
-                out.push(u8::try_from(hi * 16 + lo).unwrap_or(b'?'));
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
+    fireemu_core_types::codec::percent_decode(text, fireemu_core_types::codec::PlusMode::Literal)
 }
 
 /// A Google-shaped JSON error.
@@ -564,5 +550,27 @@ fn delete_debug_token(
         },
         Err(RegistryError::UnknownApp) => not_configured(),
         Err(_) => error(404, "NOT_FOUND", "no such debug token"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_segment;
+
+    /// The two properties this surface depends on, which the shared codec now guarantees:
+    /// a path segment reads `+` literally, and only two ASCII hexadecimal digits form an
+    /// escape. The replaced hand-rolled body already behaved this way; the test pins it so a
+    /// later change of plus mode or of the escape rule cannot pass unnoticed.
+    #[test]
+    fn a_path_segment_decodes_escapes_and_keeps_its_plus() {
+        assert_eq!(
+            decode_segment("1%3A1234567890%3Aweb%3Alocal-test-app"),
+            "1:1234567890:web:local-test-app"
+        );
+        assert_eq!(decode_segment("a+b"), "a+b");
+        assert_eq!(decode_segment("%2Bb"), "+b");
+        for malformed in ["%+f", "%zz", "%2G", "%2", "%"] {
+            assert_eq!(decode_segment(malformed), malformed, "{malformed}");
+        }
     }
 }

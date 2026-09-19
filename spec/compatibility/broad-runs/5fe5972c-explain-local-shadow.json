@@ -1,0 +1,29 @@
+{
+  "kind": "query-explain-campaign-local-shadow-v2",
+  "status": "complete",
+  "productionExecuted": false,
+  "executionCommit": "5fe5972c5b754454641edcebc9b965767751e105",
+  "manifestDigest": "35dc2b00b35783089e3eada163027ca8385a4e527bb6cc19670a0ff1cf772873",
+  "observerSha256": "0d8ff956ac28175c0b68b7f967a373dbb1254f4500465dcfe1e1b9f88ba38c71",
+  "comparisonContractDigest": "29c81357c0f917a97791defd213947199beac22ea5fa01a7cab0833efa531934",
+  "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80",
+  "artifactSha256": "c86392e896e6dd799b3377154be9de7d52b29a3d2e8d10a9b7b54226f26eeb8e",
+  "inputSha256": "5265b929a15efdec428d1acf2935294519e1a9e3912765f2788bef7b94b4a88f",
+  "processSha256": "1a2bf59cb4cb2ddea2f76151ac13fec24664fdb422817a2f99161b768278db02",
+  "cleanupSha256": "87068573dccc54e806739b636cad14cc3d37023db6e2d33cc6013528d209a6fe",
+  "recordingComplete": true,
+  "stateVerified": true,
+  "cleanupComplete": true,
+  "configurationUnchanged": true,
+  "ownedProcessStopped": true,
+  "listenersClosed": true,
+  "observedRows": 12,
+  "recoveryRows": 6,
+  "compatibility": "not-observed",
+  "scope": [
+    "Six Explain cases: query and aggregation plan-only, analyze and empty-analyze.",
+    "Setup/readback and owned cleanup are included in the local shadow.",
+    "The current feature artifact completed the local campaign; no production request was made.",
+    "This is local evidence for the prepared campaign and is not production parity."
+  ]
+}

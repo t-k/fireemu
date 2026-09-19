@@ -148,6 +148,22 @@ impl HubState {
 pub struct Locator {
     /// The file, when this daemon wrote it.
     path: Option<PathBuf>,
+    /// The file this daemon created, identified beyond its name: a newer daemon that
+    /// replaced the path keeps its own file even when the recorded pid would match.
+    #[cfg(unix)]
+    identity: Option<(u64, u64)>,
+}
+
+/// How the path was identified when this daemon created it, so removal can tell its own file
+/// from one that took the name since.
+#[cfg(unix)]
+fn file_identity(path: &std::path::Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt as _;
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    metadata
+        .file_type()
+        .is_file()
+        .then(|| (metadata.dev(), metadata.ino()))
 }
 
 impl Locator {
@@ -168,7 +184,7 @@ impl Locator {
         let path = Self::path_for(&state.project);
         if std::fs::symlink_metadata(&path).is_ok_and(|metadata| !metadata.file_type().is_file()) {
             return (
-                Self { path: None },
+                Self::unwritten(),
                 Some(format!(
                     "{} is not a regular file and was left alone",
                     path.display()
@@ -177,7 +193,7 @@ impl Locator {
         }
         if let Some(pid) = existing_live_pid(&path) {
             return (
-                Self { path: None },
+                Self::unwritten(),
                 Some(format!(
                     "another fireemu or Firebase emulator suite for {} is still running (pid {pid}); {} was left alone, so FIREBASE_EMULATOR_HUB discovery keeps pointing at it",
                     state.project,
@@ -207,11 +223,18 @@ impl Locator {
             std::fs::rename(&temporary, &path)
         })();
         match result {
-            Ok(()) => (Self { path: Some(path) }, None),
+            Ok(()) => (
+                Self {
+                    #[cfg(unix)]
+                    identity: file_identity(&path),
+                    path: Some(path),
+                },
+                None,
+            ),
             Err(e) => {
                 let _ = std::fs::remove_file(&temporary);
                 (
-                    Self { path: None },
+                    Self::unwritten(),
                     Some(format!("cannot write {}: {e}", path.display())),
                 )
             }
@@ -219,27 +242,143 @@ impl Locator {
     }
 }
 
-impl Drop for Locator {
-    fn drop(&mut self) {
-        let Some(path) = &self.path else {
-            return;
+impl Locator {
+    /// A locator this daemon did not write, so there is nothing for it to remove.
+    fn unwritten() -> Self {
+        Self {
+            path: None,
+            #[cfg(unix)]
+            identity: None,
+        }
+    }
+
+    /// Removes this daemon's locator as an explicit step of shutdown and returns the notice
+    /// to print when removal failed. Discovery would otherwise keep pointing at a daemon
+    /// that has stopped, and that is worth a warning rather than a silent `let _ =`.
+    ///
+    /// Consuming the locator is what orders the removal: the caller decides when discovery
+    /// is retired, and the destructor that runs afterwards has nothing left to do.
+    #[must_use]
+    pub fn release(mut self) -> Option<String> {
+        self.remove_owned().err()
+    }
+
+    /// Whether the path still names the very file this daemon created.
+    #[cfg(unix)]
+    fn is_the_created_file(&self, metadata: &std::fs::Metadata) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+        self.identity
+            .is_none_or(|identity| identity == (metadata.dev(), metadata.ino()))
+    }
+
+    /// Without inode identity the recorded pid is the only evidence of ownership.
+    #[cfg(not(unix))]
+    #[allow(clippy::unused_self)]
+    fn is_the_created_file(&self, _metadata: &std::fs::Metadata) -> bool {
+        true
+    }
+
+    /// Removes the file when it is still the one this daemon created.
+    ///
+    /// Ownership is checked twice over: the document must still record this process, and on
+    /// Unix the path must still be the very file that was created, so a newer daemon that
+    /// reused the path (and, after pid reuse, could record the same number) keeps its own
+    /// locator. A newer daemon that replaces the path between the check and the unlink is
+    /// not excluded by any portable call, which is why the daemon also declines to overwrite
+    /// a locator whose process is still alive.
+    fn remove_owned(&mut self) -> Result<(), String> {
+        let Some(path) = self.path.take() else {
+            return Ok(());
         };
-        // Only this daemon's own locator is removed: a file another process has since
-        // claimed must survive.
-        if existing_pid(path) == Some(std::process::id()) {
-            let _ = std::fs::remove_file(path);
+        let refusal = |what: String| format!("cannot remove {}: {what}", path.display());
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if !metadata.file_type().is_file() || !self.is_the_created_file(&metadata) {
+                    return Ok(());
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(refusal(e.to_string())),
+        }
+        if existing_pid(&path) != Some(std::process::id()) {
+            return Ok(());
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(refusal(e.to_string())),
         }
     }
 }
 
-/// The `pid` a locator file records, if it parses.
-fn existing_pid(path: &std::path::Path) -> Option<u32> {
-    if !std::fs::symlink_metadata(path).ok()?.file_type().is_file() {
-        return None;
+impl Drop for Locator {
+    fn drop(&mut self) {
+        // The fallback for a path that never reached `release`, and silent by design: a
+        // destructor has nowhere to report to. Graceful shutdown calls `release` instead.
+        let _ = self.remove_owned();
     }
-    let text = std::fs::read_to_string(path).ok()?;
-    let json: Value = serde_json::from_str(&text).ok()?;
-    json.get("pid")
+}
+
+/// The largest locator this process reads. The document is a version, one origin and a
+/// capability; anything larger is another program's file or a decoy left in the shared
+/// temp directory.
+pub const MAX_LOCATOR_BYTES: u64 = 64 * 1024;
+
+/// Reads a Hub locator from the shared temp directory.
+///
+/// The file names an origin the CLI connects to and carries this run's control token, and the
+/// temp directory is writable by every user on the host, so the document is only believed when
+/// it is a regular file (never a symlink) that this user owns, that no one else can write, and
+/// that is small. A refusal names the file, never its contents.
+pub fn read_locator(path: &std::path::Path) -> Result<Value, String> {
+    let refusal = |what: &str| format!("{}: {what}", path.display());
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| refusal(&e.to_string()))?;
+    if !metadata.file_type().is_file() {
+        return Err(refusal("is not a regular file"));
+    }
+    if metadata.len() > MAX_LOCATOR_BYTES {
+        return Err(refusal("is larger than a locator document"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.uid() != rustix::process::geteuid().as_raw() {
+            return Err(refusal("belongs to another user"));
+        }
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return Err(refusal("is writable by another user"));
+        }
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| refusal(&e.to_string()))?;
+    serde_json::from_str(&text).map_err(|e| refusal(&format!("does not parse: {e}")))
+}
+
+/// The authority (`host:port`) of a locator origin, refused unless it is loopback.
+///
+/// The locator comes from a directory anyone can write, and reaching the origin it names means
+/// presenting the control token, so an origin that is not loopback is never connected to.
+pub fn loopback_authority(origin: &str) -> Result<String, String> {
+    let rest = origin
+        .strip_prefix("http://")
+        .ok_or_else(|| format!("{origin}: an origin must start with http://"))?;
+    let authority = rest.split('/').next().unwrap_or("");
+    let (host, port) = authority
+        .rsplit_once(':')
+        .ok_or_else(|| format!("{origin}: the origin must name a port"))?;
+    if !matches!(host, "127.0.0.1" | "localhost" | "[::1]") {
+        return Err(format!("{origin}: only a loopback origin is contacted"));
+    }
+    port.parse::<u16>()
+        .map_err(|_| format!("{origin}: the port is not a number"))?;
+    Ok(authority.to_owned())
+}
+
+/// The `pid` a locator file records, if this process may believe the file.
+fn existing_pid(path: &std::path::Path) -> Option<u32> {
+    read_locator(path)
+        .ok()?
+        .get("pid")
         .and_then(Value::as_u64)
         .and_then(|p| u32::try_from(p).ok())
 }
@@ -711,6 +850,183 @@ mod tests {
             Locator::path_for("").file_name().unwrap(),
             "hub-demo-no-project.json"
         );
+    }
+
+    /// LOC-1: the locator lives in a directory every user on the host can write, so a file
+    /// that is not this user's small regular file is refused by name, and an origin that is
+    /// not loopback is never contacted with the control token.
+    #[test]
+    fn a_locator_is_believed_only_when_it_is_this_users_small_regular_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "fireemu-locator-test-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).expect("the scratch directory is created");
+
+        let good = dir.join("hub-demo-app.json");
+        std::fs::write(
+            &good,
+            br#"{"pid": 4321, "origins": ["http://127.0.0.1:4400"]}"#,
+        )
+        .expect("the locator is written");
+        assert_eq!(read_locator(&good).expect("a locator is read")["pid"], 4321);
+        assert_eq!(existing_pid(&good), Some(4321));
+
+        // A file larger than a locator document is refused without being read.
+        let huge = dir.join("hub-huge.json");
+        std::fs::write(
+            &huge,
+            vec![b' '; usize::try_from(MAX_LOCATOR_BYTES + 1).expect("the cap fits in memory")],
+        )
+        .expect("the large file is written");
+        let refusal = read_locator(&huge).expect_err("an oversized locator is refused");
+        assert!(
+            refusal.contains("larger than a locator document"),
+            "{refusal}"
+        );
+        assert_eq!(existing_pid(&huge), None);
+
+        // A symlink, even one pointing at a locator this user owns, is refused.
+        #[cfg(unix)]
+        {
+            let link = dir.join("hub-link.json");
+            std::os::unix::fs::symlink(&good, &link).expect("the symlink is created");
+            let refusal = read_locator(&link).expect_err("a symlinked locator is refused");
+            assert!(refusal.contains("is not a regular file"), "{refusal}");
+            assert_eq!(existing_pid(&link), None);
+        }
+
+        // A file this user does not own, or that another user can write, is refused.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let shared = dir.join("hub-shared.json");
+            std::fs::write(&shared, br#"{"pid": 4321}"#).expect("the shared file is written");
+            std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o666))
+                .expect("the mode is set");
+            let refusal = read_locator(&shared).expect_err("a writable locator is refused");
+            assert!(refusal.contains("writable"), "{refusal}");
+        }
+
+        // The origin a locator names is contacted only when it is loopback.
+        assert_eq!(
+            loopback_authority("http://127.0.0.1:4400").as_deref(),
+            Ok("127.0.0.1:4400")
+        );
+        assert_eq!(
+            loopback_authority("http://localhost:4400").as_deref(),
+            Ok("localhost:4400")
+        );
+        for routable in [
+            "http://attacker.example:80",
+            "http://10.0.0.1:4400",
+            "https://127.0.0.1:4400",
+            "http://127.0.0.1",
+        ] {
+            assert!(
+                loopback_authority(routable).is_err(),
+                "{routable} must not be contacted"
+            );
+        }
+
+        std::fs::remove_dir_all(&dir).expect("the scratch directory is removed");
+    }
+
+    /// A scratch directory for one locator scenario, named after the calling line.
+    fn scratch(line: u32) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "fireemu-locator-release-{}-{line}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is created");
+        dir
+    }
+
+    /// A locator owned by this process, written the way `write` leaves it.
+    fn owned_locator(path: &std::path::Path) -> Locator {
+        let body = format!(
+            r#"{{"pid": {}, "origins": ["http://127.0.0.1:4400"]}}"#,
+            std::process::id()
+        );
+        std::fs::write(path, body).expect("the locator is written");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .expect("the mode is set");
+        }
+        Locator {
+            #[cfg(unix)]
+            identity: file_identity(path),
+            path: Some(path.to_path_buf()),
+        }
+    }
+
+    /// LOCEXIT-2: removal is an explicit step that reports what it did, not a destructor that
+    /// swallows its own failure. A locator this daemon still owns goes away; one that another
+    /// daemon has claimed in the meantime is left alone, whether it says so by naming another
+    /// process or by being a different file under the same name.
+    #[test]
+    fn release_removes_this_daemons_locator_and_leaves_one_another_daemon_claimed() {
+        let dir = scratch(line!());
+
+        let own = dir.join("hub-own.json");
+        assert_eq!(owned_locator(&own).release(), None);
+        assert!(!own.exists(), "{} outlived its daemon", own.display());
+
+        // Another process recorded in the document: the file belongs to that daemon now.
+        let foreign = dir.join("hub-foreign.json");
+        let locator = owned_locator(&foreign);
+        std::fs::write(
+            &foreign,
+            br#"{"pid": 1, "origins": ["http://127.0.0.1:4400"]}"#,
+        )
+        .expect("the locator is replaced");
+        assert_eq!(locator.release(), None);
+        assert!(foreign.exists(), "another daemon's locator was removed");
+
+        // A different file under the same name, recording the same pid: only the file this
+        // daemon created may be removed, so the path is left alone.
+        #[cfg(unix)]
+        {
+            let reused = dir.join("hub-reused.json");
+            let locator = owned_locator(&reused);
+            std::fs::remove_file(&reused).expect("the locator is removed");
+            let replacement = owned_locator(&reused);
+            assert_ne!(
+                locator.identity, replacement.identity,
+                "the replacement is a different file"
+            );
+            assert_eq!(locator.release(), None);
+            assert!(reused.exists(), "a newer daemon's locator was removed");
+            assert_eq!(replacement.release(), None);
+            assert!(!reused.exists(), "the newer daemon removed its own locator");
+        }
+
+        std::fs::remove_dir_all(&dir).expect("the scratch directory is removed");
+    }
+
+    /// LOCEXIT-2: a removal that fails is reported, because discovery then keeps pointing at
+    /// a daemon that has stopped and only the operator can clear it.
+    #[cfg(unix)]
+    #[test]
+    fn release_reports_a_removal_it_could_not_perform() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = scratch(line!());
+        let path = dir.join("hub-unremovable.json");
+        let locator = owned_locator(&path);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500))
+            .expect("the directory is sealed");
+        let note = locator.release().expect("the failure is reported");
+        assert!(note.contains("cannot remove"), "{note}");
+        assert!(note.contains("hub-unremovable.json"), "{note}");
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .expect("the directory is reopened");
+        std::fs::remove_dir_all(&dir).expect("the scratch directory is removed");
     }
 
     #[cfg(unix)]

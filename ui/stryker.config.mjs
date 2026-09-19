@@ -4,7 +4,13 @@
 export default {
   testRunner: "vitest",
   plugins: ["@stryker-mutator/vitest-runner"],
-  mutate: ["src/lib/**/*.ts", "src/lib/**/*.tsx", "src/api/client.ts", "src/api/firestore.ts", "!src/**/*.test.*"],
+  mutate: [
+    "src/lib/**/*.ts",
+    "src/lib/**/*.tsx",
+    "src/api/client.ts",
+    "src/api/firestore.ts",
+    "!src/**/*.test.*",
+  ],
   // TypeScript 7 (tsgo) has no `parseConfigFileTextToJson`, which Stryker's tsconfig rewrite
   // needs; the vitest runner does not need the rewrite, so point it at no file.
   tsconfigFile: "tsconfig.stryker-none.json",

@@ -273,6 +273,7 @@ async fn start(mode: BaselineMode) -> Harness {
         gateway: Arc::new(gateway),
         rules: Some(enforcer),
         app_check: policy,
+        control_token: None,
     });
     Harness {
         client: FirestoreClient::new(channel),
@@ -359,6 +360,8 @@ impl Harness {
             authorization: authorization.map(str::to_owned),
             app_check: app_check.iter().map(|v| (*v).to_owned()).collect(),
             body,
+            origin: None,
+            browser_metadata: false,
         });
         (r.status, r.body)
     }
@@ -823,6 +826,15 @@ async fn write_stream_first(
     authorization: Option<&str>,
     app_check: &[&str],
 ) -> Result<pb::WriteResponse, tonic::Status> {
+    write_stream_first_on(h, DATABASE, authorization, app_check).await
+}
+
+async fn write_stream_first_on(
+    h: &mut Harness,
+    database: &str,
+    authorization: Option<&str>,
+    app_check: &[&str],
+) -> Result<pb::WriteResponse, tonic::Status> {
     let (tx, rx) = tokio::sync::mpsc::channel(8);
     let mut responses = h
         .client
@@ -835,7 +847,7 @@ async fn write_stream_first(
         .expect("the stream opens")
         .into_inner();
     tx.send(pb::WriteRequest {
-        database: DATABASE.to_owned(),
+        database: database.to_owned(),
         ..pb::WriteRequest::default()
     })
     .await
@@ -852,6 +864,16 @@ async fn listen_stream_first(
     authorization: Option<&str>,
     app_check: &[&str],
 ) -> Result<pb::ListenResponse, tonic::Status> {
+    listen_stream_first_on(h, DATABASE, DOCS, authorization, app_check).await
+}
+
+async fn listen_stream_first_on(
+    h: &mut Harness,
+    database: &str,
+    documents: &str,
+    authorization: Option<&str>,
+    app_check: &[&str],
+) -> Result<pb::ListenResponse, tonic::Status> {
     let (tx, rx) = tokio::sync::mpsc::channel(8);
     let mut responses = h
         .client
@@ -864,11 +886,11 @@ async fn listen_stream_first(
         .expect("the stream opens")
         .into_inner();
     tx.send(pb::ListenRequest {
-        database: DATABASE.to_owned(),
+        database: database.to_owned(),
         target_change: Some(pb::listen_request::TargetChange::AddTarget(pb::Target {
             target_id: 2,
             target_type: Some(pb::target::TargetType::Query(pb::target::QueryTarget {
-                parent: DOCS.to_owned(),
+                parent: documents.to_owned(),
                 query_type: Some(pb::target::query_target::QueryType::StructuredQuery(
                     pb::StructuredQuery {
                         from: vec![pb::structured_query::CollectionSelector {
@@ -1318,5 +1340,58 @@ async fn webchannel_observations_name_the_transport() {
             .any(|o| o.transport == "webchannel" && o.operation == "channel.open"),
         "{observations:?}"
     );
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn app_check_decides_before_a_database_that_does_not_exist_on_both_streams() {
+    // A request that is refused for two reasons answers with the same one on every surface.
+    // The unary paths classify App Check as soon as the route and the target project are
+    // resolved, before any database is touched, so a stream must not answer NOT_FOUND where
+    // a unary call of the same shape answers PERMISSION_DENIED.
+    const MISSING: &str = "projects/demo-app/databases/never-created";
+    const MISSING_DOCS: &str = "projects/demo-app/databases/never-created/documents";
+    let mut h = start(BaselineMode::Enforced).await;
+
+    let err = write_stream_first_on(&mut h, MISSING, None, &[])
+        .await
+        .expect_err("an enforced Write stream needs a token");
+    assert_eq!(err.code(), Code::PermissionDenied, "{err:?}");
+    assert_eq!(
+        err.metadata()
+            .get("fireemu-code")
+            .map(|v| v.to_str().unwrap()),
+        Some("APP_CHECK_REQUIRED")
+    );
+
+    let err = listen_stream_first_on(&mut h, MISSING, MISSING_DOCS, None, &["not-a-jwt"])
+        .await
+        .expect_err("an invalid token is refused");
+    assert_eq!(err.code(), Code::PermissionDenied, "{err:?}");
+    assert_eq!(
+        err.metadata()
+            .get("fireemu-code")
+            .map(|v| v.to_str().unwrap()),
+        Some("APP_CHECK_INVALID")
+    );
+
+    // With App Check satisfied, the database that does not exist is the remaining refusal.
+    let token = h.token();
+    let err = write_stream_first_on(&mut h, MISSING, None, &[&token])
+        .await
+        .expect_err("the database still does not exist");
+    assert_eq!(err.code(), Code::NotFound, "{err:?}");
+    let refused = listen_stream_first_on(&mut h, MISSING, MISSING_DOCS, None, &[&token]).await;
+    // The Listen target is acknowledged before it is served, so the refusal may be the
+    // message after it.
+    let err = match refused {
+        Err(error) => error,
+        Ok(_) => tonic::Status::ok("the target was acknowledged"),
+    };
+    assert!(
+        err.code() == Code::NotFound || err.code() == Code::Ok,
+        "{err:?}"
+    );
+
     h.handle.abort();
 }

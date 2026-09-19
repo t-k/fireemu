@@ -1,0 +1,161 @@
+{
+  "acceptance": "candidate",
+  "corpus": {
+    "cases": [
+      "baseline-fresh-finalize",
+      "disabled-start",
+      "disabled-finalize",
+      "reenabled-start",
+      "reenabled-finalize",
+      "final-fresh-finalize"
+    ],
+    "revision": 1,
+    "slice": "auth-mfa-start-disabled"
+  },
+  "production": {
+    "cases": [
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 3505,
+        "httpStatus": 200,
+        "id": "baseline-fresh-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "sessionInfoPresent": true
+        },
+        "elapsedMs": 4826,
+        "httpStatus": 200,
+        "id": "disabled-start",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 5137,
+        "httpStatus": 400,
+        "id": "disabled-finalize",
+        "observedError": "USER_DISABLED",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "sessionInfoPresent": true
+        },
+        "elapsedMs": 6166,
+        "httpStatus": 200,
+        "id": "reenabled-start",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 6757,
+        "httpStatus": 200,
+        "id": "reenabled-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 7961,
+        "httpStatus": 200,
+        "id": "final-fresh-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      }
+    ],
+    "cleanup": {
+      "emailAbsent": true,
+      "uidAbsent": true
+    },
+    "committedCheckout": true,
+    "configDigestMatches": true,
+    "configRestored": true,
+    "configRestoredReadback": {
+      "mfa": {
+        "state": "DISABLED"
+      },
+      "phoneNumber": {},
+      "smsRegionConfig": {
+        "allowlistOnly": {}
+      }
+    },
+    "configuration": {
+      "adminPasswordPolicyAbsent": true,
+      "blockingTriggersAbsent": true,
+      "emailEnabled": true,
+      "improvedEmailPrivacy": true,
+      "passwordRequired": true,
+      "sha256": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2"
+    },
+    "heldPendingBeforeDisable": true,
+    "privateReceiptSha256": "cfa852f418458fb734bca782647e0ea0c0f91c9f271f6bbc585c53839d91d0c7",
+    "probeSourceCommit": "21414ddbc71164cd76e0ebd68c020c8ca01cecc0",
+    "recordedAt": "2026-09-12T03:34:18.599482+00:00",
+    "recordedWith": {
+      "probeSourceCommit": "21414ddbc71164cd76e0ebd68c020c8ca01cecc0",
+      "recorderCommit": "21414ddbc71164cd76e0ebd68c020c8ca01cecc0",
+      "recorderInputs": {
+        "tools/auth-mfa-start-disabled/start_disabled_contract.py": "9ad9460a6c8d5dc6513db257d3757931cdad2268453a85fec3ddd5f086b67501",
+        "tools/auth-mfa-start-disabled/start_disabled_recorder.py": "b85af5f90a6b3efd6c2e238405d11145b61047fbcc324f91bdbaa7cc4312bca7",
+        "tools/auth-password-maximum/maximum_contract.py": "143b78e082daf4cfa675e228c42c493d452de799ba467508130061e82447ecaf",
+        "tools/auth-password-maximum/maximum_recorder.py": "deacabae79e0ed6ef2084c58d761e25d20f77c6def6d1fe756c231824289c63b",
+        "tools/auth-pending-revocation/revocation_contract.py": "068ab00d3c832165a9ffb4a476973eccce0b1b66eb8d09dc24e1bcf3a8453856",
+        "tools/auth-pending-revocation/revocation_recorder.py": "83c65d82b5b3c7ce7de0aee814cea7fefafda48b6bbb5665ea8758f147f4c553"
+      }
+    },
+    "reevaluatedWith": {
+      "commit": "74c61c99bc3cfebe9312d7811280bf2a97739d4b",
+      "contractSha256": "9ad9460a6c8d5dc6513db257d3757931cdad2268453a85fec3ddd5f086b67501"
+    },
+    "setup": true,
+    "target": "production",
+    "transitions": [
+      {
+        "disabled": true,
+        "readback": true
+      },
+      {
+        "disabled": false,
+        "readback": true
+      }
+    ]
+  },
+  "publicationContractSha256": "f80a9484b4b3a53de53972d506042f649d43b76be718163e10fe60c165937baf",
+  "schemaVersion": 1,
+  "scope": "Six sequential REST observations in production only: a fresh phone MFA completion (control) while enabled; the account is disabled through privileged accounts:update and read back; the pending credential obtained before the disable is presented to mfaSignIn:start, and its session finalized if one was returned; the account is re-enabled and read back and the same pending credential is started and finalized; a fresh completion (control) closes the run. Phone MFA with one test phone number, no tenant, no blocking function, one run; the pending credential is obtained before the disable. The oracle configuration was changed for the run and restored with a digest comparison. No human approval, no local artifact comparison, no claim about tenants, SDK, Rules or the credential's expiry; the held rows are the observation, not a rule.",
+  "sourceReviewSha256": "b2a10677fc672da4ea0b14f4144213c6aea5af9294c74fbe83ca53bbc750b367"
+}

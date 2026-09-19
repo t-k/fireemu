@@ -1,0 +1,4027 @@
+{
+  "project": "fireemu-35fe6",
+  "results": [
+    {
+      "shape": "timestamp",
+      "precision": "123456789",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+      "steps": [
+        {
+          "label": "union1",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:23.199698Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:23.199698Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:22.936485Z",
+            "updateTime": "2026-09-09T14:07:23.199698Z"
+          }
+        },
+        {
+          "label": "union2",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:23.199698Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:23.781859Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:22.936485Z",
+            "updateTime": "2026-09-09T14:07:23.199698Z"
+          }
+        },
+        {
+          "label": "union3",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:23.199698Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:24.786221Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:22.936485Z",
+            "updateTime": "2026-09-09T14:07:23.199698Z"
+          }
+        },
+        {
+          "label": "remove",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:26.099909Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:26.099909Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:22.936485Z",
+            "updateTime": "2026-09-09T14:07:26.099909Z"
+          }
+        },
+        {
+          "label": "remove_again",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:26.099909Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:26.782747Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:22.936485Z",
+            "updateTime": "2026-09-09T14:07:26.099909Z"
+          }
+        },
+        {
+          "label": "operand_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      },
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:28.061625Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:28.061625Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:22.936485Z",
+            "updateTime": "2026-09-09T14:07:28.061625Z"
+          }
+        },
+        {
+          "label": "set_union",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "appendMissingElements": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:28.061625Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:28.919376Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:22.936485Z",
+            "updateTime": "2026-09-09T14:07:28.061625Z"
+          }
+        },
+        {
+          "label": "set_remove",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "removeAllFromArray": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:30.023899Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:30.023899Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:22.936485Z",
+            "updateTime": "2026-09-09T14:07:30.023899Z"
+          }
+        },
+        {
+          "label": "ordinary_duplicates",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      },
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:30.402960Z"
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:30.402960Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    },
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:22.936485Z",
+            "updateTime": "2026-09-09T14:07:30.402960Z"
+          }
+        },
+        {
+          "label": "remove_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:30.896344Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:30.896344Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:22.936485Z",
+            "updateTime": "2026-09-09T14:07:30.896344Z"
+          }
+        }
+      ]
+    },
+    {
+      "shape": "timestamp",
+      "precision": "123456",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+      "steps": [
+        {
+          "label": "union1",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:31.583438Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:31.583438Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:31.382541Z",
+            "updateTime": "2026-09-09T14:07:31.583438Z"
+          }
+        },
+        {
+          "label": "union2",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:31.583438Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:31.784172Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:31.382541Z",
+            "updateTime": "2026-09-09T14:07:31.583438Z"
+          }
+        },
+        {
+          "label": "union3",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:31.583438Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:33.332654Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:31.382541Z",
+            "updateTime": "2026-09-09T14:07:31.583438Z"
+          }
+        },
+        {
+          "label": "remove",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:34.582663Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:34.582663Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:31.382541Z",
+            "updateTime": "2026-09-09T14:07:34.582663Z"
+          }
+        },
+        {
+          "label": "remove_again",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:34.582663Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:34.784042Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:31.382541Z",
+            "updateTime": "2026-09-09T14:07:34.582663Z"
+          }
+        },
+        {
+          "label": "operand_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      },
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:36.434737Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:36.434737Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:31.382541Z",
+            "updateTime": "2026-09-09T14:07:36.434737Z"
+          }
+        },
+        {
+          "label": "set_union",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "appendMissingElements": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:36.434737Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:36.783904Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:31.382541Z",
+            "updateTime": "2026-09-09T14:07:36.434737Z"
+          }
+        },
+        {
+          "label": "set_remove",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "removeAllFromArray": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:37.227376Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:37.227376Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:31.382541Z",
+            "updateTime": "2026-09-09T14:07:37.227376Z"
+          }
+        },
+        {
+          "label": "ordinary_duplicates",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      },
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:37.598385Z"
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:37.598385Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    },
+                    {
+                      "timestampValue": "2026-09-01T00:00:00.123456Z"
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:31.382541Z",
+            "updateTime": "2026-09-09T14:07:37.598385Z"
+          }
+        },
+        {
+          "label": "remove_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:38.016721Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:38.016721Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:31.382541Z",
+            "updateTime": "2026-09-09T14:07:38.016721Z"
+          }
+        }
+      ]
+    },
+    {
+      "shape": "map",
+      "precision": "123456789",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+      "steps": [
+        {
+          "label": "union1",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:38.600161Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:38.600161Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:38.419750Z",
+            "updateTime": "2026-09-09T14:07:38.600161Z"
+          }
+        },
+        {
+          "label": "union2",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:38.600161Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:38.784340Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:38.419750Z",
+            "updateTime": "2026-09-09T14:07:38.600161Z"
+          }
+        },
+        {
+          "label": "union3",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:38.600161Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:38.784340Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:38.419750Z",
+            "updateTime": "2026-09-09T14:07:38.600161Z"
+          }
+        },
+        {
+          "label": "remove",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:39.729053Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:39.729053Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:38.419750Z",
+            "updateTime": "2026-09-09T14:07:39.729053Z"
+          }
+        },
+        {
+          "label": "remove_again",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:39.729053Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:39.785004Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:38.419750Z",
+            "updateTime": "2026-09-09T14:07:39.729053Z"
+          }
+        },
+        {
+          "label": "operand_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:40.473950Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:40.473950Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:38.419750Z",
+            "updateTime": "2026-09-09T14:07:40.473950Z"
+          }
+        },
+        {
+          "label": "set_union",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "appendMissingElements": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:40.473950Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:40.789240Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:38.419750Z",
+            "updateTime": "2026-09-09T14:07:40.473950Z"
+          }
+        },
+        {
+          "label": "set_remove",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "removeAllFromArray": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:41.265220Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:41.265220Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:38.419750Z",
+            "updateTime": "2026-09-09T14:07:41.265220Z"
+          }
+        },
+        {
+          "label": "ordinary_duplicates",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:41.684005Z"
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:41.684005Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:38.419750Z",
+            "updateTime": "2026-09-09T14:07:41.684005Z"
+          }
+        },
+        {
+          "label": "remove_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:42.099687Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:42.099687Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:38.419750Z",
+            "updateTime": "2026-09-09T14:07:42.099687Z"
+          }
+        }
+      ]
+    },
+    {
+      "shape": "map",
+      "precision": "123456",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+      "steps": [
+        {
+          "label": "union1",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:42.689473Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:42.689473Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:42.489971Z",
+            "updateTime": "2026-09-09T14:07:42.689473Z"
+          }
+        },
+        {
+          "label": "union2",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:42.689473Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:42.789810Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:42.489971Z",
+            "updateTime": "2026-09-09T14:07:42.689473Z"
+          }
+        },
+        {
+          "label": "union3",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:42.689473Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:42.789810Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:42.489971Z",
+            "updateTime": "2026-09-09T14:07:42.689473Z"
+          }
+        },
+        {
+          "label": "remove",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:43.742782Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:43.742782Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:42.489971Z",
+            "updateTime": "2026-09-09T14:07:43.742782Z"
+          }
+        },
+        {
+          "label": "remove_again",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:43.742782Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:43.785530Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:42.489971Z",
+            "updateTime": "2026-09-09T14:07:43.742782Z"
+          }
+        },
+        {
+          "label": "operand_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:44.465659Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:44.465659Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:42.489971Z",
+            "updateTime": "2026-09-09T14:07:44.465659Z"
+          }
+        },
+        {
+          "label": "set_union",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "appendMissingElements": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:44.465659Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:44.785749Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:42.489971Z",
+            "updateTime": "2026-09-09T14:07:44.465659Z"
+          }
+        },
+        {
+          "label": "set_remove",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "removeAllFromArray": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:45.182285Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:45.182285Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:42.489971Z",
+            "updateTime": "2026-09-09T14:07:45.182285Z"
+          }
+        },
+        {
+          "label": "ordinary_duplicates",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:45.583888Z"
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:45.583888Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "at": {
+                            "timestampValue": "2026-09-01T00:00:00.123456Z"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:42.489971Z",
+            "updateTime": "2026-09-09T14:07:45.583888Z"
+          }
+        },
+        {
+          "label": "remove_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "at": {
+                              "timestampValue": "2026-09-01T00:00:00.123456Z"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:45.932194Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:45.932194Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:42.489971Z",
+            "updateTime": "2026-09-09T14:07:45.932194Z"
+          }
+        }
+      ]
+    },
+    {
+      "shape": "nested",
+      "precision": "123456789",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+      "steps": [
+        {
+          "label": "union1",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:46.491240Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:46.491240Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:46.312346Z",
+            "updateTime": "2026-09-09T14:07:46.491240Z"
+          }
+        },
+        {
+          "label": "union2",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:46.491240Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:46.785941Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:46.312346Z",
+            "updateTime": "2026-09-09T14:07:46.491240Z"
+          }
+        },
+        {
+          "label": "union3",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:46.491240Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:46.785941Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:46.312346Z",
+            "updateTime": "2026-09-09T14:07:46.491240Z"
+          }
+        },
+        {
+          "label": "remove",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:47.630195Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:47.630195Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:46.312346Z",
+            "updateTime": "2026-09-09T14:07:47.630195Z"
+          }
+        },
+        {
+          "label": "remove_again",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:47.630195Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:47.788104Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:46.312346Z",
+            "updateTime": "2026-09-09T14:07:47.630195Z"
+          }
+        },
+        {
+          "label": "operand_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:48.354952Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:48.354952Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:46.312346Z",
+            "updateTime": "2026-09-09T14:07:48.354952Z"
+          }
+        },
+        {
+          "label": "set_union",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "appendMissingElements": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:48.354952Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:48.362557Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:46.312346Z",
+            "updateTime": "2026-09-09T14:07:48.354952Z"
+          }
+        },
+        {
+          "label": "set_remove",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "removeAllFromArray": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:49.073262Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:49.073262Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:46.312346Z",
+            "updateTime": "2026-09-09T14:07:49.073262Z"
+          }
+        },
+        {
+          "label": "ordinary_duplicates",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:49.422133Z"
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:49.422133Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:46.312346Z",
+            "updateTime": "2026-09-09T14:07:49.422133Z"
+          }
+        },
+        {
+          "label": "remove_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456789Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:49.779009Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:49.779009Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:46.312346Z",
+            "updateTime": "2026-09-09T14:07:49.779009Z"
+          }
+        }
+      ]
+    },
+    {
+      "shape": "nested",
+      "precision": "123456",
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+      "steps": [
+        {
+          "label": "union1",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:50.340356Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:50.340356Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:50.167536Z",
+            "updateTime": "2026-09-09T14:07:50.340356Z"
+          }
+        },
+        {
+          "label": "union2",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:50.340356Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:50.344217Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:50.167536Z",
+            "updateTime": "2026-09-09T14:07:50.340356Z"
+          }
+        },
+        {
+          "label": "union3",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:50.340356Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:50.817475Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:50.167536Z",
+            "updateTime": "2026-09-09T14:07:50.340356Z"
+          }
+        },
+        {
+          "label": "remove",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:51.407358Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:51.407358Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:50.167536Z",
+            "updateTime": "2026-09-09T14:07:51.407358Z"
+          }
+        },
+        {
+          "label": "remove_again",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:51.407358Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:51.409312Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:50.167536Z",
+            "updateTime": "2026-09-09T14:07:51.407358Z"
+          }
+        },
+        {
+          "label": "operand_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:52.130281Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:52.130281Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:50.167536Z",
+            "updateTime": "2026-09-09T14:07:52.130281Z"
+          }
+        },
+        {
+          "label": "set_union",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "appendMissingElements": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:52.130281Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:52.132256Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:50.167536Z",
+            "updateTime": "2026-09-09T14:07:52.130281Z"
+          }
+        },
+        {
+          "label": "set_remove",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "updateTransforms": [
+              {
+                "fieldPath": "values",
+                "removeAllFromArray": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:52.837739Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:52.837739Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:50.167536Z",
+            "updateTime": "2026-09-09T14:07:52.837739Z"
+          }
+        },
+        {
+          "label": "ordinary_duplicates",
+          "write": {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+              "fields": {
+                "values": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456001Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:53.182334Z"
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:53.182334Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+            "fields": {
+              "values": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "nested": {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "at": {
+                                        "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "createTime": "2026-09-09T14:07:50.167536Z",
+            "updateTime": "2026-09-09T14:07:53.182334Z"
+          }
+        },
+        {
+          "label": "remove_duplicates",
+          "write": {
+            "transform": {
+              "document": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+              "fieldTransforms": [
+                {
+                  "fieldPath": "values",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "mapValue": {
+                          "fields": {
+                            "nested": {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "at": {
+                                          "timestampValue": "2026-09-01T00:00:00.123456Z"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "commit": {
+            "writeResults": [
+              {
+                "updateTime": "2026-09-09T14:07:53.537936Z",
+                "transformResults": [
+                  {
+                    "nullValue": null
+                  }
+                ]
+              }
+            ],
+            "commitTime": "2026-09-09T14:07:53.537936Z"
+          },
+          "document": {
+            "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+            "fields": {
+              "values": {
+                "arrayValue": {}
+              }
+            },
+            "createTime": "2026-09-09T14:07:50.167536Z",
+            "updateTime": "2026-09-09T14:07:53.537936Z"
+          }
+        }
+      ]
+    }
+  ],
+  "cleanup": [
+    {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7f92d0fa-9da3-4eb8-b139-5e7d4b24c485",
+      "status": "fulfilled"
+    },
+    {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/0c69d90f-e700-4379-a9e8-b300fd013ac1",
+      "status": "fulfilled"
+    },
+    {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/cf561daf-a732-4200-b6ca-c9a9d3bbec1d",
+      "status": "fulfilled"
+    },
+    {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/f0762ff5-1952-41a6-82df-c90e5830c743",
+      "status": "fulfilled"
+    },
+    {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/7134f5a2-d3e9-434b-85f0-5fb6bd88e44d",
+      "status": "fulfilled"
+    },
+    {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/timestamp_array_review/4ee1c8a4-1ce7-42fa-bead-a8db98464ce4",
+      "status": "fulfilled"
+    }
+  ]
+}

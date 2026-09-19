@@ -189,6 +189,131 @@ pub struct BlockingAuthTokenPolicy {
     pub refresh_token: bool,
 }
 
+/// Which discovered target should handle one synchronous Auth event.
+///
+/// Selection is kept separate from [`Trigger::BlockingAuth`]: discovery remains the source of
+/// truth for the trigger kind, region and runner address, while this value only chooses whether
+/// the discovered target is inherited, disabled, or explicitly named by the local configuration.
+/// An explicit selection must be resolved against the discovered manifest before a request is
+/// served; callers must not treat a missing target as an omitted hook.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum BlockingAuthSelection {
+    /// Use the first discovered target for the event, preserving legacy behaviour.
+    #[default]
+    Discovery,
+    /// Explicitly disable this event in the local configuration.
+    Disabled,
+    /// Select one discovered function, optionally disambiguated by region.
+    Explicit {
+        /// Exported local function name.
+        function: String,
+        /// Expected region. `None` permits the manifest's region when the function name is unique.
+        region: Option<String>,
+    },
+}
+
+/// Per-event Blocking Auth selections supplied by local configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BlockingAuthSelections {
+    /// Selection for `beforeCreate`.
+    pub before_create: BlockingAuthSelection,
+    /// Selection for `beforeSignIn`.
+    pub before_sign_in: BlockingAuthSelection,
+}
+
+impl BlockingAuthSelections {
+    /// Returns the selection for `event`.
+    #[must_use]
+    pub const fn for_event(&self, event: BlockingAuthEvent) -> &BlockingAuthSelection {
+        match event {
+            BlockingAuthEvent::BeforeCreate => &self.before_create,
+            BlockingAuthEvent::BeforeSignIn => &self.before_sign_in,
+        }
+    }
+}
+
+/// Why an explicit Blocking Auth selection cannot be safely resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockingAuthSelectionError {
+    /// The selected name is not exported by the discovered manifest.
+    FunctionNotFound {
+        /// Selected local function name.
+        function: String,
+    },
+    /// The selected name exists, but is not a Blocking Auth trigger for this event.
+    WrongEvent {
+        /// Selected local function name.
+        function: String,
+        /// Event requested by configuration.
+        expected: BlockingAuthEvent,
+        /// Event discovered for the function, or `None` for a non-blocking trigger.
+        actual: Option<BlockingAuthEvent>,
+    },
+    /// More than one discovered target has the selected name.
+    AmbiguousFunction {
+        /// Selected local function name.
+        function: String,
+    },
+    /// The selected function was discovered in another region.
+    RegionMismatch {
+        /// Selected local function name.
+        function: String,
+        /// Region requested by configuration.
+        expected: String,
+        /// Region discovered for the function.
+        actual: String,
+    },
+}
+
+impl fmt::Display for BlockingAuthSelectionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FunctionNotFound { function } => {
+                write!(f, "Blocking Auth function {function:?} was not discovered")
+            }
+            Self::WrongEvent {
+                function,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "Blocking Auth function {function:?} does not handle {} (discovered {:?})",
+                expected.as_str(),
+                actual.map(BlockingAuthEvent::as_str)
+            ),
+            Self::AmbiguousFunction { function } => write!(
+                f,
+                "Blocking Auth function {function:?} was discovered more than once"
+            ),
+            Self::RegionMismatch {
+                function,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "Blocking Auth function {function:?} is in region {actual:?}, not {expected:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BlockingAuthSelectionError {}
+
+/// Presence of raw provider credentials in one Auth request.
+///
+/// This is deliberately a separate value from [`BlockingAuthTokenPolicy`]. A configured target
+/// may request a token kind that the current request did not contain; the effective policy must
+/// then omit it rather than synthesising an empty credential.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct BlockingAuthCredentialPresence {
+    /// An OAuth access token was supplied.
+    pub access_token: bool,
+    /// An identity-provider ID token was supplied.
+    pub id_token: bool,
+    /// An OAuth refresh token was supplied.
+    pub refresh_token: bool,
+}
+
 impl BlockingAuthTokenPolicy {
     /// Policy used by legacy in-process hooks that explicitly opt in to raw forwarding.
     pub const ALL: Self = Self {
@@ -210,6 +335,30 @@ impl BlockingAuthTokenPolicy {
             access_token: self.access_token || other.access_token,
             id_token: self.id_token || other.id_token,
             refresh_token: self.refresh_token || other.refresh_token,
+        }
+    }
+
+    /// Intersects global opt-in, target policy and request credential presence.
+    ///
+    /// The global switch is an upper bound and cannot be widened by a target. Likewise, a
+    /// request that has no value for a requested token kind cannot cause one to be forwarded.
+    #[must_use]
+    pub const fn effective(
+        self,
+        globally_enabled: bool,
+        available: BlockingAuthCredentialPresence,
+    ) -> Self {
+        if !globally_enabled {
+            return Self {
+                access_token: false,
+                id_token: false,
+                refresh_token: false,
+            };
+        }
+        Self {
+            access_token: self.access_token && available.access_token,
+            id_token: self.id_token && available.id_token,
+            refresh_token: self.refresh_token && available.refresh_token,
         }
     }
 }
@@ -991,6 +1140,64 @@ impl FunctionManifest {
             .iter()
             .filter(|f| matches!(&f.trigger, Trigger::Auth { event: e } if *e == event))
             .collect()
+    }
+
+    /// Resolves the target for one synchronous Auth event against discovered functions.
+    ///
+    /// `Discovery` preserves the existing first-target behaviour. `Disabled` is an explicit
+    /// local choice and therefore returns `None`; it must not be confused with a missing
+    /// discovery result. `Explicit` checks both the event and optional region before returning a
+    /// target. A caller handling an explicit selection should treat every error as a startup or
+    /// reload failure and refuse the hook, rather than silently falling back to discovery.
+    pub fn blocking_auth_target(
+        &self,
+        event: BlockingAuthEvent,
+        selection: &BlockingAuthSelection,
+    ) -> Result<Option<&FunctionSpec>, BlockingAuthSelectionError> {
+        match selection {
+            BlockingAuthSelection::Discovery => Ok(self.functions.iter().find(|function| {
+                matches!(&function.trigger, Trigger::BlockingAuth { event: candidate, .. } if *candidate == event)
+            })),
+            BlockingAuthSelection::Disabled => Ok(None),
+            BlockingAuthSelection::Explicit { function, region } => {
+                let matches = self
+                    .functions
+                    .iter()
+                    .filter(|candidate| candidate.name == *function)
+                    .collect::<Vec<_>>();
+                let Some(candidate) = matches.first().copied() else {
+                    return Err(BlockingAuthSelectionError::FunctionNotFound {
+                        function: function.clone(),
+                    });
+                };
+                if matches.len() > 1 {
+                    return Err(BlockingAuthSelectionError::AmbiguousFunction {
+                        function: function.clone(),
+                    });
+                }
+                let actual_event = match &candidate.trigger {
+                    Trigger::BlockingAuth { event: actual, .. } => Some(*actual),
+                    _ => None,
+                };
+                if actual_event != Some(event) {
+                    return Err(BlockingAuthSelectionError::WrongEvent {
+                        function: function.clone(),
+                        expected: event,
+                        actual: actual_event,
+                    });
+                }
+                if let Some(expected_region) = region {
+                    if candidate.region != *expected_region {
+                        return Err(BlockingAuthSelectionError::RegionMismatch {
+                            function: function.clone(),
+                            expected: expected_region.clone(),
+                            actual: candidate.region.clone(),
+                        });
+                    }
+                }
+                Ok(Some(candidate))
+            }
+        }
     }
 
     /// Scheduled functions.

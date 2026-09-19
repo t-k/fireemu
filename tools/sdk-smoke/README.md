@@ -18,6 +18,10 @@ suite) needs, and what leaves the other smokes working without attaching a token
   codes read from `/emulator/v1/projects/{p}/{oobCodes,verificationCodes}` (the Node build of
   `firebase/auth` has no phone support, so those steps use the same REST calls the browser
   SDK makes).
+- `auth-refresh-same-second.mjs`: a minimal Admin password replacement, raw Secure Token
+  refresh endpoint and Web SDK refresh sequence. It waits for `tokensValidAfterTime` and the
+  existing ID token's `auth_time` to share a second, then requires both refresh paths to
+  succeed.
 - `storage.mjs`: `firebase-admin` storage (JSON API) and `firebase/storage` (Firebase
   protocol, resumable uploads) with Storage Rules; needs `FIREBASE_STORAGE_EMULATOR_HOST`.
 - `storage-targets.mjs`: the real Web Storage SDK uses three explicit bucket instances to
@@ -61,6 +65,23 @@ suite) needs, and what leaves the other smokes working without attaching a token
 - `firestore-contention.mjs`: twenty real Admin SDK transactions synchronize their first read,
   then each creates one unique item and increments one shared counter through SDK retries. The
   final item and counter totals must both be twenty.
+- `pending-switch.mjs`: the real client SDK keeps an active listener and one pending write while
+  signing out user A and signing in user B. It records cache versus server state, requires the
+  former listener to terminate on the B reconnect without changing A's document, and verifies
+  no callbacks occur during sign-out or after unsubscribe. Run it with
+  `fireemu exec --project demo-app --firestore-port 8080 --http-port 9099 -- sh -c 'cd tools/sdk-smoke && node pending-switch.mjs'`.
+- `auth-config-sdk.mjs`: the client Auth SDK and Admin Auth SDK share a local emulator project
+  while the Admin path toggles email privacy and the client path checks unknown-email password
+  reset behavior. It restores the original setting before exiting; run it with
+  `FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 GOOGLE_CLOUD_PROJECT=demo-app npm run smoke:auth-config`.
+- `web/listen-reconnect.html`: the pinned browser SDK (12.18.0) uses WebChannel with long
+  polling, records initial, pending and acknowledged snapshots across a network reconnect, then
+  checks unsubscribe and Auth sign-out denial. Serve `web/` from a local emulator and open the
+  page with `?fs=<firestore port>&auth=<auth port>&token=<FIREEMU_CONTROL_TOKEN>`.
+- `sdk-listen-coverage.json` is the local-only ledger for Listen/SDK, Auth configuration and
+  Auth-to-Firestore cross-product obligations. `sdk-pins.test.mjs` fails when package-lock or
+  browser imports drift from the declared versions. Production behavior is intentionally
+  unobserved by these scripts.
 - `listener-replacement.mjs`: the real client SDK with forced long polling unsubscribes from a
   query in its initial callback, immediately subscribes to the same query again, and verifies
   that the old listener receives no later snapshot while the replacement receives the initial

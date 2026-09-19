@@ -1,0 +1,106 @@
+{
+  "kind": "feature-goal-local-checkpoint-v1",
+  "acceptance": "candidate-local-only",
+  "goals": [
+    {
+      "goal": "G2-local",
+      "state": "done",
+      "scope": [
+        "failed multiwrite Commit post-state",
+        "failed transaction Commit local retention/lock policy",
+        "Rollback followed by verified independent update"
+      ],
+      "evidence": "local core and real gRPC handler; transaction retention is characterization, not production expectation",
+      "productionEvidence": false,
+      "sourceCommit": "2367e203276b750888b44a93e7112af27e4a1d47",
+      "tests": {
+        "passed": 116,
+        "skipped": 1,
+        "failed": 0,
+        "testSeconds": 0.337,
+        "compileSeconds": 5.01
+      },
+      "binarySha256": {
+        "fireemu-adapter-grpc": "5051f08a0aa5868e261c6543401bd1aaa40dcc647ba3d0066b3a2d9632c26407",
+        "fireemu-core-firestore": "aa4492820a58a099c41bf2ae1ce73c1cc20d403d2865b5175792df91fcd6c744",
+        "fireemu-core-firestore::store": "a00dff2e86da7e16685777b850fbe0843a238156b2e1085d49e53651494ae7e9"
+      },
+      "binaryIdentityTiming": "Recorded after successful execution from the same unchanged checkout; no prelaunch test-binary receipt claimed",
+      "newRuntimeGap": null,
+      "runtimeChanged": false,
+      "review": "Independent review closed; coordinator added final value2 readback",
+      "historyLimits": [
+        "Initial c517dba0 gRPC passing result had malformed document paths and did not prove oversized-write atomicity; preserved as superseded, not promoted",
+        "Earlier worker artifact hashes were absent; report hashes are not binary hashes"
+      ],
+      "selectedOwnerModel": "gpt-5.6-luna",
+      "ownerTokenUsage": null,
+      "ownerCostUsd": null
+    },
+    {
+      "goal": "G3-local",
+      "state": "done",
+      "scope": [
+        "UID-specific Auth A/signout/B/signout transitions",
+        "denied-write exact owner/value post-state",
+        "unsubscribed listener with active replacement delivery control"
+      ],
+      "evidence": "real Firebase client SDK12.18.0, Node gRPC; no browser/WebChannel claim",
+      "productionEvidence": false,
+      "execution": {
+        "sourceCommit": "2367e203276b750888b44a93e7112af27e4a1d47",
+        "artifactCommit": "a35f85b464743d62344a3a58763d382b5b3838ce",
+        "artifactSha256": "babe0222de91fcbf35993592799196cab7fca37da129dfa8c7adbf8249660f03",
+        "started": "2026-09-13T06:41:43.531935+00:00",
+        "ended": "2026-09-13T06:41:44.181460+00:00",
+        "elapsedSeconds": 0.649281542,
+        "pid": 31280,
+        "exitCode": 0,
+        "command": [
+          "docs.local/logs/2026-09-13/shared-a35f85b4/fireemu",
+          "exec",
+          "--config",
+          "tools/sdk-smoke/fireemu.smoke.json",
+          "--project",
+          "demo-app",
+          "--only",
+          "auth,firestore",
+          "--firestore-port",
+          "0",
+          "--http-port",
+          "0",
+          "--hub-port",
+          "0",
+          "--ui-port",
+          "0",
+          "--logging-port",
+          "0",
+          "--log-verbosity",
+          "silent",
+          "--",
+          "sh",
+          "-c",
+          "cd tools/sdk-smoke && npm run smoke:g3"
+        ],
+        "parentStopped": true
+      },
+      "review": "Independent final delta review closed; outer60second owned-run timeout is required",
+      "runtimeChanged": false,
+      "newRuntimeGap": null,
+      "selectedOwnerModel": null,
+      "modelLimitation": "Existing agent reused after new-thread limit; model could not be independently identified",
+      "ownerTokenUsage": null,
+      "ownerCostUsd": null
+    }
+  ],
+  "g0": "waiting-owner; a35f85b4 execution frame unchanged",
+  "g1": "review closed; integrated verification pending",
+  "g4": "changes-requested; no integration until silent-ignore/projection issues fixed",
+  "timing": {
+    "sessionStart": "2026-09-13T15:18:12+09:00",
+    "unmeasuredPhases": [
+      "per-owner token/cost",
+      "preparation versus analysis versus review walltime"
+    ]
+  }
+}

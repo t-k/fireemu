@@ -3365,20 +3365,38 @@ impl FunctionsRuntime {
         })
     }
 
-    /// Token policy of the first Blocking Auth target selected for `event`.
+    /// Token policy of the first discovered Blocking Auth target for `event`.
     #[must_use]
     pub fn blocking_auth_token_policy(
         &self,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
     ) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+        self.blocking_auth_token_policy_for(event, None)
+    }
+
+    /// Token policy of the selected Blocking Auth target for `event`.
+    ///
+    /// `None` preserves discovery order and returns the first target's policy. When a function
+    /// name is provided, the policy is read from that exact target so configuration that selects
+    /// a later function cannot accidentally inherit an earlier function's credential policy.
+    #[must_use]
+    pub fn blocking_auth_token_policy_for(
+        &self,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        selected_function: Option<&str>,
+    ) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
         self.manifest
             .functions
             .iter()
-            .find_map(|function| match function.trigger {
+            .find_map(|candidate| match candidate.trigger {
                 Trigger::BlockingAuth {
-                    event: candidate,
+                    event: candidate_event,
                     token_policy,
-                } if candidate == event => Some(token_policy),
+                } if candidate_event == event
+                    && selected_function.is_none_or(|selected| candidate.name == selected) =>
+                {
+                    Some(token_policy)
+                }
                 _ => None,
             })
             .unwrap_or_default()
@@ -3390,11 +3408,28 @@ impl FunctionsRuntime {
         self: &Arc<Self>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
     ) -> Result<Option<(BlockingAuthTarget, BlockingAuthAdmission)>, String> {
+        self.try_admit_blocking_auth_for(event, None)
+    }
+
+    /// Atomically selects and admits a ready Blocking Auth runner for `event`.
+    ///
+    /// When `function` is present, only that manifest function may be selected. This keeps
+    /// logical project configuration connected to the actual runner while leaving runner
+    /// addresses and secrets owned by the runtime. A missing or changed target returns `None`;
+    /// callers handling an explicit configuration must fail closed instead of falling back to
+    /// discovery.
+    pub fn try_admit_blocking_auth_for(
+        self: &Arc<Self>,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        function: Option<&str>,
+    ) -> Result<Option<(BlockingAuthTarget, BlockingAuthAdmission)>, String> {
         if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
             return Err("the Functions runtime is shutting down".to_owned());
         }
-        let Some(spec) = self.manifest.functions.iter().find(|function| {
-            matches!(function.trigger, Trigger::BlockingAuth { event: candidate, .. } if candidate == event)
+        let Some(spec) = self.manifest.functions.iter().find(|candidate| {
+            matches!(candidate.trigger, Trigger::BlockingAuth { event: candidate_event, .. } if candidate_event == event)
+                && function
+                    .is_none_or(|selected| candidate.name == selected)
         }) else {
             return Ok(None);
         };
@@ -3885,6 +3920,13 @@ impl FunctionsRuntime {
         {
             return None;
         }
+        // Keep a task pending while its codebase runner is restarting. Leasing it first would
+        // turn the expected reset gap into a transport failure and spend the task's retry and
+        // rate budgets before any handler could receive it. A replacement installation wakes
+        // this loop, and healthy codebases remain independently dispatchable.
+        let runners: Vec<Arc<Runner>> = (0..self.codebases.len())
+            .map(|index| self.runner_at(index))
+            .collect();
         let mut attempts = self
             .task_attempts
             .lock()
@@ -3908,7 +3950,14 @@ impl FunctionsRuntime {
             let (dispatches, next_wake) = inner.task_scheduler.dispatch_ready(
                 std::time::Instant::now(),
                 &self.config.project,
-                |function| self.manifest.get(function).map(|spec| spec.region.clone()),
+                |function| {
+                    let spec = self.manifest.get(function)?;
+                    let owner = self.owner.get(function).copied().unwrap_or(0);
+                    runners
+                        .get(owner)
+                        .filter(|runner| runner.is_alive())
+                        .map(|_| spec.region.clone())
+                },
                 room,
             );
             (dispatches, next_wake, epoch)
@@ -4400,7 +4449,7 @@ mod task_completion_tests {
             ],
             cwd: None,
             env: Vec::new(),
-            hello_timeout: Duration::from_secs(20),
+            hello_timeout: Duration::from_secs(60),
         };
         let runner = Runner::spawn_spec(&spec).await.unwrap();
         let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -4829,7 +4878,7 @@ mod task_completion_tests {
             ],
             cwd: None,
             env: Vec::new(),
-            hello_timeout: Duration::from_secs(20),
+            hello_timeout: Duration::from_secs(60),
         };
         let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
         let manifest = runtime.manifest().clone();

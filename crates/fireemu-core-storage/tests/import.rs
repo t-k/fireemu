@@ -297,3 +297,86 @@ fn importing_over_an_existing_object_replaces_its_bytes_and_drops_the_old_blob()
     assert_eq!(store.bytes(stored), b"second");
     assert_eq!(store.all_objects().len(), 1);
 }
+
+/// SIMP-2: an import artifact is an input boundary like an upload, so every metadata string
+/// that leaves the store as an HTTP header must be free of C0 control characters and DEL.
+/// Storing one makes every later download and metadata update fail while building the
+/// response, and re-export and the Rules `resource` carry it back out.
+#[test]
+fn imported_metadata_with_a_control_character_is_refused_field_by_field() {
+    for (label, mutate) in [
+        (
+            "contentType",
+            Box::new(|o: &mut ImportedObject| o.content_type = "text/plain\r\nX-Injected: 1".into())
+                as Box<dyn Fn(&mut ImportedObject)>,
+        ),
+        (
+            "contentDisposition",
+            Box::new(|o: &mut ImportedObject| {
+                o.content_disposition = Some("attachment\r\nX: 1".into());
+            }),
+        ),
+        (
+            "contentEncoding",
+            Box::new(|o: &mut ImportedObject| o.content_encoding = Some("gzip\u{0}".into())),
+        ),
+        (
+            "contentLanguage",
+            Box::new(|o: &mut ImportedObject| o.content_language = Some("en\u{7f}".into())),
+        ),
+        (
+            "cacheControl",
+            Box::new(|o: &mut ImportedObject| {
+                o.cache_control = Some("public\u{0}max-age=60".into());
+            }),
+        ),
+        (
+            "metadata key",
+            Box::new(|o: &mut ImportedObject| {
+                o.custom = BTreeMap::from([("key\u{0}".to_owned(), "value".to_owned())]);
+            }),
+        ),
+        (
+            "metadata",
+            Box::new(|o: &mut ImportedObject| {
+                o.custom = BTreeMap::from([("key".to_owned(), "value\r\n".to_owned())]);
+            }),
+        ),
+        (
+            "downloadTokens",
+            Box::new(|o: &mut ImportedObject| o.download_tokens = vec!["tok\u{0}en".into()]),
+        ),
+        // C1 (U+0080..U+009F) is a control character too. It is multi-byte in UTF-8, so a
+        // byte-wise test would miss it while the value still ends up in a header and a log.
+        (
+            "contentDisposition",
+            Box::new(|o: &mut ImportedObject| {
+                o.content_disposition = Some("attachment\u{85}name".into());
+            }),
+        ),
+        (
+            "cacheControl",
+            Box::new(|o: &mut ImportedObject| {
+                o.cache_control = Some("public\u{9b}max-age=60".into());
+            }),
+        ),
+    ] {
+        let mut store = StorageState::new(7);
+        let bytes = b"payload".to_vec();
+        let mut candidate = imported("controls", &bytes);
+        mutate(&mut candidate);
+        let refusal = store.insert_imported(candidate, bytes.clone());
+        let Err(StorageError::InvalidMetadata(message)) = refusal else {
+            panic!("{label}: a control character must be refused, got {refusal:?}");
+        };
+        assert!(message.contains(label), "{label}: {message}");
+        assert!(
+            !message.chars().any(char::is_control),
+            "{label}: the refusal must not echo the value: {message:?}"
+        );
+        assert!(
+            store.get(&bucket(), &object("controls")).is_none(),
+            "{label}: nothing may be installed"
+        );
+    }
+}

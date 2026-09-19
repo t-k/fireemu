@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "kind": "finite-local-enterprise-pipeline-select-copy",
+  "status": "done-local",
+  "runtimeCommit": "1b5582a378796ed23a896a645995be66fd9383ef",
+  "productionExecuted": false,
+  "capturedAt": "2026-09-15T03:30:00Z",
+  "scope": "Enterprise local latest collection read using the existing select alias and limit stages; wide documents measure projected result copies across the existing query page sizes.",
+  "conditions": [
+    "select preserves the alias and integer value type",
+    "limit preserves all rows through the one-page and nine-page fixtures",
+    "the unselected 4096-byte field is not copied into projected results",
+    "quoted literal field paths retain the existing alias semantics"
+  ],
+  "measurements": [
+    {
+      "documents": 17,
+      "pages": 1,
+      "returned": 17,
+      "projectedFieldBytesCopied": 612
+    },
+    {
+      "documents": 257,
+      "pages": 9,
+      "returned": 257,
+      "projectedFieldBytesCopied": 9252
+    }
+  ],
+  "validation": {
+    "red": {
+      "command": "cargo test -p fireemu-adapter-grpc execute_pipeline_select_copies_only_projected_fields_across_pages --no-fail-fast",
+      "result": "failed at the copy-byte assertion before the implementation change"
+    },
+    "targeted": {
+      "command": "cargo nextest run -p fireemu-adapter-grpc --profile pr execute_pipeline_reads_collection_projects_field_aliases_and_applies_limit execute_pipeline_select_copies_only_projected_fields_across_pages",
+      "passed": 2,
+      "failed": 0
+    },
+    "adapter": {
+      "command": "cargo nextest run -p fireemu-adapter-grpc --profile pr --no-fail-fast",
+      "passed": 333,
+      "failed": 0,
+      "skipped": 1
+    },
+    "clippy": {
+      "command": "cargo clippy -p fireemu-adapter-grpc --all-targets -- -D warnings",
+      "exitCode": 0
+    },
+    "format": {
+      "command": "cargo fmt --all -- --check",
+      "exitCode": 0
+    }
+  },
+  "limitations": [
+    "Local measurement only; no Enterprise production execution or parity claim.",
+    "Counters measure core projected result field copies, not process RSS, protobuf transport allocation, or MVCC history retention.",
+    "Other pipeline stages, nested extraction, metadata expressions, consistency selectors and global memory bounds remain outside this card."
+  ]
+}

@@ -103,6 +103,39 @@ impl QueryScope {
     pub const fn is_kindless(&self) -> bool {
         matches!(self, Self::KindlessAllDescendants { .. })
     }
+
+    /// Whether a document at `path` belongs to the range this scope selects. Only the
+    /// `(collection, document)` pairs are compared; a caller that admits paths from more
+    /// than one project or database compares those itself.
+    #[must_use]
+    pub fn contains(&self, path: &DocumentPath) -> bool {
+        let parent_len = self.parent().map_or(0, |parent| parent.pairs().len());
+        match self {
+            Self::Collection {
+                parent,
+                collection_id,
+            } => {
+                path.pairs().len() == parent_len + 1
+                    && path.collection_id() == collection_id
+                    && parent
+                        .as_ref()
+                        .is_none_or(|prefix| path.pairs()[..parent_len] == *prefix.pairs())
+            }
+            Self::CollectionGroup {
+                parent,
+                collection_id,
+            } => {
+                path.collection_id() == collection_id
+                    && parent.as_ref().is_none_or(|prefix| {
+                        path.pairs().len() > parent_len
+                            && path.pairs()[..parent_len] == *prefix.pairs()
+                    })
+            }
+            Self::KindlessAllDescendants { parent } => parent.as_ref().is_none_or(|prefix| {
+                path.pairs().len() > parent_len && path.pairs()[..parent_len] == *prefix.pairs()
+            }),
+        }
+    }
 }
 
 /// Field comparison operators.
@@ -216,6 +249,34 @@ pub enum Direction {
     Descending,
 }
 
+/// Distance metric for a Standard Native nearest-neighbor query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DistanceMeasure {
+    /// Square-rooted sum of squared component differences.
+    Euclidean,
+    /// One minus cosine similarity.
+    Cosine,
+    /// Sum of component products; larger values are nearer.
+    DotProduct,
+}
+
+/// Nearest-neighbor search applied after the ordinary query stages.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FindNearest {
+    /// Indexed vector field to search.
+    pub vector_field: FieldPath,
+    /// Query vector components.
+    pub query_vector: Vec<f64>,
+    /// Distance metric.
+    pub distance_measure: DistanceMeasure,
+    /// Maximum nearest neighbors to return (1 through 1000).
+    pub limit: u32,
+    /// Optional field receiving the calculated distance.
+    pub distance_result_field: Option<FieldPath>,
+    /// Optional inclusive distance threshold.
+    pub distance_threshold: Option<f64>,
+}
+
 impl Direction {
     /// The opposite direction.
     #[must_use]
@@ -264,6 +325,8 @@ pub struct Query {
     pub limit: Option<u32>,
     /// Projection.
     pub projection: Option<Vec<FieldPath>>,
+    /// Optional nearest-neighbor stage, applied after ordinary query stages.
+    pub find_nearest: Option<FindNearest>,
 }
 
 /// Structural validation errors found while canonicalizing.
@@ -289,6 +352,16 @@ pub enum QueryError {
         /// Effective order-by length.
         order_by: usize,
     },
+    /// A cursor value standing in a `__name__` position is not a document reference.
+    CursorNameValue {
+        /// Zero-based position in the effective order-by.
+        position: usize,
+    },
+    /// A cursor document reference names a document the query does not select.
+    CursorReferenceScope {
+        /// Zero-based position in the effective order-by.
+        position: usize,
+    },
     /// More than one of `!=`, `not-in`, `IS_NOT_NAN` and `IS_NOT_NULL` in one query.
     MultipleNegations,
     /// The effective ordering names a field after `__name__`, which is unique, so the
@@ -298,6 +371,18 @@ pub enum QueryError {
     NameFilterValue,
     /// A key equality with other inequalities requires a key inequality too (Standard).
     KeyEqualityWithOtherInequalities,
+    /// `FindNearest` must use a stored field rather than the document name.
+    FindNearestVectorField,
+    /// `FindNearest` query vector is empty, too large, or contains NaN.
+    FindNearestQueryVector,
+    /// `FindNearest` limit must be between one and 1000.
+    FindNearestLimit,
+    /// `FindNearest` distance measure is unspecified.
+    FindNearestDistanceMeasure,
+    /// `FindNearest` threshold must be finite.
+    FindNearestDistanceThreshold,
+    /// `FindNearest` distance output field is invalid.
+    FindNearestDistanceResultField,
 }
 
 impl fmt::Display for QueryError {
@@ -321,6 +406,18 @@ impl fmt::Display for QueryError {
                     "cursor has {cursor} values but the order-by has {order_by} fields"
                 )
             }
+            Self::CursorNameValue { position } => {
+                write!(
+                    f,
+                    "cursor value at position {position} orders by __key__ and must be a Key"
+                )
+            }
+            Self::CursorReferenceScope { position } => {
+                write!(
+                    f,
+                    "cursor value at position {position} orders by __key__ and must be a Key the query selects"
+                )
+            }
             Self::MultipleNegations => f.write_str(
                 "Only a single 'NOT_EQUAL', 'NOT_IN', 'IS_NOT_NAN', or 'IS_NOT_NULL' filter allowed per query.",
             ),
@@ -331,6 +428,24 @@ impl fmt::Display for QueryError {
             Self::KeyEqualityWithOtherInequalities => f.write_str(
                 "Equality on key is not allowed if there are other inequality fields and key does not appear in inequalities.",
             ),
+            Self::FindNearestVectorField => {
+                f.write_str("findNearest vector field must be a stored field")
+            }
+            Self::FindNearestQueryVector => f.write_str(
+                "findNearest query vector must contain between 1 and 2048 finite dimensions",
+            ),
+            Self::FindNearestLimit => {
+                f.write_str("findNearest limit must be a positive integer no greater than 1000")
+            }
+            Self::FindNearestDistanceMeasure => {
+                f.write_str("findNearest distance measure is required")
+            }
+            Self::FindNearestDistanceThreshold => {
+                f.write_str("findNearest distance threshold must be finite")
+            }
+            Self::FindNearestDistanceResultField => {
+                f.write_str("findNearest distance result field must be a stored field")
+            }
         }
     }
 }
@@ -390,6 +505,51 @@ impl Query {
         Ok(())
     }
 
+    /// Validates cursor values against the effective order-by the way production Firestore
+    /// documents them. Call on a canonicalized query: the arity rule in
+    /// [`Self::canonicalize`] runs first, so nothing here looks past the order-by.
+    ///
+    /// Reference, `google.firestore.v1.StructuredQuery`: a `Cursor` carries "the values
+    /// that represent a position, in the order they appear in the order by clause of a
+    /// query", and the `start_at` example positions a `SELECT * FROM k` query with
+    /// `START BEFORE (2, /k/123)`, which is "right before `a = 1 AND b > 2 AND __name__ >
+    /// /k/123`". The value standing in a `__name__` position is therefore a document
+    /// reference, and it names a document of the collection the query selects. A value of
+    /// another type, or a reference to a document outside the query, positions nothing.
+    ///
+    /// These are production refusals, so the strict profile applies them and the
+    /// `emulator` profile does not; `spec/compatibility/contract.json` forbids the
+    /// `emulator` profile from adding a rejection. Production has not been observed for
+    /// these two shapes, so the rule rests on the reference above.
+    pub fn check_production_cursor_constraints(&self) -> Result<(), QueryError> {
+        let order = self.effective_order_by();
+        for cursor in [&self.start_at, &self.end_at].into_iter().flatten() {
+            for (position, value) in cursor.values.iter().enumerate() {
+                // Arity is refused by `canonicalize`; a longer cursor never reaches here.
+                let Some(clause) = order.get(position) else {
+                    break;
+                };
+                if !clause.field.is_document_name() {
+                    continue;
+                }
+                let Value::Reference(name) = value else {
+                    return Err(QueryError::CursorNameValue { position });
+                };
+                let path = DocumentPath::from_resource_name(name)
+                    .ok_or(QueryError::CursorNameValue { position })?;
+                // `contains` compares path pairs only; the scope's parent, when it has one,
+                // also pins the project and database the cursor may name.
+                let same_database = self.scope.parent().is_none_or(|parent| {
+                    path.project() == parent.project() && path.database() == parent.database()
+                });
+                if !same_database || !self.scope.contains(&path) {
+                    return Err(QueryError::CursorReferenceScope { position });
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// A query over `scope` with no filter, ordering or cursor.
     #[must_use]
     pub const fn new(scope: QueryScope) -> Self {
@@ -402,6 +562,7 @@ impl Query {
             offset: 0,
             limit: None,
             projection: None,
+            find_nearest: None,
         }
     }
 
@@ -416,6 +577,13 @@ impl Query {
     #[must_use]
     pub fn with_order(mut self, order: OrderClause) -> Self {
         self.order_by.push(order);
+        self
+    }
+
+    /// Sets the nearest-neighbor stage.
+    #[must_use]
+    pub fn with_find_nearest(mut self, find_nearest: FindNearest) -> Self {
+        self.find_nearest = Some(find_nearest);
         self
     }
 
@@ -440,6 +608,9 @@ impl Query {
             filter,
             ..self.clone()
         };
+        if let Some(find_nearest) = &q.find_nearest {
+            validate_find_nearest(find_nearest)?;
+        }
         let order = q.effective_order_by();
         // `__name__` is unique, so a clause after it could never decide anything; the
         // backend refuses such an ordering rather than silently ignoring the clause. It
@@ -721,6 +892,38 @@ fn check_name_filters(f: &FilterExpr) -> Result<(), QueryError> {
             children.iter().try_for_each(check_name_filters)
         }
     }
+}
+
+fn validate_find_nearest(find_nearest: &FindNearest) -> Result<(), QueryError> {
+    if find_nearest.vector_field.is_document_name() {
+        return Err(QueryError::FindNearestVectorField);
+    }
+    if find_nearest.query_vector.is_empty()
+        || find_nearest.query_vector.len() > 2048
+        || find_nearest
+            .query_vector
+            .iter()
+            .any(|component| !component.is_finite())
+    {
+        return Err(QueryError::FindNearestQueryVector);
+    }
+    if !(1..=1000).contains(&find_nearest.limit) {
+        return Err(QueryError::FindNearestLimit);
+    }
+    if find_nearest
+        .distance_threshold
+        .is_some_and(|threshold| !threshold.is_finite())
+    {
+        return Err(QueryError::FindNearestDistanceThreshold);
+    }
+    if find_nearest
+        .distance_result_field
+        .as_ref()
+        .is_some_and(FieldPath::is_document_name)
+    {
+        return Err(QueryError::FindNearestDistanceResultField);
+    }
+    Ok(())
 }
 
 fn canonicalize_filter(f: &FilterExpr) -> Result<FilterExpr, QueryError> {

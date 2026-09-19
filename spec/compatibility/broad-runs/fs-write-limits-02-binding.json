@@ -1,0 +1,68 @@
+{
+  "blockingReasons": [
+    "owner permission envelope fields are unset",
+    "current artifact SHA-256 is not bound",
+    "production collector and immutable comparator binding are not supplied"
+  ],
+  "campaignId": "FS-DATA-WRITE-LIMITS-02",
+  "collector": {
+    "digest": "5f42ec0ad88d350aff0925a435049cdb05a67f97bc1825888ccfe0c2ebff0d36",
+    "path": "tools/compat-broad/batch_adapter.py",
+    "productionCollector": null,
+    "scope": "REST document limit request/readback and typed post-state only",
+    "status": "local-only",
+    "technicalBlocker": "No frozen production collector and no current artifact digest are bound. Production execution is prohibited until O7 supplies both."
+  },
+  "comparator": {
+    "contract": "Versioned typed status/error/body, payload digest, accepted-control post-state, rejected-resource absence and cleanup outcome. Numeric timestamps are compared by semantic type/value contract, not raw bytes.",
+    "path": "tools/compat-broad/shared_production_pair.py",
+    "productionComparator": null,
+    "status": "preparation-only",
+    "technicalBlocker": "No dedicated immutable production comparison binding is frozen for this independent limits campaign."
+  },
+  "gateEnvelope": {
+    "executionWindow": null,
+    "owner": null,
+    "permissionReference": null,
+    "productionAuthorization": false,
+    "productionNonce": null,
+    "requiredInputs": [
+      "owner identity and explicit permission reference covering this owned-data campaign",
+      "project/database/tenant and configuration readback",
+      "fresh nonce",
+      "current release artifact SHA-256",
+      "collector and comparator digests",
+      "recovery owner and tariff acceptance"
+    ],
+    "stopConditions": [
+      "binding drift",
+      "unexpected resource",
+      "budget exhaustion",
+      "cleanup uncertainty",
+      "incomplete receipt"
+    ]
+  },
+  "kind": "firestore-write-limits-campaign-binding-v1",
+  "localShadow": {
+    "artifact": "Use a locally built current-head fireemu artifact with a digest bound before execution.",
+    "commands": [
+      "cargo nextest run --locked -p fireemu-adapter-grpc --test rest --profile pr",
+      "cargo nextest run --locked -p fireemu-adapter-grpc --test local --profile pr",
+      "uv run --project tools/compat-inventory --locked pytest tools/compat-broad/test_fs_write_limits_campaign.py"
+    ],
+    "productionExecuted": false,
+    "status": "prepared-local-only"
+  },
+  "manifest": {
+    "path": "spec/compatibility/broad-runs/fs-write-limits-02.json",
+    "sha256": "41b065a0eceaf9a06ef682576e6f3975a1d5585f0c5025d8f83f82719d673d1e"
+  },
+  "productionExecuted": false,
+  "source": {
+    "artifactSha256": null,
+    "codeSourceHead": "9830ccaf53def5d51bb620411648e2a30337a32f",
+    "commit": "9830ccaf53def5d51bb620411648e2a30337a32f"
+  },
+  "status": "BLOCKED_OWNER",
+  "technicalStatus": "BLOCKED_TECHNICAL"
+}

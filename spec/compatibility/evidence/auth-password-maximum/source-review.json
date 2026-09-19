@@ -1,0 +1,251 @@
+{
+  "schemaVersion": 1,
+  "kind": "agent-authored-source-review",
+  "reviewer": "Codex (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-10",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "rawSha256": "c3454bcf8f4e565422657ba8d55ea0d23bb3d82a2bfbc0a3c6aaabdcfc888af8",
+      "bodySha256": "a9b8129d0d42db1aa1b7eed2121ac7dc2be6d5b53c3976502ecf6b753b09c0c9",
+      "fetchedAt": "2026-09-10T04:04:29.598062+00:00",
+      "locators": [
+        "section-create-email-password",
+        "section-sign-in-email-password",
+        "section-change-password",
+        "section-get-account-info",
+        "section-refresh-token",
+        "section-delete-account"
+      ]
+    },
+    {
+      "id": "password-policy",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/TopLevel/getPasswordPolicy",
+      "rawSha256": "e0358d44836900cf88704efeb032ea23674afa1be5f60badd618631aae9319e6",
+      "bodySha256": "32ee1fa52b8d6dcdeb7c051dcd34d22378ed5e6fac51aed65092f26879ee26fe",
+      "fetchedAt": "2026-09-10T05:41:19.870929+00:00",
+      "locators": [
+        "response-body",
+        "customstrengthoptions",
+        "enforcementstate"
+      ]
+    },
+    {
+      "id": "email-privacy",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/admin/email-enumeration-protection",
+      "rawSha256": "0ae2cb918d4d56d047a2b928a5eb66d96a80127fb60a7ed55e5389f5551a8834",
+      "bodySha256": "6457558a31c25b2f770f277c29839eecc1fa2f5e0c3878f2e3df3911e2a3061a",
+      "fetchedAt": "2026-09-10T05:41:20.751654+00:00",
+      "locators": [
+        "overview",
+        "example_of_an_error_response"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "id": "AUTH-MAXIMUM-SIGNUP",
+      "case": "signup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-create-email-password",
+      "condition": "Execute signup on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-BASELINE-SIGNIN",
+      "case": "baseline-signin",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "Execute baseline-signin on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-MAXIMUM-PASSWORD-CHANGE",
+      "case": "maximum-password-change",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-change-password",
+      "condition": "Update with exactly4096-character generated URL-safe ASCII password and use issued credentials in following controls.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-MAXIMUM-TOKEN-LOOKUP",
+      "case": "maximum-token-lookup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Execute maximum-token-lookup on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-OLD-PASSWORD-REJECTED",
+      "case": "old-password-rejected",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "Execute old-password-rejected on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-MAXIMUM-PASSWORD-SIGNIN",
+      "case": "maximum-password-signin",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "Execute maximum-password-signin on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-MAXIMUM-PASSWORD-LOOKUP",
+      "case": "maximum-password-lookup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Execute maximum-password-lookup on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-MAXIMUM-TOKEN-REFRESH",
+      "case": "maximum-token-refresh",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Execute maximum-token-refresh on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-MAXIMUM-REFRESHED-LOOKUP",
+      "case": "maximum-refreshed-lookup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Execute maximum-refreshed-lookup on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-TAIL-PASSWORD-REJECTED",
+      "case": "tail-password-rejected",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "Attempt signin with same4095-prefix and different4096th character; require bad credentials, not policy failure.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-STATE-AFTER-TAIL",
+      "case": "state-after-tail",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Execute state-after-tail on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-PREFIX-PASSWORD-REJECTED",
+      "case": "prefix-password-rejected",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "Attempt signin with4095-character prefix of known working4096 password; require bad credentials.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-STATE-AFTER-PREFIX",
+      "case": "state-after-prefix",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Execute state-after-prefix on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-OVERSIZE-PASSWORD-REJECTED",
+      "case": "oversize-password-rejected",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-change-password",
+      "condition": "Observe4097 ASCII update sharing4096-character working prefix; retain finite error classification and compare targets. Policy rejection must be distinct from expired/invalid token or rate limit.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-STATE-AFTER-OVERSIZE",
+      "case": "state-after-oversize",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Execute state-after-oversize on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-PRESERVED-MAXIMUM-SIGNIN",
+      "case": "preserved-maximum-signin",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "Execute preserved-maximum-signin on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-PRESERVED-MAXIMUM-LOOKUP",
+      "case": "preserved-maximum-lookup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Execute preserved-maximum-lookup on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-PRESERVED-MAXIMUM-REFRESH",
+      "case": "preserved-maximum-refresh",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Reuse the original maximum-update response refresh bytes already used before oversize attempt; check issued ID via lookup.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-PRESERVED-REFRESHED-LOOKUP",
+      "case": "preserved-refreshed-lookup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Execute preserved-refreshed-lookup on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-DELETE",
+      "case": "delete",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-delete-account",
+      "condition": "Execute delete on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-MAXIMUM-DELETED-ACCOUNT-ABSENT",
+      "case": "deleted-account-absent",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-delete-account",
+      "condition": "Execute deleted-account-absent on the same dedicated account: require expected HTTP/checks and selected-state equality or token-use/cleanup control, not a whole-API claim.",
+      "existingRequirement": null
+    }
+  ],
+  "limitations": [
+    "Candidate only; no inherited approval.",
+    "Exactly generated4096/4097ASCII inputs,one-last-character variant and4095prefix; not all strings/Unicode/boundaries.",
+    "Incomplete private diagnostics remain incomplete, not successful evidence.",
+    "No SDK/Rules/actualexpiry/revocationtiming/faultrecovery guarantee."
+  ],
+  "preconditions": [
+    {
+      "source": "password-policy",
+      "locator": "response-body",
+      "condition": "Exact schema1 ENFORCE min6/max4096, no extra strength options, unchanged pre/post configuration. InputShape verifies original47/maximum4096/tail4096/prefix4095/oversize4097,ASCII and exact prefix/suffix relationships; no password bytes/hashes."
+    }
+  ]
+}

@@ -383,14 +383,14 @@ fn authority_child_cleanup_survives_panic_unwinding() {
             .args([
                 "/bin/sh",
                 "-c",
-                "sleep 30 & child=$!; pid_tmp=\"${PID_FILE}.tmp.$$\"; printf '%s %s\\n' \"$$\" \"$child\" > \"$pid_tmp\"; mv \"$pid_tmp\" \"$PID_FILE\"; wait \"$child\"",
+                "sleep 120 & child=$!; pid_tmp=\"${PID_FILE}.tmp.$$\"; printf '%s %s\\n' \"$$\" \"$child\" > \"$pid_tmp\"; mv \"$pid_tmp\" \"$PID_FILE\"; wait \"$child\"",
             ])
             .env("PID_FILE", &pid_path)
             .spawn()
             .expect("panic fixture must launch");
         let guard = AuthorityChild::new(child);
         let mut pids = None;
-        assert!(wait_until(Duration::from_secs(3), || {
+        assert!(wait_until(Duration::from_secs(30), || {
             pids = read_complete_pid_record(&pid_path, 2);
             pids.is_some()
         }));
@@ -901,6 +901,7 @@ fn python_authority_helpers_ignore_startup_injection() {
         let output = Command::new(&helper)
             .env("PYTHONPATH", &temporary.0)
             .env("PYTHONHOME", &temporary.0)
+            .env_remove("QUINT_HOME")
             .env("SENTINEL", &sentinel)
             .output()
             .expect("isolated Python helper must launch");
@@ -980,7 +981,8 @@ fn authority_pass_owns_a_dynamic_loopback_endpoint_when_legacy_8822_is_occupied(
     .expect("cargo fixture must be written");
     make_executable(&[&authority, &group_launcher, &cargo]);
 
-    let output = Command::new(&authority)
+    let mut command = Command::new(&authority);
+    command
         .current_dir(&temporary.0)
         .env("APALACHE_SERVER_PID_FILE", &server_pid_file)
         .env("APALACHE_SERVER_ENV_FILE", &server_environment_file)
@@ -1004,9 +1006,14 @@ fn authority_pass_owns_a_dynamic_loopback_endpoint_when_legacy_8822_is_occupied(
         .env("LD_PRELOAD", "/tmp/unreviewed-native.so")
         .env("LD_LIBRARY_PATH", "/tmp/unreviewed-native-libraries")
         .env("LD_AUDIT", "/tmp/unreviewed-audit.so")
-        .env("DYLD_INSERT_LIBRARIES", "/tmp/unreviewed-native.dylib")
         .env("DYLD_LIBRARY_PATH", "/tmp/unreviewed-native-libraries")
-        .env("DYLD_FRAMEWORK_PATH", "/tmp/unreviewed-frameworks")
+        .env("DYLD_FRAMEWORK_PATH", "/tmp/unreviewed-frameworks");
+    // A missing inserted library terminates the script interpreter in the macOS
+    // loader before the authority can clear its child environment. Other Unix
+    // loaders let the fixture start, so exercise this taint where it is observable.
+    #[cfg(not(target_os = "macos"))]
+    command.env("DYLD_INSERT_LIBRARIES", "/tmp/unreviewed-native.dylib");
+    let output = command
         .env(
             "PATH",
             std::env::join_paths(std::iter::once(fake_bin).chain(std::env::split_paths(

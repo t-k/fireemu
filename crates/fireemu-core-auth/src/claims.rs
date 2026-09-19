@@ -288,6 +288,8 @@ pub struct FirebaseClaims {
     pub tenant: Option<String>,
     /// Additional attributes from the identity provider used for this sign-in.
     pub sign_in_attributes: Option<ClaimValue>,
+    /// Private fireemu control-session incarnation. Ordinary production-shaped stores omit it.
+    pub fireemu_session_epoch: Option<String>,
 }
 
 /// ID token claims (unsigned; signing is an adapter concern).
@@ -385,6 +387,12 @@ impl IdTokenClaims {
         }
         if let Some(attributes) = &self.firebase.sign_in_attributes {
             firebase.insert("sign_in_attributes".to_owned(), attributes.clone());
+        }
+        if let Some(epoch) = &self.firebase.fireemu_session_epoch {
+            firebase.insert(
+                "fireemu_session_epoch".to_owned(),
+                ClaimValue::String(epoch.clone()),
+            );
         }
         entries.insert("firebase".into(), ClaimValue::Map(firebase));
         let mut out = String::new();

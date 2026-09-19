@@ -28,6 +28,7 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         storage_rules: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::default()),
         reset_hooks: vec![Arc::new(move || {
             counter.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         })],
         functions: None,
         control_token: "test-token".to_owned(),
@@ -1136,6 +1137,17 @@ impl SnapshotHook for Injected {
         self.set(value);
         Ok(())
     }
+    fn rollback(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        let value = part
+            .downcast_ref::<String>()
+            .ok_or_else(|| TransitionFailure::new(self.name, "not a string"))?;
+        self.applied
+            .lock()
+            .unwrap()
+            .push(format!("rollback:{}={value}", self.name));
+        self.set(value);
+        Ok(())
+    }
 }
 
 /// A control state whose snapshot hooks can be made to refuse a phase, the hooks
@@ -1292,6 +1304,13 @@ fn a_restore_that_fails_at_any_position_rolls_the_earlier_hooks_back() {
         // were never touched.
         let log = applied.lock().unwrap().clone();
         assert_eq!(log.len(), position * 2, "position {position}: {log:?}");
+        assert_eq!(
+            log.iter()
+                .filter(|entry| entry.starts_with("rollback:"))
+                .count(),
+            position,
+            "position {position}: compensating rollback uses the distinct hook contract"
+        );
         // The snapshot survives the failed restore and can still be applied.
         hooks[position].refuse(Refuse::Nothing);
         let r = handle(
@@ -1660,6 +1679,121 @@ fn the_rules_request_trace_lists_decided_requests_newest_first_with_their_expres
     assert_eq!(after.body["requests"], json!([]));
 }
 
+/// FAULTH-1 on the route: the fired history is a bounded ring, so `GET faultPlan` says how
+/// many records fell out of it rather than silently serving a shorter history.
+#[test]
+fn the_fault_plan_route_reports_the_records_the_ring_dropped() {
+    use fireemu_core_session::fault::MAX_FIRED_RECORDS;
+
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let plan = json!({"rules": [{"match": {"operation": "firestore.commit"}, "action": {"type": "transactionConflict"}}]});
+    assert_eq!(
+        handle(&s, "PUT", "/v1/sessions/default/faultPlan", &plan).status,
+        200
+    );
+    let r = handle(&s, "GET", "/v1/sessions/default/faultPlan", &json!({}));
+    assert_eq!(r.body["droppedFired"], json!(0), "{}", r.body);
+
+    let registry = s.faults.as_ref().unwrap();
+    let faults = registry.for_project("demo-app");
+    let overflow = 5;
+    for _ in 0..MAX_FIRED_RECORDS + overflow {
+        assert_eq!(
+            faults
+                .lock()
+                .unwrap()
+                .decide("firestore.commit", None, None)
+                .len(),
+            1
+        );
+    }
+
+    let r = handle(&s, "GET", "/v1/sessions/default/faultPlan", &json!({}));
+    assert_eq!(
+        r.body["fired"].as_array().map(Vec::len),
+        Some(MAX_FIRED_RECORDS),
+        "{}",
+        r.body["droppedFired"]
+    );
+    assert_eq!(r.body["droppedFired"], json!(overflow), "{}", r.body);
+    assert_eq!(
+        r.body["counters"]["firestore.commit"],
+        json!(MAX_FIRED_RECORDS + overflow),
+        "every occurrence is still counted"
+    );
+
+    // Reinstalling the plan starts the history and the dropped count over.
+    assert_eq!(
+        handle(&s, "PUT", "/v1/sessions/default/faultPlan", &plan).status,
+        200
+    );
+    let r = handle(&s, "GET", "/v1/sessions/default/faultPlan", &json!({}));
+    assert_eq!(r.body["fired"], json!([]));
+    assert_eq!(r.body["droppedFired"], json!(0));
+}
+
+/// RRT-1 / RRT-2: the request trace publishes evaluated expression values for every session
+/// the daemon serves, so it is privileged exactly like the resource report, is never cached,
+/// and is only served on the default session that owns the shared ruleset.
+#[test]
+fn the_rules_request_trace_is_privileged_for_pages_and_belongs_to_the_default_session() {
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let page = RequestHeaders {
+        origin: Some("http://localhost:5173".to_owned()),
+        ..RequestHeaders::default()
+    };
+    let authorized = RequestHeaders {
+        origin: Some("http://localhost:5173".to_owned()),
+        authorization: Some("Bearer test-token".to_owned()),
+        ..RequestHeaders::default()
+    };
+
+    // A loopback page reads nothing without the control token, whatever the query string.
+    for path in [
+        "/v1/sessions/default/rules/requests",
+        "/v1/sessions/default/rules/requests?",
+        "/v1/sessions/default/rules/requests?limit=1",
+    ] {
+        let r = handle_with(&s, "GET", path, &page, &json!({}));
+        assert_eq!(r.status, 403, "{path}: {}", r.body);
+        assert!(
+            r.body["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("CONTROL_TOKEN_REQUIRED"),
+            "{path}: {}",
+            r.body
+        );
+        let r = handle_with(&s, "GET", path, &authorized, &json!({}));
+        assert_eq!(r.status, 200, "{path}: {}", r.body);
+    }
+
+    // The trace is a diagnostic snapshot of live state and is never cached.
+    assert!(fireemu_adapter_http::control::is_no_store_path(
+        "/v1/sessions/default/rules/requests"
+    ));
+    assert!(fireemu_adapter_http::control::is_no_store_path(
+        "/v1/sessions/default/rules/requests?limit=1"
+    ));
+
+    // The ruleset and its diagnostics belong to the default session: another session is
+    // refused rather than shown the decisions of every project on the daemon.
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions", &json!({"project": "demo-b"})).status,
+        200
+    );
+    let r = handle(&s, "GET", "/v1/sessions/demo-b/rules/requests", &json!({}));
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert!(
+        r.body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("FAILED_PRECONDITION"),
+        "{}",
+        r.body
+    );
+}
+
 /// A resource hook that reports one outstanding root per scope and records the scopes it
 /// was asked about, so the tests can see that a session is only ever asked about itself.
 struct FakeResources {
@@ -1970,4 +2104,38 @@ fn the_resources_guard_holds_with_query_strings_and_the_report_is_never_cached()
         );
         assert_eq!(r.status, 400, "{bad:?} => {}", r.body);
     }
+}
+
+/// RSTPS-2: the default session's shared parts are reset behind the locks the services they
+/// belong to are held by, so a hook that cannot finish reports the refusal. It used to panic
+/// through `expect`, which poisoned those locks and turned every later request against the
+/// service into a panic of its own.
+#[test]
+fn a_reset_hook_that_cannot_finish_refuses_the_reset_instead_of_panicking() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let mut s = state(counter.clone());
+    let ran = Arc::new(AtomicUsize::new(0));
+    let ran_in_hook = Arc::clone(&ran);
+    s.reset_hooks = vec![
+        Arc::new(move || {
+            ran_in_hook.fetch_add(1, Ordering::SeqCst);
+            Err("could not provision topic projects/demo-app/topics/jobs: the maximum of 10000 topics has been reached".to_owned())
+        }),
+        Arc::new(|| Ok(())),
+    ];
+
+    let r = handle(&s, "POST", "/v1/sessions/default/reset", &json!({}));
+
+    assert_eq!(r.status, 500, "{}", r.body);
+    let message = r.body.to_string();
+    assert!(message.contains("10000 topics"), "{message}");
+    assert!(message.contains("default"), "{message}");
+    assert_eq!(ran.load(Ordering::SeqCst), 1);
+    // A later reset still works once the refusal's cause is gone: nothing was poisoned.
+    s.reset_hooks = vec![Arc::new(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    })];
+    let r = handle(&s, "POST", "/v1/sessions/default/reset", &json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
 }

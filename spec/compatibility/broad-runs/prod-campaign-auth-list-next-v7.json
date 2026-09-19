@@ -1,0 +1,156 @@
+{
+  "adapter": {
+    "contract": "shared-local-v2",
+    "gateCommit": "e7bab4e0f30c195ea642e35914d1872edad77f20",
+    "gatePath": "tools/compat-broad/auth-list/campaign_gate.py",
+    "gateSha256": "77c8bc791b6559fd002465f3ce6394d4a7e09a3f7e656922f3119ec982999e71",
+    "id": "auth-list-campaign-v7",
+    "path": "tools/compat-broad/auth-list/campaign_auth_list.py",
+    "shadowCommit": "34bcbdfbe1ca79305bd5cc5b591380b21f99458e",
+    "shadowPath": "tools/compat-broad/auth-list/campaign_auth_list_shadow.py",
+    "shadowSha256": "53d737a625f89c102299fc13c455a1f008f611362b6f5aef07c34427801dd70c",
+    "sourceCommit": "aad1a41de926fae244b42ac1bd2baa57bf2bcdde",
+    "sourceSha256": "88e4c79839b4aa9ba6e47a9f0b75ab9505461ae31fb04ff9dd2a842b4f916ed0"
+  },
+  "cases": [
+    {
+      "assertion": "Refresh succeeds and returned id_token authTime is recorded as bounded unsigned metadata for comparison.",
+      "denominatorBinding": "auth-session-v2-refresh-auth-time",
+      "id": "auth/refresh/changed-refresh@0",
+      "operations": [
+        "sign-up",
+        "sign-in",
+        "refresh",
+        "issued-id-lookup"
+      ],
+      "sourceEvidence": "spec/compatibility/evidence/auth-session-v2/receipt.json"
+    },
+    {
+      "assertion": "Continuity refresh succeeds and returned id_token authTime is recorded as bounded unsigned metadata for comparison.",
+      "denominatorBinding": "auth-session-continuity-refresh-auth-time",
+      "id": "auth/refresh/reference-refresh",
+      "operations": [
+        "sign-up",
+        "sign-in",
+        "refresh",
+        "issued-id-lookup"
+      ],
+      "sourceEvidence": "spec/compatibility/evidence/auth-session-continuity/receipt.json"
+    },
+    {
+      "denominatorBinding": "firestore-list-collection-ids",
+      "id": "firestore/list-collection-ids/root",
+      "operations": [
+        "conditional-create",
+        "root-list",
+        "readback",
+        "cleanup"
+      ],
+      "sourceEvidence": "spec/compatibility/broad-runs/a12183a0-second-current.json"
+    },
+    {
+      "denominatorBinding": "firestore-list-collection-ids",
+      "id": "firestore/list-collection-ids/missing-document-parent",
+      "operations": [
+        "conditional-create-subcollection",
+        "missing-parent-list",
+        "cleanup"
+      ],
+      "sourceEvidence": "spec/compatibility/broad-runs/a12183a0-second-current.json"
+    },
+    {
+      "denominatorBinding": "firestore-list-collection-ids",
+      "id": "firestore/list-collection-ids/page-size-one",
+      "operations": [
+        "conditional-create-two-child-collections",
+        "first-page",
+        "consume-one-continuation",
+        "cleanup"
+      ],
+      "sourceEvidence": "spec/compatibility/broad-runs/a12183a0-second-current.json"
+    }
+  ],
+  "executionPlan": {
+    "coordinatorRequests": 2,
+    "costCeilingMicrousd": 8000,
+    "costCeilingUsd": 0.008,
+    "fixedCostMicrousd": 3000,
+    "localShadowObservedRequests": 39,
+    "logicalOwnedTargets": 7,
+    "maxConcurrency": 1,
+    "nonceTemplate": "{freshNonce}: fresh 32 lowercase hexadecimal value at execution time",
+    "observationRequests": 18,
+    "recoveryRequests": 19,
+    "recoverySeconds": 300,
+    "requestCostMicrousd": 100,
+    "totalRequests": 39,
+    "totalWireRequests": 39,
+    "transport": "shared-runner; production disabled until owner campaign approval",
+    "wallSeconds": 600
+  },
+  "historicalArtifacts": [
+    "spec/compatibility/broad-runs/prod-campaign-auth-list-01.json",
+    "docs/compatibility/production-campaign-auth-list-01.md"
+  ],
+  "kind": "production-campaign-auth-list-next-v7",
+  "localShadow": {
+    "command": "uv run --project tools/compat-inventory --locked python tools/compat-broad/auth-list/campaign_auth_list_shadow.py --output <private-output>",
+    "comparison": "local-only; no production compatibility claim",
+    "legacyFixture": {
+      "limitations": [
+        "Fixture transport only; does not establish production parity."
+      ],
+      "path": "spec/compatibility/broad-runs/prod-campaign-auth-list-next-local-artifact/result.json",
+      "productionExecuted": false,
+      "status": "immutable-legacy-fixture"
+    },
+    "ownedArtifact": {
+      "artifactSha256": "5512ab4ad481be4d6e0ad708f402b8a07a0d841ba2d23587adc11b371915bd4a",
+      "cleanupComplete": true,
+      "executionCommit": "34bcbdfbe1ca79305bd5cc5b591380b21f99458e",
+      "observationRequests": 18,
+      "observerSha256": "f4724b420f1a2da2db0fec200478f8b78aeaa394b1c1e4194533047fa74c91ea",
+      "path": "spec/compatibility/broad-runs/prod-campaign-auth-list-next-local-artifact-v7/result.json",
+      "processCleanup": true,
+      "productionExecuted": false,
+      "recordingComplete": true,
+      "recoveryRequests": 19,
+      "sha256": "fea698df09b58d66eb5f67f885c487d0154aa768983a3ef6465352a314e761f7",
+      "stateValidation": true,
+      "status": "passed-owned-loopback-artifact",
+      "totalRequests": 39,
+      "configurationDigest": "faecb4ac71ff8df1a872b56660a1e7dbccb05e66ffa5efc0ae071504033e2d6f",
+      "parentManifestSha256": "f0285e37f680f5e6f96aef75a5a96da9afa5066f6cac8502457a71c3040dca51",
+      "totalWireRequests": 39,
+      "kind": "production-campaign-auth-list-next-local-artifact-v7"
+    }
+  },
+  "preservedEvidence": [
+    "spec/compatibility/broad-runs/prod-campaign-auth-list-next-v2.json",
+    "spec/compatibility/broad-runs/prod-campaign-auth-list-next-local-artifact/result.json"
+  ],
+  "production": {
+    "approval": null,
+    "ownerInputs": {
+      "currentEnvironment": null,
+      "endsAt": null,
+      "nonce": null,
+      "owner": null,
+      "permissionReference": null,
+      "recoveryOwner": null,
+      "startsAt": null
+    },
+    "productionExecuted": false,
+    "requiredBeforeExecution": [
+      "owner and permission reference",
+      "execution window",
+      "fresh nonce",
+      "current project/database/tenant acceptance",
+      "configuration and pricing acceptance",
+      "recovery owner"
+    ]
+  },
+  "purpose": "Bounded Auth refresh and Firestore listCollectionIds campaign with a real owned-artifact local shadow; production execution remains owner-gated.",
+  "sourceCommit": "aad1a41de926fae244b42ac1bd2baa57bf2bcdde",
+  "status": "prepared-offline-blocked-owner"
+}

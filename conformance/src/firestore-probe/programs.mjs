@@ -1478,9 +1478,26 @@ const emulatorRoutes = {
       method: "GET",
       path: `/v1/projects/PROJECT/databases/Named/documents/em/a`,
     },
-    { id: "list-databases", method: "GET", path: `/v1/projects/PROJECT/databases` },
-    { id: "get-database", method: "GET", path: `/v1/projects/PROJECT/databases/(default)` },
-    { id: "get-named-database", method: "GET", path: `/v1/projects/PROJECT/databases/named-db` },
+    {
+      id: "list-databases",
+      method: "GET",
+      path: `/v1/projects/PROJECT/databases`,
+      // Firestore Admin inventory is a bounded fireemu extension; the official emulator has no
+      // corresponding route, so this row is checked for local transport completion only.
+      localOnly: true,
+    },
+    {
+      id: "get-database",
+      method: "GET",
+      path: `/v1/projects/PROJECT/databases/(default)`,
+      localOnly: true,
+    },
+    {
+      id: "get-named-database",
+      method: "GET",
+      path: `/v1/projects/PROJECT/databases/named-db`,
+      localOnly: true,
+    },
   ],
 };
 

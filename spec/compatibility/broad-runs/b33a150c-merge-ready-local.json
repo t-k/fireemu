@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 1,
+  "kind": "merge-readiness-local-candidate",
+  "status": "technical-validation-complete-owner-decision-pending",
+  "sourceCommit": "b33a150cc3603fd87e6991981c1be9d4ac5f094d",
+  "baseCommit": "d987d5ddcc1374cee425f08d6d81915795fc2ab5",
+  "capturedAt": "2026-09-13T12:40:34Z",
+  "productionExecuted": false,
+  "evidenceClasses": {
+    "savedProductionComparison": "Only immutable previously captured production responses are used.",
+    "localInvariant": "Owned loopback artifacts and SDKs establish local behavior and safety invariants only.",
+    "formalModel": "Quint evidence covers only each model's declared projection and bound inputs."
+  },
+  "validation": {
+    "workspace": {
+      "command": "cargo nextest run --workspace --profile pr --no-fail-fast",
+      "runId": "28b0ccc9-07cd-44a9-a245-f5cf75929959",
+      "passed": 2081,
+      "failed": 0,
+      "skipped": 81
+    },
+    "rust": [
+      "cargo fmt --all -- --check",
+      "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "cargo doc --workspace --no-deps with RUSTDOCFLAGS=-D warnings",
+      "cargo deny check",
+      "cargo run --locked -p proto-gen -- check",
+      "cargo run --locked -p traceability-check",
+      "cargo run --locked -p compat-check",
+      "cargo run --locked -p config-schema-check",
+      "ruby scripts/ci-workflow-contract.rb",
+      "scripts/check-core-deps.sh",
+      "scripts/cargo-session.test.sh"
+    ],
+    "compatibility": {
+      "broadPytest": {
+        "passed": 272,
+        "failed": 0
+      },
+      "lifetimePytest": {
+        "passed": 116,
+        "failed": 0
+      },
+      "historicalArchivePytest": {
+        "passed": 304,
+        "failed": 0,
+        "skipped": 8
+      },
+      "historicalPublishers": 11,
+      "historyCheck": "passed"
+    },
+    "quint": {
+      "models": 14,
+      "mutations": 107,
+      "generator": "verification/quint/run-verification.sh --refresh",
+      "result": "passed"
+    },
+    "ui": {
+      "unit": 315,
+      "sizeReportTests": 7,
+      "playwright": 67,
+      "lint": "passed-with-one-nonblocking-performance-warning",
+      "format": "passed",
+      "build": "passed"
+    },
+    "sdk": [
+      "firebase client Auth and Firestore Rules",
+      "Firestore Lite REST",
+      "G3 Auth switch, refused-write state and reconnect",
+      "pending write during A-to-B Auth switch",
+      "listener unsubscribe and replacement over forced long polling"
+    ],
+    "distribution": {
+      "licenseTests": 11,
+      "installSmoke": "passed",
+      "processCleanup": "passed",
+      "binarySha256": "67beccdcdc84e778321859277076d3fb37d18107f4df1c9cba486d20deee5d46",
+      "launcherTarballSha256": "96fa62f3682e0a5a8610e74f7077b218846f7027df0f475c22d98baf96df85fd",
+      "platformTarballSha256": "f506196f7595351de2ff96fa8d6cd69d16d77b6e22eba0beb8ce585334ae5d6d"
+    }
+  },
+  "savedComparisons": {
+    "first46": {
+      "referencePublicationCommit": "ab7bd698",
+      "referenceExecutionCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
+      "localExecutionCommit": "a2681a5b2eb4e2c5b21e0556f12faa65700845ff",
+      "localArtifactSha256": "348f63ef5330720f91721a81a74a5f71433313b9e2fafb0a2e75498bf78c9578",
+      "recordingComplete": true,
+      "cleanupComplete": true,
+      "compatibility": "match",
+      "rows": 46,
+      "originalComparison": {
+        "match": 35,
+        "mismatch": 11
+      }
+    },
+    "second45": {
+      "lastBoundSavedReference": "37e4c396-second45-runtime-recomparison.json",
+      "lastBoundCompatibility": "match",
+      "lastBoundRows": 45,
+      "currentLocalExecutionCommit": "a2681a5b2eb4e2c5b21e0556f12faa65700845ff",
+      "currentLocalArtifactSha256": "bd0c1b6f63448713098b1cb878458faea51d77937954946dbbdaeef759756740",
+      "currentRecordingComplete": true,
+      "currentCleanupComplete": true,
+      "currentSavedReferenceReevaluation": "indeterminate",
+      "reason": "The current observer digest is not bound to the immutable saved production record. The comparator rejected the pair; its binding was not weakened."
+    }
+  },
+  "skips": {
+    "quintExternalChecker": 48,
+    "functionsSdkAndDiscovery": 24,
+    "releaseLeakFixtureHelpers": 2,
+    "largeOrPerformanceQualification": 7,
+    "note": "The official Quint generator passed separately. The two release leak acceptance tests passed when selected explicitly. Functions SDK discovery remains assigned to its dedicated workflow; large performance and capacity qualifications are outside this merge acceptance run."
+  },
+  "reviews": {
+    "fullDiff": "approved after integration with the fixed base",
+    "historyIsolationSecurity": "approved",
+    "distributionFixtureProvenance": "approved after all bypass findings were corrected",
+    "functionsConnectionResetHarness": "approved after self-delimiting framing follow-up"
+  },
+  "blockedOwner": {
+    "goal": "G0",
+    "fixedCommit": "a35f85b464743d62344a3a58763d382b5b3838ce",
+    "executionInputs": "a35f85b4-shared-execution-inputs.json",
+    "decision": "Either accept G0 as follow-up for this merge, or authorize the exact fixed observation by supplying the owner identity, permission reference and window, a fresh nonce, settings and pricing acceptance, and a named recovery owner.",
+    "productionExecuted": false
+  },
+  "limitations": [
+    "This candidate does not claim complete Firebase, Identity Platform, Firestore or Enterprise compatibility.",
+    "No new Cloud authentication, read or data operation was performed during merge preparation.",
+    "The current second45 local record cannot be rebound to the older saved production observer.",
+    "Revision 3, GAP-AUTH-007, AUTH-U03 and the explicitly deferred Auth, Firestore, SDK and Enterprise ranges remain follow-up work."
+  ],
+  "cleanup": {
+    "ownedDaemons": "stopped",
+    "ownedListeners": "closed",
+    "ownedPortReservations": "released",
+    "g0DetachedCheckout": "retained intentionally"
+  }
+}

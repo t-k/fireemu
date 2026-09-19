@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "kind": "disabled-admin-update-case-mapping",
+  "reviewer": "Claude (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-12",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "admin-update",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/projects.accounts/update",
+      "locators": [
+        "request-body",
+        "response-body"
+      ]
+    },
+    {
+      "id": "admin-manage",
+      "url": "https://firebase.google.com/docs/auth/admin/manage-users",
+      "locators": [
+        "update_a_user"
+      ]
+    },
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "locators": [
+        "section-sign-in-email-password",
+        "section-get-account-info",
+        "section-refresh-token"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "case": "baseline-a-signin",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Password sign-in of the target before the disable; tokens name the target and serve a derived lookup."
+    },
+    {
+      "case": "baseline-b-signin",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Password sign-in of the control before the disable."
+    },
+    {
+      "case": "disabled-a-password-update",
+      "source": "admin-update",
+      "basis": "diagnostic",
+      "condition": "Privileged accounts:update replacing the disabled target's password. Accepted and refused are both valid; if accepted, the update must be visible through privileged lookup with the account still disabled, and whether tokens were returned is recorded."
+    },
+    {
+      "case": "disabled-a-update-token-lookup",
+      "source": "auth-rest",
+      "basis": "diagnostic",
+      "condition": "If the update returned an ID token, accounts:lookup with it; executed exactly when tokens were returned."
+    },
+    {
+      "case": "disabled-a-update-token-refresh",
+      "source": "auth-rest",
+      "basis": "diagnostic",
+      "condition": "If the update returned a refresh token, it is redeemed; executed exactly when tokens were returned."
+    },
+    {
+      "case": "disabled-a-photo-update",
+      "source": "admin-update",
+      "basis": "diagnostic",
+      "condition": "Privileged accounts:update setting the disabled target's photoUrl; accepted and refused are both valid; if accepted, the readback shows the value with the account still disabled."
+    },
+    {
+      "case": "disabled-a-signin",
+      "source": "auth-rest",
+      "basis": "diagnostic",
+      "condition": "The disabled target's own password sign-in with the replaced password; accepted and refused are both valid."
+    },
+    {
+      "case": "disabled-b-signin",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "The control signs in while the target is disabled."
+    },
+    {
+      "case": "reenabled-a-signin",
+      "source": "auth-rest",
+      "basis": "diagnostic",
+      "condition": "The target's password sign-in with the replaced password after re-enablement; accepted and refused are both valid."
+    },
+    {
+      "case": "reenabled-b-signin",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "The control signs in after the target is re-enabled."
+    }
+  ],
+  "limitations": [
+    "URLs were read during design; no new frozen full-body source snapshot or completed page-review claim is made by this mapping.",
+    "The sources document that a privileged update may change a disabled user's fields; they do not state whether tokens are returned for a disabled account. The observation, not the sources, answers that for the recorded conditions.",
+    "Two update fields (password, photoUrl), no tenant, a single run; other fields, self-service updates by a disabled user and SDK behavior are outside this mapping.",
+    "No execution approval, independent signature verification, SDK or Rules claim follows from this mapping."
+  ]
+}

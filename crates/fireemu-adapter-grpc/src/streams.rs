@@ -157,6 +157,7 @@ struct WriteStreamState {
     /// against the last token they saw).
     issued: u64,
     acknowledged: u64,
+    token_prefix: u64,
 }
 
 /// Runs the `Write` stream: the first message (no writes) is the handshake; every later
@@ -166,11 +167,13 @@ pub async fn write_stream(
     mut inbound: impl tokio_stream::Stream<Item = Result<pb::WriteRequest, Status>> + Unpin + Send,
     tx: mpsc::Sender<Result<pb::WriteResponse, Status>>,
 ) {
+    let stream_number = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
     let mut state = WriteStreamState {
         parent: None,
-        stream_id: format!("fireemu-{}", NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed)),
+        stream_id: format!("fireemu-{stream_number}"),
         issued: 0,
         acknowledged: 0,
+        token_prefix: stream_number,
     };
     while let Some(next) = inbound.next().await {
         let req = match next {
@@ -188,8 +191,11 @@ pub async fn write_stream(
     }
 }
 
-fn token_bytes(n: u64) -> Vec<u8> {
-    n.to_be_bytes().to_vec()
+fn token_bytes(prefix: u64, n: u64) -> Vec<u8> {
+    let mut token = Vec::with_capacity(16);
+    token.extend_from_slice(&prefix.to_be_bytes());
+    token.extend_from_slice(&n.to_be_bytes());
+    token
 }
 
 fn handle_write_request(
@@ -215,9 +221,18 @@ fn handle_write_request(
             ));
         }
         let parent = database_parent(&req.database)?;
+        if parent.document.is_some() {
+            return Err(Status::invalid_argument(
+                "the first Write request must name the database root",
+            ));
+        }
         // The route and the target database are resolved; App Check decides before the
         // Firebase Auth credential, Security Rules and every mutation (section 7.4).
         ctx.admit_app_check(&parent, "Write")?;
+        // Only then is the stream opened against a database that exists. A request refused
+        // for two reasons answers with the same one here as on the unary paths, which
+        // classify App Check before they touch any database.
+        ctx.local.database_handle(&parent)?;
         state.parent = Some(parent);
     } else if !req.stream_id.is_empty() || !req.database.is_empty() {
         return Err(Status::invalid_argument(
@@ -228,8 +243,18 @@ fn handle_write_request(
         return Err(Status::internal("write stream without database"));
     };
     if !req.stream_token.is_empty() {
-        let acknowledged: Option<[u8; 8]> = req.stream_token.as_slice().try_into().ok();
-        let acknowledged = acknowledged.map_or(0, u64::from_be_bytes);
+        let acknowledged = req
+            .stream_token
+            .as_slice()
+            .try_into()
+            .ok()
+            .and_then(|bytes: [u8; 16]| {
+                let (prefix, sequence) = bytes.split_at(8);
+                let prefix = u64::from_be_bytes(prefix.try_into().ok()?);
+                let sequence = u64::from_be_bytes(sequence.try_into().ok()?);
+                (prefix == state.token_prefix).then_some(sequence)
+            })
+            .unwrap_or(0);
         if acknowledged == 0 || acknowledged > state.issued || acknowledged < state.acknowledged {
             return Err(Status::failed_precondition("unknown write stream token"));
         }
@@ -244,7 +269,7 @@ fn handle_write_request(
     if req.writes.is_empty() {
         return Ok(pb::WriteResponse {
             stream_id,
-            stream_token: token_bytes(state.issued),
+            stream_token: token_bytes(state.token_prefix, state.issued),
             write_results: Vec::new(),
             commit_time: None,
         });
@@ -278,7 +303,7 @@ fn handle_write_request(
     let result = ctx.local.commit_writes(parent, &writes, &guarded)?;
     Ok(pb::WriteResponse {
         stream_id,
-        stream_token: token_bytes(state.issued),
+        stream_token: token_bytes(state.token_prefix, state.issued),
         write_results: result.write_results,
         commit_time: result.commit_time,
     })
@@ -703,6 +728,11 @@ fn decode_target(
                     "query target requires a structured_query",
                 ));
             };
+            if sq.find_nearest.is_some() {
+                return Err(Status::unimplemented(
+                    "Listen does not support findNearest targets",
+                ));
+            }
             let accepted = ctx.local.accepted_query(&query_parent, sq)?;
             Ok(TargetKind::Query(Box::new(accepted.query)))
         }
@@ -1275,7 +1305,11 @@ impl WireCommit {
 mod refresh_tests {
     use super::*;
     use crate::local::{CommitChangeKind, CommitPathChange, FirestoreSnapshot};
-    use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_firestore::field_path::FieldPath;
+    use fireemu_core_firestore::index::{
+        IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet,
+        IndexValidationPolicy, PlanningContext,
+    };
     use fireemu_core_firestore::store::{FirestoreState, WriteOp};
     use fireemu_core_firestore::value::Value;
     use fireemu_core_session::clock::VirtualClock;
@@ -1353,6 +1387,70 @@ mod refresh_tests {
         }
     }
 
+    #[test]
+    fn listen_decoder_refuses_find_nearest_targets() {
+        let fixture = generation_fixture();
+        let parent = fixture.parent.as_ref().unwrap();
+        let mut request = query_request(1, "restored");
+        let Some(pb::listen_request::TargetChange::AddTarget(target)) = &mut request.target_change
+        else {
+            unreachable!();
+        };
+        let Some(pb::target::TargetType::Query(query)) = &mut target.target_type else {
+            unreachable!();
+        };
+        let Some(pb::target::query_target::QueryType::StructuredQuery(structured)) =
+            &mut query.query_type
+        else {
+            unreachable!();
+        };
+        structured.find_nearest = Some(pb::structured_query::FindNearest {
+            vector_field: Some(pb::structured_query::FieldReference {
+                field_path: "embedding".to_owned(),
+            }),
+            query_vector: Some(pb::Value {
+                value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                    fields: [
+                        (
+                            "__type__".to_owned(),
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::StringValue(
+                                    "__vector__".to_owned(),
+                                )),
+                            },
+                        ),
+                        (
+                            "value".to_owned(),
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::ArrayValue(
+                                    pb::ArrayValue {
+                                        values: vec![pb::Value {
+                                            value_type: Some(pb::value::ValueType::DoubleValue(
+                                                1.0,
+                                            )),
+                                        }],
+                                    },
+                                )),
+                            },
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                })),
+            }),
+            distance_measure: pb::structured_query::find_nearest::DistanceMeasure::Euclidean as i32,
+            limit: Some(1),
+            ..Default::default()
+        });
+        let Some(pb::listen_request::TargetChange::AddTarget(target)) = request.target_change
+        else {
+            unreachable!();
+        };
+        let error = decode_target(&fixture.context, parent, &target).unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unimplemented);
+        assert!(error.message().contains("findNearest"));
+    }
+
     struct GenerationFixture {
         context: StreamContext,
         scope: Scope,
@@ -1370,7 +1468,18 @@ mod refresh_tests {
                 api_mode: FirestoreApiMode::Native,
                 policy: IndexValidationPolicy::Production,
             },
-            indexes: IndexSet::default(),
+            indexes: {
+                let mut indexes = IndexSet::default();
+                indexes.add_composite(IndexDefinition {
+                    collection_group: CollectionId::try_new("restored").unwrap(),
+                    query_scope: IndexQueryScope::Collection,
+                    fields: vec![IndexField {
+                        path: FieldPath::parse("embedding").unwrap(),
+                        mode: IndexFieldMode::Vector { dimension: 1 },
+                    }],
+                });
+                indexes
+            },
         };
         let clock = Arc::new(std::sync::Mutex::new(VirtualClock::new(
             LogicalInstant::UNIX_EPOCH,

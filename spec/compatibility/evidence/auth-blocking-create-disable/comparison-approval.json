@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "8d21beb022a6afb5f1bb22aa9d164f9e6a16a469f6fa7379d1e3b5fcb4c8fd9e",
+  "sourceCommit": "bfe70d7f1bb8d95d1f4a49abfc2f3c09a4da0122",
+  "scope": "Row-by-row comparison of the approved production record of auth-blocking-create-disable revision 2 with one run of the same corpus on the owned local artifact: all ten semantic projections agree (creating sign-up refused, disabled record kept, second sign-up EMAIL_EXISTS, photo URL not persisted). Production used the recorded first-generation blocking function; the owned local run used the equivalent second-generation Identity fixture installed with npm ci from the committed lockfile, with the runner, fixture files, lockfile and artifact bound to committed content. Approved as a comparison of these cases on that artifact, profile and recorder; not a claim of Functions SDK generation parity or beyond these cases.",
+  "cases": [
+    "control-c-signup",
+    "control-c-signup-readback",
+    "control-c-signin",
+    "target-t-signup",
+    "target-t-token-lookup",
+    "target-t-token-refresh",
+    "target-t-record-readback",
+    "target-t-signin",
+    "target-t-second-signup",
+    "control-c-final-signin"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-12",
+  "decision": "approve"
+}

@@ -77,7 +77,7 @@ fn absolute_path(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
 fn cache_base_for(
     home: Option<std::ffi::OsString>,
     xdg_cache_home: Option<std::ffi::OsString>,
-    local_app_data: Option<std::ffi::OsString>,
+    local_app_data: Option<&std::ffi::OsString>,
 ) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
@@ -93,17 +93,18 @@ fn cache_base_for(
     #[cfg(windows)]
     {
         let _ = (home, xdg_cache_home);
-        return absolute_path(local_app_data);
+        return absolute_path(local_app_data.cloned());
     }
     #[allow(unreachable_code)]
     None
 }
 
 fn default_cache_base() -> Option<PathBuf> {
+    let local_app_data = std::env::var_os("LOCALAPPDATA");
     cache_base_for(
         std::env::var_os("HOME"),
         std::env::var_os("XDG_CACHE_HOME"),
-        std::env::var_os("LOCALAPPDATA"),
+        local_app_data.as_ref(),
     )
 }
 
@@ -381,8 +382,8 @@ mod tests {
     use fireemu_core_auth::jwt::IdTokenSigner as _;
 
     use super::{
-        cache_base_for, cache_entry_path, load_or_generate_at, secure_file_metadata,
-        CacheFileMetadata,
+        cache_base_for, cache_entry_path, encode_envelope, generate, load_or_generate_at,
+        secure_file_metadata, CacheFileMetadata,
     };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use super::{entry_name, load_entry, open_cache_directory, EntryLoad};
@@ -392,6 +393,30 @@ mod tests {
     #[cfg(unix)]
     fn scratch(name: &str) -> TrustedTempDir {
         TrustedTempDir::new(&format!("session-rsa-cache-{name}"))
+    }
+
+    #[cfg(unix)]
+    fn write_valid_cache_entry(root: &std::path::Path, seed: u64) {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let _directory = open_cache_directory(root).expect("prepare secure cache directory");
+        let generated = generate(seed).expect("generate deterministic test signer");
+        let document = generated
+            .signer
+            .to_pkcs8_der()
+            .expect("serialize deterministic test signer");
+        let envelope = encode_envelope(seed, document.as_bytes());
+        let entry = cache_entry_path(root, seed);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(entry)
+            .expect("create deterministic cache fixture");
+        file.write_all(&envelope)
+            .and_then(|()| file.sync_all())
+            .expect("write deterministic cache fixture");
     }
 
     #[cfg(not(unix))]
@@ -450,7 +475,7 @@ mod tests {
         {
             let _ = absolute_home;
             for local in [None, Some("".into()), Some("relative".into())] {
-                assert_eq!(cache_base_for(None, None, local), None);
+                assert_eq!(cache_base_for(None, None, local.as_ref()), None);
             }
         }
     }
@@ -556,9 +581,8 @@ mod tests {
     #[test]
     fn a_symlink_entry_is_ignored_without_touching_its_victim() {
         let root = scratch("symlink");
-        let _ = load_or_generate_at(&root, 9).unwrap();
+        let _directory = open_cache_directory(&root).expect("prepare secure cache directory");
         let entry = cache_entry_path(&root, 9);
-        std::fs::remove_file(&entry).unwrap();
         let victim = root.join("victim");
         std::fs::write(&victim, b"must stay unchanged").unwrap();
         std::os::unix::fs::symlink(&victim, &entry).unwrap();
@@ -579,7 +603,7 @@ mod tests {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
         let root = scratch("invalid");
-        let _ = load_or_generate_at(&root, 10).unwrap();
+        let _directory = open_cache_directory(&root).expect("prepare secure cache directory");
         let entry = cache_entry_path(&root, 10);
 
         std::fs::write(&entry, b"corrupt cache entry").unwrap();
@@ -589,14 +613,14 @@ mod tests {
         assert_eq!(std::fs::read(&entry).unwrap(), corrupt);
 
         std::fs::remove_file(&entry).unwrap();
-        let _ = load_or_generate_at(&root, 10).unwrap();
+        write_valid_cache_entry(&root, 10);
         let alias = root.join("hard-link-alias");
         std::fs::hard_link(&entry, &alias).unwrap();
         assert!(!load_or_generate_at(&root, 10).unwrap().hit);
         assert_eq!(std::fs::metadata(&entry).unwrap().nlink(), 2);
         std::fs::remove_file(alias).unwrap();
 
-        let _ = load_or_generate_at(&root, 11).unwrap();
+        write_valid_cache_entry(&root, 11);
         let other = cache_entry_path(&root, 11);
         let foreign = std::fs::read(other).unwrap();
         std::fs::remove_file(&entry).unwrap();
@@ -613,9 +637,8 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let root = scratch("fifo");
-        let _ = load_or_generate_at(&root, 12).unwrap();
+        let directory = open_cache_directory(&root).unwrap();
         let entry = cache_entry_path(&root, 12);
-        std::fs::remove_file(&entry).unwrap();
         let status = std::process::Command::new("mkfifo")
             .arg(&entry)
             .status()
@@ -623,7 +646,6 @@ mod tests {
         assert!(status.success());
         std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o600)).unwrap();
 
-        let directory = open_cache_directory(&root).unwrap();
         let started = std::time::Instant::now();
         assert!(matches!(
             load_entry(&directory, &entry_name(12), 12),

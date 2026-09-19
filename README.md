@@ -60,6 +60,8 @@ See the [configuration schema](spec/config/fireemu.schema.json) for the complete
 
 `--config` accepts either a canonical fireemu configuration (with `"schemaVersion": 1`) or a Firebase project configuration. A file without `schemaVersion` is refused if it contains fireemu-only keys such as `profile`, `daemon`, or `auth.totp`, with a diagnostic naming the file, key, and required version. This check also applies to `--firebase-json` and files referenced by `firebaseJson`; keep fireemu settings in the canonical file and pass it with `--config`. Shared Firebase product sections and deployment settings remain supported, and filenames do not determine the format.
 
+The canonical file can configure the local Auth settings used by the selected project. `auth.passwordPolicy` and `auth.passwordPolicyOverrides` define password strength and sign-in enforcement; `auth.signIn.allowDuplicateEmails`, `auth.client.permissions`, and `auth.improvedEmailPrivacy` control account ownership, end-user account creation/deletion, and email privacy. `auth.configOverrides` scopes the latter settings to an existing project or tenant without creating that namespace. `auth.blockingFunctions` selects owned local beforeCreate/beforeSignIn functions and bounds inbound credential forwarding. `auth.quota` stores a production-shaped temporary quota, while `auth.quotaSimulation` enables the deterministic local fixed-window model. Values are validated before startup, and project/tenant management routes expose the effective settings without changing the file. These local settings and simulations are separate from production compatibility evidence; the compatibility ledger records which conditions have been compared with Firebase.
+
 ## Installation
 
 Install fireemu as a development dependency:
@@ -161,12 +163,15 @@ In practical terms:
 
 - the `emulator` profile targets the behavior of the pinned Firebase Emulator Suite release, while `strict` follows production Firebase and refuses what production refuses;
 - where production and the official emulator disagree, fireemu follows production and records the difference in `conformance/divergences.json`. Two examples: an equality filter combined with an inequality on another field is refused without a composite index, as production does, and a REST `runQuery` response omits the `done` flag that the official emulator adds;
+- a few behaviors differ by profile rather than being registered differences, because the `emulator` profile still matches the official emulator exactly. `spec/compatibility/contract.json` lists them. One example: under `strict` a request against a Firestore database that was never created answers `NOT_FOUND` as production does, where the official emulator serves any syntactically valid database id. The default database and the databases a `firebase.json` `firestore` entry names are always served under both profiles;
 - fireemu serves its own UI with the supported Auth, Firestore, Storage, Functions, Rules diagnostics and Firebase alerts workflows. The official UI Logs browser boundary is also tested; Android, Apple and Unity SDK matrices plus optional accessibility and visual snapshots remain outside the current scope;
 - Eventarc publication and trigger-management workflows, Cloud Tasks queue inspection, Pub/Sub snapshots, and loopback push delivery are supported through the Functions and Pub/Sub runtimes. Local safety limits and reload semantics are recorded in the compatibility contract;
 - Realtime Database, Firebase Hosting, App Hosting, and Data Connect are deferred and not served;
 - Firebase Extensions is not planned.
 
 This list reflects differences known to the project at the current compatibility baseline. It may be incomplete. The [Compatibility Contract](spec/compatibility/contract.json) is the authoritative machine-readable scope, and [the compatibility contract guide](docs/compatibility-contract.md) explains how claims are tied to tests and conformance evidence.
+
+The generated [Auth and Firestore compatibility inventory](docs/compatibility/README.md) connects official source pointers, API surfaces, existing requirements and capability declarations. It keeps implementation status separate from execution evidence and exposes incomplete mappings. It describes the source tree, not a verified npm release.
 
 ## Why use both profiles?
 

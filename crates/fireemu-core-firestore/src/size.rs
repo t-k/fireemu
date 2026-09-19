@@ -97,8 +97,18 @@ fn reference_size(resource_name: &str) -> Result<u64, SizeError> {
     Ok(total)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Counts [`field_value_size`] calls, so a test can prove the write path measures each
+    /// value once instead of re-walking every subtree at every nesting level.
+    pub(crate) static FIELD_VALUE_SIZE_CALLS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
 /// Size of a field value per the official table.
 pub fn field_value_size(value: &Value) -> Result<u64, SizeError> {
+    #[cfg(test)]
+    FIELD_VALUE_SIZE_CALLS.with(|count| count.set(count.get().saturating_add(1)));
     Ok(match value {
         Value::Null | Value::Boolean(_) => 1,
         Value::Integer(_) | Value::Double(_) | Value::Timestamp(_) => 8,

@@ -173,7 +173,7 @@ own answer (marked below).
 | replace-without-mask | 200 | OK | commit(1 results) |
 | read-after-replace | 200 | OK | document |
 | update-time-precondition-matches | 200 | OK | commit(1 results) |
-| update-time-precondition-is-stale | 400 | FAILED_PRECONDITION | `the stored version (1788789987423495) does not match the required base version (1788789987418846)` |
+| update-time-precondition-is-stale | 400 | FAILED_PRECONDITION | `the stored version (1789411817685701) does not match the required base version (1789411817682883)` |
 | update-time-precondition-on-a-missing-document | 400 | FAILED_PRECONDITION | `the stored version (0) does not match the required base version (1577836800000000)` |
 | delete-missing-is-ok | 200 | OK | commit(1 results) |
 | delete-missing-with-exists-true | 404 | NOT_FOUND | `no entity to update: app: "dev~demo-firestore-probe" path <   Element {     type: "wr"     name: "none"   } > ` |
@@ -196,13 +196,15 @@ own answer (marked below).
 | delete-document-again | 200 | OK | object() |
 | delete-with-exists-precondition | 404 | NOT_FOUND | `no entity to update: app: "dev~demo-firestore-probe" path <   Element {     type: "wr"     name: "created"   } > ` |
 
-## writes/transforms (18)
+## writes/transforms (20)
 
 | step | status | code | oracle |
 | --- | --- | --- | --- |
 | server-timestamp-and-increments | 200 | OK | commit(1 results) |
 | read-after-increments | 200 | OK | document |
-| maximum-and-minimum | 400 | INVALID_ARGUMENT | `Invalid property path "max-missing". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted prope` |
+| maximum-and-minimum-invalid-field-path | 400 | INVALID_ARGUMENT | `Invalid property path "max-missing". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted prope` |
+| read-after-invalid-max-min | 200 | OK | document |
+| maximum-and-minimum | 200 | OK | commit(1 results) |
 | read-after-max-min | 200 | OK | document |
 | array-transforms | 200 | OK | commit(1 results) |
 | read-after-array-transforms | 200 | OK | document |

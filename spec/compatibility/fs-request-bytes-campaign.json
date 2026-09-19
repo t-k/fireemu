@@ -1,0 +1,416 @@
+{
+  "accounting": {
+    "documentDeletes": 34,
+    "documentReads": 204,
+    "documentWrites": 34,
+    "httpRequests": 258,
+    "uploadedBytes": 31457280
+  },
+  "authorizesProductionExecution": false,
+  "boundSources": [
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_compiler.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_collector.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_campaign.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_local_transport.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_remote_transport.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_https_worker.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_process_exchange.py"
+  ],
+  "boundary": {
+    "acceptedBytes": [
+      10485759,
+      10485760
+    ],
+    "limit": 10485760,
+    "metric": "REST raw HTTP body UTF-8 bytes",
+    "metricStatus": "observation hypothesis",
+    "refusedBytes": [
+      10485761
+    ]
+  },
+  "budget": {
+    "budgetBasis": "maxima cover every probe being accepted; expectedWrites and expectedDeletes are the forecast under the expected outcome and bind nothing",
+    "expectedDeletes": 34,
+    "expectedWrites": 34,
+    "maxAccounts": 1,
+    "maxConcurrency": 1,
+    "maxDeletes": 51,
+    "maxDistinctResources": 51,
+    "maxDocuments": 51,
+    "maxDurationSeconds": 1100,
+    "maxHttpRequests": 258,
+    "maxInFlightRequests": 1,
+    "maxPeakLiveDocuments": 17,
+    "maxReads": 204,
+    "maxRequestBytes": 10485761,
+    "maxResponseBytes": 2097152,
+    "maxRuns": 1,
+    "maxWrites": 51,
+    "perRequestTimeoutSeconds": 60.0,
+    "recoveryWindow": {
+      "authority": "read-only unless the same run holds a conditional-creation proof and a matching version-bound ownership read",
+      "exitCondition": "typed NOT_FOUND for every one of the 51 owned resources",
+      "onExhaustion": "stop, leave the remaining resources recorded as unresolved, and escalate to the owner; never widen the scope or retry a Commit",
+      "reserveDeletes": 51,
+      "reserveReads": 102,
+      "reserveSeconds": 500,
+      "trigger": "any probe that reaches an observation failure, an uncertain Commit or an interrupted run"
+    },
+    "schedulingReservation": {
+      "basis": "Computed by calling shared_gate's own charging helpers on this campaign's schedule, so a Gate change that alters the charge fails this artifact's tests rather than the campaign's admission.",
+      "boundaryCommitSeconds": 60.0,
+      "chargedBy": "shared_gate",
+      "enforcement": "smallRequestSeconds is also the per-request timeout for a small read or delete, so a slot cannot outrun its own reservation; the boundary Commits keep the transport deadline, which the Gate's ceiling check requires them to reserve.",
+      "gateWallCapSeconds": 1200,
+      "intervalSeconds": 0.25,
+      "observationCommitSlots": 3,
+      "observationSeconds": 512.25,
+      "observationSmallSlots": 102,
+      "recoverySeconds": 497.25,
+      "recoverySlots": 153,
+      "smallRequestSeconds": 3.0,
+      "totalSeconds": 1009.5
+    },
+    "smallRequestTimeoutSeconds": 3.0
+  },
+  "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
+  "caseIds": [
+    "FS-LIMIT-API-REQUEST-BYTES-UNDER",
+    "FS-LIMIT-API-REQUEST-BYTES-EXACT",
+    "FS-LIMIT-API-REQUEST-BYTES-OVER"
+  ],
+  "cases": [
+    {
+      "cleanup": {
+        "absenceProofs": 17,
+        "authority": "a version-bound DELETE requires this run's conditional-creation proof and a matching ownership read; every other path is a zero-wire skip",
+        "ownershipRead": 17,
+        "versionBoundDeletes": 17
+      },
+      "family": "firestore",
+      "id": "FS-LIMIT-API-REQUEST-BYTES-UNDER",
+      "operation": "Commit",
+      "postState": {
+        "expected": "every owned resource present with its expected field digest and the version the Commit returned",
+        "proves": "the accepted request wrote exactly its own resource set",
+        "readbackCount": 17
+      },
+      "probe": "under",
+      "productionExpectation": "accepted",
+      "refusalShape": null,
+      "relationToLimit": -1,
+      "requestBytes": 10485759
+    },
+    {
+      "cleanup": {
+        "absenceProofs": 17,
+        "authority": "a version-bound DELETE requires this run's conditional-creation proof and a matching ownership read; every other path is a zero-wire skip",
+        "ownershipRead": 17,
+        "versionBoundDeletes": 17
+      },
+      "family": "firestore",
+      "id": "FS-LIMIT-API-REQUEST-BYTES-EXACT",
+      "operation": "Commit",
+      "postState": {
+        "expected": "every owned resource present with its expected field digest and the version the Commit returned",
+        "proves": "the accepted request wrote exactly its own resource set",
+        "readbackCount": 17
+      },
+      "probe": "exact",
+      "productionExpectation": "accepted",
+      "refusalShape": null,
+      "relationToLimit": 0,
+      "requestBytes": 10485760
+    },
+    {
+      "cleanup": {
+        "absenceProofs": 17,
+        "authority": "a version-bound DELETE requires this run's conditional-creation proof and a matching ownership read; every other path is a zero-wire skip",
+        "ownershipRead": 17,
+        "versionBoundDeletes": 0
+      },
+      "family": "firestore",
+      "id": "FS-LIMIT-API-REQUEST-BYTES-OVER",
+      "operation": "Commit",
+      "postState": {
+        "expected": "every owned resource absent",
+        "proves": "the refused request wrote nothing",
+        "readbackCount": 17
+      },
+      "probe": "over",
+      "productionExpectation": "refused",
+      "refusalShape": {
+        "metric": "REST raw HTTP body UTF-8 bytes",
+        "metricStatus": "observation hypothesis",
+        "notRefusal": [
+          "HTTP 200 with or without write results",
+          "a complete receipt whose raw bytes contradict the parsed body",
+          "an incomplete or timed-out receipt",
+          "a non-JSON body, including a front-end HTML 413 page",
+          "a connection reset with no response"
+        ],
+        "requires": [
+          "complete receipt",
+          "integer HTTP status",
+          "integer error code equal to the HTTP status",
+          "raw response bytes matching the parsed body"
+        ],
+        "typed": [
+          {
+            "classification": "expected",
+            "errorCode": 400,
+            "errorStatus": "INVALID_ARGUMENT",
+            "httpStatus": 400,
+            "note": "A typed Firestore error refusing the request before any document is evaluated."
+          },
+          {
+            "classification": "semantic-discrepancy",
+            "errorCode": 413,
+            "errorStatus": "INVALID_ARGUMENT",
+            "httpStatus": 413,
+            "note": "A typed refusal, but not the catalog-expected code; it requires owner adjudication before the catalog is amended."
+          }
+        ],
+        "untypedTransportRefusal": {
+          "classification": "untyped-transport-refusal",
+          "handling": "A non-JSON refusal, such as a front-end HTML 413 or a reset, is not Firestore's answer and is never upgraded to a typed row. The collector records it as its own outcome with the HTTP status, the content type and the response bytes verbatim, and keeps the refusal shape unproven.",
+          "isRefusalProof": false,
+          "ownerAction": "Adjudicate the recorded status, content type and bytes. The primary boundary question stays open and needs a second run once the intermediary is identified.",
+          "recoveryAuthority": "read-only; it grants no cleanup ownership, so every version-bound delete is a zero-wire skip",
+          "resultKey": "untypedOverRefusal",
+          "state": "commit-uncertain",
+          "stillProven": "The post-state readback and the recovery absence proofs still establish that the refused request wrote nothing."
+        }
+      },
+      "relationToLimit": 1,
+      "requestBytes": 10485761
+    }
+  ],
+  "catalogId": "FS-LIMIT-API-REQUEST-BYTES",
+  "catalogMaximum": 10485760,
+  "catalogSource": "spec/limits/firestore-standard-2026-08-25.json",
+  "claims": [
+    "REST-only",
+    "does not claim gRPC coverage",
+    "does not claim document, depth, transform, or operation-count limits"
+  ],
+  "condition": "FS-LIMIT-API-REQUEST-BYTES",
+  "cost": {
+    "basis": "Firestore Native published unit prices; a planning bound, not a billing record.",
+    "estimatedCostUsd": 0.00019,
+    "hardCostCeilingUsd": 0.5,
+    "maximumCostUsd": 0.000224,
+    "networkCostUsd": 0.0,
+    "networkNote": "About 30 MiB is uploaded across the three Commits and under 1 MiB is returned. Ingress is not billed and the returned volume is negligible, so the network component of this campaign is zero to the published precision.",
+    "unitPricesUsd": {
+      "documentDelete": 2e-07,
+      "documentRead": 6e-07,
+      "documentWrite": 1.8e-06
+    }
+  },
+  "excludedOperations": [
+    {
+      "operation": "BatchWrite",
+      "reason": "The reviewed compiler emits only the Commit endpoint and the collector's transport admits only `documents:commit`. A BatchWrite boundary needs its own compiler, transport admission and receipt shape."
+    },
+    {
+      "operation": "gRPC Commit",
+      "reason": "Protobuf message encoding is a different metric and needs a separate compiler and receipt."
+    }
+  ],
+  "formalCompatibilityClaim": false,
+  "localExpectation": {
+    "catalogNote": "The limits catalog records FS-LIMIT-API-REQUEST-BYTES as implemented, enforced before the request is parsed on the REST body, the WebChannel form body and a gRPC message, unary or streamed. The refusal shape is documented, production observation pending.",
+    "catalogState": "implemented",
+    "classification": "local-shape-matches-production-expectation",
+    "differenceFromProductionExpectation": "None in shape or boundary. The local runtime answers the same status, code and message this campaign expects of production. That expectation is documented rather than observed, so the agreement removes a known difference and does not confirm the production shape; only a production receipt can do that.",
+    "emulatorProfileRefusal": {
+      "grpc": {
+        "errorStatus": "OUT_OF_RANGE",
+        "message": "tonic's own wording, left unrewritten"
+      },
+      "note": "What the local runtime answered before the limits layer implemented this condition. The strict profile is what the campaign compares against.",
+      "profile": "emulator",
+      "rest": {
+        "errorCode": 413,
+        "errorStatus": "INVALID_ARGUMENT",
+        "httpStatus": 413,
+        "message": "request body too large"
+      }
+    },
+    "enforcementSource": "crates/fireemu-adapter-grpc/src/serve.rs, API_REQUEST_BYTES = 10 * 1024 * 1024, refused by api_request_too_large()",
+    "expectedCollectorFailures": [],
+    "expectedCompleted": true,
+    "expectedResourceAbsence": true,
+    "localEnforcement": "each transport's decode boundary, strict profile",
+    "note": "A local run in which the over probe is accepted means the bound was removed or raised; the shadow reports that as `local-boundary-not-enforced` rather than passing.",
+    "observedProbeOutcomes": {
+      "exact": "accepted",
+      "over": "refused",
+      "under": "accepted"
+    },
+    "observedRefusal": {
+      "classification": "expected",
+      "errorCode": 400,
+      "errorStatus": "INVALID_ARGUMENT",
+      "httpStatus": 400,
+      "message": "Request payload size exceeds the limit: 10485760 bytes."
+    },
+    "observedRefusalByTransport": {
+      "grpc": {
+        "errorCode": 3,
+        "errorStatus": "INVALID_ARGUMENT",
+        "httpStatus": null,
+        "message": "Request payload size exceeds the limit: 10485760 bytes.",
+        "note": "The gRPC code follows from google.rpc.Code, where INVALID_ARGUMENT maps to HTTP 400. This campaign compiles REST bodies only, so it does not observe this row.",
+        "observedBy": "the runtime's own tests, not this campaign",
+        "transport": "gRPC unary, Write stream and WebChannel"
+      },
+      "rest": {
+        "errorCode": 400,
+        "errorStatus": "INVALID_ARGUMENT",
+        "httpStatus": 400,
+        "message": "Request payload size exceeds the limit: 10485760 bytes.",
+        "observedBy": "this campaign's local shadow",
+        "transport": "REST Commit"
+      }
+    },
+    "supersededBaseline": "Until the limits layer landed, the local runtime refused with HTTP 413 `request body too large` from a transport body cap, which the shadow classified as `local-boundary-enforced-shape-differs`. That classification is retained as a regression outcome: a strict-profile build answering 413 has lost the implemented shape."
+  },
+  "maximumUsage": {
+    "basis": "every probe accepted, which is the outcome the campaign exists to detect",
+    "distinctResources": 51,
+    "documentDeletes": 51,
+    "documentReads": 204,
+    "documentWrites": 51,
+    "httpRequests": 258,
+    "peakLiveDocuments": 17,
+    "uploadedBytes": 31457280
+  },
+  "operations": [
+    "Commit"
+  ],
+  "owner": {
+    "database": "(default)",
+    "nonce": "a32e23a844ac11484405c005bb1a9e27",
+    "nonceDigest": "abf4d900c208cd3c2759b4a1b714cb640dbf1c5b365dd913faa4d6895301a96e",
+    "nonceHandling": "The nonce is a scope label, not a secret; it appears in every owned resource path and is published with this artifact. It is fresh for this campaign and must not be reused. A document that already exists under it is not owned by this run and stops the run at preflight.",
+    "project": "fireemu-35fe6",
+    "resourceCount": 51,
+    "scope": "projects/fireemu-35fe6/databases/(default)/documents/oracle/a32e23a844ac11484405c005bb1a9e27/request-bytes-01",
+    "scopes": [
+      "projects/fireemu-35fe6/databases/(default)/documents/oracle/a32e23a844ac11484405c005bb1a9e27/request-bytes-01/probe-u01",
+      "projects/fireemu-35fe6/databases/(default)/documents/oracle/a32e23a844ac11484405c005bb1a9e27/request-bytes-01/probe-e01",
+      "projects/fireemu-35fe6/databases/(default)/documents/oracle/a32e23a844ac11484405c005bb1a9e27/request-bytes-01/probe-o01"
+    ]
+  },
+  "ownerPreconditions": [
+    {
+      "id": "o7-admission",
+      "requirement": "An O7 admission decision that binds this campaign artifact digest, the frozen source and the credential holder.",
+      "verifiable": "the admission record names this campaign digest"
+    },
+    {
+      "id": "credential",
+      "requirement": "A bearer token for a principal that can write under the owned scope in fireemu-35fe6/(default) and nothing else it could damage.",
+      "verifiable": "the runner acquires the token through the shared Ledger; this module never holds one"
+    },
+    {
+      "id": "empty-owned-scope",
+      "requirement": "Every one of the 51 owned resources is absent before the run. A preexisting document with the same marker is not owned by this run.",
+      "verifiable": "all 51 preflight reads return typed NOT_FOUND; the run stops otherwise"
+    },
+    {
+      "id": "quiet-project",
+      "requirement": "No other campaign writes under the oracle scope for the duration of the run.",
+      "verifiable": "campaign scheduling record"
+    },
+    {
+      "id": "collector-untyped-refusal",
+      "requirement": "Accept that an untyped transport refusal leaves the run inconclusive on the refusal shape, or extend the collector first.",
+      "verifiable": "REFUSAL_EXPECTATION.untypedTransportRefusal is acknowledged in the admission record"
+    }
+  ],
+  "parent": "FS-DATA-WRITE",
+  "planBounds": {
+    "distinctDocumentCount": 51,
+    "maxInFlight": 1,
+    "observationRequests": 105,
+    "peakLiveDocumentCount": 17,
+    "probeCount": 3,
+    "recoveryRequests": 153,
+    "requestBytes": 10485761,
+    "responseByteCap": 2097152,
+    "totalRequestBound": 258
+  },
+  "planDigest": "78021991b1966c28cd60cee202b21b38d241bfebad0712c301528c1c95bc2ca6",
+  "productionExecuted": false,
+  "protocol": "REST",
+  "refusalExpectation": {
+    "metric": "REST raw HTTP body UTF-8 bytes",
+    "metricStatus": "observation hypothesis",
+    "notRefusal": [
+      "HTTP 200 with or without write results",
+      "a complete receipt whose raw bytes contradict the parsed body",
+      "an incomplete or timed-out receipt",
+      "a non-JSON body, including a front-end HTML 413 page",
+      "a connection reset with no response"
+    ],
+    "requires": [
+      "complete receipt",
+      "integer HTTP status",
+      "integer error code equal to the HTTP status",
+      "raw response bytes matching the parsed body"
+    ],
+    "typed": [
+      {
+        "classification": "expected",
+        "errorCode": 400,
+        "errorStatus": "INVALID_ARGUMENT",
+        "httpStatus": 400,
+        "note": "A typed Firestore error refusing the request before any document is evaluated."
+      },
+      {
+        "classification": "semantic-discrepancy",
+        "errorCode": 413,
+        "errorStatus": "INVALID_ARGUMENT",
+        "httpStatus": 413,
+        "note": "A typed refusal, but not the catalog-expected code; it requires owner adjudication before the catalog is amended."
+      }
+    ],
+    "untypedTransportRefusal": {
+      "classification": "untyped-transport-refusal",
+      "handling": "A non-JSON refusal, such as a front-end HTML 413 or a reset, is not Firestore's answer and is never upgraded to a typed row. The collector records it as its own outcome with the HTTP status, the content type and the response bytes verbatim, and keeps the refusal shape unproven.",
+      "isRefusalProof": false,
+      "ownerAction": "Adjudicate the recorded status, content type and bytes. The primary boundary question stays open and needs a second run once the intermediary is identified.",
+      "recoveryAuthority": "read-only; it grants no cleanup ownership, so every version-bound delete is a zero-wire skip",
+      "resultKey": "untypedOverRefusal",
+      "state": "commit-uncertain",
+      "stillProven": "The post-state readback and the recovery absence proofs still establish that the refused request wrote nothing."
+    }
+  },
+  "schema": "fs-request-bytes-campaign-v1",
+  "transportDeadline": {
+    "consequenceIfMissed": "The receipt is incomplete, the Commit is uncertain, and the run holds no conditional-creation proof. The version-bound delete is then a zero-wire skip by design, so cleanup detects the residue as `cleanup-not-absent` but cannot remove it: up to 17 documents stay in the project pending manual owner action.",
+    "covers": "connection setup, TLS, the request upload, server processing and the bounded response read",
+    "derivation": {
+      "assumedSustainedBitsPerSecond": 5000000,
+      "connectionSetupSeconds": 1.5,
+      "derivedRequirementSeconds": 26.8,
+      "marginNote": "The published ceiling is that requirement with roughly a 2x margin.",
+      "responseReadSeconds": 0.5,
+      "serverProcessingSeconds": 8.0,
+      "uploadBits": 83886088,
+      "uploadSeconds": 16.8
+    },
+    "detection": "Detected, never silent. The absence proofs are only recorded on a typed NOT_FOUND, so an unremovable residue fails the run rather than passing it.",
+    "enforcedBy": [
+      "request_bytes_remote_transport.TIMEOUT, rejecting any larger timeout argument",
+      "request_bytes_https_worker, re-checking the same ceiling independently"
+    ],
+    "nonUploadReserveSeconds": 10.0,
+    "ownerAction": "Run from a link that sustains the rate above. If a probe times out, the owner removes the residue under the recorded owned scope; the campaign never retries a Commit to compensate.",
+    "perRequestSeconds": 60.0,
+    "slowestUsableUpstreamBitsPerSecond": 1677722
+  }
+}

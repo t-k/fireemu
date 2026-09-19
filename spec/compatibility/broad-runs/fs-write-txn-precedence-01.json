@@ -1,0 +1,387 @@
+{
+  "kind": "firestore-write-transaction-oracle-preparation-v1",
+  "campaignId": "FS-WRITE-TXN-PRECEDENCE-01",
+  "status": "BLOCKED_OWNER",
+  "technicalStatus": "BLOCKED_TECHNICAL",
+  "productionExecuted": false,
+  "parentFeatureGroups": [
+    "FS-DATA-WRITE",
+    "FS-TRANSACTION"
+  ],
+  "requirementSurfaces": [
+    "FS-WRITE",
+    "FS-COMMIT",
+    "FS-TRANSACTION",
+    "FS-LIMIT-DOCUMENT-BYTES",
+    "FS-LIMIT-NESTING"
+  ],
+  "safetyClass": "OWNED_DATA",
+  "executionMode": {
+    "exclusive": true,
+    "parallelCampaigns": false,
+    "reason": "The transaction lock and the Write stream target a shared owned document; limit controls use the same owned namespace and must not overlap another campaign."
+  },
+  "target": {
+    "projectId": "fireemu-35fe6",
+    "projectNumber": "592603257417",
+    "quotaProject": "fireemu-35fe6",
+    "database": "(default)",
+    "edition": "STANDARD",
+    "apiMode": "NATIVE",
+    "concurrencyMode": "PESSIMISTIC",
+    "tenant": null,
+    "location": null
+  },
+  "configuration": {
+    "requiredReadback": [
+      "database name",
+      "database edition",
+      "database type",
+      "location",
+      "concurrency mode"
+    ],
+    "requiredValues": {
+      "edition": "STANDARD",
+      "apiMode": "NATIVE",
+      "concurrencyMode": "PESSIMISTIC"
+    },
+    "writes": 0,
+    "restoration": "No configuration mutation is permitted. A configuration mismatch stops the campaign before owned data setup."
+  },
+  "sourceBinding": {
+    "featureHead": "d813c811945e262296b16fce7609f4d0a8698909",
+    "artifactSha256": "87b2c574667104ee284a4d4e801c06606b93667cfd73a9101cb6123e30459059",
+    "artifactKind": "fireemu-release-compatible-local-binary",
+    "runtimeSourcePaths": [
+      "crates/fireemu-adapter-grpc/tests/streams.rs",
+      "crates/fireemu-adapter-grpc/tests/rest.rs",
+      "crates/fireemu-adapter-grpc/tests/local.rs",
+      "spec/limits/firestore-standard-2026-08-25.json"
+    ],
+    "runtimeSourceDigests": {
+      "crates/fireemu-adapter-grpc/tests/streams.rs": "2f780912acb48ae680c12ca2002f74b9fa54f1e871e4053aed4bab06381541bc",
+      "crates/fireemu-adapter-grpc/tests/rest.rs": "bbe99465fc6dd776f303d20c75d9fb8d14403f3c48068ed17f10745a42b68730",
+      "crates/fireemu-adapter-grpc/tests/local.rs": "821b82abab52cd3b1ab5ed2fe51d1d380e518d9946d04298a80f2c078823c493",
+      "spec/limits/firestore-standard-2026-08-25.json": "2c29e7492fd581e236ce9f044294bf59e9a6b89f2c4dc3c48d9f74beb291d406"
+    }
+  },
+  "collectorBinding": {
+    "status": "frozen-local-only",
+    "existingSharedGate": {
+      "path": "tools/compat-broad/shared_gate.py",
+      "sha256": "f4724b420f1a2da2db0fec200478f8b78aeaa394b1c1e4194533047fa74c91ea"
+    },
+    "existingRestAdapter": {
+      "path": "tools/compat-broad/batch_adapter.py",
+      "sha256": "5f42ec0ad88d350aff0925a435049cdb05a67f97bc1825888ccfe0c2ebff0d36",
+      "scope": "REST document-size and transform cases only"
+    },
+    "writeStreamHarness": {
+      "path": "crates/fireemu-adapter-grpc/tests/streams.rs",
+      "sha256": "2f780912acb48ae680c12ca2002f74b9fa54f1e871e4053aed4bab06381541bc",
+      "scope": "local gRPC regression and local shadow only"
+    },
+    "productionCollector": null,
+    "technicalBlocker": "The existing batch adapter is REST-only and the checked-in Write stream harness is a Rust local test. No production gRPC collector is bound; production execution is prohibited until an owner-approved collector contract exists."
+  },
+  "comparatorBinding": {
+    "status": "frozen-contract-preparation-only",
+    "path": "tools/compat-broad/shared_production_pair.py",
+    "sha256": "69f668abe7550b1b73edde44e8d7e7892d08f428a3912152b8b2ad638841385a",
+    "contract": "typed ordered status/error/body and post-state comparison; stream event sequence and transaction token binding must be added as a versioned contract before production admission",
+    "productionComparator": null,
+    "technicalBlocker": "The current shared comparator does not compare bidirectional Write stream events or transaction token lifecycle; it cannot be used to claim a stream comparison."
+  },
+  "cases": [
+    {
+      "id": "FS-WRITE-TXN-PRECEDENCE-01/stream-transaction-contention",
+      "parentFeatureGroups": [
+        "FS-DATA-WRITE",
+        "FS-TRANSACTION"
+      ],
+      "requirementSurface": "FS-WRITE plus transaction lock ownership and atomic write refusal",
+      "semantics": "A write stream request that targets a document read by an active read-write transaction is refused with the production result classification, publishes no write from the request, and permits a fresh stream write after rollback. The uncontended control must succeed.",
+      "productionOperationSequence": [
+        "GET owned guard and tail documents to establish absence",
+        "Commit one seed guard document in the owned namespace",
+        "Begin a read-write transaction",
+        "Read the guard document in that transaction and retain the transaction token",
+        "Open a bidirectional Write stream and complete the database handshake",
+        "Send one stream request containing an update to the locked guard and a second owned tail write",
+        "Fully receive the stream result and classify the refusal without assuming an error code",
+        "Read guard and tail to prove no mutation from the refused request",
+        "Rollback the transaction and verify completion",
+        "Open a fresh Write stream, handshake, and write the guard document",
+        "Read the guard to verify the post-rollback write"
+      ],
+      "requiredConfiguration": [
+        "Standard edition",
+        "Native API mode",
+        "PESSIMISTIC concurrency mode",
+        "no Rules or index mutation",
+        "no shared setting mutation"
+      ],
+      "principalTenantDatabase": {
+        "principal": "owner-authorized Firestore data-plane principal",
+        "projectId": "fireemu-35fe6",
+        "database": "(default)",
+        "tenant": null
+      },
+      "ownedResources": [
+        "projects/fireemu-35fe6/databases/(default)/documents/fs_write_txn/{freshNonce}/precedence/guard",
+        "projects/fireemu-35fe6/databases/(default)/documents/fs_write_txn/{freshNonce}/precedence/contended-tail"
+      ],
+      "preflight": [
+        "Read each owned document and require typed NOT_FOUND or the campaign stops",
+        "Read and bind database identity, edition, type, location and concurrency mode",
+        "Confirm the nonce is fresh and absent from all current campaign paths",
+        "Reserve one exclusive gate slot and the full recovery budget"
+      ],
+      "setup": [
+        "Create only guard with an owned marker using Commit",
+        "Read back name, fields and updateTime",
+        "Do not create tail before the contended request"
+      ],
+      "observation": [
+        "Begin read-write transaction",
+        "Read guard under transaction to establish lock ownership",
+        "Open Write stream and handshake",
+        "Submit guard update plus contended-tail create in one stream request",
+        "Receive all stream events until terminal refusal",
+        "Read both documents after refusal",
+        "Rollback transaction",
+        "Open a fresh stream and write guard after rollback",
+        "Read guard after successful recovery"
+      ],
+      "postStateReadback": [
+        "guard retains the setup marker after refusal",
+        "contended-tail is absent after refusal",
+        "guard contains the after-rollback value after fresh stream success",
+        "transaction is no longer usable after rollback",
+        "all stream response events are consumed before classification"
+      ],
+      "cleanup": [
+        "Read guard and bind its updateTime",
+        "Conditionally delete guard with that exact updateTime",
+        "Read guard and require typed NOT_FOUND",
+        "Read contended-tail and require typed NOT_FOUND",
+        "Record any uncertain resource and do not issue an unconditional delete"
+      ],
+      "comparator": "Versioned typed stream/transaction contract: ordered handshake, refusal, terminal status, write-result cardinality, post-state and cleanup outcome; no token or timestamp byte equality",
+      "localPreRunControl": [
+        "cargo nextest run --locked -p fireemu-adapter-grpc --test streams --profile pr",
+        "write_stream_refuses_active_transaction_contention_without_mutation",
+        "write_stream_handshake_then_sequential_commits"
+      ],
+      "estimate": {
+        "observationRequests": 14,
+        "recoveryRequests": 6,
+        "maxRequestsIncludingGate": 22,
+        "maxOwnedDocuments": 2,
+        "maxResponseBytes": 262144,
+        "maxWallSeconds": 180,
+        "recoveryReserveSeconds": 90,
+        "planningCostUsd": 0.02,
+        "costCapUsd": 1.0,
+        "tariffsConfirmed": false
+      },
+      "configurationRestorationRule": "No configuration changes. If a preflight or postflight configuration digest changes, stop and leave the data journal for the named recovery owner.",
+      "productionOnlyReason": "The local gRPC test establishes fireemu behavior only. Production transaction lock ownership, Write stream refusal precedence, stream terminal framing and error classification require a live Firestore observation under the same Standard Native concurrency mode."
+    },
+    {
+      "id": "FS-WRITE-TXN-PRECEDENCE-01/document-limit-boundaries",
+      "parentFeatureGroups": [
+        "FS-DATA-WRITE"
+      ],
+      "requirementSurface": "FS-LIMIT-DOCUMENT-BYTES and FS-LIMIT-NESTING",
+      "semantics": "A document at the accepted boundary is stored, while an immediately over-boundary document is refused atomically and leaves no partial document. Nested values are checked with the same post-state contract.",
+      "productionOperationSequence": [
+        "GET the exact-boundary and over-boundary document names to establish absence",
+        "PATCH the exact-boundary document with a generated boundary payload",
+        "GET the exact-boundary document and verify typed fields",
+        "PATCH the over-boundary document with a minimally larger payload",
+        "Record the structured refusal and do not retry",
+        "GET the over-boundary document and require typed NOT_FOUND",
+        "PATCH a nested boundary control with valid individually sized fields",
+        "GET the nested control and verify its fields",
+        "PATCH a nested over-boundary document",
+        "GET the nested over-boundary document and require typed NOT_FOUND"
+      ],
+      "requiredConfiguration": [
+        "Standard edition",
+        "Native API mode",
+        "production-oriented limit enforcement",
+        "no Rules or index mutation"
+      ],
+      "principalTenantDatabase": {
+        "principal": "owner-authorized Firestore data-plane principal",
+        "projectId": "fireemu-35fe6",
+        "database": "(default)",
+        "tenant": null
+      },
+      "ownedResources": [
+        "projects/fireemu-35fe6/databases/(default)/documents/fs_write_txn/{freshNonce}/limits/exact",
+        "projects/fireemu-35fe6/databases/(default)/documents/fs_write_txn/{freshNonce}/limits/over",
+        "projects/fireemu-35fe6/databases/(default)/documents/fs_write_txn/{freshNonce}/limits/nested-exact",
+        "projects/fireemu-35fe6/databases/(default)/documents/fs_write_txn/{freshNonce}/limits/nested-over"
+      ],
+      "preflight": [
+        "Require all four generated names to be absent",
+        "Bind the document-limit contract revision and generated payload digest",
+        "Confirm that the request and response byte reservation covers the generated payload"
+      ],
+      "setup": [
+        "Generate boundary payloads from the pinned local limit constants",
+        "Use one request per document so refusal scope and post-state are distinguishable"
+      ],
+      "observation": [
+        "Create exact boundary",
+        "Read exact boundary",
+        "Attempt over boundary",
+        "Read over-boundary absence",
+        "Create nested exact control",
+        "Read nested exact control",
+        "Attempt nested over boundary",
+        "Read nested over-boundary absence"
+      ],
+      "postStateReadback": [
+        "exact and nested-exact documents are present with typed payload digests",
+        "over and nested-over documents are absent",
+        "no prior owned document changed"
+      ],
+      "cleanup": [
+        "Read each present document and bind updateTime",
+        "Conditionally delete only matching owned versions",
+        "Read every target and require typed NOT_FOUND",
+        "Retain any uncertain target for manual recovery"
+      ],
+      "comparator": "Existing typed REST comparison contract with exact status/code, field presence/types, generated payload digest and absence readbacks",
+      "localPreRunControl": [
+        "cargo nextest run --locked -p fireemu-adapter-grpc --test rest --profile pr",
+        "rest_document_size_and_nesting_boundaries_refuse_without_publishing",
+        "rest_oversized_nested_values_report_canonical_paths_without_publishing"
+      ],
+      "estimate": {
+        "observationRequests": 8,
+        "recoveryRequests": 12,
+        "maxRequestsIncludingGate": 22,
+        "maxOwnedDocuments": 4,
+        "maxResponseBytes": 2097152,
+        "maxWallSeconds": 180,
+        "recoveryReserveSeconds": 90,
+        "planningCostUsd": 0.10,
+        "costCapUsd": 1.0,
+        "tariffsConfirmed": false
+      },
+      "configurationRestorationRule": "No configuration changes. The generated payload and limit-contract digest are immutable campaign inputs.",
+      "productionOnlyReason": "The local limit tests do not establish the managed Firestore limit boundary or error classification for the configured Standard Native database. The exact boundary must be compared to a complete production receipt."
+    }
+  ],
+  "budgets": {
+    "observationRequests": 22,
+    "recoveryRequests": 18,
+    "coordinatorRequests": 2,
+    "maxRequests": 42,
+    "maxOwnedDocuments": 6,
+    "maxInFlightRequests": 1,
+    "maxRequestsPerSecond": 2,
+    "maxWallSeconds": 300,
+    "recoveryReserveSeconds": 120,
+    "maxCostUsd": 1.0,
+    "planningCostUsd": 0.12,
+    "automaticRetries": 0,
+    "reobservations": 0,
+    "maxResponseBytesPerOperation": 2097152,
+    "maxResponseBytesRetained": 8388608
+  },
+  "recovery": {
+    "owner": null,
+    "deadlineHours": 24,
+    "journal": "private append-only ownership journal; record attempts before dispatch",
+    "deleteRule": "Only delete a document after a typed readback, ownership marker check and exact updateTime conditional delete; otherwise record unrecovered and stop.",
+    "configurationRule": "There is no configuration mutation. A preflight/postflight mismatch stops cleanup decisions that depend on the mismatched baseline.",
+    "processRule": "The local shadow must stop all owned Firestore processes and release the shared gate before completion; production runner must prove transport quiescence before recovery.",
+    "uncertainResourceRule": "Never enumerate or delete outside the nonce namespace; retain the journal for the named recovery owner."
+  },
+  "gate": {
+    "status": "BLOCKED_OWNER",
+    "owner": null,
+    "permissionReference": null,
+    "executionWindow": {
+      "startsAt": null,
+      "endsAt": null
+    },
+    "productionNonce": null,
+    "acceptedConfigurationDigest": null,
+    "recoveryOwner": null,
+    "requiredInputs": [
+      "owner identity",
+      "explicit permission reference covering both cases and one exclusive campaign",
+      "project/database/edition/concurrency configuration acceptance",
+      "fresh 32-hex nonce",
+      "execution window",
+      "current tariff and cost acceptance",
+      "named recovery owner and reserve",
+      "production gRPC Write stream collector and comparator contract",
+      "collector and artifact runtime binding"
+    ],
+    "stopConditions": [
+      "configuration drift",
+      "ownership marker mismatch",
+      "transport interruption or incomplete stream",
+      "request/resource/time/cost reservation exhaustion",
+      "unclassified response",
+      "cleanup or restoration failure"
+    ],
+    "productionAuthorization": false
+  },
+  "localShadow": {
+    "status": "prepared-local-only",
+    "productionExecuted": false,
+    "runner": "existing shared gate plus current Rust/REST test harnesses",
+    "commands": [
+      "cargo nextest run --locked -p fireemu-adapter-grpc --test streams --profile pr",
+      "cargo nextest run --locked -p fireemu-adapter-grpc --test rest --profile pr",
+      "cargo nextest run --locked -p fireemu-adapter-grpc --test local --profile pr"
+    ],
+    "expectedEvidence": [
+      "stream refusal has no mutation",
+      "rollback releases the lock",
+      "fresh stream write succeeds",
+      "exact and nested document-limit controls preserve state",
+      "all failures are fully classified and process cleanup is proved"
+    ],
+    "evidenceBoundary": "local invariant and official-emulator-independent runtime evidence only; no production comparison"
+  },
+  "queue": {
+    "CURRENT": {
+      "campaignId": "FS-WRITE-TXN-PRECEDENCE-01",
+      "focus": "Write stream versus active transaction precedence plus owned document-limit controls",
+      "state": "BLOCKED_OWNER",
+      "nextAction": "Finish collector/comparator binding and submit the complete envelope to O7; continue local shadow and failure rehearsal while owner inputs are absent."
+    },
+    "NEXT": {
+      "campaignId": "FS-DATA-WRITE-LIMITS-02",
+      "focus": "Representative Commit operation-count and field-transform boundaries using the existing REST adapter",
+      "state": "PREPARATION",
+      "dependency": "Reuse current limit catalog and shared gate; do not add a production case until duplicate coverage and current artifact are checked."
+    },
+    "BACKLOG": [
+      {
+        "campaignId": "FS-TRANSACTION-SDK-RETRY-01",
+        "focus": "SDK retryTransaction and conflict recovery",
+        "reason": "Requires fixed SDK version and a separate SDK collector; current parent closure does not need it before stream precedence and representative write limits."
+      },
+      {
+        "campaignId": "FS-DATA-WRITE-LIMITS-03",
+        "focus": "Index-entry and total request-size boundaries",
+        "reason": "High request/response and cost envelope; defer until the smaller document and transform cases are compared."
+      },
+      {
+        "campaignId": "FS-TRANSACTION-RETENTION-01",
+        "focus": "Read-time retention and long-running transaction expiry",
+        "reason": "Requires a separate time-budget campaign and must not be mixed with the exclusive stream lock case."
+      }
+    ]
+  }
+}

@@ -13,22 +13,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Bundle committed source only
-        shell: bash
+      - name: Download pinned validation wheels only
         run: |
-          set -euo pipefail
-          git bundle create "$RUNNER_TEMP/fireemu-offline-source.bundle" HEAD
-          git rev-parse HEAD > "$RUNNER_TEMP/fireemu-offline-source.sha"
-          sha256sum "$RUNNER_TEMP/fireemu-offline-source.bundle"
+          set -eu
+          python -m pip download --no-deps --only-binary=:all: --dest "$RUNNER_TEMP/wheels" ruff==0.12.12 pytest-timeout==2.4.0
+          cd "$RUNNER_TEMP/wheels"
+          sha256sum *.whl > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: fireemu-offline-source
-          path: |
-            ${{ runner.temp }}/fireemu-offline-source.bundle
-            ${{ runner.temp }}/fireemu-offline-source.sha
+          name: fireemu-offline-tools
+          path: ${{ runner.temp }}/wheels
           retention-days: 1
           if-no-files-found: error

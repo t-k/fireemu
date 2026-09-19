@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from compiler import compile_limits_plan
-from remote_transport import prepare, request
+from remote_transport import _request, prepare, request
 
 NONCE = "a" * 32
 TOKEN = "synthetic-test-token"
@@ -122,3 +122,5 @@ def test_direct_worker_revalidates_and_never_prints_input_secrets():
 def test_direct_production_request_requires_private_admission():
     with pytest.raises(TypeError, match="bridge-only"):
         request(payload())
+    with pytest.raises(TypeError, match="active production bridge session"):
+        _request(payload())

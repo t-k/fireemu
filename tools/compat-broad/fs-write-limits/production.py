@@ -504,19 +504,25 @@ def execute(permission, local_directory, artifact, output, api_key):
     try:
         coordinator.acquire()
         coordinator.preflight()
-        collection = collect(
-            gate,
-            compiled,
-            output / "collection",
-            bind_reserved_wire(
-                coordinator,
-                plan,
-                artifact=artifact,
-                artifact_sha256=local["artifactSha256"],
-                production=True,
-            ),
-            before_recovery=coordinator.recover_credentials,
+        wire = bind_reserved_wire(
+            coordinator,
+            plan,
+            artifact=artifact,
+            artifact_sha256=local["artifactSha256"],
+            production=True,
         )
+        try:
+            collection = collect(
+                gate,
+                compiled,
+                output / "collection",
+                wire,
+                before_recovery=coordinator.recover_credentials,
+            )
+        finally:
+            close = getattr(wire, "close", None)
+            if close is not None:
+                close()
     except Exception as error:  # noqa: BLE001 -- Keep failed acquisition evidence without credential-bearing messages.
         failure = type(error).__name__
     finally:

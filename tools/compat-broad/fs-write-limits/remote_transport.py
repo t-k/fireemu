@@ -26,6 +26,19 @@ PROJECT = "fireemu-35fe6"
 ORIGIN = "https://firestore.googleapis.com"
 TIMEOUT = 12
 INPUT_CAP = 4 * 1024 * 1024
+_ACTIVE_BRIDGE_SESSIONS = {}
+
+
+def _install_bridge_session(session_id, validator):
+    if not isinstance(session_id, str) or not re.fullmatch(r"[a-f0-9]{64}", session_id):
+        raise ValueError("invalid bridge session")
+    if not callable(validator) or session_id in _ACTIVE_BRIDGE_SESSIONS:
+        raise ValueError("invalid bridge session")
+    _ACTIVE_BRIDGE_SESSIONS[session_id] = validator
+
+
+def _revoke_bridge_session(session_id):
+    _ACTIVE_BRIDGE_SESSIONS.pop(session_id, None)
 
 
 def _json(value):
@@ -111,11 +124,15 @@ def request(value):
     raise TypeError("production transport is bridge-only")
 
 
-def _request(value):
+def _request(value, *, _session_id=None):
     """Private fixed-target worker used only by the closed production bridge.
 
     Secrets travel on stdin, never argv or the environment.
     """
+    validator = _ACTIVE_BRIDGE_SESSIONS.get(_session_id)
+    if validator is None:
+        raise TypeError("active production bridge session required")
+    validator(value)
     prepare(value)
     encoded = _json(value)
     if len(encoded.encode()) > INPUT_CAP:

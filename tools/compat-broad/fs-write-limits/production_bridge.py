@@ -14,11 +14,17 @@ from pathlib import Path
 
 import json
 import math
+import secrets
 import time
 import threading
 
 from production_plan import production_plan
-from remote_transport import _request, prepare
+from remote_transport import (
+    _install_bridge_session,
+    _request,
+    _revoke_bridge_session,
+    prepare,
+)
 from shadow import source_inputs
 
 from batch_adapter import observer_digest
@@ -142,9 +148,12 @@ def bind_wire(
         raise ValueError("closed limits execution plan required")
     bound_gate = coordinator.gate
     key_digest = coordinator.key_digest
+    session_id = secrets.token_hex(32) if production else None
+
     def send_value(value):
         if production:
-            return _request(value)
+            assert session_id is not None
+            return _request(value, _session_id=session_id)
         return transmit(value)
 
     def validate(recovery):
@@ -169,6 +178,22 @@ def bind_wire(
             raise ValueError("limits production binding or credential changed")
 
     validate(False)
+
+    if production:
+        def validate_session(value):
+            if not isinstance(value, dict) or value.get("phase") not in (
+                "observation",
+                "recovery",
+            ):
+                raise ValueError("invalid production bridge request")
+            validate(value["phase"] == "recovery")
+            with artifact.open("rb") as stream:
+                current_artifact = hashlib.file_digest(stream, "sha256").hexdigest()
+            if current_artifact != artifact_sha256:
+                raise ValueError("production artifact binding changed")
+
+        assert session_id is not None
+        _install_bridge_session(session_id, validate_session)
 
     def wire(operation, recovery, index, request_index):
         # Gate has already waited and charged the attempt. Reject drift before I/O.
@@ -210,6 +235,12 @@ def bind_wire(
             return {**result, "failure": "UnexpectedServiceResponse"}
         return result
 
+    if production:
+        def close_session():
+            assert session_id is not None
+            _revoke_bridge_session(session_id)
+
+        wire.close = close_session
     return wire
 
 
@@ -302,5 +333,8 @@ def bind_reserved_wire(
     def reserved(operation, recovery, index, request_index):
         coordinator.validate_reservation()
         return wire(operation, recovery, index, request_index)
+
+    if hasattr(wire, "close"):
+        reserved.close = wire.close
 
     return reserved

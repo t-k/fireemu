@@ -29,6 +29,7 @@ from shared_gate import (
     abandoned_cleanup_complete,
     non_creating_dispatches,
     typed_absence,
+    unconfirmed_creates,
     validate_absence_proofs,
 )
 
@@ -697,8 +698,9 @@ class Ledger:
                 or any(
                     j["complete"] is not True
                     or j["inflight"]
+                    or unconfirmed_creates(gate, job_name)
                     or set(j["absent"]) != set(j["resources"])
-                    for j in gate["jobs"].values()
+                    for job_name, j in gate["jobs"].items()
                 )
                 or gate["total"] > claim["budget"]["requests"]
                 or gate["costMicrousd"] > claim["budget"]["costMicrousd"]

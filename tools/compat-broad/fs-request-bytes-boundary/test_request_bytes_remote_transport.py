@@ -37,8 +37,16 @@ WIRE_SMOKE_BUDGET_SECONDS = 30.0
 
 def request(*args, exchange=None, **kwargs):
     if exchange is None:
-        return production_request(*args, **kwargs)
+        if "capability" in kwargs:
+            return production_request(*args, **kwargs)
+        return _request_impl(*args, **kwargs)
     return _request_impl(*args, exchange=exchange, **kwargs)
+
+
+def test_public_production_request_requires_o7_capability():
+    plan, operation = plan_and_commit()
+    with pytest.raises(ValueError, match="active O7 production capability"):
+        production_request(plan, "observation", 17, operation, "token")
 
 
 class FakeResponse:

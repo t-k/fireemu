@@ -36,9 +36,9 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 sys.path.insert(0, str(HERE))
 
 import request_bytes_remote_transport
-from o8_admission import authorize_transport
 from batch_contract import NUMBER, PROJECT
 from broad_contract import digest
+from o8_admission import authorize_transport
 from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
 from request_bytes_campaign import campaign_digest, compile_request_bytes_campaign
 from request_bytes_collector import collect_local
@@ -647,6 +647,9 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
         value["operation"],
         value["token"],
         timeout=transport_deadline_seconds(),
+        capability=capability,
+        binding=binding,
+        binding_digest=binding_digest,
     )
 
 

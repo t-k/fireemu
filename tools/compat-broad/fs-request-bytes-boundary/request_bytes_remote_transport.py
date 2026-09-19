@@ -15,6 +15,7 @@ import http.client
 import json
 import math
 import re
+import sys
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -22,6 +23,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
 
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "o8-core"))
+
+from o8_admission import authorize_transport
 from request_bytes_compiler import validate_request_bytes_plan
 from request_bytes_process_exchange import _run_process_exchange
 
@@ -427,8 +432,18 @@ def request(
     token: str,
     *,
     timeout: float = TIMEOUT,
+    capability=None,
+    binding=None,
+    binding_digest=None,
 ) -> dict[str, Any]:
     """Send one fixed-origin operation using the production HTTPS exchange."""
+    if capability is None:
+        raise ValueError("active O7 production capability required")
+    authorize_transport(
+        capability,
+        binding=binding,
+        binding_digest=binding_digest,
+    )
     return _request_impl(
         plan, phase, index, operation, token, timeout=timeout, exchange=None
     )

@@ -1425,6 +1425,7 @@ class Gate:
                 state.get("noDataAbort") is not None
                 or job["pid"] != os.getpid()
                 or job["inflight"]
+                or unconfirmed_creates(state, self.job)
                 or job["recovery"] != len(state["plan"]["jobs"][self.job]["recovery"])
                 or set(job["absent"]) != set(job["resources"])
             ):

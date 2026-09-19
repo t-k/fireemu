@@ -1510,6 +1510,24 @@ def test_a_commit_whose_answer_was_lost_leaves_its_delete_unskippable(tmp_path):
     assert gate.snapshot().get("skips", []) == []
 
 
+def test_a_lost_create_answer_blocks_normal_finish(tmp_path):
+    """A typed absence read does not settle an uncertain create outcome."""
+    value, _resources = scheduled_commit_plan()
+    path = tmp_path / "gate"
+    create(path, value)
+    gate = Gate(path, "probe")
+    gate.claim()
+
+    with pytest.raises(TimeoutError):
+        gate.dispatch(
+            value["jobs"]["probe"]["observation"][0],
+            False,
+            lambda: (_ for _ in ()).throw(TimeoutError("transport deadline")),
+        )
+    with pytest.raises(ValueError, match="cleanup incomplete"):
+        gate.finish()
+
+
 def test_a_nonce_bound_marker_requires_nonce_scoped_resources(tmp_path):
     """The binding is only adequate because the path scopes it, so check the path."""
     value, _resources = commit_plan(marker="nonce")

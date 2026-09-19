@@ -25,7 +25,28 @@ PROJECT = "fireemu-35fe6"
 ORIGIN = "https://firestore.googleapis.com"
 TIMEOUT = 12
 INPUT_CAP = 4 * 1024 * 1024
-_ACTIVE_BRIDGE_SESSIONS = {}
+class _BridgeSession:
+    __slots__ = ("_active", "_validator")
+
+    def __init__(self, validator):
+        if not callable(validator):
+            raise TypeError("bridge validator required")
+        self._validator = validator
+        self._active = True
+
+    def request(self, value):
+        if not self._active:
+            raise TypeError("inactive production bridge session")
+        self._validator(value)
+        prepared = prepare(value)
+        return _exchange(**prepared, timeout=TIMEOUT)
+
+    def close(self):
+        self._active = False
+
+
+def _open_bridge_session(validator):
+    return _BridgeSession(validator)
 
 
 def _json(value):
@@ -116,20 +137,7 @@ def _request(value, *, _session_id=None):
 
     Secrets travel on stdin, never argv or the environment.
     """
-    validator = _ACTIVE_BRIDGE_SESSIONS.get(_session_id)
-    if validator is None:
-        raise TypeError("active production bridge session required")
-    validator(value)
-    prepare(value)
-    encoded = _json(value)
-    if len(encoded.encode()) > INPUT_CAP:
-        raise ValueError("wire input limit")
-    # Network I/O stays in this already-admitted bridge process. A separately
-    # launchable worker cannot prove the parent gate's capability and is
-    # therefore intentionally not part of the production path.
-    del encoded
-    prepared = prepare(value)
-    return _exchange(**prepared, timeout=TIMEOUT)
+    raise TypeError("active production bridge session required")
 
 
 def main():

@@ -14,13 +14,12 @@ from pathlib import Path
 
 import json
 import math
-import secrets
 import time
 import threading
 
 from production_plan import production_plan
 from remote_transport import (
-    _ACTIVE_BRIDGE_SESSIONS,
+    _open_bridge_session,
     _request,
     prepare,
 )
@@ -147,12 +146,12 @@ def bind_wire(
         raise ValueError("closed limits execution plan required")
     bound_gate = coordinator.gate
     key_digest = coordinator.key_digest
-    session_id = secrets.token_hex(32) if production else None
+    session = None
 
     def send_value(value):
         if production:
-            assert session_id is not None
-            return _request(value, _session_id=session_id)
+            assert session is not None
+            return session.request(value)
         return transmit(value)
 
     def validate(recovery):
@@ -191,8 +190,7 @@ def bind_wire(
             if current_artifact != artifact_sha256:
                 raise ValueError("production artifact binding changed")
 
-        assert session_id is not None
-        _ACTIVE_BRIDGE_SESSIONS[session_id] = validate_session
+        session = _open_bridge_session(validate_session)
 
     def wire(operation, recovery, index, request_index):
         # Gate has already waited and charged the attempt. Reject drift before I/O.
@@ -236,8 +234,8 @@ def bind_wire(
 
     if production:
         def close_session():
-            assert session_id is not None
-            _ACTIVE_BRIDGE_SESSIONS.pop(session_id, None)
+            assert session is not None
+            session.close()
 
         wire.close = close_session
     return wire

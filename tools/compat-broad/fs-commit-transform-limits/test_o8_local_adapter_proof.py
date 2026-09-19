@@ -22,10 +22,10 @@ import commit_remote_transport as production_transport
 from test_commit_acquisition import fixture
 
 
-def test_local_adapter_proves_full_lifecycle_without_production_execution(
+def test_local_adapter_proves_fail_closed_lifecycle_without_production_execution(
     tmp_path, monkeypatch
 ):
-    """The local proof reaches release without authorizing production traffic."""
+    """The local proof fails closed without authorizing production traffic."""
     inputs, ledger, calls, kwargs = fixture(tmp_path, monkeypatch)
 
     def unexpected_production_transport(*_args, **_kwargs):
@@ -48,18 +48,21 @@ def test_local_adapter_proves_full_lifecycle_without_production_execution(
     assert result["productionExecuted"] is False
     assert result["workerArchiveSha256"] is None
     assert result["failure"] is None
-    assert result["releaseEligible"] is True
-    assert result["reservationReleased"] is True
-    assert result["collection"]["collectionComplete"] is True
+    # Transform-only Commit writes remain conservatively owned: without an
+    # explicit exists=true precondition, a lost acknowledgement could still
+    # have created a document. The local proof therefore demonstrates the
+    # safe held-reservation outcome rather than manufacturing a release.
+    assert result["releaseEligible"] is False
+    assert result["reservationReleased"] is False
+    assert result["collection"]["collectionComplete"] is False
     assert result["chargedCalls"] == 27
     assert calls[:2] == ["refresh", "tokeninfo"]
     assert calls[-4:] == ["project", "database", "auth", "key"]
 
     receipt = (tmp_path / "output/receipt.json").read_text()
-    release = (tmp_path / "output/release.json").read_text()
     assert '"productionExecuted": false' in receipt
     assert '"executionKind": "injected-transport"' in receipt
-    assert '"state": "released"' in release
+    assert not (tmp_path / "output/release.json").exists()
     assert ledger.snapshot()["reservations"][result["ticket"]["reservation"]][
         "state"
-    ] == "released"
+    ] == "held"

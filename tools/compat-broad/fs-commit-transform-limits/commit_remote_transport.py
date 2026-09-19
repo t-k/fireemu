@@ -19,9 +19,6 @@ import zipimport
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[2]
-sys.path.insert(0, str(ROOT / "tools/compat-broad"))
 
 def _archive_origin() -> tuple[str, str] | None:
     match = re.fullmatch(r"(/dev/fd/([0-9]+))/commit_remote_transport\.py", __file__)
@@ -40,6 +37,33 @@ def _archive_origin() -> tuple[str, str] | None:
 
 
 _ARCHIVE = _archive_origin()
+if _ARCHIVE is None:
+    HERE = Path(__file__).resolve().parent
+    ROOT = HERE.parents[2]
+    sys.path.insert(0, str(ROOT / "tools/compat-broad"))
+else:
+    # The archive is the only application import root in worker mode.  Retain
+    # interpreter-owned stdlib locations, but never derive a checkout path
+    # from the /dev/fd path and add it ahead of the archive.
+    HERE = Path(__file__).parent
+    ROOT = None
+    archive_path = _ARCHIVE[0]
+    prefixes = tuple(
+        Path(prefix).resolve()
+        for prefix in {sys.base_prefix, sys.exec_prefix}
+    )
+    stdlib_paths = []
+    for entry in sys.path:
+        if not entry or entry == archive_path:
+            continue
+        try:
+            resolved = Path(entry).resolve()
+        except OSError:
+            continue
+        if any(resolved == prefix or prefix in resolved.parents for prefix in prefixes):
+            stdlib_paths.append(entry)
+    sys.path[:] = [archive_path, *stdlib_paths]
+
 if _ARCHIVE is None:
     _transport_spec = importlib.util.spec_from_file_location(
         "_commit_fixed_bounded_transport", ROOT / "tools/compat-broad/fs-write-limits/transport.py"
@@ -64,7 +88,8 @@ else:
 _exchange = _transport._exchange
 MAX_CAP = _transport.MAX_CAP
 
-sys.path.insert(0, str(HERE))
+if _ARCHIVE is None:
+    sys.path.insert(0, str(HERE))
 from transform_compiler import compile_plan
 
 ORIGIN = "https://firestore.googleapis.com"

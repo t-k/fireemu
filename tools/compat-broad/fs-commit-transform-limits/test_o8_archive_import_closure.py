@@ -182,6 +182,50 @@ print(json.dumps({name: sys.modules[name].__file__ for name in sys.modules if na
         )
 
 
+def test_archive_worker_does_not_derive_a_mutable_checkout_import_root(
+    tmp_path: Path,
+) -> None:
+    main = b"""import json, sys, commit_remote_transport
+print(json.dumps({'path': sys.path, 'base': sys.base_prefix}))
+"""
+    (tmp_path / "__main__.py").write_bytes(main)
+    manifest = {"__main__.py": hashlib.sha256(main).hexdigest()}
+    for name, source in SOURCES.items():
+        data = source.read_bytes()
+        (tmp_path / f"{name}.py").write_bytes(data)
+        manifest[f"{name}.py"] = hashlib.sha256(data).hexdigest()
+    archive, sha = bundle.build_archive(tmp_path, manifest)
+    bundle.verify_archive(archive, manifest, sha)
+    with bundle.unlinked_archive_fd(archive, sha) as fd:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-B",
+                str(HERE / "o8_fd_bootstrap.py"),
+                str(fd),
+                sha,
+            ],
+            cwd=tmp_path,
+            pass_fds=(fd,),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        observed = json.loads(result.stdout)
+        archive_path = f"/dev/fd/{fd}"
+        assert observed["path"][0] == archive_path
+        assert not any(
+            entry.endswith("/tools/compat-broad") for entry in observed["path"]
+        )
+        assert not any(
+            entry == str(tmp_path) or entry.startswith(f"{tmp_path}/")
+            for entry in observed["path"]
+        )
+
+
 def test_historical_source_map_is_independent_of_current_archive_map(
     tmp_path: Path,
 ) -> None:

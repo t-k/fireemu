@@ -1,0 +1,34 @@
+name: offline-compat-source-export
+
+on:
+  push:
+    branches: [work/offline-compat-20260919]
+    paths: [.github/workflows/offline-compat-export.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  source-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bundle committed source only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git bundle create "$RUNNER_TEMP/fireemu-offline-source.bundle" HEAD
+          git rev-parse HEAD > "$RUNNER_TEMP/fireemu-offline-source.sha"
+          sha256sum "$RUNNER_TEMP/fireemu-offline-source.bundle"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fireemu-offline-source
+          path: |
+            ${{ runner.temp }}/fireemu-offline-source.bundle
+            ${{ runner.temp }}/fireemu-offline-source.sha
+          retention-days: 1
+          if-no-files-found: error

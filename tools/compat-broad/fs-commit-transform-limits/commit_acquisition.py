@@ -445,7 +445,7 @@ def _copy_frozen_sources(output, source_root, frozen):
             os.fsync(stream.fileno())
 
 
-def run_acquisition(
+def _run_acquisition(
     output,
     inputs,
     *,
@@ -634,6 +634,40 @@ def run_acquisition(
         "reservationReleased": released,
         "release": release,
     }
+
+
+def run_acquisition(
+    output,
+    inputs,
+    *,
+    permission_path,
+    source_root,
+    artifact_path,
+    ledger_root,
+    api_key,
+    credential_handoff,
+    capability=None,
+    injected_transport=None,
+    descriptor=None,
+):
+    """Run acquisition and revoke any consumed production capability on exit."""
+    try:
+        return _run_acquisition(
+            output,
+            inputs,
+            permission_path=permission_path,
+            source_root=source_root,
+            artifact_path=artifact_path,
+            ledger_root=ledger_root,
+            api_key=api_key,
+            credential_handoff=credential_handoff,
+            capability=capability,
+            injected_transport=injected_transport,
+            descriptor=descriptor,
+        )
+    finally:
+        if capability is not None:
+            revoke_production_capability(capability)
 
 
 def compare_saved(

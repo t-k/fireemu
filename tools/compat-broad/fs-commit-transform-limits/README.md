@@ -55,3 +55,15 @@ uv run --project tools/compat-inventory --locked pytest tools/compat-broad/fs-co
 ```
 
 The timestamp contract follows the [Commit response](https://firebase.google.com/docs/firestore/reference/rest/v1/projects.databases.documents/commit) and [WriteResult](https://firebase.google.com/docs/firestore/reference/rest/v1/WriteResult) definitions: write results correspond to request writes, and commitTime bounds when reads can observe their effects; it is not assumed equal to each write updateTime.
+
+## Local O8 lifecycle proof
+
+`test_o8_local_adapter_proof.py` is the non-authorizing preparation proof for this campaign. It uses the existing `injected_transport` mode and the real acquisition path: bounded OAuth preparation fixtures, the reserved Coordinator, the charged Commit Gate, the shared Ledger reservation, the collector, owned cleanup, immutable receipt publication and Ledger release. It asserts `executionKind: injected-transport`, `productionExecuted: false`, no worker archive digest, and a released reservation. The production transport entry points are replaced with failing sentinels, so a production wire call fails the test immediately.
+
+The proof uses synthetic offline credential and response fixtures. It does not obtain a production credential, contact a production origin, create or change a production resource, or grant compatibility approval. Passing this test establishes only that the local preparation lifecycle is internally complete; it does not establish `productionExecuted`, `acquisitionValidated`, `promotionReady`, or production compatibility.
+
+Run it with:
+
+```text
+uv run --project tools/compat-inventory --locked pytest tools/compat-broad/fs-commit-transform-limits/test_o8_local_adapter_proof.py
+```

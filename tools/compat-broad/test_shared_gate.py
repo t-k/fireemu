@@ -535,6 +535,9 @@ def scheduled_plan(slots=3, probes=("p1", "p2", "p3")):
         "method": "GET",
         "privileged": True,
         "form": False,
+        # These scheduled probes are read-only; do not classify their
+        # observation slots as conditional creates for cleanup accounting.
+        "creates": False,
     }
     jobs = {
         key: {
@@ -542,9 +545,9 @@ def scheduled_plan(slots=3, probes=("p1", "p2", "p3")):
             "observation": [op(key), op(key)],
             "recovery": [op(key), op(key)],
             "schedule": [
-                {"phase": "observation", "index": 0},
+                {"phase": "observation", "index": 0, "creates": False},
                 {"phase": "recovery", "index": 0},
-                {"phase": "observation", "index": 1},
+                {"phase": "observation", "index": 1, "creates": False},
                 {"phase": "recovery", "index": 1},
             ],
         }

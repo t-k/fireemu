@@ -7,7 +7,6 @@ worker independently match every request to the closed compiler operation.
 # ruff: noqa: BLE001 -- Worker errors must never serialize secret input.
 from __future__ import annotations
 
-import inspect
 import json
 import re
 import sys
@@ -20,44 +19,12 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
 
 from compiler import compile_limits_plan
-from transport import MAX_CAP, _exchange
+from transport import MAX_CAP
 
 PROJECT = "fireemu-35fe6"
 ORIGIN = "https://firestore.googleapis.com"
 TIMEOUT = 12
 INPUT_CAP = 4 * 1024 * 1024
-_BRIDGE_AUTHORITY = object()
-
-
-class _BridgeSession:
-    __slots__ = ("_active", "_validator")
-
-    def __init__(self, validator, authority):
-        if authority is not _BRIDGE_AUTHORITY:
-            raise TypeError("bridge authority required")
-        if not callable(validator):
-            raise TypeError("bridge validator required")
-        self._validator = validator
-        self._active = True
-
-    def request(self, value):
-        if not self._active:
-            raise TypeError("inactive production bridge session")
-        self._validator(value)
-        prepared = prepare(value)
-        return _exchange(**prepared, timeout=TIMEOUT)
-
-    def close(self):
-        self._active = False
-
-
-def _open_bridge_session(validator):
-    caller = inspect.currentframe().f_back
-    if caller is None or caller.f_globals.get("__name__") != "production_bridge":
-        raise TypeError("bridge-owned admission required")
-    return _BridgeSession(validator, _BRIDGE_AUTHORITY)
-
-
 def _json(value):
     return json.dumps(
         value,

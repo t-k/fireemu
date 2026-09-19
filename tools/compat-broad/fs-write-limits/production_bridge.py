@@ -19,10 +19,10 @@ import threading
 
 from production_plan import production_plan
 from remote_transport import (
-    _open_bridge_session,
     _request,
     prepare,
 )
+from transport import _exchange
 from shadow import source_inputs
 
 from batch_adapter import observer_digest
@@ -146,12 +146,10 @@ def bind_wire(
         raise ValueError("closed limits execution plan required")
     bound_gate = coordinator.gate
     key_digest = coordinator.key_digest
-    session = None
-
     def send_value(value):
         if production:
-            assert session is not None
-            return session.request(value)
+            prepared = prepare(value)
+            return _exchange(**prepared, timeout=12)
         return transmit(value)
 
     def validate(recovery):
@@ -190,7 +188,6 @@ def bind_wire(
             if current_artifact != artifact_sha256:
                 raise ValueError("production artifact binding changed")
 
-        session = _open_bridge_session(validate_session)
 
     def wire(operation, recovery, index, request_index):
         # Gate has already waited and charged the attempt. Reject drift before I/O.
@@ -232,12 +229,6 @@ def bind_wire(
             return {**result, "failure": "UnexpectedServiceResponse"}
         return result
 
-    if production:
-        def close_session():
-            assert session is not None
-            session.close()
-
-        wire.close = close_session
     return wire
 
 

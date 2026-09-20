@@ -22,6 +22,7 @@ import { request as httpRequest } from 'node:http';
 import { performance } from 'node:perf_hooks';
 import path from 'node:path';
 import { createLifecycleJournal } from './listen_journal.mjs';
+import { parseEvidence } from './local_shadow_check.mjs';
 
 import {
   argvIsClean,
@@ -267,7 +268,7 @@ export const localAccountRequest = (endpoint, projectId, operation, body, timeou
               (lengths.length && (!/^[0-9]+$/.test(lengths[0]) || Number(lengths[0]) !== length)) ||
               (res.headers['transfer-encoding'] && lengths.length) ||
               !/^application\/json(?:\s*;|$)/i.test(res.headers['content-type'] ?? '')) throw fail();
-          const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+          const value = parseEvidence(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
           if (!plainObject(value) || !Number.isInteger(res.statusCode)) throw fail();
           resolve({ status: res.statusCode, body: value });
         } catch { reject(fail()); }
@@ -284,7 +285,7 @@ const accountLookup = (response, email, uid = null) => {
     throw new Error('account lookup unavailable');
   }
   const body = response.body;
-  if ('error' in body || 'nextPageToken' in body ||
+  if (Object.keys(body).some(key => key !== 'kind' && key !== 'users') ||
       ('kind' in body && body.kind !== 'identitytoolkit#GetAccountInfoResponse')) {
     throw new Error('account lookup ambiguous');
   }

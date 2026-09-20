@@ -160,6 +160,7 @@ test('failed document recovery retains the account rather than destroying recove
 });
 
 for (const body of [{}, { users: null }, { users: [], error: {} },
+  { users: [], unexpected: 'contradictory data' },
   { users: [], nextPageToken: 'next' }, { kind: 'wrong' },
   { users: [{ localId: 'other', email: EMAIL }] },
   { users: [{ localId: UID, email: 'foreign@example.invalid' }] },
@@ -168,6 +169,8 @@ for (const body of [{}, { users: null }, { users: [], error: {} },
     const f = fixture(null, { lookups: { 2: { status: 200, body } } });
     const out = await executeLocalLifecycle(f.sdk, config(), { request: f.request });
     assert.equal(out.lifecycle.accountCleanup.complete, false);
+    assert.equal(out.lifecycle.complete, false);
+    assert.ok(f.account());
     assert.ok(!f.calls.includes('account-delete'));
   });
 }
@@ -313,7 +316,7 @@ test('real local account HTTP completes a bounded typed lookup with only local o
   assert.deepEqual(await localAccountRequest(endpoint, 'demo-local', 'lookup', { email: [EMAIL] }),
     { status: 200, body: { users: [] } });
 });
-for (const kind of ['short', 'oversize', 'redirect', 'non-json', 'array', 'invalid-utf8']) {
+for (const kind of ['short', 'oversize', 'redirect', 'non-json', 'array', 'invalid-utf8', 'duplicate-key']) {
   test(`real local account HTTP refuses ${kind}`, async t => {
     const endpoint = await server(t, socket => socket.once('data', () => {
       let body = Buffer.from('{"users":[]}'); let status = '200 OK'; let contentType = 'application/json';
@@ -322,6 +325,7 @@ for (const kind of ['short', 'oversize', 'redirect', 'non-json', 'array', 'inval
       if (kind === 'non-json') contentType = 'text/html';
       if (kind === 'array') body = Buffer.from('[]');
       if (kind === 'invalid-utf8') body = Buffer.from([123,34,120,34,58,34,255,34,125]);
+      if (kind === 'duplicate-key') body = Buffer.from('{"users":[{"localId":"owned"}],"users":[]}');
       socket.end(Buffer.concat([Buffer.from(`HTTP/1.1 ${status}\r\nContent-Type: ${contentType}\r\nContent-Length: ${kind === 'short' ? 900 : body.length}\r\nConnection: close\r\n\r\n`), body]));
     }), true);
     await assert.rejects(localAccountRequest(endpoint, 'demo-local', 'lookup', { email: [EMAIL] }));

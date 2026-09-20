@@ -108,17 +108,19 @@ always refuses; `validate_permission` accepts no permission while they stand.
 ## Local shadow
 
 The plan was driven against a `fireemu` built in the lane worktree. The runner
-records that binding itself, refuses a binary from another checkout, and writes
-the committed record at
+records that binding itself and refuses a binary from another checkout.
+The historical run remains immutable at
 [`fs-query-partition-cursor-local-shadow.json`](../../spec/compatibility/broad-runs/fs-query-partition-cursor-local-shadow.json).
+The current native run is published separately at
+[`fs-query-partition-cursor-current-v2-local-shadow.json`](../../spec/compatibility/broad-runs/fs-query-partition-cursor-current-v2-local-shadow.json).
 A debug build is not bit-reproducible, so the digest identifies one build
 instance rather than the source.
 
 | Binding | Value |
 | --- | --- |
-| Artifact source commit | `0d1477487` |
+| Artifact source commit | `9b5d827129a8aae3c7277674770ffbdcd26d21d9` |
 | Rust sources | unchanged from base `3d0e56bdf` |
-| Artifact SHA-256 | `47b2b5bb3833235704f851c647a85c2343dd92422753593313cbe83c785b4e91` |
+| Artifact SHA-256 | `fe95aec05208b0e79767b6efa7f1dd3c135505cbe45cfa83417c98d2579e0b70` |
 
 The record also carries the SHA-256 of every lane module it was produced by, so
 the withdrawal of `O4-REPAIR-001` and every other recorded result can be
@@ -142,12 +144,13 @@ first baseline query, at a partition query and at a cursor query. Each ended wit
 zero residual owned documents. The run that lost its creation receipt skipped its
 deletions with `no-current-run-ownership` rather than issuing an unproven delete.
 
-## Local differences found, both unobserved in production
+## Historical local differences, both unobserved in production
 
-Two cursor-validation conditions differ from the documented REST contract and are
-open repair tickets under `docs.local/issues/open/`. Each expectation in the plan
-stays as the typed refusal, because confirming the production answer is the point
-of the campaign.
+The immutable historical run recorded two cursor-validation conditions that
+differed from the documented REST contract. They remain attached to the
+historical receipt and were not production observations. The fresh current run
+matches all planned local expectations, so these historical differences are no
+longer present in the current native shadow.
 
 - `O4-REPAIR-002`, `cursor-reference-type-mismatch`: a string value against a
   `__name__` order is accepted and returns the whole collection.

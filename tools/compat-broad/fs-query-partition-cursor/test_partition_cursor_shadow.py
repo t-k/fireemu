@@ -327,19 +327,14 @@ def test_the_committed_shadow_record_agrees_with_the_compiled_plan() -> None:
     assert run["ownedProcess"]["listenersClosed"] is True
 
 
-def test_the_committed_shadow_record_differences_are_exactly_the_open_tickets() -> None:
+def test_the_current_committed_shadow_record_is_matched() -> None:
     import json
 
     from partition_cursor_shadow import SHADOW_RECORD
 
     record = json.loads(SHADOW_RECORD.read_bytes())
-    assert record["run"]["validation"] == "DIFFERENT_KNOWN"
-    assert {difference["kind"] for difference in record["differences"]} == set(
-        KNOWN_LOCAL_DIFFERENCES
-    )
-    assert {difference["ticket"] for difference in record["differences"]} == set(
-        KNOWN_LOCAL_DIFFERENCES.values()
-    )
+    assert record["run"]["validation"] == "MATCHED"
+    assert record["differences"] == []
 
 
 def test_the_withdrawn_ticket_is_no_longer_claimed_anywhere() -> None:

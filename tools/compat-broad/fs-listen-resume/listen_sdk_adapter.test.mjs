@@ -60,6 +60,13 @@ test('source digests are recomputed from disk and missing files are explicit', (
   assert.equal(digests['tools/compat-broad/fs-listen-resume/does-not-exist.mjs'], 'missing');
 });
 
+test('the adapter clock emits integer milliseconds for transport timelines', () => {
+  const deps = createDeps(fakeSdk([]), { primary: { db: 'db', auth: 'auth' } });
+  const atMs = deps.now();
+  assert.equal(Number.isSafeInteger(atMs), true);
+  assert.ok(atMs >= 0);
+});
+
 const fakeSdk = calls => ({
   doc: (db, docPath) => ({ db, docPath }),
   collection: (db, collectionPath) => ({ db, collectionPath }),

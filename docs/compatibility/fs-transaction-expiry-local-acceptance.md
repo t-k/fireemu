@@ -53,9 +53,12 @@ This does not claim transport-wide fee accounting or a new production budget.
 source. It is BLOCKED_OWNER, permissionGranted=false, authorizesProduction=false,
 productionExecuted=false and requiresFreshPermissionBinding=true.
 The original manifest, v2 preparation and original native local-shadow remain byte-for-byte
-unchanged. Their current-source checks intentionally remain nonpassing until a
-new real-artifact rehearsal and saved-input comparison exist. Do not replace
-old source hashes with this version's hashes.
+unchanged. The original local-shadow is retained at
+`spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-local-shadow-v2.json`; the
+current generated rehearsal is published at the canonical local-shadow path. Their
+current-source checks intentionally remain nonpassing until a new real-artifact rehearsal
+and saved-input comparison exist. Do not replace old source hashes with this version's
+hashes.
 
 ## Non-production work still required
 

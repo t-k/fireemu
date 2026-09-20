@@ -209,8 +209,11 @@ path. Three consecutive runs produced the same result, and a fourth with a four
 second deadline produced an honest incomplete receipt with cleanup still
 complete.
 
-The receipt is checked in at `spec/compatibility/fs-listen-sdk-local-shadow.json`,
+The current receipt is checked in at `spec/compatibility/fs-listen-sdk-local-shadow.json`,
 with the campaign it ran under at `fs-listen-sdk-local-shadow-campaign.json`. The
+prior lifecycle-free receipt remains byte-for-byte preserved at
+`spec/compatibility/fs-listen-sdk-local-shadow-historical.json`; it is admitted
+only through the explicit legacy checker mode. The
 campaign record publishes the run nonce because a reader cannot recompile the
 campaign, and so cannot verify the receipt, without it; a production campaign
 record stays private and only its digest is published.
@@ -227,7 +230,9 @@ Reproduce it with:
 ```sh
 cargo build -p fireemu
 npm install --prefix <scratch> firebase@12.18.0
-O6_FIREBASE_MODULE_DIR=<scratch> O6_REPO_ROOT="$PWD" GOOGLE_CLOUD_PROJECT=demo-o6 \
+O6_FIREBASE_MODULE_DIR=<scratch> O6_REPO_ROOT="$PWD" \
+  O6_LISTEN_CAMPAIGN_PATH="$PWD/spec/compatibility/fs-listen-sdk-local-shadow-campaign.json" \
+  O6_LISTEN_SDK_VERSION=12.18.0 GOOGLE_CLOUD_PROJECT=demo-o6 \
   O6_LISTEN_FIREEMU_BINARY="$PWD/target/debug/fireemu" \
   O6_LISTEN_FIREEMU_COMMIT="$(git rev-parse HEAD)" \
   O6_LISTEN_SOURCE_COMMIT="$(git rev-parse HEAD)" \

@@ -64,11 +64,12 @@ Run the focused checks with:
 uv run --python 3.12 --with pytest pytest -q tools/compat-broad/fs-query-partition-cursor
 ```
 
-## Reviewed local shadow
+## Historical local shadow
 
 The runner records the artifact it executes, refuses a binary built outside this
 worktree, and publishes the committed record at
-`spec/compatibility/broad-runs/fs-query-partition-cursor-local-shadow.json`. A
+`spec/compatibility/broad-runs/fs-query-partition-cursor-local-shadow.json`. This
+record is immutable historical evidence. A
 debug build is not bit-reproducible, so the digest identifies one build instance
 while the commit identifies its source.
 
@@ -103,13 +104,20 @@ This verifies the local observation tooling and the local runtime answers. It is
 not a production observation, a saved-production comparison or a parent
 compatibility promotion.
 
-## Current local integrity revision (offline v23)
+## Current local shadow and integrity revision (offline v23)
 
 The old local-shadow record above is **historical**, not execution evidence for
-this revision. It is left byte-for-byte unchanged. Current preparation lives in
+this revision. It is left byte-for-byte unchanged. The fresh native run is
+published at
+`spec/compatibility/broad-runs/fs-query-partition-cursor-current-v2-local-shadow.json`.
+It was generated from source commit `9b5d827129a8aae3c7277674770ffbdcd26d21d9`
+using `target/debug/fireemu`, retained all 37 raw sidecars, completed cleanup,
+proved zero residual documents and returned `MATCHED`. Its artifact SHA-256 is
+`fe95aec05208b0e79767b6efa7f1dd3c135505cbe45cfa83417c98d2579e0b70`.
+Current preparation also lives in
 `spec/compatibility/broad-runs/fs-query-partition-cursor-preparation-v2.json`;
-preparation is non-authorizing and not a new local/native run. Its source closure
-includes the fixed HTTP worker and the shared `batch_wire.py` decoder.
+preparation is non-authorizing. Its source closure includes the fixed HTTP
+worker and the shared `batch_wire.py` decoder.
 
 The collector now requires explicit-port numeric loopback origins, not DNS names
 (including localhost), URL credentials, query strings or fragments. The fixed

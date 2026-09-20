@@ -79,7 +79,9 @@ const nameOfFactory = paths => {
 };
 
 export const createDeps = (sdk, clients) => ({
-  now: () => performance.now(),
+  // Transport timeline timestamps are part of the cross-language receipt
+  // contract, whose schema represents elapsed milliseconds as integers.
+  now: () => Math.trunc(performance.now()),
   sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
   firestore: {
     async setDoc(client, docPath, fields) {

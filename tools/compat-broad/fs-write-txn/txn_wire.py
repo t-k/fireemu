@@ -181,7 +181,8 @@ def _exchange(value):
     req = urllib.request.Request(
         value["url"], data=payload, method=value["method"],
         headers={"Content-Type": "application/json", "Accept": "application/json",
-                 "Authorization": "Bearer " + value["token"]},
+                 "Authorization": "Bearer " + value["token"],
+                 "Origin": "http://127.0.0.1"},
     )
     opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
     try:

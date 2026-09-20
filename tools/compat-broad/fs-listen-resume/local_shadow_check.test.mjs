@@ -9,11 +9,10 @@ import { checkShadow, parseEvidence } from './local_shadow_check.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const cli = path.join(root, 'tools/compat-broad/fs-listen-resume/local_shadow_check.mjs');
-const historical = JSON.parse(readFileSync(path.join(root, 'spec/compatibility/fs-listen-sdk-local-shadow.json'), 'utf8'));
+const historical = JSON.parse(readFileSync(path.join(root, 'spec/compatibility/fs-listen-sdk-local-shadow-historical.json'), 'utf8'));
+const currentEvidence = JSON.parse(readFileSync(path.join(root, 'spec/compatibility/fs-listen-sdk-local-shadow.json'), 'utf8'));
 const catalog = JSON.parse(readFileSync(path.join(root, 'spec/compatibility/fs-listen-sdk-cases.json'), 'utf8'));
-const current = () => ({ ...structuredClone(historical), lifecycle: {
-  complete: true, failure: null, accountCleanup: { complete: true }, clients: { complete: true },
-} }); // Synthetic current lifecycle: not a new SDK/native run.
+const current = () => structuredClone(currentEvidence);
 
 test('historical expected events pass only under the explicit legacy contract', () => {
   assert.equal(checkShadow(historical, catalog).complete, false);

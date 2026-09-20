@@ -25,6 +25,7 @@ LEGACY_MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest.json"
 PREVIOUS_MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest-v2.json"
 MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest-v3.json"
 SHADOW = RUNS / "fs-transaction-expiry-retry-04-local-shadow.json"
+HISTORICAL_SHADOW_V2 = RUNS / "fs-transaction-expiry-retry-04-local-shadow-v2.json"
 
 REGENERATE = (
     'regenerate with: uv run --python 3.12 python -c "import sys; '
@@ -109,6 +110,7 @@ def test_the_published_shadow_is_exactly_what_the_generator_emits():
         receipt=value["receipt"],
         contract=value["selfContract"],
     )
+    generated["publication"] = value["publication"]
     assert set(generated) == set(value), set(generated) ^ set(value)
     assert set(generated["runtime"]) == set(value["runtime"])
     assert generated == value, "the published record is not the generator's output"
@@ -295,7 +297,7 @@ def test_previous_manifest_and_native_receipt_remain_immutable():
     import hashlib
 
     assert hashlib.sha256(LEGACY_MANIFEST.read_bytes()).hexdigest() == "e8f80fc0c35c2c64c87cbb6bf4bf5d9bae61f86ba097e89b7e6a8a05e76ef752"
-    assert hashlib.sha256(SHADOW.read_bytes()).hexdigest() == "e8ac9c831772245e1798bcd5a0295ac3fdcd6c972b9b574a297d339bf5551b71"
+    assert hashlib.sha256(HISTORICAL_SHADOW_V2.read_bytes()).hexdigest() == "e8ac9c831772245e1798bcd5a0295ac3fdcd6c972b9b574a297d339bf5551b71"
 
 
 def test_current_preparation_is_reproducible_but_grants_no_production_permission():

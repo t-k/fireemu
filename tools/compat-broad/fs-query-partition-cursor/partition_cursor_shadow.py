@@ -340,7 +340,7 @@ def residual_documents(
 
 SHADOW_RECORD = (
     Path(__file__).resolve().parents[3]
-    / "spec/compatibility/broad-runs/fs-query-partition-cursor-local-shadow.json"
+    / "spec/compatibility/broad-runs/fs-query-partition-cursor-current-v2-local-shadow.json"
 )
 
 

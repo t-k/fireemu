@@ -185,6 +185,27 @@ test('throwing or asynchronous expressions are not guessed as default values',as
  for(const name of ['throws','asyncValue']) { assert.equal(f.spec(name),undefined);assert.equal(f.ignored(name)?.scope,'unsupported'); }
  assert.equal((await f.invoke('healthy')).ok,true);
 });
+test('a rejecting asynchronous option does not terminate healthy sibling discovery',async t=>{
+ const f=await start(t,`define('rejects','gcfv2',{timeoutSeconds:{value(){return Promise.reject(Error('synthetic rejection'));}}});`);
+ assert.equal(f.spec('rejects'),undefined);
+ assert.equal(f.ignored('rejects')?.scope,'unsupported');
+ await new Promise(resolve=>setTimeout(resolve,50));
+ assert.equal((await f.invoke('healthy')).ok,true);
+});
+test('a directly supplied rejected Promise does not terminate healthy siblings',async t=>{
+ const f=await start(t,`define('rejects','gcfv2',{timeoutSeconds:Promise.reject(Error('direct rejection'))});`);
+ assert.equal(f.spec('rejects'),undefined);
+ assert.equal(f.ignored('rejects')?.scope,'unsupported');
+ await new Promise(resolve=>setTimeout(resolve,50));
+ assert.equal((await f.invoke('healthy')).ok,true);
+});
+test('a rejected Promise thrown by metadata evaluation does not terminate siblings',async t=>{
+ const f=await start(t,`define('rejects','gcfv2',{timeoutSeconds:{value(){throw Promise.reject(Error('thrown rejection'));}}});`);
+ assert.equal(f.spec('rejects'),undefined);
+ assert.equal(f.ignored('rejects')?.scope,'unsupported');
+ await new Promise(resolve=>setTimeout(resolve,50));
+ assert.equal((await f.invoke('healthy')).ok,true);
+});
 test('zero literal timeout still means unspecified; reset numeric settings are omitted',async t=>{
  const f=await start(t,`define('subject','gcfv2',{timeoutSeconds:0,availableMemoryMb:reset,minInstances:null,maxInstances:reset,concurrency:reset});`);
  const s=f.spec('subject');assert.ok(s);assert.equal(s.timeoutSeconds,undefined);assert.equal(s.platformOptions,undefined);assert.equal(s.concurrency,undefined);

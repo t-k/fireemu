@@ -252,6 +252,27 @@ async function loadCodebase() {
   return exportNamespace(mod);
 }
 
+// Unsupported async options may already be rejected. Observe that rejection
+// before isolating the export so it cannot terminate discovery of siblings.
+function observeAsyncValue(value) {
+  if (value instanceof Promise) {
+    void Promise.prototype.then.call(value, undefined, () => {});
+    return true;
+  }
+  if ((typeof value === "object" && value !== null || typeof value === "function") &&
+      typeof value.then === "function") {
+    void Promise.resolve(value).catch(() => {});
+    return true;
+  }
+  return false;
+}
+
+function rejectAsyncOption(value, field) {
+  if (observeAsyncValue(value))
+    throw new Error(`${field} expression returned an asynchronous value`);
+  return value;
+}
+
 // SDK endpoint options keep Expression objects until the local runtime resolves
 // them. JSON/toString encode a deployment expression, not its runtime value.
 // Match the existing numeric-option `.value()` protocol, but never read its
@@ -264,10 +285,10 @@ function resolvedOption(value, field) {
     if (typeof evaluate === "function") {
       const resolved = evaluate.call(value);
       if (resolved == null) throw new Error(`${field} expression did not resolve to a value`);
-      return resolved;
+      return rejectAsyncOption(resolved, field);
     }
   }
-  return value;
+  return rejectAsyncOption(value, field);
 }
 
 function resolvedBoolean(value, field) {
@@ -1083,11 +1104,14 @@ async function main() {
     try {
       return describe(name, fn, instrumentation);
     } catch (e) {
+      const failure = observeAsyncValue(e)
+        ? new Error("asynchronous endpoint metadata failure")
+        : e;
       return ignored(
         { name, entryPoint: name },
         "unknown",
         "unsupported",
-        `the export could not be described: ${invocationFailure(e).message}`,
+        `the export could not be described: ${invocationFailure(failure).message}`,
       );
     }
   });

@@ -34,11 +34,13 @@ or an externally enforced time limit.
 
 ## Deliberately unchanged or unverified
 
-This is not complete parameterized configuration support. Event resource/filter
-strings, schedule expressions and nested Task Queue retry/rate options require
-separate coverage. Multi-region expansion is NOT implemented here: the current
-first-region policy remains. Deployed range constraints and the native manifest
-validator remain separate. Secret values are not resolved by this helper.
+This is not complete parameterized configuration support. The follow-up
+[trigger option boundary](functions-trigger-option-resolution.md) covers selected
+event resource/filter strings, runtime schedule expressions and Task Queue
+retry/rate values. Pre-rendered CEL is not evaluated. Multi-region expansion is
+NOT implemented here: the current first-region policy remains. Deployed range
+constraints and the native manifest validator remain separate. Secret values are
+not resolved by this helper.
 
 The regression uses the real Node runner, subprocesses and framed IPC, with
 Functions-shaped metadata and `.value()` test expressions. It does not execute

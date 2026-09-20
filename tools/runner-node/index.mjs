@@ -324,6 +324,115 @@ function resolvedNonNegativeInteger(value, field) {
   return resolved;
 }
 
+// Routing and dispatch options must be concrete before publishing the hello.
+// Do not stringify an Expression (that emits its deployment representation),
+// coerce malformed values, or retain a caller-owned map with a later toJSON.
+function triggerRecord(value, field) {
+  if (value == null || value?.[Symbol.for("firebase-functions:ResetValue:Tag")] === true) {
+    return Object.create(null);
+  }
+  rejectAsyncOption(value, field);
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${field} must be an object`);
+  }
+  return value;
+}
+
+function triggerString(value, field, { optional = false, allowEmpty = false } = {}) {
+  const resolved = resolvedOption(value, field);
+  if (resolved === undefined && optional) return undefined;
+  if (typeof resolved !== "string" || (!allowEmpty && resolved.length === 0)) {
+    throw new Error(`${field} did not resolve to ${allowEmpty ? "a string" : "a non-empty string"}`);
+  }
+  return resolved;
+}
+
+function triggerFilters(value) {
+  const input = triggerRecord(value, "eventFilters");
+  const output = Object.create(null);
+  for (const key of Object.keys(input)) {
+    // Preserve empty exact-match values and literal __proto__/toJSON keys as
+    // strings, not object hooks. Null is not an instruction to drop a filter.
+    output[key] = triggerString(input[key], `eventFilters.${key}`, { allowEmpty: true });
+  }
+  return Object.freeze(output);
+}
+
+const SCHEDULE_RETRY_FIELDS = new Set([
+  "retryCount", "maxRetrySeconds", "minBackoffSeconds", "maxBackoffSeconds", "maxDoublings",
+]);
+const TASK_RETRY_FIELDS = new Set([
+  "maxAttempts", "maxRetrySeconds", "minBackoffSeconds", "maxBackoffSeconds", "maxDoublings",
+]);
+const TASK_RATE_FIELDS = new Set(["maxConcurrentDispatches", "maxDispatchesPerSecond"]);
+
+const V1_SCHEDULE_DURATIONS = Object.freeze({
+  maxRetryDuration: "maxRetrySeconds",
+  minBackoffDuration: "minBackoffSeconds",
+  maxBackoffDuration: "maxBackoffSeconds",
+});
+
+function triggerNumbers(value, field, allowed, durationAliases = undefined) {
+  const input = triggerRecord(value, field);
+  const output = Object.create(null);
+  const populated = new Set();
+  for (const key of Object.keys(input)) {
+    const durationKey = durationAliases && Object.hasOwn(durationAliases, key)
+      ? durationAliases[key] : undefined;
+    if (!allowed.has(key) && !durationKey) {
+      observeAsyncValue(input[key]);
+      throw new Error(`${field}.${key} is not supported`);
+    }
+    const outputKey = durationKey ?? key;
+    const original = input[key];
+    if (original !== undefined) {
+      if (populated.has(outputKey)) throw new Error(`${field}.${outputKey} is specified twice`);
+      populated.add(outputKey);
+    }
+    let resolved = resolvedOption(original, `${field}.${key}`);
+    if (resolved === undefined) {
+      // Pinned SDKs put null/ResetValue in numeric records for defaults. Keep
+      // that wire meaning; an expression returning null has already failed.
+      if (original !== undefined) output[outputKey] = null;
+      continue;
+    }
+    if (durationKey) {
+      // Gen1's public ScheduleRetryConfig uses protobuf Duration strings,
+      // while this runner's existing native protocol uses numeric seconds.
+      // Accept the non-negative seconds form; never parseFloat a suffix or CEL.
+      if (typeof resolved !== "string" || !/^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,9})?s$/.test(resolved)) {
+        throw new Error(`${field}.${key} did not resolve to a seconds duration`);
+      }
+      resolved = Number(resolved.slice(0, -1));
+    }
+    if (typeof resolved !== "number" || !Number.isFinite(resolved)) {
+      throw new Error(`${field}.${key} did not resolve to a finite number`);
+    }
+    // Preserve fractional seconds and rates. Native range/count conversion is
+    // unchanged: this is not a second implementation of cloud quota policy.
+    output[outputKey] = resolved;
+  }
+  return Object.freeze(output);
+}
+
+function describeSchedule(base, value) {
+  const input = triggerRecord(value, "scheduleTrigger");
+  const schedule = triggerString(input.schedule, "scheduleTrigger.schedule");
+  const timeZone = triggerString(input.timeZone, "scheduleTrigger.timeZone", { optional: true });
+  // Some Gen1 SDK entrypoints already turn an Expression into braced CEL.
+  // This local resolver does not implement CEL: do not announce it as a cron.
+  if (schedule.includes("{{") || timeZone?.includes("{{")) {
+    throw new Error("scheduleTrigger contains an unresolved deployment expression");
+  }
+  const retryConfig = triggerNumbers(input.retryConfig, "scheduleTrigger.retryConfig",
+    SCHEDULE_RETRY_FIELDS, base.generation === 1 ? V1_SCHEDULE_DURATIONS : undefined);
+  return {
+    ...base,
+    retry: (retryConfig.retryCount ?? 0) > 0,
+    trigger: { type: "schedule", schedule, timeZone, retryConfig },
+  };
+}
+
 // Preserve shared Gen1/Gen2 endpoint options. Memory and instance limits shape local
 // admission; the other deployment and IAM values remain visible for faithful diagnostics.
 function platformOptions(ep) {
@@ -434,6 +543,7 @@ function describeV1Event(base, type, resource, schedule, retry) {
     // Resource labels have fixed positions. A project/database can itself be
     // named "documents" or "databases"; substring searches pick the wrong slash.
     // Preserve the document pattern verbatim for the native pattern validator.
+    resource = triggerString(resource, "eventTrigger.resource", { optional: true, allowEmpty: true }) ?? "";
     const match = resource.match(/^projects\/[^/]+\/databases\/([^/]+)\/documents\/(.+)$/s);
     if (!match) {
       return ignored(
@@ -454,6 +564,7 @@ function describeV1Event(base, type, resource, schedule, retry) {
   }
   const stMatch = type.match(/^google\.storage\.object\.(finalize|delete|metadataUpdate|archive)$/);
   if (stMatch) {
+    resource = triggerString(resource, "eventTrigger.resource", { optional: true, allowEmpty: true }) ?? "";
     const match = resource.match(/^projects\/[^/]+\/buckets\/([^/]+)$/);
     if (!match) {
       // Missing/unparseable bucket metadata must not become an unfiltered
@@ -474,17 +585,7 @@ function describeV1Event(base, type, resource, schedule, retry) {
     };
   }
   if (schedule) {
-    return {
-      ...base,
-      ...v1,
-      retry: Number(schedule.retryConfig?.retryCount || 0) > 0,
-      trigger: {
-        type: "schedule",
-        schedule: schedule.schedule,
-        timeZone: schedule.timeZone || undefined,
-        retryConfig: schedule.retryConfig || {},
-      },
-    };
+    return describeSchedule({ ...base, ...v1 }, schedule);
   }
   const authMatch = type.match(/^providers\/firebase\.auth\/eventTypes\/user\.(create|delete)$/);
   if (authMatch) {
@@ -502,6 +603,7 @@ function describeV1Event(base, type, resource, schedule, retry) {
     type === "providers/cloud.pubsub/eventTypes/topic.publish" ||
     type === "google.pubsub.topic.publish"
   ) {
+    resource = triggerString(resource, "eventTrigger.resource");
     const topicMatch = resource.match(/\/topics\/([^/]+)$/);
     return {
       ...base,
@@ -524,13 +626,8 @@ function describeTaskQueue(base, queue) {
   if (!queue || typeof queue !== "object" || Array.isArray(queue)) {
     throw new Error("taskQueueTrigger must be an object");
   }
-  const retryConfig = queue.retryConfig ?? {};
-  const rateLimits = queue.rateLimits ?? {};
-  for (const value of [retryConfig, rateLimits]) {
-    if (typeof value !== "object" || Array.isArray(value)) {
-      throw new Error("task queue retryConfig and rateLimits must be objects");
-    }
-  }
+  const retryConfig = triggerNumbers(queue.retryConfig, "taskQueueTrigger.retryConfig", TASK_RETRY_FIELDS);
+  const rateLimits = triggerNumbers(queue.rateLimits, "taskQueueTrigger.rateLimits", TASK_RATE_FIELDS);
   return { ...base, trigger: { type: "tasks", retryConfig, rateLimits } };
 }
 
@@ -600,7 +697,7 @@ function describe(name, fn, instrumentation) {
     return describeV1Event(
       base,
       String(et.eventType || ""),
-      String(et.eventFilters?.resource || ""),
+      triggerRecord(et.eventFilters, "eventFilters").resource,
       ep.scheduleTrigger,
       resolvedBoolean(et.retry, "eventTrigger.retry") ?? false,
     );
@@ -620,17 +717,7 @@ function describe(name, fn, instrumentation) {
     if (ep.httpsTrigger) return { ...base, trigger: { type: "http", callable: false } };
     if (ep.callableTrigger) return { ...base, trigger: callable() };
     if (ep.scheduleTrigger) {
-      const retryCount = Number(ep.scheduleTrigger.retryConfig?.retryCount || 0);
-      return {
-        ...base,
-        retry: retryCount > 0,
-        trigger: {
-          type: "schedule",
-          schedule: ep.scheduleTrigger.schedule,
-          timeZone: ep.scheduleTrigger.timeZone || undefined,
-          retryConfig: ep.scheduleTrigger.retryConfig || {},
-        },
-      };
+      return describeSchedule(base, ep.scheduleTrigger);
     }
     if (ep.blockingTrigger) {
       const eventType = String(ep.blockingTrigger.eventType || "");
@@ -648,15 +735,16 @@ function describe(name, fn, instrumentation) {
       const type = et.eventType || "";
       base.retry = resolvedBoolean(et.retry, "eventTrigger.retry") ?? false;
       if (type.startsWith("google.cloud.firestore.")) {
-        const filters = et.eventFilters || {};
-        const patterns = et.eventFilterPathPatterns || {};
+        const filters = triggerRecord(et.eventFilters, "eventFilters");
+        const patterns = triggerRecord(et.eventFilterPathPatterns, "eventFilterPathPatterns");
+        const documentPattern = triggerString(patterns.document, "eventFilterPathPatterns.document", { optional: true });
         return {
           ...base,
           trigger: {
             type: "firestore",
             eventType: type,
-            database: filters.database || "(default)",
-            document: patterns.document || filters.document,
+            database: triggerString(filters.database, "eventFilters.database", { optional: true }) ?? "(default)",
+            document: documentPattern ?? triggerString(filters.document, "eventFilters.document"),
           },
         };
       }
@@ -666,15 +754,18 @@ function describe(name, fn, instrumentation) {
           trigger: {
             type: "storage",
             eventType: type,
-            bucket: (et.eventFilters || {}).bucket || undefined,
+            bucket: triggerString(triggerRecord(et.eventFilters, "eventFilters").bucket, "eventFilters.bucket", { optional: true }),
           },
         };
       }
       if (type === "google.cloud.pubsub.topic.v1.messagePublished") {
-        const topic = String((et.eventFilters || {}).topic || "");
-        return { ...base, trigger: { type: "pubsub", topic: topic.replace(/^.*\/topics\//, "") } };
+        const topic = triggerString(triggerRecord(et.eventFilters, "eventFilters").topic, "eventFilters.topic");
+        const projectedTopic = topic.replace(/^.*\/topics\//, "");
+        if (!projectedTopic) throw new Error("eventFilters.topic resolved to an empty topic");
+        return { ...base, trigger: { type: "pubsub", topic: projectedTopic } };
       }
-      if (et.channel) {
+      const channel = triggerString(et.channel, "eventTrigger.channel", { optional: true });
+      if (channel !== undefined) {
         // `onCustomEventPublished`: the channel is `locations/<l>/channels/<c>` and every
         // eventFilter beyond the type is matched against the published event's attributes.
         return {
@@ -682,8 +773,8 @@ function describe(name, fn, instrumentation) {
           trigger: {
             type: "eventarc",
             eventType: type,
-            channel: et.channel,
-            filters: et.eventFilters || {},
+            channel,
+            filters: triggerFilters(et.eventFilters),
           },
         };
       }
@@ -700,7 +791,7 @@ function describe(name, fn, instrumentation) {
             type: "eventarc",
             eventType: type,
             channel: "google",
-            filters: et.eventFilters || {},
+            filters: triggerFilters(et.eventFilters),
           },
         };
       }
@@ -742,7 +833,7 @@ function describe(name, fn, instrumentation) {
       return describeV1Event(
         base,
         String(et.eventType || ""),
-        String(et.resource || ""),
+        et.resource,
         t.schedule,
         !!et.failurePolicy || !!t.failurePolicy,
       );

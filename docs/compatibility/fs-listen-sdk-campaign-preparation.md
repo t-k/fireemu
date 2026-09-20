@@ -191,23 +191,17 @@ the permission and transport bindings.
 
 ## Local shadow
 
-The following describes the **archived** shadow and its original inputs. It is
-not a run of the later recovery, JSON, lifecycle or supervisor changes. A new
-native/SDK shadow and binding are required for the current source; historical
-receipts and hashes are not rewritten.
-
-
-All fourteen cases agreed with their expected local result. The collector ran
+The current shadow receipt was regenerated from commit `4130d105b0e157f6a807594c761a3fac84a19819`
+with the pinned Firebase SDK `12.18.0`. All fourteen cases agreed with their
+expected local result. The collector ran
 the full catalog against an owned local `fireemu` instance
 started by `fireemu exec` with the Firestore and Auth emulators on OS-assigned
 ports. The runtime was built from this worktree with `cargo build -p fireemu`,
 never taken from another checkout: a prebuilt binary elsewhere can predate
 branch-only fixes and describe a different commit. The receipt therefore names
-the binary it ran, its SHA-256 and the commit it was built from. All twelve cases agreed with their expected local results, every listener
+the binary it ran, its SHA-256 and the commit it was built from. Every listener
 closed, no invariant was violated, and cleanup proved absence for every owned
-path. Three consecutive runs produced the same result, and a fourth with a four
-second deadline produced an honest incomplete receipt with cleanup still
-complete.
+path.
 
 The current receipt is checked in at `spec/compatibility/fs-listen-sdk-local-shadow.json`,
 with the campaign it ran under at `fs-listen-sdk-local-shadow-campaign.json`. The

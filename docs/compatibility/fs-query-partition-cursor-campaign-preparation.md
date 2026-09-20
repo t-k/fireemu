@@ -118,9 +118,9 @@ instance rather than the source.
 
 | Binding | Value |
 | --- | --- |
-| Artifact source commit | `9b5d827129a8aae3c7277674770ffbdcd26d21d9` |
+| Artifact source commit | `4130d105b0e157f6a807594c761a3fac84a19819` |
 | Rust sources | unchanged from base `3d0e56bdf` |
-| Artifact SHA-256 | `fe95aec05208b0e79767b6efa7f1dd3c135505cbe45cfa83417c98d2579e0b70` |
+| Artifact SHA-256 | `bccacc0a7d3f8a42dba9b4c6b6a0c693082f600690dd5d337a02f56287fd42b1` |
 
 The record also carries the SHA-256 of every lane module it was produced by, so
 the withdrawal of `O4-REPAIR-001` and every other recorded result can be

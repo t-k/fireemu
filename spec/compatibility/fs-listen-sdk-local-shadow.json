@@ -7,15 +7,15 @@
   "environment": {
     "kind": "local-fireemu",
     "node": "24.14.0",
-    "sourceCommit": "9b5d827129a8aae3c7277674770ffbdcd26d21d9",
+    "sourceCommit": "4130d105b0e157f6a807594c761a3fac84a19819",
     "firebaseSdk": "12.18.0",
     "fireemuBinary": "target/debug/fireemu",
-    "fireemuBinaryDigest": "bccacc0a7d3f8a42dba9b4c6b6a0c693082f600690dd5d337a02f56287fd42b1",
-    "fireemuSourceCommit": "9b5d827129a8aae3c7277674770ffbdcd26d21d9",
+    "fireemuBinaryDigest": "944cb4aca596064c03657077238c29f47b8d1993c88ae506b8aa0be78886bb15",
+    "fireemuSourceCommit": "4130d105b0e157f6a807594c761a3fac84a19819",
     "rulesPath": "tools/compat-broad/fs-listen-resume/fs-listen-sdk.rules",
     "rulesDigest": "f60a988c929ea7e26feb4645e1d8134979b91adea56d3ccb9a747cbeb1e41f34",
     "projectId": "demo-o6",
-    "nonceDigest": "36093f7fe863c91d29019c583627ac0d291734f34f9d31f86200302cfb3c531e"
+    "nonceDigest": "b903f451d5808de9a3ce64fcd64a1037305ee45f296484878a13646cc97871c1"
   },
   "budget": {
     "used": {
@@ -60,31 +60,31 @@
     "rows": [
       {
         "name": "alpha",
-        "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+        "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
         "outcome": "already-deleted-earlier",
         "detail": null
       },
       {
         "name": "beta",
-        "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+        "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
         "outcome": "already-deleted-earlier",
         "detail": null
       },
       {
         "name": "gamma",
-        "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+        "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
         "outcome": "already-deleted-earlier",
         "detail": null
       },
       {
         "name": "absent",
-        "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+        "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
         "outcome": "not-created",
         "detail": null
       },
       {
         "name": "private",
-        "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+        "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
         "outcome": "already-deleted-earlier",
         "detail": null
       }
@@ -100,31 +100,31 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+          "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+          "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+          "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+          "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+          "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
           "outcome": "not-created",
           "detail": null
         }
@@ -137,31 +137,31 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+          "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+          "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+          "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+          "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+          "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
           "outcome": "not-created",
           "detail": null
         }
@@ -174,31 +174,31 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+          "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+          "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+          "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+          "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+          "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
           "outcome": "not-created",
           "detail": null
         }
@@ -211,31 +211,31 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+          "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+          "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+          "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+          "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+          "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
           "outcome": "not-created",
           "detail": null
         }
@@ -248,31 +248,31 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+          "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+          "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+          "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+          "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+          "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
           "outcome": "not-created",
           "detail": null
         }
@@ -285,31 +285,31 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+          "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+          "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+          "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+          "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+          "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
           "outcome": "not-created",
           "detail": null
         }
@@ -322,31 +322,31 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+          "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+          "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+          "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+          "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+          "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
           "outcome": "not-created",
           "detail": null
         }
@@ -359,31 +359,31 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+          "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+          "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+          "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+          "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+          "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
           "outcome": "not-created",
           "detail": null
         }
@@ -396,31 +396,31 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+          "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+          "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+          "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+          "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+          "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
           "outcome": "not-created",
           "detail": null
         }
@@ -433,31 +433,31 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+          "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+          "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+          "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+          "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+          "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
           "outcome": "not-created",
           "detail": null
         }
@@ -470,31 +470,31 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+          "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+          "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+          "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+          "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+          "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
           "outcome": "deleted-and-absent",
           "detail": null
         }
@@ -507,31 +507,31 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+          "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+          "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+          "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+          "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+          "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
           "outcome": "already-deleted-earlier",
           "detail": null
         }
@@ -544,31 +544,31 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+          "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+          "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+          "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+          "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+          "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
           "outcome": "already-deleted-earlier",
           "detail": null
         }
@@ -581,31 +581,31 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+          "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+          "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+          "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+          "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+          "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
           "outcome": "already-deleted-earlier",
           "detail": null
         }
@@ -618,31 +618,31 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "a10632080c10bcb5235915f229afdf8b3c51d3c555887bdc63a91fc78d322467",
+          "pathDigest": "41a09d188f06b603655b47241b399378ff912d5382d8ab0e71448ad9c1938ffb",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "ce17791c8d5c6e8810702f02148574412028915219eed7748083f5f8251ba92b",
+          "pathDigest": "703b0edde8af1fe0999d91cfb627d50b6e8239f3dece3ed5501ee3bc019618c8",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "9c9bbc9befac26ddfaf507a5db70c75fc40ee122888743d44939efc106da3bbe",
+          "pathDigest": "2c9f95a95e9301bc751453b3335554276ff483e836006a0bf4fb5c6fb65df8a2",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "1cc5077d12b1150790e4195d0ed76d4a11cccbb869d815d850bb54c54c8a5c22",
+          "pathDigest": "0f5ea093cca6298983a6b1c7c1c17f8cc8179b0d09e68994d98e2994807cf514",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "32b61418dcb0a39edb57cbd3ba1264d6da79f35cbbc2cb9884b1f792815b8871",
+          "pathDigest": "8fd985a251888a0d46ef99ef1990819acfaf2f9aa750e04027355137e7e8fe0c",
           "outcome": "already-deleted-earlier",
           "detail": null
         }
@@ -711,7 +711,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 149,
+          "atMs": 182,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -771,7 +771,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 192,
+          "atMs": 225,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -871,7 +871,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 229,
+          "atMs": 265,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -947,7 +947,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 300,
+          "atMs": 339,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1128,7 +1128,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 385,
+          "atMs": 426,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1190,7 +1190,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 522,
+          "atMs": 558,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1330,27 +1330,27 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 3595,
+          "atMs": 3624,
           "derivedFrom": "first server-backed snapshot"
         },
         {
           "kind": "break-requested",
-          "atMs": 3618,
+          "atMs": 3649,
           "derivedFrom": "collector called disableNetwork"
         },
         {
           "kind": "disconnect",
-          "atMs": 3619,
+          "atMs": 3651,
           "derivedFrom": "listener fell back to the local cache"
         },
         {
           "kind": "resume-requested",
-          "atMs": 3622,
+          "atMs": 3652,
           "derivedFrom": "collector called enableNetwork"
         },
         {
           "kind": "reconnect",
-          "atMs": 3628,
+          "atMs": 3657,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1491,7 +1491,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 8677,
+          "atMs": 8705,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1593,7 +1593,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 13740,
+          "atMs": 13782,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1719,7 +1719,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 16828,
+          "atMs": 16869,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1829,17 +1829,17 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 16910,
+          "atMs": 16954,
           "derivedFrom": "first server-backed snapshot"
         },
         {
           "kind": "disconnect",
-          "atMs": 16963,
+          "atMs": 17008,
           "derivedFrom": "listener fell back to the local cache"
         },
         {
           "kind": "connect",
-          "atMs": 16965,
+          "atMs": 17010,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1971,7 +1971,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 20064,
+          "atMs": 20103,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -2038,109 +2038,109 @@
   "transportTimeline": [
     {
       "kind": "connect",
-      "atMs": 149,
+      "atMs": 182,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-101"
     },
     {
       "kind": "connect",
-      "atMs": 192,
+      "atMs": 225,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-101C"
     },
     {
       "kind": "connect",
-      "atMs": 229,
+      "atMs": 265,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-102"
     },
     {
       "kind": "connect",
-      "atMs": 300,
+      "atMs": 339,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-102C"
     },
     {
       "kind": "connect",
-      "atMs": 385,
+      "atMs": 426,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-103"
     },
     {
       "kind": "connect",
-      "atMs": 522,
+      "atMs": 558,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-103C"
     },
     {
       "kind": "connect",
-      "atMs": 3595,
+      "atMs": 3624,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-104"
     },
     {
       "kind": "break-requested",
-      "atMs": 3618,
+      "atMs": 3649,
       "derivedFrom": "collector called disableNetwork",
       "caseId": "FS-LISTEN-SDK-104"
     },
     {
       "kind": "disconnect",
-      "atMs": 3619,
+      "atMs": 3651,
       "derivedFrom": "listener fell back to the local cache",
       "caseId": "FS-LISTEN-SDK-104"
     },
     {
       "kind": "resume-requested",
-      "atMs": 3622,
+      "atMs": 3652,
       "derivedFrom": "collector called enableNetwork",
       "caseId": "FS-LISTEN-SDK-104"
     },
     {
       "kind": "reconnect",
-      "atMs": 3628,
+      "atMs": 3657,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-104"
     },
     {
       "kind": "connect",
-      "atMs": 8677,
+      "atMs": 8705,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-104C"
     },
     {
       "kind": "connect",
-      "atMs": 13740,
+      "atMs": 13782,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-105"
     },
     {
       "kind": "connect",
-      "atMs": 16828,
+      "atMs": 16869,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-105C"
     },
     {
       "kind": "connect",
-      "atMs": 16910,
+      "atMs": 16954,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-106"
     },
     {
       "kind": "disconnect",
-      "atMs": 16963,
+      "atMs": 17008,
       "derivedFrom": "listener fell back to the local cache",
       "caseId": "FS-LISTEN-SDK-106"
     },
     {
       "kind": "connect",
-      "atMs": 16965,
+      "atMs": 17010,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-106"
     },
     {
       "kind": "connect",
-      "atMs": 20064,
+      "atMs": 20103,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-107"
     }

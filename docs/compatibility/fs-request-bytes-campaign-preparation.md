@@ -258,8 +258,8 @@ has lost the implemented shape.
 
 The recorded run is published as
 `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, at source
-`9e9bf561d0642cc6101d321dfb73b1eba07254a6`, artifact SHA-256
-`7010e7eb3c94f6dc3fea6686f7f7748c5facb33af2663abb11487ba7371db1c4`, nonce `3c2132bc4ea2419e97ab9657fbeea843`.
+`facee334a603d5dfa84cb4811cdf4e7d0027d6b8`, artifact SHA-256
+`3c486cee6cd842039f114bc5d154d71e2b242b18381960716f4e1433e134a9e5`, nonce `1bccbd7f5a1c468ebf25ec82c8eca904`.
 
 | Property | Value |
 | --- | --- |
@@ -271,7 +271,7 @@ The recorded run is published as
 | Recovery rows | 153 |
 | Requests sent | 241 |
 | Every owned resource absent | true |
-| Small-request median, p99 | 0.0010 s, 0.0110 s |
+| Small-request median, p99 | 0.0010 s, 0.0108 s |
 | Boundary Commit median | 0.0245 s |
 
 The timings are a loopback floor, not a production estimate; see the
@@ -341,8 +341,8 @@ zero-wire skips are excluded, since they send nothing.
 
 **The published figures are a floor and not an estimate, and the record says so
 beside them.** A local shadow runs over loopback against an emulator on the same
-machine. In the published run the small-request median is 0.0013 s with a p99 of 0.0141 s, and the
-three boundary Commits ran 0.0287 s at the median. That is service time with no
+machine. In the published run the small-request median is 0.0010 s with a p99 of 0.0108 s, and the
+three boundary Commits ran 0.0245 s at the median. That is service time with no
 network in it at all; a production small read is an HTTPS round trip and
 will be one to two orders of magnitude higher. Citing the local p99 as a
 production per-slot figure would be wrong by that margin. It bounds the

@@ -155,10 +155,18 @@ def _receipt_problems(record: Any, side: str, root: Path) -> list[str]:
                 problems.append(f"row {row.get('id')} has a non-integer status")
             if row.get("outcome") not in {"observed", "skipped"}:
                 problems.append(f"row {row.get('id')} has no typed outcome")
+    if "requestBudget" in record:
+        from mfa_request_budget import valid_summary
+        if not valid_summary(record["requestBudget"], campaign, record.get("requestsCharged")):
+            problems.append("transport request budget is incomplete or inconsistent")
     recovery = record.get("recovery")
     if not isinstance(recovery, dict):
         problems.append("recovery evidence is missing")
     else:
+        if "creationResponsibility" in recovery:
+            from mfa_persistence import complete_summary
+            if not complete_summary(recovery["creationResponsibility"], recovery.get("ownedAccounts")):
+                problems.append("creation responsibility is incomplete or inconsistent")
         if recovery.get("cleanupVerified") is not True:
             problems.append("cleanup was not verified")
         if (

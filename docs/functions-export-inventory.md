@@ -48,3 +48,22 @@ Non-trigger exports (`params`, `logger`, `config`, `app`, `onInit`, `runWith`, `
 ## Anything else
 
 An endpoint whose manifest entry has none of `httpsTrigger`, `callableTrigger`, `eventTrigger`, `blockingTrigger`, `scheduleTrigger` or `taskQueueTrigger`, or an event type the tables above do not name, is reported as `unsupported` with the official emulator's own wording (`unsupported function type: expected either an httpsTrigger, eventTrigger, or blockingTrigger`). `GET /v1/sessions/default/functions` lists every ignored export with its trigger type, scope and reason, so a codebase author can see what fireemu declined and why.
+
+## Malformed export graphs and ambiguous names
+
+Own enumerable exports are inspected independently. CommonJS root order and
+precedence are retained; missing named ES module exports are then added. The
+interop aliases `default` and `module.exports` remain excluded. A property named
+`constructor`, `toString`, or `__proto__` is not dropped because of the merger's
+prototype. This is a runner discovery rule, not a claim that every such name is
+accepted by Firebase deployment or the native manifest parser.
+
+A cyclic group edge, throwing export getter, or uninspectable nested proxy is
+reported in the ignored inventory at that name; healthy siblings remain visible.
+Shared but acyclic groups are explored at each alias. If separate paths flatten
+to the same name (for example `api.user` and `api-user`), there is no first/last
+winner: that name is ignored and cannot be dispatched. This is a local defensive
+policy rather than verified behavior of the official emulator.
+
+Finite discovery limits and remaining boundaries are documented in
+[Node runner export discovery](compatibility/node-runner-export-discovery.md).

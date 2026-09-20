@@ -47,19 +47,41 @@ export const argvIsClean = (argv = []) =>
  * campaign envelope was exhausted.
  */
 export const createBudget = ({ now, deadlineMs, limits }) => {
+  const kinds = ['reads', 'writes', 'deletes', 'snapshots', 'listeners'];
+  if (typeof now !== 'function' || !Number.isSafeInteger(deadlineMs) || deadlineMs <= 0) {
+    throw new Error('finite positive budget duration required');
+  }
+  if (!limits || typeof limits !== 'object' || Array.isArray(limits) ||
+      Object.keys(limits).length !== kinds.length || kinds.some(kind =>
+        !Object.hasOwn(limits, kind) || !Number.isSafeInteger(limits[kind]) || limits[kind] < 0)) {
+    throw new Error('every budget kind needs a finite nonnegative integer ceiling');
+  }
+  const ceilings = Object.freeze({ ...limits });
   const startedAt = now();
+  if (!Number.isFinite(startedAt)) throw new Error('finite initial clock required');
+  let lastNow = startedAt;
+  let clockFailed = false;
   const used = { reads: 0, writes: 0, deletes: 0, snapshots: 0, listeners: 0 };
   const exceeded = [];
-  const remainingMs = () => deadlineMs - (now() - startedAt);
+  const elapsedMs = () => {
+    let current;
+    try { current = now(); } catch { current = NaN; }
+    if (!Number.isFinite(current) || current < lastNow) {
+      clockFailed = true;
+      exceeded.push('clock');
+    } else if (!clockFailed) lastNow = current;
+    return clockFailed ? deadlineMs : lastNow - startedAt;
+  };
+  const remainingMs = () => deadlineMs - elapsedMs();
   const charge = (kind, amount = 1) => {
-    if (!(kind in used)) return err(`unknown-charge:${kind}`);
+    if (!Object.hasOwn(used, kind)) return err(`unknown-charge:${kind}`);
+    if (!Number.isSafeInteger(amount) || amount <= 0) return err('invalid-charge-amount');
     if (remainingMs() <= 0) {
       exceeded.push('deadline');
       return err('deadline-exceeded');
     }
     const next = used[kind] + amount;
-    const cap = limits[kind];
-    if (typeof cap === 'number' && next > cap) {
+    if (!Number.isSafeInteger(next) || next > ceilings[kind]) {
       exceeded.push(kind);
       return err(`budget-exceeded:${kind}`);
     }
@@ -67,23 +89,58 @@ export const createBudget = ({ now, deadlineMs, limits }) => {
     return ok(next);
   };
   return {
-    charge,
-    remainingMs,
-    elapsedMs: () => now() - startedAt,
+    charge, remainingMs, elapsedMs,
     snapshot: () => ({
-      used: { ...used },
-      limits: { ...limits },
-      deadlineMs,
-      exceeded: [...new Set(exceeded)],
-      exhausted: exceeded.length > 0,
+      used: { ...used }, limits: { ...ceilings }, deadlineMs,
+      exceeded: [...new Set(exceeded)], exhausted: exceeded.length > 0,
     }),
+  };
+};
+
+/** Recovery time is accumulated only while a recovery phase is running.
+ * All passes share the same counters and elapsed time; resuming never refills
+ * either reserve. A monotonic regression is latched, including between phases.
+ * This measures time around awaited work; it does not cancel SDK operations.
+ */
+export const createRecoveryBudget = ({ now, deadlineMs, limits }) => {
+  let last = now();
+  if (!Number.isFinite(last)) throw new Error('finite initial recovery clock required');
+  let elapsed = 0;
+  let active = false;
+  let failed = false;
+  const clock = () => {
+    let current;
+    try { current = now(); } catch { current = NaN; }
+    if (!Number.isFinite(current) || current < last) failed = true;
+    if (!failed) {
+      if (active) elapsed += current - last;
+      last = current;
+    }
+    return failed ? NaN : elapsed;
+  };
+  const budget = createBudget({ now: clock, deadlineMs, limits });
+  return {
+    ...budget,
+    charge: (...args) => active ? budget.charge(...args) : err('recovery-phase-not-active'),
+    async withPhase(work) {
+      if (active) throw new Error('recovery phase already active');
+      clock();
+      active = true;
+      try {
+        if (budget.remainingMs() <= 0) throw new Error('recovery deadline exhausted');
+        return await work();
+      }
+      finally { budget.remainingMs(); active = false; }
+    },
   };
 };
 
 /** Owned paths for a run nonce; mirrors campaign.owned_paths in Python. */
 export const ownedPaths = (nonce, uid) => {
   if (!/^[0-9a-f]{32}$/.test(nonce ?? '')) throw new Error('nonce must be 128-bit lowercase hex');
-  if (!uid || typeof uid !== 'string') throw new Error('uid is required to bind the private path');
+  if (typeof uid !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(uid)) {
+    throw new Error('safe uid is required to bind the private path');
+  }
   const run = `o6_listen/${uid}/runs/${nonce}`;
   const docs = `${run}/docs`;
   return {
@@ -275,60 +332,83 @@ export const classifyCleanup = rows => {
   };
 };
 
+// These are normalized adapter receipts, not raw SDK truthiness. A cached or
+// pending local snapshot cannot prove that an owned server document is absent.
+const cleanupSnapshot = value => {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      typeof value.exists !== 'boolean' ||
+      (value.fromCache !== undefined && value.fromCache !== false) ||
+      (value.hasPendingWrites !== undefined && value.hasPendingWrites !== false)) {
+    throw new Error('invalid-cleanup-snapshot');
+  }
+  if (value.exists) {
+    if (!value.fields || typeof value.fields !== 'object' || Array.isArray(value.fields)) {
+      throw new Error('invalid-cleanup-fields');
+    }
+  } else if (value.fields != null || value.updateTime != null) {
+    throw new Error('contradictory-cleanup-absence');
+  }
+  return value;
+};
+
+// Do not copy an arbitrary SDK exception message (which may contain credentials)
+// into the public receipt. A short canonical code is sufficient for diagnosis.
+const cleanupFailure = error =>
+  typeof error?.code === 'string' && /^[a-zA-Z0-9_/-]{1,80}$/.test(error.code)
+    ? error.code : 'cleanup-operation-failed';
+
 export const runCleanup = async (deps, { client, paths, nonce, budget }) => {
   const rows = [];
   for (const target of planCleanup(paths, nonce)) {
-    const row = {
-      name: target.name,
-      pathDigest: pathDigest(target.path),
-      outcome: 'unattempted',
-      detail: null,
-    };
+    const row = { name: target.name, pathDigest: pathDigest(target.path),
+      outcome: 'unattempted', detail: null };
     rows.push(row);
     const readCharge = budget.charge('reads');
     if (!readCharge.ok) {
-      row.outcome = 'budget-exhausted';
-      row.detail = readCharge.error;
-      continue;
+      row.outcome = 'budget-exhausted'; row.detail = readCharge.error; continue;
     }
     let current;
     try {
-      current = await deps.firestore.getDoc(client, target.path);
+      current = cleanupSnapshot(await deps.firestore.getDoc(client, target.path));
+      if (budget.remainingMs() <= 0) throw new Error('late-cleanup-read');
     } catch (error) {
-      row.outcome = 'read-failed';
-      row.detail = String(error?.code ?? error?.message ?? error);
-      continue;
+      row.outcome = 'read-failed'; row.detail = cleanupFailure(error); continue;
     }
-    if (!current.exists) {
-      row.outcome = 'not-created';
-      continue;
+    if (current.exists === false) { row.outcome = 'not-created'; continue; }
+    if (current.fields.owner !== target.requiredMarker) {
+      row.outcome = 'not-owned'; row.detail = 'owner marker does not match this run'; continue;
     }
-    if (current.fields?.owner !== target.requiredMarker) {
-      row.outcome = 'not-owned';
-      row.detail = 'owner marker does not match this run';
-      continue;
+    // A client DocumentSnapshot exposes no updateTime precondition. The adapter
+    // must instead re-read ownership inside a single-attempt transaction. Never
+    // fall back to an unconditional delete if that operation is unavailable.
+    if (typeof deps.firestore.deleteOwnedDoc !== 'function') {
+      row.outcome = 'delete-failed'; row.detail = 'conditional-cleanup-unavailable'; continue;
+    }
+    const ownershipRead = budget.charge('reads');
+    if (!ownershipRead.ok) {
+      row.outcome = 'budget-exhausted'; row.detail = ownershipRead.error; continue;
     }
     const deleteCharge = budget.charge('deletes');
     if (!deleteCharge.ok) {
-      row.outcome = 'budget-exhausted';
-      row.detail = deleteCharge.error;
-      continue;
+      row.outcome = 'budget-exhausted'; row.detail = deleteCharge.error; continue;
     }
     try {
-      await deps.firestore.deleteDoc(client, target.path, { updateTime: current.updateTime });
+      await deps.firestore.deleteOwnedDoc(client, target.path, { owner: target.requiredMarker });
+      if (budget.remainingMs() <= 0) throw new Error('late-cleanup-delete');
     } catch (error) {
-      row.outcome = 'delete-failed';
-      row.detail = String(error?.code ?? error?.message ?? error);
-      continue;
+      row.outcome = 'delete-failed'; row.detail = cleanupFailure(error); continue;
     }
     const absenceCharge = budget.charge('reads');
     if (!absenceCharge.ok) {
-      row.outcome = 'absence-unverified';
-      row.detail = absenceCharge.error;
-      continue;
+      row.outcome = 'absence-unverified'; row.detail = absenceCharge.error; continue;
     }
-    const after = await deps.firestore.getDoc(client, target.path);
-    row.outcome = after.exists ? 'still-present' : 'deleted-and-absent';
+    try {
+      const after = cleanupSnapshot(await deps.firestore.getDoc(client, target.path));
+      if (budget.remainingMs() <= 0) throw new Error('late-cleanup-absence');
+      row.outcome = after.exists ? 'still-present' : 'deleted-and-absent';
+    } catch (error) {
+      row.outcome = 'absence-unverified'; row.detail = cleanupFailure(error);
+    }
   }
   return classifyCleanup(rows);
 };
@@ -351,6 +431,7 @@ export const runCase = async (deps, caseSpec, ctx) => {
   const { budget, nonce, paths, nameOf } = ctx;
   const specs = listenerNames(caseSpec);
   const registered = new Map();
+  const closedListeners = new Set();
   const events = [];
   const counters = {
     eventsDuringQuiet: 0,
@@ -514,7 +595,7 @@ export const runCase = async (deps, caseSpec, ctx) => {
         case 'awaitServer':
           await waitFor(() => {
             const seen = events.filter(row => row.listener === step.listener);
-            return seen.length > 0 && seen.at(-1).fromCache === false;
+            return seen.length > 0 && seen.at(-1).snapshotKind !== 'error' && seen.at(-1).fromCache === false;
           });
           break;
         case 'awaitError':
@@ -541,11 +622,15 @@ export const runCase = async (deps, caseSpec, ctx) => {
             unsubscribe();
           } catch {
             if (step.repeat) counters.repeatedUnsubscribeThrew = true;
+            allListenersClosed = false;
+            failures.push(`unsubscribe-failed:${step.listener}`);
+            // Retain the actual finalizer for the finally block; replacing a
+            // failed unsubscribe with a no-op invents a closed listener.
+            break;
           }
           if (!step.repeat) {
             unsubscribed = true;
-            registered.delete(step.listener);
-            registered.set(step.listener, () => {});
+            closedListeners.add(step.listener);
           }
           break;
         }
@@ -572,14 +657,15 @@ export const runCase = async (deps, caseSpec, ctx) => {
   } catch (error) {
     // A thrown step is recorded, never propagated: the caller still has to run
     // cleanup and write a receipt.
-    failures.push(`step-threw:${String(error?.code ?? error?.message ?? error)}`);
+    failures.push(`step-threw:${cleanupFailure(error)}`);
   } finally {
     for (const [name, unsubscribe] of registered) {
+      if (closedListeners.has(name)) continue;
       try {
         unsubscribe();
       } catch (error) {
         allListenersClosed = false;
-        failures.push(`unsubscribe-failed:${name}:${String(error?.message ?? error)}`);
+        failures.push(`unsubscribe-failed:${name}:${cleanupFailure(error)}`);
       }
     }
     registered.clear();
@@ -638,7 +724,7 @@ export const runCase = async (deps, caseSpec, ctx) => {
  */
 export const runCatalog = async (
   deps,
-  { catalog, contextFor, budget, cleanupBudget, paths, nonce, client, betweenCases },
+  { catalog, contextFor, budget, cleanupBudget, paths, nonce, client, betweenCases, beforeFinalCleanup },
 ) => {
   const caseRecords = [];
   const cleanupPasses = [];
@@ -661,37 +747,41 @@ export const runCatalog = async (
     return result;
   };
   let thrown = null;
+  const recover = async (label, caseSpec = null) => {
+    const work = async () => {
+      let restorationFailure = null;
+      try {
+        if (caseSpec && betweenCases) await betweenCases(caseSpec);
+        else if (!caseSpec && beforeFinalCleanup) await beforeFinalCleanup();
+      }
+      catch (error) { restorationFailure = cleanupFailure(error); }
+      // A failed restoration does not prevent attempts on independent resources.
+      const result = recordPass(label,
+        await runCleanup(deps, { client, paths, nonce, budget: cleanupBudget }));
+      if (restorationFailure) thrown = thrown ?? restorationFailure;
+      return result;
+    };
+    return typeof cleanupBudget.withPhase === 'function'
+      ? cleanupBudget.withPhase(work) : work();
+  };
   try {
     for (const caseSpec of catalog.cases) {
       caseRecords.push(await runCase(deps, caseSpec, contextFor(caseSpec)));
-      // The session hook runs before the cleanup pass, not after it. A case may
-      // end signed out, and cleanup has to read and delete under Rules that
-      // require a principal; running it first would deny every read.
-      if (betweenCases) await betweenCases(caseSpec);
-      recordPass(
-        caseSpec.caseId,
-        await runCleanup(deps, { client, paths, nonce, budget: cleanupBudget }),
-      );
+      await recover(caseSpec.caseId, caseSpec);
+      if (thrown) break;
     }
   } catch (error) {
-    thrown = String(error?.stack ?? error?.message ?? error);
+    thrown = cleanupFailure(error);
   }
   let cleanup;
   try {
-    cleanup = recordPass(
-      'final',
-      await runCleanup(deps, { client, paths, nonce, budget: cleanupBudget }),
-    );
+    cleanup = await recover('final');
   } catch (error) {
-    cleanup = classifyCleanup([
-      {
-        name: 'final-pass',
-        pathDigest: null,
-        outcome: 'cleanup-threw',
-        detail: String(error?.message ?? error),
-      },
-    ]);
-    thrown = thrown ?? String(error?.message ?? error);
+    cleanup = classifyCleanup([{
+      name: 'final-pass', pathDigest: null, outcome: 'cleanup-threw',
+      detail: cleanupFailure(error),
+    }]);
+    thrown = thrown ?? cleanupFailure(error);
   }
   return {
     caseRecords,

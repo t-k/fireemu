@@ -147,6 +147,23 @@ def test_comparator_preserves_indeterminate_for_state_recording_cleanup_failures
     assert compare_rows(base, other)["compatibility"] == "indeterminate"
 
 
+def _write_shadow_worker(output, *, state_validation=True):
+    """Provide the typed worker receipt; runtime flags stay independently asserted."""
+    worker = output / "worker"
+    worker.mkdir()
+    (worker / "result.json").write_text(json.dumps({
+        "schemaVersion": 1,
+        "target": "owned-fireemu-artifact",
+        "productionExecuted": False,
+        "completed": state_validation is True,
+        "recordingComplete": True,
+        "stateValidation": state_validation,
+        "cleanupComplete": True,
+        "failure": None,
+        "gate": {},
+    }))
+
+
 def test_shadow_public_result_keeps_state_validation_independent(tmp_path):
     report = {
         "status": "completed",
@@ -157,9 +174,7 @@ def test_shadow_public_result_keeps_state_validation_independent(tmp_path):
         "failure": None,
         "stopReason": "child-completed",
     }
-    worker = tmp_path / "worker"
-    worker.mkdir()
-    (worker / "result.json").write_text(json.dumps({"gate": {}}))
+    _write_shadow_worker(tmp_path, state_validation=False)
     with patch("broad.run", return_value=report):
         result = campaign_auth_list_shadow.run(tmp_path)
     assert result["recordingComplete"] is True
@@ -178,15 +193,14 @@ def test_shadow_does_not_handoff_without_state_validation(tmp_path, state_valida
         "failure": None,
         "stopReason": "child-completed",
     }
-    worker = tmp_path / "worker"
-    worker.mkdir()
-    (worker / "result.json").write_text(json.dumps({"gate": {}}))
     shadow = tmp_path / "shadow"
     shadow.mkdir()
+    _write_shadow_worker(shadow, state_validation=state_validation)
     with patch("broad.run", return_value=report):
         result = campaign_auth_list_shadow.run(shadow)
     assert result["recordingComplete"] is True
-    assert result["stateValidation"] is state_validation
+    assert result["stateValidation"] is False
+    assert result["runtime"]["stateValidation"] is state_validation
     assert result["completed"] is False
 
 
@@ -291,8 +305,7 @@ def test_deleted_lookup_validation_requires_explicit_empty_users():
         validate(200, {})
     with pytest.raises(ValueError):
         validate(200, {"users": [{"localId": "still-present"}]})
-    with pytest.raises(ValueError):
-        validate(200, {"users": []})
+    validate(200, {"users": []})
     validate(200, {"kind": "identitytoolkit#GetAccountInfoResponse"})
     validate(404, {"error": {"status": "USER_NOT_FOUND"}})
 
@@ -720,7 +733,7 @@ def test_gate_finish_rejects_unclosed_recovery(tmp_path):
         gate.finish()
 
 
-def test_gate_records_typed_not_found_auth_lookup_as_absent(tmp_path):
+def test_gate_rejects_lookup_only_plan_without_account_ownership(tmp_path):
     from campaign_gate import CampaignGate, create
 
     plan = campaign_manifest("2" * 32)
@@ -730,19 +743,19 @@ def test_gate_records_typed_not_found_auth_lookup_as_absent(tmp_path):
         if item["operationType"] == "auth-lookup"
     )
     plan["jobs"]["auth-list"]["recovery"] = [operation]
-    create(tmp_path / "gate", plan)
-    gate = CampaignGate(tmp_path / "gate", "auth-list")
-    gate.coordinator_call(0, lambda: (200, {}))
-    gate.coordinator_call(1, lambda: (200, {}))
-    gate.claim()
-    gate.dispatch(
-        operation,
-        True,
-        lambda: (404, {"error": {"status": "USER_NOT_FOUND"}}),
-    )
-
-    route = operation["path"].split("?", 1)[0].removeprefix("/v1/")
-    assert route in gate.snapshot()["jobs"]["auth-list"]["absent"]
+    # A single lookup cannot replace same-run creation, deletion and final
+    # absence proofs for both accounts in the closed local recipe.
+    with pytest.raises(ValueError, match="closed local Auth-list contract drift"):
+        create(tmp_path / "gate", plan)
+    assert not (tmp_path / "gate").exists()
+    # The constructor must reject the same plan even if a generic Gate was
+    # written directly, without this facade's create-time admission.
+    from shared_gate import create as create_generic_gate
+    create_generic_gate(tmp_path / "gate", plan)
+    with pytest.raises(ValueError, match="closed local Auth-list contract drift"):
+        CampaignGate(tmp_path / "gate", "auth-list")
+    state = json.loads((tmp_path / "gate/state.json").read_bytes())
+    assert state["jobs"]["auth-list"]["absent"] == []
 
 
 def test_shadow_cli_returns_nonzero_for_incomplete_result(tmp_path, monkeypatch):

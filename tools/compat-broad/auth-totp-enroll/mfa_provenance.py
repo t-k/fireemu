@@ -36,6 +36,10 @@ BOUND_PATHS: tuple[str, ...] = (
     f"{_PACKAGE}/mfa_manifest.py",
     f"{_PACKAGE}/mfa_provenance.py",
     f"{_PACKAGE}/mfa_totp.py",
+    f"{_PACKAGE}/mfa_wire.py",
+    f"{_PACKAGE}/mfa_persistence.py",
+    f"{_PACKAGE}/mfa_request_budget.py",
+    "tools/compat-broad/batch_wire.py",
     "tools/compat-inventory/pyproject.toml",
     "tools/compat-inventory/uv.lock",
 )

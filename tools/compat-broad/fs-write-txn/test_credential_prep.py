@@ -438,3 +438,24 @@ def test_owned_shadow_http_fixture_performs_same_two_slot_protocol(tmp_path):
         {"total": 31, "costMicrousd": 1_303_100},
     )
     assert combined == {"requests": 33, "costMicrousd": 1_303_300}
+
+
+def test_private_worker_uses_isolated_stdlib_interpreter(oauth_server, monkeypatch):
+    import subprocess
+
+    original = subprocess.Popen
+    calls = []
+
+    def start(argv, **kwargs):
+        calls.append((list(argv), dict(kwargs["env"])))
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", start)
+    result = prep()._private_request(
+        "refresh", ADC, fixture_origin=oauth_server["origin"], deadline=3,
+    )
+    assert len(calls) == 1
+    assert calls[0][0][1:4] == ["-I", "-S", "-B"]
+    assert set(calls[0][1]) == {"PATH", "LANG"}
+    assert result["complete"] is True and result["workerReaped"] is True
+    assert oauth_server["requests"] == [("POST", "/token")]

@@ -605,6 +605,7 @@ fn state() -> AuthState {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
         query_limits: AuthQueryLimits::EmulatorUnbounded,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
@@ -623,6 +624,8 @@ fn state_with_totp_extension() -> AuthState {
 
 fn strict_state() -> AuthState {
     AuthState {
+        idp_continuations:
+            fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::LocalBounded,
         query_limits: AuthQueryLimits::ProductionBounded,
         stateless_refresh_tokens: false,
         fake_custom_token_expiry:
@@ -4629,13 +4632,17 @@ fn strict_admin_query_applies_the_production_page_contract() {
     assert_eq!(status, 200, "{count}");
     assert_eq!(count["recordsCount"], "503");
 
-    let (status, unsupported_sort) = admin(
+    let (status, name_page) = admin(
         &strict,
         "POST",
         &format!("{ADMIN}/accounts:query"),
-        &json!({"sortBy": "NAME"}),
+        &json!({"sortBy": "NAME", "limit": 2}),
     );
-    assert_eq!(status, 501, "{unsupported_sort}");
+    assert_eq!(status, 200, "{name_page}");
+    assert_eq!(name_page["recordsCount"], "2");
+    // All display names are missing: the local deterministic tie-breaker is UID.
+    assert_eq!(name_page["userInfo"][0]["localId"], "user-000");
+    assert_eq!(name_page["userInfo"][1]["localId"], "user-001");
 
     for invalid in [
         json!({"limit": "501"}),
@@ -11199,4 +11206,569 @@ fn admin_update_refused_for_a_bad_provider_link_leaves_the_mfa_list_unchanged() 
         "{record}"
     );
     assert!(record.get("mfaInfo").is_none(), "{record}");
+}
+
+// -----------------------------------------------------------------------------
+// Strict administrator field ordering. These are local contract tests, not a
+// replacement for final-artifact execution or production comparison.
+// -----------------------------------------------------------------------------
+
+fn query_sort_fixture() -> AuthState {
+    let s = strict_state();
+    for (uid, email, name, created, last_login) in [
+        ("c", "z@example.com", "Z", 10, Some(3)),
+        ("a", "a@example.com", "B", 9, None),
+        ("d", "d@example.com", "C", 20, Some(10)),
+        ("b", "b@example.com", "A", 2, Some(2)),
+    ] {
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": uid, "email": email, "displayName": name}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let mut store = s.store.lock().unwrap();
+        let local_id = store
+            .all_user_ids()
+            .into_iter()
+            .find(|id| id.as_str() == uid)
+            .unwrap();
+        let record = store.user_mut(&local_id).unwrap();
+        record.created_at = LogicalInstant::from_unix_seconds(created);
+        record.last_sign_in_at = last_login.map(LogicalInstant::from_unix_seconds);
+    }
+    s
+}
+
+fn query_result_ids(body: &Value) -> Vec<&str> {
+    body["userInfo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["localId"].as_str().unwrap())
+        .collect()
+}
+
+#[test]
+fn strict_admin_query_all_documented_sorts_apply_before_paging_on_both_routes() {
+    let s = query_sort_fixture();
+    let before = admin(&s, "POST", &format!("{ADMIN}/accounts:query"), &json!({})).1;
+    for (sort, expected) in [
+        ("USER_ID", ["a", "b", "c", "d"]),
+        ("NAME", ["b", "a", "d", "c"]),
+        ("CREATED_AT", ["b", "a", "c", "d"]),
+        ("LAST_LOGIN_AT", ["a", "b", "c", "d"]),
+        ("USER_EMAIL", ["a", "b", "d", "c"]),
+    ] {
+        for route in [
+            format!("{ADMIN}/accounts:query"),
+            format!("{ADMIN}:queryAccounts"),
+        ] {
+            for descending in [false, true] {
+                let mut order = expected.to_vec();
+                if descending {
+                    order.reverse();
+                }
+                let (status, page) = admin(
+                    &s,
+                    "POST",
+                    &route,
+                    &json!({
+                        "sortBy": sort, "order": if descending { "DESC" } else { "ASC" },
+                        "limit": "2", "offset": "1"
+                    }),
+                );
+                assert_eq!(status, 200, "{sort} {route}: {page}");
+                assert_eq!(query_result_ids(&page), order[1..3]);
+                assert_eq!(page["recordsCount"], "2");
+            }
+        }
+    }
+    let after = admin(&s, "POST", &format!("{ADMIN}/accounts:query"), &json!({})).1;
+    assert_eq!(
+        before, after,
+        "queries must not update accounts or timestamps"
+    );
+}
+
+#[test]
+fn strict_admin_query_count_and_empty_pages_keep_their_distinct_contracts() {
+    let s = query_sort_fixture();
+    for sort in ["NAME", "CREATED_AT", "LAST_LOGIN_AT", "USER_EMAIL"] {
+        let (status, count) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:query"),
+            &json!({"sortBy": sort, "returnUserInfo": false}),
+        );
+        assert_eq!(status, 200, "{count}");
+        assert_eq!(count["recordsCount"], "4");
+        assert!(count.get("userInfo").is_none());
+        for boundary in [json!({"limit": 0}), json!({"offset": "4"})] {
+            let mut request = boundary;
+            request["sortBy"] = json!(sort);
+            let (status, page) = admin(&s, "POST", &format!("{ADMIN}/accounts:query"), &request);
+            assert_eq!(status, 200, "{page}");
+            assert_eq!(page["recordsCount"], "0");
+            assert_eq!(page["userInfo"], json!([]));
+        }
+    }
+}
+
+#[test]
+fn strict_admin_query_never_silently_ignores_a_malformed_or_unsupported_filter() {
+    let s = query_sort_fixture();
+    for malformed in [json!({}), json!("uid-a"), json!(false), json!(1)] {
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:query"),
+            &json!({"expression": malformed, "sortBy": "NAME"}),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert!(body.get("userInfo").is_none());
+    }
+    let (status, filtered) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:query"),
+        &json!({"expression": [{"email": "a@example.com"}], "sortBy": "USER_EMAIL"}),
+    );
+    assert_eq!(status, 200, "{filtered}");
+    assert_eq!(query_result_ids(&filtered), ["a"]);
+    for expression in [Value::Null, json!([])] {
+        let (status, page) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:query"),
+            &json!({"expression": expression, "sortBy": "NAME"}),
+        );
+        assert_eq!(status, 200, "{page}");
+        assert_eq!(query_result_ids(&page), ["b", "a", "d", "c"]);
+    }
+}
+
+#[test]
+fn firebase_admin_query_keeps_its_legacy_uid_order_and_ignored_paging() {
+    let s = state();
+    for (uid, name) in [("a", "Z"), ("b", "A")] {
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": uid, "displayName": name}),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+    let (status, page) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:query"),
+        &json!({"sortBy": "NAME", "limit": 1, "offset": 1}),
+    );
+    assert_eq!(status, 200, "{page}");
+    assert_eq!(query_result_ids(&page), ["a", "b"]);
+    assert_eq!(page["recordsCount"], "2");
+}
+
+#[test]
+fn sorted_admin_query_does_not_admit_an_end_user_or_a_wrong_project() {
+    let s = query_sort_fixture();
+    let request = json!({"sortBy": "NAME"});
+    for suffix in ["/accounts:query", ":queryAccounts"] {
+        let path = format!("{ADMIN}{suffix}");
+        let (status, _) = post(&s, &path, &request);
+        assert_eq!(status, 401);
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("/identitytoolkit.googleapis.com/v1/projects/wrong-project{suffix}"),
+            &request,
+        );
+        assert_eq!(status, 400);
+        assert_eq!(admin(&s, "GET", &path, &request).0, 405);
+        let mut foreign_origin = owner();
+        foreign_origin.origin = Some("https://foreign.invalid".to_owned());
+        assert_eq!(
+            handle_with(&s, "POST", &path, &foreign_origin, &request).status,
+            403
+        );
+    }
+}
+
+#[test]
+fn sorted_admin_query_remains_scoped_to_the_selected_tenant() {
+    let mut s = query_sort_fixture();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer").unwrap();
+    s.registry = Some(registry);
+    let tenant = format!("{ADMIN}/tenants/customer");
+    for (uid, name) in [("a", "Z"), ("b", "A")] {
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{tenant}/accounts"),
+            &json!({"localId": uid, "displayName": name}),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+    let (status, tenant_page) = admin(
+        &s,
+        "POST",
+        &format!("{tenant}/accounts:query"),
+        &json!({"sortBy": "NAME"}),
+    );
+    assert_eq!(status, 200, "{tenant_page}");
+    assert_eq!(query_result_ids(&tenant_page), ["b", "a"]);
+    assert_eq!(tenant_page["recordsCount"], "2");
+    let (status, default_page) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:query"),
+        &json!({"sortBy": "NAME"}),
+    );
+    assert_eq!(status, 200, "{default_page}");
+    assert_eq!(query_result_ids(&default_page), ["b", "a", "d", "c"]);
+    assert_eq!(default_page["recordsCount"], "4");
+}
+
+#[test]
+fn strict_admin_query_body_tenant_is_scoped_and_never_silently_ignored() {
+    let mut s = query_sort_fixture();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer").unwrap();
+    s.registry = Some(registry);
+    let tenant = format!("{ADMIN}/tenants/customer");
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{tenant}/accounts"),
+            &json!({"localId": "tenant-only", "displayName": "A"}),
+        )
+        .0,
+        200
+    );
+    for suffix in ["/accounts:query", ":queryAccounts"] {
+        let path = format!("{ADMIN}{suffix}");
+        let body = json!({"tenantId": "customer", "sortBy": "NAME"});
+        let (status, page) = admin(&s, "POST", &path, &body);
+        assert_eq!(status, 200, "{page}");
+        assert_eq!(query_result_ids(&page), ["tenant-only"]);
+        assert_eq!(page["recordsCount"], "1");
+        let (status, count) = admin(
+            &s,
+            "POST",
+            &path,
+            &json!({"tenantId": "customer", "returnUserInfo": false}),
+        );
+        assert_eq!(status, 200, "{count}");
+        assert_eq!(count["recordsCount"], "1");
+        assert_eq!(post(&s, &path, &body).0, 401);
+        for malformed in [json!(false), json!(7), json!([]), json!({})] {
+            let (status, refused) = admin(
+                &s,
+                "POST",
+                &path,
+                &json!({"tenantId": malformed, "sortBy": "NAME"}),
+            );
+            assert_eq!(status, 400, "{refused}");
+            assert!(refused.get("userInfo").is_none());
+        }
+        let (status, refused) = admin(
+            &s,
+            "POST",
+            &path,
+            &json!({"tenantId": "not-a-tenant", "sortBy": "NAME"}),
+        );
+        assert_eq!(status, 404, "{refused}");
+        assert!(refused.get("userInfo").is_none());
+        assert_eq!(
+            admin(&s, "POST", &format!("{path}?tenantId=other"), &body).0,
+            400
+        );
+    }
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{tenant}/accounts:query"),
+            &json!({"tenantId": "other", "sortBy": "NAME"}),
+        )
+        .0,
+        400
+    );
+    let (status, default_page) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}:queryAccounts"),
+        &json!({"sortBy": "NAME"}),
+    );
+    assert_eq!(status, 200, "{default_page}");
+    assert_eq!(default_page["recordsCount"], "4");
+}
+
+// Typed query expression tests. OR/exact matching and local parser limits are local policy.
+#[test]
+fn strict_query_expression_priorities_exact_union_and_duplicates_are_explicit() {
+    let s = query_sort_fixture();
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId":"b", "phoneNumber":"+15550000002"})
+        )
+        .0,
+        200
+    );
+    for (expression, expected) in [
+        (json!([{"email":"A@EXAMPLE.COM"}]), vec!["a"]),
+        (json!([{"phoneNumber":"+15550000002"}]), vec!["b"]),
+        (json!([{"userId":"c"}]), vec!["c"]),
+        (
+            json!([{"email":"a@example.com", "phoneNumber":"+15550000002", "userId":"c"}]),
+            vec!["a"],
+        ),
+        (
+            json!([{"email":null, "phoneNumber":"+15550000002", "userId":"c"}]),
+            vec!["b"],
+        ),
+        (
+            json!([{"email":null, "phoneNumber":null, "userId":"c"}]),
+            vec!["c"],
+        ),
+        (
+            json!([{"email":"a@example.com"}, {"userId":"a"}, {"userId":"c"}, {"userId":"c"}]),
+            vec!["a", "c"],
+        ),
+        (json!([{"email":"", "userId":"a"}]), vec![]),
+        (json!([{"email":"%@example.com"}]), vec![]),
+        (json!([{"email":"a@"}]), vec![]),
+        (json!([{"userId":"A"}]), vec![]),
+    ] {
+        let (status, page) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}:queryAccounts"),
+            &json!({"expression": expression}),
+        );
+        assert_eq!(status, 200, "{page}");
+        assert_eq!(query_result_ids(&page), expected, "{expression}");
+        assert_eq!(page["recordsCount"], expected.len().to_string());
+    }
+}
+
+#[test]
+fn strict_expression_filters_before_sort_paging_and_count_only() {
+    let s = query_sort_fixture();
+    let expression = json!([{"userId":"a"}, {"userId":"c"}, {"userId":"d"}]);
+    let before = format!("{:?}", s.store.lock().unwrap());
+    let (status, count) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}:queryAccounts"),
+        &json!({"expression":expression, "returnUserInfo":false, "sortBy":"NAME"}),
+    );
+    assert_eq!(status, 200, "{count}");
+    assert_eq!(count, json!({"recordsCount":"3"}));
+    for (order, expected) in [("ASC", vec!["d", "c"]), ("DESC", vec!["d", "a"])] {
+        let (status, page) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:query"),
+            &json!({"expression":expression, "sortBy":"NAME", "order":order, "offset":1, "limit":2}),
+        );
+        assert_eq!(status, 200, "{page}");
+        assert_eq!(query_result_ids(&page), expected);
+        assert_eq!(page["recordsCount"], "2");
+    }
+    for body in [
+        json!({"expression":expression, "limit":0}),
+        json!({"expression":expression, "offset":"9223372036854775807"}),
+    ] {
+        let (status, page) = admin(&s, "POST", &format!("{ADMIN}:queryAccounts"), &body);
+        assert_eq!(status, 200, "{page}");
+        assert_eq!(page["userInfo"], json!([]));
+    }
+    assert_eq!(before, format!("{:?}", s.store.lock().unwrap()));
+}
+
+#[test]
+fn malformed_expression_never_falls_back_to_an_unfiltered_response() {
+    let s = query_sort_fixture();
+    let before = format!("{:?}", s.store.lock().unwrap());
+    for expression in [
+        json!({}),
+        json!("SQL"),
+        json!([null]),
+        json!([[]]),
+        json!([{}]),
+        json!([{"userId":null}]),
+        json!([{"email":true}]),
+        json!([{"userId":4}]),
+        json!([{"phoneNumber":{}}]),
+        json!([{"name":"A"}]),
+        json!([{"email":"a@example.com", "userId":false}]),
+        json!([{"email":"a@example.com", "unknown":null}]),
+        json!([{"userId":"a\n"}]),
+        json!([{"email":"a@example.com"}, null]),
+    ] {
+        for count_only in [false, true] {
+            let (status, body) = admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}:queryAccounts"),
+                &json!({"expression":expression, "returnUserInfo":!count_only}),
+            );
+            assert_eq!(status, 400, "{expression}: {body}");
+            assert!(body.get("userInfo").is_none());
+            assert!(body.get("recordsCount").is_none());
+        }
+    }
+    assert_eq!(before, format!("{:?}", s.store.lock().unwrap()));
+}
+
+#[test]
+fn expression_count_and_utf8_byte_limits_are_local_and_fail_closed() {
+    let s = query_sort_fixture();
+    for (size, accepted) in [(128, true), (129, false)] {
+        let expression = vec![json!({"userId":"a"}); size];
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}:queryAccounts"),
+            &json!({"expression":expression}),
+        );
+        assert_eq!(status, if accepted { 200 } else { 400 });
+    }
+    for (value, accepted) in [
+        ("x".repeat(4096), true),
+        ("x".repeat(4097), false),
+        ("あ".repeat(1365), true),
+        ("あ".repeat(1366), false),
+    ] {
+        let (status, page) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}:queryAccounts"),
+            &json!({"expression":[{"userId":value}]}),
+        );
+        assert_eq!(status, if accepted { 200 } else { 400 }, "{page}");
+        if accepted {
+            assert!(query_result_ids(&page).is_empty());
+        }
+    }
+}
+
+#[test]
+fn account_expression_is_namespace_scoped_and_keeps_management_authorization() {
+    let mut s = query_sort_fixture();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer").unwrap();
+    s.registry = Some(registry);
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/tenants/customer/accounts"),
+            &json!({"localId":"a", "email":"tenant@example.com"})
+        )
+        .0,
+        200
+    );
+    for (selector, expected) in [
+        (json!({"userId":"a"}), vec!["a"]),
+        (json!({"email":"a@example.com"}), vec![]),
+    ] {
+        let body = json!({"tenantId":"customer", "expression":[selector]});
+        let path = format!("{ADMIN}:queryAccounts");
+        let (status, page) = admin(&s, "POST", &path, &body);
+        assert_eq!(status, 200, "{page}");
+        assert_eq!(query_result_ids(&page), expected);
+        assert_eq!(post(&s, &path, &body).0, 401);
+        let mut foreign = owner();
+        foreign.origin = Some("https://external.invalid".into());
+        assert_eq!(handle_with(&s, "POST", &path, &foreign, &body).status, 403);
+    }
+    let (status, page) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}:queryAccounts"),
+        &json!({"expression":[{"email":"tenant@example.com"}]}),
+    );
+    assert_eq!(status, 200, "{page}");
+    assert!(query_result_ids(&page).is_empty());
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}:queryAccounts"),
+            &json!({"tenantId":"unknown", "expression":[{"userId":"a"}]})
+        )
+        .0,
+        404
+    );
+}
+
+#[test]
+fn firebase_query_profile_still_reports_expression_as_unsupported() {
+    let s = state();
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:query"),
+            &json!({"expression":[{"userId":"a"}]})
+        )
+        .0,
+        501
+    );
+}
+
+#[test]
+fn generated_account_expression_corpus_runs_through_the_native_handler() {
+    let corpus: Value = serde_json::from_str(include_str!(
+        "../../../spec/compatibility/auth-account-federation-local-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(corpus["productionAllowed"], false);
+    let s = strict_state();
+    for user in corpus["account"]["fixture"].as_array().unwrap() {
+        let (status, body) = admin(&s, "POST", &format!("{ADMIN}/accounts"), user);
+        assert_eq!(status, 200, "{body}");
+    }
+    let before = format!("{:?}", s.store.lock().unwrap().users_by_creation());
+    for case in corpus["account"]["cases"].as_array().unwrap() {
+        for suffix in ["/accounts:query", ":queryAccounts"] {
+            let (status, body) = admin(&s, "POST", &format!("{ADMIN}{suffix}"), &case["request"]);
+            assert_eq!(
+                json!(status),
+                case["expected"]["status"],
+                "{}: {body}",
+                case["id"]
+            );
+            if status == 200 {
+                assert_eq!(body["recordsCount"], case["expected"]["count"]);
+                if case["expected"]["ids"].is_null() {
+                    assert!(body.get("userInfo").is_none());
+                } else {
+                    assert_eq!(
+                        json!(query_result_ids(&body)),
+                        case["expected"]["ids"],
+                        "{}",
+                        case["id"]
+                    );
+                }
+            } else {
+                assert!(body.get("userInfo").is_none());
+                assert!(body.get("recordsCount").is_none());
+            }
+            assert_eq!(
+                before,
+                format!("{:?}", s.store.lock().unwrap().users_by_creation())
+            );
+        }
+    }
 }

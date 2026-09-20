@@ -508,3 +508,34 @@ The standard for this goal is zero gap with production Firebase. A production be
 
 - 2026-09-18, FS-CONFIG-LIFECYCLE: the owner classified the managed-infrastructure surfaces (backups, backup schedules, restore, clone, locations, point-in-time recovery and similar) as out of scope for this goal. The classification document's managed-infrastructure rows stay excluded; the data-plane contract and local-safety rows remain in scope.
 - 2026-09-18, FS-DATA-WRITE: the four write-path limits the catalog declares `unsupported` (`FS-LIMIT-API-REQUEST-BYTES`, `FS-LIMIT-FIELD-PATH-BYTES`, `FS-LIMIT-FIELD-VALUE-BYTES`, `FS-LIMIT-INDEXED-FIELD-VALUE-BYTES`) remain required for closure. They are implemented in the strict profile and observed in a bounded campaign (field-path, field-value and indexed-field-value bytes on the limits collector; API request bytes on the request-byte collector). An earlier same-day note recording a class-B exclusion was withdrawn. The three index-entry limits are likewise observed, with the index configuration changes they need declared in the campaign manifest.
+
+
+## Offline integration preparation (2026-09-19)
+
+[The offline integration note](offline-integration-20260919.md) records the current
+BatchWrite ownership repair and separate Explain v9 preparation. Historical
+preparations and observation receipts remain immutable. This update records no
+new production observation, no current-artifact acceptance, and no parent
+promotion. Missing native, SDK, historical-replay and independent-review evidence
+remain requirements rather than waived checks.
+
+## Offline continuation: administrator field ordering
+
+The offline continuation adds strict Auth administrator sorting for `NAME`,
+`CREATED_AT`, `LAST_LOGIN_AT`, and `USER_EMAIL`, plus the documented project
+`queryAccounts` spelling, using the existing scoped administrator admission.
+See [the bounded local query contract](auth-admin-query-local.md) for memory bounds,
+local tie/null policy, unchanged paging limits and the still-unsupported filters.
+These native changes and their regression cases have not been compiled or executed
+in the continuation environment. The parent remains `IMPLEMENTING`; this is neither
+an artifact-bound pass nor a production compatibility claim.
+
+
+### Local continuation: AUTH-ACCOUNT / AUTH-FEDERATION (unverified native changes)
+
+The [account/federation local acceptance record](auth-account-federation-local-acceptance.md)
+describes typed account expressions, process-local pendingToken continuations, and
+stricter JSON SAML fixture validation. Native compilation/execution and independent
+review are still required. This note adds no production permission or parent closure,
+and does not convert JSON fixture handling into signed XML SAML support. The current
+pendingToken field and the deprecated pendingIdToken are tracked separately.

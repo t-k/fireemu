@@ -47,3 +47,32 @@ Run the Node checks with:
 ```text
 node --test tools/compat-broad/fs-listen-resume/*.test.mjs
 ```
+
+## Local expectation checker
+
+`node tools/compat-broad/fs-listen-resume/local_shadow_check.mjs receipt.json`
+checks the entire catalog, per-case failures/invariants, cleanup passes, budgets,
+and the current lifecycle receipt. Exit 0 means that this **local projection**
+passed these checks; it does not verify the current binary, SDK or production.
+Exit 1 means incomplete/different evidence, and exit 2 means invalid input/usage.
+
+An old immutable receipt without `lifecycle` requires the explicit
+`--legacy-lifecycle` option. The JSON result marks that limited scope. Do not add
+synthetic lifecycle evidence to old receipts, change old source hashes, or treat
+this diagnostic checker as replacement for `observation.py`'s source binding.
+
+## Local process watchdog and responsibility journal
+
+The optional `local_supervisor.py --output <fresh-directory>` runs the fixed SDK
+adapter inside an existing owned `fireemu exec`. It requires a demo project and
+numeric loopback endpoints, excludes cloud credentials/Node injection variables,
+and generates fresh unapproved local inputs. It does not start/stop the emulator
+or authorize production. See the supervised execution section of
+`docs/compatibility/fs-listen-sdk-campaign-preparation.md` for prerequisites and
+limits.
+
+The private pre-spawn launch record and synchronous adapter checkpoints retain
+recovery responsibility if a Promise stalls or the process is killed. Process
+termination is not resource cleanup. The wrapper does not retry, refresh budgets,
+perform recovery from saved identifiers, or grant deletion permission. A new
+native/SDK shadow is still required for the changed source binding.

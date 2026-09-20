@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -56,12 +57,20 @@ def test_the_ledger_stays_inside_the_declared_request_budget() -> None:
     assert ledger["requestsCharged"] > len(CASE_IDS)
 
 
-def test_the_ledger_carries_a_manifest_the_comparator_accepts() -> None:
-    ledger = load(LEDGER)
+def test_historical_ledger_is_preserved_but_not_rebound_to_the_repaired_reaper() -> None:
+    # The recorder changed; the old receipt remains true historical evidence,
+    # not a newly executed local artifact. Do not replace its provenance hashes.
+    raw = (repository_root() / LEDGER).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == (
+        "811a5c652ab41f845f3c6b02249cac292d64a949e34d46cf8373dde5191946a9"
+    )
+    ledger = json.loads(raw)
+    assert validate_campaign(ledger["campaign"]) is True
     other = json.loads(json.dumps(ledger)) | {"side": "production"}
     result = compare(ledger, other)
-    assert result["classification"] == "PREPARATION_ONLY"
-    assert result["localProblems"] == [] and result["productionProblems"] == []
+    assert result["classification"] == "INDETERMINATE"
+    assert result["localProblems"] == ["provenance does not match the worktree"]
+    assert result["productionProblems"] == ["provenance does not match the worktree"]
 
 
 def test_the_ledger_agrees_with_the_expected_local_results() -> None:

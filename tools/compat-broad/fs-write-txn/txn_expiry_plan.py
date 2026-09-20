@@ -79,6 +79,8 @@ SOURCE_FILES = (
     "txn_expiry_collector.py",
     "txn_expiry_comparison.py",
     "txn_expiry_shadow.py",
+    "txn_wire.py",
+    "../batch_wire.py",
 )
 
 NONCE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{15,63}$")

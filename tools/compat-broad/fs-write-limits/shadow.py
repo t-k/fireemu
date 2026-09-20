@@ -6,6 +6,8 @@ import argparse
 import hashlib
 import json
 import os
+import re
+from datetime import datetime
 import sys
 from pathlib import Path
 from typing import Any
@@ -37,6 +39,8 @@ def should_interrupt(rehearsal: str | None, rows: list[dict], plan: dict) -> boo
         and all(
             row.get("complete") is True
             and row.get("failure") is None
+            and row.get("dispatchFailure") is None
+            and row.get("recordingFailure") is None
             and type(row.get("status")) is int
             for row in rows
         )
@@ -59,13 +63,50 @@ def source_inputs() -> dict[str, str]:
 
 
 def typed_absence(status: Any, body: Any) -> bool:
+    # Keep source_inputs() usable in the existing minimal provenance checkout;
+    # runtime validation uses the same already-bound Gate rules as dispatch.
+    from shared_gate import typed_absence as gate_absence
+
+    return gate_absence(status, body)
+
+
+def typed_boundary_refusal(status: Any, body: Any) -> bool:
+    from shared_gate import _typed_firestore_error
+
+    return _typed_firestore_error(status, body, 400, "INVALID_ARGUMENT")
+
+
+def exact_json(left: Any, right: Any) -> bool:
+    """Compare typed JSON, never Python's bool/int/float coercing equality."""
+    try:
+        return digest(left) == digest(right)
+    except (TypeError, ValueError, RecursionError):
+        return False
+
+
+def valid_version(value: Any) -> bool:
+    """Recognize the bounded UTC timestamp form used by creation ownership."""
+    if not isinstance(value, str) or re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z", value
+    ) is None:
+        return False
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def document_matches(status: Any, body: Any, resource: str, fields: dict) -> bool:
+    """An acknowledged document, not success data accompanied by an error."""
     return (
         type(status) is int
-        and status == 404
+        and status == 200
         and isinstance(body, dict)
-        and isinstance(body.get("error"), dict)
-        and body["error"].get("status") == "NOT_FOUND"
-        and body["error"].get("code") == 404
+        and "error" not in body
+        and body.get("name") == resource
+        and exact_json(body.get("fields"), fields)
+        and valid_version(body.get("updateTime"))
     )
 
 
@@ -78,9 +119,11 @@ def evaluate_rows(rows: list[dict], plan: dict) -> list[dict]:
     for index, row in enumerate(rows):
         reason = None
         if (
-            index >= len(operations)
-            or row.get("index") != index
-            or row.get("request") != operations[index]
+            not isinstance(row, dict)
+            or index >= len(operations)
+            or type(row.get("index")) is not int
+            or row["index"] != index
+            or not exact_json(row.get("request"), operations[index])
         ):
             problems.append(
                 {"index": index, "basis": "request identity/order mismatch"}
@@ -93,6 +136,7 @@ def evaluate_rows(rows: list[dict], plan: dict) -> list[dict]:
         if (
             row.get("complete") is not True
             or row.get("failure") is not None
+            or row.get("dispatchFailure") is not None
             or type(status) is not int
         ):
             continue  # Infrastructure failures are not API semantic mismatches.
@@ -102,23 +146,10 @@ def evaluate_rows(rows: list[dict], plan: dict) -> list[dict]:
             if not typed_absence(status, body):
                 reason = "typed resource absence not proven"
         elif kind == "create-only-patch" and request["expect"]["positive"] is False:
-            if not (
-                status == 400
-                and isinstance(body, dict)
-                and isinstance(body.get("error"), dict)
-                and body["error"].get("status") == "INVALID_ARGUMENT"
-                and body["error"].get("code") == 400
-            ):
+            if not typed_boundary_refusal(status, body):
                 reason = "negative boundary was not refused with INVALID_ARGUMENT"
         else:
-            if (
-                status != 200
-                or not isinstance(body, dict)
-                or body.get("name") != resource
-                or body.get("fields") != documents[resource]["fields"]
-                or not isinstance(body.get("updateTime"), str)
-                or not body["updateTime"]
-            ):
+            if not document_matches(status, body, resource, documents[resource]["fields"]):
                 reason = "exact typed document/version not returned"
             elif kind == "create-only-patch":
                 versions[resource] = body["updateTime"]
@@ -130,6 +161,14 @@ def evaluate_rows(rows: list[dict], plan: dict) -> list[dict]:
 
 
 def validate_local_receipt(receipt: dict, plan: dict) -> bool:
+    """Reject malformed receipt structures instead of escaping with an exception."""
+    try:
+        return _validate_local_receipt(receipt, plan)
+    except (KeyError, TypeError, ValueError, IndexError, AttributeError, RecursionError):
+        return False
+
+
+def _validate_local_receipt(receipt: dict, plan: dict) -> bool:
     if receipt.get("productionExecuted") is not False or any(
         receipt.get(key) is not True
         for key in (
@@ -147,17 +186,31 @@ def validate_local_receipt(receipt: dict, plan: dict) -> bool:
         and all(
             row.get("complete") is True
             and row.get("failure") is None
+            and row.get("dispatchFailure") is None
+            and row.get("recordingFailure") is None
             and type(row.get("status")) is int
             for row in rows
         )
         and not evaluate_rows(rows, plan)
         and _validate_cleanup(receipt, plan)
-        and receipt.get("resourceAbsence")
-        == {d["resource"]: True for d in plan["documents"].values()}
+        and exact_json(
+            receipt.get("resourceAbsence"),
+            {d["resource"]: True for d in plan["documents"].values()},
+        )
     )
 
 
 def _validate_cleanup(
+    receipt: dict, plan: dict, *, observed_prefix: int | None = None
+) -> bool:
+    """Check recovery integrity without requiring observation semantics to match."""
+    try:
+        return _cleanup_matches(receipt, plan, observed_prefix=observed_prefix)
+    except (KeyError, TypeError, ValueError, IndexError, AttributeError, RecursionError):
+        return False
+
+
+def _cleanup_matches(
     receipt: dict, plan: dict, *, observed_prefix: int | None = None
 ) -> bool:
     """Check ordered cleanup against creation receipts and the final Gate journal."""
@@ -175,7 +228,7 @@ def _validate_cleanup(
         not isinstance(cleanup, list)
         or len(cleanup) != len(operations)
         or not isinstance(gate, dict)
-        or gate.get("plan") != gate_plan
+        or not exact_json(gate.get("plan"), gate_plan)
         or gate.get("planDigest") != digest(gate_plan)
     ):
         return False
@@ -185,18 +238,43 @@ def _validate_cleanup(
         not isinstance(job, dict)
         or job.get("complete") is not True
         or job.get("inflight") is not False
-        or job.get("observation") != expected_observations
-        or job.get("recovery") != len(operations)
+        or type(job.get("observation")) is not int
+        or job["observation"] != expected_observations
+        or type(job.get("recovery")) is not int
+        or job["recovery"] != len(operations)
         or job.get("resources") != declared_job["resources"]
         or not isinstance(job.get("absent"), list)
         or sorted(job["absent"]) != sorted(declared_job["resources"])
     ):
         return False
-    creations = {
-        row["body"]["name"]: row
-        for row in receipt["rows"]
-        if row["request"]["method"] == "PATCH" and row["status"] == 200
-    }
+    # Saved comparison may legitimately contain semantic mismatches (e.g. a
+    # negative boundary unexpectedly accepted). Still demand a coherent ACK for
+    # every claimed creation, bound to the original request's exact fields.
+    creations = {}
+    rows = receipt.get("rows")
+    if not isinstance(rows, list) or len(rows) != expected_observations:
+        return False
+    for index, row in enumerate(rows):
+        declared = declared_job["observation"][index]
+        if (
+            not isinstance(row, dict)
+            or type(row.get("index")) is not int
+            or row["index"] != index
+            or not exact_json(row.get("request"), declared)
+            or row.get("complete") is not True
+            or row.get("failure") is not None
+            or row.get("dispatchFailure") is not None
+            or row.get("recordingFailure") is not None
+            or type(row.get("status")) is not int
+        ):
+            return False
+        if declared["method"] == "PATCH" and row["status"] == 200:
+            name = declared["path"].split("?", 1)[0].removeprefix("/v1/")
+            if name in creations or not document_matches(
+                row["status"], row.get("body"), name, declared["body"]["fields"]
+            ):
+                return False
+            creations[name] = row
     proofs = {
         name: {
             "name": name,
@@ -207,16 +285,21 @@ def _validate_cleanup(
         }
         for name, row in creations.items()
     }
-    if job.get("creationProofs") != proofs:
+    if not exact_json(job.get("creationProofs"), proofs):
         return False
     for index, (row, declared) in enumerate(zip(cleanup, operations, strict=True)):
         if (
             not isinstance(row, dict)
-            or row.get("index") != index
-            or row.get("request") != resolve_recovery(declared, cleanup[:index])
+            or type(row.get("index")) is not int
+            or row["index"] != index
+            or not exact_json(
+                row.get("request"), resolve_recovery(declared, cleanup[:index])
+            )
             or row.get("complete") is not True
             or row.get("failure") is not None
             or row.get("dispatchFailure") is not None
+            or row.get("recordingFailure") is not None
+            or ("skipped" in row and type(row["skipped"]) is not bool)
         ):
             return False
         status, body = row.get("status"), row.get("body")
@@ -234,7 +317,9 @@ def _validate_cleanup(
             elif (
                 type(status) is not int
                 or status != 200
-                or row.get("skipped")
+                or row.get("skipped") is True
+                or not isinstance(body, dict)
+                or body != {}
                 or resource not in creations
                 or previous["body"].get("updateTime") != proofs[resource]["updateTime"]
             ):
@@ -248,11 +333,8 @@ def _validate_cleanup(
                 type(status) is not int
                 or status != 200
                 or row.get("skipped")
-                or not isinstance(body, dict)
-                or any(
-                    body.get(key) != created.get(key)
-                    for key in ("name", "fields", "updateTime")
-                )
+                or not document_matches(status, body, resource, created["fields"])
+                or body.get("updateTime") != created["updateTime"]
             ):
                 return False
     return True
@@ -261,12 +343,20 @@ def _validate_cleanup(
 def resolve_recovery(declared: dict, cleanup: list[dict]) -> dict:
     operation = dict(declared)
     source = operation.pop("versionFrom", None)
+    if source is not None and (type(source) is not int or source < 0):
+        raise ValueError("invalid cleanup version source")
     if source is not None and source < len(cleanup):
         prior = cleanup[source]
-        body = prior.get("body")
-        if prior.get("status") == 200 and isinstance(body, dict):
+        body = prior.get("body") if isinstance(prior, dict) else None
+        if (
+            isinstance(prior, dict)
+            and type(prior.get("status")) is int
+            and prior["status"] == 200
+            and isinstance(body, dict)
+            and "error" not in body
+        ):
             version = body.get("updateTime")
-            if isinstance(version, str) and version:
+            if valid_version(version):
                 operation["path"] += "?currentDocument.updateTime=" + quote(
                     version, safe=""
                 )

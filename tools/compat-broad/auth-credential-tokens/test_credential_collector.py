@@ -321,9 +321,10 @@ def test_recovery_gets_its_whole_window_from_the_moment_it_starts() -> None:
     assert collector.remaining_seconds(budget, 30.0) == 20
     # A run stopped by its own deadline still gets all twenty seconds, because the
     # accounts it created are already live and nothing else will delete them.
-    collector.enter_recovery(budget, 95.0)
-    assert collector.remaining_seconds(budget, 95.0) == 20
-    assert collector.remaining_seconds(budget, 114.9) == pytest.approx(0.1)
+    late = _budget(max_requests=10, max_wall_seconds=100, recovery_wall_seconds=20)
+    collector.enter_recovery(late, 95.0)
+    assert collector.remaining_seconds(late, 95.0) == 20
+    assert collector.remaining_seconds(late, 114.9) == pytest.approx(0.1)
 
 
 def test_the_cleanup_window_is_bounded_in_its_turn() -> None:

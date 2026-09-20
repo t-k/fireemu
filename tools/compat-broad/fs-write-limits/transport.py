@@ -19,6 +19,36 @@ from broad_contract import local_origin
 MAX_CAP = 2 * 1024 * 1024
 
 
+def _decode_json_response(payload: bytes) -> Any:
+    """Decode one finite UTF-8 JSON value without silently replacing keys.
+
+    A fully received HTTP body can still be unusable as typed API evidence.
+    Keep this helper self-contained: this file is also a standalone worker
+    (and the limits transport is included in the closed O8 archive).
+    """
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON response key")
+            result[key] = value
+        return result
+
+    def finite_float(value):
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ValueError("non-finite JSON response number")
+        return parsed
+
+    def reject_constant(_value):
+        raise ValueError("non-standard JSON response constant")
+
+    return json.loads(
+        payload.decode("utf-8"), object_pairs_hook=unique_object,
+        parse_float=finite_float, parse_constant=reject_constant,
+    )
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise urllib.error.HTTPError(
@@ -38,16 +68,31 @@ def _cap(value: Any, name: str) -> int:
 
 
 def _read_bounded(response: Any, cap: int) -> tuple[bytes, str | None]:
+    """Bound the body and require one unambiguous HTTP message boundary.
+
+    Keep at most ``cap`` bytes for diagnosis. Even equal duplicate lengths are
+    refused by this closed observer, as are unsupported transfer encodings.
+    A valid JSON prefix is not evidence that an HTTP response completed.
+    """
+    payload = b""
     try:
+        lengths = response.headers.get_all("Content-Length", [])
+        codings = response.headers.get_all("Transfer-Encoding", [])
+        if codings and (lengths or len(codings) != 1 or codings[0].lower() != "chunked"):
+            return payload, "partial"
+        expected = None
+        if lengths:
+            value = lengths[0].strip(" \t")
+            if len(lengths) != 1 or not value or any(c not in "0123456789" for c in value):
+                return payload, "partial"
+            expected = int(value)
         payload = response.read(cap + 1)
+        if len(payload) > cap:
+            return payload[:cap], "truncated"
+        if expected is not None and expected != len(payload):
+            return payload, "partial"
     except (http.client.IncompleteRead, OSError, TimeoutError, ValueError) as error:
-        payload = getattr(error, "partial", b"")
-        return bytes(payload)[:cap], "partial"
-    if len(payload) > cap:
-        return payload[:cap], "truncated"
-    length = response.headers.get("Content-Length")
-    if length is not None and int(length) != len(payload):
-        return payload, "partial"
+        return bytes(getattr(error, "partial", payload))[:cap], "partial"
     return payload, None
 
 
@@ -149,8 +194,8 @@ def _exchange(url, method, data, headers, response_cap, timeout):
         )
         return observation
     try:
-        parsed = json.loads(payload)
-    except (ValueError, UnicodeDecodeError):
+        parsed = _decode_json_response(payload)
+    except (ValueError, UnicodeDecodeError, RecursionError):
         observation.update(
             kind="non-json", body=payload.decode("utf-8", errors="replace")
         )

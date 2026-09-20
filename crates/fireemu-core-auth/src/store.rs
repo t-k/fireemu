@@ -16,6 +16,7 @@ use fireemu_core_types::hash::sha256;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
 use crate::claims::{CustomClaims, FirebaseClaims, IdTokenClaims};
+use crate::federation::PendingIdpCache;
 use crate::mfa::{
     match_code, CodeMatch, EnrolledFactor, MfaError, MfaState, PendingEnrollment, PendingSignIn,
     PendingSignInContext, PhoneFactor, TotpEnrollmentMaterial, TotpFactor, TotpPolicy, TotpSecret,
@@ -373,6 +374,76 @@ pub struct UserRecord {
     /// Salted password digest (local test hashing, not Firebase's scrypt). `None` for users
     /// without a password credential.
     password: Option<PasswordDigest>,
+}
+
+/// Field used by the bounded administrator account query.
+///
+/// The adapter selects the namespace and validates wire enums before using this API.
+/// Missing values sort before present values in ascending order; equal primary keys use
+/// local ID as a deterministic tie-breaker. These tie/null rules are local policy, not
+/// production-observed ordering. Times use the millisecond precision exposed on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserSortField {
+    /// Canonical local ID.
+    LocalId,
+    /// Display name (`NAME`).
+    Name,
+    /// Account creation time (`CREATED_AT`).
+    CreatedAt,
+    /// Last successful sign-in time (`LAST_LOGIN_AT`).
+    LastLoginAt,
+    /// Account email (`USER_EMAIL`).
+    Email,
+}
+
+/// A validated administrator account lookup predicate.
+///
+/// Each predicate is an exact match. Emails follow the store's case-insensitive ownership
+/// rule; phone numbers and local IDs are case-sensitive. Multiple predicates are combined
+/// as a de-duplicated union (an explicitly local policy pending production observation).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum UserQueryExpression {
+    /// Account email, canonicalized by the matcher.
+    Email(String),
+    /// Exact phone number.
+    PhoneNumber(String),
+    /// Exact local ID.
+    UserId(String),
+}
+
+impl UserQueryExpression {
+    fn matches(&self, user: &UserRecord) -> bool {
+        match self {
+            Self::Email(email) => user
+                .email
+                .as_deref()
+                .is_some_and(|value| value.to_lowercase() == email.to_lowercase()),
+            Self::PhoneNumber(phone) => user.phone_number.as_ref() == Some(phone),
+            Self::UserId(id) => user.local_id.as_str() == id.as_str(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum UserSortValue<'a> {
+    Text(Option<&'a str>),
+    Milliseconds(Option<i128>),
+}
+
+impl UserSortField {
+    fn value(self, user: &UserRecord) -> UserSortValue<'_> {
+        match self {
+            Self::LocalId => UserSortValue::Text(Some(user.local_id.as_str())),
+            Self::Name => UserSortValue::Text(user.display_name.as_deref()),
+            Self::CreatedAt => {
+                UserSortValue::Milliseconds(Some(user.created_at.as_nanos() / 1_000_000))
+            }
+            Self::LastLoginAt => UserSortValue::Milliseconds(
+                user.last_sign_in_at.map(|time| time.as_nanos() / 1_000_000),
+            ),
+            Self::Email => UserSortValue::Text(user.email.as_deref()),
+        }
+    }
 }
 
 /// Salted SHA-1 digest of a password. Test-only hashing: never claims scrypt compatibility.
@@ -923,6 +994,8 @@ pub struct AuthStore {
     /// credential is resolved directly rather than by scanning every user
     /// (`AUTH-TRANSIENT-04`). Kept in step with the users' own pending maps.
     pending_sign_in_owners: Arc<BTreeMap<String, LocalId>>,
+    /// Process-local raw IdP requests; detached from default snapshots and restore.
+    pending_idp: PendingIdpCache,
     /// Generated IDs held by in-flight blocking Auth candidates, grouped by reset generation and
     /// request ticket. This registry is shared by snapshots so concurrent candidates avoid each
     /// other's IDs without advancing the live random stream that ordinary nested Admin requests
@@ -1159,6 +1232,7 @@ impl AuthStore {
             oob_codes: Arc::new(BTreeMap::new()),
             verification_codes: Arc::new(BTreeMap::new()),
             pending_sign_in_owners: Arc::new(BTreeMap::new()),
+            pending_idp: PendingIdpCache::default(),
             generated_local_id_reservations: Arc::new(Mutex::new(BTreeMap::new())),
             generated_local_id_reservation_ticket: Arc::new(AtomicU64::new(0)),
             generated_id_interference: Arc::new(AtomicU64::new(0)),
@@ -1435,6 +1509,7 @@ impl AuthStore {
         self.oob_codes = Arc::new(BTreeMap::new());
         self.verification_codes = Arc::new(BTreeMap::new());
         self.pending_sign_in_owners = Arc::new(BTreeMap::new());
+        self.pending_idp = PendingIdpCache::default();
         self.reset_generation.fetch_add(1, Ordering::AcqRel);
         self.pending_user_ids.clear();
         if let Some(epoch) = self.credential_epoch {
@@ -1456,6 +1531,7 @@ impl AuthStore {
     /// bounded under abandoned flows (`AUTH-TRANSIENT-01`, `-02`). It depends on `now` and on
     /// the order of operations only.
     pub fn sweep_transient_credentials(&mut self, now: LogicalInstant) {
+        self.pending_idp.sweep(now);
         if self
             .oob_codes
             .values()
@@ -1505,6 +1581,75 @@ impl AuthStore {
                 VerificationPurpose::SignIn | VerificationPurpose::Enrollment { .. } => true,
             });
         }
+    }
+
+    /// Retains a previously resolved IdP request under a namespace-bound opaque handle.
+    ///
+    /// The adapter supplies only original provider credentials, never a linking user's ID
+    /// token. Authority binds the assertion validation mode/trust pin. Full caches omit this
+    /// optional response field rather than failing after account mutation. Nothing is evicted
+    /// while still live. This local TTL and capacity are not production quotas.
+    pub fn remember_idp_sign_in(
+        &mut self,
+        request: String,
+        authority: String,
+        now: LogicalInstant,
+    ) -> Option<String> {
+        self.pending_idp.sweep(now);
+        if !self.pending_idp.can_insert(&request, &authority, now) {
+            return None;
+        }
+        // Include the exact namespace so identical deterministic seeds in different stores
+        // cannot make a token for one tenant resolve to a different tenant's cached identity.
+        // A restore can rewind RNG/counter state, so also bind the live reset generation;
+        // old handles cannot be reassigned to a newly issued assertion after restore.
+        let tenant = self.tenant_id.as_deref().unwrap_or_default();
+        let namespace = format!(
+            "{}:{}{}:{}",
+            self.project_id.len(),
+            self.project_id,
+            tenant.len(),
+            tenant
+        );
+        // Also commit to the credential material and verification authority. A public
+        // deterministic seed/counter alone must not identify someone else's cached signed
+        // assertion. This is an opaque local handle, not a Google-issued token format.
+        let material = format!(
+            "{}:{}{}:{}",
+            request.len(),
+            request,
+            authority.len(),
+            authority
+        );
+        let prefix = format!(
+            "pidp1-{}-{:016x}-{}-",
+            fireemu_core_types::hash::hex_lower(&sha256(namespace.as_bytes())),
+            self.reset_generation(),
+            fireemu_core_types::hash::hex_lower(&sha256(material.as_bytes())),
+        );
+        let token = self.next_id(&prefix);
+        self.pending_idp
+            .insert(token.clone(), request, authority, now)
+            .then_some(token)
+    }
+
+    /// Returns raw cached provider credentials only for the same authority and active time.
+    /// No account mutation, expiry extension or consumption occurs. The adapter must still
+    /// verify current namespace/provider policy and, in signed mode, the original signature.
+    #[must_use]
+    pub fn pending_idp_sign_in(
+        &self,
+        token: &str,
+        authority: &str,
+        now: LogicalInstant,
+    ) -> Option<&str> {
+        self.pending_idp.get(token, authority, now)
+    }
+
+    /// Number of retained IdP continuation handles in this namespace.
+    #[must_use]
+    pub fn pending_idp_count(&self) -> usize {
+        self.pending_idp.len()
     }
 
     /// Outstanding pending second-factor sign-ins across every user (bounded state).
@@ -2061,6 +2206,110 @@ impl AuthStore {
         }
     }
 
+    /// A read-only page sorted by an administrator-selected field.
+    ///
+    /// Keeps at most `min(user_count, offset + limit) + 1` borrowed candidates during
+    /// selection, with saturating arithmetic and no account/credential payload clones.
+    /// The canonical local-ID path retains its allocation-bounded iterator fast path.
+    /// Non-ID fields scan the namespace once; they do not maintain stale secondary indexes.
+    #[must_use]
+    pub fn users_sorted_page(
+        &self,
+        field: UserSortField,
+        offset: usize,
+        limit: usize,
+        descending: bool,
+    ) -> Vec<&UserRecord> {
+        self.users_matching_sorted_page(&[], field, offset, limit, descending)
+    }
+
+    /// Counts the union of exact predicates; an empty predicate list selects all users.
+    /// Duplicate or overlapping predicates never duplicate a user. This is read-only.
+    #[must_use]
+    pub fn matching_user_count(&self, expressions: &[UserQueryExpression]) -> usize {
+        if expressions.is_empty() {
+            return self.users.len();
+        }
+        self.users
+            .values()
+            .filter(|user| Self::matches_user_query(user, expressions))
+            .count()
+    }
+
+    fn matches_user_query(user: &UserRecord, expressions: &[UserQueryExpression]) -> bool {
+        expressions.is_empty()
+            || expressions
+                .iter()
+                .any(|expression| expression.matches(user))
+    }
+
+    /// Filters within this namespace before ordering, offset and limit.
+    ///
+    /// The local-ID iterator needs only a page allocation. Other sorts retain at most
+    /// `min(user_count, offset + limit) + 1` borrowed candidates, never full user clones.
+    /// Email matching and the union rule are documented by [`UserQueryExpression`].
+    #[must_use]
+    pub fn users_matching_sorted_page(
+        &self,
+        expressions: &[UserQueryExpression],
+        field: UserSortField,
+        offset: usize,
+        limit: usize,
+        descending: bool,
+    ) -> Vec<&UserRecord> {
+        if limit == 0 || offset >= self.users.len() {
+            return Vec::new();
+        }
+        if field == UserSortField::LocalId {
+            if descending {
+                return self
+                    .users
+                    .values()
+                    .rev()
+                    .map(Arc::as_ref)
+                    .filter(|user| Self::matches_user_query(user, expressions))
+                    .skip(offset)
+                    .take(limit)
+                    .collect();
+            }
+            return self
+                .users
+                .values()
+                .map(Arc::as_ref)
+                .filter(|user| Self::matches_user_query(user, expressions))
+                .skip(offset)
+                .take(limit)
+                .collect();
+        }
+        let keep = offset.saturating_add(limit).min(self.users.len());
+        let mut candidates = BTreeMap::new();
+        for user in self
+            .users
+            .values()
+            .map(Arc::as_ref)
+            .filter(|user| Self::matches_user_query(user, expressions))
+        {
+            candidates.insert((field.value(user), &user.local_id), user);
+            if candidates.len() > keep {
+                if descending {
+                    candidates.pop_first();
+                } else {
+                    candidates.pop_last();
+                }
+            }
+        }
+        if descending {
+            candidates
+                .into_values()
+                .rev()
+                .skip(offset)
+                .take(limit)
+                .collect()
+        } else {
+            candidates.into_values().skip(offset).take(limit).collect()
+        }
+    }
+
     /// Number of users without allocating an ID list.
     #[must_use]
     pub fn user_count(&self) -> usize {
@@ -2102,6 +2351,7 @@ impl AuthStore {
             .saturating_add(verification)
             .saturating_add(refresh_owners)
             .saturating_add((self.pending_sign_in_owners.len() as u64).saturating_mul(64))
+            .saturating_add(u64::try_from(self.pending_idp.bytes()).unwrap_or(u64::MAX))
     }
 
     /// Bytes of user records this store shares with `other` by allocation: users whose record
@@ -2123,9 +2373,9 @@ impl AuthStore {
 
     /// Number of copy-on-write transient registries this store shares with `other`.
     ///
-    /// The six registries are refresh sessions, deletion digests, their per-user index,
-    /// email action codes, phone verification codes, and pending-sign-in owners. Issuing
-    /// a refresh session leaves the other four allocations shared.
+    /// The seven registries are refresh sessions, deletion digests, their per-user index,
+    /// email action codes, phone verification codes, pending-MFA owners, and IdP
+    /// continuations. Issuing a refresh session leaves the other five allocations shared.
     #[must_use]
     pub fn transient_registries_shared_with(&self, other: &Self) -> usize {
         usize::from(Arc::ptr_eq(&self.refresh_tokens, &other.refresh_tokens))
@@ -2143,6 +2393,7 @@ impl AuthStore {
                 &self.pending_sign_in_owners,
                 &other.pending_sign_in_owners,
             ))
+            + usize::from(self.pending_idp.shared_with(&other.pending_idp))
     }
 
     /// Creates a user.
@@ -3985,6 +4236,7 @@ impl AuthSnapshot {
     #[must_use]
     pub fn capture(store: &AuthStore) -> Self {
         let mut copy = store.clone();
+        copy.pending_idp = PendingIdpCache::default();
         // Provider configurations are process-local control-plane state. In particular,
         // OIDC client secrets must never become transferable snapshot material.
         copy.oidc_configs.clear();
@@ -4037,6 +4289,7 @@ impl AuthSnapshot {
     /// Replaces `live` with the snapshot, rebinding TOTP secrets from what `live` held.
     pub fn restore_into(&self, live: &mut AuthStore) -> RestoreReport {
         let mut restored = self.0.clone();
+        restored.pending_idp = PendingIdpCache::default();
         // A restore is a lifecycle boundary just like clear. Keep the destination's shared
         // generation cell so blocking candidates captured from the live namespace cannot commit
         // after this replacement, including when the snapshot came from another namespace.
@@ -5734,13 +5987,21 @@ impl AuthRegistry {
                 (!merged.is_empty()).then_some((tenant.clone(), merged))
             })
             .collect();
+        // Export views are serialization inputs, not a way to transfer raw IdP
+        // continuation credentials between processes/namespaces.
+        let mut exported_default = default_guard.clone();
+        exported_default.pending_idp = PendingIdpCache::default();
         let snapshot = AuthExportSnapshot {
             project: project.to_owned(),
-            default: default_guard.clone(),
+            default: exported_default,
             tenants: tenant_entries
                 .iter()
                 .zip(&tenant_guards)
-                .map(|((tenant, _), store)| (tenant.clone(), (*store).clone()))
+                .map(|((tenant, _), store)| {
+                    let mut exported = (*store).clone();
+                    exported.pending_idp = PendingIdpCache::default();
+                    (tenant.clone(), exported)
+                })
                 .collect(),
             tenant_metadata,
             tenant_config_overrides,

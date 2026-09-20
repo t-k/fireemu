@@ -731,6 +731,13 @@ pub(crate) const ROUTES: &[Route] = &[
         "admin/accounts:query",
         Handler::AdminQuery,
     ),
+    // The documented project-level spelling shares the same admission/handler/label.
+    admin(
+        "POST",
+        ":queryAccounts",
+        "admin/accounts:query",
+        Handler::AdminQuery,
+    ),
     admin(
         "POST",
         "/accounts:sendOobCode",
@@ -1203,6 +1210,37 @@ mod tests {
     }
 
     #[test]
+    fn project_query_accounts_alias_keeps_admin_admission_and_scoped_dispatch() {
+        let path = "/identitytoolkit.googleapis.com/v1/projects/demo-app:queryAccounts";
+        assert!(matches!(
+            resolve("POST", path),
+            Resolution::Matched {
+                route,
+                project: Some("demo-app"),
+                tenant: None,
+                ..
+            } if route.handler == Handler::AdminQuery && route.class == RouteClass::Admin
+        ));
+        assert_eq!(operation_of(path), "admin/accounts:query");
+        assert_eq!(class_of(path), Some((RouteClass::Admin, Some("demo-app"))));
+        assert!(matches!(
+            resolve("GET", path),
+            Resolution::MethodNotAllowed {
+                class: RouteClass::Admin,
+                project: Some("demo-app"),
+                tenant: None,
+                ..
+            }
+        ));
+        for invalid in [
+            "/identitytoolkit.googleapis.com/v1/projects/:queryAccounts",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-app/extra:queryAccounts",
+        ] {
+            assert_eq!(resolve("POST", invalid), Resolution::NotFound);
+        }
+    }
+
+    #[test]
     fn end_user_labels_are_the_published_canonical_operation_names() {
         for route in ROUTES.iter().filter(|r| r.class == RouteClass::EndUser) {
             let Pattern::Exact(path) = route.pattern else {
@@ -1265,11 +1303,17 @@ mod tests {
         ));
         assert!(matches!(
             resolve("POST", "/identitytoolkit.googleapis.com/v1/projects/demo-app:createSessionCookie"),
-            Resolution::Matched { route, project: Some("demo-app"), tenant: None, .. } if route.handler == Handler::AdminCreateSessionCookie
+            Resolution::Matched { route,
+                project: Some("demo-app"),
+                tenant: None,
+                .. } if route.handler == Handler::AdminCreateSessionCookie
         ));
         assert!(matches!(
             resolve("PATCH", "/emulator/v1/projects/demo-app/config"),
-            Resolution::Matched { route, project: Some("demo-app"), tenant: None, .. } if route.handler == Handler::EmulatorPatchConfig
+            Resolution::Matched { route,
+                project: Some("demo-app"),
+                tenant: None,
+                .. } if route.handler == Handler::EmulatorPatchConfig
         ));
         assert!(matches!(
             resolve(

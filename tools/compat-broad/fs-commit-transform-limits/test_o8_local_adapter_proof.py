@@ -6,6 +6,7 @@ cleanup, receipt and release path while proving that the production capability
 and production transport are never used.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -48,13 +49,27 @@ def test_local_adapter_proves_fail_closed_lifecycle_without_production_execution
     assert result["productionExecuted"] is False
     assert result["workerArchiveSha256"] is None
     assert result["failure"] is None
-    # Transform-only Commit writes remain conservatively owned: without an
-    # explicit exists=true precondition, a lost acknowledgement could still
-    # have created a document. The local proof therefore demonstrates the
-    # safe held-reservation outcome rather than manufacturing a release.
-    assert result["releaseEligible"] is False
-    assert result["reservationReleased"] is False
-    assert result["collection"]["collectionComplete"] is False
+    # The compiler now binds every transform to an existing document. Verify
+    # that prerequisite from the actual registered plan before expecting release;
+    # missing/malformed preconditions must still retain uncertain ownership.
+    reservation = ledger.snapshot()["reservations"][result["ticket"]["reservation"]]
+    gate = json.loads((Path(reservation["claim"]["gatePath"]) / "state.json").read_bytes())
+    transforms = [
+        write
+        for job in gate["plan"]["jobs"].values()
+        for operation in job["observation"]
+        for write in (operation.get("body") or {}).get("writes", [])
+        if "transform" in write
+    ]
+    assert transforms
+    assert all(
+        write.get("currentDocument") == {"exists": True}
+        and write["currentDocument"]["exists"] is True
+        for write in transforms
+    )
+    assert result["releaseEligible"] is True
+    assert result["reservationReleased"] is True
+    assert result["collection"]["collectionComplete"] is True
     assert result["chargedCalls"] == 27
     assert calls[:2] == ["refresh", "tokeninfo"]
     assert calls[-4:] == ["project", "database", "auth", "key"]
@@ -62,7 +77,5 @@ def test_local_adapter_proves_fail_closed_lifecycle_without_production_execution
     receipt = (tmp_path / "output/receipt.json").read_text()
     assert '"productionExecuted": false' in receipt
     assert '"executionKind": "injected-transport"' in receipt
-    assert not (tmp_path / "output/release.json").exists()
-    assert ledger.snapshot()["reservations"][result["ticket"]["reservation"]][
-        "state"
-    ] == "held"
+    assert (tmp_path / "output/release.json").exists()
+    assert reservation["state"] == "released"

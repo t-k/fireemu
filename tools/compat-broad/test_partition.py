@@ -54,10 +54,10 @@ from pathlib import Path
 out=Path(sys.argv[1])
 if len(sys.argv)>2:
  s=socket.socket();s.bind(("127.0.0.1",0));s.listen()
- (out/"instance.json").write_text(json.dumps({"pid":os.getpid(),"parentPid":os.getppid(),"argv":sys.argv,"nonce":"test-nonce","origins":["http://127.0.0.1:"+str(s.getsockname()[1])]}))
+ (out/"instance.json").write_text(json.dumps({"pid":os.getpid(),"parentPid":os.getppid(),"argv":sys.orig_argv[1:],"nonce":"test-nonce","origins":["http://127.0.0.1:"+str(s.getsockname()[1])]}))
  time.sleep(20)
 else:
- p=subprocess.Popen([sys.executable,__file__,str(out),"child"])
+ p=subprocess.Popen([sys.executable,"-I","-S","-B",__file__,str(out),"child"])
  signal.signal(signal.SIGTERM,lambda *_: sys.exit(1))
  try: p.wait()
  finally:
@@ -65,7 +65,7 @@ else:
 """)
     report = {"status": "incomplete"}
     partition.supervise_partition(
-        [sys.executable, str(script), str(tmp_path)],
+        [sys.executable, "-I", "-S", "-B", str(script), str(tmp_path)],
         tmp_path,
         "test-nonce",
         report,

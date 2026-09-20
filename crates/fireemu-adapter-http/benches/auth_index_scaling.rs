@@ -55,6 +55,7 @@ fn state(users: usize) -> AuthState {
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
         fake_custom_token_expiry: FakeCustomTokenExpiry::Ignore,
+        idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
         query_limits: AuthQueryLimits::EmulatorUnbounded,
         app_check: None,
         app_check_policy: None,

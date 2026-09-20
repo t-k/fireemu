@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import secrets
 import sys
@@ -26,6 +27,8 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from batch_wire import _read_bounded_response
 
 from action_codes_plan import (
     CAMPAIGN_ID,
@@ -184,7 +187,16 @@ class _Run:
                 self.sleep(waiting)
         self.last_start = self.clock()
 
+    def check_deadline(self) -> None:
+        now = self.clock()
+        start = self.recovery_started if self.recovering else self.started
+        limit = self.recovery_seconds if self.recovering else self.wall_seconds
+        if not math.isfinite(now) or now < start or now - start >= limit:
+            prefix = "recovery " if self.recovering else ""
+            raise CollectorError(prefix + "wall clock budget exhausted")
+
     def spend(self) -> None:
+        self.check_deadline()
         if self.recovering:
             self.recovery_requests += 1
             if self.recovery_requests > self.recovery_budget:
@@ -217,6 +229,8 @@ class _Run:
     def request(self, path: str, body: dict[str, Any], privileged: bool):
         self.spend()
         self.pace()
+        # Rate-limiting is part of the phase, not an extension of its deadline.
+        self.check_deadline()
         headers = {"content-type": "application/json"}
         if privileged:
             headers["authorization"] = "Bearer owner"
@@ -290,7 +304,7 @@ def _project_stage(
     if stage["id"] in _ACCOUNT_BINDING:
         name = _ACCOUNT_BINDING[stage["id"]]
         local_id = body.get("localId")
-        if isinstance(local_id, str) and local_id:
+        if type(status) is int and status == 200 and isinstance(local_id, str) and local_id:
             run.secrets[name + ".localId"] = local_id
             run.owned[name] = {
                 "email": run.secrets[name + ".email"],
@@ -341,15 +355,47 @@ def _recover(
                 "status": None,
                 "failure": type(error).__name__,
             }, None
-        users = body.get("users") if isinstance(body, dict) else None
-        if status != 200 or not isinstance(users, list | type(None)):
-            return {"id": row["id"], "account": None, "status": status}, None
-        present = {
-            user.get("email"): user.get("localId")
-            for user in (users or [])
-            if isinstance(user, dict)
-        }
-        found = {email: uid for email, uid in present.items() if email in owned_emails}
+        def invalid():
+            return {
+                "id": row["id"], "account": None, "status": status,
+                "failure": "invalid-owned-address-lookup",
+            }, None
+
+        # A missing users member is meaningful only in the exact typed empty
+        # response. Never infer absence from {}, null, errors or truncated pages.
+        if type(status) is not int or status != 200 or not isinstance(body, dict):
+            return invalid()
+        if "error" in body or "nextPageToken" in body:
+            return invalid()
+        kind = "identitytoolkit#GetAccountInfoResponse"
+        if "kind" in body and body["kind"] != kind:
+            return invalid()
+        if "users" not in body:
+            if body != {"kind": kind}:
+                return invalid()
+            users = []
+        else:
+            users = body["users"]
+        if not isinstance(users, list) or len(users) > len(owned_emails):
+            return invalid()
+        found: dict[str, str] = {}
+        identifiers: set[str] = set()
+        for user in users:
+            if not isinstance(user, dict):
+                return invalid()
+            email, uid = user.get("email"), user.get("localId")
+            if (
+                not isinstance(email, str) or email not in owned_emails
+                or not isinstance(uid, str) or not uid
+                or any(ord(char) < 32 or ord(char) == 127 for char in uid)
+                or email in found or uid in identifiers
+            ):
+                return invalid()
+            known = run.secrets.get(owned_emails[email] + ".localId")
+            if known is not None and known != uid:
+                return invalid()
+            found[email] = uid
+            identifiers.add(uid)
         return {
             "id": row["id"],
             "account": None,
@@ -373,6 +419,15 @@ def _recover(
     )
     for name in manifest["ownedAccounts"]:
         row = by_id["recover-delete-" + name]
+        if discovered is None:
+            # A previously issued UID does not override a failed/currently
+            # conflicting discovery. Leave the responsibility open, not deleted.
+            rows.append({
+                "id": row["id"], "account": name, "status": None,
+                "skipped": "owned identity not confirmed by discovery",
+                "failure": "unverified-owned-identity",
+            })
+            continue
         if present_names is not None and name not in present_names:
             # A stage may delete an owned account on purpose. Asking the backend
             # to delete it again only collects a refusal for a run that did
@@ -469,6 +524,7 @@ def collect(
             status, body = run.request(
                 stage["path"], stage["body"], stage["routeClass"] == "admin"
             )
+            stages.append(_project_stage(run, stage, status, body))
         except CollectorError as error:
             # A violated bound still recovers before it is reported.
             stop_reason = "bound-exceeded:" + stage["id"]
@@ -478,7 +534,6 @@ def collect(
             stop_reason = "stage-failed:" + stage["id"]
             failure = error
             break
-        stages.append(_project_stage(run, stage, status, body))
     run.begin_recovery()
     recovery, cleanup_complete, remaining, delete_failures, proven = _recover(
         run, manifest
@@ -561,18 +616,33 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def http_opener() -> urllib.request.OpenerDirector:
-    return urllib.request.build_opener(_NoRedirect)
+    return urllib.request.build_opener(_NoRedirect(), urllib.request.ProxyHandler({}))
 
 
 def _http_send(method: str, url: str, headers: dict[str, str], body: dict[str, Any]):
-    request = urllib.request.Request(
-        url, data=json.dumps(body).encode(), method=method, headers=headers
-    )
+    parsed = urllib.parse.urlsplit(url)
+    _loopback_origin(f"{parsed.scheme}://{parsed.netloc}")
+    if parsed.fragment:
+        raise CollectorError("request fragment is forbidden")
+    payload = json.dumps(body, allow_nan=False).encode()
+    if len(payload) > 65536:
+        raise CollectorError("local request body exceeds its bound")
+    request = urllib.request.Request(url, data=payload, method=method, headers=headers)
     try:
-        with http_opener().open(request, timeout=20) as answer:
-            return answer.status, json.loads(answer.read() or b"{}")
-    except urllib.error.HTTPError as error:
-        return error.code, json.loads(error.read() or b"{}")
+        try:
+            answer = http_opener().open(request, timeout=20)
+        except urllib.error.HTTPError as error:
+            answer = error
+        with answer:
+            raw, failure = _read_bounded_response(answer, method)
+            if failure is not None or 300 <= answer.status < 400:
+                raise CollectorError("incomplete or redirected local response")
+            value = json.loads(raw)
+            if not isinstance(value, dict):
+                raise CollectorError("object response required")
+            return answer.status, value
+    except (ValueError, OSError, urllib.error.URLError) as error:
+        raise CollectorError("local transport failed: " + type(error).__name__) from None
 
 
 def run_cli(arguments: argparse.Namespace) -> dict[str, Any]:

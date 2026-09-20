@@ -258,7 +258,9 @@ def test_an_incomplete_receipt_stops_later_rows_but_still_recovers() -> None:
 
 def test_an_exhausted_deadline_stops_observation_before_the_request() -> None:
     plan = case()
-    ticks = iter([0.0, 100.0] + [1.0] * 500)
+    # Observation expires at 10s; recovery remains within its original 900s.
+    # A monotonic clock must not roll back from 100s to 1s.
+    ticks = iter([0.0, 100.0] + [100.0] * 500)
     transport = Transport(plan)
     bundle = collect(
         plan,

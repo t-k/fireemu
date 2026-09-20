@@ -62,7 +62,7 @@ def test_transport_refuses_a_target_outside_the_loopback_interface() -> None:
 
 
 def test_loopback_hosts_are_the_only_permitted_targets() -> None:
-    assert set(shadow.LOOPBACK_HOSTS) == {"127.0.0.1", "localhost", "[::1]"}
+    assert set(shadow.LOOPBACK_HOSTS) == {"127.0.0.1", "::1"}
 
 
 def test_custom_token_is_unsigned_and_decodes_to_the_given_payload() -> None:
@@ -190,7 +190,7 @@ def _stub(responses: list[tuple[int, dict]]):
 
 def test_an_absent_account_needs_a_200_lookup_with_an_empty_result() -> None:
     tracker = _tracker_with("uid-1", owned_email(_tracker_with("uid-1", None), 0))
-    poster = _stub([(200, {}), (200, {}), (200, {})])
+    poster = _stub([(200, {}), (200, {"users": []}), (200, {"users": []})])
     shadow.cleanup("http://127.0.0.1:1", _budget(30, 60, 0.0), tracker, poster=poster)
     report = cleanup_report(tracker)
     assert report["cleanupComplete"] is True
@@ -228,7 +228,7 @@ def test_a_lookup_that_still_returns_the_account_is_not_absence() -> None:
 
 def test_an_addressless_account_skips_the_address_lookup_entirely() -> None:
     tracker = _tracker_with("uid-custom", None)
-    poster = _stub([(200, {}), (200, {})])
+    poster = _stub([(200, {}), (200, {"users": []})])
     shadow.cleanup("http://127.0.0.1:1", _budget(30, 60, 0.0), tracker, poster=poster)
     paths = [path for path, _ in poster.calls]
     assert paths == ["/accounts:delete", "/accounts:lookup"]
@@ -317,7 +317,8 @@ def test_a_stopped_run_writes_a_record_with_the_missing_cases_marked_not_run(
         tracker=tracker,
         budget=_budget(60, 600, 0.0),
         failure="BudgetExceeded: request budget exhausted",
-        shutdown={"exitCode": 0, "processStopped": True, "remainingChildren": 0},
+        shutdown={"exitCode": 0, "processStopped": True, "remainingChildren": 0,
+                  "outputDrainerStopped": True, "failures": []},
         source_binding={"commit": None, "artifactSha256": "c" * 64},
     )
     assert exit_code == 1
@@ -486,7 +487,7 @@ def _service(*, cookie_subject: str | None = None) -> dict:
             if uid in body.get("localId", [])
             or account["email"] in body.get("email", [])
         ]
-        return 200, ({"users": found} if found else {})
+        return 200, {"users": found}
 
     def user_lookup(body: dict) -> tuple[int, dict]:
         if revoked(body["idToken"]):
@@ -573,7 +574,7 @@ def test_a_response_already_received_is_never_discarded_by_the_wall_clock_bound(
     monkeypatch,
 ) -> None:
     service = _service()
-    budget = _budget(10, 2, 0.0)
+    budget = _budget(10, 2, 0.0, started_monotonic=0.0)
     ticks = iter([0.0, 5.0, 5.0])
     monkeypatch.setattr(shadow.time, "monotonic", lambda: next(ticks))
     # The request was sent and paid for, so its result must reach the caller.
@@ -758,7 +759,8 @@ def _stopped_local_receipt() -> dict:
         tracker=_cleaned_tracker(),
         budget=_budget(60, 600, 0.0),
         failure="BudgetExceeded: request budget exhausted",
-        shutdown={"exitCode": 0, "processStopped": True, "remainingChildren": 0},
+        shutdown={"exitCode": 0, "processStopped": True, "remainingChildren": 0,
+                  "outputDrainerStopped": True, "failures": []},
         source_binding={"commit": "a" * 40, "artifactSha256": "c" * 64},
     )
     assert exit_code == 1

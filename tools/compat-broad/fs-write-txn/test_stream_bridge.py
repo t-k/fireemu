@@ -227,6 +227,7 @@ def test_worker_ipc_records_refusal_before_next_request(tmp_path, code, rpc):
     """Exercise the actual subprocess, framed channel, Gate and held Ledger."""
     import json
     import os
+    import shlex
     import time
 
     from batch_contract import Credential
@@ -237,9 +238,11 @@ def test_worker_ipc_records_refusal_before_next_request(tmp_path, code, rpc):
     executable = tmp_path / "node"
     trace = tmp_path / "ipc-trace.jsonl"
     trace.touch(mode=0o600)
-    executable.write_text(
-        f"#!{sys.executable}\n"
-        + f"import sys; sys.path.insert(0, {str(ROOT)!r}); sys.path.insert(0, {str(Path(__file__).parent)!r})\n"
+    # Isolate this Python test double from site hooks and shutdown handlers.
+    # Keep the production worker's existing one-second shutdown deadline.
+    script = tmp_path / "node-worker.py"
+    script.write_text(
+        f"import sys; sys.path.insert(0, {str(ROOT)!r}); sys.path.insert(0, {str(Path(__file__).parent)!r})\n"
         + f"TARGET={target}; CODE={code}; TRACE={str(trace)!r}\n"
         + """import json, os, socket
 from stream_bridge import read_message, write_message
@@ -301,6 +304,10 @@ for index in range(TARGET + 2):
     binding = request(index + 1)
 channel.close()
 """
+    )
+    executable.write_text(
+        "#!/bin/sh\nexec " + shlex.quote(sys.executable)
+        + " -I -S -B " + shlex.quote(str(script)) + ' "$@"\n'
     )
     executable.chmod(0o700)
     previous = os.environ["PATH"]

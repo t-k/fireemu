@@ -39,6 +39,7 @@ REFUSED = "REFUSED"
 BOUND_SOURCES = (
     "tools/compat-broad/fs-listen-resume/listen_collector.mjs",
     "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs",
+    "tools/compat-broad/fs-listen-resume/listen_journal.mjs",
     "tools/compat-broad/fs-listen-resume/cases.py",
     "tools/compat-broad/fs-listen-resume/campaign.py",
     "tools/compat-broad/fs-listen-resume/observation.py",

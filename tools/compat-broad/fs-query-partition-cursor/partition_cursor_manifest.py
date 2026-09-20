@@ -45,6 +45,7 @@ def source_inputs() -> dict[str, str]:
         for path in HERE.glob("*.py")
         if not path.name.startswith("test_") and path.name != "conftest.py"
     )
+    files.append(HERE.parent / "batch_wire.py")
     return {
         str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in files
@@ -181,7 +182,7 @@ def validate_permission(permission: Any) -> None:
 
 
 EVIDENCE = (
-    ROOT / "spec/compatibility/broad-runs/fs-query-partition-cursor-preparation.json"
+    ROOT / "spec/compatibility/broad-runs/fs-query-partition-cursor-preparation-v2.json"
 )
 
 

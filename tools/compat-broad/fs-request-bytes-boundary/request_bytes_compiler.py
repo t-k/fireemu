@@ -50,11 +50,14 @@ def _fields_size(fields: dict[str, dict[str, Any]]) -> int:
 
 
 def document_size_bytes(resource: str, fields: dict[str, dict[str, Any]]) -> int:
-    if "/documents/" not in resource:
-        raise ValueError("resource must contain /documents/")
-    relative = resource.split("/documents/", 1)[1]
-    segments = relative.split("/")
-    if not segments or len(segments) % 2 or any(not segment for segment in segments):
+    if not isinstance(resource, str):
+        raise ValueError("malformed document resource")
+    parts = resource.split("/", 5)
+    if (len(parts) != 6 or parts[0] != "projects" or not parts[1]
+            or parts[2] != "databases" or not parts[3] or parts[4] != "documents"):
+        raise ValueError("malformed document resource")
+    segments = parts[5].split("/")
+    if len(segments) < 2 or len(segments) % 2 or any(not segment for segment in segments):
         raise ValueError("malformed document resource")
     return (
         16

@@ -16,8 +16,6 @@ import os
 import socket
 import subprocess
 import sys
-import urllib.error
-import urllib.request
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -30,7 +28,11 @@ from partition_cursor_collector import (
     MAX_RAW_BYTES,
     collect_local,
     validate_origin,
+    _documents,
+    _typed_error,
 )
+
+from partition_cursor_wire import request as wire_request, validate_receipt
 
 PROJECT = "demo-partition-cursor"
 KNOWN_LOCAL_DIFFERENCES = {
@@ -141,6 +143,15 @@ def _unretained(bundle: dict[str, Any], cleanup: dict[str, Any]) -> str | None:
         for row in dispatched
     ):
         return "unretained-dispatched-row"
+    if any(
+        not isinstance(row.get("receipt"), dict)
+        or row["receipt"].get("complete") is not True
+        or row.get("evidenceFailure") is True
+        for row in dispatched
+    ):
+        # Retained diagnostic bytes do not establish a usable API observation.
+        # Do not report a semantic difference when the wire/body binding failed.
+        return "unusable-response-evidence"
     return None
 
 
@@ -231,39 +242,7 @@ def loopback_transport(origin: Any) -> Callable[[dict[str, Any]], dict[str, Any]
     validate_origin(origin)
 
     def transmit(request: dict[str, Any]) -> dict[str, Any]:
-        body = request.get("body")
-        payload = None if body is None else json.dumps(body).encode()
-        message = urllib.request.Request(
-            origin + request["path"],
-            data=payload,
-            method=request["method"],
-            headers={
-                "authorization": "Bearer owner",
-                "content-type": "application/json",
-            },
-        )
-        try:
-            with urllib.request.urlopen(
-                message, timeout=REQUEST_TIMEOUT_SECONDS
-            ) as response:
-                status, headers = response.status, response.headers
-                raw = response.read(MAX_RAW_BYTES + 1)
-        except urllib.error.HTTPError as error:
-            status, headers = error.code, error.headers
-            raw = error.read(MAX_RAW_BYTES + 1)
-        complete = len(raw) <= MAX_RAW_BYTES
-        try:
-            decoded = json.loads(raw) if complete and raw else None
-        except json.JSONDecodeError:
-            decoded = None
-        return {
-            "status": status,
-            "body": decoded,
-            "complete": complete,
-            "contentType": headers.get("content-type", ""),
-            "byteCount": len(raw),
-            "rawBody": bytes(raw),
-        }
+        return wire_request(origin, request, timeout=REQUEST_TIMEOUT_SECONDS)
 
     return transmit
 
@@ -306,10 +285,14 @@ def residual_documents(
             },
         }
     )
-    body = receipt.get("body")
-    if receipt.get("status") != 200 or not isinstance(body, list):
+    try:
+        body = validate_receipt(receipt)
+    except (ValueError, TypeError, UnicodeError, RecursionError):
         return None
-    group = sum(1 for entry in body if isinstance(entry, dict) and "document" in entry)
+    documents = _documents(body)
+    if receipt["status"] != 200 or documents is None:
+        return None
+    group = len(documents)
     root = transmit(
         {
             "phase": "verification",
@@ -334,22 +317,25 @@ def residual_documents(
             },
         }
     )
-    cursor_body = cursor.get("body")
-    if cursor.get("status") != 200 or not isinstance(cursor_body, list):
+    try:
+        cursor_body, root_body = validate_receipt(cursor), validate_receipt(root)
+    except (ValueError, TypeError, UnicodeError, RecursionError):
         return None
-    if root.get("status") not in (200, 404):
-        # Absence must be proven by an explicit 404. A failed read is unknown,
-        # never zero, because the whole rehearsal pass criterion rests on this.
+    cursor_documents = _documents(cursor_body)
+    if cursor["status"] != 200 or cursor_documents is None:
         return None
-    return (
-        group
-        + int(root.get("status") == 200)
-        + sum(
-            1
-            for entry in cursor_body
-            if isinstance(entry, dict) and "document" in entry
-        )
-    )
+    if any(doc["name"] not in plan["ownedResources"][1:] for doc in documents + cursor_documents):
+        return None
+    if root["status"] == 404:
+        if not _typed_error(root_body, "NOT_FOUND", 404):
+            return None
+    elif root["status"] == 200:
+        if (not isinstance(root_body, dict) or "error" in root_body
+                or root_body.get("name") != plan["ownedScope"]):
+            return None
+    else:
+        return None
+    return group + int(root["status"] == 200) + len(cursor_documents)
 
 
 SHADOW_RECORD = (

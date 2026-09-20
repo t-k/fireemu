@@ -13,15 +13,14 @@ one-time code, a token, a pending credential or a session identifier.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import signal
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,9 +34,9 @@ from mfa_cases import (
 )
 from mfa_collector import (
     assert_no_sensitive_material,
-    checkpoint_bytes,
+    cleanup_complete,
+    outstanding_cleanup,
     initial_state,
-    load_checkpoint,
     mark_deleted,
     record_step,
     register_owned,
@@ -46,7 +45,10 @@ from mfa_collector import (
 )
 from mfa_manifest import compile_campaign
 from mfa_provenance import compute_provenance, describe_worktree, repository_root
+from mfa_persistence import RunPersistence, complete_summary
+from mfa_request_budget import RequestBudget, valid_summary as valid_request_summary
 from mfa_totp import TotpParameters, totp_code, wrong_code
+from mfa_wire import call as _bounded_call, origin as _local_origin, validate_url
 
 PROJECT = "fireemu-35fe6"
 API_KEY = "fireemu-local-shadow-key"
@@ -68,41 +70,15 @@ class Refused(RuntimeError):
         self.code = code
 
 
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *_: Any) -> None:
-        return None
-
-
 def _call(url: str, body: Any = None, token: str | None = None) -> tuple[int, dict]:
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != "http" or parsed.hostname not in {
-        "127.0.0.1",
-        "::1",
-        "localhost",
-    }:
-        raise ValueError("the local shadow only talks to loopback")
-    headers = {}
-    payload = None
-    if token:
-        headers["Authorization"] = "Bearer " + token
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-        payload = json.dumps(body).encode()
-    request = urllib.request.Request(url, data=payload, headers=headers)
-    opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
-    try:
-        with opener.open(request, timeout=20) as response:
-            return response.status, json.loads(response.read() or b"{}")
-    except urllib.error.HTTPError as error:
-        raw = error.read()
-        try:
-            return error.code, json.loads(raw or b"{}")
-        except ValueError:
-            return error.code, {"raw": raw[:200].decode("utf-8", "replace")}
+    # A socket inactivity timeout is not a whole-response deadline. The fixed,
+    # isolated worker is killed/reaped by its caller if the full call expires.
+    return _bounded_call(url, body, token)
 
 
 def _code_of(payload: dict) -> str | None:
-    message = payload.get("error", {}).get("message")
+    error = payload.get("error") if isinstance(payload, dict) else None
+    message = error.get("message") if isinstance(error, dict) else None
     return message.split(":", 1)[0].strip() if isinstance(message, str) else None
 
 
@@ -112,19 +88,52 @@ class Instance:
     def __init__(self, origin: str, control: str, token: str) -> None:
         # Every call through this instance is charged, so the budget reflects the run's
         # real HTTP traffic rather than one notional request per case.
-        self.requests = 0
-        self.origin = origin
-        self.identity = origin + "/identitytoolkit.googleapis.com"
+        self._request_budget = RequestBudget()
+        self.origin = _local_origin(origin)
+        self.identity = self.origin + "/identitytoolkit.googleapis.com"
         # The control URL is handed over with its version prefix already attached.
-        base = control.rstrip("/")
-        self.control = base.removesuffix("/v1")
+        self.control = _local_origin(control, control=True)
         self.token = token
+
+    @property
+    def requests(self) -> int:
+        return self._request_budget.requests
+
+    def bind_plan(self, plan: dict) -> None:
+        self._request_budget.bind(plan)
+
+    def begin_recovery(self, owned_uids: tuple[str, ...]) -> None:
+        self._request_budget.begin_recovery(owned_uids)
+
+    def finish_requests(self) -> dict:
+        self._request_budget.close()
+        return self._request_budget.snapshot()
 
     def send(
         self, url: str, body: Any = None, token: str | None = None
     ) -> tuple[int, dict]:
-        self.requests += 1
-        return _call(url, body, token)
+        parsed = validate_url(url)
+        if f"{parsed.scheme}://{parsed.netloc}" not in {self.origin, self.control}:
+            raise ValueError("request is outside the owned loopback origins")
+        # Count every attempt, including failure, before dispatch. This counter
+        # includes inspection/control calls; it is not a new quota allowance.
+        operation = uid = None
+        if self._request_budget.snapshot()["phase"] == "recovery":
+            # Validate and send the same private value snapshot; caller-owned
+            # dictionaries/lists must not retarget a reserved UID after admission.
+            body = copy.deepcopy(body)
+            # Only this run's delete/lookup pair may spend the reserved tail.
+            # No query-string alias, body extension or control request is admitted.
+            prefix = f"{self.identity}/v1/projects/{PROJECT}/accounts:"
+            if url == prefix + "delete" and type(body) is dict and set(body) == {"localId"}:
+                operation, uid = "delete", body["localId"]
+            elif (url == prefix + "lookup" and type(body) is dict and set(body) == {"localId"}
+                    and type(body["localId"]) is list and len(body["localId"]) == 1):
+                operation, uid = "lookup", body["localId"][0]
+            if token != "owner":
+                raise ValueError("recovery requires the local owner route")
+        with self._request_budget.attempt(operation=operation, uid=uid):
+            return _call(url, body, token)
 
     def public(self, path: str, body: Any) -> tuple[int, dict]:
         return self.send(f"{self.identity}{path}?key={API_KEY}", body)
@@ -134,7 +143,7 @@ class Instance:
 
     def emulator(self, path: str) -> tuple[int, dict]:
         # The inspection routes are served at the instance root, not under the API host prefix.
-        return _call(
+        return self.send(
             f"{self.origin}/emulator/v1/projects/{PROJECT}{path}", token=self.token
         )
 
@@ -163,8 +172,10 @@ class Instance:
         )
 
     def require(self, status: int, payload: dict) -> dict:
-        if status != 200:
+        if type(status) is not int or status != 200:
             raise Refused(status, _code_of(payload))
+        if not isinstance(payload, dict) or "error" in payload:
+            raise ValueError("local Auth success response is malformed")
         return payload
 
 
@@ -190,18 +201,29 @@ def _observe(instance: Instance, path: str, body: Any) -> tuple[int, dict, str |
     return status, payload, _code_of(payload)
 
 
-def create_account(instance: Instance, email: str, verified: bool = True) -> dict:
+def create_account(instance: Instance, email: str | None, verified: bool = True, *, on_created=None) -> dict:
+    if email is None and verified:
+        raise ValueError("anonymous account cannot use email verification setup")
     payload = instance.require(
         *instance.public(
             "/v1/accounts:signUp",
-            {"email": email, "password": "Shadow-Passw0rd!", "returnSecureToken": True},
+            ({"returnSecureToken": True} if email is None else
+             {"email": email, "password": "Shadow-Passw0rd!", "returnSecureToken": True}),
         )
     )
-    account = {
-        "localId": payload["localId"],
-        "idToken": payload["idToken"],
-        "email": email,
-    }
+    # Register a typed signup ACK before token parsing, email verification or
+    # a second sign-in can fail. A callback failure stops all subsequent setup.
+    uid = payload.get("localId") if isinstance(payload, dict) else None
+    if (not isinstance(payload, dict) or "error" in payload
+            or not isinstance(uid, str) or not uid or any(ord(c) < 32 or ord(c) == 127 for c in uid)
+            or ("email" in payload and payload["email"] != email)):
+        raise ValueError("signup did not acknowledge the requested account")
+    account = {"localId": uid, "email": email}
+    if on_created is not None:
+        on_created(account)
+    if not isinstance(payload.get("idToken"), str) or not payload["idToken"]:
+        raise ValueError("signup token is missing or malformed")
+    account["idToken"] = payload["idToken"]
     if verified:
         instance.require(
             *instance.admin(
@@ -209,7 +231,7 @@ def create_account(instance: Instance, email: str, verified: bool = True) -> dic
                 {"localId": account["localId"], "emailVerified": True},
             )
         )
-        account["idToken"] = instance.require(
+        signed = instance.require(
             *instance.public(
                 "/v1/accounts:signInWithPassword",
                 {
@@ -218,7 +240,11 @@ def create_account(instance: Instance, email: str, verified: bool = True) -> dic
                     "returnSecureToken": True,
                 },
             )
-        )["idToken"]
+        )
+        if (not isinstance(signed.get("idToken"), str) or not signed["idToken"]
+                or ("localId" in signed and signed["localId"] != uid)):
+            raise ValueError("verified sign-in did not return the owned account")
+        account["idToken"] = signed["idToken"]
     return account
 
 
@@ -343,34 +369,162 @@ def _complete_phone_mfa(
 
 
 def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
-    """Walk the ordered cases, checkpointing before each aged wait."""
+    """Record creation intent before dispatch; retain uncertainty after failure."""
     plan = compile_campaign(uuid.uuid4().hex)
     state = initial_state(plan, time.time())
     checkpoint = output / "checkpoint.json"
     rows: dict[str, dict] = {}
     accounts: dict[str, dict] = {}
+    # One fresh plan per instance; no old requests/counters can be rebound.
+    instance.bind_plan(plan)
+    # Exclusive persistence initialization happens before any service request.
+    journal = RunPersistence(output, state, plan)
+    primary: BaseException | None = None
+    responsibility = None
+    request_summary = None
+
+    def failed(error: BaseException) -> None:
+        nonlocal primary
+        if primary is None:
+            primary = error
+        state["aborted"] = True
+        state["abortReason"] = state["abortReason"] or "local-sequence-failed"
+
     try:
-        _walk(instance, state, checkpoint, rows, accounts)
+        _walk(instance, state, checkpoint, rows, accounts, journal=journal)
+    except BaseException as error:
+        failed(error)
     finally:
-        # Cleanup runs whether the walk finished, refused, or raised.
-        _delete_owned(instance, state, accounts)
-        # The budget bounds the whole run's traffic, including the calls made before the
-        # first row was charged and the deletions made after the last one.
-        state["requests"] = max(state["requests"], instance.requests)
-        checkpoint.write_bytes(checkpoint_bytes(state))
-    return build_report(rows, load_checkpoint(checkpoint.read_bytes()), plan)
+        try:
+            # Only confirmed, in-process UIDs confer this existing authority.
+            # A persisted intent with no ACK never creates deletion authority.
+            instance.begin_recovery(tuple(item["id"] for item in state["ownedResources"]
+                                          if item["kind"] == "account"))
+            _delete_owned(instance, state, accounts)
+        except BaseException as error:
+            failed(error)
+        # Transport is authoritative, not one notional charge per case.
+        state["requests"] = instance.requests
+        try:
+            request_summary = instance.finish_requests()
+            if not valid_request_summary(request_summary, plan, state["requests"]):
+                state["aborted"] = True
+                state["abortReason"] = state["abortReason"] or "local-request-budget-incomplete"
+        except BaseException as error:
+            failed(error)
+        # A crash or journal failure during finalization must not leave a
+        # checkpoint that independently reports DONE. Only the final outcome
+        # publication below may remove this provisional abort.
+        provisional = copy.deepcopy(state)
+        if provisional["aborted"] is not True:
+            provisional["aborted"] = True
+            provisional["abortReason"] = "local-finalization-pending"
+        try:
+            journal.save_checkpoint(provisional)
+        except BaseException as error:
+            failed(error)
+        try:
+            responsibility = journal.finalize(state, request_budget=request_summary)
+        except BaseException as error:
+            failed(error)
+        if responsibility is not None:
+            if responsibility["resourceCleanupComplete"] is not True:
+                state["aborted"] = True
+                state["abortReason"] = state["abortReason"] or "local-responsibility-incomplete"
+            try:
+                journal.finish_checkpoint(state)
+            except BaseException as error:
+                failed(error)
+        try:
+            journal.close()
+        except BaseException as error:
+            failed(error)
+    if primary is not None:
+        raise primary
+    report = build_report(rows, state, plan)
+    report["requestBudget"] = request_summary
+    report["recovery"]["creationResponsibility"] = responsibility
+    report["recovery"]["cleanupVerified"] = (
+        report["recovery"]["cleanupVerified"] is True
+        and responsibility["resourceCleanupComplete"] is True
+    )
+    report["recordingComplete"] = (
+        report["recordingComplete"] is True
+        and responsibility["journalComplete"] is True
+        and responsibility["unresolvedCreations"] == 0
+    )
+    return report
+
+
+def _create_owned_account(instance: Instance, state: dict,
+                          accounts: dict, journal: RunPersistence, role: str,
+                          verified: bool) -> dict:
+    """The same path handles named and anonymous creation, including ACK loss."""
+    journal.intent(role)
+
+    def acknowledged(account: dict) -> None:
+        if any(item.get("localId") == account["localId"] for item in accounts.values()):
+            raise ValueError("signup UID was already owned by another role")
+        register_owned(state, "account", account["localId"], time.time())
+        # Keep in-process responsibility even if ACK publication or checkpoint fails.
+        accounts[role] = account
+        journal.acknowledge(role, account["localId"])
+        journal.save_checkpoint(state)
+
+    return create_account(instance, journal.email_for(role), verified,
+                          on_created=acknowledged)
+
+
+def _empty_account_reply(status: int, payload: Any, *, deletion: bool) -> bool:
+    """Only the finite local success envelopes prove deletion or absence."""
+    if type(status) is not int or status != 200 or not isinstance(payload, dict):
+        return False
+    kind = "identitytoolkit#DeleteAccountResponse" if deletion else "identitytoolkit#GetAccountInfoResponse"
+    if deletion:
+        return payload == {} or payload == {"kind": kind}
+    if set(payload) - {"kind", "users"}:
+        return False
+    if "kind" in payload and payload["kind"] != kind:
+        return False
+    return ("users" in payload and type(payload["users"]) is list and not payload["users"]) or payload == {"kind": kind}
 
 
 def _delete_owned(instance: Instance, state: dict[str, Any], accounts: dict) -> None:
+    """Try each confirmed account once; one failed account must not skip the others.
+
+    This consumes the existing per-instance request counter. It is not a restart
+    authorization, a new transport budget, or proof about a timed-out create.
+    """
+    recorded = {
+        item["id"] for item in state["ownedResources"]
+        if item["kind"] == "account" and isinstance(item["id"], str) and item["id"]
+    }
+    seen = set()
     for record in accounts.values():
-        instance.admin(
-            f"/v1/projects/{PROJECT}/accounts:delete", {"localId": record["localId"]}
-        )
-        status, payload = instance.admin(
-            f"/v1/projects/{PROJECT}/accounts:lookup", {"localId": [record["localId"]]}
-        )
-        absent = status == 200 and not payload.get("users")
-        mark_deleted(state, record["localId"], absence_verified=absent)
+        uid = record.get("localId") if isinstance(record, dict) else None
+        if not isinstance(uid, str) or uid not in recorded or uid in seen:
+            continue
+        seen.add(uid)
+        # Invalidate an earlier in-memory readback before attempting a fresh one.
+        mark_deleted(state, uid, absence_verified=False)
+        resource = next(item for item in state["ownedResources"] if item["id"] == uid)
+        resource["deleted"] = False
+        try:
+            delete_status, delete_body = instance.admin(
+                f"/v1/projects/{PROJECT}/accounts:delete", {"localId": uid}
+            )
+            if not _empty_account_reply(delete_status, delete_body, deletion=True):
+                continue
+            resource["deleted"] = True
+            status, payload = instance.admin(
+                f"/v1/projects/{PROJECT}/accounts:lookup", {"localId": [uid]}
+            )
+            mark_deleted(state, uid, absence_verified=_empty_account_reply(status, payload, deletion=False))
+        except Exception:  # noqa: BLE001 -- retain this account, attempt the remaining owned accounts
+            # Do not serialize transport exceptions: they may contain credential bytes.
+            # Unverified resource flags, rather than an error swallowed into success,
+            # remain the durable reason this run cannot be complete.
+            continue
 
 
 def _walk(
@@ -379,17 +533,15 @@ def _walk(
     checkpoint: Path,
     rows: dict[str, dict],
     accounts: dict[str, dict],
+    *,
+    journal: RunPersistence,
 ) -> None:
-    suffix = uuid.uuid4().hex[:12]
     charged = {"requests": instance.requests}
 
     def account_for(role: str, verified: bool = True) -> dict:
         if role not in accounts:
-            created = create_account(
-                instance, f"o2-{role}-{suffix}@example.com", verified
-            )
-            accounts[role] = created
-            register_owned(state, "account", created["localId"], time.time())
+            _create_owned_account(instance, state, accounts, journal,
+                                  role, verified)
         return accounts[role]
 
     def finish(case_id: str, status: int, code: str | None, **extra: Any) -> None:
@@ -403,7 +555,7 @@ def _walk(
             time.time(),
             requests=max(1, spent),
         )
-        checkpoint.write_bytes(checkpoint_bytes(state))
+        journal.save_checkpoint(state)
 
     control = account_for("pending-control")
     pendings, sessions = _acquire_aged_resources(instance, account_for)
@@ -642,15 +794,7 @@ def _walk(
         {"idToken": unverified["idToken"], "totpEnrollmentInfo": {}},
     )
     finish("unverified-email-enroll-refusal", status, code)
-    anonymous = instance.require(
-        *instance.public("/v1/accounts:signUp", {"returnSecureToken": True})
-    )
-    register_owned(state, "account", anonymous["localId"], time.time())
-    accounts["interaction-anonymous"] = {
-        "localId": anonymous["localId"],
-        "idToken": anonymous["idToken"],
-        "email": None,
-    }
+    anonymous = account_for("interaction-anonymous", verified=False)
     status, payload, code = _observe(
         instance,
         "/v2/accounts/mfaEnrollment:start",
@@ -712,14 +856,8 @@ def build_report(
         "expectations": expectations,
         "disagreements": [item["id"] for item in expectations if not item["agrees"]],
         "recovery": {
-            "cleanupVerified": all(
-                resource["deleted"] and resource["absenceVerified"]
-                for resource in state["ownedResources"]
-            ),
-            "remainingOwnedResources": sum(
-                0 if resource["deleted"] and resource["absenceVerified"] else 1
-                for resource in state["ownedResources"]
-            ),
+            "cleanupVerified": cleanup_complete(state),
+            "remainingOwnedResources": len(outstanding_cleanup(state)),
             # The owned instance is created for this run and discarded with it, so no
             # project configuration is mutated and nothing has to be restored. The
             # production side of this campaign does mutate configuration and must prove
@@ -808,17 +946,20 @@ def capture_child_identity(
     rather than from the argument vector that was requested. `Popen` returns as soon as
     the child exists, which can be before its `exec` has replaced the image, and in that
     window the child still carries this process's own argument vector; the capture
-    therefore waits for an identity that differs from this process's own. None means the
-    child was already gone, and the reaper then refuses to signal that PID at all.
+    therefore waits for an identity that differs from this process's own. A missing
+    identity can also be a transient procfs read failure; only waiting for the child
+    proves that it exited. None means exited or unconfirmed, never signal authority.
     """
     own = process_identity(os.getpid())
     deadline = time.monotonic() + settle_seconds
     while True:
+        if _has_exited(process):
+            return None
         identity = process_identity(process.pid)
-        if identity is None or identity != own:
+        if identity is not None and identity != own:
             return identity
         if time.monotonic() >= deadline:
-            return identity
+            return None
         time.sleep(0.01)
 
 
@@ -850,9 +991,12 @@ def reap_owned_child(
         if _has_exited(process):
             break
         identity = process_identity(process.pid)
-        if identity is None:
-            break
-        if identity != spawn_identity:
+        if identity is None or spawn_identity is None or identity != spawn_identity:
+            # A failed/empty OS identity read is not proof that this child exited.
+            # Re-check waitpid to recognize an exit racing with the identity read;
+            # otherwise retain the cleanup obligation without signalling the PID.
+            if _has_exited(process):
+                return "stopped"
             return "pid-reused-refusing-to-signal"
         try:
             os.kill(process.pid, signal_number)
@@ -863,21 +1007,20 @@ def reap_owned_child(
             break
         except subprocess.TimeoutExpired:
             continue
-    if _has_exited(process):
-        return "stopped"
-    if process_identity(process.pid) is not None:
-        return "survived"
-    return "stopped"
+    return "stopped" if _has_exited(process) else "survived"
 
 
 def parent(output: Path) -> int:
+    # Never let a failed new child inherit an old shadow ledger from this path.
+    # Reserve the output before building or starting anything; failure stays an
+    # incomplete generation and a retry must choose a fresh output directory.
+    output.mkdir(mode=0o700, parents=True, exist_ok=False)
     root = repository_root()
     binary = root / "target" / "debug" / "fireemu"
     if not binary.is_file():
         subprocess.run(
             ["cargo", "build", "--locked", "-p", "fireemu"], cwd=root, check=True
         )
-    output.mkdir(parents=True, exist_ok=True)
     config = output / "fireemu.json"
     config.write_text(json.dumps(CONFIG), encoding="utf-8")
     environment = {
@@ -923,6 +1066,9 @@ def parent(output: Path) -> int:
     if cleanup != "stopped":
         print(f"owned instance cleanup: {cleanup}", file=sys.stderr)
         return 1
+    if returncode != 0:
+        print(f"owned instance did not complete successfully (exit {returncode})", file=sys.stderr)
+        return 1
     if not (output / "shadow.json").is_file():
         print(f"no shadow ledger was written (exit {returncode})", file=sys.stderr)
         return 1
@@ -936,7 +1082,20 @@ def parent(output: Path) -> int:
             indent=2,
         )
     )
-    return 0
+    recovery = report.get("recovery")
+    return 0 if (
+        report.get("recordingComplete") is True
+        and report.get("disagreements") == []
+        and isinstance(recovery, dict)
+        and valid_request_summary(
+            report.get("requestBudget"), report.get("campaign"), report.get("requestsCharged"))
+        and ("creationResponsibility" not in recovery or complete_summary(
+            recovery["creationResponsibility"], recovery.get("ownedAccounts")))
+        and recovery.get("cleanupVerified") is True
+        and type(recovery.get("remainingOwnedResources")) is int
+        and recovery["remainingOwnedResources"] == 0
+        and recovery.get("configurationRestored") is True
+    ) else 1
 
 
 if __name__ == "__main__":

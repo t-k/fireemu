@@ -368,15 +368,15 @@ class CaseAwareEndpoint:
         message = case["expectedLocal"]["message"] if case else None
         rpc = request["rpc"]
         body = request.get("body") or {}
-        reply = {"code": code, "status": "", "message": message, "complete": True}
+        reply = {"code": code, "status": collector.CANONICAL_STATUS[code], "message": message, "complete": True}
         if rpc == "BeginTransaction":
             if code:
-                return {**reply, "body": {}}
+                return reply
             self.issued += 1
             token = base64.b64encode(f"token-{self.issued}".encode()).decode()
             return {**reply, "body": {"transaction": token}}
         if rpc == "Rollback":
-            return {**reply, "body": {}}
+            return reply if code else {**reply, "body": {}}
         if rpc == "GetDocument":
             name = request["name"]
             if name not in self.documents:
@@ -423,7 +423,7 @@ class CaseAwareEndpoint:
                             version,
                         )
             if code:
-                return {**reply, "body": {}}
+                return reply
             return {
                 **reply,
                 "body": {

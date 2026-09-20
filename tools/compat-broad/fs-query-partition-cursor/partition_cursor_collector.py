@@ -11,42 +11,35 @@ same run; an unproven version never authorizes a delete.
 from __future__ import annotations
 
 import copy
+from datetime import datetime
 import hashlib
 import json
 import os
 import re
+import stat
 from collections.abc import Callable
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from partition_cursor_case import RECONSTRUCTION_SLOTS, validate_plan
 
-LOOPBACK_ORIGINS = frozenset({"http://127.0.0.1", "http://localhost", "http://[::1]"})
+from partition_cursor_wire import same_json, validate_origin, validate_receipt
+
+LOOPBACK_ORIGINS = frozenset({"http://127.0.0.1:8080", "http://[::1]:8080"})
 DEFAULT_ORIGIN = "http://127.0.0.1:8080"
 MAX_RAW_BYTES = 65536
 BENIGN_SKIPS = frozenset({"no-page-token", "range-not-required"})
-
-_TIMESTAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$")
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_TIMESTAMP = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z$")
 
 
-def validate_origin(origin: Any) -> None:
-    """Fail closed before any directory is created or any request is sent."""
-    if not isinstance(origin, str):
-        raise PermissionError("origin must be a loopback URL")
-    try:
-        parsed = urlsplit(origin)
-        host = parsed.hostname
-    except ValueError as error:
-        raise PermissionError("origin must be a loopback URL") from error
-    if (
-        parsed.scheme != "http"
-        or host not in _LOOPBACK_HOSTS
-        or parsed.path not in ("", "/")
-    ):
-        raise PermissionError("origin must be a loopback URL")
+def _write_all(handle: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        count = os.write(handle, view)
+        if count <= 0:
+            raise OSError("no progress writing retained evidence")
+        view = view[count:]
 
 
 def _publish(directory_fd: int, filename: str, value: Any) -> None:
@@ -57,7 +50,7 @@ def _publish(directory_fd: int, filename: str, value: Any) -> None:
         temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=directory_fd
     )
     try:
-        os.write(handle, payload)
+        _write_all(handle, payload)
         os.fsync(handle)
     finally:
         os.close(handle)
@@ -76,7 +69,7 @@ def _publish_bytes(directory_fd: int, filename: str, payload: bytes) -> None:
         dir_fd=directory_fd,
     )
     try:
-        os.write(handle, payload)
+        _write_all(handle, payload)
         os.fsync(handle)
     finally:
         os.close(handle)
@@ -84,7 +77,13 @@ def _publish_bytes(directory_fd: int, filename: str, payload: bytes) -> None:
 
 
 def _typed_timestamp(value: Any) -> bool:
-    return isinstance(value, str) and bool(_TIMESTAMP.fullmatch(value))
+    if not isinstance(value, str) or not _TIMESTAMP.fullmatch(value):
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
 
 
 def _normalize(receipt: Any) -> dict[str, Any]:
@@ -110,13 +109,18 @@ def _documents(body: Any) -> list[dict[str, Any]] | None:
         return None
     found = []
     for entry in body:
-        if not isinstance(entry, dict):
+        if not isinstance(entry, dict) or "error" in entry:
             return None
         if "document" in entry:
             document = entry["document"]
-            if not isinstance(document, dict):
+            if (not isinstance(document, dict) or "error" in document
+                    or not isinstance(document.get("name"), str)
+                    or not isinstance(document.get("fields"), dict)):
                 return None
             found.append(document)
+        elif not _typed_timestamp(entry.get("readTime")):
+            # An arbitrary object/error is not an empty query result.
+            return None
     return found
 
 
@@ -126,35 +130,34 @@ def _documents_match(expected: list[dict[str, Any]], body: Any) -> bool:
         return False
     return all(
         document.get("name") == item["name"]
-        and document.get("fields") == item["fields"]
+        and same_json(document.get("fields"), item["fields"])
         for document, item in zip(found, expected)
     )
 
 
 def _cursor_valid(cursor: Any) -> bool:
+    # This finite lane orders by __name__ only, not arbitrary field values.
     return (
         isinstance(cursor, dict)
-        and isinstance(cursor.get("values"), list)
-        and bool(cursor["values"])
-        and cursor.get("before") in (None, True, False)
+        and set(cursor) <= {"values", "before"}
+        and isinstance(cursor.get("values"), list) and len(cursor["values"]) == 1
+        and isinstance(cursor["values"][0], dict)
+        and set(cursor["values"][0]) == {"referenceValue"}
+        and isinstance(cursor["values"][0]["referenceValue"], str)
+        and bool(cursor["values"][0]["referenceValue"])
+        and ("before" not in cursor or type(cursor["before"]) is bool)
     )
 
 
 def _cursors_ordered(partitions: list[Any]) -> bool:
-    references = []
-    for cursor in partitions:
-        values = cursor["values"]
-        if len(values) != 1 or not isinstance(values[0], dict):
-            return True
-        reference = values[0].get("referenceValue")
-        if not isinstance(reference, str):
-            return True
-        references.append(reference)
+    if not all(_cursor_valid(item) for item in partitions):
+        return False
+    references = [item["values"][0]["referenceValue"] for item in partitions]
     return all(earlier < later for earlier, later in pairwise(references))
 
 
 def _partitions(body: Any) -> list[Any] | None:
-    if not isinstance(body, dict):
+    if not isinstance(body, dict) or "error" in body:
         return None
     found = body.get("partitions", [])
     if not isinstance(found, list) or not all(_cursor_valid(item) for item in found):
@@ -162,40 +165,40 @@ def _partitions(body: Any) -> list[Any] | None:
     return found
 
 
-def _any_typed_error(body: Any) -> bool:
+def _any_typed_error(body: Any, http_status: int) -> bool:
     return (
-        isinstance(body, dict)
-        and isinstance(body.get("error"), dict)
+        isinstance(body, dict) and set(body) == {"error"}
+        and isinstance(body["error"], dict)
+        and type(body["error"].get("code")) is int
+        and body["error"]["code"] == http_status
         and isinstance(body["error"].get("status"), str)
+        and bool(body["error"]["status"])
     )
 
 
-def _typed_error(body: Any, status: str) -> bool:
-    return (
-        isinstance(body, dict)
-        and isinstance(body.get("error"), dict)
-        and body["error"].get("status") == status
-    )
+def _typed_error(body: Any, status: str, http_status: int) -> bool:
+    return _any_typed_error(body, http_status) and body["error"]["status"] == status
 
 
 def _owned_root(body: Any, plan: dict[str, Any]) -> bool:
     return (
         isinstance(body, dict)
+        and "error" not in body
         and body.get("name") == plan["ownedScope"]
-        and body.get("fields") == {"marker": {"stringValue": plan["campaignId"]}}
+        and same_json(body.get("fields"), {"marker": {"stringValue": plan["campaignId"]}})
         and _typed_timestamp(body.get("updateTime"))
     )
 
 
 def _write_versions(body: Any, count: int) -> list[str] | None:
-    if not isinstance(body, dict):
+    if not isinstance(body, dict) or "error" in body or not _typed_timestamp(body.get("commitTime")):
         return None
     results = body.get("writeResults")
     if not isinstance(results, list) or len(results) != count:
         return None
     versions = []
     for result in results:
-        if not isinstance(result, dict) or not _typed_timestamp(
+        if not isinstance(result, dict) or "error" in result or not _typed_timestamp(
             result.get("updateTime")
         ):
             return None
@@ -214,28 +217,29 @@ def _matches(
             return False
     elif status != expect["status"]:
         return False
-    if expect.get("typed") and not _typed_error(body, expect["typed"]):
+    if expect.get("typed") and not _typed_error(body, expect["typed"], status):
         return False
-    if expect.get("typedOpen") and not _any_typed_error(body):
+    if expect.get("typedOpen") and not _any_typed_error(body, status):
         return False
     if expect.get("outcome") == "refused":
         return True
     kind = operation["kind"]
     if kind in ("create-only-patch", "cleanup-ownership-read"):
-        return status == 404 or _owned_root(body, plan)
+        return _typed_error(body, "NOT_FOUND", 404) if status == 404 else _owned_root(body, plan)
     if kind in ("seed-commit", "cleanup-seed-delete"):
         if expect.get("updateTimes") is False:
             # A delete never reports an update time, so only the result count and
             # the commit time bind this receipt.
             return (
-                isinstance(body, dict)
+                isinstance(body, dict) and "error" not in body
                 and isinstance(body.get("writeResults"), list)
+                and all(isinstance(item, dict) and "error" not in item for item in body["writeResults"])
                 and len(body["writeResults"]) == expect["writeResults"]
                 and _typed_timestamp(body.get("commitTime"))
             )
         return _write_versions(body, expect["writeResults"]) is not None
     if kind == "cleanup-root-delete":
-        return isinstance(body, dict)
+        return isinstance(body, dict) and not body
     if "documents" in expect:
         return _documents_match(expect["documents"], body)
     if expect.get("documentsAsserted") is False and "maxPartitions" in expect:
@@ -244,6 +248,7 @@ def _matches(
             partitions is not None
             and len(partitions) <= expect["maxPartitions"]
             and _cursors_ordered(partitions)
+            and all(item["values"][0]["referenceValue"] in operation["targetResources"] for item in partitions)
         )
     if expect.get("reconstruction"):
         return _documents(body) is not None
@@ -293,7 +298,7 @@ def _bind_reconstruction(
 ) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
     source = rows[operation["cursorFrom"]]
     receipt = source["receipt"] or {}
-    if source["status"] == "skipped" or receipt.get("status") != 200:
+    if source["status"] in {"skipped", "failed"} or receipt.get("status") != 200:
         # A refused or undispatched partition response never authorizes a
         # reconstruction range, which would otherwise read the whole query.
         return None, "no-partition-response", None
@@ -304,6 +309,9 @@ def _bind_reconstruction(
     if ranges > RECONSTRUCTION_SLOTS:
         return None, "reconstruction-slots-exceeded", None
     slot = operation["reconstructionSlot"]
+    if (source["status"] != "pass" or not _cursors_ordered(partitions)
+            or any(item["values"][0]["referenceValue"] not in operation["targetResources"] for item in partitions)):
+        return None, "unusable-partition-response", None
     if slot >= ranges:
         return None, "range-not-required", None
     request = _request("observation", operation["index"], operation)
@@ -370,7 +378,7 @@ def _retain_raw(
     if len(payload) > MAX_RAW_BYTES:
         row["raw"] = {"present": False, "reason": "oversized"}
         return
-    if receipt.get("complete") is not True or receipt.get("byteCount") != len(payload):
+    if receipt.get("complete") is not True or type(receipt.get("byteCount")) is not int or receipt.get("byteCount") != len(payload):
         row["raw"] = {"present": False, "reason": "incomplete-transport-bytes"}
         return
     name = f"{row['phase']}-{row['index']:02d}.raw"
@@ -399,10 +407,16 @@ def _retain_raw(
 def _verify_raw(raw_fd: int, bindings: list[dict[str, Any]]) -> bool:
     """Re-read every sidecar through the retained directory fd, never by path."""
     for binding in bindings:
-        handle = os.open(binding["path"], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=raw_fd)
+        handle = os.open(binding["path"], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=raw_fd)
         try:
+            info = os.fstat(handle)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_RAW_BYTES:
+                return False
             payload = b""
-            while chunk := os.read(handle, 65536):
+            while len(payload) <= MAX_RAW_BYTES:
+                chunk = os.read(handle, MAX_RAW_BYTES + 1 - len(payload))
+                if not chunk:
+                    break
                 payload += chunk
         finally:
             os.close(handle)
@@ -441,7 +455,10 @@ def _reconstruction(rows: list[dict[str, Any]]) -> dict[str, Any]:
     names = [document.get("name") for document in joined]
     return {
         "checked": True,
-        "matches": names == [document.get("name") for document in expected],
+        "matches": same_json(
+            [{"name": doc["name"], "fields": doc["fields"]} for doc in joined],
+            [{"name": doc["name"], "fields": doc["fields"]} for doc in expected],
+        ),
         "ranges": len(dispatched),
         "documents": len(names),
         "reason": None,
@@ -458,6 +475,7 @@ def collect_local(
     """Drive the compiled plan against one owned loopback artifact."""
     validate_plan(plan)
     validate_origin(origin)
+    plan = copy.deepcopy(plan)
     directory = Path(directory)
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
     (directory / "raw").mkdir(mode=0o700)
@@ -523,8 +541,19 @@ def _dispatch(
         row["failure"] = type(error).__name__
         row["raw"] = {"present": False, "reason": "transport-failure"}
         return
-    row["receipt"] = _normalize(receipt)
-    row["status"] = "pass" if _matches(plan, operation, row["receipt"]) else "mismatch"
+    # Own the response snapshot before any caller can mutate it. Persist raw bytes
+    # for diagnostics, but never derive authorization from mismatching JSON.
+    try:
+        receipt = copy.deepcopy(receipt)
+        decoded = validate_receipt(receipt)
+        row["receipt"] = _normalize(receipt)
+        row["receipt"]["body"] = decoded
+        row["status"] = "pass" if _matches(plan, operation, row["receipt"]) else "mismatch"
+    except Exception as error:
+        row["receipt"] = {"status": None, "body": None, "complete": False}
+        row["status"] = "failed"
+        row["failure"] = type(error).__name__
+        row["evidenceFailure"] = True
     _retain_raw(receipt, row, raw_fd, bindings)
 
 
@@ -563,7 +592,10 @@ def _run_phase(
             else:
                 row["boundFrom"] = bound
                 _dispatch(plan, transmit, operation, row, request, raw_fd, bindings)
-                aborted = row["status"] == "failed"
+                aborted = row["status"] == "failed" or (
+                    operation["kind"] in {"preflight-typed-absence", "create-only-patch", "seed-commit"}
+                    and row["status"] != "pass"
+                )
         _record(publication, directory_fd, row)
 
 

@@ -181,16 +181,28 @@ def _stream_policy(plan):
     return None
 
 
-def typed_absence(status, body):
-    error = body.get("error") if isinstance(body, dict) else None
+def _typed_firestore_error(status, body, expected_status, expected_code):
+    """A top-level error envelope, not a document/write result plus an error.
+
+    Diagnostic fields inside the error are preserved. Unknown top-level fields
+    cannot grant authority: this closed evidence contract cannot establish that
+    such a response did not also acknowledge a document or a write.
+    """
+    if not isinstance(body, dict) or set(body) != {"error"}:
+        return False
+    error = body["error"]
     return (
         type(status) is int
-        and status == 404
+        and status == expected_status
         and isinstance(error, dict)
         and type(error.get("code")) is int
-        and error["code"] == 404
-        and error.get("status") == "NOT_FOUND"
+        and error["code"] == expected_status
+        and error.get("status") == expected_code
     )
+
+
+def typed_absence(status, body):
+    return _typed_firestore_error(status, body, 404, "NOT_FOUND")
 
 
 def validate_absence_proofs(state, job_name):
@@ -219,12 +231,17 @@ def validate_absence_proofs(state, job_name):
         ):
             raise ValueError("typed cleanup absence event missing")
         event = state["events"][index]
+        expected = dict(operations[candidates[-1]])
+        # versionFrom is a planning annotation, removed before dispatch. An
+        # explicit null must hash exactly like its absence on the wire.
+        if expected.pop("versionFrom", None) is not None:
+            raise ValueError("final absence read cannot depend on a version capture")
         if (
             event.get("job") != job_name
             or event.get("phase") != "recovery"
             or type(event.get("index")) is not int
             or event["index"] != candidates[-1]
-            or event.get("requestDigest") != digest(operations[candidates[-1]])
+            or event.get("requestDigest") != digest(expected)
             or event.get("completed") is not True
             or event.get("failure") is not None
             or not typed_absence(event.get("status"), proof.get("body"))
@@ -264,7 +281,13 @@ def _ceiling_honoured(plan, seconds):
     for name, job in plan["jobs"].items():
         schedule = job_schedule(job)
         if schedule is None:
-            continue
+            # Legacy slots use the plan-wide allowance. Omitting a schedule
+            # must not bypass the same declared wire ceiling.
+            schedule = (
+                {"phase": phase, "index": index}
+                for phase in PHASES
+                for index in range(len(job[phase]))
+            )
         for entry in schedule:
             operation = plan["jobs"][name][entry["phase"]][entry["index"]]
             if (
@@ -663,14 +686,134 @@ GATE_SKIP_REASONS = (
 MAX_STOP_REASON = 128
 
 
+def _bulk_writes(operation):
+    """Only the known Firestore bulk-write envelope can prove non-creation."""
+    path = operation.get("path")
+    body = operation.get("body")
+    if (
+        operation.get("service") == "firestore"
+        and operation.get("method") == "POST"
+        and isinstance(path, str)
+        and re.fullmatch(
+            r"/v1/projects/[^/?#]+/databases/[^/?#]+/documents:(?:commit|batchWrite)",
+            path,
+        )
+        and operation.get("bodyRef") is None
+        and isinstance(body, dict)
+        and isinstance(body.get("writes"), list)
+        and body["writes"]
+    ):
+        return body["writes"]
+    return None
+
+
+def _existing_transform(write):
+    """An unambiguous transform guarded by a JSON boolean, not Python equality."""
+    return (
+        isinstance(write, dict)
+        and set(write) == {"transform", "currentDocument"}
+        and isinstance(write["transform"], dict)
+        and isinstance(write["currentDocument"], dict)
+        and set(write["currentDocument"]) == {"exists"}
+        and write["currentDocument"]["exists"] is True
+    )
+
+
+def _document_read_rpc(operation):
+    """Recognize only the body-carrying, non-creating read recipes we support.
+
+    Legacy plans infer creation from the operation, not a schedule. Treating
+    every POST body as a create strands Query Explain cleanup even when its
+    writes were acknowledged and every owned document was removed. Match the
+    service, method, canonical parent and exact RPC rather than a path suffix:
+    a collection with a similar name must never exempt a write. A request that
+    starts a transaction, carries unknown fields, or uses a body reference is
+    deliberately outside this narrow exception.
+    """
+    if (
+        operation.get("service") != "firestore"
+        or operation.get("method") != "POST"
+        or operation.get("bodyRef") is not None
+        or not isinstance(operation.get("path"), str)
+        or not isinstance(operation.get("body"), dict)
+    ):
+        return False
+    path = operation["path"]
+    match = re.fullmatch(
+        r"/v1/projects/([^/?#:%]+)/databases/([^/?#:%]+)/documents"
+        r"((?:/[^/?#:%]+/[^/?#:%]+)*):"
+        r"(runQuery|runAggregationQuery|listCollectionIds)",
+        path,
+    )
+    if match is None or any(
+        part in {".", ".."}
+        for part in (match.group(1), match.group(2), *match.group(3).split("/")[1:])
+    ):
+        return False
+    allowed = {
+        "runQuery": {"structuredQuery", "explainOptions", "readTime"},
+        "runAggregationQuery": {
+            "structuredAggregationQuery", "explainOptions", "readTime"
+        },
+        "listCollectionIds": {"pageSize", "pageToken", "readTime"},
+    }
+    return set(operation["body"]) <= allowed[match.group(4)]
+
+
+def _auth_noncreating_rpc(operation):
+    """Only the exact password, refresh and lookup recipes cannot create users.
+
+    Non-creating is not read-only: sign-in and refresh issue credentials. Other
+    sign-in methods can create accounts and must remain conservative. Unknown
+    fields, body references, path variants and wire encodings are not exempted.
+    """
+    if (
+        operation.get("service") != "auth"
+        or operation.get("method") != "POST"
+        or operation.get("bodyRef") is not None
+        or not isinstance(operation.get("body"), dict)
+        or not isinstance(operation.get("path"), str)
+    ):
+        return False
+    body, path = operation["body"], operation["path"]
+    if path == "securetoken.googleapis.com/v1/token":
+        return (
+            operation.get("form") is True
+            and set(body) == {"grant_type", "refresh_token"}
+            and body["grant_type"] == "refresh_token"
+            and isinstance(body["refresh_token"], str)
+            and bool(body["refresh_token"])
+        )
+    if operation.get("form") is not False:
+        return False
+    if path == "identitytoolkit.googleapis.com/v1/accounts:signInWithPassword":
+        return (
+            set(body) == {"email", "password", "returnSecureToken"}
+            and body["returnSecureToken"] is True
+            and all(isinstance(body[key], str) and body[key] for key in ("email", "password"))
+        )
+    if path == "identitytoolkit.googleapis.com/v1/accounts:lookup":
+        return set(body) == {"idToken"} and isinstance(body["idToken"], str) and bool(body["idToken"])
+    match = re.fullmatch(
+        r"identitytoolkit\.googleapis\.com/v1/projects/([A-Za-z0-9_-]+)/accounts:lookup",
+        path,
+    )
+    return (
+        match is not None
+        and set(body) == {"localId"}
+        and isinstance(body["localId"], str)
+        and bool(body["localId"])
+    )
+
+
 def can_create(operation):
     """Whether a request could bring a document into existence.
 
     The Ledger relaxes its retirement contract on a slot declared `creates`
     false, so the declaration is not the campaign's word alone: a plan whose
     slot could write is refused here. A request that carries a body is treated
-    as able to create even when its shape is not one this module recognises,
-    because the conservative direction is to refuse the declaration.
+    as able to create unless an exact known operation proves otherwise, because
+    the conservative direction is to refuse an unknown declaration.
     """
     if not isinstance(operation, dict):
         return True
@@ -678,20 +821,10 @@ def can_create(operation):
     path = path if isinstance(path, str) else ""
     method = operation.get("method")
     body = operation.get("body")
-    # A transform is non-creating only when every write is explicitly bound
-    # to an existing document. Keep malformed or mixed batches conservative:
-    # an incomplete precondition must retain ownership for recovery.
-    if (
-        isinstance(body, dict)
-        and isinstance(body.get("writes"), list)
-        and body["writes"]
-        and all(
-            isinstance(write, dict)
-            and isinstance(write.get("transform"), dict)
-            and write.get("currentDocument") == {"exists": True}
-            for write in body["writes"]
-        )
-    ):
+    if _document_read_rpc(operation) or _auth_noncreating_rpc(operation):
+        return False
+    writes = _bulk_writes(operation)
+    if writes is not None and all(_existing_transform(write) for write in writes):
         return False
     return (
         body is not None
@@ -807,6 +940,8 @@ def _creation_proofs(operation, status, body, job, plan):
     """Only exact conditional-create acknowledgements grant destructive authority."""
     if status != 200 or operation["service"] != "firestore":
         return []
+    if isinstance(body, dict) and "error" in body:
+        raise ValueError("success response contains an API error")
     request = operation.get("body")
     candidates = []
     if operation["method"] == "PATCH" and operation["path"].endswith(
@@ -927,15 +1062,78 @@ def _typed_create_refusal(status, body):
     boundary campaigns as a refusal; every other response remains recoverable
     as an outcome-unknown create.
     """
-    error = body.get("error") if isinstance(body, dict) else None
-    return (
-        type(status) is int
-        and status == 400
-        and isinstance(error, dict)
-        and type(error.get("code")) is int
-        and error.get("code") == 400
-        and error.get("status") == "INVALID_ARGUMENT"
-    )
+    return _typed_firestore_error(status, body, 400, "INVALID_ARGUMENT")
+
+
+def _creation_outcome(operation, status, body, proofs):
+    """Settle a request only when every potentially creating write is accounted for.
+
+    A successful prefix is not an acknowledgement of a BatchWrite's suffix.
+    Keep partial creation proofs for conditional cleanup, but retain uncertain
+    ownership if any other write has an ambiguous outcome or no creation proof.
+    The accepted per-item refusals are INVALID_ARGUMENT (3) and ALREADY_EXISTS
+    (6) for an exact exists=false conditional create. An ALREADY_EXISTS result
+    cannot authorize deletion of that resource: it provides no creation proof.
+    """
+    if _typed_create_refusal(status, body):
+        return "refused"
+    if status != 200 or (isinstance(body, dict) and "error" in body):
+        return "unknown"
+    if operation["method"] == "PATCH":
+        return "created" if proofs else "unknown"
+    writes = _bulk_writes(operation)
+    if writes is None or not isinstance(body, dict):
+        return "unknown"
+    batch = operation["path"].endswith(":batchWrite")
+    statuses = body.get("status") if batch else None
+    results = body.get("writeResults")
+    if batch and (
+        not isinstance(statuses, list)
+        or len(statuses) != len(writes)
+        or not isinstance(results, list)
+        or len(results) != len(writes)
+    ):
+        return "unknown"
+    outstanding = {proof["name"] for proof in proofs}
+    if len(outstanding) != len(proofs):
+        return "unknown"
+    creates = 0
+    for index, write in enumerate(writes):
+        if _existing_transform(write):
+            continue
+        if (
+            not isinstance(write, dict)
+            or not {"update", "currentDocument"}
+            <= set(write)
+            <= {"update", "currentDocument", "updateMask", "updateTransforms"}
+            or not isinstance(write["update"], dict)
+            or not isinstance(write["update"].get("name"), str)
+            or not isinstance(write["currentDocument"], dict)
+            or set(write["currentDocument"]) != {"exists"}
+            or write["currentDocument"]["exists"] is not False
+        ):
+            return "unknown"
+        creates += 1
+        if batch:
+            entry = statuses[index]
+            if not isinstance(entry, dict) or type(entry.get("code", 0)) is not int:
+                return "unknown"
+            code = entry.get("code", 0)
+            if code in {3, 6}:
+                # A refusal cannot also acknowledge a successful write. Only
+                # the empty typed result slot settles this narrow contract.
+                if not isinstance(results[index], dict) or results[index]:
+                    return "unknown"
+                continue
+            if code != 0:
+                return "unknown"
+        name = write["update"]["name"]
+        if name not in outstanding:
+            return "unknown"
+        outstanding.remove(name)
+    if outstanding or not creates:
+        return "unknown"
+    return "created" if proofs else "refused"
 
 
 class Gate:
@@ -1153,6 +1351,18 @@ class Gate:
             + quote(proof["updateTime"], safe="")
         ):
             raise ValueError("cleanup requires journaled creation ownership/version")
+
+    def _record_response(self, state, operation, recovery, event, status, body):
+        """Extension point for a closed local facade; called under the journal lock.
+
+        The default adds no authority. A facade must validate its own frozen
+        contract before settling an otherwise unknown creation acknowledgement.
+        """
+
+    def _validate_finish_evidence(self, state):
+        """Validate protocol-specific terminal evidence while the lock is held."""
+        if _stream_policy(state["plan"]):
+            validate_absence_proofs(state, self.job)
 
     def _recovery_capture(self, operation, status, body):
         """Return the bounded default recovery read receipt."""
@@ -1395,12 +1605,9 @@ class Gate:
                         job["stopped"] = True
                         raise
                     if "creationOutcome" in event:
-                        if proofs:
-                            event["creationOutcome"] = "created"
-                        elif _typed_create_refusal(status, body):
-                            event["creationOutcome"] = "refused"
-                        else:
-                            event["creationOutcome"] = "unknown"
+                        event["creationOutcome"] = _creation_outcome(
+                            operation, status, body, proofs
+                        )
                     for proof in proofs:
                         # Never replace a creation version with a later read or write.
                         job["creationProofs"].setdefault(proof["name"], proof)
@@ -1420,11 +1627,13 @@ class Gate:
                             }
                     elif status == 200 and (
                         not isinstance(body, dict)
+                        or "error" in body
                         or body.get("name") != resource
                         or not isinstance(body.get("fields"), dict)
                     ):
                         job["stopped"] = True
                         raise ValueError("readback identity/body mismatch")
+                self._record_response(state, operation, recovery, event, status, body)
                 if recovery:
                     job["captures"][str(index)] = self._recovery_capture(
                         operation, status, body
@@ -1453,8 +1662,7 @@ class Gate:
                 or set(job["absent"]) != set(job["resources"])
             ):
                 raise ValueError("cleanup incomplete; ownership retained")
-            if _stream_policy(state["plan"]):
-                validate_absence_proofs(state, self.job)
+            self._validate_finish_evidence(state)
             job["complete"] = True
             _save(self.path, state)
 

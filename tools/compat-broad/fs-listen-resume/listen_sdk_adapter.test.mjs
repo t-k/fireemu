@@ -69,7 +69,8 @@ const fakeSdk = calls => ({
   limit: value => ({ kind: 'limit', value }),
   setDoc: async (ref, fields) => calls.push(['setDoc', ref.docPath, fields]),
   deleteDoc: async ref => calls.push(['deleteDoc', ref.docPath]),
-  getDoc: async ref => ({
+  getDocFromServer: async ref => ({
+    metadata: { fromCache: false, hasPendingWrites: false },
     exists: () => ref.docPath.endsWith('alpha'),
     data: () => ({ owner: 'o6-listen:x' }),
   }),

@@ -72,11 +72,13 @@ Bounds and ownership:
   outcomes make the receipt incomplete rather than passing.
 - Listener shutdown is tracked per case. A failed unsubscribe is a failure, not
   a silent success.
-- The cleanup reserve is bounded in wall time as well as in operations, so a
-  cleanup read that never settles cannot run past the declared budget.
-- Nothing thrown by a step, by a per-case cleanup or by the between-case hook
-  escapes the run. `runCatalog` records it, still runs the final cleanup pass
-  and still returns, so a receipt is always written. A rehearsal against a
+- The cleanup reserve checks elapsed active time and operations. It cannot cancel
+  an unresolved SDK Promise. The local supervisor described below bounds the SDK
+  process separately and records uncertain resources when it has to stop it.
+- Ordinary step, per-case cleanup and between-case errors enter the recovery
+  path. An unresolved SDK Promise, process death or output failure can still
+  prevent a receipt; the supervisor's pre-spawn responsibility record is not
+  replaced by a fabricated successful receipt. A rehearsal against a
   deny-all ruleset, the most likely production failure, produced a receipt whose
   every case carried `step-threw:permission-denied`, whose listeners were all
   closed, and whose cleanup honestly reported `read-failed` rather than success.
@@ -189,6 +191,12 @@ the permission and transport bindings.
 
 ## Local shadow
 
+The following describes the **archived** shadow and its original inputs. It is
+not a run of the later recovery, JSON, lifecycle or supervisor changes. A new
+native/SDK shadow and binding are required for the current source; historical
+receipts and hashes are not rewritten.
+
+
 All fourteen cases agreed with their expected local result. The collector ran
 the full catalog against an owned local `fireemu` instance
 started by `fireemu exec` with the Firestore and Auth emulators on OS-assigned
@@ -275,3 +283,79 @@ Because all five remain open, `FS-LISTEN-SDK` keeps its blocking condition and
 its `WAITING_ORACLE` status. Running this campaign would reduce that condition
 to the browser, Android and Apple paths, cross-identity isolation and raw token
 behaviour; it would not clear it.
+
+## Supervised local SDK execution (non-authorizing)
+
+`local_supervisor.py` is an opt-in POSIX launcher for the fixed Node SDK adapter.
+Use it **inside an already owned `fireemu exec`**; it supervises the Node client,
+not the emulator daemon. Both emulator endpoints must be explicit numeric
+loopback addresses and the runtime project must start with `demo-`. There is no
+arbitrary-command or production flag. Production permission, externally supplied
+nonce/campaign/journal and inherited password descriptors are rejected. The
+launcher creates its own fresh nonce and unapproved local campaign inputs.
+
+```sh
+# Build/locked SDK installation are prerequisites, not performed by the wrapper.
+# The output parent must exist and the final run directory must be unused.
+O6_FIREBASE_MODULE_DIR="$PWD/tools/sdk-smoke" GOOGLE_CLOUD_PROJECT=demo-o6 \
+O6_LISTEN_FIREEMU_BINARY="$PWD/target/debug/fireemu" \
+O6_LISTEN_FIREEMU_COMMIT="$(git rev-parse HEAD)" \
+O6_LISTEN_SOURCE_COMMIT="$(git rev-parse HEAD)" \
+O6_LISTEN_RULES_PATH="$PWD/tools/compat-broad/fs-listen-resume/fs-listen-sdk.rules" \
+  target/debug/fireemu exec \
+  --firebase-json tools/compat-broad/fs-listen-resume/fs-listen-sdk.firebase.json \
+  --project demo-o6 --only firestore,auth \
+  --firestore-port 0 --http-port 0 --hub-port 0 --ui-port 0 --logging-port 0 \
+  --log-verbosity silent -- \
+  python3 -I -S tools/compat-broad/fs-listen-resume/local_supervisor.py \
+    --output /tmp/new-private-listen-run --timeout-seconds 820
+```
+
+The default SDK process allowance is 820 seconds (600 observation, 180 cleanup,
+40 startup/finalization). The SDK's existing shorter phase/operation budgets are
+not extended. The wrapper then allows at most two seconds after SIGTERM and two
+after SIGKILL while waiting for its owned leader. An exited leader's inherited
+pipes have a one-second drain limit. The local expectation checker has a separate
+ten-second process allowance. Filesystem/kernel stalls and an externally killed
+supervisor are not a hard-real-time or OS-wide termination guarantee.
+
+Before spawn, `launch.json` records the nonce, local namespace/endpoints and
+source/input hashes with fsync. The adapter writes a private hash-linked checkpoint
+before signup, after a bound UID is known, and before document operations; a final
+checkpoint records the actual lifecycle outcome. UID/path data is private; no
+password, token, assertion or arbitrary payload is accepted by the checkpoint
+schema. A checkpoint failure stops further data work, still attempts known
+in-process cleanup, and cannot be cleared by a later checkpoint. A process cut
+off during signup retains a creation intent, not a false absence claim.
+
+The parent bounds stdout to 8 MiB and stderr to 64 KiB, stores them privately,
+and prints only completion flags. It never prints raw SDK diagnostics. Exit zero
+requires the live process/pipe checks, same-run source/input/nonce/UID-path binding,
+and the full local expectation checker. A complete-looking receipt after timeout,
+nonzero exit, source drift or partial pipe capture cannot restore success.
+`currentArtifactVerified` and `productionCompatibilityVerified` remain false;
+these local process/expectation checks are not independent artifact attestation.
+
+`processCleanupComplete` and `resourceCleanupComplete` are independent. A forced
+stop can confirm the former while leaving `recoveryRequired=true`. Never delete
+`launch.json` or the checkpoints just because the PID exited. If no final result
+exists, treat the launch as unresolved. The journal grants **no automatic cleanup
+authority**, has no resume/delete command, and cannot prove account or document
+absence. Review the exact same-run markers and versions before recovery; never
+replay a PID or blindly delete a recorded namespace. Parent SIGKILL, descendants
+escaping their process group, durable automatic orphan recovery and actual SDK
+wire-request accounting remain separate obligations.
+
+Tests use actual local processes, pipes and sockets and instrumented SDK methods.
+The current Rust binary, real Firebase SDK and browser/mobile paths remain to be
+executed; compiling inputs or passing these tests does not create that evidence.
+
+### Read-only recovery inspection
+
+An interrupted supervised run can be inspected with
+`local_recovery_inspect.py --run ... --output ...` without starting an SDK or
+contacting its old endpoints. It preserves a validated responsibility prefix
+and does not grant cleanup authority. See
+[the inspection contract](fs-listen-recovery-inspection.md) for output privacy,
+exit codes, limits, drift handling, and the live checks still required before
+any resumed cleanup.

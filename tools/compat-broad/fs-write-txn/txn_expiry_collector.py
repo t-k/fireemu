@@ -16,6 +16,9 @@ refuse to treat the two as interchangeable by accident.
 from __future__ import annotations
 
 import base64
+import copy
+import math
+import re
 import datetime
 import sys
 import time
@@ -43,7 +46,7 @@ OWNER_SLOT = "<fireemu:o3-txn-expiry:owner>"
 #: Document keys that carry an instant rather than a value.
 INSTANT_KEYS = ("updateTime", "createTime", "readTime")
 
-LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+LOOPBACK_HOSTS = ("127.0.0.1", "::1")
 PRODUCTION_HOST = "firestore.googleapis.com"
 
 NOT_FOUND = 5
@@ -119,7 +122,7 @@ def validate_collector_options(options):
     owner_id = options.get("ownerId")
     plan_module._validate_identity(nonce, owner_id)
     deadline = options.get("deadlineSeconds", plan_module.WALL_SECONDS)
-    if not isinstance(deadline, int) or not 1 <= deadline <= plan_module.WALL_SECONDS:
+    if type(deadline) is not int or not 1 <= deadline <= plan_module.WALL_SECONDS:
         raise ValueError("deadline must be a positive integer within the envelope")
     return {
         "target": target,
@@ -153,13 +156,104 @@ def document_name(project, database, path):
     return f"projects/{project}/databases/{database}/documents/{path}"
 
 
+CANONICAL_STATUS = (
+    "OK", "CANCELLED", "UNKNOWN", "INVALID_ARGUMENT", "DEADLINE_EXCEEDED",
+    "NOT_FOUND", "ALREADY_EXISTS", "PERMISSION_DENIED", "RESOURCE_EXHAUSTED",
+    "FAILED_PRECONDITION", "ABORTED", "OUT_OF_RANGE", "UNIMPLEMENTED",
+    "INTERNAL", "UNAVAILABLE", "DATA_LOSS", "UNAUTHENTICATED",
+)
+# Only a definitive rejection of this finite, create-only Commit settles it.
+# Timeouts, INTERNAL/UNAVAILABLE and unknown outcomes can follow an applied write.
+CREATE_REFUSALS = (INVALID_ARGUMENT, ALREADY_EXISTS, PERMISSION_DENIED, 9, UNAUTHENTICATED)
+HTTP_STATUS = (200, 499, 500, 400, 504, 404, 409, 403, 429, 400, 409, 400, 501, 500, 503, 500, 401)
+_UTC = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z\Z")
+
+
+def finite_seconds(value):
+    """A measured duration is neither a truthy flag nor a non-finite number."""
+    try:
+        return type(value) in (int, float) and value >= 0 and math.isfinite(value)
+    except (OverflowError, ValueError):
+        return False
+
+
+def valid_instant(value):
+    if not isinstance(value, str) or not _UTC.fullmatch(value):
+        return False
+    try:
+        datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
+def complete_response(response):
+    # The injected normalized interface historically omits complete on success.
+    # Retain that shorthand, but never accept 1/None/string as an explicit flag.
+    return isinstance(response, dict) and response.get("complete", True) is True
+
+
+def _checked_response(response, request):
+    """Validate the normalized RPC boundary, not authenticate its producer.
+
+    Fixtures may omit the raw REST error body. If present, it must be an
+    error-only envelope agreeing with the normalized status. A normalized
+    receipt is not a cryptographic binding to raw bytes.
+    """
+    if not isinstance(response, dict):
+        return {"complete": False, "code": None, "status": None,
+                "incomplete": "response-not-object"}
+    result = copy.deepcopy(response)
+    if not complete_response(response):
+        result["complete"] = False
+        result.setdefault("incomplete", "response-not-complete")
+        return result
+    code, status = response.get("code"), response.get("status")
+    valid = type(code) is int and 0 <= code < len(CANONICAL_STATUS)
+    valid = valid and status == CANONICAL_STATUS[code]
+    if valid and "httpStatus" in response:
+        valid = type(response["httpStatus"]) is int and response["httpStatus"] == HTTP_STATUS[code]
+    valid = valid and all(response.get(k) is None for k in ("failure", "incomplete", "blocked"))
+    body = response.get("body")
+    if valid and code != OK and body is not None:
+        valid = isinstance(body, dict) and set(body) == {"error"}
+        error = body.get("error") if isinstance(body, dict) else None
+        valid = valid and isinstance(error, dict) and error.get("status") == status
+        if valid and "code" in error:
+            # This is an HTTP error envelope, not another normalized gRPC code.
+            expected = HTTP_STATUS[code]
+            valid = type(error["code"]) is int and error["code"] == expected
+    if valid and code == OK:
+        valid = isinstance(body, dict) and "error" not in body
+        if valid and request["rpc"] == "Rollback":
+            valid = body == {}
+        if valid and request["rpc"] == "Commit":
+            writes = request["body"].get("writes", [])
+            results = body.get("writeResults")
+            valid = isinstance(results, list) and len(results) == len(writes)
+            if valid:
+                for write, item in zip(writes, results, strict=True):
+                    if not isinstance(item, dict) or "error" in item:
+                        valid = False
+                        break
+                    if "update" in write and not valid_instant(item.get("updateTime")):
+                        valid = False
+                    if "updateTime" in item and not valid_instant(item["updateTime"]):
+                        valid = False
+    if not valid:
+        result.update(complete=False, incomplete="response-contract-invalid")
+    else:
+        result["complete"] = True
+    return result
+
+
 def is_owned(document, owner_id, role, nonce):
     if not isinstance(document, dict):
         return False
     fields = document.get("fields")
     if not isinstance(fields, dict):
         return False
-    if not document.get("updateTime"):
+    if "error" in document or not valid_instant(document.get("updateTime")):
         return False
     expected = {
         "owner": owner_marker(owner_id),
@@ -168,7 +262,7 @@ def is_owned(document, owner_id, role, nonce):
     }
     for key, value in expected.items():
         entry = fields.get(key)
-        if not isinstance(entry, dict) or entry.get("stringValue") != value:
+        if not isinstance(entry, dict) or entry != {"stringValue": value}:
             return False
     return True
 
@@ -214,12 +308,18 @@ class Collection:
         self.transport = transport
         self.sleeper = sleeper or time.sleep
         self.advance = advance
-        self.monotonic = monotonic
+        self._clock = monotonic
+        self._last_tick = None
+        self.clock_failure = None
+        self.virtual_clock_valid = True
+        self.monotonic = self._now
+        self.active_deadline = None
         self.wall = wall
         self.checkpoint = checkpoint
         self.rows = []
         self.tokens = {}
         self.open_tokens = {}
+        self.unconfirmed_transactions = set()
         self.locked_at = {}
         self.virtual_elapsed = 0.0
         self.checkpoints = []
@@ -242,6 +342,19 @@ class Collection:
         if self.options["timing"] == CONTROL_CLOCK and advance is None:
             raise ValueError("control-clock timing needs a clock advance callable")
 
+    def _now(self):
+        if self.clock_failure is not None:
+            raise _Stopped("clock-integrity-failed")
+        try:
+            value = self._clock()
+            if not finite_seconds(value) or (self._last_tick is not None and value < self._last_tick):
+                raise ValueError("invalid monotonic clock")
+        except Exception:
+            self.clock_failure = "monotonic-clock-invalid"
+            raise _Stopped("clock-integrity-failed") from None
+        self._last_tick = value
+        return value
+
     # -- request helpers ----------------------------------------------------
 
     def _path(self, role):
@@ -263,6 +376,14 @@ class Collection:
         """
         if self.authority_refusal is not None:
             return self._blocked("authority-refused-earlier")
+        if self.clock_failure is not None:
+            return self._blocked("clock-integrity-failed")
+        timeout = self.current_timeout
+        if self.active_deadline is not None:
+            remaining = self.active_deadline.remaining()
+            if remaining <= 0:
+                return self._blocked("phase-deadline-reached")
+            timeout = min(timeout, remaining)
         request = {
             "rpc": rpc,
             "database": self.options["database"],
@@ -272,13 +393,17 @@ class Collection:
             "query": query,
             "maxResponseBytes": plan_module.MAX_RESPONSE_BYTES,
             "maxRequestBytes": plan_module.MAX_REQUEST_BYTES,
-            "timeoutSeconds": self.current_timeout,
+            "timeoutSeconds": timeout,
         }
         self.request_count += 1
         response = self.transport(request)
-        if isinstance(response, dict) and response.get("code") in AUTHORITY_REFUSALS:
-            self._latch_authority(response)
-        return response
+        if isinstance(response, dict):
+            if type(response.get("httpStatus")) is int and response["httpStatus"] in (401, 403):
+                code = UNAUTHENTICATED if response["httpStatus"] == 401 else PERMISSION_DENIED
+                self._latch_authority({"code": code, "status": CANONICAL_STATUS[code]})
+            elif response.get("code") in AUTHORITY_REFUSALS:
+                self._latch_authority(response)
+        return _checked_response(response, request)
 
     def _latch_authority(self, response):
         if self.authority_refusal is not None:
@@ -301,7 +426,7 @@ class Collection:
     def _get(self, role, token=None):
         query = {"transaction": _b64(token)} if token is not None else None
         response = self._send("GetDocument", None, role=role, query=query)
-        if response.get("code") != OK:
+        if not complete_response(response) or response.get("code") != OK:
             return response
         body = response.get("body")
         if not isinstance(body, dict) or not body.get("name"):
@@ -325,6 +450,8 @@ class Collection:
                     "observed": self._scrub(body["name"]),
                 },
             }
+        if not isinstance(body.get("fields", {}), dict) or not valid_instant(body.get("updateTime")):
+            return {**response, "complete": False, "incomplete": "get-invalid-document"}
         return response
 
     def _blocked(self, reason):
@@ -423,7 +550,7 @@ class Collection:
                 "status": response.get("status"),
                 "message": response.get("message"),
             },
-            "complete": bool(response.get("complete", True)),
+            "complete": complete_response(response),
             "waited": waited,
             "detail": detail,
         }
@@ -470,10 +597,15 @@ class Collection:
             measured = self.monotonic() - started_monotonic
         else:
             steps = 1
-            reported = self.advance(seconds)
-            measured = None if reported is None else float(reported)
-            if measured is not None:
-                self.virtual_elapsed += measured
+            try:
+                reported = self.advance(seconds)
+                if not finite_seconds(reported) or not finite_seconds(self.virtual_elapsed + reported):
+                    raise ValueError("unconfirmed clock advance")
+            except Exception:
+                self.virtual_clock_valid = False
+                raise _Stopped("clock-advance-unconfirmed") from None
+            measured = float(reported)
+            self.virtual_elapsed += measured
         return {
             "mode": self.options["timing"],
             "requestedSeconds": seconds,
@@ -511,8 +643,9 @@ class Collection:
     # -- execution ----------------------------------------------------------
 
     def run(self):
-        deadline = _Deadline(self.options["deadlineSeconds"], self.monotonic)
         try:
+            deadline = _Deadline(self.options["deadlineSeconds"], self.monotonic)
+            self.active_deadline = deadline
             self._observe(deadline)
         except _Stopped as stop:
             self.failure = stop.reason
@@ -560,12 +693,15 @@ class Collection:
             wait = step["waitSeconds"]
             self._guard(deadline, wait + step["timeoutSeconds"])
             waited = self._elapse(wait, step["slot"])
+            # A sleeper/control callback may itself consume the remaining wall
+            # budget. Never dispatch using only the pre-wait check.
+            self._guard(deadline, step["timeoutSeconds"])
             self.current_timeout = step["timeoutSeconds"]
             self.current_site = step["slot"]
             response = self._dispatch(step)
             row = self._record(step, response, waited=waited)
             closes = step["closesTransaction"]
-            if closes and response.get("code") == OK:
+            if closes and row["complete"] and response.get("code") == OK:
                 self.open_tokens.pop(closes, None)
             if step["slot"].startswith("idle/read/"):
                 self.locked_at[step["slot"].rsplit("/", 1)[1]] = self._campaign_now()
@@ -646,9 +782,10 @@ class Collection:
                 self._record_precondition(role, created=True)
                 return None
             self._record_precondition(role, created=False)
-            # A complete refusal is the backend saying the write did not happen,
-            # so this run's creation is confirmed not to have taken effect.
-            self._mark_resource(role, ABSENCE_CONFIRMED)
+            # A complete error is not necessarily a definitive non-creation.
+            # DEADLINE_EXCEEDED/INTERNAL/UNAVAILABLE may follow an applied write.
+            if complete_response(response) and code in CREATE_REFUSALS:
+                self._mark_resource(role, ABSENCE_CONFIRMED)
             if code == ALREADY_EXISTS:
                 return "conditional-create-refused-already-exists"
             return "conditional-create-refused"
@@ -737,12 +874,22 @@ class Collection:
         during recovery. So every fully successful begin is registered, and the
         expectation only classifies the row afterwards.
         """
-        response = self._begin(options_body)
-        if response.get("code") != OK:
-            return response
         tag = step["opensTransaction"] or f"unplanned/{step['slot']}"
+        before = self.request_count
+        try:
+            response = self._begin(options_body)
+        except Exception:
+            if self.request_count != before:
+                self.unconfirmed_transactions.add(tag)
+            raise
+        if not complete_response(response) or response.get("code") != OK:
+            if (self.request_count != before and not (
+                    complete_response(response) and response.get("code") in CREATE_REFUSALS)):
+                self.unconfirmed_transactions.add(tag)
+            return response
         decoded = _decode_token((response.get("body") or {}).get("transaction"))
         if decoded is None:
+            self.unconfirmed_transactions.add(tag)
             # A success-shaped reply without a usable token has not acquired
             # anything, and it may still have started a transaction this run can
             # never name. That is an incomplete response, not an acquisition.
@@ -853,6 +1000,7 @@ class Collection:
         ]
         self.current_timeout = plan_module.DEFAULT_REQUEST_TIMEOUT_SECONDS
         recovery = _Deadline(RECOVERY_SECONDS, self.monotonic)
+        self.active_deadline = recovery
         releases = self._release_transactions(recovery)
         results = []
         for resource in self.plan["resources"]:
@@ -911,6 +1059,10 @@ class Collection:
                 releases.append(entry)
                 continue
             code = response.get("code")
+            if not complete_response(response):
+                entry.update(code=code, failure="rollback-incomplete")
+                releases.append(entry)
+                continue
             if code in AUTHORITY_REFUSALS:
                 # The latch is already set by the send site; this only classifies
                 # the entry so the receipt names what stayed open and why.
@@ -934,7 +1086,11 @@ class Collection:
                 # did run out of time. The same code also means contention,
                 # which says nothing about whether this transaction still holds
                 # its locks, so it must not be read as a successful release.
-                expired = idle is not None and idle >= cases.DECLARED_IDLE_LIMIT_SECONDS
+                expired = (
+                    self.virtual_clock_valid
+                    and finite_seconds(idle)
+                    and idle >= cases.DECLARED_IDLE_LIMIT_SECONDS
+                )
                 entry["released"] = expired
                 entry["expiryProven"] = expired
                 if not expired:
@@ -986,13 +1142,13 @@ class Collection:
             "code": read.get("code"),
             "status": read.get("status"),
         }
-        if read.get("code") == NOT_FOUND:
+        if complete_response(read) and read.get("code") == NOT_FOUND:
             if state == SENT_UNKNOWN:
-                # The create whose answer was lost left nothing behind. The
-                # responsibility is discharged by the readback, not assumed.
-                self._mark_resource(role, ABSENCE_CONFIRMED)
-                entry["resourceState"] = ABSENCE_CONFIRMED
-            entry.update(skipped=True, complete=True, absent=True)
+                # A read can precede the late application of a timed-out create.
+                # Preserve the observed absence, but not a false terminal result.
+                entry.update(skipped=True, absent=True, failure="create-outcome-still-unknown")
+            else:
+                entry.update(skipped=True, complete=True, absent=True)
             return entry
         if read.get("code") in AUTHORITY_REFUSALS:
             entry.update(skipped=True, failure="owned-read-refused-authority")
@@ -1012,7 +1168,7 @@ class Collection:
             # that name carries this run's owner, role and nonce, and the only
             # request this run ever sent to it was that create, so the readback
             # is the creation evidence the lost response would have been.
-            if self._record_precondition(role).get("absence") is False:
+            if self._record_precondition(role).get("absence") is not True:
                 # Except where the preflight had already seen a document there.
                 # Then the marker cannot be attributed and the document stays.
                 entry.update(
@@ -1042,7 +1198,7 @@ class Collection:
         if delete.get("code") in AUTHORITY_REFUSALS:
             entry["failure"] = "conditional-delete-refused-authority"
             return entry
-        if delete.get("code") != OK:
+        if not complete_response(delete) or delete.get("code") != OK:
             entry["failure"] = "conditional-delete-refused"
             return entry
         absence = self._get(role)
@@ -1050,7 +1206,7 @@ class Collection:
             "code": absence.get("code"),
             "incomplete": absence.get("incomplete"),
         }
-        entry["absent"] = absence.get("code") == NOT_FOUND
+        entry["absent"] = complete_response(absence) and absence.get("code") == NOT_FOUND
         entry["complete"] = entry["absent"]
         if not entry["absent"]:
             entry["failure"] = "final-absence-not-proven"
@@ -1094,6 +1250,7 @@ class Collection:
             "cleanup": cleanup,
             "transactionReleases": releases,
             "openTransactions": sorted(self.open_tokens),
+            "unconfirmedTransactionStarts": sorted(self.unconfirmed_transactions),
             "checkpoints": self.checkpoints,
             "startedAt": self.started_at,
             "finishedAt": self.finished_at,
@@ -1103,13 +1260,18 @@ class Collection:
             "missingCases": missing,
             "failureSites": self.failure_sites,
             "authorityRefusal": self.authority_refusal,
+            "clockIntegrityFailure": self.clock_failure,
+            "virtualClockConfirmed": self.virtual_clock_valid,
             "failure": self.failure,
             "complete": (
                 not missing
                 and not unrecovered
                 and not [entry for entry in responsibility if not entry["resolved"]]
                 and not self.open_tokens
+                and not self.unconfirmed_transactions
                 and self.authority_refusal is None
+                and self.clock_failure is None
+                and self.virtual_clock_valid
                 and self.failure is None
             ),
             # Counted where the requests are actually sent, so releases and

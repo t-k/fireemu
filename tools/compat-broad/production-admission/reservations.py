@@ -736,6 +736,7 @@ class Ledger:
             or attestation["receiptDigest"] != record["receiptDigest"]
             or attestation["gateDigest"] != record["gateDigest"]
             or attestation["residueRemoved"] is not True
+            or type(attestation["resourceCount"]) is not int
             or attestation["resourceCount"] != len(owned)
             or attestation["resourcesDigest"] != digest(owned)
             or not _owner_value(attestation["ownerIdentity"])
@@ -801,8 +802,10 @@ class Ledger:
             digest(gate) != record["gateDigest"]
             # A no-data abort stops the Gate, so a run resumed after a crash
             # between the stop and this row's update finds it already terminal
-            # under this very record. Nothing else may differ.
-            and gate.get("noDataAbort") != terminal
+            # under this very record. Nothing else may differ. No explicit
+            # resume marker means there is no exception: two absent values
+            # must not make a mismatched snapshot look bound to this record.
+            and (terminal is None or gate.get("noDataAbort") != terminal)
         ):
             raise ValueError("registered Gate differs from the record")
         embedded = receipt.get("gate")
@@ -905,7 +908,6 @@ class Ledger:
         receipt = self._terminal_receipt(
             ticket, record, ESCALATION_FIELDS, ESCALATION_KIND, "escalation close"
         )
-        decision_now = time.time()
         with self._locked() as state:
             row = self._terminal_row(
                 state,
@@ -942,7 +944,9 @@ class Ledger:
                 claim=claim,
                 record=record,
                 owned=owned,
-                now=decision_now,
+                # Both the Ledger and the registered Gate may have waited for
+                # a lock. Check freshness at the decision, not before either wait.
+                now=time.time(),
             )
             row["state"] = "closed-after-escalation"
             row["escalationRecordDigest"] = digest(record)

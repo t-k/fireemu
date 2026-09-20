@@ -248,15 +248,22 @@ def test_the_residual_scan_counts_a_present_root_and_proves_absence_with_404() -
 
     value = plan()
 
+    def retained(status, body):
+        # Match the actual transport contract; no reconstructed/omitted bytes.
+        import json
+        raw = json.dumps(body).encode("utf-8")
+        return {"status": status, "body": body, "rawBody": raw, "byteCount": len(raw),
+                "complete": True, "contentType": "application/json"}
+
     def present(request: dict) -> dict:
         if request["kind"] == "residual-root":
-            return {"status": 200, "body": {"name": value["ownedScope"]}}
-        return {"status": 200, "body": [{"readTime": "2026-09-18T00:00:00Z"}]}
+            return retained(200, {"name": value["ownedScope"]})
+        return retained(200, [{"readTime": "2026-09-18T00:00:00Z"}])
 
     def absent(request: dict) -> dict:
         if request["kind"] == "residual-root":
-            return {"status": 404, "body": {"error": {"status": "NOT_FOUND"}}}
-        return {"status": 200, "body": [{"readTime": "2026-09-18T00:00:00Z"}]}
+            return retained(404, {"error": {"status": "NOT_FOUND", "code": 404}})
+        return retained(200, [{"readTime": "2026-09-18T00:00:00Z"}])
 
     assert residual_documents(present, value) == 1
     assert residual_documents(absent, value) == 0

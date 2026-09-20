@@ -570,6 +570,11 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         registry: Some(registry.clone()),
         allow_routed_projects: cfg.profile == crate::config::CompatibilityProfile::Emulator,
         stateless_refresh_tokens: cfg.profile == crate::config::CompatibilityProfile::Emulator,
+        idp_continuations: if cfg.profile == crate::config::CompatibilityProfile::Strict {
+            fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::LocalBounded
+        } else {
+            fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled
+        },
         query_limits: match cfg.profile {
             crate::config::CompatibilityProfile::Emulator => {
                 fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded

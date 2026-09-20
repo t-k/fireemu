@@ -19,6 +19,7 @@ from urllib.parse import parse_qs
 import batch_adapter
 from campaign_auth_list import SOURCE_COMMIT, campaign_manifest
 from campaign_gate import CampaignGate, create
+from batch_wire import _read_bounded_response
 from shared_cases import save
 
 
@@ -69,13 +70,13 @@ class ShadowHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         name = self.path.removeprefix("/v1/")
         self.reply(200, self.documents[name]) if name in self.documents else self.reply(
-            404, {"error": {"status": "NOT_FOUND"}}
+            404, {"error": {"code": 404, "status": "NOT_FOUND"}}
         )
 
     def do_DELETE(self):
         name = self.path.split("?", 1)[0].removeprefix("/v1/")
         if name not in self.documents:
-            return self.reply(404, {"error": {"status": "NOT_FOUND"}})
+            return self.reply(404, {"error": {"code": 404, "status": "NOT_FOUND"}})
         del self.documents[name]
         self.reply(200, {})
 
@@ -173,7 +174,7 @@ class ShadowHandler(BaseHTTPRequestHandler):
                 return self.reply(400, {"error": {"status": "INVALID_PASSWORD"}})
             uid = match[0]
         else:
-            return self.reply(404, {"error": {"status": "NOT_FOUND"}})
+            return self.reply(404, {"error": {"code": 404, "status": "NOT_FOUND"}})
         ShadowHandler.tokens[f"id-{uid}"] = uid
         ShadowHandler.tokens[f"refresh-{uid}"] = uid
         self.reply(
@@ -200,22 +201,24 @@ def wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
     encoded = (
         None if body is None else body if isinstance(body, str) else json.dumps(body)
     )
-    connection.request(
-        method,
-        parsed.path + (("?" + parsed.query) if parsed.query else ""),
-        body=encoded,
-        headers=headers,
-    )
-    response = connection.getresponse()
-    payload = response.read(65537)
-    connection.close()
-    if len(payload) > 65536:
-        raise ValueError("bounded transport response exceeded")
     try:
-        value = json.loads(payload)
-    except (ValueError, UnicodeDecodeError):
-        value = {"nonJson": True}
-    return response.status, value, response.headers.get("content-type", "")
+        connection.request(
+            method,
+            parsed.path + (("?" + parsed.query) if parsed.query else ""),
+            body=encoded,
+            headers=headers,
+        )
+        response = connection.getresponse()
+        payload, failure = _read_bounded_response(response, method)
+        if failure is not None or 300 <= response.status < 400:
+            raise ValueError("incomplete, oversized or redirected local response")
+        try:
+            value = json.loads(payload)
+        except (ValueError, UnicodeDecodeError):
+            value = {"nonJson": True}
+        return response.status, value, response.headers.get("content-type", "")
+    finally:
+        connection.close()
 
 
 def replace(value, bindings):
@@ -283,13 +286,25 @@ def validate_auth_lookup(body, expected_uid: str) -> None:
 
 def validate_deleted_lookup(status: int, body) -> None:
     """Require an explicit, typed acknowledgement that the account is absent."""
-    kind_only = body == {"kind": "identitytoolkit#GetAccountInfoResponse"}
+    if type(status) is not int or not isinstance(body, dict):
+        raise ValueError("owned account absence unconfirmed")
+    kind = "identitytoolkit#GetAccountInfoResponse"
+    empty_users = (
+        set(body) <= {"users", "kind"}
+        and type(body.get("users")) is list
+        and body["users"] == []
+        and ("kind" not in body or body["kind"] == kind)
+    )
+    kind_only = body == {"kind": kind}
+    error = body.get("error")
     not_found = (
         status == 404
-        and isinstance(body, dict)
-        and body.get("error", {}).get("status") == "USER_NOT_FOUND"
+        and set(body) == {"error"}
+        and isinstance(error, dict)
+        and error.get("status") == "USER_NOT_FOUND"
+        and ("code" not in error or type(error["code"]) is int and error["code"] == 404)
     )
-    if not (status == 200 and kind_only) and not not_found:
+    if not (status == 200 and (kind_only or empty_users)) and not not_found:
         raise ValueError("owned account absence unconfirmed")
 
 
@@ -695,8 +710,50 @@ def run(output: Path) -> dict:
     )
     worker = {}
     worker_path = output / "worker/result.json"
-    if worker_path.exists():
-        worker = json.loads(worker_path.read_bytes())
+    receipt_issue = None
+    if worker_path.is_symlink():
+        receipt_issue = "worker-receipt-not-regular"
+    elif not worker_path.exists():
+        receipt_issue = "worker-receipt-missing"
+    else:
+        try:
+            worker = json.loads(worker_path.read_bytes())
+        except (OSError, ValueError, UnicodeDecodeError):
+            receipt_issue = "worker-receipt-unreadable"
+        if not isinstance(worker, dict):
+            worker = {}
+            receipt_issue = "worker-receipt-not-object"
+    owned = report.get("ownedProcess")
+    process_cleanup = isinstance(owned, dict) and owned.get("listenersClosed") is True
+    local_worker = (
+        type(worker.get("schemaVersion")) is int
+        and worker["schemaVersion"] == 1
+        and worker.get("target") == "owned-fireemu-artifact"
+        and worker.get("productionExecuted") is False
+    )
+    resource_cleanup = local_worker and worker.get("cleanupComplete") is True
+    issues = [] if receipt_issue is None else [receipt_issue]
+    if report.get("status") != "completed":
+        issues.append("runtime-incomplete")
+    if report.get("recordingComplete") is not True:
+        issues.append("runtime-recording-incomplete")
+    if report.get("stateValidation") is not True:
+        issues.append("runtime-state-unvalidated")
+    if report.get("failure") is not None:
+        issues.append("runtime-failure")
+    if not process_cleanup:
+        issues.append("process-cleanup-incomplete")
+    if type(worker.get("schemaVersion")) is not int or worker.get("schemaVersion") != 1:
+        issues.append("worker-schema-mismatch")
+    if worker.get("target") != "owned-fireemu-artifact":
+        issues.append("worker-target-mismatch")
+    if worker.get("productionExecuted") is not False:
+        issues.append("worker-not-local-only")
+    for field in ("completed", "recordingComplete", "stateValidation", "cleanupComplete"):
+        if worker.get(field) is not True:
+            issues.append("worker-" + field + "-incomplete")
+    if worker.get("failure") is not None:
+        issues.append("worker-failure")
     safe_runtime = dict(report)
     # The private worker receipt retains full token-bearing responses. The checked-in
     # campaign result is a public summary and must not copy those bodies.
@@ -706,16 +763,24 @@ def run(output: Path) -> dict:
         # operation/state assertions were absent or failed. A semantic
         # mismatch is represented by a complete, state-validated report and
         # must still reach comparison.
-        "completed": (
-            report["status"] == "completed"
-            and report.get("stateValidation") is True
-        ),
+        "completed": not issues,
+        "completionIssues": issues,
         "productionExecuted": False,
         "target": "owned-fireemu-artifact",
         "runtime": safe_runtime,
-        "recordingComplete": report.get("recordingComplete", False),
-        "cleanupComplete": report.get("ownedProcess", {}).get("listenersClosed") is True,
-        "stateValidation": report.get("stateValidation", False),
+        "recordingComplete": (
+            report.get("recordingComplete") is True
+            and local_worker
+            and worker.get("recordingComplete") is True
+        ),
+        "cleanupComplete": resource_cleanup and process_cleanup,
+        "resourceCleanupComplete": resource_cleanup,
+        "processCleanupComplete": process_cleanup,
+        "stateValidation": (
+            report.get("stateValidation") is True
+            and local_worker
+            and worker.get("stateValidation") is True
+        ),
         "rows": [
             {
                 "operationType": row.get("operationType"),

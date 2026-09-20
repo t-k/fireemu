@@ -236,7 +236,9 @@ def _private_request(slot, secret, *, fixture_origin=None, deadline=REQUEST_SECO
     deadline_at = time.monotonic() + deadline
     cleanup_margin = min(0.25, deadline / 4)
     worker = subprocess.Popen(
-        [sys.executable, str(Path(__file__).resolve()), flag],
+        # This worker uses only stdlib and explicit repository imports. Do not
+        # run site hooks or inherit interpreter search-path configuration.
+        [sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve()), flag],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,

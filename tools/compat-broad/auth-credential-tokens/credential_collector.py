@@ -17,6 +17,7 @@ import base64
 import binascii
 import hashlib
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -77,6 +78,9 @@ BOUND_MODULES = (
     "credential_comparator.py",
     "credential_plan.py",
     "credential_shadow.py",
+    "credential_wire.py",
+    "credential_process.py",
+    "../batch_wire.py",
 )
 
 
@@ -177,20 +181,83 @@ def safe_log(line: str, secrets: list[str]) -> str:
 # --- claim shapes --------------------------------------------------------------
 
 
+# Local diagnostic parser limit, not a service quota or a JWT validity limit.
+MAX_TOKEN_BYTES = 262_144
+MAX_TOKEN_JSON_DEPTH = 128
+
+
+def _unique_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError("duplicate JSON member")
+        result[name] = value
+    return result
+
+
+def _finite_json_float(value: str) -> float:
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError("non-finite JSON number")
+    return result
+
+
+def _reject_constant(_value: str) -> None:
+    raise ValueError("non-finite JSON number")
+
+
+def _decode_base64url(segment: str) -> bytes:
+    # A JWT's compact segments use unpadded base64url, not permissive MIME base64.
+    if not re.fullmatch(r"[A-Za-z0-9_-]*", segment) or len(segment) % 4 == 1:
+        raise ValueError("token segment is not base64url")
+    try:
+        return base64.b64decode(segment + "=" * (-len(segment) % 4), altchars=b"-_", validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("token segment is not base64url") from None
+
+
 def _decode_segment(segment: str) -> dict[str, Any]:
-    padded = segment + "=" * (-len(segment) % 4)
     try:
-        raw = base64.urlsafe_b64decode(padded)
-    except (binascii.Error, ValueError) as error:
-        raise ValueError("token segment is not base64url") from error
-    try:
-        decoded = json.loads(raw)
-    except json.JSONDecodeError as error:
-        raise ValueError("token segment is not JSON") from error
+        raw = _decode_base64url(segment)
+        decoded = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique_members,
+            parse_float=_finite_json_float,
+            parse_constant=_reject_constant,
+        )
+        pending = [(decoded, 1)]
+        while pending:
+            item, depth = pending.pop()
+            if isinstance(item, (dict, list)):
+                if depth > MAX_TOKEN_JSON_DEPTH:
+                    raise ValueError("token JSON exceeds local depth boundary")
+                values = item.values() if isinstance(item, dict) else item
+                pending.extend((value, depth + 1) for value in values)
+    except (ValueError, RecursionError):
+        # Do not expose parser messages, keys, or token fragments in diagnostics.
+        raise ValueError("token segment is not unambiguous UTF-8 JSON") from None
     if not isinstance(decoded, dict):
-        # A non-object segment is malformed input, not a caller type error.
         raise ValueError("token segment is not a JSON object")  # noqa: TRY004
     return decoded
+
+
+def _jwt_objects(token: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Parse the compact envelope only. This does NOT authenticate its signature."""
+    if not isinstance(token, str):
+        raise TypeError("token must be a string")
+    if len(token) > MAX_TOKEN_BYTES or not token.isascii():
+        raise ValueError("token exceeds local encoding or size boundary")
+    segments = token.split(".")
+    if len(segments) != 3 or not segments[0] or not segments[1]:
+        raise ValueError("token is not a three-segment JWT")
+    header, payload = _decode_segment(segments[0]), _decode_segment(segments[1])
+    algorithm = header.get("alg")
+    if not isinstance(algorithm, str) or not algorithm:
+        raise ValueError("token header declares no algorithm")
+    if (algorithm == "none") != (segments[2] == ""):
+        raise ValueError("token algorithm and signature presence disagree")
+    _decode_base64url(segments[2])
+    return header, payload
 
 
 def claim_shape(token: str, reveal: tuple[str, ...] = ()) -> dict[str, Any]:
@@ -203,19 +270,10 @@ def claim_shape(token: str, reveal: tuple[str, ...] = ()) -> dict[str, Any]:
     for name in reveal:
         if name not in REVEALABLE_CLAIM_NAMES:
             raise ValueError(f"reveal refused for account-derived claim {name!r}")
-    if not isinstance(token, str):
-        raise TypeError("token must be a string")
-    segments = token.split(".")
-    if len(segments) != 3 or not segments[0] or not segments[1]:
-        raise ValueError("token is not a three-segment JWT")
-    header, payload = _decode_segment(segments[0]), _decode_segment(segments[1])
-    algorithm = header.get("alg")
-    if algorithm == "none":
-        trust_root = "unsigned-emulator"
-    elif isinstance(algorithm, str) and algorithm:
-        trust_root = "signed"
-    else:
-        raise ValueError("token header declares no algorithm")
+    header, payload = _jwt_objects(token)
+    algorithm = header["alg"]
+    # Classification of a declared envelope, not evidence of signature verification.
+    trust_root = "unsigned-emulator" if algorithm == "none" else "signed"
     issuer = payload.get("iss")
     return {
         "trustRoot": trust_root,
@@ -228,7 +286,7 @@ def claim_shape(token: str, reveal: tuple[str, ...] = ()) -> dict[str, Any]:
         "times": {
             name: payload[name]
             for name in TIME_CLAIM_NAMES
-            if isinstance(payload.get(name), int)
+            if type(payload.get(name)) is int
         },
         "claimValues": {name: payload[name] for name in reveal if name in payload},
     }
@@ -244,11 +302,8 @@ def _subject(token: str) -> str | None:
     """
     if not isinstance(token, str):
         return None
-    segments = token.split(".")
-    if len(segments) != 3:
-        return None
     try:
-        payload = _decode_segment(segments[1])
+        _, payload = _jwt_objects(token)
     except ValueError:
         return None
     subject = payload.get("sub")
@@ -303,9 +358,11 @@ def mark_deleted(
     tracker: dict[str, Any], uid: str, *, uid_absent: bool, email_absent: bool
 ) -> None:
     """Record the readback after deleting one owned account."""
+    if type(uid_absent) is not bool or type(email_absent) is not bool:
+        raise ValueError("absence evidence must be boolean")
     account = tracker["accounts"][uid]
-    account["uidAbsent"] = bool(uid_absent)
-    account["emailAbsent"] = bool(email_absent)
+    account["uidAbsent"] = uid_absent
+    account["emailAbsent"] = email_absent
 
 
 def cleanup_report(tracker: dict[str, Any]) -> dict[str, Any]:
@@ -317,14 +374,17 @@ def cleanup_report(tracker: dict[str, Any]) -> dict[str, Any]:
     remaining = [
         a
         for a in accounts
-        if not (a["uidAbsent"] and (a["emailAbsent"] or not a["addressReadback"]))
+        if not (
+            a["uidAbsent"] is True
+            and (a["emailAbsent"] is True or a["addressReadback"] is False)
+        )
     ]
     return {
         "ownedAccounts": len(accounts),
         "remainingAccounts": len(remaining),
         # Only accounts that actually had an address can contribute a readback.
         "addressReadbacks": sum(
-            1 for a in accounts if a["addressReadback"] and a["emailAbsent"]
+            1 for a in accounts if a["addressReadback"] is True and a["emailAbsent"] is True
         ),
         "cleanupComplete": not remaining,
     }
@@ -335,6 +395,39 @@ def cleanup_report(tracker: dict[str, Any]) -> dict[str, Any]:
 
 RUN_PHASE = "run"
 RECOVERY_PHASE = "recovery"
+
+
+def _finite_nonnegative(value: Any) -> float:
+    if type(value) not in (int, float):
+        raise ValueError("finite non-negative number required")
+    try:
+        result = float(value)
+    except OverflowError:
+        raise ValueError("finite non-negative number required") from None
+    if not math.isfinite(result) or result < 0:
+        raise ValueError("finite non-negative number required")
+    return result
+
+
+def _budget_fault(budget: dict[str, Any], reason: str) -> None:
+    if budget.get("integrityFailure") is None:
+        budget["integrityFailure"] = reason
+
+
+def _clock_reading(budget: dict[str, Any], now: Any) -> float:
+    if budget.get("integrityFailure") is not None:
+        raise BudgetExceeded("budget integrity failure latched")
+    try:
+        reading = _finite_nonnegative(now)
+        start = _finite_nonnegative(budget["startedMonotonic"])
+        last = _finite_nonnegative(budget.get("lastClockMonotonic", start))
+        if reading < max(start, last):
+            raise ValueError("clock moved backwards")
+    except (ValueError, TypeError, KeyError):
+        _budget_fault(budget, "invalid-monotonic-clock")
+        raise BudgetExceeded("invalid monotonic clock") from None
+    budget["lastClockMonotonic"] = reading
+    return reading
 
 
 def new_budget(
@@ -365,15 +458,28 @@ def new_budget(
     cleanup tail, not a single total that cleanup might not fit inside. Deleting the
     accounts a run created is the last thing that should lose a race against a clock.
     """
-    if not max_cost_usd < COST_CEILING_USD:
+    try:
+        cost = _finite_nonnegative(max_cost_usd)
+    except ValueError:
+        raise ValueError("finite non-negative cost below the ceiling required") from None
+    if not cost < COST_CEILING_USD:
         raise ValueError(f"cost ceiling is US${COST_CEILING_USD}")
-    if max_requests < 1 or max_wall_seconds <= 0:
+    max_wall_seconds = _finite_nonnegative(max_wall_seconds)
+    if type(max_requests) is not int or max_requests < 1 or max_wall_seconds <= 0:
         raise ValueError("positive request and wall-clock bounds are required")
-    if recovery_requests < 0 or recovery_wall_seconds < 0:
-        raise ValueError("a recovery reserve cannot be negative")
+    try:
+        recovery_wall_seconds = _finite_nonnegative(recovery_wall_seconds)
+    except ValueError:
+        raise ValueError("a recovery reserve must be finite and non-negative") from None
+    if type(recovery_requests) is not int or recovery_requests < 0:
+        raise ValueError("a recovery reserve must be a non-negative integer")
     if recovery_requests >= max_requests or recovery_wall_seconds >= max_wall_seconds:
         raise ValueError("the recovery reserve must leave the run something to spend")
-    started = float(started_monotonic)
+    started = _finite_nonnegative(started_monotonic)
+    total_deadline = _finite_nonnegative(started + max_wall_seconds)
+    observation_deadline = _finite_nonnegative(started + max_wall_seconds - recovery_wall_seconds)
+    if not started < observation_deadline <= total_deadline:
+        raise ValueError("representable positive deadlines required")
     return {
         "maxRequests": max_requests,
         "maxWallSeconds": max_wall_seconds,
@@ -387,12 +493,13 @@ def new_budget(
         # Absolute readings, stripped from the published receipt: a monotonic origin is
         # a property of the machine that ran, and only the relative seconds are evidence.
         "startedMonotonic": started,
-        "observationDeadlineMonotonic": started
-        + (max_wall_seconds - recovery_wall_seconds),
+        "lastClockMonotonic": started,
+        "integrityFailure": None,
+        "observationDeadlineMonotonic": observation_deadline,
         # The total an undisturbed run fits inside: the observation deadline plus the
         # reserve. A run that overran its observation still gets the whole reserve, so
         # this is the nominal total rather than a second bound.
-        "totalDeadlineMonotonic": started + max_wall_seconds,
+        "totalDeadlineMonotonic": total_deadline,
         "recoveryDeadlineMonotonic": None,
         "recoveryEnteredSeconds": None,
         # Every phase whose deadline stopped work, recorded separately: a run that both
@@ -411,12 +518,12 @@ def phase_deadline(budget: dict[str, Any]) -> float:
 
 def elapsed_seconds(budget: dict[str, Any], now: float) -> float:
     """How long the campaign has been running, by the caller's monotonic clock."""
-    return float(now) - budget["startedMonotonic"]
+    return _clock_reading(budget, now) - budget["startedMonotonic"]
 
 
 def remaining_seconds(budget: dict[str, Any], now: float) -> float:
     """How long this phase may still spend. Never negative, so a caller cannot wait."""
-    return max(0.0, phase_deadline(budget) - float(now))
+    return max(0.0, phase_deadline(budget) - _clock_reading(budget, now))
 
 
 def _note_deadline(budget: dict[str, Any], now: float) -> None:
@@ -461,6 +568,11 @@ def reserve_request(budget: dict[str, Any], now: float) -> float:
     allowance is what is left before this phase's deadline, so a caller that caps its
     transport to it cannot wait past the bound the campaign was approved against.
     """
+    if budget.get("integrityFailure") is not None:
+        raise BudgetExceeded("budget integrity failure latched")
+    if type(budget["requests"]) is not int or budget["requests"] < 0:
+        _budget_fault(budget, "invalid-request-counter")
+        raise BudgetExceeded("invalid request counter")
     if budget["requests"] + 1 > request_allowance(budget):
         raise BudgetExceeded("request budget exhausted")
     check_deadline(budget, now)
@@ -477,7 +589,15 @@ def charge_elapsed(budget: dict[str, Any], elapsed_seconds: float) -> None:
     sign-up whose result is thrown away leaves a live account nothing knows about. The
     overrun stops the run at the next reservation instead.
     """
-    budget["wallSeconds"] += float(elapsed_seconds)
+    # Never replace an already received ACK with a timing exception. Preserve
+    # the existing charge, latch the fault, then forbid further sends.
+    try:
+        amount = _finite_nonnegative(elapsed_seconds)
+        total = _finite_nonnegative(_finite_nonnegative(budget["wallSeconds"]) + amount)
+    except (ValueError, TypeError, KeyError):
+        _budget_fault(budget, "invalid-elapsed-charge")
+        return
+    budget["wallSeconds"] = total
 
 
 def enter_recovery(budget: dict[str, Any], now: float) -> None:
@@ -489,9 +609,20 @@ def enter_recovery(budget: dict[str, Any], now: float) -> None:
     the accounts are already created, and nothing else will delete them. The campaign is
     therefore declared as a bounded observation plus a bounded cleanup tail.
     """
+    # Re-entering cleanup must not refill its time or request allowance.
+    # Keep this transition non-throwing on clock faults: callers use it in
+    # finally, and still must stop their owned daemon. Reservation fails closed.
+    try:
+        reading = _clock_reading(budget, now)
+        deadline = _finite_nonnegative(reading + budget["recoveryWallSeconds"])
+    except (BudgetExceeded, ValueError, TypeError, KeyError):
+        _budget_fault(budget, "invalid-recovery-clock")
+        return
+    if budget["phase"] == RECOVERY_PHASE:
+        return
     budget["phase"] = RECOVERY_PHASE
-    budget["recoveryEnteredSeconds"] = elapsed_seconds(budget, now)
-    budget["recoveryDeadlineMonotonic"] = float(now) + budget["recoveryWallSeconds"]
+    budget["recoveryEnteredSeconds"] = reading - budget["startedMonotonic"]
+    budget["recoveryDeadlineMonotonic"] = deadline
 
 
 # --- collector binding ---------------------------------------------------------------
@@ -599,6 +730,7 @@ def build_receipt(
     complete = (
         all(unobserved_reason(row) is None for row in rows)
         and cleanup["ownedAccounts"] > 0
+        and budget.get("integrityFailure") is None
     )
     return {
         "side": side,

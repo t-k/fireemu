@@ -23,6 +23,7 @@ created. Both are recovered here.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import time
@@ -127,6 +128,8 @@ def _scan(value: Any, depth: int, budget: list[int]) -> str | None:
         if _JWT_SHAPE.fullmatch(value):
             return "credential-leak:token-shaped-value"
         return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return "nonfinite-receipt-value"
     if isinstance(value, (bool, int, float)) or value is None:
         return None
     return "unsupported-receipt-value"
@@ -145,38 +148,55 @@ def _accept(
     unknown = sorted(key for key in receipt if key not in allowed)
     if unknown:
         return None, "unknown-receipt-key:" + ",".join(unknown)
+    if receipt.get("complete") is True and receipt.get("failure") is not None:
+        return None, "explicit-receipt-failure"
     return dict(receipt), None
 
 
 class _Journal:
     """Append-only, fsynced record of every intent and outcome.
 
-    A process that dies mid-run still leaves the list of resources it touched,
-    so an orphan document or account can be found and removed.
+    A healthy journal records attempted resources. Any open/write/sync/close
+    failure latches observation off and disqualifies completion. A partial
+    journal is not a complete inventory or restart-time deletion authority.
     """
 
     def __init__(self, path: str | os.PathLike[str] | None) -> None:
         self.path = Path(path) if path is not None else None
+        self._handle = None
+        self.failures: list[str] = []
         if self.path is not None:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self._handle = self.path.open("a", encoding="utf-8")
-        else:
-            self._handle = None
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                self._handle = self.path.open("a", encoding="utf-8")
+            except Exception as error:  # noqa: BLE001 -- keep recovery possible
+                self.failures.append("journal-open:" + type(error).__name__)
 
     def record(self, kind: str, payload: dict[str, Any]) -> None:
-        if self._handle is None:
+        # After a partial write, never append records behind a corrupt line.
+        # The failure latches observation off; typed recovery still uses its
+        # original plan and reserve. A failed journal cannot yield a pass.
+        if self._handle is None or self.failures:
             return
-        line = json.dumps(
-            {"kind": kind, **payload}, sort_keys=True, separators=(",", ":")
-        )
-        self._handle.write(line + "\n")
-        self._handle.flush()
-        os.fsync(self._handle.fileno())
+        try:
+            line = json.dumps(
+                {"kind": kind, **payload}, sort_keys=True, separators=(",", ":"),
+                allow_nan=False,
+            )
+            self._handle.write(line + "\n")
+            self._handle.flush()
+            os.fsync(self._handle.fileno())
+        except Exception as error:  # noqa: BLE001 -- type only, no secret content
+            self.failures.append("journal-record:" + type(error).__name__)
 
     def close(self) -> None:
         if self._handle is not None:
-            self._handle.close()
-            self._handle = None
+            try:
+                self._handle.close()
+            except Exception as error:  # noqa: BLE001 -- close is part of recording
+                self.failures.append("journal-close:" + type(error).__name__)
+            finally:
+                self._handle = None
 
 
 class _Budget:
@@ -185,29 +205,55 @@ class _Budget:
         *,
         requests: int,
         recovery: int,
-        deadline: float,
-        recovery_deadline: float,
+        deadline_seconds: float,
+        recovery_deadline_seconds: float,
         clock: Callable[[], float],
     ) -> None:
         self._requests = requests
         self._recovery = recovery
-        self._deadline = deadline
-        self._recovery_deadline = recovery_deadline
         self._clock = clock
+        self._clock_failure: str | None = None
+        self._last_clock: float | int | None = None
         self.spent = 0
         self.recovery_spent = 0
+        try:
+            started = self._read_clock()
+        except BudgetExhausted:
+            # The plan can already own setup resources. Return explicit held
+            # responsibilities instead of losing the whole result on bad time.
+            started = 0.0
+        self._deadline = started + deadline_seconds
+        self._recovery_deadline = started + recovery_deadline_seconds
+
+    def _read_clock(self) -> float | int:
+        if self._clock_failure is not None:
+            raise BudgetExhausted(self._clock_failure)
+        try:
+            value = self._clock()
+            valid = type(value) in (int, float) and math.isfinite(value) and value >= 0
+        except Exception:  # noqa: BLE001 -- untrusted clock must never enable I/O
+            self._clock_failure = "invalid-clock"
+            raise BudgetExhausted(self._clock_failure) from None
+        if not valid:
+            self._clock_failure = "invalid-clock"
+        elif self._last_clock is not None and value < self._last_clock:
+            self._clock_failure = "clock-regressed"
+        if self._clock_failure is not None:
+            raise BudgetExhausted(self._clock_failure)
+        self._last_clock = value
+        return value
 
     def take_observation(self) -> None:
         if self.spent >= self._requests:
             raise BudgetExhausted("observation-request-ceiling")
-        if self._clock() >= self._deadline:
+        if self._read_clock() >= self._deadline:
             raise BudgetExhausted("deadline-exhausted")
         self.spent += 1
 
     def take_recovery(self) -> None:
         if self.recovery_spent >= self._recovery:
             raise BudgetExhausted("recovery-request-ceiling")
-        if self._clock() >= self._recovery_deadline:
+        if self._read_clock() >= self._recovery_deadline:
             raise BudgetExhausted("recovery-deadline-exhausted")
         self.recovery_spent += 1
 
@@ -251,7 +297,7 @@ def collect(
     if not isinstance(run_id, str) or not run_id:
         raise ValueError("run identity required")
     for value in (deadline_seconds, recovery_deadline_seconds):
-        if not isinstance(value, (int, float)) or not 0 < value <= 3600:
+        if type(value) not in (int, float) or not 0 < value <= 3600:
             raise ValueError("deadline out of range")
     if recovery_deadline_seconds < deadline_seconds:
         raise ValueError("recovery deadline must not precede the observation deadline")
@@ -259,12 +305,11 @@ def collect(
     nonce = plan["nonce"]
     operations = plan["observation"]
     accounts = plan["ownedAccounts"]
-    started = clock()
     budget = _Budget(
         requests=len(operations),
         recovery=3 * (len(plan["ownedResources"]) + len(accounts)),
-        deadline=started + float(deadline_seconds),
-        recovery_deadline=started + float(recovery_deadline_seconds),
+        deadline_seconds=float(deadline_seconds),
+        recovery_deadline_seconds=float(recovery_deadline_seconds),
         clock=clock,
     )
     journal = _Journal(journal_path)
@@ -280,6 +325,9 @@ def collect(
 
     try:
         for operation in operations:
+            if journal.failures:
+                abort = "journal-failure"
+                break
             request = _request(operation, nonce)
             try:
                 budget.take_observation()
@@ -294,6 +342,9 @@ def collect(
             journal.record(
                 "request", {"caseId": request["caseId"], "index": request["index"]}
             )
+            if journal.failures:
+                abort = "journal-failure"
+                break
             try:
                 raw = execute(dict(request))
             except Exception as error:  # noqa: BLE001 - type name only, no message
@@ -319,10 +370,18 @@ def collect(
                 abort = "incomplete-receipt"
                 break
 
-        cleanup = _recover(plan, execute, budget, attempted, journal)
+    except Exception as error:  # noqa: BLE001 -- processing must not skip recovery
+        abort = "collector:" + type(error).__name__
+        failures.append(abort)
     finally:
-        journal.close()
+        try:
+            cleanup = _recover(plan, execute, budget, attempted, journal)
+        finally:
+            journal.close()
 
+    if journal.failures:
+        failures.extend(journal.failures)
+        abort = abort or "journal-failure"
     complete = (
         abort is None
         and len(rows) == len(operations)
@@ -475,6 +534,49 @@ def _recover(
     }
 
 
+def _recovery_evidence_error(kind: str, receipt: Mapping[str, Any]) -> str | None:
+    """Validate semantic evidence, not just the presence of complete=True.
+
+    Transport-normalized receipts may omit wire metadata. Any metadata they do
+    supply must agree with typed presence. This does not grant production
+    authority; the comparator remains locked.
+    """
+    present_key = "accountPresent" if kind.startswith("account-") else "documentPresent"
+    present = receipt.get(present_key)
+    if type(present) is not bool:
+        return "untyped-recovery-presence"
+    other_key = "documentPresent" if kind.startswith("account-") else "accountPresent"
+    if receipt.get(other_key) is not None:
+        return "unrelated-recovery-presence"
+    deleting = kind in {"delete", "account-delete"}
+    if deleting and present is not False:
+        return "unconfirmed-recovery-delete"
+    identity_key = "uid" if kind.startswith("account-") else "version"
+    identity = receipt.get(identity_key)
+    if present and (not isinstance(identity, str) or not identity):
+        return "missing-recovery-identity"
+    if not present and identity is not None:
+        return "contradictory-recovery-identity"
+    permitted = {"OK"}
+    codes = {"OK", 0}
+    http_codes = {200}
+    if not present and not deleting:
+        permitted |= {"NOT_FOUND", "USER_NOT_FOUND"} if kind.startswith("account-") else {"NOT_FOUND"}
+        codes |= permitted | {5}
+        http_codes.add(404)
+    for key in ("status", "code"):
+        if key in receipt:
+            value = receipt[key]
+            allowed = permitted if key == "status" else codes
+            if type(value) not in (str, int) or value not in allowed:
+                return "unsuccessful-recovery-" + key
+    if "httpStatus" in receipt:
+        value = receipt["httpStatus"]
+        if type(value) is not int or value not in http_codes:
+            return "unsuccessful-recovery-http-status"
+    return None
+
+
 def _cleanup_step(
     execute: Callable[[dict[str, Any]], Any],
     budget: _Budget,
@@ -517,15 +619,23 @@ def _cleanup_step(
         budget.take_recovery()
     except BudgetExhausted as error:
         return outcome(str(error), None)
+    except Exception as error:  # noqa: BLE001 -- no request without a valid budget
+        return outcome("recovery-budget:" + type(error).__name__, None)
     try:
         raw = execute(dict(request))
     except Exception as error:  # noqa: BLE001 - type name only, never a message
         return outcome(f"transport:{type(error).__name__}", None)
-    accepted, failure = _accept(raw, RECOVERY_RECEIPT_KEYS)
-    if failure is not None:
-        return outcome(failure, None)
-    if accepted.get("complete") is not True:
-        return outcome("incomplete", None)
+    try:
+        accepted, failure = _accept(raw, RECOVERY_RECEIPT_KEYS)
+        if failure is not None:
+            return outcome(failure, None)
+        if accepted.get("complete") is not True:
+            return outcome("incomplete", None)
+        failure = _recovery_evidence_error(kind, accepted)
+        if failure is not None:
+            return outcome(failure, None)
+    except Exception as error:  # noqa: BLE001 -- keep other subjects reachable
+        return outcome("recovery-processing:" + type(error).__name__, None)
     return outcome(
         None,
         {

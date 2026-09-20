@@ -17,20 +17,20 @@ import hashlib
 import json
 import os
 import re
-import signal
-import subprocess
 import sys
 import time
 import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
 
 from credential_cases import CAMPAIGN_ID, observation_cases
+from credential_process import start_daemon, stop_daemon
+import credential_wire
 from credential_collector import (
     BudgetExceeded,
     build_receipt,
     charge_elapsed,
+    cleanup_report,
     check_deadline,
     claim_shape,
     enter_recovery,
@@ -45,13 +45,12 @@ from credential_collector import (
 )
 from credential_plan import BUDGET
 
-LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "[::1]")
+LOOPBACK_HOSTS = credential_wire.LOOPBACK_HOSTS
 API_KEY = "local-shadow-key"
 OWNER = "Bearer owner"
 PROJECT = "demo-app"
 PASSWORD = "shadow-Passw0rd!"
 CUSTOM_TOKEN_AUDIENCE = "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit"
-READY_PATTERN = re.compile(r"auth \(REST\):\s+(\S+)")
 REQUEST_TIMEOUT_SECONDS = 5
 
 
@@ -78,21 +77,11 @@ def unsigned_jwt(payload: dict[str, Any]) -> str:
 def _send_over_http(
     base: str, path: str, body: dict[str, Any], owner: bool, timeout: float
 ) -> tuple[int, bytes]:
-    """Perform one request against the owned local daemon, waiting no longer than told."""
-    request = urllib.request.Request(
-        f"{base}{path}",
-        data=json.dumps(body).encode(),
-        headers={
-            "Content-Type": "application/json",
-            **({"Authorization": OWNER} if owner else {}),
-        },
-        method="POST",
-    )
+    """One fixed local worker; the parent owns the whole-response deadline."""
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.status, response.read()
-    except urllib.error.HTTPError as error:
-        return error.code, error.read()
+        return credential_wire.request(credential_wire.target(base, path), body, owner, timeout)
+    except ValueError:
+        raise ShadowError("local credential HTTP request failed") from None
 
 
 def post(
@@ -112,21 +101,27 @@ def post(
     charged afterwards and never raises: by then the response exists, and discarding it
     could lose an account this run just created.
     """
-    host = base.split("//", 1)[-1].split(":")[0]
-    if host not in LOOPBACK_HOSTS:
-        raise ShadowError(f"refusing a non-loopback target: {host}")
+    try:
+        credential_wire.target(base, path)
+        if type(owner) is not bool or not isinstance(body, dict):
+            raise ValueError("typed local request required")
+    except ValueError:
+        raise ShadowError("refusing a non-loopback or malformed target/request") from None
     started = time.monotonic()
     allowance = reserve_request(budget, started)
     timeout = min(REQUEST_TIMEOUT_SECONDS, allowance)
     try:
         status, raw = (sender or _send_over_http)(base, path, body, owner, timeout)
     finally:
+        # Do not discard a received ACK because later elapsed accounting failed.
         charge_elapsed(budget, time.monotonic() - started)
     try:
-        parsed = json.loads(raw or b"{}")
-    except json.JSONDecodeError as error:
-        raise ShadowError("response was not JSON") from error
-    return status, parsed if isinstance(parsed, dict) else {}
+        if type(status) is not int or not 200 <= status <= 599 or 300 <= status < 400:
+            raise ValueError("invalid HTTP status")
+        parsed = credential_wire.response_body(raw)
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        raise ShadowError("response was not a usable local JSON object") from None
+    return status, parsed
 
 
 def error_code(body: dict[str, Any]) -> str | None:
@@ -137,90 +132,6 @@ def error_code(body: dict[str, Any]) -> str | None:
         else None
     )
     return message.split(":")[0].strip() if isinstance(message, str) else None
-
-
-# --- owned process -----------------------------------------------------------------
-
-
-def start_daemon(binary: Path, workdir: Path) -> tuple[subprocess.Popen[str], str]:
-    """Start an owned strict Auth-only daemon on an OS-assigned port."""
-    config = workdir / "fireemu.shadow.json"
-    config.write_text(json.dumps({"schemaVersion": 1, "profile": "strict"}))
-    process = subprocess.Popen(
-        [
-            str(binary),
-            "up",
-            "--config",
-            str(config),
-            "--project",
-            PROJECT,
-            "--only",
-            "auth",
-            "--http-port",
-            "0",
-            "--hub-port",
-            "0",
-            "--ui-port",
-            "0",
-            "--logging-port",
-            "0",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        cwd=str(workdir),
-    )
-    deadline = time.monotonic() + 60
-    assert process.stdout is not None
-    while time.monotonic() < deadline:
-        line = process.stdout.readline()
-        if not line:
-            break
-        found = READY_PATTERN.search(line)
-        if found:
-            return process, f"http://{found.group(1)}"
-    stop_daemon(process)
-    raise ShadowError("daemon did not report an auth address")
-
-
-def _children_of(pid: int) -> list[int]:
-    found = subprocess.run(
-        ["/usr/bin/pgrep", "-P", str(pid)], capture_output=True, text=True, check=False
-    )
-    return [int(line) for line in found.stdout.split() if line.isdigit()]
-
-
-def _alive(pid: int) -> bool:
-    return (
-        subprocess.run(
-            ["/bin/ps", "-p", str(pid)], capture_output=True, text=True, check=False
-        ).returncode
-        == 0
-    )
-
-
-def stop_daemon(process: subprocess.Popen[str]) -> dict[str, Any]:
-    """Stop the owned process and report whether it and its children are gone.
-
-    The child set is taken before the signal. Asking after `wait()` has reaped the
-    process would always answer none, because a dead PID has no children and any
-    survivor has already been reparented.
-    """
-    children = _children_of(process.pid)
-    if process.poll() is None:
-        process.send_signal(signal.SIGTERM)
-    try:
-        process.wait(timeout=20)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=20)
-    remaining = [pid for pid in children if _alive(pid)]
-    return {
-        "exitCode": process.returncode,
-        "processStopped": process.poll() is not None,
-        "childrenBeforeStop": len(children),
-        "remainingChildren": len(remaining),
-    }
 
 
 # --- case execution ----------------------------------------------------------------
@@ -650,48 +561,60 @@ def run_cases(
     return rows
 
 
+def _deleted_response(status: Any, body: Any) -> bool:
+    return type(status) is int and status == 200 and isinstance(body, dict) and (
+        body == {} or body == {"kind": "identitytoolkit#DeleteAccountResponse"}
+    )
+
+
+def _absent_response(status: Any, body: Any) -> bool:
+    if (type(status) is not int or status != 200 or not isinstance(body, dict)
+            or not body or set(body) - {"kind", "users"}):
+        return False
+    if "kind" in body and body["kind"] != "identitytoolkit#GetAccountInfoResponse":
+        return False
+    if "users" in body:
+        return isinstance(body["users"], list) and body["users"] == []
+    return body == {"kind": "identitytoolkit#GetAccountInfoResponse"}
+
+
 def cleanup(
     base: str,
     budget: dict[str, Any],
     tracker: dict[str, Any],
     poster: Any = None,
 ) -> list[str]:
-    """Delete every owned account and prove both its UID and address are gone.
+    """Use typed delete and absence evidence, and retain each failed owned UID.
 
-    Absence is only established by a 200 response whose result is empty. A refused or
-    failed call carries no result member either, and reading that as absence would
-    report a live production account as deleted. Any non-200 leaves the account
-    outstanding, which keeps the receipt incomplete.
+    No new authority or retry is introduced. An exception for one account does
+    not prevent the next owned account from attempting the existing reserve.
     """
     send = poster or post
-    identity = f"{base}/identitytoolkit.googleapis.com/v1"
-    admin = f"{identity}/projects/{PROJECT}"
+    admin = f"{base}/identitytoolkit.googleapis.com/v1/projects/{PROJECT}"
     problems: list[str] = []
     for uid, account in list(tracker["accounts"].items()):
-        deleted, _ = send(
-            budget, admin, "/accounts:delete", {"localId": uid}, owner=True
-        )
-        if deleted != 200:
-            problems.append(f"delete returned {deleted}")
-            continue
-        uid_status, by_uid = send(
-            budget, admin, "/accounts:lookup", {"localId": [uid]}, owner=True
-        )
-        uid_absent = uid_status == 200 and not by_uid.get("users")
-        if not uid_absent:
-            problems.append(f"uid lookup returned {uid_status}")
-        # An account created by custom-token sign-in has no address, so there is no
-        # address readback to perform and none is claimed.
-        if account["email"] is None:
-            mark_deleted(tracker, uid, uid_absent=uid_absent, email_absent=True)
-            continue
-        email_status, by_email = send(
-            budget, admin, "/accounts:lookup", {"email": [account["email"]]}, owner=True
-        )
-        email_absent = email_status == 200 and not by_email.get("users")
-        if not email_absent:
-            problems.append(f"address lookup returned {email_status}")
-        mark_deleted(tracker, uid, uid_absent=uid_absent, email_absent=email_absent)
+        uid_absent = email_absent = False
+        try:
+            status, body = send(budget, admin, "/accounts:delete", {"localId": uid}, owner=True)
+            if not _deleted_response(status, body):
+                problems.append("delete-unconfirmed")
+                continue
+            status, body = send(budget, admin, "/accounts:lookup", {"localId": [uid]}, owner=True)
+            uid_absent = _absent_response(status, body)
+            if not uid_absent:
+                problems.append("uid-absence-unconfirmed")
+            if account["email"] is None:
+                email_absent = True  # No address readback is claimed for addressless users.
+            else:
+                status, body = send(budget, admin, "/accounts:lookup", {"email": [account["email"]]}, owner=True)
+                email_absent = _absent_response(status, body)
+                if not email_absent:
+                    problems.append("address-absence-unconfirmed")
+        except Exception as error:
+            # Server bodies and exception strings may contain token material.
+            problems.append("account-cleanup-" + type(error).__name__)
+        finally:
+            mark_deleted(tracker, uid, uid_absent=uid_absent, email_absent=email_absent)
     return problems
 
 
@@ -735,8 +658,8 @@ def collect(
     rows: dict[str, dict[str, Any]] = {}
     try:
         (runner or run_cases)(base, budget, tracker, rows)
-    except STOP_CONDITIONS as error:
-        return rows, f"{type(error).__name__}: {error}"
+    except Exception as error:
+        return rows, f"{type(error).__name__}: local collection failed"
     return rows, None
 
 
@@ -779,7 +702,26 @@ def finish_record(
         "receipt": receipt,
         "expectedLocalAgreement": agreement,
     }
-    return record, 0 if failure is None and agreement["unexpected"] == [] else 1
+    issues = []
+    if receipt.get("recordingComplete") is not True:
+        issues.append("incomplete-recording")
+    if cleanup_report(tracker)["cleanupComplete"] is not True:
+        issues.append("incomplete-resource-cleanup")
+    if budget.get("integrityFailure") is not None:
+        issues.append("budget-integrity-failure")
+    if not (
+        isinstance(shutdown, dict)
+        and shutdown.get("processStopped") is True
+        and type(shutdown.get("remainingChildren")) is int
+        and shutdown["remainingChildren"] == 0
+        and type(shutdown.get("exitCode")) is int
+        and shutdown["exitCode"] in (0, -15, -9)
+        and shutdown.get("outputDrainerStopped") is True
+        and shutdown.get("failures") == []
+    ):
+        issues.append("process-cleanup-unconfirmed")
+    record["completionIssues"] = issues
+    return record, 0 if failure is None and not issues and agreement["unexpected"] == [] else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -797,36 +739,63 @@ def main(argv: list[str] | None = None) -> int:
 
     tracker = new_tracker(args.nonce)
     budget = shadow_budget()
-    workdir = args.output.parent
-    workdir.mkdir(parents=True, exist_ok=True)
-    process, base = start_daemon(args.binary, workdir)
+    # Output freshness and input failures are checked before a daemon is started.
     try:
+        binary = args.binary.resolve(strict=True)
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            raise ValueError("executable artifact required")
+        if args.output.exists() or args.output.is_symlink():
+            raise ValueError("fresh output required")
+        artifact_sha256 = hashlib.sha256(binary.read_bytes()).hexdigest()
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        workdir = args.output.with_name(args.output.name + ".work")
+        workdir.mkdir(mode=0o700, exist_ok=False)
+    except (OSError, ValueError):
+        print("credential shadow: input or output unavailable", file=sys.stderr)
+        return 2
+    rows, failure = {}, None
+    process = None
+    shutdown = {"processStopped": False, "remainingChildren": None,
+                "exitCode": None, "outputDrainerStopped": False, "failures": []}
+    problems: list[str] = []
+    try:
+        process, base = start_daemon(binary, workdir)
         rows, failure = collect(base, budget, tracker)
+    except Exception as error:
+        failure = type(error).__name__ + ": local execution failed"
     finally:
-        # Cleanup runs on the reserve held back from the total, so a run that stopped on
-        # an exhausted bound can still delete every account it created.
-        enter_recovery(budget, time.monotonic())
-        try:
-            problems = cleanup(base, budget, tracker)
-        except STOP_CONDITIONS as error:
-            problems = [f"cleanup: {type(error).__name__}"]
-        shutdown = stop_daemon(process)
+        if process is not None:
+            try:
+                enter_recovery(budget, time.monotonic())
+                problems = cleanup(base, budget, tracker)
+            except Exception as error:
+                problems = ["cleanup: " + type(error).__name__]
+            finally:
+                # Even unexpected cleanup errors/interrupts must reach daemon stop.
+                shutdown = stop_daemon(process)
     if problems:
         failure = failure or "cleanup: " + "; ".join(problems)
-
     record, exit_code = finish_record(
-        rows=rows,
-        tracker=tracker,
-        budget=budget,
-        failure=failure,
-        shutdown=shutdown,
-        source_binding={
-            "commit": args.commit,
-            "commitStatus": "operator-asserted; not verified by this run",
-            "artifactSha256": hashlib.sha256(args.binary.read_bytes()).hexdigest(),
-        },
+        rows=rows, tracker=tracker, budget=budget, failure=failure, shutdown=shutdown,
+        source_binding={"commit": args.commit,
+                        "commitStatus": "operator-asserted; not verified by this run",
+                        "artifactSha256": artifact_sha256},
     )
-    args.output.write_text(json.dumps(record, indent=2, sort_keys=True))
+    try:
+        # No old successful output is overwritten, including concurrent publication.
+        descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(record, stream, indent=2, sort_keys=True, allow_nan=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        directory = os.open(args.output.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except (OSError, ValueError):
+        print("credential shadow: result publication failed", file=sys.stderr)
+        return 2
     return exit_code
 
 

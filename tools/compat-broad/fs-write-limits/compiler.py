@@ -51,17 +51,29 @@ def _fields_size(fields: dict[str, dict[str, Any]]) -> int:
 
 
 def _reference_size(resource: str) -> int:
-    relative = resource.split("/documents/", 1)[-1]
-    return 16 + sum(_string_size(segment) for segment in relative.split("/"))
+    return document_name_size(resource)
 
 
 def document_name_size(resource: str) -> int:
-    """Return the core ``document_name_size`` for a REST resource name."""
-    if "/documents/" not in resource:
-        raise ValueError("resource must contain /documents/")
-    relative = resource.split("/documents/", 1)[1]
-    segments = relative.split("/")
-    if not segments or any(not segment for segment in segments):
+    """Charge document segments, not the project/database namespace.
+
+    This checks structure, not byte/depth limits: boundary compilers must still
+    be able to measure structurally valid over-limit paths.
+    """
+    if not isinstance(resource, str):
+        raise ValueError("malformed document resource")
+    parts = resource.split("/", 5)
+    if (
+        len(parts) != 6
+        or parts[0] != "projects"
+        or not parts[1]
+        or parts[2] != "databases"
+        or not parts[3]
+        or parts[4] != "documents"
+    ):
+        raise ValueError("malformed document resource")
+    segments = parts[5].split("/")
+    if len(segments) < 2 or len(segments) % 2 or any(not part for part in segments):
         raise ValueError("malformed document resource")
     return 16 + sum(_string_size(segment) for segment in segments)
 

@@ -58,19 +58,19 @@ def recover(*_):
     (p/'cases.json').write_text(json.dumps(dict(recordingComplete=False,cases=[dict(id='partial',status='indeterminate',family='test')])) )
     sys.exit(0)
 signal.signal(signal.SIGTERM,recover)
-(p/'instance.json').write_text(json.dumps(dict(pid=os.getpid(),parentPid=os.getppid(),nonce='n',argv=sys.argv,authOrigin='http://127.0.0.1:1',firestoreOrigin='http://127.0.0.1:1',controlOrigin='http://127.0.0.1:1')))
+(p/'instance.json').write_text(json.dumps(dict(pid=os.getpid(),parentPid=os.getppid(),nonce='n',argv=sys.orig_argv[1:],authOrigin='http://127.0.0.1:1',firestoreOrigin='http://127.0.0.1:1',controlOrigin='http://127.0.0.1:1')))
 while True: time.sleep(1)
 """)
     parent = tmp_path / "parent.py"
     parent.write_text("""import subprocess,sys
-sys.exit(subprocess.call([sys.executable,sys.argv[1],sys.argv[2]]))
+sys.exit(subprocess.call([sys.executable,"-I","-S","-B",sys.argv[1],sys.argv[2]]))
 """)
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         origin = f"http://127.0.0.1:{sock.getsockname()[1]}"
     script.write_text(script.read_text().replace("http://127.0.0.1:1", origin))
     result = supervise(
-        [sys.executable, str(parent), str(script), str(tmp_path)],
+        [sys.executable, "-I", "-S", "-B", str(parent), str(script), str(tmp_path)],
         tmp_path,
         "n",
         {"artifactSha256": "known-before-start"},

@@ -7,6 +7,7 @@ import copy
 import errno
 import hashlib
 import json
+import math
 import os
 import re
 from collections.abc import Callable
@@ -36,12 +37,51 @@ def _valid_timestamp(value: str) -> bool:
     return True
 
 
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _reject_constant(_value):
+    raise ValueError("nonfinite JSON constant")
+
+
+def _same_json_value(left: Any, right: Any) -> bool:
+    """Python equality conflates nested booleans, integers and floats."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _same_json_value(value, right[key]) for key, value in left.items()
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _same_json_value(a, b) for a, b in zip(left, right, strict=True)
+        )
+    if isinstance(left, float):
+        return math.isfinite(left) and math.isfinite(right) and left.hex() == right.hex()
+    return left == right
+
+
 def _raw_matches_body(raw: bytes, body: Any) -> bool:
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(
+            raw.decode("utf-8"), object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+        )
     except (ValueError, UnicodeDecodeError):
+        # A non-JSON response remains diagnostic data, not a typed API proof.
         return isinstance(body, str) and body == raw.decode("utf-8", errors="replace")
-    return type(parsed) is type(body) and parsed == body
+    except RecursionError:
+        return False
+    try:
+        return _same_json_value(parsed, body)
+    except RecursionError:
+        return False
 
 
 def complete(receipt: Any) -> bool:
@@ -531,7 +571,13 @@ def collect_local(
                     raw_invalid = encoded is not None and (
                         raw is None
                         or len(raw) > MAX_RESPONSE_BYTES
-                        or ("bodyBytes" in receipt and receipt["bodyBytes"] != len(raw))
+                        or (
+                            "bodyBytes" in receipt
+                            and (
+                                type(receipt["bodyBytes"]) is not int
+                                or receipt["bodyBytes"] != len(raw)
+                            )
+                        )
                     )
                     if raw_invalid or (
                         complete(receipt)

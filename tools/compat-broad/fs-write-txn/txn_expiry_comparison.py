@@ -134,6 +134,10 @@ def _reasons(receipt, side, *, expect_target):
     if not isinstance(receipt, dict):
         reasons.append({"code": "receipt-missing", "side": side})
         return reasons
+    if receipt.get("complete") is not True:
+        reasons.append({"code": "receipt-not-complete", "side": side})
+    if receipt.get("clockIntegrityFailure") is not None or receipt.get("virtualClockConfirmed", True) is not True:
+        reasons.append({"code": "clock-not-confirmed", "side": side})
     if receipt.get("kind") != collector.CONTRACT:
         reasons.append({"code": "receipt-kind", "side": side})
     if receipt.get("casesDigest") != cases.cases_digest():
@@ -152,6 +156,8 @@ def _reasons(receipt, side, *, expect_target):
                 "detail": list(receipt["missingCases"]),
             }
         )
+    if receipt.get("unconfirmedTransactionStarts"):
+        reasons.append({"code": "transaction-start-unconfirmed", "side": side})
     if receipt.get("openTransactions"):
         reasons.append(
             {
@@ -230,6 +236,10 @@ def _elapsed_reasons(receipt, side):
                 }
             )
             continue
+        if not collector.finite_seconds(measured):
+            reasons.append({"code": "elapsed-time-invalid", "side": side,
+                            "detail": {"case": case["id"]}})
+            continue
         if measured < required:
             reasons.append(
                 {
@@ -277,6 +287,9 @@ def _wait_reasons(receipt, side):
                     "detail": {"slot": row.get("slot")},
                 }
             )
+        elif not collector.finite_seconds(measured) or not collector.finite_seconds(waited.get("requestedSeconds")):
+            reasons.append({"code": "wait-time-invalid", "side": side,
+                            "detail": {"slot": row.get("slot")}})
         elif measured < waited.get("requestedSeconds", 0):
             reasons.append(
                 {

@@ -240,6 +240,7 @@ def document_server():
             else:
                 if "transaction" in body:
                     status = 400
+                    response = {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}
                 else:
                     statuses, results = [], []
                     for write in body["writes"]:

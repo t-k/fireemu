@@ -87,8 +87,13 @@ pub fn document_name_size(path: &DocumentPath) -> Result<u64, SizeError> {
 /// Size of a resource-name string used as a reference value: same formula, applied to the
 /// segments after `documents/`.
 fn reference_size(resource_name: &str) -> Result<u64, SizeError> {
+    // Consume the namespace in order. A project or database ID may itself be
+    // `documents`; searching the entire resource name would count namespace
+    // segments as part of the referenced document (and overcharge every use).
     let relative = resource_name
-        .split_once("/documents/")
+        .strip_prefix("projects/")
+        .and_then(|rest| rest.split_once("/databases/"))
+        .and_then(|(_, rest)| rest.split_once("/documents/"))
         .map_or(resource_name, |(_, rest)| rest);
     let mut total: u64 = 16;
     for segment in relative.split('/') {

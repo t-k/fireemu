@@ -196,28 +196,37 @@ def test_a_child_that_outlives_its_deadline_is_reaped_and_confirmed_gone() -> No
             process.wait(timeout=10)
 
 
-def test_a_child_whose_identity_is_not_the_one_that_was_started_is_never_signalled() -> (
-    None
-):
-    """This is the PID-reuse case: the PID is live but it is somebody else's process."""
+def test_a_child_whose_identity_is_not_the_one_that_was_started_is_never_signalled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live child's wrong identity never grants permission to signal its PID."""
     import subprocess
     import sys
 
-    from mfa_local_shadow import process_identity, reap_owned_child
+    from mfa_local_shadow import capture_child_identity, reap_owned_child
 
-    argv = [sys.executable, "-c", "import time; time.sleep(120)"]
+    argv = [sys.executable, "-I", "-S", "-B", "-c", "import time; time.sleep(120)"]
     process = subprocess.Popen(argv)
     try:
+        # procfs may transiently report no command line during exec. Establish
+        # the fixture using the production capture operation, not one immediate
+        # procfs read after Popen. Signal refusal itself is checked directly.
+        assert capture_child_identity(process) is not None
         stranger = ("some-other-command", "some other command --with args")
-        assert reap_owned_child(process, stranger) == "pid-reused-refusing-to-signal"
-        assert process_identity(process.pid) is not None
-        assert process.poll() is None
-        # A child whose identity was never captured is treated the same way.
-        assert reap_owned_child(process, None) == "pid-reused-refusing-to-signal"
-        assert process.poll() is None
+
+        def forbidden_signal(*_args):
+            pytest.fail("an unconfirmed identity must never be signalled")
+
+        with monkeypatch.context() as patch:
+            patch.setattr("mfa_local_shadow.os.kill", forbidden_signal)
+            assert reap_owned_child(process, stranger) == "pid-reused-refusing-to-signal"
+            assert process.poll() is None
+            assert reap_owned_child(process, None) == "pid-reused-refusing-to-signal"
+            assert process.poll() is None
     finally:
-        process.kill()
-        process.wait(timeout=10)
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
 
 
 def test_a_command_name_the_kernel_truncates_does_not_block_the_reaper(

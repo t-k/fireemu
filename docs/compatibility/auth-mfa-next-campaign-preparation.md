@@ -112,3 +112,12 @@ uv run --project tools/compat-inventory --locked --python 3.12 \
 ```
 
 The shadow builds or reuses the local artifact, owns one instance, and reaps it; it contacts nothing but loopback and reads no ambient Google credentials.
+
+## Local responsibility persistence
+
+The local recorder now writes signup intent before dispatch (including anonymous
+signup), immutable ACK records, and atomic private checkpoints. Unknown creation
+is separate from cleanup of confirmed UIDs. See
+[mfa-local-responsibility.md](mfa-local-responsibility.md) for ordering, failure
+semantics, tests and the non-authorizing boundary. This changes local provenance;
+no historical MFA receipt is rebound or treated as a new execution.

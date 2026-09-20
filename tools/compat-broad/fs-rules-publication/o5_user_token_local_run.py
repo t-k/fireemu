@@ -19,8 +19,14 @@ Child:   invoked by the parent through `fireemu exec -- ...`; not run by hand.
 from __future__ import annotations
 
 import argparse
+import errno
+import hashlib
+import stat
 import json
+import math
 import os
+import re
+from datetime import datetime
 import shutil
 import signal
 import socket
@@ -29,10 +35,16 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any
+
+# Shared stdlib-only HTTP framing checks; no production credentials or worker
+# entry point is imported or invoked by this local transport.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from batch_wire import NoRedirect, _read_bounded_response
 
 from o5_user_token_case import (
     PRINCIPAL_EMPTY,
@@ -75,24 +87,39 @@ class Refused(RuntimeError):
 def _request(
     method: str, url: str, body: Any = None, credential: str | None = None
 ) -> tuple[int, dict[str, Any]]:
-    data = None if body is None else json.dumps(body).encode()
-    headers = {"Content-Type": "application/json"} if data is not None else {}
-    if credential is not None:
-        headers["Authorization"] = "Bearer " + credential
-    request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
-            raw = response.read()
-            return response.status, json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as error:
-        raw = error.read()
+        parsed = urllib.parse.urlsplit(url)
+        if (
+            parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "::1"}
+            or parsed.username is not None or parsed.password is not None
+            or parsed.fragment or not parsed.port
+            or method not in {"GET", "POST", "PATCH", "PUT", "DELETE"}
+        ):
+            raise ValueError("owned numeric loopback required")
+        data = None if body is None else json.dumps(body, allow_nan=False).encode()
+        if data is not None and len(data) > 1_048_576:
+            raise ValueError("local request body exceeds its bound")
+        headers = {"Content-Type": "application/json"} if data is not None else {}
+        if credential is not None:
+            headers["Authorization"] = "Bearer " + credential
+        request = urllib.request.Request(url, data=data, headers=headers, method=method)
+        opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
         try:
-            parsed = json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            parsed = {}
-        return error.code, parsed
-    except urllib.error.URLError as error:
-        raise Refused(f"transport:{type(error.reason).__name__}") from error
+            response = opener.open(request, timeout=REQUEST_TIMEOUT)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            raw, failure = _read_bounded_response(response, method)
+            if failure is not None or 300 <= response.status < 400:
+                raise ValueError("incomplete or redirected local response")
+            # Empty or unparsable error bodies are not fabricated as {}.
+            parsed_body = json.loads(raw)
+            if not isinstance(parsed_body, dict):
+                raise ValueError("object response required")
+            return response.status, parsed_body
+    except (ValueError, OSError, urllib.error.URLError) as error:
+        # Never include URLs, request headers, assertions or raw error bodies.
+        raise Refused(f"local-transport:{type(error).__name__}") from None
 
 
 def _encode(fields: dict[str, Any], uids: dict[str, str]) -> dict[str, Any]:
@@ -125,6 +152,18 @@ def _unsigned_jwt(payload: dict[str, Any]) -> str:
     return segment({"alg": "none", "typ": "JWT"}) + "." + segment(payload) + "."
 
 
+def _valid_version(value: Any) -> bool:
+    if not isinstance(value, str) or not re.fullmatch(
+        r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z", value
+    ):
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
 # --------------------------------------------------------------------------
 # Child: everything that talks to the owned instance.
 # --------------------------------------------------------------------------
@@ -141,13 +180,19 @@ class LocalShadow:
         self.active_ruleset: str | None = None
         self.plan: dict[str, Any] = {}
         self.tenant: str | None = None
+        self.tenant_attempted = False
         self.wire_requests = 0
+        self.setup_accounts: list[str] = []
+        self.setup_documents: dict[str, dict[str, Any]] = {}
+        self.setup_journal: Path | None = None
+        self.setup_recovery_started = False
 
     # -- Auth ------------------------------------------------------------
     def _identity(self, path: str) -> str:
         return f"{self.auth}/identitytoolkit.googleapis.com/{path}"
 
     def create_tenant(self) -> str:
+        self.tenant_attempted = True
         status, body = _request(
             "POST",
             self._identity(f"v2/projects/{self.project}/tenants"),
@@ -156,10 +201,11 @@ class LocalShadow:
         )
         if status != 200:
             raise Refused(f"tenant-create:{status}:{json.dumps(body)[:200]}")
-        name = body.get("name", "")
-        tenant = name.rsplit("/", 1)[-1]
-        if not tenant:
-            raise Refused("tenant-create:missing-identifier")
+        name = body.get("name")
+        prefix = f"projects/{self.project}/tenants/"
+        tenant = name[len(prefix):] if isinstance(name, str) and name.startswith(prefix) else ""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", tenant) or "error" in body:
+            raise Refused("tenant-create:missing-or-foreign-identifier")
         self.tenant = tenant
         return tenant
 
@@ -229,15 +275,41 @@ class LocalShadow:
     def document_url(self, resource: str) -> str:
         return f"{self.firestore}/v1/{resource}"
 
+    def _record_setup(self, kind: str, **value: Any) -> None:
+        if self.setup_journal is None:
+            return
+        fd = os.open(self.setup_journal, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"kind": kind, **value}, allow_nan=False) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+
     def create_fixture(self, resource: str, fields: dict[str, Any]) -> None:
+        encoded = _encode(fields, self.uids)
+        # A failed send or lost acknowledgement stays unknown, not absent.
+        proof: dict[str, Any] = {"outcome": "unknown", "version": None}
+        self.setup_documents[resource] = proof
+        self._record_setup("document-intent", resource=resource)
         status, body = _request(
-            "PATCH",
-            self.document_url(resource),
-            {"fields": _encode(fields, self.uids)},
-            OWNER_TOKEN,
+            "PATCH", self.document_url(resource) + "?currentDocument.exists=false",
+            {"fields": encoded}, OWNER_TOKEN,
         )
-        if status != 200:
-            raise Refused(f"fixture:{status}:{json.dumps(body)[:200]}")
+        version = body.get("updateTime")
+        valid_version = _valid_version(version)
+        if (
+            type(status) is not int or status != 200 or "error" in body
+            or body.get("name") != resource or body.get("fields") != encoded
+            or not valid_version
+        ):
+            # A typed conditional conflict did not create this resource. Never
+            # turn the pre-existing document into this run's deletion authority.
+            error = body.get("error")
+            if (status == 409 and isinstance(error, dict)
+                    and error.get("status") == "ALREADY_EXISTS" and error.get("code") == 409):
+                proof["outcome"] = "rejected"
+            raise Refused("fixture:creation-unconfirmed")
+        proof.update(outcome="created", version=version)
+        self._record_setup("document-created", resource=resource, version=version)
 
     def credential_for(self, ref: str) -> str | None:
         if ref == PRINCIPAL_UNAUTHENTICATED:
@@ -325,17 +397,25 @@ class LocalShadow:
             status, body = _request(
                 "GET", self.document_url(resource), None, OWNER_TOKEN
             )
-            return {
-                "complete": True,
-                "status": STATUS_BY_HTTP.get(status, f"HTTP_{status}"),
-                "documentPresent": status == 200,
-                "version": body.get("updateTime") if status == 200 else None,
-            }
+            if status == 404:
+                error = body.get("error")
+                absent = (
+                    set(body) == {"error"} and isinstance(error, dict)
+                    and type(error.get("code")) is int and error["code"] == 404
+                    and error.get("status") == "NOT_FOUND"
+                )
+                if absent:
+                    return {"complete": True, "status": "NOT_FOUND", "documentPresent": False, "version": None}
+            elif status == 200 and "error" not in body and body.get("name") == resource:
+                version = body.get("updateTime")
+                if _valid_version(version):
+                    return {"complete": True, "status": "OK", "documentPresent": True, "version": version}
+            return {"complete": False, "failure": "invalid-owned-document-readback"}
         version = request["precondition"]["updateTime"]
-        url = self.document_url(resource) + "?currentDocument.updateTime=" + version
-        status, _ = _request("DELETE", url, None, OWNER_TOKEN)
+        url = self.document_url(resource) + "?currentDocument.updateTime=" + urllib.parse.quote(version, safe="")
+        status, body = _request("DELETE", url, None, OWNER_TOKEN)
         return {
-            "complete": status == 200,
+            "complete": type(status) is int and status == 200 and body == {},
             "status": STATUS_BY_HTTP.get(status, f"HTTP_{status}"),
             "documentPresent": False,
         }
@@ -346,7 +426,8 @@ class LocalShadow:
         prefix = self.account_prefix(entry["tenant"])
         uid = self.uids.get(ref)
         if uid is None:
-            return {"complete": True, "accountPresent": False, "uid": None}
+            # A lost sign-up response is not evidence that no account exists.
+            return {"complete": False, "failure": "owned-account-identity-unknown"}
         if kind in ("account-readback", "account-absence"):
             status, body = _request(
                 "POST",
@@ -354,21 +435,38 @@ class LocalShadow:
                 {"localId": [uid]},
                 OWNER_TOKEN,
             )
-            present = status == 200 and bool(body.get("users"))
+            valid = (
+                type(status) is int and status == 200 and isinstance(body, dict)
+                and "error" not in body and "nextPageToken" not in body
+                and ("kind" not in body or body["kind"] == "identitytoolkit#GetAccountInfoResponse")
+            )
+            if valid and "users" not in body:
+                valid = body == {"kind": "identitytoolkit#GetAccountInfoResponse"}
+                users = []
+            else:
+                users = body.get("users") if isinstance(body, dict) else None
+            valid = valid and isinstance(users, list) and len(users) <= 1
+            if valid and users:
+                valid = isinstance(users[0], dict) and users[0].get("localId") == uid
+            if not valid:
+                return {"complete": False, "failure": "invalid-owned-account-lookup"}
+            present = bool(users)
             return {
                 "complete": True,
-                "status": STATUS_BY_HTTP.get(status, f"HTTP_{status}"),
+                "status": "OK",
                 "accountPresent": present,
                 "uid": uid if present else None,
             }
-        status, _ = _request(
+        status, body = _request(
             "POST",
             self._identity(f"{prefix}/accounts:delete"),
             {"localId": request["precondition"]["uid"]},
             OWNER_TOKEN,
         )
         return {
-            "complete": status == 200,
+            "complete": type(status) is int and status == 200 and body in (
+                {}, {"kind": "identitytoolkit#DeleteAccountResponse"},
+            ),
             "status": STATUS_BY_HTTP.get(status, f"HTTP_{status}"),
             "accountPresent": False,
         }
@@ -377,8 +475,13 @@ class LocalShadow:
     def setup(self) -> None:
         for entry in self.plan["ownedAccounts"]:
             tenant = entry["tenant"]
+            self._record_setup("account-intent", account=entry["ref"])
+            self.setup_accounts.append(entry["ref"])
             uid, token = self.sign_up(entry["email"], tenant)
+            if not isinstance(uid, str) or not uid or not isinstance(token, str) or not token:
+                raise Refused("signup:invalid-identity")
             self.uids[entry["ref"]] = uid
+            self._record_setup("account-created", account=entry["ref"], uid=uid)
             if entry["claims"]:
                 self.set_claims(uid, entry["claims"], tenant)
                 token = self.sign_in(entry["email"], tenant)
@@ -386,28 +489,131 @@ class LocalShadow:
         for fixture in self.plan["fixtures"]:
             self.create_fixture(fixture["resource"], fixture["fields"])
 
+    def recover_setup(self, *, deadline_seconds: float = 600.0) -> dict[str, Any]:
+        """Rollback only effects attempted by incomplete setup, with no retry.
+
+        Acknowledgement-less creates remain outstanding even after a 404: a
+        request could still complete late. No namespace-wide sweep is allowed.
+        This path does not run after observation began or refill its budget.
+        """
+        if (type(deadline_seconds) not in (int, float) or not math.isfinite(deadline_seconds)
+                or not 0 < deadline_seconds <= 600):
+            raise Refused("invalid-setup-recovery-deadline")
+        if self.setup_recovery_started:
+            raise Refused("setup-recovery-already-started")
+        self.setup_recovery_started = True
+        started = time.monotonic()
+        if not math.isfinite(started):
+            raise Refused("invalid-setup-recovery-clock")
+        deadline = started + deadline_seconds
+        limit = 3 * (len(self.setup_documents) + len(self.setup_accounts))
+        spent = 0
+        last = started
+        clock_failed = False
+        rows: list[dict[str, Any]] = []
+
+        def request(kind: str, **kwargs: Any) -> dict[str, Any]:
+            nonlocal spent, last, clock_failed
+            now = time.monotonic()
+            clock_failed = clock_failed or not math.isfinite(now) or now < last
+            if clock_failed or now + REQUEST_TIMEOUT > deadline or spent >= limit:
+                raise Refused("setup-recovery-budget")
+            last = now
+            spent += 1
+            result = self._recover({"kind": kind, **kwargs})
+            after = time.monotonic()
+            clock_failed = clock_failed or not math.isfinite(after) or after < last
+            if clock_failed or after > deadline or result.get("complete") is not True:
+                raise Refused("setup-recovery-unconfirmed")
+            last = after
+            return result
+
+        for resource, proof in self.setup_documents.items():
+            row = {"kind": "document", "subject": resource, "complete": False}
+            rows.append(row)
+            if proof["outcome"] == "rejected":
+                row.update(complete=True, outcome="not-created-by-run")
+                continue
+            if proof["outcome"] != "created":
+                row["outcome"] = "creation-unconfirmed"
+                continue
+            try:
+                current = request("readback", resource=resource)
+                if current.get("documentPresent") is False:
+                    row.update(complete=True, outcome="already-absent")
+                    continue
+                if current.get("version") != proof["version"]:
+                    raise Refused("setup-version-changed")
+                request("delete", resource=resource, precondition={"updateTime": proof["version"]})
+                final = request("absence", resource=resource)
+                row.update(complete=final.get("documentPresent") is False,
+                           outcome="final-readback")
+            except Exception as error:  # noqa: BLE001 -- keep independent rollback attempts
+                row.update(outcome="unconfirmed", failure=type(error).__name__)
+        for ref in self.setup_accounts:
+            row = {"kind": "account", "subject": ref, "complete": False}
+            rows.append(row)
+            uid = self.uids.get(ref)
+            if not uid:
+                row["outcome"] = "creation-unconfirmed"
+                continue
+            try:
+                current = request("account-readback", accountRef=ref)
+                if current.get("accountPresent") is False:
+                    row.update(complete=True, outcome="already-absent")
+                    continue
+                if current.get("uid") != uid:
+                    raise Refused("setup-uid-changed")
+                request("account-delete", accountRef=ref, precondition={"uid": uid})
+                final = request("account-absence", accountRef=ref)
+                row.update(complete=final.get("accountPresent") is False,
+                           outcome="final-readback")
+            except Exception as error:  # noqa: BLE001 -- recover unrelated accounts
+                row.update(outcome="unconfirmed", failure=type(error).__name__)
+        return {"complete": all(row["complete"] for row in rows), "rows": rows,
+                "requestLimit": limit, "requests": spent, "deadlineSeconds": deadline_seconds}
+
     def delete_tenant(self) -> bool:
         if self.tenant is None:
-            return True
-        status, _ = _request(
-            "DELETE",
-            self._identity(f"v2/projects/{self.project}/tenants/{self.tenant}"),
-            None,
-            OWNER_TOKEN,
+            return not self.tenant_attempted
+        url = self._identity(f"v2/projects/{self.project}/tenants/{self.tenant}")
+        # A deletion response is not a final resource readback. Preserve failure
+        # even when the subsequent lookup independently proves absence.
+        status, body = _request("DELETE", url, None, OWNER_TOKEN)
+        deleted = type(status) is int and status == 200 and body == {}
+        status, body = _request("GET", url, None, OWNER_TOKEN)
+        error = body.get("error") if isinstance(body, dict) else None
+        absent = (
+            type(status) is int and status == 404 and isinstance(body, dict) and set(body) == {"error"}
+            and isinstance(error, dict) and type(error.get("code")) is int
+            and error["code"] == 404 and error.get("message") == "TENANT_NOT_FOUND"
+            and ("status" not in error or error["status"] == "NOT_FOUND")
+            and ("errors" not in error or error["errors"] == [{
+                "message": "TENANT_NOT_FOUND", "domain": "global", "reason": "invalid",
+            }])
         )
-        return status == 200
+        return deleted and absent
 
 
 def run_child(output: Path, nonce: str) -> int:
     firestore = "http://" + os.environ["FIRESTORE_EMULATOR_HOST"]
     auth = "http://" + os.environ["FIREBASE_AUTH_EMULATOR_HOST"]
-    output.mkdir(parents=True, exist_ok=True)
+    output.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Parent launch metadata may exist, but a child invocation is single-use.
+    with (output / "child-started").open("x", encoding="utf-8") as stream:
+        stream.write("local-only\n")
+    if any((output / name).exists() or (output / name).is_symlink()
+           for name in ("local-shadow.json", "setup-journal.jsonl", "journal.jsonl")):
+        raise Refused("existing-child-evidence")
     shadow = LocalShadow(firestore, auth, PROJECT, nonce)
+    shadow.setup_journal = output / "setup-journal.jsonl"
+    setup_finished = False
     record: dict[str, Any] = {
         "contract": "fs-rules-user-token-local-shadow-run-v1",
         "status": "LOCAL_SHADOW_ONLY",
         "productionExecuted": False,
         "productionReady": False,
+        "completed": False,
         "parentPid": os.getppid(),
         "childPid": os.getpid(),
         "nonce": nonce,
@@ -421,6 +627,7 @@ def run_child(output: Path, nonce: str) -> int:
         record["planDigest"] = shadow.plan["planDigest"]
         shadow.publish("A")
         shadow.setup()
+        setup_finished = True
         bundle = collect(
             shadow.plan,
             shadow.execute,
@@ -437,13 +644,43 @@ def run_child(output: Path, nonce: str) -> int:
         bundle["journal"] = Path(bundle["journal"]).name
         record["bundle"] = redact_principals(bundle, shadow.uids)
         record["deviations"] = redact_principals(deviations, shadow.uids)
-        record["tenantDeleted"] = shadow.delete_tenant()
+        record["stateValidation"] = not deviations
+        record["recordingComplete"] = bundle.get("recordingComplete") is True
+        record["resourceCleanupComplete"] = (
+            isinstance(bundle.get("cleanup"), dict)
+            and bundle["cleanup"].get("cleanupComplete") is True
+        )
         record["wireRequests"] = shadow.wire_requests
         record["launchSpecification"] = launch_specification(shadow.plan)
     except Refused as error:
-        record["failure"] = str(error)
+        record["failure"] = str(error).split(":", 1)[0]
     except Exception as error:  # noqa: BLE001 - type name only
         record["failure"] = f"{type(error).__name__}"
+    finally:
+        if not setup_finished and shadow.plan:
+            try:
+                recovery = shadow.recover_setup()
+                record["setupRecovery"] = redact_principals(recovery, shadow.uids)
+                record["resourceCleanupComplete"] = recovery.get("complete") is True
+            except Exception as error:  # noqa: BLE001 -- retain rollback failure separately
+                record["resourceCleanupComplete"] = False
+                record["setupRecoveryFailure"] = type(error).__name__
+        # Creating a tenant is an effect even if fixture setup never completed.
+        # Attempt its owned cleanup once; failure is never swallowed or retried.
+        try:
+            record["tenantDeleted"] = shadow.delete_tenant() is True
+        except Exception as error:  # noqa: BLE001 - retain the independent failure
+            record["tenantDeleted"] = False
+            record["tenantCleanupFailure"] = type(error).__name__
+    record["completed"] = (
+        "failure" not in record
+        and record.get("recordingComplete") is True
+        and record.get("stateValidation") is True
+        and record.get("resourceCleanupComplete") is True
+        and record.get("tenantDeleted") is True
+    )
+    if not record["completed"] and "failure" not in record:
+        record["failure"] = "local-acceptance-incomplete"
     leaked = unredacted_identifiers(record)
     if leaked:
         record = {
@@ -453,10 +690,8 @@ def run_child(output: Path, nonce: str) -> int:
             "productionReady": False,
             "failure": f"unredacted-identifier-count:{len(leaked)}",
         }
-    (output / "local-shadow.json").write_text(
-        json.dumps(record, indent=2, sort_keys=True) + "\n"
-    )
-    return 0 if "failure" not in record else 2
+    _publish_new(output / "local-shadow.json", record)
+    return 0 if record.get("completed") is True else 2
 
 
 # --------------------------------------------------------------------------
@@ -465,12 +700,104 @@ def run_child(output: Path, nonce: str) -> int:
 
 
 def _socket_closed(origin: str) -> bool:
-    host, _, port = origin.rpartition(":")
+    """Only connection refusal proves closure; timeout/invalid address is unknown."""
     try:
-        with socket.create_connection((host or "127.0.0.1", int(port)), timeout=1):
+        value = urllib.parse.urlsplit(origin if origin.startswith("http://") else "http://" + origin)
+        if (
+            value.scheme != "http" or value.hostname not in {"127.0.0.1", "::1"}
+            or not value.port or value.username is not None or value.password is not None
+            or value.path or value.query or value.fragment
+        ):
             return False
-    except OSError:
-        return True
+        with socket.create_connection((value.hostname, value.port), timeout=1):
+            return False
+    except OSError as error:
+        return error.errno == errno.ECONNREFUSED
+    except (ValueError, TypeError):
+        return False
+
+
+def _publish_new(path: Path, value: dict[str, Any]) -> None:
+    """Exclusive, fsynced publication. Never overwrite another run's evidence."""
+    temporary = None
+    try:
+        fd, name = tempfile.mkstemp(prefix=".receipt-", dir=path.parent)
+        temporary = Path(name)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, allow_nan=False, sort_keys=True, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _read_child_receipt(path: Path) -> tuple[dict[str, Any], str]:
+    # O_NONBLOCK avoids hanging on a FIFO substituted for the expected file.
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 8 * 1024 * 1024:
+            raise Refused("invalid-child-receipt-file")
+        raw = stream.read(8 * 1024 * 1024 + 1)
+    if len(raw) > 8 * 1024 * 1024:
+        raise Refused("oversized-child-receipt")
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise Refused("duplicate-child-receipt-key")
+            value[key] = item
+        return value
+
+    def nonfinite(_value):
+        raise Refused("nonfinite-child-receipt")
+
+    value = json.loads(raw, object_pairs_hook=unique, parse_constant=nonfinite)
+    if not isinstance(value, dict):
+        raise Refused("invalid-child-receipt")
+    return value, hashlib.sha256(raw).hexdigest()
+
+
+def _stop_owned_process(child: subprocess.Popen) -> bool:
+    """Stop only the new process group created by this parent's Popen.
+
+    An unreaped live leader pins its PID. Never signal a group after the leader
+    has been reaped; closed listeners are verified separately in either case.
+    """
+    def group_gone() -> bool:
+        try:
+            os.killpg(child.pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        return False
+
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        if child.poll() is not None:
+            return group_gone()
+        try:
+            if os.getpgid(child.pid) != child.pid:
+                return False
+            os.killpg(child.pid, sig)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            return False
+        try:
+            child.wait(timeout=10)
+            return group_gone()
+        except subprocess.TimeoutExpired:
+            continue
+    return child.poll() is not None and group_gone()
 
 
 def build() -> tuple[Path, dict[str, Any]]:
@@ -507,93 +834,122 @@ def build() -> tuple[Path, dict[str, Any]]:
 
 
 def run_parent(output: Path) -> int:
-    output.mkdir(parents=True, exist_ok=True)
-    binary, artifact = build()
+    if output.exists() or output.is_symlink():
+        raise Refused("fresh-parent-output-required")
+    output = output.resolve()
+    output.mkdir(mode=0o700, parents=True, exist_ok=False)
     nonce = uuid.uuid4().hex
     environment = {
         key: os.environ[key] for key in ENVIRONMENT_ALLOWLIST if key in os.environ
     }
-    with tempfile.TemporaryDirectory(prefix="o5-user-token-") as temporary:
-        private = Path(temporary)
-        owned = private / "fireemu"
-        shutil.copyfile(binary, owned)
-        owned.chmod(0o500)
-        rules = private / "firestore.rules"
-        rules.write_text(
-            "rules_version = '2';\nservice cloud.firestore {\n"
-            "  match /databases/{database}/documents {\n"
-            "    match /{document=**} { allow read, write: if false; }\n"
-            "  }\n}\n"
-        )
-        firebase_json = private / "firebase.json"
-        firebase_json.write_text(
-            json.dumps({"firestore": {"rules": "firestore.rules"}})
-        )
-        argv = [
-            str(owned),
-            "exec",
-            "--firebase-json",
-            str(firebase_json),
-            "--project",
-            PROJECT,
-            "--only",
-            "auth,firestore",
-            "--firestore-port",
-            "0",
-            "--http-port",
-            "0",
-            "--hub-port",
-            "0",
-            "--ui-port",
-            "0",
-            "--logging-port",
-            "0",
-            "--log-verbosity",
-            "silent",
-            "--",
-            sys.executable,
-            str(Path(__file__).resolve()),
-            "--child",
-            str(output),
-            "--nonce",
-            nonce,
-        ]
-        (output / "launch.json").write_text(
-            json.dumps(
-                {
-                    "argv": argv,
-                    "artifact": artifact,
-                    "environment": sorted(environment),
-                },
-                indent=2,
-                sort_keys=True,
+    parent: dict[str, Any] = {
+        "contract": "fs-rules-user-token-parent-v2", "productionExecuted": False,
+        "completed": False, "processStopped": False, "originsClosed": False,
+        "childReceiptValid": False, "issues": [], "exitCode": None,
+    }
+    child = None
+    artifact = None
+    try:
+        binary, artifact = build()
+        with tempfile.TemporaryDirectory(prefix="o5-user-token-") as temporary:
+            private = Path(temporary)
+            owned = private / "fireemu"
+            shutil.copyfile(binary, owned)
+            owned.chmod(0o500)
+            rules = private / "firestore.rules"
+            rules.write_text(
+                "rules_version = '2';\nservice cloud.firestore {\n"
+                "  match /databases/{database}/documents {\n"
+                "    match /{document=**} { allow read, write: if false; }\n"
+                "  }\n}\n"
             )
-            + "\n"
-        )
-        child = subprocess.Popen(argv, cwd=private, env=environment)
-        try:
-            code = child.wait(timeout=900)
-        except subprocess.TimeoutExpired:
-            child.send_signal(signal.SIGTERM)
+            firebase_json = private / "firebase.json"
+            firebase_json.write_text(
+                json.dumps({"firestore": {"rules": "firestore.rules"}})
+            )
+            argv = [
+                str(owned),
+                "exec",
+                "--firebase-json",
+                str(firebase_json),
+                "--project",
+                PROJECT,
+                "--only",
+                "auth,firestore",
+                "--firestore-port",
+                "0",
+                "--http-port",
+                "0",
+                "--hub-port",
+                "0",
+                "--ui-port",
+                "0",
+                "--logging-port",
+                "0",
+                "--log-verbosity",
+                "silent",
+                "--",
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--child",
+                str(output),
+                "--nonce",
+                nonce,
+            ]
+            _publish_new(output / "launch.json", {
+                "artifact": artifact, "environment": sorted(environment),
+                "privateExecutable": "fireemu", "newProcessGroup": True,
+            })
             try:
-                child.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
-            code = 124
-    time.sleep(0.2)
-    record = output / "local-shadow.json"
-    if record.exists():
-        value = json.loads(record.read_text())
-        value["artifact"] = artifact
-        value["exitCode"] = code
-        value["originsClosed"] = all(
-            _socket_closed(value[key].removeprefix("http://"))
-            for key in ("firestoreOrigin", "authOrigin")
-            if key in value
-        )
-        record.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
-    return code
+                child = subprocess.Popen(argv, cwd=private, env=environment, start_new_session=True)
+                try:
+                    parent["exitCode"] = child.wait(timeout=900)
+                except subprocess.TimeoutExpired:
+                    parent["exitCode"] = 124
+                    parent["issues"].append("child-timeout")
+            finally:
+                if child is not None:
+                    parent["processStopped"] = _stop_owned_process(child)
+                    if not parent["processStopped"]:
+                        parent["issues"].append("owned-process-stop-unconfirmed")
+    except Exception as error:  # noqa: BLE001 -- sanitized parent evidence
+        parent["issues"].append("parent-operation:" + type(error).__name__)
+    parent["artifact"] = artifact
+    if child is not None:
+        try:
+            value, sha = _read_child_receipt(output / "local-shadow.json")
+            parent["childReceiptSha256"] = sha
+            required = {
+                "contract": "fs-rules-user-token-local-shadow-run-v1",
+                "status": "LOCAL_SHADOW_ONLY", "productionExecuted": False,
+                "productionReady": False, "completed": True, "nonce": nonce,
+                "recordingComplete": True, "stateValidation": True,
+                "resourceCleanupComplete": True, "tenantDeleted": True,
+            }
+            parent["childReceiptValid"] = (
+                all(type(value.get(key)) is type(expected) and value.get(key) == expected
+                    for key, expected in required.items())
+                and value.get("failure") is None
+                and type(value.get("childPid")) is int and value["childPid"] > 0
+            )
+            # Missing endpoints are never an empty conjunction proving closure.
+            endpoints = [value.get(key) for key in ("firestoreOrigin", "authOrigin")]
+            parent["originsClosed"] = all(
+                isinstance(origin, str) and _socket_closed(origin) for origin in endpoints
+            )
+        except Exception as error:  # noqa: BLE001 -- retain absent/malformed receipt
+            parent["issues"].append("child-receipt:" + type(error).__name__)
+    for flag in ("processStopped", "originsClosed", "childReceiptValid"):
+        if parent[flag] is not True:
+            parent["issues"].append(flag + "-unconfirmed")
+    if type(parent["exitCode"]) is not int or parent["exitCode"] != 0:
+        parent["issues"].append("child-exit-unsuccessful")
+    parent["completed"] = not parent["issues"]
+    parent["returnCode"] = 0 if parent["completed"] else 2
+    # Preserve the child bytes. A parent receipt points to them by hash instead
+    # of relabeling them as the result of another process or rewriting history.
+    _publish_new(output / "parent-result.json", parent)
+    return parent["returnCode"]
 
 
 def main() -> int:

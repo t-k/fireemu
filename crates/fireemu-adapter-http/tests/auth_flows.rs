@@ -178,6 +178,7 @@ fn state() -> AuthState {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
         query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
@@ -715,6 +716,8 @@ fn password_reset_rejects_oversize_and_malformed_passwords_without_consuming_oob
 #[test]
 fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
     let s = AuthState {
+        idp_continuations:
+            fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::LocalBounded,
         query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::ProductionBounded,
         stateless_refresh_tokens: false,
         fake_custom_token_expiry:
@@ -8494,5 +8497,257 @@ fn routed_project_saml_uses_selected_store_for_first_and_existing_requests() {
             .unwrap()
             .saml_config("saml.test")
             .is_none());
+    }
+}
+
+// Process-local pendingToken contract. The fixture policy is explicit, not signed SAML.
+fn continuation_state() -> AuthState {
+    let mut s = state();
+    s.idp_continuations =
+        fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::LocalBounded;
+    s
+}
+
+fn continuation_assertion(subject: &str) -> Value {
+    json!({"requestUri":"http://localhost", "returnSecureToken":true,
+        "postBody":format!("providerId=github.com&id_token={}",
+            idp_jwt(&json!({"sub":subject, "email":format!("{subject}@example.test")})))})
+}
+
+fn resume_request(token: &Value) -> Value {
+    json!({"requestUri":"http://localhost", "pendingToken":token, "returnSecureToken":true})
+}
+
+#[test]
+fn pending_token_repeats_sign_in_without_creating_a_second_account_or_extending_ttl() {
+    let s = continuation_state();
+    let path = format!("{V1}/accounts:signInWithIdp");
+    let (status, first) = post(&s, &path, &continuation_assertion("repeat"));
+    assert_eq!(status, 200, "{first}");
+    assert!(first["pendingToken"].is_string());
+    let resume = resume_request(&first["pendingToken"]);
+    let (status, next) = post(&s, &path, &resume);
+    assert_eq!(status, 200, "{next}");
+    assert_eq!(next["localId"], first["localId"]);
+    assert_eq!(next["isNewUser"], false);
+    assert_eq!(next["pendingToken"], first["pendingToken"]);
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(299))
+        .unwrap();
+    assert_eq!(post(&s, &path, &resume).0, 200);
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(1))
+        .unwrap();
+    let before = format!("{:?}", s.store.lock().unwrap().users_by_creation());
+    assert_eq!(post(&s, &path, &resume).0, 400);
+    assert_eq!(
+        before,
+        format!("{:?}", s.store.lock().unwrap().users_by_creation())
+    );
+    assert_eq!(s.store.lock().unwrap().user_count(), 1);
+}
+
+#[test]
+fn pending_token_cannot_replace_current_account_authorization_with_cached_linking_token() {
+    let s = continuation_state();
+    let path = format!("{V1}/accounts:signInWithIdp");
+    let victim = sign_up(&s, "victim-cont@example.test");
+    let outsider = sign_up(&s, "outsider-cont@example.test");
+    let claims =
+        json!({"sub":"not-authorized", "email":"victim-cont@example.test", "email_verified":false});
+    let body = json!({"requestUri":"http://localhost", "postBody":format!("providerId=github.com&id_token={}", idp_jwt(&claims))});
+    let (status, confirmation) = post(&s, &path, &body);
+    assert_eq!(status, 200, "{confirmation}");
+    assert_eq!(confirmation["needConfirmation"], true);
+    assert!(confirmation.get("idToken").is_none());
+    assert!(confirmation["pendingToken"].is_string());
+    let mut resume = resume_request(&confirmation["pendingToken"]);
+    let (status, again) = post(&s, &path, &resume);
+    assert_eq!(status, 200);
+    assert_eq!(again["needConfirmation"], true);
+    assert!(again.get("idToken").is_none());
+    resume["idToken"] = victim["idToken"].clone();
+    let (status, linked) = post(&s, &path, &resume);
+    assert_eq!(status, 200, "{linked}");
+    assert_eq!(linked["localId"], victim["localId"]);
+    {
+        let store = s.store.lock().unwrap();
+        let now = s.clock.lock().unwrap().now();
+        let raw = store
+            .pending_idp_sign_in(
+                linked["pendingToken"].as_str().unwrap(),
+                "fixture-idp-v1",
+                now,
+            )
+            .unwrap();
+        let cached: Value = serde_json::from_str(raw).unwrap();
+        assert!(cached.get("idToken").is_none());
+        assert!(cached.get("pendingToken").is_none());
+        assert!(!raw.contains(victim["idToken"].as_str().unwrap()));
+    }
+    // The credential belongs to this provider identity, never to a cached link session.
+    resume["idToken"] = outsider["idToken"].clone();
+    let before = format!("{:?}", s.store.lock().unwrap().users_by_creation());
+    let (status, refused) = post(&s, &path, &resume);
+    assert_eq!(status, 400, "{refused}");
+    assert!(refused.get("idToken").is_none());
+    assert_eq!(
+        before,
+        format!("{:?}", s.store.lock().unwrap().users_by_creation())
+    );
+    resume["idToken"] = json!("invalid-link-session");
+    assert_eq!(post(&s, &path, &resume).0, 400);
+}
+
+#[test]
+fn pending_token_refuses_ambiguous_inputs_and_never_falls_back_to_fresh_credentials() {
+    let s = continuation_state();
+    let path = format!("{V1}/accounts:signInWithIdp");
+    let assertion = continuation_assertion("input-shape");
+    let (status, first) = post(&s, &path, &assertion);
+    assert_eq!(status, 200, "{first}");
+    let before = format!("{:?}", s.store.lock().unwrap().users_by_creation());
+    for token in [
+        json!(""),
+        json!("arbitrary"),
+        json!(false),
+        json!(1),
+        json!([]),
+        json!({}),
+        json!("x".repeat(257)),
+    ] {
+        let mut fresh = assertion.clone();
+        fresh["pendingToken"] = token;
+        assert_eq!(post(&s, &path, &fresh).0, 400);
+    }
+    for (key, value) in [
+        ("postBody", assertion["postBody"].clone()),
+        ("pendingIdToken", json!("legacy")),
+        ("requestUri", json!("https://different.invalid")),
+        ("requestUri", Value::Null),
+    ] {
+        let mut body = resume_request(&first["pendingToken"]);
+        body[key] = value;
+        assert_eq!(post(&s, &path, &body).0, 400, "{key}");
+    }
+    assert_eq!(
+        before,
+        format!("{:?}", s.store.lock().unwrap().users_by_creation())
+    );
+}
+
+#[test]
+fn pending_token_is_local_to_project_tenant_and_current_reset_generation() {
+    use fireemu_core_auth::store::{AuthRegistry, AuthSnapshot};
+    let mut s = continuation_state();
+    let path = format!("{V1}/accounts:signInWithIdp");
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer").unwrap();
+    s.registry = Some(registry);
+    let (_, signed) = post(&s, &path, &continuation_assertion("scope"));
+    let request = resume_request(&signed["pendingToken"]);
+    let mut tenant_request = request.clone();
+    tenant_request["tenantId"] = json!("customer");
+    assert_eq!(post(&s, &path, &tenant_request).0, 400);
+    let snapshot = AuthSnapshot::capture(&s.store.lock().unwrap());
+    snapshot.restore_into(&mut s.store.lock().unwrap());
+    assert_eq!(post(&s, &path, &request).0, 400);
+    let (_, fresh) = post(&s, &path, &continuation_assertion("scope"));
+    assert_ne!(fresh["pendingToken"], signed["pendingToken"]);
+    s.store.lock().unwrap().clear();
+    assert_eq!(
+        post(&s, &path, &resume_request(&fresh["pendingToken"])).0,
+        400
+    );
+}
+
+#[test]
+fn default_fixture_mode_does_not_silently_accept_or_issue_continuations() {
+    let s = state();
+    let path = format!("{V1}/accounts:signInWithIdp");
+    let body = continuation_assertion("legacy-shape");
+    let (status, first) = post(&s, &path, &body);
+    assert_eq!(status, 200, "{first}");
+    assert!(first.get("pendingToken").is_none());
+    let before = format!("{:?}", s.store.lock().unwrap().users_by_creation());
+    let mut forged = body;
+    forged["pendingToken"] = json!("unverified");
+    assert_eq!(post(&s, &path, &forged).0, 501);
+    assert_eq!(
+        before,
+        format!("{:?}", s.store.lock().unwrap().users_by_creation())
+    );
+}
+
+#[test]
+fn replayed_assertions_still_run_current_blocking_hooks() {
+    let mut s = continuation_state();
+    let path = format!("{V1}/accounts:signInWithIdp");
+    let (_, first) = post(&s, &path, &continuation_assertion("blocking-repeat"));
+    s.blocking = Some(Arc::new(RejectBeforeSignInHook { timeout: true }));
+    let before = format!("{:?}", s.store.lock().unwrap().users_by_creation());
+    let (status, response) = post(&s, &path, &resume_request(&first["pendingToken"]));
+    assert_ne!(status, 200, "{response}");
+    assert!(response.get("idToken").is_none());
+    assert_eq!(
+        before,
+        format!("{:?}", s.store.lock().unwrap().users_by_creation())
+    );
+}
+
+#[test]
+fn local_saml_fixture_rejects_non_string_subjects_and_non_object_attributes() {
+    let s = continuation_state();
+    let path = format!("{V1}/accounts:signInWithIdp");
+    for saml in [
+        json!({"assertion":false}),
+        json!({"assertion":{"subject":1}}),
+        json!({"assertion":{"subject":{"nameId":false}}}),
+        json!({"assertion":{"subject":{"nameId":1}}}),
+        json!({"assertion":{"subject":{"nameId":[]}}}),
+        json!({"assertion":{"subject":{"nameId":""}}}),
+        json!({"assertion":{"subject":{"nameId":"bad\nname"}}}),
+        json!({"assertion":{"subject":{"nameId":"test@example.com"}, "attributeStatements":[]}}),
+    ] {
+        let body = json!({"requestUri":"http://localhost", "postBody":format!(
+            "providerId=saml.fixture&id_token={}&SAMLResponse={}",
+            percent(&json!({"sub":"saml-sub"}).to_string()), percent(&saml.to_string()))});
+        let (status, response) = post(&s, &path, &body);
+        assert_eq!(status, 400, "{response}");
+        assert!(response.get("pendingToken").is_none());
+        assert_eq!(s.store.lock().unwrap().user_count(), 0);
+    }
+    let saml = json!({"assertion":{"subject":{"nameId":"test@example.com"}}});
+    let body = json!({"requestUri":"http://localhost", "postBody":format!(
+        "providerId=saml.fixture&id_token={}&SAMLResponse={}",
+        percent(&json!({"sub":"saml-sub"}).to_string()), percent(&saml.to_string()))});
+    assert_eq!(post(&s, &path, &body).0, 200);
+}
+
+#[test]
+fn generated_saml_json_shape_corpus_is_executed_by_the_native_fixture_handler() {
+    let corpus: Value = serde_json::from_str(include_str!(
+        "../../../spec/compatibility/auth-account-federation-local-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(corpus["productionAllowed"], false);
+    for case in corpus["federation"]["samlFixtureCases"].as_array().unwrap() {
+        let s = continuation_state();
+        let request = json!({"requestUri":"http://localhost", "postBody":format!(
+            "providerId=saml.fixture&id_token={}&SAMLResponse={}",
+            percent(&json!({"sub":"fixture-corpus"}).to_string()), percent(&case["response"].to_string()))});
+        let (status, body) = post(&s, &format!("{V1}/accounts:signInWithIdp"), &request);
+        assert_eq!(json!(status), case["status"], "{}: {body}", case["id"]);
+        assert_eq!(
+            s.store.lock().unwrap().user_count(),
+            usize::from(status == 200)
+        );
+        if status != 200 {
+            assert!(body.get("pendingToken").is_none());
+        }
     }
 }

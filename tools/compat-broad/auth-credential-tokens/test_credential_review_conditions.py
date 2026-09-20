@@ -7,8 +7,8 @@ recorded a further defect and two were controls. All twenty-five are reproduced 
 ones that recorded a defect state what the fixed code must do instead, and the controls
 state what must not have changed.
 
-The harness intercepts `urllib.request.urlopen` and substitutes a deterministic clock, so
-the real transport, claim decoder, assertions, cleanup and receipt assembly run while no
+The harness injects the raw HTTP sender and substitutes a deterministic clock, so
+the real parser, claim decoder, assertions, cleanup and receipt assembly run while no
 daemon, service or network is involved. Every token here is a synthetic unsigned fixture
 built by the shadow's own `unsigned_jwt`; none is a credential.
 """
@@ -22,6 +22,7 @@ import io
 import json
 import sys
 import urllib.error
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -194,7 +195,7 @@ def _service(clock, *, cookie_subject="same") -> SimpleNamespace:
                 if uid in body.get("localId", [])
                 or account["email"] in body.get("email", [])
             ]
-            return 200, ({"users": found} if found else {})
+            return 200, {"users": found}
         if ":createSessionCookie" in url:
             return create_session_cookie(body)
         if "accounts:delete" in url:
@@ -223,9 +224,18 @@ def _service(clock, *, cookie_subject="same") -> SimpleNamespace:
 @contextlib.contextmanager
 def _driven(service, clock):
     """Run the shadow against the fixture, with no real clock and no real socket."""
+    def sender(base, path, body, owner, timeout):
+        request = urllib.request.Request(base + path, data=json.dumps(body).encode(), method="POST")
+        try:
+            with service.urlopen(request, timeout=timeout) as response:
+                return response.status, response.read()
+        except urllib.error.HTTPError as error:
+            with error:
+                return error.code, error.read()
+
     with (
         patch.object(shadow, "time", clock),
-        patch.object(shadow.urllib.request, "urlopen", service.urlopen),
+        patch.object(shadow, "_send_over_http", sender),
     ):
         yield
 
@@ -256,7 +266,8 @@ def _full_run(cookie_subject="same", clock=None):
         tracker=tracker,
         budget=budget,
         failure=failure,
-        shutdown={"processStopped": True, "remainingChildren": 0},
+        shutdown={"exitCode": 0, "processStopped": True, "remainingChildren": 0,
+                  "outputDrainerStopped": True, "failures": []},
         source_binding=dict(SOURCE_BINDING),
     )
     return SimpleNamespace(
@@ -507,7 +518,8 @@ def _partial_record() -> dict:
         tracker=_cleaned_tracker(),
         budget=shadow.shadow_budget(now=0.0),
         failure="BudgetExceeded: fixture stop",
-        shutdown={"processStopped": True, "remainingChildren": 0},
+        shutdown={"exitCode": 0, "processStopped": True, "remainingChildren": 0,
+                  "outputDrainerStopped": True, "failures": []},
         source_binding=dict(SOURCE_BINDING),
     )
     assert exit_code == 1
@@ -745,8 +757,9 @@ def test_review_cleanup_on_a_spent_total_deletes_nothing_rather_than_some() -> N
     budget = shadow.shadow_budget(now=clock.monotonic())
     _owned_accounts(service, tracker, 3)
     budget["requests"] = budget["maxRequests"]
-    with _driven(service, clock), pytest.raises(BudgetExceeded):
-        shadow.cleanup("http://127.0.0.1:8123", budget, tracker)
+    with _driven(service, clock):
+        problems = shadow.cleanup("http://127.0.0.1:8123", budget, tracker)
+    assert len(problems) == 3 and all("BudgetExceeded" in problem for problem in problems)
     assert service.sent == []
     assert len(service.accounts) == 3
     report = cleanup_report(tracker)

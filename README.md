@@ -32,6 +32,9 @@ If `firebase.json` exists, `init` references it instead of copying its settings.
 
 Functions source reloads hash all non-ignored file content. One daemon-wide source-work admission paces scans and snapshots to 64 MiB/s and 20,000 directory entries/s, stops abandoned work between 64 KiB chunks, and rejects a watch or reload operation whose source tree exceeds 100,000 entries or 128 directory levels. These are local resource-safety limits rather than Firebase CLI compatibility claims.
 
+The Node runner's protocol output is bounded to 32 MiB / 1,024 pending frames and a 30-second per-frame wait. A blocked or failed output channel retires the runner rather than silently dropping results or buffering indefinitely. Clean EOF/shutdown allows a one-second flush of already-admitted output, not completion of active callbacks. These are local safety limits, not Firebase quotas or a whole-process memory guarantee; see [runner output boundaries](docs/compatibility/node-runner-output-boundary.md).
+Direct `process.stderr.write()` and redirected user stdout are separately bounded to 8 MiB / 1,024 outstanding writes and a 30-second write wait. The native `write` return value and `drain` behavior are retained; direct fd writes and global monkey-patching are outside this guard. Clean shutdown flushes both channels within the same one-second tail.
+
 Second-generation callable functions support the Firebase Web SDK's `.stream()` API. `response.sendChunk()` and `onCallGenkit` stream values are forwarded progressively, the final result resolves when the handler completes, and client cancellation reaches the handler's response signal. Streamed responses use bounded backpressure and the production 10 MiB uncompressed response limit. A local runner response with a non-identity `Content-Encoding` is refused rather than allowing compressed bytes to bypass that limit.
 
 For CI or scripted setup, use the non-interactive form:

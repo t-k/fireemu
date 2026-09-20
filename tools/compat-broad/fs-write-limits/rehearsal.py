@@ -8,10 +8,19 @@ import json
 from pathlib import Path
 
 from compiler import compile_limits_plan
-from shadow import REHEARSAL, _real_child, _validate_cleanup, evaluate_rows, run, save
+from shadow import (
+    REHEARSAL, _real_child, _validate_cleanup, evaluate_rows, exact_json, run, save,
+)
 
 
 def validate_rehearsal(receipt: dict, report: dict, binding: dict, plan: dict) -> bool:
+    try:
+        return _validate_rehearsal(receipt, report, binding, plan)
+    except (KeyError, TypeError, ValueError, IndexError, AttributeError, RecursionError):
+        return False
+
+
+def _validate_rehearsal(receipt: dict, report: dict, binding: dict, plan: dict) -> bool:
     fault = {"name": REHEARSAL, "afterObservationIndex": 7, "triggered": True}
     rows = receipt.get("rows")
     manifest = receipt.get("manifest", {})
@@ -24,9 +33,9 @@ def validate_rehearsal(receipt: dict, report: dict, binding: dict, plan: dict) -
         and receipt.get("cleanupComplete") is True
         and receipt.get("semanticMismatches") == []
         and receipt.get("infrastructureFailures") == []
-        and receipt.get("injectedFault") == fault
-        and manifest.get("injectedFault") == fault
-        and report.get("manifest", {}).get("injectedFault") == fault
+        and exact_json(receipt.get("injectedFault"), fault)
+        and exact_json(manifest.get("injectedFault"), fault)
+        and exact_json(report.get("manifest", {}).get("injectedFault"), fault)
         and isinstance(rows, list)
         and len(rows) == 8
         and all(
@@ -37,13 +46,16 @@ def validate_rehearsal(receipt: dict, report: dict, binding: dict, plan: dict) -
         )
         and not evaluate_rows(rows, plan)
         and _validate_cleanup(receipt, plan, observed_prefix=8)
-        and receipt.get("resourceAbsence")
-        == {d["resource"]: True for d in plan["documents"].values()}
+        and exact_json(
+            receipt.get("resourceAbsence"),
+            {d["resource"]: True for d in plan["documents"].values()},
+        )
         and binding.get("bound") is True
         and report.get("status") == "incomplete"
         and report.get("productionExecuted") is False
         and report.get("stopReason") == "child-completed"
-        and report.get("exitCode") == 0
+        and type(report.get("exitCode")) is int
+        and report["exitCode"] == 0
         and report.get("ownedProcess", {}).get("stopped") is True
         and report.get("ownedProcess", {}).get("listenersClosed") is True
         and not any(

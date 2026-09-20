@@ -32,7 +32,8 @@ use fireemu_core_auth::store::{
     AuthError, AuthPrincipal, AuthStore, CredentialNotice, FederatedIdentity,
     InboundSamlProviderConfig, LocalId, NewUser, OAuthResponseType, OidcProviderConfig,
     OobRequestType, PendingSignInId, PhoneCodeUse, ProjectAuthConfigPatch, RoutedStoreInstall,
-    SecondFactorAssertion, VerificationCode, VerificationPurpose,
+    SecondFactorAssertion, UserQueryExpression, UserSortField, VerificationCode,
+    VerificationPurpose,
 };
 use fireemu_core_session::clock::VirtualClock;
 pub use fireemu_core_session::loopback::origin_is_local;
@@ -618,6 +619,15 @@ pub enum AuthQueryLimits {
     ProductionBounded,
 }
 
+/// Whether this embedding exposes bounded local `pendingToken` continuation handles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdpContinuationPolicy {
+    /// Preserve the Firebase Emulator response shape; pending-token input is unsupported.
+    Disabled,
+    /// Enable namespace/authority-bound local handles, never production token verification.
+    LocalBounded,
+}
+
 /// Shared Auth state behind the REST surface.
 pub struct AuthState {
     /// User store (shared with the gRPC adapter, which verifies ID tokens against it).
@@ -658,6 +668,8 @@ pub struct AuthState {
     pub fake_custom_token_expiry: FakeCustomTokenExpiry,
     /// Profile-specific Admin query behavior.
     pub query_limits: AuthQueryLimits,
+    /// Explicit local IdP continuation policy, independent of query paging.
+    pub idp_continuations: IdpContinuationPolicy,
     /// App Check exchange, JWKS and debug-token management, when `appCheck.enabled` selects
     /// them. `None` makes every App Check route a 404 (the activation table of section 8).
     pub app_check: Option<Arc<crate::app_check::AppCheckState>>,
@@ -2665,6 +2677,30 @@ fn handle_with_policy(
     if tenant.is_some() && store.tenant_id() != tenant {
         return error(404, "TENANT_NOT_FOUND");
     }
+    if route.handler == routes::Handler::SignInWithIdp
+        && state.idp_continuations == IdpContinuationPolicy::Disabled
+        && body
+            .get("pendingToken")
+            .is_some_and(|value| !value.is_null())
+    {
+        return not_implemented("pendingToken requires local continuation mode.");
+    }
+    let idp_authority = (route.handler == routes::Handler::SignInWithIdp
+        && state.idp_continuations == IdpContinuationPolicy::LocalBounded)
+        .then(|| idp_continuation_authority(oidc_trust));
+    let idp_generation = store.reset_generation();
+    let incoming_pending = body
+        .get("pendingToken")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let resumed_body = match idp_authority.as_deref() {
+        Some(authority) => match resume_idp_body(&store, body, authority, at) {
+            Ok(body) => body,
+            Err(response) => return response,
+        },
+        None => None,
+    };
+    let body = resumed_body.as_ref().unwrap_or(body);
     if route.class == routes::RouteClass::EndUser && store_tenant.is_some() {
         if let Some(denial) =
             tenant_policy_denial_with_metadata(route.handler, tenant_metadata.as_ref(), body)
@@ -2846,7 +2882,7 @@ fn handle_with_policy(
     } else {
         response
     };
-    let response = finish_token_response(response, signer.as_deref(), &store_arc, at);
+    let mut response = finish_token_response(response, signer.as_deref(), &store_arc, at);
     if let Some(reservation) = quota_reservation.take() {
         // Blocking dispatch commits a successful new-account reservation at its typed
         // per-request creation boundary. Any reservation left here belongs to a failed or
@@ -2858,6 +2894,51 @@ fn handle_with_policy(
         let result = store.release_signup(reservation);
         if let Err(e) = result {
             return auth_error(&e);
+        }
+    }
+    if let Some(authority) = idp_authority {
+        let continuation_response = response.status == 200
+            && response
+                .body
+                .get("providerId")
+                .and_then(Value::as_str)
+                .is_some()
+            && (response
+                .body
+                .get("idToken")
+                .and_then(Value::as_str)
+                .is_some()
+                || response
+                    .body
+                    .get("mfaPendingCredential")
+                    .and_then(Value::as_str)
+                    .is_some()
+                || response
+                    .body
+                    .get("needConfirmation")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                || matches!(
+                    response.body.get("errorMessage").and_then(Value::as_str),
+                    Some("EMAIL_EXISTS" | "FEDERATED_USER_ID_ALREADY_LINKED")
+                ));
+        if continuation_response {
+            if let Ok(mut live) = store_arc.lock() {
+                // A reset while a blocking hook/signing task ran must not mint a
+                // continuation in the next incarnation from a pre-reset assertion.
+                if live.reset_generation() == idp_generation {
+                    let token = incoming_pending.or_else(|| {
+                        let original = json!({
+                            "requestUri": body.get("requestUri"),
+                            "postBody": body.get("postBody"),
+                        });
+                        live.remember_idp_sign_in(original.to_string(), authority, at)
+                    });
+                    if let Some(token) = token {
+                        response.body["pendingToken"] = json!(token);
+                    }
+                }
+            }
         }
     }
     response
@@ -5690,6 +5771,19 @@ fn select_store(
     resolution: routes::Resolution<'_>,
 ) -> Result<Arc<Mutex<AuthStore>>, JsonResponse> {
     let (api_key, query_tenant) = query_selectors(query)?;
+    let query_body_scope = state.query_limits == AuthQueryLimits::ProductionBounded
+        && matches!(
+            resolution,
+            routes::Resolution::Matched { route, .. }
+                if route.handler == routes::Handler::AdminQuery
+        );
+    if query_body_scope
+        && body
+            .get("tenantId")
+            .is_some_and(|value| !value.is_null() && !value.is_string())
+    {
+        return Err(error(400, "INVALID_ARGUMENT : tenantId must be a string"));
+    }
     let body_tenant = str_field(body, "tenantId");
     if let Some((body_tenant, query_tenant)) = body_tenant.as_ref().zip(query_tenant.as_ref()) {
         if body_tenant != query_tenant {
@@ -5776,8 +5870,15 @@ fn select_store(
             };
             return Ok(store);
         }
-        if let Some(query_tenant) = query_tenant.as_deref() {
-            let Some(store) = registry.tenant_store(project, query_tenant) else {
+        // Administrator query accepts its tenant selector in the JSON body as well.
+        // Do not route a tenant query into the default project store. Other handlers
+        // retain their existing selector rules; path/body/query conflicts were checked above.
+        let selected_tenant =
+            query_tenant
+                .as_deref()
+                .or(if query_body_scope { body_tenant } else { None });
+        if let Some(selected_tenant) = selected_tenant {
+            let Some(store) = registry.tenant_store(project, selected_tenant) else {
                 return Err(error(404, "TENANT_NOT_FOUND"));
             };
             return Ok(store);
@@ -7517,17 +7618,25 @@ fn admin_batch_delete(store: &mut AuthStore, body: &Value) -> JsonResponse {
     }
 }
 
-/// Admin `accounts:query` (`queryAccounts`): the count, or users in `localId` order.
-/// Expressions are not implemented by the official emulator either. The Firebase profile
-/// preserves its ignored paging fields; strict applies the documented production contract.
+/// Admin `accounts:query` (`queryAccounts`): count or a bounded, field-sorted page.
+/// The Firebase profile preserves its unimplemented expression/ignored paging behavior.
+/// Strict mode accepts the typed SqlExpression shape, with an explicit local exact-union policy.
 fn admin_query(store: &AuthStore, body: &Value, limits: AuthQueryLimits) -> JsonResponse {
-    if body
-        .get("expression")
-        .and_then(Value::as_array)
-        .is_some_and(|e| !e.is_empty())
-    {
-        return not_implemented("expression is not implemented.");
-    }
+    let expressions = if limits == AuthQueryLimits::ProductionBounded {
+        match parse_admin_query_expressions(body) {
+            Ok(expressions) => expressions,
+            Err(response) => return response,
+        }
+    } else {
+        if body
+            .get("expression")
+            .and_then(Value::as_array)
+            .is_some_and(|e| !e.is_empty())
+        {
+            return not_implemented("expression is not implemented.");
+        }
+        Vec::new()
+    };
     let return_user_info = if limits == AuthQueryLimits::ProductionBounded {
         match opt_bool(body, "returnUserInfo") {
             Ok(value) => value.unwrap_or(true),
@@ -7536,12 +7645,14 @@ fn admin_query(store: &AuthStore, body: &Value, limits: AuthQueryLimits) -> Json
     } else {
         body.get("returnUserInfo").and_then(Value::as_bool) != Some(false)
     };
-    if limits == AuthQueryLimits::ProductionBounded {
-        if let Err(response) = validate_production_admin_query_enums(body) {
-            return response;
+    let sort = if limits == AuthQueryLimits::ProductionBounded {
+        match validate_production_admin_query_enums(body) {
+            Ok(sort) => sort,
+            Err(response) => return response,
         }
-    }
-    let count = store.user_count();
+    } else {
+        UserSortField::LocalId
+    };
     if !return_user_info {
         if limits == AuthQueryLimits::ProductionBounded
             && ["limit", "offset"]
@@ -7555,11 +7666,11 @@ fn admin_query(store: &AuthStore, body: &Value, limits: AuthQueryLimits) -> Json
         }
         return JsonResponse {
             status: 200,
-            body: json!({"recordsCount": count.to_string()}),
+            body: json!({"recordsCount": store.matching_user_count(&expressions).to_string()}),
         };
     }
     if limits == AuthQueryLimits::ProductionBounded {
-        return production_admin_query_page(store, body);
+        return production_admin_query_page(store, body, sort, &expressions);
     }
     let mut ids = store.all_user_ids();
     if str_field(body, "order") == Some("DESC") {
@@ -7568,11 +7679,72 @@ fn admin_query(store: &AuthStore, body: &Value, limits: AuthQueryLimits) -> Json
     let users: Vec<Value> = ids.iter().map(|uid| user_json(store, uid)).collect();
     JsonResponse {
         status: 200,
-        body: json!({"recordsCount": count.to_string(), "userInfo": users}),
+        body: json!({"recordsCount": store.user_count().to_string(), "userInfo": users}),
     }
 }
 
-fn production_admin_query_page(store: &AuthStore, body: &Value) -> JsonResponse {
+/// Decode SqlExpression, not a SQL string. Validate every field before applying the
+/// documented priority email > phoneNumber > userId. Reject empty/unrecognized selectors
+/// rather than turning a malformed filter into an unfiltered query. Limits below are local
+/// parser safety limits, not claimed Identity Platform quotas.
+fn parse_admin_query_expressions(body: &Value) -> Result<Vec<UserQueryExpression>, JsonResponse> {
+    const MAX_EXPRESSIONS: usize = 128;
+    const MAX_SELECTOR_BYTES: usize = 4_096;
+    let expressions = match body.get("expression") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(expressions)) if expressions.len() <= MAX_EXPRESSIONS => expressions,
+        _ => return Err(error(400, "INVALID_ARGUMENT : invalid expression array")),
+    };
+    let mut result = BTreeSet::new();
+    for expression in expressions {
+        let Some(object) = expression.as_object() else {
+            return Err(error(
+                400,
+                "INVALID_ARGUMENT : expression must be an object",
+            ));
+        };
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "email" | "phoneNumber" | "userId"))
+        {
+            return Err(error(400, "INVALID_ARGUMENT : unknown expression field"));
+        }
+        // JSON null is an unset proto scalar; every supplied non-null value is typed,
+        // including a lower-priority selector that will not be used for matching.
+        for value in object.values() {
+            if !value.is_null()
+                && !value.as_str().is_some_and(|text| {
+                    text.len() <= MAX_SELECTOR_BYTES && !text.chars().any(char::is_control)
+                })
+            {
+                return Err(error(400, "INVALID_ARGUMENT : invalid expression selector"));
+            }
+        }
+        let selected = if let Some(email) = str_field(expression, "email") {
+            UserQueryExpression::Email(canonicalize_email(email))
+        } else if let Some(phone) = str_field(expression, "phoneNumber") {
+            UserQueryExpression::PhoneNumber(phone.to_owned())
+        } else if let Some(id) = str_field(expression, "userId") {
+            UserQueryExpression::UserId(id.to_owned())
+        } else {
+            return Err(error(
+                400,
+                "INVALID_ARGUMENT : expression selector required",
+            ));
+        };
+        // Empty strings remain exact values (not wildcards), including a higher-priority
+        // empty email. A field's presence must not silently select a different predicate.
+        result.insert(selected);
+    }
+    Ok(result.into_iter().collect())
+}
+
+fn production_admin_query_page(
+    store: &AuthStore,
+    body: &Value,
+    sort: UserSortField,
+    expressions: &[UserQueryExpression],
+) -> JsonResponse {
     // Enum fields were validated before the count-only branch in `admin_query`.
     let descending = str_field(body, "order") == Some("DESC");
     let limit = match query_i64(body, "limit", 500) {
@@ -7586,7 +7758,7 @@ fn production_admin_query_page(store: &AuthStore, body: &Value) -> JsonResponse 
         },
         Ok(_) | Err(()) => return error(400, "INVALID_ARGUMENT : invalid offset"),
     };
-    let page = store.users_by_local_id_page(offset, limit, descending);
+    let page = store.users_matching_sorted_page(expressions, sort, offset, limit, descending);
     let users = page
         .iter()
         .map(|user| user_json(store, &user.local_id))
@@ -7597,16 +7769,17 @@ fn production_admin_query_page(store: &AuthStore, body: &Value) -> JsonResponse 
     }
 }
 
-fn validate_production_admin_query_enums(body: &Value) -> Result<(), JsonResponse> {
-    match opt_str(body, "sortBy") {
-        Ok(None | Some("SORT_BY_FIELD_UNSPECIFIED" | "USER_ID")) => {}
-        Ok(Some("NAME" | "CREATED_AT" | "LAST_LOGIN_AT" | "USER_EMAIL")) => {
-            return Err(not_implemented("sortBy is not implemented."));
-        }
+fn validate_production_admin_query_enums(body: &Value) -> Result<UserSortField, JsonResponse> {
+    let sort = match opt_str(body, "sortBy") {
+        Ok(None | Some("SORT_BY_FIELD_UNSPECIFIED" | "USER_ID")) => UserSortField::LocalId,
+        Ok(Some("NAME")) => UserSortField::Name,
+        Ok(Some("CREATED_AT")) => UserSortField::CreatedAt,
+        Ok(Some("LAST_LOGIN_AT")) => UserSortField::LastLoginAt,
+        Ok(Some("USER_EMAIL")) => UserSortField::Email,
         Ok(Some(_)) | Err(_) => return Err(error(400, "INVALID_ARGUMENT : invalid sortBy")),
-    }
+    };
     match opt_str(body, "order") {
-        Ok(None | Some("ORDER_UNSPECIFIED" | "ASC" | "DESC")) => Ok(()),
+        Ok(None | Some("ORDER_UNSPECIFIED" | "ASC" | "DESC")) => Ok(sort),
         Ok(Some(_)) | Err(_) => Err(error(400, "INVALID_ARGUMENT : invalid order")),
     }
 }
@@ -9359,32 +9532,118 @@ fn idp_missing_claims_error(
 fn validate_saml_response(raw: Option<&String>) -> Result<Option<Value>, JsonResponse> {
     let Some(raw) = raw else { return Ok(None) };
     let parsed: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
-    let present = |v: Option<&Value>| v.is_some() && v != Some(&Value::Null);
     let assertion = parsed.get("assertion");
-    if !present(assertion) {
+    if !assertion.is_some_and(Value::is_object) {
         return Err(error(
             400,
             "INVALID_IDP_RESPONSE ((Missing assertion in SAMLResponse.))",
         ));
     }
     let subject = assertion.and_then(|a| a.get("subject"));
-    if !present(subject) {
+    if !subject.is_some_and(Value::is_object) {
         return Err(error(
             400,
             "INVALID_IDP_RESPONSE ((Missing assertion.subject in SAMLResponse.))",
         ));
     }
-    if !present(subject.and_then(|s| s.get("nameId"))) {
+    if !subject
+        .and_then(|s| s.get("nameId"))
+        .and_then(Value::as_str)
+        .is_some_and(|name| !name.is_empty() && !name.chars().any(char::is_control))
+    {
         return Err(error(
             400,
             "INVALID_IDP_RESPONSE ((Missing assertion.subject.nameId in SAMLResponse.))",
         ));
     }
+    if assertion
+        .and_then(|a| a.get("attributeStatements"))
+        .is_some_and(|value| !value.is_null() && !value.is_object())
+    {
+        return Err(error(
+            400,
+            "INVALID_IDP_RESPONSE ((Invalid SAML attributeStatements.))",
+        ));
+    }
     Ok(Some(parsed))
+}
+
+/// Opaque continuation authority is supplied by the trusted embedder, never by HTTP.
+fn idp_continuation_authority(trust: Option<&crate::oidc::LocalOidcTrust>) -> String {
+    match trust {
+        None => "fixture-idp-v1".to_owned(),
+        Some(trust) => {
+            let pin = json!({
+                "project": trust.project_id,
+                "tenant": trust.tenant_id,
+                "provider": trust.provider_id,
+                "issuer": trust.issuer,
+                "client": trust.client_id,
+                "jwk": trust.jwk,
+            });
+            format!(
+                "signed-oidc-v1:{}",
+                fireemu_core_types::hash::hex_lower(&fireemu_core_types::hash::sha256(
+                    pin.to_string().as_bytes()
+                ))
+            )
+        }
+    }
+}
+
+/// Resolve pendingToken *before* signup admission and assertion verification. A caller
+/// cannot replace cached credentials with a postBody, change the original redirect URI,
+/// or carry a linking ID token over from the earlier request. The current request's ID
+/// token and response flags are validated normally after this function.
+fn resume_idp_body(
+    store: &AuthStore,
+    body: &Value,
+    authority: &str,
+    at: LogicalInstant,
+) -> Result<Option<Value>, JsonResponse> {
+    let token = match body.get("pendingToken") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(token)) if !token.is_empty() && token.len() <= 256 => token,
+        _ => return Err(error(400, "INVALID_PENDING_TOKEN")),
+    };
+    if body.get("postBody").is_some_and(|value| !value.is_null())
+        || body
+            .get("pendingIdToken")
+            .is_some_and(|value| !value.is_null())
+    {
+        return Err(error(400, "INVALID_PENDING_TOKEN"));
+    }
+    let Some(raw) = store.pending_idp_sign_in(token, authority, at) else {
+        return Err(error(400, "INVALID_PENDING_TOKEN"));
+    };
+    let original: Value =
+        serde_json::from_str(raw).map_err(|_| error(400, "INVALID_PENDING_TOKEN"))?;
+    let Some(uri) = original.get("requestUri").and_then(Value::as_str) else {
+        return Err(error(400, "INVALID_PENDING_TOKEN"));
+    };
+    if body.get("requestUri").and_then(Value::as_str) != Some(uri) {
+        return Err(error(400, "INVALID_REQUEST_URI"));
+    }
+    let mut resolved = body.clone();
+    let Some(object) = resolved.as_object_mut() else {
+        return Err(error(400, "INVALID_PENDING_TOKEN"));
+    };
+    object.remove("pendingToken");
+    object.insert(
+        "postBody".to_owned(),
+        original.get("postBody").cloned().unwrap_or(Value::Null),
+    );
+    Ok(Some(resolved))
 }
 
 /// Parses and validates a `signInWithIdp` credential, or the error the official emulator raises.
 fn resolve_idp_credential(body: &Value) -> Result<ResolvedIdp, JsonResponse> {
+    if body
+        .get("pendingToken")
+        .is_some_and(|value| !value.is_null())
+    {
+        return Err(error(400, "INVALID_PENDING_TOKEN"));
+    }
     let return_refresh_token = match body.get("returnRefreshToken") {
         None | Some(Value::Null) => false,
         Some(Value::Bool(value)) => *value,

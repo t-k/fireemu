@@ -73,6 +73,9 @@ def _receipt_reason(receipt: Any, side: str) -> str | None:
         return "credential-material-present"
     if receipt.get("recordingComplete") is not True:
         return "incomplete-recording"
+    budget = receipt.get("budget")
+    if isinstance(budget, dict) and budget.get("integrityFailure") is not None:
+        return "budget-integrity-failure"
     cleanup = receipt.get("cleanup")
     if (
         not isinstance(cleanup, dict)

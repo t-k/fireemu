@@ -39,6 +39,13 @@ export const RUNNER_FILES = [
   "blocking-error.mjs",
   "blocking-response.mjs",
   "log-context.mjs",
+  "protocol.mjs",
+  "discovery.mjs",
+  "output.mjs",
+  "diagnostic-output.mjs",
+  "http-lifecycle.mjs",
+  "http-admission.mjs",
+  "invocation-error.mjs",
 ];
 
 function parseArgs(argv) {

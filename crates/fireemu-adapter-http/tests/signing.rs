@@ -115,6 +115,7 @@ fn auth_state(store: Arc<Mutex<AuthStore>>) -> AuthState {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
         query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
@@ -274,7 +275,7 @@ fn blocking_auth_with_fifty_thousand_sessions_copies_only_changed_registries() {
             .lock()
             .unwrap()
             .transient_registries_shared_with(&before),
-        4,
+        5,
         "the blocking request may detach only refresh sessions and their owner index"
     );
 }

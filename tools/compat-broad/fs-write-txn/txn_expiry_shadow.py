@@ -14,17 +14,18 @@ production observation and establishes no parity.
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
+import stat
+import tempfile
 import shlex
 import signal
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -37,7 +38,8 @@ import txn_expiry_comparison as comparison
 import txn_expiry_plan as plan_module
 from broad_contract import digest
 from evidence_common import runtime_inputs
-from owned_runner import control_get, local_addresses
+from owned_runner import local_addresses
+import txn_wire
 
 CONTRACT = "txn-expiry-local-shadow-v1"
 PROJECT = "fireemu-test"
@@ -155,134 +157,233 @@ def runtime_binding(artifact, root):
     }
 
 
+MAX_SAVED_BYTES = 8 * 1024 * 1024
+
+
 def save(path, value):
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    """Publish complete private JSON once; never truncate an existing receipt.
+
+    A failure after link may leave a complete file, but is still a failed
+    publication. This is not a power-loss or hostile-filesystem guarantee.
+    """
+    path = Path(path)
+    raw = (json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n").encode("utf-8")
+    if len(raw) > MAX_SAVED_BYTES:
+        raise ValueError("local receipt exceeds limit")
+    if path.exists() or path.is_symlink():
+        raise FileExistsError("local receipt already exists")
+    descriptor, temporary = tempfile.mkstemp(prefix=".txn-result-", dir=path.parent)
+    try:
+        try:
+            view = memoryview(raw)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError("local receipt write made no progress")
+                view = view[written:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.link(temporary, path, follow_symlinks=False)
+        os.unlink(temporary)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def _read_result(path):
+    """Bounded nonblocking read; no links/devices, duplicate keys or nonfinite JSON."""
+    from batch_wire import _decode_json_response
+
+    path = Path(path)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or before.st_uid != os.getuid() or before.st_mode & 0o077
+                or not 0 < before.st_size <= MAX_SAVED_BYTES):
+            raise ValueError("private regular local receipt required")
+        chunks, size = [], 0
+        while size <= MAX_SAVED_BYTES:
+            chunk = os.read(descriptor, min(65536, MAX_SAVED_BYTES + 1 - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        after, current = os.fstat(descriptor), path.lstat()
+        identity = lambda item: (item.st_dev, item.st_ino, item.st_mode, item.st_uid,
+                                 item.st_nlink, item.st_size, item.st_mtime_ns, item.st_ctime_ns)
+        if (identity(before) != identity(after) or identity(before) != identity(current)
+                or size != before.st_size or size > MAX_SAVED_BYTES):
+            raise ValueError("local receipt changed while reading")
+        raw = b"".join(chunks)
+        value = _decode_json_response(raw)
+        if not isinstance(value, dict):
+            raise ValueError("local receipt object required")
+        return value, hashlib.sha256(raw).hexdigest()
+    finally:
+        os.close(descriptor)
+
+
+def _local_origin(origin):
+    if not isinstance(origin, str) or any(ord(c) <= 32 or ord(c) == 127 for c in origin):
+        raise ValueError("numeric loopback origin required")
+    parsed = urllib.parse.urlsplit(origin)
+    if (parsed.scheme != "http" or parsed.hostname not in collector.LOOPBACK_HOSTS
+            or parsed.port is None or parsed.port < 1 or parsed.username is not None
+            or parsed.password is not None or parsed.path or "?" in origin or "#" in origin):
+        raise ValueError("numeric loopback origin required")
 
 
 def rest_transport(origin, *, timeout=None):
-    """Build a bounded REST transport for one Firestore origin.
+    """One fixed worker per send, bounded by the collector's remaining timeout.
 
-    The per-request time bound comes from the plan. A transport that ignored it
-    would leave the campaign's wall envelope unenforced, so the request's own
-    `timeoutSeconds` wins and the constructor argument is only a fallback.
+    HTTP status is retained even if the worker is killed during body reception.
+    Process creation/kernel kill/reap and the emulator's work are separate.
     """
+    from batch_wire import _decode_json_response
+
+    _local_origin(origin)
 
     def send(request):
-        deadline = request.get("timeoutSeconds") or timeout or DEFAULT_TIMEOUT_SECONDS
-        database = request["database"]
-        project = request["projectId"]
-        base = f"{origin}/v1/projects/{project}/databases/{database}/documents"
-        rpc = request["rpc"]
-        if rpc == "GetDocument":
-            url = f"{origin}/v1/{request['name']}"
-            query = request.get("query") or {}
-            if "transaction" in query:
-                url += "?transaction=" + urllib.parse.quote(
-                    query["transaction"], safe=""
-                )
-            http = urllib.request.Request(url, method="GET")
-            payload = None
-        else:
-            suffix = {
-                "BeginTransaction": ":beginTransaction",
-                "Commit": ":commit",
-                "Rollback": ":rollback",
-            }[rpc]
-            payload = json.dumps(request["body"]).encode()
-            http = urllib.request.Request(base + suffix, data=payload, method="POST")
-            http.add_header("Content-Type", "application/json")
-        http.add_header("Authorization", "Bearer owner")
-        limit = request["maxResponseBytes"]
+        observed_status = None
         try:
-            with urllib.request.urlopen(http, timeout=deadline) as response:
-                raw = response.read(limit + 1)
-                if len(raw) > limit:
-                    return {
-                        "complete": False,
-                        "code": None,
-                        "status": None,
-                        "message": "response-exceeds-bound",
-                    }
-                return {
-                    "complete": True,
-                    "code": 0,
-                    "status": "OK",
-                    "message": None,
-                    "body": json.loads(raw or b"{}"),
-                }
-        except urllib.error.HTTPError as error:
-            raw = error.read(limit + 1)
-            if len(raw) > limit:
-                return {
-                    "complete": False,
-                    "code": None,
-                    "status": None,
-                    "message": "response-exceeds-bound",
-                }
-            try:
-                body = json.loads(raw or b"{}")
-            except ValueError:
-                return {
-                    "complete": False,
-                    "code": None,
-                    "status": None,
-                    "message": "response-not-json",
-                }
-            detail = body.get("error") or {}
-            status = detail.get("status")
-            if status not in STATUS_TO_CODE:
-                return {
-                    "complete": False,
-                    "code": None,
-                    "status": status,
-                    "message": "unmapped-status",
-                }
-            return {
-                "complete": True,
-                "code": STATUS_TO_CODE[status],
-                "status": status,
-                "message": detail.get("message"),
-                "body": body,
-            }
-        except (urllib.error.URLError, TimeoutError, ValueError) as error:
-            return {
-                "complete": False,
-                "code": None,
-                "status": None,
-                "message": type(error).__name__,
-            }
-
+            deadline = request.get("timeoutSeconds", timeout or DEFAULT_TIMEOUT_SECONDS)
+            if not collector.finite_seconds(deadline) or not 0 < deadline <= plan_module.CONTENDED_REQUEST_TIMEOUT_SECONDS:
+                raise ValueError("request timeout outside envelope")
+            limit = request["maxResponseBytes"]
+            request_limit = request.get("maxRequestBytes", plan_module.MAX_REQUEST_BYTES)
+            if (type(limit) is not int or not 1 <= limit <= plan_module.MAX_RESPONSE_BYTES
+                    or type(request_limit) is not int or not 1 <= request_limit <= plan_module.MAX_REQUEST_BYTES):
+                raise ValueError("request bounds invalid")
+            database, project = request["database"], request["projectId"]
+            if any(not isinstance(v, str) or not v or any(c in v for c in "/?#%\\")
+                   or any(ord(c) <= 32 for c in v) for v in (database, project)):
+                raise ValueError("invalid resource identity")
+            base = f"{origin}/v1/projects/{project}/databases/{database}/documents"
+            rpc = request["rpc"]
+            if rpc == "GetDocument":
+                name = request["name"]
+                prefix = f"projects/{project}/databases/{database}/documents/"
+                if not isinstance(name, str) or not name.startswith(prefix) or any(c in name for c in "?#%\\"):
+                    raise ValueError("document resource mismatch")
+                url, payload, method = f"{origin}/v1/{name}", None, "GET"
+                query = request.get("query") or {}
+                if not isinstance(query, dict) or set(query) - {"transaction"}:
+                    raise ValueError("invalid document query")
+                if "transaction" in query:
+                    if not isinstance(query["transaction"], str) or not query["transaction"]:
+                        raise ValueError("invalid transaction query")
+                    url += "?transaction=" + urllib.parse.quote(query["transaction"], safe="")
+            else:
+                suffix = {"BeginTransaction": ":beginTransaction", "Commit": ":commit", "Rollback": ":rollback"}[rpc]
+                if not isinstance(request["body"], dict):
+                    raise ValueError("request object required")
+                payload = json.dumps(request["body"], allow_nan=False).encode()
+                if len(payload) > request_limit:
+                    raise ValueError("request exceeds bound")
+                url, method = base + suffix, "POST"
+            wire = txn_wire.request(
+                url, method=method, payload=None if payload is None else payload.decode("utf-8"),
+                seconds=deadline, request_limit=request_limit, response_limit=limit,
+            )
+            observed_status = wire["httpStatus"]
+            if wire["complete"] is not True:
+                return {"complete": False, "code": None, "status": None,
+                        "httpStatus": observed_status, "message": wire["failure"]}
+            status = observed_status
+            body = _decode_json_response(wire["rawBody"])
+            if not isinstance(body, dict):
+                raise ValueError("response object required")
+            if status == 200:
+                normalized = {"complete": True, "code": 0, "status": "OK", "message": None, "body": body}
+            else:
+                if set(body) != {"error"} or not isinstance(body["error"], dict):
+                    raise ValueError("error envelope required")
+                detail = body["error"]
+                code = STATUS_TO_CODE.get(detail.get("status"))
+                if type(code) is not int or type(detail.get("code")) is not int or detail["code"] != status:
+                    raise ValueError("error status not confirmed")
+                normalized = {"complete": True, "code": code, "status": detail["status"],
+                              "message": detail.get("message"), "body": body}
+            normalized["httpStatus"] = status
+            return collector._checked_response(normalized, request)
+        except (OSError, ValueError, TypeError, KeyError, RecursionError) as error:
+            return {"complete": False, "code": None, "status": None,
+                    "httpStatus": observed_status, "message": type(error).__name__}
     return send
 
 
 def clock_advance(control_origin, token, *, timeout=15):
-    """Advance the emulator's virtual clock by whole seconds."""
+    """Measure the returned virtual clock; never substitute requested seconds.
+
+    The current control API returns clock/backwardsSets, not advancedSeconds.
+    A bounded GET before each POST supplies the observed baseline. These are
+    local control requests, recorded separately from the Firestore data count.
+    """
+    from batch_wire import _decode_json_response
+
+    _local_origin(control_origin)
+    if not collector.finite_seconds(timeout) or not 0 < timeout <= 15:
+        raise ValueError("invalid control timeout")
+
+    def request(method, suffix, body=None):
+        payload = None if body is None else json.dumps(body, allow_nan=False)
+        advance.requests += 1
+        wire = txn_wire.request(control_origin + "/v1/sessions/default" + suffix,
+                                method=method, payload=payload, token=token, seconds=timeout)
+        if wire["httpStatus"] != 200 or wire["complete"] is not True:
+            raise ValueError("control response incomplete")
+        value = _decode_json_response(wire["rawBody"])
+        if not isinstance(value, dict) or "error" in value:
+            raise ValueError("control response malformed")
+        if method == "GET":
+            if value.get("session") != "default":
+                raise ValueError("control session mismatch")
+            value = value.get("clock")
+        if (not isinstance(value, dict) or not collector.valid_instant(value.get("clock"))
+                or type(value.get("backwardsSets")) is not int or value["backwardsSets"] < 0):
+            raise ValueError("control clock not observed")
+        text = value["clock"]
+        whole = datetime.datetime.fromisoformat(text[:19] + "+00:00")
+        epoch = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+        delta = whole - epoch
+        fraction = text[20:-1] if text[19] == "." else ""
+        nanoseconds = (delta.days * 86400 + delta.seconds) * 1_000_000_000
+        nanoseconds += int(fraction.ljust(9, "0") or "0")
+        return nanoseconds, value["backwardsSets"]
 
     def advance(seconds):
-        payload = json.dumps({"seconds": int(seconds)}).encode()
-        request = urllib.request.Request(
-            f"{control_origin}/v1/sessions/default/clock:advance",
-            data=payload,
-            method="POST",
-        )
-        request.add_header("Content-Type", "application/json")
-        request.add_header("Authorization", "Bearer " + token)
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            if response.status != 200:
-                raise RuntimeError("clock advance refused")
-            raw = response.read(65536)
-        # Report the virtual seconds the emulator says it applied, so the
-        # receipt records an observed advance rather than the request.
-        try:
-            body = json.loads(raw or b"{}")
-        except ValueError:
-            return None
-        applied = body.get("advancedSeconds")
-        if isinstance(applied, (int, float)):
-            return float(applied)
-        return float(seconds)
+        if type(seconds) is not int or not 0 <= seconds <= cases.maximum_elapsed_seconds():
+            raise ValueError("invalid control advance")
+        before, revision = request("GET", "")
+        after, after_revision = request("POST", "/clock:advance", {"seconds": seconds})
+        if after_revision != revision or after < before:
+            raise ValueError("control clock moved backwards")
+        return (after - before) / 1_000_000_000
 
+    advance.requests = 0
     return advance
+
+
+def _control_get(origin, path, token, *, timeout=15):
+    from batch_wire import _decode_json_response
+
+    _local_origin(origin)
+    wire = txn_wire.request(origin + path, method="GET", token=token, seconds=timeout)
+    if wire["complete"] is not True:
+        raise ValueError("owned control response incomplete")
+    body = _decode_json_response(wire["rawBody"])
+    if not isinstance(body, dict):
+        raise ValueError("owned control response object required")
+    return wire["httpStatus"], body
 
 
 def child(output, nonce, owner_id):
@@ -290,16 +391,17 @@ def child(output, nonce, owner_id):
         os.environ["FIRESTORE_EMULATOR_HOST"], os.environ["FIREEMU_CONTROL_URL"]
     )
     token = os.environ["FIREEMU_CONTROL_TOKEN"]
-    status, resources = control_get(control, "/v1/sessions/default/resources", token)
-    wrong, _ = control_get(control, "/v1/sessions/default/resources", token + "-wrong")
+    status, resources = _control_get(control, "/v1/sessions/default/resources", token)
+    wrong, _ = _control_get(control, "/v1/sessions/default/resources", token + "-wrong")
     if status != 200 or wrong != 403 or resources.get("project") != PROJECT:
         raise ValueError("owned instance identity is not proven")
     argv = shlex.split(
         subprocess.check_output(
-            ["ps", "-ww", "-p", str(os.getppid()), "-o", "args="], text=True
+            ["ps", "-ww", "-p", str(os.getppid()), "-o", "args="], text=True, timeout=2
         ).strip()
     )
-    host, _, port = firestore.rpartition("//")[2].partition(":")
+    origin = urllib.parse.urlsplit(firestore)
+    host, port = origin.hostname, origin.port
     options = {
         "target": "local",
         "host": host,
@@ -311,11 +413,9 @@ def child(output, nonce, owner_id):
         "timing": collector.CONTROL_CLOCK,
         "deadlineSeconds": 300,
     }
-    receipt = collector.collect(
-        options,
-        rest_transport(firestore),
-        advance=clock_advance(control, token),
-    )
+    advance = clock_advance(control, token)
+    receipt = collector.collect(options, rest_transport(firestore), advance=advance)
+    receipt["localControlRequestCount"] = advance.requests
     receipt["instance"] = {
         "pid": os.getpid(),
         "parentPid": os.getppid(),
@@ -340,11 +440,14 @@ def stop_child(process, artifact):
         return {"stopped": True, "signal": None, "exitCode": process.returncode}
     try:
         argv = subprocess.check_output(
-            ["ps", "-ww", "-p", str(process.pid), "-o", "args="], text=True
+            ["ps", "-ww", "-p", str(process.pid), "-o", "args="], text=True, timeout=2
         ).strip()
-    except subprocess.CalledProcessError:
-        return {"stopped": True, "signal": None, "exitCode": process.poll()}
-    if str(artifact) not in argv:
+    except (OSError, subprocess.SubprocessError):
+        exit_code = process.poll()
+        return {"stopped": exit_code is not None, "signal": None,
+                "exitCode": exit_code, "failure": "identity-unavailable"}
+    arguments = shlex.split(argv)
+    if not arguments or arguments[0] != str(artifact):
         raise RuntimeError("refusing to signal a process we did not start")
     process.send_signal(signal.SIGTERM)
     try:
@@ -435,10 +538,18 @@ def build_shadow_document(
     }
     result["complete"] = bool(
         runtime["artifactSha256"] == artifact_sha
-        and runtime["runtimeInputsClean"]
+        and runtime["runtimeInputsClean"] is True
         and runtime["childObservedArtifactSha256"] == artifact_sha
         and receipt
-        and receipt.get("complete")
+        and receipt.get("complete") is True
+        and isinstance(child, dict)
+        and child.get("stopped") is True
+        and type(child.get("exitCode")) is int and child["exitCode"] == 0
+        and child.get("signal") is None
+        and child.get("timedOut", False) is False
+        and child.get("failure") is None
+        and type(runtime["wrongControlTokenStatus"]) is int
+        and runtime["wrongControlTokenStatus"] == 403
         and contract
         and contract.get("classification") == comparison.MATCH
         and before == after
@@ -494,22 +605,65 @@ def run_shadow(artifact, output):
         "--owner",
         owner_id,
     ]
+    environment = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "SYSTEMROOT", "TMPDIR")
+                   if key in os.environ}
     version = subprocess.check_output(
-        [str(retained), "--version"], cwd=output, text=True, timeout=30
+        [str(retained), "--version"], cwd=output, text=True, timeout=30, env=environment
     ).strip()
-    started = time.time()
-    process = subprocess.Popen(argv, cwd=output)
+    save(output / "launch.json", {"kind": "txn-local-launch-v1", "nonce": nonce,
+                                 "ownerId": owner_id, "sourceDigest": before,
+                                 "artifactSha256": artifact_sha, "productionExecuted": False,
+                                 "authorizesCleanup": False})
+    started = time.monotonic()
+    process = subprocess.Popen(argv, cwd=output, env=environment)
+    timed_out = False
     try:
         process.wait(timeout=CHILD_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        pass
-    stopped = stop_child(process, retained)
-    receipt_path = output / "receipt.json"
-    receipt = json.loads(receipt_path.read_bytes()) if receipt_path.exists() else None
-    contract_path = output / "self-contract.json"
-    contract = (
-        json.loads(contract_path.read_bytes()) if contract_path.exists() else None
-    )
+        timed_out = True
+    finally:
+        stopped = stop_child(process, retained)
+    if timed_out:
+        stopped["timedOut"] = True
+    failures, input_digests = [], {}
+    receipt, contract = None, None
+    for name in ("receipt.json", "self-contract.json"):
+        try:
+            value, raw_digest = _read_result(output / name)
+            input_digests[name] = raw_digest
+            if name == "receipt.json":
+                receipt = value
+            else:
+                contract = value
+        except (OSError, ValueError, TypeError, RecursionError):
+            failures.append("unusable-" + name)
+    if receipt is not None:
+        expected = {"kind": collector.CONTRACT, "campaign": cases.CAMPAIGN,
+                    "casesDigest": cases.cases_digest(), "sourceDigest": before,
+                    "target": "local", "timing": collector.CONTROL_CLOCK,
+                    "projectId": PROJECT, "database": plan_module.DATABASE,
+                    "documentPrefix": plan_module.document_prefix(nonce), "nonce": nonce}
+        if any(type(receipt.get(key)) is not type(val) or receipt.get(key) != val
+               for key, val in expected.items()):
+            failures.append("receipt-run-binding-mismatch")
+        instance = receipt.get("instance")
+        try:
+            if (not isinstance(instance, dict) or type(instance.get("parentPid")) is not int
+                    or instance["parentPid"] != process.pid or type(instance.get("pid")) is not int
+                    or instance["pid"] <= 0):
+                raise ValueError("process binding")
+            _local_origin(instance.get("firestoreOrigin"))
+            _local_origin(instance.get("controlOrigin"))
+        except (ValueError, TypeError, KeyError):
+            failures.append("receipt-instance-binding-mismatch")
+        try:
+            computed = comparison.local_self_contract(receipt)
+            # Canonical JSON keeps bool/int/float distinctions, unlike dict equality.
+            if (json.dumps(computed, sort_keys=True, allow_nan=False)
+                    != json.dumps(contract, sort_keys=True, allow_nan=False)):
+                failures.append("self-contract-recomputation-mismatch")
+        except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            failures.append("self-contract-unusable")
     result = build_shadow_document(
         before=before,
         after=plan_module.source_digest(),
@@ -518,11 +672,15 @@ def run_shadow(artifact, output):
         version=version,
         nonce=nonce,
         owner_id=owner_id,
-        elapsed=round(time.time() - started, 3),
+        elapsed=round(time.monotonic() - started, 3),
         child=stopped,
-        receipt=receipt,
-        contract=contract,
+        receipt=receipt if not failures else None,
+        contract=contract if not failures else None,
     )
+    result["publication"] = {"contract": "txn-local-publication-v1",
+                             "inputDigests": input_digests, "failures": failures}
+    if failures:
+        result["complete"] = False
     save(output / "shadow.json", result)
     return result
 
@@ -540,7 +698,12 @@ def main(argv=None):
         return 0
     if args.artifact is None or args.output is None:
         parser.error("--artifact and --output are required")
-    result = run_shadow(args.artifact, args.output)
+    try:
+        result = run_shadow(args.artifact, args.output)
+    except (OSError, ValueError, TypeError, subprocess.SubprocessError) as error:
+        print(json.dumps({"complete": False, "failure": type(error).__name__,
+                          "productionExecuted": False}), file=sys.stderr)
+        return 2
     print(json.dumps({k: v for k, v in result.items() if k != "receipt"}, indent=2))
     return 0 if result["complete"] else 1
 

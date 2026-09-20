@@ -71,7 +71,9 @@ class Endpoint:
                     self.documents.pop(write["delete"], None)
                 else:
                     self.documents[write["update"]["name"]] = write["update"]["fields"]
-            return {"code": 0, "status": "OK", "body": {"writeResults": []}}
+            return {"code": 0, "status": "OK", "body": {"writeResults": [
+                {"updateTime": "2026-09-18T00:00:00.000001Z"} for _ in request["body"]["writes"]
+            ]}}
         if rpc == "GetDocument":
             name = request["name"]
             if name not in self.documents:
@@ -143,7 +145,7 @@ def test_control_clock_timing_requires_an_advance_callable():
 
 def test_ownership_proof_requires_owner_role_nonce_and_update_time():
     fields = collector._marker_fields(OWNER, "control", NONCE, "created")
-    document = {"fields": fields, "updateTime": "t"}
+    document = {"fields": fields, "updateTime": "2026-09-18T00:00:00Z"}
     assert collector.is_owned(document, OWNER, "control", NONCE)
     assert not collector.is_owned({"fields": fields}, OWNER, "control", NONCE)
     assert not collector.is_owned(document, OWNER, "locked-a", NONCE)
@@ -402,10 +404,13 @@ def test_wall_clock_waits_are_served_in_bounded_checkpointed_steps():
 def test_an_abort_after_the_locks_are_taken_still_returns_every_document():
     endpoint = LockingEndpoint()
 
+    clock = {"now": 0.0}
+
     def monotonic():
-        # Time jumps forward the moment all four transactional reads have taken
-        # their locks, so the run aborts with every transaction still open.
-        return 10_000.0 if len(endpoint.locks) >= 4 else 0.0
+        # Jump once; releasing a lock must not move the clock backwards.
+        if len(endpoint.locks) >= 4:
+            clock["now"] = 10_000.0
+        return clock["now"]
 
     receipt = collector.collect(
         options(),
@@ -1051,18 +1056,18 @@ def test_a_create_lost_to_an_exception_is_still_read_back_and_recovered():
     assert receipt["unrecovered"] == []
 
 
-def test_a_lost_create_response_whose_write_never_landed_is_proven_absent():
+def test_a_lost_create_response_followed_by_absence_remains_unresolved():
     endpoint = LostCreateResponseEndpoint(applies=False)
     receipt, _ = run_against(endpoint)
     entry = cleanup_entries(receipt)["control"]
-    assert entry["resourceState"] == collector.ABSENCE_CONFIRMED
-    assert entry["absent"] is True
-    assert entry["complete"] is True
+    assert entry["resourceState"] == collector.SENT_UNKNOWN
+    assert entry["absent"] is True  # observation now, not proof of no late apply
+    assert entry["complete"] is False
     assert endpoint.deletes == []
     assert receipt["responsibility"] == [
-        {"role": "control", "state": collector.ABSENCE_CONFIRMED, "resolved": True}
+        {"role": "control", "state": collector.SENT_UNKNOWN, "resolved": False}
     ]
-    assert receipt["unrecovered"] == []
+    assert receipt["unrecovered"] == ["control"]
 
 
 def test_a_lost_create_response_never_deletes_a_document_it_cannot_prove_it_owns():

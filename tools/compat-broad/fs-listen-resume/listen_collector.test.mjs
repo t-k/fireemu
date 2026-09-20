@@ -146,6 +146,14 @@ const createFake = ({ denyPrivate = false } = {}) => {
       store.delete(path);
       broadcast({});
     },
+    async deleteOwnedDoc(client, path, condition) {
+      const current = store.get(path);
+      if (current && current.fields.owner !== condition.owner) {
+        throw { code: 'failed-precondition' };
+      }
+      store.delete(path);
+      broadcast({});
+    },
     async getDoc(client, path) {
       const value = store.get(path);
       return value ? { exists: true, ...value } : { exists: false, fields: null, updateTime: null };
@@ -608,6 +616,7 @@ test('a document that survives its delete is recorded as still present', async (
           : { exists: false, fields: null, updateTime: null };
       },
       async deleteDoc() {},
+      async deleteOwnedDoc() {},
     },
   };
   const result = await runCleanup(deps, { client: 'primary', paths, nonce: NONCE, budget });
@@ -897,7 +906,7 @@ test('an error thrown outside a case is recorded on the receipt', async () => {
       },
     },
   );
-  assert.match(outcome.thrown, /sign-in lost/);
+  assert.equal(outcome.thrown, 'cleanup-operation-failed');
   assert.equal(outcome.cleanup.complete, true);
   const receipt = buildReceipt({
     campaign: { caseId: 'FS-LISTEN-SDK' },
@@ -911,7 +920,8 @@ test('an error thrown outside a case is recorded on the receipt', async () => {
     thrown: outcome.thrown,
   });
   assert.equal(receipt.complete, false);
-  assert.match(receipt.thrown, /sign-in lost/);
+  assert.equal(receipt.thrown, 'cleanup-operation-failed');
+  assert.ok(!JSON.stringify(receipt).includes('sign-in lost'));
 });
 
 test('cleanup stops on its own deadline instead of hanging', async () => {

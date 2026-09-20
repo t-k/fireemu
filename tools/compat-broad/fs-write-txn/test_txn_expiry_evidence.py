@@ -21,7 +21,9 @@ import txn_expiry_shadow as shadow_module
 
 ROOT = Path(__file__).resolve().parents[3]
 RUNS = ROOT / "spec/compatibility/broad-runs"
-MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest.json"
+LEGACY_MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest.json"
+PREVIOUS_MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest-v2.json"
+MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest-v3.json"
 SHADOW = RUNS / "fs-transaction-expiry-retry-04-local-shadow.json"
 
 REGENERATE = (
@@ -287,3 +289,33 @@ def test_the_published_shadow_was_produced_by_the_current_modules():
         "rerun the local shadow: it was produced by an older collector"
     )
     assert value["sourceDigestAfter"] == value["sourceDigestBefore"]
+
+
+def test_previous_manifest_and_native_receipt_remain_immutable():
+    import hashlib
+
+    assert hashlib.sha256(LEGACY_MANIFEST.read_bytes()).hexdigest() == "e8f80fc0c35c2c64c87cbb6bf4bf5d9bae61f86ba097e89b7e6a8a05e76ef752"
+    assert hashlib.sha256(SHADOW.read_bytes()).hexdigest() == "e8ac9c831772245e1798bcd5a0295ac3fdcd6c972b9b574a297d339bf5551b71"
+
+
+def test_current_preparation_is_reproducible_but_grants_no_production_permission():
+    value = manifest()
+    expected = plan.proposal("o3expiry-reference-000000001", "0" * 32)
+    expected.update(
+        preparationVersion=3,
+        authorizesProduction=False,
+        productionExecuted=False,
+        requiresFreshPermissionBinding=True,
+    )
+    assert value == expected
+
+
+def test_prior_v2_preparation_stays_immutable():
+    import hashlib
+    assert hashlib.sha256(PREVIOUS_MANIFEST.read_bytes()).hexdigest() == 'd46ec59979c9e11f6635308329754b01cd67319a1e4ca9231066038bec9703e1'
+
+
+def test_local_worker_and_decoder_belong_to_current_source_closure():
+    sources = plan.source_inputs()
+    assert "txn_wire.py" in sources
+    assert "../batch_wire.py" in sources

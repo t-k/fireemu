@@ -102,3 +102,42 @@ creation receipt skipped its deletions rather than issuing them.
 This verifies the local observation tooling and the local runtime answers. It is
 not a production observation, a saved-production comparison or a parent
 compatibility promotion.
+
+## Current local integrity revision (offline v23)
+
+The old local-shadow record above is **historical**, not execution evidence for
+this revision. It is left byte-for-byte unchanged. Current preparation lives in
+`spec/compatibility/broad-runs/fs-query-partition-cursor-preparation-v2.json`;
+preparation is non-authorizing and not a new local/native run. Its source closure
+includes the fixed HTTP worker and the shared `batch_wire.py` decoder.
+
+The collector now requires explicit-port numeric loopback origins, not DNS names
+(including localhost), URL credentials, query strings or fragments. The fixed
+worker disables redirects and proxy inheritance and retains exact response bytes.
+One existing 20-second post-spawn deadline covers headers, body and worker exit;
+no retries are added. Process creation/kill/reap or a stalled OS are not bounded.
+The HTTP response cap remains 64 KiB and is a local defensive limit, not a service
+quota. Invalid/incomplete worker responses are failures, not typed API evidence.
+
+Before using a response for control, versions, query comparison or typed absence,
+its complete UTF-8 JSON bytes must match the decoded body, including nested types.
+Diagnostic raw sidecars are not themselves proof that a response is usable. A
+bad preflight, root-create or seed acknowledgement stops further observation;
+recovery still follows the existing same-run ownership/version checks. Ordinary
+query semantic mismatches remain recorded and do not grant cleanup authority.
+Publication errors do not grant ownership, and short writes are completed or
+reported as failures rather than published as success.
+
+Partition reconstruction compares document names **and fields**, preserving
+Firestore Value types but not requiring server-time metadata equality. Returned
+cursors must fit the finite `__name__`-only lane, and reconstruction accepts only
+references in that operation's already-frozen target set. Query error objects are
+never counted as an empty result. The independent residual scan also requires
+complete, byte-bound query/404 responses; an unknown result is not zero.
+
+The new tests use artificial API responses, including real local TCP and fixed
+worker processes. They do not run the Rust emulator or Firebase SDK. A new native
+shadow, source/artifact binding and independent review remain required; the old
+shadow's digests must not be relabelled to satisfy current-source checks.
+
+Invalid or incomplete byte-bound observations remain INDETERMINATE even when their diagnostic raw sidecars were fully retained. They are not semantic differences.

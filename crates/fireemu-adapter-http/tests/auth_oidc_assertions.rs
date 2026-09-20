@@ -71,6 +71,7 @@ fn state() -> AuthState {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
         query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
@@ -537,7 +538,7 @@ fn signed_oidc_bad_signature_preserves_populated_sessions_transients_and_allocat
         format!("{:?}", store.users_by_creation()),
         format!("{:?}", baseline.users_by_creation())
     );
-    assert_eq!(store.transient_registries_shared_with(&baseline), 6);
+    assert_eq!(store.transient_registries_shared_with(&baseline), 7);
     assert_eq!(store.transient_bytes(), baseline.transient_bytes());
     assert_eq!(
         store.pending_sign_in_count(),
@@ -625,7 +626,7 @@ fn signed_oidc_mixed_refresh_token_never_reaches_hooks_or_pending_credentials() 
                 store.users_shared_with(&baseline),
                 baseline.retained_user_bytes()
             );
-            assert_eq!(store.transient_registries_shared_with(&baseline), 6);
+            assert_eq!(store.transient_registries_shared_with(&baseline), 7);
             assert_eq!(store.pending_sign_in_count(), 0);
         }
         let mut empty = body.clone();
@@ -658,4 +659,147 @@ fn signed_oidc_mixed_refresh_token_never_reaches_hooks_or_pending_credentials() 
             }
         }
     }
+}
+
+fn continuation_request(value: &Value) -> Value {
+    json!({"requestUri":"http://localhost", "pendingToken":value, "returnSecureToken":true})
+}
+
+#[test]
+fn signed_continuation_reverifies_assertion_expiry_before_its_local_handle_expires() {
+    let mut s = state();
+    s.idp_continuations =
+        fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::LocalBounded;
+    let first = signed_post(&s, &trust(), &request(&token(&claims())));
+    assert_eq!(first.status, 200, "{}", first.body);
+    assert!(first.body["pendingToken"].is_string());
+    let next = continuation_request(&first.body["pendingToken"]);
+    s.clock
+        .lock()
+        .unwrap()
+        .advance_to(LogicalInstant::from_unix_seconds(NOW + 59))
+        .unwrap();
+    let repeated = signed_post(&s, &trust(), &next);
+    assert_eq!(repeated.status, 200, "{}", repeated.body);
+    assert_eq!(repeated.body["localId"], first.body["localId"]);
+    assert_eq!(repeated.body["pendingToken"], first.body["pendingToken"]);
+    s.clock
+        .lock()
+        .unwrap()
+        .advance_to(LogicalInstant::from_unix_seconds(NOW + 60))
+        .unwrap();
+    let before = format!("{:?}", s.store.lock().unwrap().users_by_creation());
+    let rejected = signed_post(&s, &trust(), &next);
+    assert_eq!(rejected.status, 400);
+    assert_eq!(rejected.body["error"]["message"], "INVALID_IDP_RESPONSE");
+    assert!(rejected.body.get("idToken").is_none());
+    assert_eq!(
+        before,
+        format!("{:?}", s.store.lock().unwrap().users_by_creation())
+    );
+}
+
+#[test]
+fn signed_and_fixture_pending_tokens_cannot_cross_verification_authorities() {
+    let mut s = state();
+    s.idp_continuations =
+        fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::LocalBounded;
+    let body = request(&token(&claims()));
+    let signed = signed_post(&s, &trust(), &body);
+    assert_eq!(signed.status, 200);
+    let path = format!("{V1}/accounts:signInWithIdp");
+    let rejected = fireemu_adapter_http::identity_toolkit::handle(
+        &s,
+        "POST",
+        &path,
+        &continuation_request(&signed.body["pendingToken"]),
+    );
+    assert_eq!(rejected.status, 400);
+    let fixture = fireemu_adapter_http::identity_toolkit::handle(&s, "POST", &path, &body);
+    assert_eq!(fixture.status, 200, "{}", fixture.body);
+    assert!(fixture.body["pendingToken"].is_string());
+    assert_eq!(
+        signed_post(
+            &s,
+            &trust(),
+            &continuation_request(&fixture.body["pendingToken"])
+        )
+        .status,
+        400
+    );
+    let mut changed_pin = trust();
+    changed_pin.jwk["kid"] = json!("rotated-kid");
+    assert_eq!(
+        signed_post(
+            &s,
+            &changed_pin,
+            &continuation_request(&signed.body["pendingToken"])
+        )
+        .status,
+        400
+    );
+    assert_eq!(
+        signed_post(
+            &s,
+            &trust(),
+            &continuation_request(&signed.body["pendingToken"])
+        )
+        .status,
+        200
+    );
+    assert_eq!(s.store.lock().unwrap().user_count(), 1);
+}
+
+#[test]
+fn signed_continuation_checks_current_provider_configuration_not_cached_acceptance() {
+    let mut s = state();
+    s.idp_continuations =
+        fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::LocalBounded;
+    let first = signed_post(&s, &trust(), &request(&token(&claims())));
+    assert_eq!(first.status, 200, "{}", first.body);
+    let original = s
+        .store
+        .lock()
+        .unwrap()
+        .oidc_config("oidc.local")
+        .unwrap()
+        .clone();
+    let mut disabled = original.clone();
+    disabled.enabled = false;
+    s.store.lock().unwrap().replace_oidc_config(disabled);
+    let body = continuation_request(&first.body["pendingToken"]);
+    let before = format!("{:?}", s.store.lock().unwrap().users_by_creation());
+    assert_eq!(signed_post(&s, &trust(), &body).status, 400);
+    let mut changed = original.clone();
+    changed.issuer = "https://changed.invalid".into();
+    s.store.lock().unwrap().replace_oidc_config(changed);
+    assert_eq!(signed_post(&s, &trust(), &body).status, 400);
+    assert_eq!(
+        before,
+        format!("{:?}", s.store.lock().unwrap().users_by_creation())
+    );
+    s.store.lock().unwrap().replace_oidc_config(original);
+    assert_eq!(signed_post(&s, &trust(), &body).status, 200);
+}
+
+#[test]
+fn unsigned_forgery_cannot_mint_a_signed_continuation_or_link_an_account() {
+    let mut s = state();
+    s.idp_continuations =
+        fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::LocalBounded;
+    let mut forged = token(&claims());
+    let start = forged.rfind('.').unwrap() + 1;
+    forged.replace_range(
+        start..=start,
+        if &forged[start..=start] == "A" {
+            "B"
+        } else {
+            "A"
+        },
+    );
+    let response = signed_post(&s, &trust(), &request(&forged));
+    assert_eq!(response.status, 400);
+    assert!(response.body.get("pendingToken").is_none());
+    assert_eq!(s.store.lock().unwrap().pending_idp_count(), 0);
+    assert_eq!(s.store.lock().unwrap().user_count(), 0);
 }

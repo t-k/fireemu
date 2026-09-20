@@ -223,8 +223,8 @@ def owner_permission(plan, commit, artifact_digest, inputs, baseline):
         "recoveryOwner": "offline-recovery",
         "gateReservationSeconds": {
             "upload": 60.0,
-            "observationSlot": 2.0,
-            "recoverySlot": 2.0,
+            "observationSlot": 3.0,
+            "recoverySlot": 3.0,
             "slotBasis": admission.PLANNING_ASSUMPTION,
         },
         "issuedAt": time.time() - 1,
@@ -564,11 +564,56 @@ def test_the_bound_transport_refuses_a_binding_that_is_not_the_reviewed_worker()
         "index": 0,
         "operation": {},
         "token": "t",
+        "deadline": 1002.5,
     }
     with pytest.raises(ValueError, match="active O7 production capability"):
         campaign.transport_bound(
             call, binding=b"other", binding_digest=hashlib.sha256(b"other").hexdigest()
         )
+
+
+@pytest.mark.parametrize("phase", ["observation", "recovery"])
+@pytest.mark.parametrize(
+    ("operation", "expected_timeout"),
+    [
+        ({"method": "GET"}, 2.5),
+        ({"method": "DELETE"}, 2.5),
+        ({"method": "POST", "body": b"commit"}, 60.0),
+    ],
+    ids=["get-small", "delete-small", "commit"],
+)
+def test_the_bound_transport_uses_operation_timeout_in_every_phase(
+    monkeypatch, phase, operation, expected_timeout
+):
+    source, pinned = campaign.worker_binding()
+    calls = []
+
+    monkeypatch.setattr(
+        campaign,
+        "authorize_transport",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        campaign.request_bytes_remote_transport,
+        "request",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or {"status": 200},
+    )
+
+    campaign.transport_bound(
+        {
+            "plan": {},
+            "phase": phase,
+            "index": 0,
+            "operation": operation,
+            "token": "t",
+            "deadline": 1002.5,
+        },
+        binding=source,
+        binding_digest=pinned,
+        capability=object(),
+    )
+
+    assert calls[0][1]["timeout"] == expected_timeout
 
 
 def consumed(built):
@@ -596,7 +641,7 @@ def test_the_collector_callable_walks_the_frozen_schedule_in_order(tmp_path):
     execute = admission.bind_execute(capability, built.execution_plan, "offline-token")
     schedule = built.execution_plan["executionSchedule"]
     for expected in schedule[:4]:
-        assert execute({"slot": expected["index"]}) == {"status": 200}
+        assert execute({"slot": expected["index"]}, deadline=1002.5) == {"status": 200}
     assert [(item["phase"], item["index"]) for item in sent] == [
         (item["phase"], item["index"]) for item in schedule[:4]
     ]
@@ -620,9 +665,9 @@ def test_the_collector_callable_cannot_outrun_the_schedule(tmp_path):
         "offline-token",
         schedule=[{"phase": "observation", "index": 0}],
     )
-    assert execute({}) == {"status": 200}
+    assert execute({}, deadline=1002.5) == {"status": 200}
     with pytest.raises(ValueError, match="schedule exhausted"):
-        execute({})
+        execute({}, deadline=1002.5)
 
 
 def test_a_reused_nonce_or_a_respent_permission_is_refused(tmp_path):
@@ -904,7 +949,7 @@ def test_the_gate_plan_hosts_three_interleaved_probes(tmp_path):
         uploads = [item for item in job["schedule"] if item["seconds"] == 60.0]
         assert uploads == [{"phase": "observation", "index": 17, "seconds": 60.0}]
         assert all(
-            item["seconds"] == 2.0 for item in job["schedule"] if item not in uploads
+            item["seconds"] == 3.0 for item in job["schedule"] if item not in uploads
         )
         # Absent means creating, so only the one Commit per probe omits it.
         creating = [item for item in job["schedule"] if "creates" not in item]
@@ -931,15 +976,15 @@ def test_the_gate_reservations_are_owner_declared_and_must_fit(tmp_path):
     built = Admission(tmp_path)
     declared = admission.gate_reservations(built.permission)
     assert declared["upload"] == 60.0
-    assert declared["observationSlot"] == 2.0
-    assert declared["recoverySlot"] == 2.0
+    assert declared["observationSlot"] == 3.0
+    assert declared["recoverySlot"] == 3.0
     # The small-slot figure has no measurement behind it and says so.
     assert declared["slotBasis"] == admission.PLANNING_ASSUMPTION
     assert "slotBasisRecord" not in declared
     assumption = {
         "upload": 60.0,
-        "observationSlot": 2.0,
-        "recoverySlot": 2.0,
+        "observationSlot": 3.0,
+        "recoverySlot": 3.0,
         "slotBasis": "owner-planning-assumption",
     }
     for damage in (
@@ -947,13 +992,15 @@ def test_the_gate_reservations_are_owner_declared_and_must_fit(tmp_path):
         {"gateReservationSeconds": {"upload": 60.0}},
         {"gateReservationSeconds": {**assumption, "upload": 12.0}},
         {"gateReservationSeconds": {**assumption, "recoverySlot": 0}},
+        {"gateReservationSeconds": {**assumption, "recoverySlot": 2.99}},
+        {"gateReservationSeconds": {**assumption, "observationSlot": 2.99}},
         {"gateReservationSeconds": {**assumption, "observationSlot": True}},
         # A figure with no declared basis is the v10 failure in a new costume.
         {
             "gateReservationSeconds": {
                 "upload": 60.0,
-                "observationSlot": 2.0,
-                "recoverySlot": 2.0,
+                "observationSlot": 3.0,
+                "recoverySlot": 3.0,
             }
         },
         {"gateReservationSeconds": {**assumption, "slotBasis": "measured"}},
@@ -974,8 +1021,8 @@ def test_the_gate_reservations_are_owner_declared_and_must_fit(tmp_path):
     # refused by arithmetic, not by a comment.
     fitting = {
         "upload_seconds": 60.0,
-        "observation_slot_seconds": 2.0,
-        "recovery_slot_seconds": 2.0,
+        "observation_slot_seconds": 3.0,
+        "recovery_slot_seconds": 3.0,
     }
     with pytest.raises(ValueError, match="do not fit"):
         campaign.gate_plan(execution, **{**fitting, "recovery_slot_seconds": 13.0})
@@ -1022,7 +1069,9 @@ def test_a_three_second_recovery_slot_now_fits_the_published_wall(
     assert fitting["recoverySeconds"] <= published["recoveryWindow"]["reserveSeconds"]
 
     # A figure the published wall still cannot carry names its own deficit.
-    with pytest.raises(ValueError, match="need .* against"):
+    with pytest.raises(
+        ValueError, match="recovery 1263 s exceeds published reserve 500 s"
+    ):
         campaign.gate_plan(
             execution,
             upload_seconds=60.0,
@@ -1286,3 +1335,32 @@ def test_three_second_slots_fit_the_rebalanced_wall(tmp_path):
         if slot["phase"] == "observation"
     )
     assert observation <= rebalanced["wallSeconds"] - rebalanced["recoverySeconds"]
+
+
+def test_bound_executor_carries_deadline_through_real_capability(monkeypatch, tmp_path):
+    built = Admission(tmp_path)
+    capability = consumed(built)
+    calls = []
+    monkeypatch.setattr(
+        campaign.request_bytes_remote_transport,
+        "request",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or {"status": 200},
+    )
+    try:
+        execute = admission.bind_execute(
+            capability, built.execution_plan, "offline-token"
+        )
+        operation = built.execution_plan["observation"][0]
+        with pytest.raises(TypeError, match="deadline"):
+            execute(operation)
+        for invalid in (None, True, float("inf"), float("nan")):
+            with pytest.raises(ValueError, match="absolute deadline"):
+                execute(operation, deadline=invalid)
+        deadline = time.monotonic() + 2.5
+        assert execute(operation, deadline=deadline) == {"status": 200}
+        assert calls[0][0][1:3] == ("observation", 0)
+        assert calls[0][1]["deadline"] == deadline
+        assert calls[0][1]["timeout"] == 2.5
+        assert len(calls) == 1
+    finally:
+        admission.revoke_production_capability(capability)

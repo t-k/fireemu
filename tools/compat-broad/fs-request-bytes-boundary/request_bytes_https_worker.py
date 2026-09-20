@@ -82,9 +82,15 @@ def run():
         headers["Content-Type"] = "application/json"
     connection = None
     try:
+        if time.monotonic() >= deadline:
+            failure("timeout")
+            return
         connection = http.client.HTTPSConnection(
             _HOST, timeout=max(0.001, deadline - time.monotonic())
         )
+        if time.monotonic() >= deadline:
+            failure("timeout")
+            return
         connection.request(method, path, body=body if body else None, headers=headers)
         response = connection.getresponse()
         content_type = response.getheader("Content-Type", "")[:128]

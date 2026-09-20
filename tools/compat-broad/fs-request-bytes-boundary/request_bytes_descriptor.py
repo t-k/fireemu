@@ -217,6 +217,23 @@ def transport_deadline_seconds() -> float:
     return float(enforced)
 
 
+def small_request_timeout_seconds() -> float:
+    """The published ceiling for bodyless reads and deletes."""
+    published = budget_document()
+    declared = published["budget"]["smallRequestTimeoutSeconds"]
+    if (
+        type(declared) not in (int, float)
+        or isinstance(declared, bool)
+        or declared <= 0
+    ):
+        raise ValueError("published small-request timeout required")
+    if declared != request_bytes_remote_transport.SMALL_REQUEST_TIMEOUT:
+        raise ValueError(
+            "published small-request timeout differs from enforced ceiling"
+        )
+    return float(declared)
+
+
 def budget() -> dict:
     """The published budget object, unmodified."""
     return copy.deepcopy(budget_document()["budget"])
@@ -464,12 +481,10 @@ def gate_plan(
 ):
     """Project the compiled campaign onto the shared Gate schema.
 
-    Both reservations are required arguments with no default. The three 10 MiB
-    Commits are bounded by the transport at 60 seconds while the other 255
-    requests are small, and no single plan-wide reservation is an upper bound for
-    both: the recovery window forces at most 1.71 seconds per slot, which is not
-    a bound on a 60 second upload. Neither number may be invented here, so the
-    caller states both and this function proves the arithmetic fits.
+    The owner declares the 60-second Commit reservation and the small-request
+    reservations. Their sums, including rate spacing, must fit the published
+    observation and recovery windows. The full published recovery reserve is
+    retained so the Gate and collector use the same phase cutoff.
     """
     for name, value in (
         ("upload_seconds", upload_seconds),
@@ -510,6 +525,12 @@ def gate_plan(
             if slot["phase"] == "recovery"
         )
     )
+    if recovery_time > recovery_seconds():
+        raise ValueError(
+            "declared reservations do not fit the campaign wall: "
+            f"recovery {recovery_time} s exceeds published reserve {recovery_seconds()} s"
+        )
+    recovery_time = recovery_seconds()
     wall = int(wall_seconds if wall_seconds is not None else campaign_seconds())
     observation_time = math.ceil(
         sum(
@@ -624,6 +645,7 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
         "index",
         "operation",
         "token",
+        "deadline",
     }:
         raise ValueError("closed request-byte wire call required")
     if capability is None:
@@ -640,13 +662,24 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
         or request_bytes_remote_transport.RESPONSE_BYTES != bounds["maxResponseBytes"]
     ):
         raise ValueError("transport byte caps differ from the published budget")
+    if type(value["deadline"]) not in (int, float) or not math.isfinite(
+        value["deadline"]
+    ):
+        raise ValueError("finite absolute deadline required")
+    operation = value["operation"]
+    timeout = (
+        transport_deadline_seconds()
+        if isinstance(operation, dict) and operation.get("body") is not None
+        else small_request_timeout_seconds()
+    )
     return request_bytes_remote_transport.request(
         value["plan"],
         value["phase"],
         value["index"],
         value["operation"],
         value["token"],
-        timeout=transport_deadline_seconds(),
+        timeout=timeout,
+        deadline=value["deadline"],
         capability=capability,
         binding=binding,
         binding_digest=binding_digest,

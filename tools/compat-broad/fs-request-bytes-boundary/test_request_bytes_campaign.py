@@ -783,9 +783,12 @@ def test_the_published_windows_pay_for_the_reservation(campaign: dict) -> None:
 def test_a_small_slot_cannot_outrun_its_own_reservation(campaign: dict) -> None:
     """A reservation nothing enforces is a wish."""
     budget = campaign["budget"]
+    from request_bytes_remote_transport import SMALL_REQUEST_TIMEOUT
+
+    assert budget["smallRequestTimeoutSeconds"] == SMALL_REQUEST_TIMEOUT
     assert (
         budget["smallRequestTimeoutSeconds"]
-        == budget["schedulingReservation"]["smallRequestSeconds"]
+        <= budget["schedulingReservation"]["smallRequestSeconds"]
     )
     assert budget["smallRequestTimeoutSeconds"] <= budget["perRequestTimeoutSeconds"]
 

@@ -147,8 +147,8 @@ The seconds are what the shared Gate charges, computed by calling it rather than
 by re-deriving its formula. `shared_gate` charges each slot its own reserved
 seconds plus an interval with a floor of 0.25, requires a slot carrying a body to
 reserve the transport ceiling, refuses a wall above 1200 seconds, and refuses a
-recovery reservation that cannot pay for its slots. At three seconds a small
-request:
+recovery reservation that cannot pay for its slots. The Gate reserves three
+seconds for a small request:
 
 | Phase | Slots | Reserved |
 | --- | ---: | ---: |
@@ -167,11 +167,21 @@ runner's reservation came to disagree. The arithmetic is now computed in
 `shared_gate.create` on this campaign's schedule to prove it admits the published
 windows and refuses 900/300, 900/500 and 1100/300.
 
-Three seconds is roughly an order of magnitude over a few-hundred-millisecond
-round trip, which is the shape a bound should have. It is also the per-request
-timeout for a small read or delete, so a slot cannot outrun its own reservation;
-a reservation nothing enforces is a plan, not a bound. The boundary Commits keep
-the 60-second transport deadline.
+The enforced small GET and DELETE transport cap is 2.5 seconds total. It covers
+plan preparation, conservative pre-dispatch work, worker startup and the network
+exchange, including response handling. The runner clamps the effective phase
+deadline before dispatch, so a request that starts close to the observation or
+recovery boundary cannot spend the next phase's time. The three-second Gate
+reservation remains larger than this cap to pay for the conservative slot and
+the Gate interval; the reservation and the transport timeout are deliberately
+separate quantities. The boundary Commits keep the 60-second transport deadline.
+
+At the enforced 2.5-second cap, 153 recovery slots plus their 0.25-second
+interval consume 420.75 seconds, leaving a nominal 79.25-second margin inside
+the 500-second recovery reserve. This is a planning margin, not a mathematical
+full-cleanup guarantee. If cleanup cannot complete, the run retains ownership,
+records unresolved resources and fails closed for owner recovery; it does not
+silently release ownership or widen the scope.
 
 The window opens on any probe that reaches an observation failure, an uncertain
 Commit or an interrupted run. Its authority is read-only unless the same run
@@ -316,7 +326,10 @@ by a result the collector could not have produced, and it drives
 
 The O8 runner reserves a number of seconds for each of the 258 schedule slots.
 The three boundary Commits are covered by the 60-second transport deadline
-above. The other 255 are small reads and deletes, and nothing measured them.
+above. The other 255 are small reads and deletes. The Gate reserves three
+seconds for each of them, while the transport enforces the 2.5-second total cap
+described above. The cap includes preparation and worker/network time, so an
+individual wire exchange does not receive the full 2.5 seconds independently.
 
 Both transports now record `elapsedSeconds` on every receipt and the collector
 copies it into each row, so every run measures its own slots. On the production
@@ -333,8 +346,9 @@ three boundary Commits ran 0.0287 s at the median. That is service time with no
 network in it at all; a production small read is an HTTPS round trip and
 will be one to two orders of magnitude higher. Citing the local p99 as a
 production per-slot figure would be wrong by that margin. It bounds the
-reservation from below and nothing more. A real figure needs a production run,
-which the production transport can now record.
+reservation from below and nothing more. No production observation or
+mathematical cleanup guarantee is claimed here; a real figure needs a
+production run, which the production transport can now record.
 
 ## Artifacts
 

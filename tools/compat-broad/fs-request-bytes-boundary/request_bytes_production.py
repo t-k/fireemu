@@ -132,7 +132,7 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
             for index, operation in enumerate(plan[phase])
         }
 
-        def execute_wire(operation):
+        def execute_wire(operation, *, deadline):
             phase, index = coordinates[
                 (operation["probe"], operation["kind"], operation.get("resource"))
             ]
@@ -147,7 +147,9 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
             rows.append(entry)
             receipt = _validated_response(
                 capability._transmit(
-                    admission.transport_call(plan, phase, index, operation, token)
+                    admission.transport_call(
+                        plan, phase, index, operation, token, deadline=deadline
+                    )
                 )
             )
             entry.update(

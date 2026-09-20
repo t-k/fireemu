@@ -37,6 +37,7 @@ from request_bytes_compiler import (
 )
 from request_bytes_remote_transport import (
     NON_UPLOAD_RESERVE_SECONDS,
+    SMALL_REQUEST_TIMEOUT,
 )
 from request_bytes_remote_transport import (
     TIMEOUT as TRANSPORT_TIMEOUT_SECONDS,
@@ -130,10 +131,9 @@ GATE_WALL_CAP_SECONDS = 1200
 #: wearing the opposite hat. The floor's only job is to say this choice is legal.
 CAMPAIGN_INTERVAL_SECONDS = 0.25
 
-#: What one small read or delete may reserve, and time out at. The reservation
-#: is only a plan unless the request is also bounded by it, so this is both.
-#: Three seconds is roughly an order of magnitude over a few-hundred-millisecond
-#: round trip, which is the shape a bound should have.
+#: What the shared Gate reserves for one small read or delete. The enforced
+#: transport cap is smaller and published separately by the remote transport;
+#: this 3-second reservation leaves scheduling room around that 2.5-second cap.
 SMALL_REQUEST_SECONDS = 3.0
 
 
@@ -247,7 +247,7 @@ TRANSPORT_DEADLINE: dict[str, Any] = {
     ),
     "consequenceIfMissed": "The receipt is incomplete, the Commit is uncertain, and the run holds no conditional-creation proof. The version-bound delete is then a zero-wire skip by design, so cleanup detects the residue as `cleanup-not-absent` but cannot remove it: up to 17 documents stay in the project pending manual owner action.",
     "detection": "Detected, never silent. The absence proofs are only recorded on a typed NOT_FOUND, so an unremovable residue fails the run rather than passing it.",
-    "ownerAction": "Run from a link that sustains the rate above. If a probe times out, the owner removes the residue under the recorded owned scope; the campaign never retries a Commit to compensate.",
+    "ownerAction": "Run from a link that sustains the rate above. If a probe times out or cleanup cannot complete, the owner removes the residue under the recorded owned scope; ownership remains retained and fail-closed, and the campaign never retries a Commit to compensate.",
 }
 
 
@@ -443,7 +443,7 @@ def _scheduling_reservation(plan: dict[str, Any]) -> dict[str, Any]:
         "totalSeconds": round(recovery_seconds + observation_seconds, 3),
         "gateWallCapSeconds": GATE_WALL_CAP_SECONDS,
         "basis": "Computed by calling shared_gate's own charging helpers on this campaign's schedule, so a Gate change that alters the charge fails this artifact's tests rather than the campaign's admission.",
-        "enforcement": "smallRequestSeconds is also the per-request timeout for a small read or delete, so a slot cannot outrun its own reservation; the boundary Commits keep the transport deadline, which the Gate's ceiling check requires them to reserve.",
+        "enforcement": "smallRequestSeconds is the 3.0-second Gate reservation for a small read or delete. The enforced transport cap is 2.5 seconds total, including plan preparation, worker startup and network exchange; the runner uses a conservative pre-dispatch slot and clamps each phase deadline before dispatch. Boundary Commits keep the 60-second transport deadline, which the Gate's ceiling check requires them to reserve.",
     }
 
 
@@ -470,7 +470,7 @@ def _budget(accounting: dict[str, int], plan: dict[str, Any]) -> dict[str, Any]:
         "maxRequestBytes": max(REQUEST_TARGETS),
         "maxResponseBytes": 2 * 1024 * 1024,
         "perRequestTimeoutSeconds": TRANSPORT_TIMEOUT_SECONDS,
-        "smallRequestTimeoutSeconds": SMALL_REQUEST_SECONDS,
+        "smallRequestTimeoutSeconds": SMALL_REQUEST_TIMEOUT,
         "maxDurationSeconds": 1100,
         "schedulingReservation": _scheduling_reservation(plan),
         "recoveryWindow": {
@@ -984,10 +984,12 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
         > budget["maxDurationSeconds"] - window["reserveSeconds"]
     ):
         raise ValueError("observation does not fit outside the recovery reserve")
-    # A reservation nothing enforces is a wish. The small-request timeout has to
-    # be the reserved figure, and within what the transport will accept.
-    if budget.get("smallRequestTimeoutSeconds") != reservation["smallRequestSeconds"]:
-        raise ValueError("a small slot's timeout must equal its reservation")
+    # The Gate reservation pays for a slot, while transport enforces the
+    # smaller total cap. Both values are published and must remain consistent.
+    if budget.get("smallRequestTimeoutSeconds") != SMALL_REQUEST_TIMEOUT:
+        raise ValueError("the published small-request cap differs from transport")
+    if budget["smallRequestTimeoutSeconds"] > reservation["smallRequestSeconds"]:
+        raise ValueError("the small-request cap exceeds its Gate reservation")
     if budget["smallRequestTimeoutSeconds"] > TRANSPORT_TIMEOUT_SECONDS:
         raise ValueError("the small-request timeout exceeds the transport ceiling")
     # The reserve exists for the worst legitimate outcome, so it is sized by the

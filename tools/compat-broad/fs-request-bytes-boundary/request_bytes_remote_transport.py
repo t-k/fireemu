@@ -50,6 +50,7 @@ RESPONSE_BYTES = 2 * 1024 * 1024
 # A slower link yields an incomplete receipt and an uncertain Commit; see
 # `request_bytes_campaign.TRANSPORT_DEADLINE` for the consequence that binds.
 TIMEOUT = 60.0
+SMALL_REQUEST_TIMEOUT = 2.5
 #: Bits in the largest compiled request body, used by the derivation above.
 BOUNDARY_REQUEST_BITS = MAX_REQUEST_BYTES * 8
 #: Seconds of the deadline reserved for everything that is not the upload.
@@ -57,7 +58,7 @@ NON_UPLOAD_RESERVE_SECONDS = 10.0
 _TOKEN = re.compile(r"[A-Za-z0-9._~+/-]{1,8192}=*")
 _VERSION = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z")
 _DIAGNOSTIC_LIMIT = 512
-_WORKER_SHA256 = "ce29745aa7994861754f96a82be5833d2e2008035342e6dcf4f26e45e222ec07"
+_WORKER_SHA256 = "b302a96910b6a1a996e462094980a8ac2e8ba7a9a584062da6be7361a83e01aa"
 
 Exchange = Callable[[str, str, bytes | None, dict[str, str], float, int], Any]
 Clock = Callable[[], float]
@@ -238,6 +239,8 @@ def _process_exchange(
         "deadline": deadline,
     }
     payload = _compact(message) + b"\n" + (body or b"")
+    if time.monotonic() >= deadline:
+        return None, {}, b"", "timeout"
     status, content_type, raw, failure = _run_process_exchange(
         worker_source=source,
         worker_sha256=_WORKER_SHA256,
@@ -331,6 +334,7 @@ def _request_impl(
     *,
     exchange: Exchange | None = None,
     timeout: float = TIMEOUT,
+    deadline: float | None = None,
     clock: Clock = time.monotonic,
     capability=None,
     binding=None,
@@ -356,6 +360,7 @@ def _request_impl(
         token,
         exchange=exchange,
         timeout=timeout,
+        deadline=deadline,
         clock=clock,
         capability=capability,
         binding=binding,
@@ -375,6 +380,7 @@ def _dispatch(
     *,
     exchange: Exchange | None = None,
     timeout: float = TIMEOUT,
+    deadline: float | None = None,
     clock: Clock = time.monotonic,
     capability=None,
     binding=None,
@@ -390,6 +396,13 @@ def _dispatch(
         raise TypeError(f"timeout must be a finite number in 0..{TIMEOUT:g} seconds")
     if not math.isfinite(timeout) or not 0 < timeout <= TIMEOUT:
         raise ValueError(f"timeout must be a finite number in 0..{TIMEOUT:g} seconds")
+    cap = TIMEOUT if operation.get("body") is not None else SMALL_REQUEST_TIMEOUT
+    local_deadline = clock() + min(timeout, cap)
+    if deadline is not None:
+        if type(deadline) not in (int, float) or not math.isfinite(deadline):
+            raise ValueError("finite absolute deadline required")
+        local_deadline = min(local_deadline, deadline)
+    deadline = local_deadline
     if exchange is None:
         if capability is None:
             raise ValueError("active O7 production capability required")
@@ -398,8 +411,11 @@ def _dispatch(
             binding=binding,
             binding_digest=binding_digest,
         )
+    if clock() >= deadline:
+        return _transport_failure("timeout")
     url, method, body, headers = prepare(plan, phase, index, operation, token)
-    deadline = clock() + timeout
+    if clock() >= deadline:
+        return _transport_failure("timeout")
     try:
         if exchange is None:
             status, response_headers, raw_body, failure = _process_exchange(
@@ -449,6 +465,7 @@ def request(
     token: str,
     *,
     timeout: float = TIMEOUT,
+    deadline: float | None = None,
     capability=None,
     binding=None,
     binding_digest=None,
@@ -468,6 +485,7 @@ def request(
         operation,
         token,
         timeout=timeout,
+        deadline=deadline,
         exchange=None,
         capability=capability,
         binding=binding,

@@ -18,7 +18,7 @@ uv run --offline --project tools/compat-inventory --locked pytest -q tools/compa
 
 No credentials, network request, emulator, or production runner is used.
 
-`request_bytes_remote_transport.py` separately prepares exact frozen-plan REST slots and provides a fixed-origin HTTPS exchange with a 12-second total deadline and a 2 MiB response cap. Its public `request()` needs a bearer token, but the module does not acquire credentials, enforce the 258-slot execution schedule, hold shared reservations, or authorize production execution. It must be called only through a future O7-approved runner that binds the schedule, permission, budget, resource locks, and cleanup contract. Its tests use an injected exchange and send no production requests.
+`request_bytes_remote_transport.py` prepares exact frozen-plan REST slots and provides a fixed-origin HTTPS exchange with a 2 MiB response cap. The total deadline is 60 seconds for a boundary Commit and 2.5 seconds for a small GET or DELETE; an earlier slot or phase deadline takes precedence. Its public `request()` needs a bearer token, but the module does not acquire credentials, hold shared reservations, or authorize production execution. The O8 runner binds the 258-slot schedule, permission, budget, resource locks, and cleanup contract after O7 approval. Transport tests use an injected exchange and send no production requests.
 
 ## Local collector and transport
 

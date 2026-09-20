@@ -60,7 +60,7 @@
       "basis": "Computed by calling shared_gate's own charging helpers on this campaign's schedule, so a Gate change that alters the charge fails this artifact's tests rather than the campaign's admission.",
       "boundaryCommitSeconds": 60.0,
       "chargedBy": "shared_gate",
-      "enforcement": "smallRequestSeconds is also the per-request timeout for a small read or delete, so a slot cannot outrun its own reservation; the boundary Commits keep the transport deadline, which the Gate's ceiling check requires them to reserve.",
+      "enforcement": "smallRequestSeconds is the 3.0-second Gate reservation for a small read or delete. The enforced transport cap is 2.5 seconds total, including plan preparation, worker startup and network exchange; the runner uses a conservative pre-dispatch slot and clamps each phase deadline before dispatch. Boundary Commits keep the 60-second transport deadline, which the Gate's ceiling check requires them to reserve.",
       "gateWallCapSeconds": 1200,
       "intervalSeconds": 0.25,
       "observationCommitSlots": 3,
@@ -71,7 +71,7 @@
       "smallRequestSeconds": 3.0,
       "totalSeconds": 1009.5
     },
-    "smallRequestTimeoutSeconds": 3.0
+    "smallRequestTimeoutSeconds": 2.5
   },
   "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
   "caseIds": [
@@ -409,7 +409,7 @@
       "request_bytes_https_worker, re-checking the same ceiling independently"
     ],
     "nonUploadReserveSeconds": 10.0,
-    "ownerAction": "Run from a link that sustains the rate above. If a probe times out, the owner removes the residue under the recorded owned scope; the campaign never retries a Commit to compensate.",
+    "ownerAction": "Run from a link that sustains the rate above. If a probe times out or cleanup cannot complete, the owner removes the residue under the recorded owned scope; ownership remains retained and fail-closed, and the campaign never retries a Commit to compensate.",
     "perRequestSeconds": 60.0,
     "slowestUsableUpstreamBitsPerSecond": 1677722
   }

@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import subprocess
 import sys
 import time
@@ -148,15 +149,11 @@ RESERVATION_BASES = (PLANNING_ASSUMPTION, MEASURED_SHADOW)
 def gate_reservations(permission) -> dict:
     """The per-slot reservations the owner declared, checked but never invented.
 
-    No single reservation covers this campaign: the three 10 MiB Commits are
-    bounded by the transport at 60 seconds while the recovery window allows at
-    most 1.71 seconds a slot once the Gate's 0.25 second spacing is taken off
-    the 1.96 the window allows. The upload figure is the published ceiling,
-    which the transport enforces. Observation and recovery declare separately,
-    because the recovery phase is where a reservation that is too tight does the
-    most damage: the Gate refuses mid-cleanup and leaves documents behind. The small-slot figure has no measurement behind it:
-    the lane records outcomes, not durations, so nothing in the tree says how
-    long a small request takes. It is therefore an owner planning bound, and the
+    Commits reserve their 60-second transport ceiling. Bodyless reads and
+    deletes reserve at least 3 seconds around a 2.5-second absolute deadline,
+    including preparation and Gate delay. Observation and recovery reservations
+    are checked independently against the published campaign windows. The
+    small-slot figure is an owner planning bound rather than a measurement; the
     permission has to say which it is. A figure declared as measured must name
     the shadow record it was read from, so the claim is checkable; a planning
     assumption is admitted and labelled, never silently promoted.
@@ -175,6 +172,14 @@ def gate_reservations(permission) -> dict:
             raise ValueError("owner declared Gate reservations required")
     if declared["upload"] != campaign.transport_deadline_seconds():
         raise ValueError("upload reservation differs from the enforced ceiling")
+    small_reservation = 3.0
+    if any(
+        declared[name] < small_reservation
+        for name in ("observationSlot", "recoverySlot")
+    ):
+        raise ValueError(
+            "small-request reservation below the required three-second floor"
+        )
     basis = declared["slotBasis"]
     if basis not in RESERVATION_BASES:
         raise ValueError("declared basis for the slot reservation required")
@@ -337,7 +342,7 @@ def reservation_claim(inputs, *, gate_path, gate_plan):
     }
 
 
-def transport_call(plan, phase, index, operation, token) -> dict:
+def transport_call(plan, phase, index, operation, token, *, deadline) -> dict:
     """The closed value one bound wire call carries."""
     return {
         "plan": plan,
@@ -345,15 +350,18 @@ def transport_call(plan, phase, index, operation, token) -> dict:
         "index": index,
         "operation": operation,
         "token": token,
+        "deadline": deadline,
     }
 
 
 def bind_execute(capability, plan, token, *, schedule=None):
-    """Adapt the collector's one-argument callable onto an admitted capability.
+    """Adapt the collector's deadline-bearing callable onto an admitted capability.
 
     The collector drives the frozen schedule and hands each operation here. The
     slot coordinates come from the schedule, never from the operation, so a
-    caller cannot move a request to another slot by reshaping it.
+    caller cannot move a request to another slot by reshaping it. The absolute
+    deadline must come from the collector before Gate dispatch; this adapter
+    never starts a fresh timeout or extends the phase window.
     """
     if not issued_capability(capability) and not getattr(capability, "consumed", False):
         raise ValueError("unissued O7 production capability")
@@ -362,13 +370,17 @@ def bind_execute(capability, plan, token, *, schedule=None):
     order = list(schedule if schedule is not None else plan["executionSchedule"])
     position = {"index": 0}
 
-    def execute(operation):
+    def execute(operation, *, deadline):
+        if type(deadline) not in (int, float) or not math.isfinite(deadline):
+            raise ValueError("finite absolute deadline required")
         if position["index"] >= len(order):
             raise ValueError("request-byte schedule exhausted")
         slot = order[position["index"]]
         position["index"] += 1
         return capability._transmit(
-            transport_call(plan, slot["phase"], slot["index"], operation, token)
+            transport_call(
+                plan, slot["phase"], slot["index"], operation, token, deadline=deadline
+            )
         )
 
     return execute

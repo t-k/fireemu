@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -486,7 +487,7 @@ def _validated_response(receipt):
 
 def collect_local(
     plan: dict[str, Any],
-    execute: Callable[[dict[str, Any]], dict[str, Any]],
+    execute: Callable[..., dict[str, Any]],
     output: str | Path,
     *,
     gate=None,
@@ -500,6 +501,23 @@ def collect_local(
     """
     validate_schedule(plan)
     plan = copy.deepcopy(plan)
+    phase_deadlines = None
+    if gate is not None:
+        # Read the immutable campaign origin once, before any dispatch. The
+        # published recovery reserve may be stricter than an older Gate plan.
+        import request_bytes_descriptor as campaign
+
+        snapshot = next(iter(gate.values())).snapshot()
+        started = snapshot["started"]
+        phase_deadlines = {
+            "observation": started
+            + min(
+                snapshot["plan"]["wallSeconds"] - snapshot["plan"]["recoverySeconds"],
+                campaign.campaign_seconds() - campaign.recovery_seconds(),
+            ),
+            "recovery": started
+            + min(snapshot["plan"]["wallSeconds"], campaign.campaign_seconds()),
+        }
     output_fd = _create_output_directory(Path(output))
     try:
         for probe in plan["probes"]:
@@ -623,7 +641,7 @@ def collect_local(
                         def send_wire(current_operation=operation_copy):
                             nonlocal wire_receipt
                             wire_receipt = _validated_response(
-                                execute(current_operation)
+                                execute(current_operation, deadline=deadline)  # noqa: B023 -- dispatch invokes synchronously.
                             )
                             if not isinstance(wire_receipt, dict):
                                 raise TypeError("executor returned non-object")
@@ -631,6 +649,12 @@ def collect_local(
                                 raise ValueError("incomplete production response")
                             return wire_receipt["status"], wire_receipt.get("body")
 
+                        cap = (
+                            campaign.transport_deadline_seconds()
+                            if operation_copy.get("body") is not None
+                            else campaign.small_request_timeout_seconds()
+                        )
+                        deadline = min(time.monotonic() + cap, phase_deadlines[phase])
                         probe_gate.dispatch(
                             operation_copy, phase == "recovery", send_wire
                         )

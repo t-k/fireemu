@@ -15,6 +15,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import request_bytes_admission as admission
+import request_bytes_collector as collector
 import request_bytes_descriptor as campaign
 import request_bytes_o8 as launcher
 import request_bytes_production as production
@@ -39,6 +40,7 @@ class Clock:
 @pytest.fixture(autouse=True)
 def offline(monkeypatch):
     monkeypatch.setattr(shared_gate, "time", Clock())
+    monkeypatch.setattr(collector, "time", shared_gate.time)
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("network forbidden in O8 regression")

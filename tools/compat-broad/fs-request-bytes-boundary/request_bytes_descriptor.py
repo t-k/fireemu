@@ -48,6 +48,7 @@ from request_bytes_compiler import (
     validate_request_bytes_plan,
 )
 from request_bytes_shadow import classify_local_result
+from shared_gate import body_reference
 
 
 def _load(name: str, path: Path):
@@ -489,6 +490,10 @@ def gate_plan(
             observation_slot_seconds=observation_slot_seconds,
             recovery_slot_seconds=recovery_slot_seconds,
         )
+        observation = copy.deepcopy(observation)
+        for operation in observation:
+            if operation.get("body") is not None:
+                operation["bodyRef"] = body_reference(operation.pop("body"))
         jobs[gate_job_name(probe)] = {
             "resources": [
                 name for name in plan["ownedResources"] if f"/{probe}/" in name
@@ -528,6 +533,7 @@ def gate_plan(
         "campaignId": CAMPAIGN,
         "nonce": plan["nonce"],
         "jobSlots": len(PROBE_SCOPES),
+        "ownershipMarker": {"field": "_owner", "binding": "nonce"},
         # The plan-wide fallback for a slot that declares none; every slot in
         # this schedule declares its own, so this is the floor, not the figure.
         "requestSeconds": min(observation_slot_seconds, recovery_slot_seconds),
@@ -569,13 +575,8 @@ def source_map() -> dict[str, str]:
 
 
 def collector(gate, plan, output, *, transmit):
-    """Drive the reviewed collector; the Gate argument is accepted, never used.
-
-    The collector's own contract is a plan, a one-argument callable and an
-    output directory. It is not given the Gate, because this lane's charging
-    authority is unresolved; see `request_bytes_admission.reservation_claim`.
-    """
-    return collect_local(plan, transmit, output)
+    """Drive the reviewed collector through the existing Gate when supplied."""
+    return collect_local(plan, transmit, output, gate=gate)
 
 
 def comparator(result, shadow=None):
@@ -636,8 +637,7 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
     bounds = budget_document()["budget"]
     if (
         request_bytes_remote_transport.MAX_REQUEST_BYTES != bounds["maxRequestBytes"]
-        or request_bytes_remote_transport.MAX_RESPONSE_BYTES
-        != bounds["maxResponseBytes"]
+        or request_bytes_remote_transport.RESPONSE_BYTES != bounds["maxResponseBytes"]
     ):
         raise ValueError("transport byte caps differ from the published budget")
     return request_bytes_remote_transport.request(

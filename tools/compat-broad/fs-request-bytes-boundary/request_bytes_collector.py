@@ -63,14 +63,17 @@ def _same_json_value(left: Any, right: Any) -> bool:
             _same_json_value(a, b) for a, b in zip(left, right, strict=True)
         )
     if isinstance(left, float):
-        return math.isfinite(left) and math.isfinite(right) and left.hex() == right.hex()
+        return (
+            math.isfinite(left) and math.isfinite(right) and left.hex() == right.hex()
+        )
     return left == right
 
 
 def _raw_matches_body(raw: bytes, body: Any) -> bool:
     try:
         parsed = json.loads(
-            raw.decode("utf-8"), object_pairs_hook=_unique_object,
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
         )
     except (ValueError, UnicodeDecodeError):
@@ -447,12 +450,54 @@ def _row(
     return row
 
 
+def _validated_response(receipt):
+    if not isinstance(receipt, dict):
+        raise TypeError("executor returned non-object")
+    encoded = receipt.get("rawBodyBase64")
+    raw = None
+    if isinstance(encoded, str) and len(encoded) <= 4 * ((MAX_RESPONSE_BYTES + 2) // 3):
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except (ValueError, base64.binascii.Error):
+            pass
+    raw_invalid = encoded is not None and (
+        raw is None
+        or len(raw) > MAX_RESPONSE_BYTES
+        or (
+            "bodyBytes" in receipt
+            and (
+                type(receipt["bodyBytes"]) is not int
+                or receipt["bodyBytes"] != len(raw)
+            )
+        )
+    )
+    if raw_invalid or (
+        complete(receipt)
+        and (raw is None or not _raw_matches_body(raw, receipt["body"]))
+    ):
+        receipt = {
+            **receipt,
+            "complete": False,
+            "failure": "response-bytes-unavailable",
+        }
+        receipt.pop("rawBodyBase64", None)
+    return receipt
+
+
 def collect_local(
     plan: dict[str, Any],
     execute: Callable[[dict[str, Any]], dict[str, Any]],
     output: str | Path,
+    *,
+    gate=None,
 ) -> dict[str, Any]:
-    """Execute the immutable schedule and persist bounded rows in an exclusive directory."""
+    """Execute the immutable schedule and persist bounded rows in an exclusive directory.
+
+    When ``gate`` is supplied, every wire operation is charged through that
+    already-created probe Gate and every zero-wire recovery slot advances its cursor
+    through ``skip_scheduled_slot``. The local shadow path keeps its historical
+    direct callback when no Gate is supplied.
+    """
     validate_schedule(plan)
     plan = copy.deepcopy(plan)
     output_fd = _create_output_directory(Path(output))
@@ -495,6 +540,7 @@ def collect_local(
         commit_refused: set[str] = set()
         over_refusal_observation: dict[str, Any] | None = None
         untyped_over_refusal: dict[str, Any] | None = None
+        abandoned_observation: set[str] = set()
         stopped = False
         observation_stopped = False
         dispatches = 0
@@ -506,6 +552,9 @@ def collect_local(
             phase, index = slot["phase"], slot["index"]
             operation = copy.deepcopy(plan[phase][index])
             probe = operation["probe"]
+            probe_gate = gate[probe] if gate is not None else None
+            if probe_gate is not None:
+                operation.pop("versionFrom", None)
             kind = operation["kind"]
             resource = operation.get("resource")
             skip = None
@@ -536,6 +585,15 @@ def collect_local(
                         proved_version, safe=""
                     )
             if skip:
+                if probe_gate is not None:
+                    if phase == "observation":
+                        if probe not in abandoned_observation:
+                            probe_gate.abandon_observation(skip)
+                            abandoned_observation.add(probe)
+                    else:
+                        probe_gate.skip_scheduled_slot(
+                            copy.deepcopy(operation), True, skip
+                        )
                 row = _row(
                     phase,
                     index,
@@ -556,39 +614,30 @@ def collect_local(
                     commit_sent.add(probe)
                 dispatches += 1
                 try:
-                    receipt = execute(copy.deepcopy(operation))
+                    operation_copy = copy.deepcopy(operation)
+                    if gate is None:
+                        receipt = execute(operation_copy)
+                    else:
+                        wire_receipt = None
+
+                        def send_wire(current_operation=operation_copy):
+                            nonlocal wire_receipt
+                            wire_receipt = _validated_response(
+                                execute(current_operation)
+                            )
+                            if not isinstance(wire_receipt, dict):
+                                raise TypeError("executor returned non-object")
+                            if not complete(wire_receipt):
+                                raise ValueError("incomplete production response")
+                            return wire_receipt["status"], wire_receipt.get("body")
+
+                        probe_gate.dispatch(
+                            operation_copy, phase == "recovery", send_wire
+                        )
+                        receipt = wire_receipt
                     if not isinstance(receipt, dict):
                         raise TypeError("executor returned non-object")
-                    encoded = receipt.get("rawBodyBase64")
-                    raw = None
-                    if isinstance(encoded, str) and len(encoded) <= 4 * (
-                        (MAX_RESPONSE_BYTES + 2) // 3
-                    ):
-                        try:
-                            raw = base64.b64decode(encoded, validate=True)
-                        except (ValueError, base64.binascii.Error):
-                            pass
-                    raw_invalid = encoded is not None and (
-                        raw is None
-                        or len(raw) > MAX_RESPONSE_BYTES
-                        or (
-                            "bodyBytes" in receipt
-                            and (
-                                type(receipt["bodyBytes"]) is not int
-                                or receipt["bodyBytes"] != len(raw)
-                            )
-                        )
-                    )
-                    if raw_invalid or (
-                        complete(receipt)
-                        and (raw is None or not _raw_matches_body(raw, receipt["body"]))
-                    ):
-                        receipt = {
-                            **receipt,
-                            "complete": False,
-                            "failure": "response-bytes-unavailable",
-                        }
-                        receipt.pop("rawBodyBase64", None)
+                    receipt = _validated_response(receipt)
                 except Exception as error:  # noqa: BLE001 - lost responses remain recoverable.
                     receipt = {
                         "complete": False,
@@ -713,6 +762,14 @@ def collect_local(
                     f"recording:row-{sequence:03d}.json:{type(error).__name__}"
                 )
                 observation_stopped = True
+            if probe_gate is not None and (
+                kind == "preflight-typed-absence"
+                and not preflight_ok[probe]
+                or kind == "conditional-create-commit"
+                and probe not in versions
+                and probe not in commit_refused
+            ):
+                break
             next_slot = (
                 plan["executionSchedule"][sequence + 1]
                 if sequence + 1 < len(plan["executionSchedule"])
@@ -739,6 +796,8 @@ def collect_local(
                     or not preflight_ok[probe]
                 ):
                     stopped = True
+                    if probe_gate is not None:
+                        break
         all_resources = {
             item for probe in plan["probes"] for item in probe["resources"]
         }

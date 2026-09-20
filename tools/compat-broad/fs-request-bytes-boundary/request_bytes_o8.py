@@ -4,12 +4,11 @@ This boundary consumes an independently frozen O7 permission and an owner
 approval. It has no preparation mode, no injected transport mode and no
 credential discovery: the bearer token arrives only on a private descriptor.
 
-The launcher completes the admission, proves the worker binding, compiles the
-campaign's Gate plan and builds the Ledger claim. It stops only for what the
-owner has not supplied: a fresh approval for an unreserved nonce. No credential
-is read until every refusable check has run, and an admitted run that starts
-nothing exits 2, the documented code for "nothing was created", with a message
-that distinguishes it from a refusal.
+The launcher validates the retained source and O7 approval before consuming the
+capability. The acquisition reserves the shared Ledger and claims every Gate
+job before it reads the private handoff. Exit 0 requires verified cleanup and
+Ledger release; exit 1 retains possible writes, and exit 2 proves no create was
+dispatched or refuses admission before execution.
 """
 
 # ruff: noqa: TRY004 -- Public boundary collapses malformed private input to one refusal class.
@@ -130,6 +129,7 @@ def validate_handoff(handoff: dict, permission: dict) -> str:
 
 
 def execute(args: argparse.Namespace) -> dict:
+    args.execution_may_have_started = False
     inputs, _ = _read_json(args.inputs)
     manifest, manifest_bytes = _read_json(args.manifest, private=True)
     approval, _ = _read_json(args.approval, private=True)
@@ -147,11 +147,12 @@ def execute(args: argparse.Namespace) -> dict:
         artifact_path=args.artifact,
         launcher_path=Path(__file__),
     )
+    admission._provenance(args.source, inputs["sourceCommit"], inputs["sourceInputs"])
     # A reused nonce or a respent permission would make the campaign's own
     # absence proofs meaningless. This reads the shared Ledger and writes none.
     # The Gate plan and the claim are compiled before the capability exists, so
     # a campaign whose reservations do not fit is refused without one.
-    gate_plan = admission.gate_plan_for(inputs, permission)
+    admission.gate_plan_for(inputs, permission)
     binding, binding_digest = campaign.worker_binding()
     capability = admission.issue_production_capability(
         inputs=inputs,
@@ -167,20 +168,24 @@ def execute(args: argparse.Namespace) -> dict:
         binding_digest=binding_digest,
     )
     try:
-        # Every refusable check has now run. The credential is read only here,
-        # so a run that was going to be refused never touches the owner's token:
-        # reading it first would put a production secret in this process for a
-        # campaign that was never admissible.
-        claim = admission.reservation_claim(
-            inputs, gate_path=args.output / "gate", gate_plan=gate_plan
-        )
-        fresh = admission.validate_fresh_admission(
-            args.ledger, inputs["plan"], permission
-        )
-        validate_handoff(_read_handoff(args), permission)
-        raise ValueError(
-            f"request-byte run not started: {admission.MISSING_APPROVAL} "
-            f"(claim {digest(claim)}, ledger {fresh['ledgerRoot']})"
+        # This advisory check improves refusals; the atomic Ledger reservation
+        # and Gate admission inside execute_production still precede the reader.
+        admission.validate_fresh_admission(args.ledger, inputs["plan"], permission)
+        from request_bytes_production import execute as execute_production
+
+        def read_credential():
+            token = validate_handoff(_read_handoff(args), permission)
+            # If evidence publication later fails, absence is not established.
+            args.execution_may_have_started = True
+            return token
+
+        return execute_production(
+            capability=capability,
+            inputs=inputs,
+            permission=permission,
+            credential_reader=read_credential,
+            ledger_root=args.ledger,
+            output=args.output,
         )
     finally:
         # An admission that will not be executed must not stay issued.
@@ -190,21 +195,15 @@ def execute(args: argparse.Namespace) -> dict:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        execute(args)
-    except ValueError as error:
-        # Exit 2 is the documented "nothing was created" outcome, and an
-        # admitted run that starts nothing is one: no reservation was taken, no
-        # output directory exists and no request was sent. The message says
-        # which of the two it was; the code does not invent a fourth value.
-        if str(error).startswith("request-byte run not started"):
-            print(f"Request-byte O8 admitted, not started: {error}", file=sys.stderr)
-        else:
-            print(f"Request-byte O8 refused ({type(error).__name__}).", file=sys.stderr)
-        return 2
+        result = execute(args)
     except Exception as error:  # noqa: BLE001 -- public output must be secret-free.
-        print(f"Request-byte O8 refused ({type(error).__name__}).", file=sys.stderr)
-        return 2
-    return 1  # pragma: no cover -- execute never returns
+        uncertain = getattr(args, "execution_may_have_started", False)
+        state = "interrupted; reservation may remain held" if uncertain else "refused"
+        print(f"Request-byte O8 {state} ({type(error).__name__}).", file=sys.stderr)
+        return 1 if uncertain else 2
+    if result.get("reservationReleased") and result.get("failure") is None:
+        return 0
+    return 1 if result.get("mayHaveCreated") else 2
 
 
 if __name__ == "__main__":

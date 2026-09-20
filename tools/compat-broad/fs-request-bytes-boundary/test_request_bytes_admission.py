@@ -584,6 +584,7 @@ def consumed(built):
 def test_the_collector_callable_walks_the_frozen_schedule_in_order(tmp_path):
     built = Admission(tmp_path)
     sent = []
+
     class FixtureCapability:
         consumed = True
 
@@ -1177,11 +1178,18 @@ def test_the_receipt_binds_every_route_it_observed(tmp_path):
         admission.revoke_production_capability(capability)
 
 
-def test_the_launcher_admits_the_campaign_and_stops_only_for_the_approval(tmp_path):
-    """Exit 2 is the documented "nothing was created", not a fourth code."""
+def test_the_launcher_refuses_an_uninitialized_ledger_before_handoff(
+    tmp_path, monkeypatch
+):
+    """An O7-shaped fixture is not an initialized shared Ledger."""
     built = Admission(tmp_path)
+    reads = []
+    monkeypatch.setattr(
+        request_bytes_o8, "_read_handoff", lambda _args: reads.append(True)
+    )
     before = len(admission.o8_admission._ISSUED)
     assert request_bytes_o8.main(built.argv(tmp_path)) == 2
+    assert reads == []
     # The admission that will not be executed is not left issued.
     assert len(admission.o8_admission._ISSUED) == before
     assert not (tmp_path / "output").exists()

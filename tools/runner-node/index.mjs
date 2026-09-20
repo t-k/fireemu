@@ -252,17 +252,51 @@ async function loadCodebase() {
   return exportNamespace(mod);
 }
 
+// SDK endpoint options keep Expression objects until the local runtime resolves
+// them. JSON/toString encode a deployment expression, not its runtime value.
+// Match the existing numeric-option `.value()` protocol, but never read its
+// accessor twice or coerce an unresolved value into false/true/default.
+function resolvedOption(value, field) {
+  if (value == null) return undefined;
+  if (value?.[Symbol.for("firebase-functions:ResetValue:Tag")] === true) return undefined;
+  if (typeof value === "object") {
+    const evaluate = value.value;
+    if (typeof evaluate === "function") {
+      const resolved = evaluate.call(value);
+      if (resolved == null) throw new Error(`${field} expression did not resolve to a value`);
+      return resolved;
+    }
+  }
+  return value;
+}
+
+function resolvedBoolean(value, field) {
+  const resolved = resolvedOption(value, field);
+  if (resolved === undefined) return undefined;
+  if (typeof resolved !== "boolean") throw new Error(`${field} did not resolve to a boolean`);
+  return resolved;
+}
+
 function firstRegion(ep) {
-  const r = ep.region;
-  if (Array.isArray(r)) return r[0];
-  return r || undefined;
+  const resolved = resolvedOption(ep.region, "region");
+  if (resolved === undefined) return undefined;
+  // Preserve this runner's existing first-region policy. This is not a new
+  // multi-region deployment implementation. Validate the list rather than
+  // allowing malformed later entries to be silently hidden by selection.
+  const values = Array.isArray(resolved)
+    ? resolved.map(region => resolvedOption(region, "region"))
+    : [resolved];
+  for (const value of values) {
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error("region did not resolve to a non-empty string");
+    }
+  }
+  return values[0];
 }
 
 function resolvedNonNegativeInteger(value, field) {
-  if (value == null) return undefined;
-  if (value?.[Symbol.for("firebase-functions:ResetValue:Tag")] === true) return undefined;
-  const resolved =
-    typeof value === "object" && typeof value.value === "function" ? value.value() : value;
+  const resolved = resolvedOption(value, field);
+  if (resolved === undefined) return undefined;
   if (!Number.isSafeInteger(resolved) || resolved < 0) {
     throw new Error(`${field} did not resolve to a non-negative integer`);
   }
@@ -512,7 +546,7 @@ function describe(name, fn, instrumentation) {
     entryPoint: name,
     generation: platform === "gcfv2" ? 2 : 1,
   };
-  if (ep?.omit === true) return { ...base, omitted: true };
+  if (resolvedBoolean(ep?.omit, "omit") === true) return { ...base, omitted: true };
   if (ep && Object.keys(ep).length > 0 && platform !== "gcfv1" && platform !== "gcfv2") {
     // A nonempty endpoint without a known platform is not a legacy trigger.
     // Do not advertise generation 1 while silently invoking the v2 convention.
@@ -521,7 +555,10 @@ function describe(name, fn, instrumentation) {
   if (ep && platform === "gcfv1") {
     const deployment = platformOptions(ep);
     if (deployment) base.platformOptions = deployment;
-    if (ep.timeoutSeconds) base.timeoutSeconds = ep.timeoutSeconds;
+    const timeout = resolvedNonNegativeInteger(ep.timeoutSeconds, "timeoutSeconds");
+    // The pinned SDK uses literal zero for unset/default timeout. Do not turn
+    // an Expression resolving to zero into a zero-length native deadline.
+    if (timeout !== undefined && timeout > 0) base.timeoutSeconds = timeout;
     const region = firstRegion(ep);
     if (region) base.region = region;
     if (ep.taskQueueTrigger) return describeTaskQueue(base, ep.taskQueueTrigger);
@@ -544,7 +581,7 @@ function describe(name, fn, instrumentation) {
       String(et.eventType || ""),
       String(et.eventFilters?.resource || ""),
       ep.scheduleTrigger,
-      !!et.retry,
+      resolvedBoolean(et.retry, "eventTrigger.retry") ?? false,
     );
   }
   if (ep && Object.keys(ep).length > 0) {
@@ -552,9 +589,12 @@ function describe(name, fn, instrumentation) {
     if (deployment) base.platformOptions = deployment;
     const region = firstRegion(ep);
     if (region) base.region = region;
-    if (ep.timeoutSeconds) base.timeoutSeconds = ep.timeoutSeconds;
-    if (ep.concurrency != null)
-      base.concurrency = resolvedNonNegativeInteger(ep.concurrency, "concurrency");
+    const timeout = resolvedNonNegativeInteger(ep.timeoutSeconds, "timeoutSeconds");
+    // The pinned SDK uses literal zero for unset/default timeout. Do not turn
+    // an Expression resolving to zero into a zero-length native deadline.
+    if (timeout !== undefined && timeout > 0) base.timeoutSeconds = timeout;
+    const concurrency = resolvedNonNegativeInteger(ep.concurrency, "concurrency");
+    if (concurrency !== undefined) base.concurrency = concurrency;
     if (ep.taskQueueTrigger) return describeTaskQueue(base, ep.taskQueueTrigger);
     if (ep.httpsTrigger) return { ...base, trigger: { type: "http", callable: false } };
     if (ep.callableTrigger) return { ...base, trigger: callable() };
@@ -585,7 +625,7 @@ function describe(name, fn, instrumentation) {
     if (ep.eventTrigger) {
       const et = ep.eventTrigger;
       const type = et.eventType || "";
-      base.retry = !!et.retry;
+      base.retry = resolvedBoolean(et.retry, "eventTrigger.retry") ?? false;
       if (type.startsWith("google.cloud.firestore.")) {
         const filters = et.eventFilters || {};
         const patterns = et.eventFilterPathPatterns || {};

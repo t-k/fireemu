@@ -59,7 +59,7 @@ LANE = "tools/compat-broad/fs-write-limits"
 
 OPEN_GATE_DEFECTS = [
     (
-        "Ambiguous or lost create responses remain owner-escalation: only a "
+        "ambiguous or lost create responses remain owner-escalation: only a "
         "typed refusal or a complete creation proof can settle ownership, and "
         "the production lane must retain that fail-closed disposition."
     ),

@@ -108,14 +108,34 @@ test("G0 process identity uses the OS-native exact argv of a real owned child", 
   }
 });
 
-const nativeG0Environment = [
+const nativeG0PathEnvironment = [
   "G0_RETAINED_ARTIFACT",
   "G0_BUILD_MANIFEST",
-  "G0_ARTIFACT_PROFILE",
   "G0_PRIVATE_PRODUCTION_RESULT",
   "G0_NATIVE_OUTPUT_ROOT",
 ];
-const nativeG0Ready = nativeG0Environment.every((name) => typeof process.env[name] === "string" && process.env[name].startsWith("/"));
+export function nativeG0ReadyFor(env) {
+  return (
+    nativeG0PathEnvironment.every((name) => typeof env[name] === "string" && env[name].startsWith("/")) &&
+    typeof env.G0_ARTIFACT_PROFILE === "string" &&
+    /^[a-z0-9][a-z0-9-]{1,80}$/.test(env.G0_ARTIFACT_PROFILE)
+  );
+}
+const nativeG0Ready = nativeG0ReadyFor(process.env);
+
+test("native G0 readiness separates absolute inputs from the registered profile identifier", () => {
+  const valid = {
+    G0_RETAINED_ARTIFACT: "/artifact",
+    G0_BUILD_MANIFEST: "/manifest",
+    G0_ARTIFACT_PROFILE: "current-8f129b10",
+    G0_PRIVATE_PRODUCTION_RESULT: "/production.json",
+    G0_NATIVE_OUTPUT_ROOT: "/runs",
+  };
+  assert.equal(nativeG0ReadyFor(valid), true);
+  assert.equal(nativeG0ReadyFor({ ...valid, G0_ARTIFACT_PROFILE: "" }), false);
+  assert.equal(nativeG0ReadyFor({ ...valid, G0_ARTIFACT_PROFILE: "/profile" }), false);
+  assert.equal(nativeG0ReadyFor({ ...valid, G0_NATIVE_OUTPUT_ROOT: "relative" }), false);
+});
 
 test("G0 opt-in native handoff reaches the real worker and closes every recovery slot", { skip: !nativeG0Ready }, async () => {
   const output = join(process.env.G0_NATIVE_OUTPUT_ROOT, `g0-native-${process.pid}-${Date.now()}`);

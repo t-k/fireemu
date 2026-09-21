@@ -133,7 +133,7 @@ is itself the finding.
 
 - Bounded. Every response is capped at 64 KiB, every request at 8 KiB, and the
   whole collection runs against an absolute deadline.
-- Owned. It creates only documents below `compat/o3-txn-expiry/<nonce>/`, each
+- Owned. It creates only documents below `oracle/<nonce>/txn-expiry-04/`, each
   carrying an owner, role and nonce marker.
 - Established before observed. A setup step's own success is judged separately
   from any case's result. The preflight read that expects absence, the

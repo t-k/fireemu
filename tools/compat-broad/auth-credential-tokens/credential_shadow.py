@@ -161,7 +161,14 @@ def local_environment() -> dict[str, Any]:
         "signer": unsigned_jwt,
         "trustRoot": "unsigned-emulator",
         "endpoints": None,
+        # Whether custom tokens can be minted. Without it the signing-dependent
+        # groups are skipped and their rows are recorded as not run.
+        "signing": True,
     }
+
+
+#: The reason a signing-dependent row carries when the run had no signer.
+SIGNING_ABSENT_REASON = "signing capability absent"
 
 
 def _endpoints(base: str, environment: dict[str, Any]) -> dict[str, str]:
@@ -307,6 +314,71 @@ def run_cases(
         status, body = refresh(fresh["refreshToken"])
         return {"status": status, "errorCode": error_code(body)}
 
+    # The refresh-refusal group runs last on both paths, so it is a closure over
+    # the sessions the earlier groups established.
+    state: dict[str, Any] = {}
+
+    def _refresh_refusal_cases() -> None:
+        first_email, first_refresh_token = state["firstEmail"], state["firstRefresh"]
+        revoked, revoked_email, later, later_shape = (
+            state["revoked"], state["revokedEmail"], state["later"], state["laterShape"]
+        )
+        # --- refresh refusal class (TP-AUTH-C-02) --------------------------------
+        # An out-of-band reset on the first account: the code is returned to the
+        # privileged caller rather than mailed, the password is replaced, and the
+        # pre-reset refresh token is exchanged. A fresh sign-in with the new password
+        # is exchanged once more as the row's control.
+        status, body = send(
+            budget,
+            admin,
+            "/accounts:sendOobCode",
+            {"requestType": "PASSWORD_RESET", "email": first_email, "returnOobLink": True},
+            owner=True,
+        )
+        oob_code = body.get("oobCode")
+        if status != 200 or type(oob_code) is not str or not oob_code:
+            raise ShadowError(f"privileged reset code request failed: {error_code(body)}")
+        status, body = send(
+            budget,
+            identity,
+            f"/accounts:resetPassword?key={key}",
+            {"oobCode": oob_code, "newPassword": env["resetPassword"]},
+        )
+        if status != 200:
+            raise ShadowError(f"password reset failed: {error_code(body)}")
+        _rest(budget, 1)
+        status, body = refresh(first_refresh_token)
+        rows["refresh-after-password-reset-rejected"] = row(
+            "refresh-after-password-reset-rejected",
+            status,
+            body,
+            {},
+            freshSessionRefresh=fresh_control(first_email, env["resetPassword"]),
+        )
+
+        # An explicit administrative validSince on the second account, set two whole
+        # seconds after the newest session's own auth_time, then that session's refresh
+        # token is exchanged; a fresh sign-in is exchanged once more as the control.
+        _rest(budget, 2)
+        send(
+            budget,
+            admin,
+            "/accounts:update",
+            {
+                "localId": revoked["localId"],
+                "validSince": str(later_shape["times"]["auth_time"] + 2),
+            },
+            owner=True,
+        )
+        status, body = refresh(later["refreshToken"])
+        rows["refresh-after-explicit-valid-since-rejected"] = row(
+            "refresh-after-explicit-valid-since-rejected",
+            status,
+            body,
+            {},
+            freshSessionRefresh=fresh_control(revoked_email),
+        )
+
     # --- refresh -------------------------------------------------------------
     first = signup(0)
     first_email = owned_email(tracker, 0)
@@ -369,6 +441,7 @@ def run_cases(
         },
     )
     first_refresh_token = body.get("refresh_token", first_refresh_token)
+    state.update(firstEmail=first_email, firstRefresh=first_refresh_token)
     status, body = refresh("rt1.0.0.demo-app.unissued0000000000000")
     rows["refresh-unknown-token-rejected"] = row(
         "refresh-unknown-token-rejected", status, body, {}
@@ -435,6 +508,13 @@ def run_cases(
         },
         claims=_claims(later_shape),
     )
+    state.update(revoked=revoked, revokedEmail=revoked_email, later=later, laterShape=later_shape)
+
+    if env.get("signing", True) is not True:
+        # No signer: the custom-token, session-cookie and claim-precedence groups
+        # cannot run, so the runner continues with the groups that need none.
+        _refresh_refusal_cases()
+        return rows
 
     # --- custom token --------------------------------------------------------
     custom_uid = f"custom-{tracker['nonce']}"
@@ -609,61 +689,7 @@ def run_cases(
         },
     )
 
-    # --- refresh refusal class (TP-AUTH-C-02) --------------------------------
-    # An out-of-band reset on the first account: the code is returned to the
-    # privileged caller rather than mailed, the password is replaced, and the
-    # pre-reset refresh token is exchanged. A fresh sign-in with the new password
-    # is exchanged once more as the row's control.
-    status, body = send(
-        budget,
-        admin,
-        "/accounts:sendOobCode",
-        {"requestType": "PASSWORD_RESET", "email": first_email, "returnOobLink": True},
-        owner=True,
-    )
-    oob_code = body.get("oobCode")
-    if status != 200 or type(oob_code) is not str or not oob_code:
-        raise ShadowError(f"privileged reset code request failed: {error_code(body)}")
-    status, body = send(
-        budget,
-        identity,
-        f"/accounts:resetPassword?key={key}",
-        {"oobCode": oob_code, "newPassword": env["resetPassword"]},
-    )
-    if status != 200:
-        raise ShadowError(f"password reset failed: {error_code(body)}")
-    _rest(budget, 1)
-    status, body = refresh(first_refresh_token)
-    rows["refresh-after-password-reset-rejected"] = row(
-        "refresh-after-password-reset-rejected",
-        status,
-        body,
-        {},
-        freshSessionRefresh=fresh_control(first_email, env["resetPassword"]),
-    )
-
-    # An explicit administrative validSince on the second account, set two whole
-    # seconds after the newest session's own auth_time, then that session's refresh
-    # token is exchanged; a fresh sign-in is exchanged once more as the control.
-    _rest(budget, 2)
-    send(
-        budget,
-        admin,
-        "/accounts:update",
-        {
-            "localId": revoked["localId"],
-            "validSince": str(later_shape["times"]["auth_time"] + 2),
-        },
-        owner=True,
-    )
-    status, body = refresh(later["refreshToken"])
-    rows["refresh-after-explicit-valid-since-rejected"] = row(
-        "refresh-after-explicit-valid-since-rejected",
-        status,
-        body,
-        {},
-        freshSessionRefresh=fresh_control(revoked_email),
-    )
+    _refresh_refusal_cases()
     return rows
 
 
@@ -689,6 +715,7 @@ def cleanup(
     budget: dict[str, Any],
     tracker: dict[str, Any],
     poster: Any = None,
+    environment: dict[str, Any] | None = None,
 ) -> list[str]:
     """Use typed delete and absence evidence, and retain each failed owned UID.
 
@@ -696,7 +723,8 @@ def cleanup(
     not prevent the next owned account from attempting the existing reserve.
     """
     send = poster or post
-    admin = f"{base}/identitytoolkit.googleapis.com/v1/projects/{PROJECT}"
+    env = local_environment() if environment is None else dict(environment)
+    admin = _endpoints(base, env)["admin"]
     problems: list[str] = []
     for uid, account in list(tracker["accounts"].items()):
         uid_absent = email_absent = False
@@ -769,6 +797,14 @@ def collect(
     return rows, None
 
 
+def not_run_row(case: dict[str, Any], reason: str | None = None) -> dict[str, Any]:
+    """The row a case nobody ran carries; a reason names why when one is known."""
+    row = {"caseId": case["id"], "status": 0, "errorCode": "NOT_RUN", "assertions": {}}
+    if reason is not None:
+        row["notRunReason"] = reason
+    return row
+
+
 def finish_record(
     *,
     rows: dict[str, dict[str, Any]],
@@ -777,17 +813,18 @@ def finish_record(
     failure: str | None,
     shutdown: dict[str, Any],
     source_binding: dict[str, Any],
+    signing: bool = True,
 ) -> tuple[dict[str, Any], int]:
     """Assemble the record from whatever was observed, marking the rest not run."""
     ordered = [
         rows.get(
             case["id"],
-            {
-                "caseId": case["id"],
-                "status": 0,
-                "errorCode": "NOT_RUN",
-                "assertions": {},
-            },
+            not_run_row(
+                case,
+                SIGNING_ABSENT_REASON
+                if not signing and case["requiresSigning"]
+                else None,
+            ),
         )
         for case in observation_cases()
     ]

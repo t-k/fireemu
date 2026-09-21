@@ -361,21 +361,16 @@ def _recover(
                 "failure": "invalid-owned-address-lookup",
             }, None
 
-        # A missing users member is meaningful only in the exact typed empty
-        # response. Never infer absence from {}, null, errors or truncated pages.
+        # Only an explicit typed users[] response proves absence. Never infer
+        # absence from {}, a missing users member, null, errors or pagination.
         if type(status) is not int or status != 200 or not isinstance(body, dict):
             return invalid()
         if "error" in body or "nextPageToken" in body:
             return invalid()
         kind = "identitytoolkit#GetAccountInfoResponse"
-        if "kind" in body and body["kind"] != kind:
+        if body.get("kind", kind) != kind or not isinstance(body.get("users"), list):
             return invalid()
-        if "users" not in body:
-            if body != {"kind": kind}:
-                return invalid()
-            users = []
-        else:
-            users = body["users"]
+        users = body["users"]
         if not isinstance(users, list) or len(users) > len(owned_emails):
             return invalid()
         found: dict[str, str] = {}
@@ -392,7 +387,9 @@ def _recover(
             ):
                 return invalid()
             known = run.secrets.get(owned_emails[email] + ".localId")
-            if known is not None and known != uid:
+            # Discovery can confirm an immutable create UID, but it can never
+            # create ownership. An address with no create event is held.
+            if known is None or known != uid:
                 return invalid()
             found[email] = uid
             identifiers.add(uid)
@@ -402,6 +399,43 @@ def _recover(
             "status": status,
             "presentAddresses": len(found),
         }, found
+
+    def uid_absence(
+        row: dict[str, Any], name: str, discovery_valid: bool
+    ) -> tuple[dict[str, Any], bool]:
+        uid = run.secrets.get(name + ".localId")
+        if uid is None:
+            return {
+                "id": row["id"],
+                "account": name,
+                "status": None,
+                "skipped": "no immutable create UID",
+                **({"failure": "unowned-identity"} if not discovery_valid else {}),
+            }, discovery_valid
+        try:
+            status, body = run.request(row["path"], row["body"], True)
+        except Exception as error:  # noqa: BLE001 -- recovery records, never raises.
+            return {
+                "id": row["id"],
+                "account": name,
+                "status": None,
+                "failure": type(error).__name__,
+            }, False
+        valid = (
+            type(status) is int
+            and status == 200
+            and isinstance(body, dict)
+            and body.get("kind") == "identitytoolkit#GetAccountInfoResponse"
+            and body.get("users") == []
+        )
+        if not valid:
+            return {
+                "id": row["id"],
+                "account": name,
+                "status": status,
+                "failure": "uid-still-present-or-invalid-absence",
+            }, False
+        return {"id": row["id"], "account": name, "status": status, "uidAbsent": True}, True
 
     by_id = {row["id"]: row for row in manifest["recovery"]}
     discovery, discovered = address_lookup(by_id["recover-discover"])
@@ -465,18 +499,31 @@ def _recover(
             delete_failures += 1
             continue
         record = {"id": row["id"], "account": name, "status": status}
-        # A delete can be refused because a stage already removed the account.
-        # Absence, proven below by address, is the requirement.
+        # A delete can be refused because a stage already removed the account;
+        # the typed UID and address proofs still decide cleanup.
         record["deleted"] = status == 200
         if status != 200:
             delete_failures += 1
         rows.append(record)
 
+    uid_proofs = []
+    for name in manifest["ownedAccounts"]:
+        proof, complete = uid_absence(
+            by_id["recover-uid-absence-" + name], name, discovered is not None
+        )
+        rows.append(proof)
+        uid_proofs.append(complete)
+
     absence, still_present = address_lookup(by_id["recover-absence"])
     rows.append(absence)
     proven = still_present is not None
     remaining = len(still_present) if proven else len(owned_emails)
-    complete = proven and remaining == 0 and not any("failure" in row for row in rows)
+    complete = (
+        proven
+        and remaining == 0
+        and all(uid_proofs)
+        and not any("failure" in row for row in rows)
+    )
     return rows, complete, remaining, delete_failures, proven
 
 

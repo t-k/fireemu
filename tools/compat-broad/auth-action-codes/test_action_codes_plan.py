@@ -155,10 +155,12 @@ def test_recovery_proves_absence_by_address_not_by_runtime_identifier() -> None:
         "recover-discover",
         "recover-delete-accountA",
         "recover-delete-accountB",
+        "recover-uid-absence-accountA",
+        "recover-uid-absence-accountB",
         "recover-absence",
     ]
-    # The address is the ownership key, because a lost create response leaves an
-    # account whose runtime identifier this collector never learned.
+    # Email discovery is batched, but only an immutable create UID authorizes a
+    # delete or UID absence proof.
     for identifier in ("recover-discover", "recover-absence"):
         row = rows[identifier]
         assert row["operationType"] == "auth-lookup"
@@ -167,7 +169,21 @@ def test_recovery_proves_absence_by_address_not_by_runtime_identifier() -> None:
             "$binding:" + name + ".email" for name in sorted(owned)
         ]
     assert {rows["recover-delete-" + name]["account"] for name in owned} == owned
+    assert {rows["recover-uid-absence-" + name]["account"] for name in owned} == owned
     assert all(row["routeClass"] == "admin" for row in manifest["recovery"])
+
+
+def test_recovery_budget_is_the_frozen_observation_plus_six_rows() -> None:
+    manifest = campaign_manifest(NONCE)
+    assert len(manifest["stages"]) + len(manifest["recovery"]) == 32
+    assert manifest["budget"]["observationRequests"] == 26
+    assert manifest["budget"]["recoveryRequests"] == 6
+    rows = {row["id"]: row for row in manifest["recovery"]}
+    for name in ("accountA", "accountB"):
+        assert rows["recover-uid-absence-" + name]["selector"] == "localId"
+        assert rows["recover-uid-absence-" + name]["body"] == {
+            "localId": "$binding:" + name + ".localId"
+        }
 
 
 def test_the_permission_envelope_names_a_least_privilege_role() -> None:

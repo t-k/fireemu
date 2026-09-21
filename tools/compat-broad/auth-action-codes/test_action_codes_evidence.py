@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from action_codes_plan import (
     CAMPAIGN_ID,
     CONTRACT,
@@ -25,10 +27,11 @@ REHEARSAL = ROOT / (
 )
 
 
-def test_the_checked_in_manifest_is_exactly_the_frozen_proposal() -> None:
+def test_the_checked_in_manifest_is_retained_old_proposal_and_rejected_as_stale() -> None:
     value = json.loads(MANIFEST.read_bytes())
-    assert value == proposal()
-    assert validate_proposal(value) is True
+    assert value["planTemplate"]["budget"]["recoveryRequests"] == 4
+    with pytest.raises(ValueError, match="drift"):
+        validate_proposal(value)
     assert MANIFEST.read_text().endswith("}\n")
 
 

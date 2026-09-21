@@ -85,7 +85,7 @@ def test_discovery_is_an_exact_unambiguous_owned_address_set(mutation):
 
 
 @pytest.mark.parametrize("body", [
-    {"users": []}, {"kind": "identitytoolkit#GetAccountInfoResponse"},
+    {"users": []},
     {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []},
 ])
 def test_explicit_typed_empty_result_remains_accepted(body):
@@ -100,6 +100,19 @@ def test_explicit_typed_empty_result_remains_accepted(body):
     assert receipt["cleanupComplete"] is True
     assert receipt["absenceProven"] is True
     assert service.accounts == {}
+
+
+def test_kind_only_empty_result_is_not_typed_absence():
+    class Service(FakeService):
+        def _lookup(self, request):
+            status, actual = super()._lookup(request)
+            if "email" in request and not actual.get("users"):
+                return 200, {"kind": "identitytoolkit#GetAccountInfoResponse"}
+            return status, actual
+
+    receipt = run_service(Service())
+    assert receipt["absenceProven"] is False
+    assert receipt["cleanupComplete"] is False
 
 
 def test_rate_wait_cannot_authorize_a_request_after_its_phase_deadline():

@@ -42,17 +42,18 @@ class _ActionFixture(BaseHTTPRequestHandler):
         size = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(size))
         self.__class__.calls.append({"path": self.path, "body": body})
-        if self.path.endswith("accounts:signUp"):
+        route = self.path.split("?", 1)[0]
+        if route.endswith("accounts:signUp"):
             suffix = "a" if body["email"].endswith("-a@example.invalid") else "b"
             response = {"localId": "uid-" + suffix, "idToken": "token-" + suffix, "refreshToken": "refresh-" + suffix}
-        elif self.path.endswith("accounts:lookup"):
+        elif route.endswith("accounts:lookup"):
             response = self.recovery_body
-        elif self.path.endswith("accounts:sendOobCode"):
+        elif route.endswith("accounts:sendOobCode"):
             response = {"oobCode": "code-" + str(len(self.calls))}
         else:
             response = {}
         encoded = json.dumps(response).encode()
-        self.send_response(self.recovery_status if self.path.endswith("accounts:lookup") else 200)
+        self.send_response(self.recovery_status if route.endswith("accounts:lookup") else 200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()

@@ -2,16 +2,20 @@
 
 Built on a socket we own with http.client parsing the reply: it never
 consults proxy environment variables, never follows redirects (a 3xx is
-refused), and the deadline is a true wall-clock cutoff. The body is read in
-bounded chunks and each read is given only the time that remains; when the
-deadline passes the connection is closed and the request abandoned. Errors
-carry a status word and a short reason; bodies are never included in
-exceptions or logs.
+refused), and the deadline is a true wall-clock cutoff. One deadline covers
+connect, send, status line, headers and body: every socket read, including
+the ones http.client makes while parsing the head, is given only the time
+that remains, and when the deadline passes the socket is closed and the
+request abandoned. A reply counts only when the HTTP response was received
+in full (the declared Content-Length, or the terminating chunk); JSON that
+happens to parse from a truncated body is refused. Errors carry a status word
+and a short reason; bodies are never included in exceptions or logs.
 """
 
 from __future__ import annotations
 
 import http.client
+import io
 import json
 import socket
 import time
@@ -50,11 +54,49 @@ def _remaining(deadline: float) -> float:
     return remaining
 
 
-def _read_body(sock: socket.socket, response, deadline: float) -> bytes:
+class _DeadlineReader(io.RawIOBase):
+    """Raw reads over our socket, each bounded by the time left to the deadline.
+
+    http.client parses the status line and headers with buffered reads over
+    the file object this yields; a socket timeout set once would restart on
+    every fragment, so the timeout is re-derived from the deadline on every
+    underlying recv instead. Closing this object does not close the socket:
+    the caller owns it and closes it exactly once.
+    """
+
+    def __init__(self, sock: socket.socket, deadline: float):
+        super().__init__()
+        self._sock = sock
+        self._deadline = deadline
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        self._sock.settimeout(_remaining(self._deadline))
+        return self._sock.recv_into(buffer)
+
+    def makefile(self, mode: str = "rb", *_args, **_kwargs) -> io.BufferedReader:
+        # HTTPResponse asks the "socket" for a binary file object.
+        assert mode == "rb"
+        return io.BufferedReader(self, READ_CHUNK_BYTES)
+
+
+def _read_body(response: http.client.HTTPResponse) -> bytes:
+    """Read the whole body; refuse it unless the response was received in full.
+
+    `response.length` is the Content-Length still to come (None when chunked or
+    delimited by close). At EOF a fixed-length body must have delivered every
+    declared byte and a chunked body must have ended with the terminating
+    chunk, which http.client reports by closing its file object. Timing is
+    enforced by the reader underneath, so no per-read timeout is set here.
+    """
+    declared = response.length
+    if declared is not None and declared > MAX_RESPONSE_BYTES:
+        raise TransportError("server-error", "response larger than the byte cap")
     chunks: list[bytes] = []
     total = 0
     while True:
-        sock.settimeout(_remaining(deadline))
         # read1 returns after one recv; read(n) would wait for n bytes.
         chunk = response.read1(READ_CHUNK_BYTES)
         if not chunk:
@@ -63,6 +105,12 @@ def _read_body(sock: socket.socket, response, deadline: float) -> bytes:
         if total > MAX_RESPONSE_BYTES:
             raise TransportError("server-error", "response larger than the byte cap")
         chunks.append(chunk)
+    # The request went out and no complete answer came back: the server's
+    # state is unknown, exactly as after a timeout.
+    if declared is not None and total != declared:
+        raise TransportError("server-error", "incomplete body", inflight=True)
+    if response.chunked and not response.isclosed():
+        raise TransportError("server-error", "incomplete body", inflight=True)
     return b"".join(chunks)
 
 
@@ -103,13 +151,15 @@ def http_json(
     try:
         # The socket is ours: http.client only parses over it, so every read
         # below gets exactly the time that remains and close() abandons the
-        # request whatever the server is still doing.
+        # request whatever the server is still doing. sendall is bounded as a
+        # whole by the timeout it is given.
         sock = socket.create_connection((host, port), timeout=_remaining(deadline))
         sock.settimeout(_remaining(deadline))
         sock.sendall(head.encode("ascii") + b"\r\n" + data)
         sent = True
-        response = http.client.HTTPResponse(sock, method=method)
-        sock.settimeout(_remaining(deadline))
+        response = http.client.HTTPResponse(
+            _DeadlineReader(sock, deadline), method=method
+        )
         response.begin()
         if 300 <= response.status < 400:
             raise TransportError(
@@ -124,13 +174,16 @@ def http_json(
             raise TransportError("busy", f"server reported HTTP {response.status}")
         if response.status != 200:
             raise TransportError("server-error", f"HTTP {response.status}")
-        raw = _read_body(sock, response, deadline)
+        raw = _read_body(response)
     except TransportError as error:
         if error.status == "timeout":
             error.inflight = sent
         raise
     except (TimeoutError, socket.timeout):  # noqa: UP041 - socket.timeout is distinct on 3.9
         raise TransportError("timeout", "request deadline exceeded", inflight=sent)
+    except http.client.IncompleteRead:
+        # http.client noticed the truncation first (EOF inside a chunk).
+        raise TransportError("server-error", "incomplete body", inflight=sent)
     except (OSError, http.client.HTTPException) as error:
         raise TransportError(
             "server-error", f"connection failed ({type(error).__name__})", inflight=sent

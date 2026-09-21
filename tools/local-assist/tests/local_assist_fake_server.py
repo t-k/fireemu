@@ -13,7 +13,10 @@ class FakeLlamaServer:
 
     Each scripted reply is either a dict (sent as the completion content, JSON
     encoded), a string (sent verbatim as content), or a dict with a "__raw__"
-    key describing status/body/delay behavior.
+    key describing status/body/delay behavior. A "__raw__" spec with a "wire"
+    key bypasses the HTTP helpers: its list of {"bytes", "delay"} fragments is
+    written to the connection verbatim, each after its delay, so tests can
+    script malformed or slowly delivered responses byte for byte.
     """
 
     def __init__(
@@ -51,6 +54,18 @@ class FakeLlamaServer:
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+
+            def _send_wire(self, fragments: list[dict]) -> None:
+                # Exact bytes, no status/header helpers: the client is expected
+                # to close early in some scripts, which counts as abandoned.
+                try:
+                    for fragment in fragments:
+                        if fragment.get("delay"):
+                            time.sleep(fragment["delay"])
+                        self.wfile.write(fragment["bytes"])
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    outer.abandoned += 1
 
             def _authorized(self) -> bool:
                 if outer.api_key is None:
@@ -111,6 +126,10 @@ class FakeLlamaServer:
                     delay = raw_spec.get("delay", 0)
                     if delay:
                         time.sleep(delay)
+                    wire = raw_spec.get("wire")
+                    if wire is not None:
+                        self._send_wire(wire)
+                        return
                     trickle = raw_spec.get("trickle")
                     if trickle:
                         # Announce a body and then deliver it one byte at a time.

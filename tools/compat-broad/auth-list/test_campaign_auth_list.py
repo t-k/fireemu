@@ -1,5 +1,7 @@
 import copy
 import json
+import os
+import subprocess
 import sys
 from types import SimpleNamespace
 from pathlib import Path
@@ -63,6 +65,70 @@ def test_manifest_has_exact_five_cases_and_fixed_local_entry():
         if "missing-parent-" in path
     )
     assert child.endswith("/parent/children/doc")
+
+
+def test_facade_projects_legacy_auth_slots_to_canonical_account_resources(tmp_path):
+    from campaign_gate import _project_auth_plan, create
+
+    plan = campaign_manifest("a" * 32)
+    create(tmp_path / "gate", plan)
+    state = json.loads((tmp_path / "gate" / "state.json").read_bytes())
+    auth_operations = [
+        operation
+        for operation in state["plan"]["jobs"]["auth-list"]["observation"]
+        if operation["service"] == "auth"
+    ]
+    assert auth_operations
+    assert all(operation["resource"].startswith("projects/demo-firestore-probe/auth/accounts/") for operation in auth_operations)
+    assert all(operation["account"] for operation in auth_operations)
+    assert all(
+        operation["provenance"]["uid"] == "$binding:" + operation["account"] + "Uid"
+        for operation in auth_operations
+        if operation["operationType"] != "auth-sign-up"
+    )
+    canonical_path = tmp_path / "canonical-gate"
+    create(canonical_path, _project_auth_plan(plan))
+    canonical_state = json.loads((canonical_path / "state.json").read_bytes())
+    assert canonical_state["plan"] == state["plan"]
+
+
+@pytest.mark.parametrize("mutation", ["foreign-resource", "cross-uid-binding"])
+def test_facade_rejects_auth_projection_tampering(tmp_path, mutation):
+    from campaign_gate import create
+
+    plan = campaign_manifest("b" * 32)
+    operation = next(
+        operation
+        for operation in plan["jobs"]["auth-list"]["observation"]
+        if operation["operationType"] == "auth-sign-in"
+    )
+    if mutation == "foreign-resource":
+        operation["resource"] = "reference-" + "b" * 32
+    else:
+        operation["provenance"]["uid"] = "$binding:reference-" + "b" * 32 + "Uid"
+    with pytest.raises(ValueError, match="closed local Auth-list contract drift"):
+        create(tmp_path / mutation, plan)
+
+
+def test_projected_auth_plan_digest_is_hash_seed_independent():
+    script = (
+        "import sys; sys.path[:0] = ['tools/compat-broad/auth-list', 'tools/compat-broad']; "
+        "from broad_contract import digest; from campaign_auth_list import campaign_manifest; "
+        "from campaign_gate import _project_auth_plan; "
+        "print(digest(_project_auth_plan(campaign_manifest('c' * 32))))"
+    )
+    outputs = []
+    for seed in ("1", "2"):
+        environment = {**os.environ, "PYTHONHASHSEED": seed}
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        outputs.append(result.stdout.strip())
+    assert outputs[0] == outputs[1]
 
 
 def test_fresh_nonce_and_external_origin_fail_closed():
@@ -751,7 +817,8 @@ def test_gate_rejects_lookup_only_plan_without_account_ownership(tmp_path):
     # The constructor must reject the same plan even if a generic Gate was
     # written directly, without this facade's create-time admission.
     from shared_gate import create as create_generic_gate
-    create_generic_gate(tmp_path / "gate", plan)
+    from campaign_gate import _project_auth_plan
+    create_generic_gate(tmp_path / "gate", _project_auth_plan(plan))
     with pytest.raises(ValueError, match="closed local Auth-list contract drift"):
         CampaignGate(tmp_path / "gate", "auth-list")
     state = json.loads((tmp_path / "gate/state.json").read_bytes())

@@ -47,6 +47,7 @@ from o8_admission import (
 )
 
 import mfa_descriptor as campaign
+import mfa_gate
 from mfa_collector import assert_no_sensitive_material
 from mfa_config_lock import VERIFIED_RESTORE_STATUSES
 from mfa_timing import WALL_CLOCK
@@ -283,78 +284,30 @@ def validate_fresh_admission(ledger_root, plan, permission) -> dict:
     }
 
 
-GATE_JOB = "mfa-accounts"
-GATE_CONTRACT = "shared-local-v2"
-GATE_INTERVAL_SECONDS = 0.25
-MANAGEMENT_SLOT_SECONDS = 12.0
+GATE_JOB = mfa_gate.JOB
 
 
 def gate_plan_for(inputs, permission, descriptor_=None) -> dict:
-    """This campaign projected onto the shared Gate schema, as far as it goes.
+    """This campaign projected onto the shared Gate schema through the lane facade.
 
-    The Gate's data slots are a fixed queue of pre-declared Firestore operations. This
-    campaign's requests are Auth requests whose bodies carry material produced by the
-    previous response, so its data slots cannot be declared here; the projection
-    carries the management slots, the window and the cost, and an empty data job.
-    `hosting_check` states whether the shared modules accept that.
+    Every request the walk sends is a frozen slot with run-time placeholders; the
+    accounts and the configuration lock are named as `projects/<project>/auth/...`
+    resources beside the two cleanup routes the base Gate requires. Whether the
+    shared modules accept the projection is `hosting_check`'s answer, not this one's.
     """
     descriptor_ = descriptor_ or descriptor()
     campaign.execution_plan(inputs["plan"])
     expiry = permission.get("expiresAt")
     if type(expiry) not in (int, float) or isinstance(expiry, bool):
         raise ValueError("permission expiry required for management dispatch")
-    slot = lambda name: {
-        "id": name,
-        "seconds": MANAGEMENT_SLOT_SECONDS,
-        "duration": MANAGEMENT_SLOT_SECONDS,
-        "timeout": MANAGEMENT_SLOT_SECONDS,
-    }
-    observation = [*campaign.MANAGEMENT_PREFLIGHT, *campaign.CONFIG_APPLY]
-    recovery = list(campaign.CONFIG_RESTORE)
-    request_budget = campaign.request_budget()
-    return {
-        "contract": GATE_CONTRACT,
-        "campaignId": campaign.CAMPAIGN,
-        "nonce": inputs["plan"]["nonce"],
-        "jobSlots": 1,
-        "requestSeconds": campaign.transport.REQUEST_SECONDS,
-        "wallSeconds": descriptor_.campaign_seconds,
-        "recoverySeconds": descriptor_.recovery_seconds,
-        "intervalSeconds": GATE_INTERVAL_SECONDS,
-        "observationRequests": request_budget["dataRequests"] + len(observation),
-        "dataRequests": request_budget["dataRequests"]
-        + request_budget["recoveryRequests"],
-        "managementRequests": request_budget["managementRequests"],
-        "requestCostMicrousd": 1,
-        "costMicrousd": campaign.ledger_budget()["costMicrousd"],
-        "receiptKind": campaign.RECEIPT_KIND,
-        "transportCeilingSeconds": campaign.transport.REQUEST_SECONDS,
-        "resourceKind": "auth-account",
-        "management": {
-            "dispatchKind": "closed-v1",
-            "observation": [slot(name) for name in observation],
-            "recovery": [slot(name) for name in recovery],
-            "credentialIds": ["oauth-tokeninfo"],
-            "credentialSlots": ["tokeninfo"],
-            "slotSeconds": MANAGEMENT_SLOT_SECONDS,
-            "intervalSeconds": GATE_INTERVAL_SECONDS,
-            "totalRequests": len(observation) + len(recovery),
-            "principalBinding": {
-                "required": ["clientId", "subject", "requiredScopes"],
-                "claims": ["issued_to", "audience", "user_id", "scope", "expires_in"],
-            },
-            "permissionExpiryBound": True,
-        },
-        "jobs": {
-            GATE_JOB: {
-                "resources": [],
-                "observation": [],
-                "recovery": [],
-                "schedule": [],
-            }
-        },
-        "permissionExpiresAt": expiry,
-    }
+    plan = mfa_gate.gate_plan(
+        inputs["plan"]["nonce"],
+        wall_seconds=descriptor_.campaign_seconds,
+        recovery_seconds=descriptor_.recovery_seconds,
+        cost_microusd=campaign.ledger_budget()["costMicrousd"],
+    )
+    plan["permissionExpiresAt"] = expiry
+    return plan
 
 
 def reservation_claim(inputs, *, gate_path, gate_plan, descriptor_=None):
@@ -383,9 +336,10 @@ def hosting_check(claim, gate_plan) -> list[dict]:
     """Every structural reason the shared Ledger and Gate refuse this campaign today.
 
     Each entry is produced by exercising the shared module, not by restating it: the
-    claim is validated by the Ledger's own claim validator and the Gate plan by the
-    Gate's own `create`, in a temporary directory that is removed again. An empty list
-    means the shared modules accept the campaign's shapes.
+    claim goes through the Ledger's own claim validator and its resource scope
+    derivation, and the Gate plan through the Gate's own `create` in a temporary
+    directory that is removed again. An empty list means the shared modules accept
+    the campaign's shapes.
     """
     refusals = []
     try:
@@ -414,26 +368,44 @@ def hosting_check(claim, gate_plan) -> list[dict]:
                 },
             }
         )
-    with tempfile.TemporaryDirectory() as scratch:
+    else:
+        with tempfile.TemporaryDirectory() as scratch:
+            try:
+                mfa_gate.create(Path(scratch) / "gate", copy.deepcopy(gate_plan))
+            except (ValueError, TypeError, KeyError) as error:
+                refusals.append(
+                    {
+                        "refusal": "gate-plan-refused",
+                        "module": "tools/compat-broad/shared_gate.py",
+                        "detail": f"{type(error).__name__}: {error}",
+                        "value": {"job": GATE_JOB},
+                    }
+                )
+    resources = (
+        [name for job in gate_plan["jobs"].values() for name in job["resources"]]
+        + list(gate_plan.get("accountResources", []))
+        + [gate_plan.get("configResource")]
+    )
+    refused = []
+    for name in resources:
         try:
-            shared_gate.create(Path(scratch) / "gate", copy.deepcopy(gate_plan))
-        except (ValueError, TypeError, KeyError) as error:
-            refusals.append(
-                {
-                    "refusal": "gate-plan-refused",
-                    "module": "tools/compat-broad/shared_gate.py",
-                    "detail": (
-                        f"{type(error).__name__}: {error}; the Gate hosts a fixed queue of "
-                        "Firestore document operations with typed 404 absence proofs, and "
-                        "this campaign's resources are Auth accounts whose requests carry "
-                        "material from the previous response"
-                    ),
-                    "value": {
-                        "resourceKind": gate_plan.get("resourceKind"),
-                        "declaredDataSlots": 0,
-                    },
-                }
-            )
+            reservations._firestore_resource_scope(name)
+        except (ValueError, TypeError):
+            refused.append(name)
+    if refused:
+        refusals.append(
+            {
+                "refusal": "ledger-resource-refused",
+                "module": "tools/compat-broad/production-admission/reservations.py",
+                "detail": (
+                    "Ledger.reserve admits only canonical Firestore document resources "
+                    "and Ledger.finish only a Firestore typed-404 absence proof; this "
+                    "campaign's resources are Auth accounts, the two account cleanup "
+                    "routes and the project Auth configuration"
+                ),
+                "value": {"refusedResources": len(refused), "sample": refused[:3]},
+            }
+        )
     return refusals
 
 

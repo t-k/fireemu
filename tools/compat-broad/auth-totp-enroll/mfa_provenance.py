@@ -35,6 +35,7 @@ BOUND_PATHS: tuple[str, ...] = (
     f"{_PACKAGE}/mfa_comparator.py",
     f"{_PACKAGE}/mfa_config_lock.py",
     f"{_PACKAGE}/mfa_descriptor.py",
+    f"{_PACKAGE}/mfa_gate.py",
     f"{_PACKAGE}/mfa_local_shadow.py",
     f"{_PACKAGE}/mfa_manifest.py",
     f"{_PACKAGE}/mfa_o8.py",

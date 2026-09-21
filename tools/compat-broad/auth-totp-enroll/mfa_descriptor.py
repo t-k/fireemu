@@ -35,6 +35,7 @@ from broad_contract import digest
 from o8_admission import authorize_transport
 from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
 
+import mfa_gate
 import mfa_production_transport as transport
 from mfa_cases import (
     CAMPAIGN_ID,
@@ -95,22 +96,22 @@ ABORT_CLOSURE_SOURCES = (
 # --- management and configuration slots ------------------------------------------
 # What the run sends before its first data request and after its last, on top of the
 # thirty-three cases. Every one is charged against `maxRequests`; nothing here is a
-# separate allowance.
-MANAGEMENT_PREFLIGHT = ("oauth-tokeninfo", "auth-config-readback")
-CONFIG_APPLY = ("auth-config-apply", "auth-config-apply-readback")
-CONFIG_RESTORE = ("auth-config-restore", "auth-config-restore-readback")
-# One resume re-reads, re-applies and re-verifies the configuration; the budget admits
-# this many resumes before the request bound rather than the wall bound stops a run.
+# separate allowance. The slot lists are the Gate facade's, so the budget and the
+# frozen plan cannot disagree.
+MANAGEMENT_PREFLIGHT = mfa_gate.MANAGEMENT_OBSERVATION_IDS[:2]
+CONFIG_APPLY = mfa_gate.MANAGEMENT_OBSERVATION_IDS[2:]
+CONFIG_RESTORE = mfa_gate.MANAGEMENT_RECOVERY_IDS
+# How many times a paused run may be resumed under its reservation.
 RESUME_ALLOWANCE = 3
-# Each owned account is deleted, then proven absent by UID and by email.
+# Each owned account is deleted, then proven absent by UID and, where it has one, by
+# address; the anonymous account has no address.
 RECOVERY_REQUESTS_PER_ACCOUNT = 3
 # The service may lag its configuration readback; the earlier production recorder for
 # the same change waited this long before the first request that needed it.
 CONFIG_ENFORCEMENT_LAG_SECONDS = 30
-# The local shadow charged 132 data requests. Production sends the same case walk, so
-# the ceiling below is that figure plus the phone number the production request shape
-# carries (no extra call) and headroom for a refused start that skips its finalize.
-DATA_REQUEST_CEILING = 160
+# The nonce only shapes addresses, never the request count, so any nonce sizes the
+# frozen plan.
+_SIZING_NONCE = "0" * 32
 
 
 def shadow_record() -> dict:
@@ -174,28 +175,31 @@ def recovery_seconds() -> int:
 
 
 def management_requests() -> int:
-    """Preflight, configuration change, restore, and the resume allowance."""
-    per_resume = 1 + len(CONFIG_APPLY) + len(CONFIG_RESTORE)
-    return (
-        len(MANAGEMENT_PREFLIGHT)
-        + len(CONFIG_APPLY)
-        + len(CONFIG_RESTORE)
-        + RESUME_ALLOWANCE * per_resume
+    """Preflight, configuration change and restore: the Gate's closed slots."""
+    return len(mfa_gate.MANAGEMENT_OBSERVATION_IDS) + len(
+        mfa_gate.MANAGEMENT_RECOVERY_IDS
     )
 
 
+def data_requests() -> int:
+    """The observation slots of the frozen Gate plan."""
+    return len(mfa_gate.observation_operations(_SIZING_NONCE))
+
+
 def recovery_requests() -> int:
-    return len(owned_accounts()) * RECOVERY_REQUESTS_PER_ACCOUNT
+    return len(mfa_gate.recovery_operations(_SIZING_NONCE))
 
 
 def request_budget() -> dict:
     """The 400-request bound, re-derived slot by slot so the headroom is visible."""
-    data = DATA_REQUEST_CEILING
+    data = data_requests()
     management = management_requests()
     recovery = recovery_requests()
     total = int(LIMITS["maxRequests"])
     if data + management + recovery > total:
         raise ValueError("re-derived request budget exceeds the frozen bound")
+    if recovery > RECOVERY_REQUESTS_PER_ACCOUNT * len(owned_accounts()):
+        raise ValueError("recovery slots exceed the per-account allowance")
     return {
         "maxRequests": total,
         "dataRequests": data,
@@ -601,12 +605,13 @@ def descriptor(sleeper=None) -> CampaignDescriptor:
 
 
 def rehearsal_descriptor(
-    sleeper, *, seconds: int = 600, recovery: int = 120
+    sleeper, *, seconds: int = 1200, recovery: int = 240
 ) -> CampaignDescriptor:
     """A descriptor for an injected-transport rehearsal under a virtual clock.
 
     It carries the same campaign identity and bindings, so the admission checks run
-    unchanged, but its bounds say `virtual-clock` and its window is short. It is the
+    unchanged, but its bounds say `virtual-clock` and its window is the shared
+    Gate's 1200 s cap, which is what lets the Gate side of a rehearsal be proven. It is the
     only way a simulated sleeper enters a descriptor, and it can never be the
     production descriptor: `descriptor()` refuses the sleeper it accepts.
     """

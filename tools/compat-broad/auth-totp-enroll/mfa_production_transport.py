@@ -232,9 +232,10 @@ def send(value: dict) -> tuple[int, dict]:
 def verify_tokeninfo(body: Any, principal: dict, *, required_seconds: float) -> dict:
     """The bearer belongs to the frozen principal, carries the scope and outlives the run.
 
-    Returns a secret-free attestation for the receipt. The identity comes from the
-    owner-frozen permission and is compared against tokeninfo; it is never read out of
-    tokeninfo and written into the permission.
+    Returns a secret-free attestation in the shape the shared Gate's management
+    receipt validator accepts for the `oauth-tokeninfo` slot. The identity comes from
+    the owner-frozen permission and is compared against tokeninfo; it is never read
+    out of tokeninfo and written into the permission.
     """
     if not isinstance(body, dict):
         raise ValueError("tokeninfo body required")  # noqa: TRY004 -- refusal class
@@ -263,20 +264,21 @@ def verify_tokeninfo(body: Any, principal: dict, *, required_seconds: float) -> 
         )
     if seconds < required_seconds:
         raise ValueError("credential lifetime cannot cover the campaign")
+    identity = principal.get("subject", principal.get("verifiedEmail", ""))
     return {
-        "kind": "mfa-token-attestation-v1",
+        "kind": "request-byte-token-attestation-v1",
         "principalDigest": hashlib.sha256(
-            (
-                principal["clientId"]
-                + "\n"
-                + principal.get("subject", principal.get("verifiedEmail", ""))
-            ).encode()
+            (principal["clientId"] + "\n" + identity).encode()
         ).hexdigest(),
+        "requiredScopeVerified": True,
         "identityMode": mode,
         "identityVerified": True,
-        "requiredScopeVerified": True,
+        "oauthClientVerified": True,
         "expiresInSeconds": seconds,
-        "requiredSeconds": required_seconds,
+        "remainingSecondsAtVerification": float(seconds),
+        "requiredSeconds": float(required_seconds),
+        "complete": True,
+        "workerReaped": True,
     }
 
 
@@ -307,7 +309,12 @@ class ProductionSession:
             self.credential_rejected = True
         return status, body
 
-    def public(self, path: str, body: Any) -> tuple[int, dict]:
+    def _deadline(self, deadline: float | None) -> float:
+        return self._deadline_for() if deadline is None else deadline
+
+    def public(
+        self, path: str, body: Any, *, deadline: float | None = None
+    ) -> tuple[int, dict]:
         return self._transmit(
             closed_call(
                 "auth-public",
@@ -315,22 +322,26 @@ class ProductionSession:
                 body=body,
                 secret=self._token,
                 key=self._key,
-                deadline=self._deadline_for(),
+                deadline=self._deadline(deadline),
             )
         )
 
-    def admin(self, path: str, body: Any) -> tuple[int, dict]:
+    def admin(
+        self, path: str, body: Any, *, deadline: float | None = None
+    ) -> tuple[int, dict]:
         return self._transmit(
             closed_call(
                 "auth-admin",
                 path=path,
                 body=body,
                 secret=self._token,
-                deadline=self._deadline_for(),
+                deadline=self._deadline(deadline),
             )
         )
 
-    def patch_config(self, body: dict, mask: str) -> tuple[int, dict]:
+    def patch_config(
+        self, body: dict, mask: str, *, deadline: float | None = None
+    ) -> tuple[int, dict]:
         return self._transmit(
             closed_call(
                 "auth-config-patch",
@@ -338,21 +349,21 @@ class ProductionSession:
                 body=body,
                 secret=self._token,
                 mask=mask,
-                deadline=self._deadline_for(),
+                deadline=self._deadline(deadline),
             )
         )
 
-    def read_config(self) -> tuple[int, dict]:
-        return self.admin(CONFIG_PATH, None)
+    def read_config(self, *, deadline: float | None = None) -> tuple[int, dict]:
+        return self.admin(CONFIG_PATH, None, deadline=deadline)
 
-    def tokeninfo(self) -> tuple[int, dict]:
+    def tokeninfo(self, *, deadline: float | None = None) -> tuple[int, dict]:
         return self._transmit(
             closed_call(
                 "oauth-tokeninfo",
                 path=None,
                 body=None,
                 secret=self._token,
-                deadline=self._deadline_for(),
+                deadline=self._deadline(deadline),
             )
         )
 

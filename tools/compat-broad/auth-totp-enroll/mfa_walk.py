@@ -287,6 +287,12 @@ class Walk:
         if self._stop_requested():
             raise StopRequested("stop requested")
 
+    def _skip_planned(self, reason: str) -> None:
+        """Tell a slot-hosting session that a planned finalize will not be sent."""
+        skip = getattr(self.session, "skip_planned", None)
+        if skip is not None:
+            skip(reason)
+
     # -- accounts ------------------------------------------------------------------
     def _email(self, role: str) -> str | None:
         if role in ACCOUNT_ROLES_ANONYMOUS:
@@ -449,6 +455,7 @@ class Walk:
             "/v2/accounts/mfaSignIn:start", self._phone_start_body(pending)
         )
         if status != 200:
+            self._skip_planned("its start was refused")
             return status, payload, code
         session_info = payload["phoneResponseInfo"]["sessionInfo"]
         return self._observe(
@@ -527,6 +534,7 @@ class Walk:
                 start_status, start_code = material["startSessions"][f"{age}-status"]
                 session_info = material["startSessions"][str(age)]
                 if start_status != 200 or session_info is None:
+                    self._skip_planned("its start was refused")
                     self._skip(
                         case_id, "its start was refused", start_status, start_code
                     )
@@ -794,32 +802,43 @@ class Walk:
                 (item["email"] for item in accounts.values() if item["localId"] == uid),
                 None,
             )
-            try:
-                status, body = self.session.admin(
-                    f"/v1/projects/{PROJECT}/accounts:delete", {"localId": uid}
+            # Every readback is sent whatever the delete answered: absence is what
+            # they prove, and a delete that failed makes the readbacks the evidence
+            # that the account is still there. Each call is guarded on its own so a
+            # transport failure on one leaves the next slot reachable.
+            deleted = self._admin_evidence(
+                f"/v1/projects/{PROJECT}/accounts:delete",
+                {"localId": uid},
+                deletion=True,
+            )
+            uid_absent = self._admin_evidence(
+                f"/v1/projects/{PROJECT}/accounts:lookup",
+                {"localId": [uid]},
+                deletion=False,
+            )
+            email_absent = True
+            if email is not None:
+                email_absent = self._admin_evidence(
+                    f"/v1/projects/{PROJECT}/accounts:lookup",
+                    {"email": [email]},
+                    deletion=False,
                 )
-                deleted = empty_account_reply(status, body, deletion=True)
-                status, body = self.session.admin(
-                    f"/v1/projects/{PROJECT}/accounts:lookup", {"localId": [uid]}
+            if deleted or uid_absent:
+                mark_deleted(
+                    self.state, uid, absence_verified=uid_absent and email_absent
                 )
-                uid_absent = empty_account_reply(status, body, deletion=False)
-                email_absent = True
-                if email is not None:
-                    status, body = self.session.admin(
-                        f"/v1/projects/{PROJECT}/accounts:lookup", {"email": [email]}
-                    )
-                    email_absent = empty_account_reply(status, body, deletion=False)
-                if deleted or uid_absent:
-                    mark_deleted(
-                        self.state, uid, absence_verified=uid_absent and email_absent
-                    )
-            except Exception:  # noqa: BLE001, S112 -- retain this account, attempt the others; transport errors may carry credential bytes and are not logged
-                continue
-            finally:
-                self._save_checkpoint()
+            self._save_checkpoint()
         self.state["requests"] = self._charged = self.session.requests
         self._save_checkpoint()
         return self.state
+
+    def _admin_evidence(self, path: str, body: dict, *, deletion: bool) -> bool:
+        """One cleanup call; a transport failure is `False`, never a raised secret."""
+        try:
+            status, payload = self.session.admin(path, body)
+        except Exception:  # noqa: BLE001 -- transport errors may carry credential bytes and are not logged
+            return False
+        return empty_account_reply(status, payload, deletion=deletion)
 
     def complete(self) -> bool:
         return run_complete(self.state)

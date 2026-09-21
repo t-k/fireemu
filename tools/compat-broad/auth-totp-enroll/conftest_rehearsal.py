@@ -415,21 +415,21 @@ class FakeSession:
             self.fault(kind, path, self._requests, self.fake)
         return self.fake.handle(kind, path, body, mask)
 
-    def public(self, path, body):
+    def public(self, path, body, **_kwargs):
         return self._call("auth-public", path, body)
 
-    def admin(self, path, body):
+    def admin(self, path, body, **_kwargs):
         return self._call("auth-admin", path, body)
 
-    def read_config(self):
+    def read_config(self, **_kwargs):
         return self._call("auth-admin", "/admin/v2/projects/fireemu-35fe6/config", None)
 
-    def patch_config(self, body, mask):
+    def patch_config(self, body, mask, **_kwargs):
         return self._call(
             "auth-config-patch", "/admin/v2/projects/fireemu-35fe6/config", body, mask
         )
 
-    def tokeninfo(self):
+    def tokeninfo(self, **_kwargs):
         return self._call("oauth-tokeninfo", "", None)
 
     def sms_code(self) -> str:

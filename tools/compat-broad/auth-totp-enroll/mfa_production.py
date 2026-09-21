@@ -29,6 +29,7 @@ from broad_contract import digest
 
 import mfa_admission as admission
 import mfa_descriptor as campaign
+import mfa_gate
 import mfa_production_transport as transport
 from mfa_config_lock import VERIFIED_RESTORE_STATUSES, ConfigLock, ConfigLockError
 from mfa_provenance import compute_provenance, describe_worktree
@@ -94,6 +95,146 @@ def _read_private(path: Path) -> dict:
     return value
 
 
+class GateSession:
+    """The walk's session over the shared Gate facade and an inner transport.
+
+    Every data request is admitted against its frozen slot before the inner session
+    sends it, every management call is charged as its closed slot, and a planned
+    finalize the walk cannot send is consumed as a journaled zero-wire skip.
+    """
+
+    def __init__(self, inner, gate: mfa_gate.MfaGate) -> None:
+        self.inner = inner
+        self.gate = gate
+        self.phase = "observation"
+        self._management_slots = [
+            ("observation", name) for name in mfa_gate.MANAGEMENT_OBSERVATION_IDS
+        ] + [("recovery", name) for name in mfa_gate.MANAGEMENT_RECOVERY_IDS]
+        self.management_receipts: list[dict] = []
+
+    @property
+    def requests(self) -> int:
+        return self.inner.requests
+
+    def _dispatch(self, path, body, *, owner):
+        recovery = self.phase == "recovery"
+
+        def send():
+            deadline = time.monotonic() + mfa_gate.DATA_SLOT_SECONDS
+            if owner:
+                return self.inner.admin(path, body, deadline=deadline)
+            return self.inner.public(path, body, deadline=deadline)
+
+        return self.gate.dispatch_runtime(
+            path, body, owner=owner, recovery=recovery, send=send
+        )
+
+    def public(self, path, body):
+        return self._dispatch(path, body, owner=False)
+
+    def admin(self, path, body):
+        return self._dispatch(path, body, owner=True)
+
+    def skip_planned(self, reason: str):
+        return self.gate.skip_planned(reason, recovery=self.phase == "recovery")
+
+    def sms_code(self) -> str:
+        return self.inner.sms_code()
+
+    def _management(self, expected_kind: str, call):
+        """Charge the next closed management slot and run `call` inside it."""
+        if not self._management_pending():
+            raise ValueError("management slot out of order: none remain")
+        phase, slot_id = self._management_pending()[0]
+        if expected_kind not in slot_id:
+            raise ValueError(f"management slot out of order: next is {slot_id}")
+        outcome: dict = {}
+
+        def send(deadline):
+            try:
+                status, body = call(deadline)
+            except Exception as error:  # noqa: BLE001 -- the slot is charged either way; the class is the evidence
+                outcome["failure"] = type(error).__name__
+                return {
+                    "status": None,
+                    "complete": False,
+                    "workerReaped": True,
+                    "bodyKind": None,
+                    "body": None,
+                }
+            outcome["status"], outcome["body"] = status, body
+            return {
+                "status": status,
+                "complete": True,
+                "workerReaped": True,
+                "bodyKind": "json",
+                "body": body,
+            }
+
+        self._consumed = getattr(self, "_consumed", 0) + 1
+        self.gate.management_dispatch(phase, slot_id, send)
+        self.management_receipts.append(
+            {
+                "id": f"{phase}:{slot_id}",
+                **{k: v for k, v in outcome.items() if k != "body"},
+            }
+        )
+        if "failure" in outcome:
+            raise ValueError(f"management slot {slot_id} failed: {outcome['failure']}")
+        return outcome["status"], outcome["body"]
+
+    def _management_pending(self):
+        return self._management_slots[getattr(self, "_consumed", 0) :]
+
+    def tokeninfo(self, attest):
+        """The tokeninfo slot; `attest(body)` turns the raw body into the attestation."""
+        phase, slot_id = self._management_pending()[0]
+        if slot_id != "oauth-tokeninfo":
+            raise ValueError("management slot out of order")
+        result: dict = {}
+
+        def send(deadline):
+            status, body = self.inner.tokeninfo(deadline=deadline)
+            result["status"] = status
+            if status != 200:
+                return {
+                    "status": status,
+                    "complete": True,
+                    "workerReaped": True,
+                    "bodyKind": "json",
+                    "body": None,
+                }
+            result["attestation"] = attest(body)
+            return {
+                "status": status,
+                "complete": True,
+                "workerReaped": True,
+                "bodyKind": "json",
+                "body": result["attestation"],
+            }
+
+        self._consumed = getattr(self, "_consumed", 0) + 1
+        self.gate.management_dispatch(phase, slot_id, send)
+        self.management_receipts.append(
+            {"id": f"{phase}:{slot_id}", "status": result.get("status")}
+        )
+        if result.get("status") != 200:
+            raise ValueError(f"tokeninfo answered {result.get('status')}")
+        return result["attestation"]
+
+    def read_config(self):
+        return self._management(
+            "readback", lambda deadline: self.inner.read_config(deadline=deadline)
+        )
+
+    def patch_config(self, body, mask):
+        kind = "restore" if self.phase == "recovery" else "apply"
+        return self._management(
+            kind,
+            lambda deadline: self.inner.patch_config(body, mask, deadline=deadline),
+        )
+
+
 def _validate_credentials(value) -> dict:
     if (
         not isinstance(value, dict)
@@ -125,12 +266,16 @@ def execute(
 
     `session_factory` is None in production, which binds the fixed transport through
     the capability. A rehearsal injects a session over a virtual clock; its receipt
-    says `injected-transport` and can never be production evidence.
+    says `injected-transport` and can never be production evidence. A rehearsal is
+    also the only execution that may continue after the shared Ledger refuses the
+    reservation: the refusal is recorded by name, and the run then proves the Gate
+    side; production raises instead.
     """
     if not admission.issued_capability(capability):
         raise ValueError("unissued O7 production capability")
     mode = timing_mode(sleeper)
-    if session_factory is None and mode != "wall-clock":
+    rehearsal = bool(descriptor_.frozen_bounds.get("rehearsal"))
+    if session_factory is None and (mode != "wall-clock" or rehearsal):
         raise ValueError("production execution requires wall-clock timing")
     inputs, permission = copy.deepcopy(inputs), copy.deepcopy(permission)
     admission.validate_frozen_inputs(inputs, descriptor_)
@@ -167,31 +312,46 @@ def execute(
         if run_state.get("inputsDigest") != inputs["inputsDigest"]:
             raise ValueError("run directory belongs to other frozen inputs")
         ticket = run_state["ticket"]
-        ledger.validate(ticket, duration=13)
+        if ticket is not None:
+            ledger.validate(ticket, duration=13)
         run_state["resumeCount"] += 1
         if run_state["resumeCount"] > campaign.RESUME_ALLOWANCE:
             raise ValueError("resume allowance exhausted")
     else:
         output.mkdir(mode=0o700, parents=True, exist_ok=False)
         _write_immutable(output / "inputs.json", inputs)
-        ticket = ledger.reserve(
-            _envelope(permission, claim), claim, gate_plan, generation=generation
-        )
+        reservation_refusal = None
+        try:
+            ticket = ledger.reserve(
+                _envelope(permission, claim), claim, gate_plan, generation=generation
+            )
+        except ValueError as error:
+            if execution_kind != INJECTED_EXECUTION or not rehearsal:
+                raise
+            # A rehearsal records the shared Ledger's own refusal and goes on to
+            # prove the Gate side without a reservation; production never does.
+            ticket = None
+            reservation_refusal = str(error)
         run_state = {
             "inputsDigest": inputs["inputsDigest"],
             "ticket": ticket,
+            "reservationRefusal": reservation_refusal,
             "claimDigest": digest(claim),
             "gatePlanDigest": digest(gate_plan),
             "resumeCount": 0,
             "receipts": [],
         }
+        mfa_gate.create(output / "gate", gate_plan)
     output = output.resolve()
     _write_private(output / RUN_STATE_FILE, run_state)
+    gate = mfa_gate.MfaGate(output / "gate")
+    if not (resume or abandon):
+        gate.claim()
     started_wall = sleeper.now()
     wall_seconds = manifest["limits"]["maxWallSeconds"]
 
     def deadline_for():
-        return time.monotonic() + transport.REQUEST_SECONDS
+        return time.monotonic() + mfa_gate.DATA_SLOT_SECONDS
 
     stop_point = "schedule-not-started"
     failure = None
@@ -203,59 +363,67 @@ def execute(
     try:
         credentials = _validate_credentials(credential_reader())
         if session_factory is None:
-            session = transport.ProductionSession(
+            inner = transport.ProductionSession(
                 capability=capability,
                 token=credentials["token"],
                 api_key=credentials["apiKey"],
                 deadline_for=deadline_for,
             )
         else:
-            session = session_factory(capability, credentials, deadline_for)
+            inner = session_factory(capability, credentials, deadline_for)
         credentials = None
-        stop_point = "preflight-tokeninfo"
-        status, body = session.tokeninfo()
-        if status != 200:
-            raise ValueError(f"tokeninfo answered {status}")
-        credential_evidence = transport.verify_tokeninfo(
-            body,
-            permission["credentialPrincipal"],
-            required_seconds=descriptor_.window_seconds,
-        )
-        stop_point = "preflight-config-readback"
+        session = GateSession(inner, gate)
         lock_arguments = {
             "read": session.read_config,
             "patch": session.patch_config,
             "frozen_baseline_digest": permission["authConfigBaselineDigest"],
         }
-        lock = (
-            ConfigLock.resume(output, **lock_arguments)
-            if resume or abandon
-            else ConfigLock(output, **lock_arguments)
-        )
-        if abandon:
+        if resume or abandon:
+            # The Gate's observation preflight was spent by the first process; the
+            # configuration stays applied under the held lock across a pause, so a
+            # resumed run continues from the lock record rather than re-reading.
+            lock = ConfigLock.resume(output, **lock_arguments)
+            session._consumed = len(mfa_gate.MANAGEMENT_OBSERVATION_IDS)
             walk = descriptor_.collector(
-                session, manifest, output, sleeper=sleeper, resume=True
+                session,
+                manifest,
+                output,
+                sleeper=sleeper,
+                resume=True,
+                stop_requested=stop_requested,
             )
             walk.reconcile_intents()
-            stop_point = "cleanup"
-            raise StopRequested("abandon requested")
-        lock.preflight(resume=resume)
-        stop_point = "config-apply"
-        lock.apply()
-        sleeper.sleep_until(sleeper.now() + campaign.CONFIG_ENFORCEMENT_LAG_SECONDS)
-        stop_point = "acquisition"
-        walk = descriptor_.collector(
-            session,
-            manifest,
-            output,
-            sleeper=sleeper,
-            resume=resume,
-            stop_requested=stop_requested,
-        )
-        if resume:
-            walk.reconcile_intents()
-        stop_point = "cases"
-        walk.run()
+            if abandon:
+                stop_point = "cleanup"
+                raise StopRequested("abandon requested")
+            stop_point = "cases"
+            walk.run()
+        else:
+            stop_point = "preflight-tokeninfo"
+            credential_evidence = session.tokeninfo(
+                lambda body: transport.verify_tokeninfo(
+                    body,
+                    permission["credentialPrincipal"],
+                    required_seconds=descriptor_.window_seconds,
+                )
+            )
+            stop_point = "preflight-config-readback"
+            lock = ConfigLock(output, **lock_arguments)
+            lock.preflight()
+            stop_point = "config-apply"
+            lock.apply()
+            sleeper.sleep_until(sleeper.now() + campaign.CONFIG_ENFORCEMENT_LAG_SECONDS)
+            stop_point = "acquisition"
+            walk = descriptor_.collector(
+                session,
+                manifest,
+                output,
+                sleeper=sleeper,
+                resume=False,
+                stop_requested=stop_requested,
+            )
+            stop_point = "cases"
+            walk.run()
     except StopRequested as error:
         stopped = True
         failure = type(error).__name__
@@ -270,13 +438,10 @@ def execute(
         failure = type(error).__name__
     finally:
         if stop_point == "cases" and walk is not None and failure is not None:
-            # Which part of the walk the failure interrupted, read from what it left.
             stop_point = (
                 "acquisition" if walk.material.value["origin"] is None else "cases"
             )
         resumable = stopped and not abandon and walk is not None
-        # With no walk nothing was created, so cleanup is vacuously complete on a
-        # terminal stop; a resumable stop has not attempted it.
         cleanup = {
             "ownedAccounts": 0,
             "deleted": 0,
@@ -284,8 +449,27 @@ def execute(
             "complete": not resumable,
             "attempted": not resumable,
         }
-        if walk is not None and not resumable:
-            walk.cleanup()
+        gate_complete = False
+        gate_refusal = None
+        if session is not None and not resumable:
+            # Open the Gate's recovery phase: consume what observation left, clean
+            # up whatever was created, and skip the slots of accounts that never
+            # were, so the configuration restore behind them is reachable.
+            snapshot = gate.snapshot()
+            job = snapshot["jobs"][mfa_gate.JOB]
+            planned = len(snapshot["plan"]["jobs"][mfa_gate.JOB]["observation"])
+            if job["observation"] < planned and job.get("stopReason") is None:
+                try:
+                    gate.abandon_observation(failure or "observation-incomplete")
+                except ValueError as error:
+                    gate_refusal = type(error).__name__
+            session.phase = "recovery"
+            if walk is not None:
+                walk.cleanup()
+            try:
+                gate.drain_recovery()
+            except ValueError as error:
+                gate_refusal = gate_refusal or type(error).__name__
         if walk is not None:
             owned = [r for r in walk.state["ownedResources"] if r["kind"] == "account"]
             all_absent = all(r["deleted"] and r["absenceVerified"] for r in owned)
@@ -299,13 +483,21 @@ def execute(
             if cleanup["attempted"] and not cleanup["complete"]:
                 stop_point = "cleanup"
                 failure = failure or "CleanupIncomplete"
-        if lock is not None:
+        if lock is not None and not resumable:
+            if session is not None:
+                session.phase = "recovery"
             try:
                 lock.restore()
             except ConfigLockError as error:
                 failure = failure or type(error).__name__
                 if stop_point != "cleanup":
                     stop_point = "restore"
+        if session is not None and not resumable and cleanup["complete"]:
+            try:
+                gate.finish()
+                gate_complete = True
+            except ValueError as error:
+                gate_refusal = type(error).__name__
         admission.revoke_production_capability(capability)
     walk_state = copy.deepcopy(walk.state) if walk is not None else None
     rows = walk.ordered_rows() if walk is not None else []
@@ -316,9 +508,14 @@ def execute(
         and cleanup["complete"]
         and lock is not None
         and lock.record["restoreStatus"] in VERIFIED_RESTORE_STATUSES
+        and gate_complete
     )
     if stop_point == "cases" and failure is None and complete:
         stop_point = None
+    snapshot = gate.snapshot()
+    _write_immutable(
+        output / f"gate-snapshot-{len(run_state['receipts']):02d}.json", snapshot
+    )
     receipt = admission.build_receipt(
         inputs,
         walk_state=walk_state,
@@ -335,14 +532,21 @@ def execute(
     )
     receipt.update(
         ticket=ticket,
+        reservationRefusal=run_state.get("reservationRefusal"),
         claimDigest=digest(claim),
         planDigest=digest(gate_plan),
+        gateDigest=digest(snapshot),
+        gateComplete=gate_complete,
+        gateRefusal=gate_refusal,
+        accountEvidence=mfa_gate.account_evidence(snapshot),
+        managementEvidence=session.management_receipts if session is not None else [],
+        chargedCalls=snapshot["total"],
         hostingRefusals=hosting,
         resumeCount=run_state["resumeCount"],
         wallElapsedSeconds=sleeper.now() - started_wall,
         wallBudgetSeconds=wall_seconds,
-        reservationStateAtPublication="held",
-        releaseEligible=complete,
+        reservationStateAtPublication="held" if ticket is not None else "unreserved",
+        releaseEligible=complete and ticket is not None,
         releaseRecord="release.json" if complete else None,
         requestsCharged=session.requests if session is not None else 0,
     )
@@ -374,12 +578,13 @@ def execute(
     released = False
     release = None
     release_refusal = None
-    if complete and hosting:
-        # The shared Ledger releases a row only through the shared Gate's cleanup
-        # proof, and the hosting check has already established that this campaign
-        # has no Gate the shared module accepts. Asking anyway would only turn the
-        # named refusal into a missing-file error; the row stays held and the
-        # release record names why.
+    if complete and ticket is None:
+        release_refusal = "Unreserved"
+    elif complete and hosting:
+        # The shared Ledger releases a row only through the shared Gate's Firestore
+        # cleanup proof, which this campaign's Gate cannot supply; the row stays
+        # held and the release record names why rather than turning a known
+        # refusal into a missing-proof error.
         release_refusal = "HostingRefused"
     elif complete:
         try:
@@ -393,9 +598,13 @@ def execute(
             "ticket": ticket,
             "failure": release_refusal,
             "hostingRefusals": hosting,
-            "reservationFinal": ledger.snapshot()["reservations"][
-                ticket["reservation"]
-            ],
+            "reservationRefusal": run_state.get("reservationRefusal"),
+            "gateComplete": gate_complete,
+            "reservationFinal": (
+                ledger.snapshot()["reservations"][ticket["reservation"]]
+                if ticket is not None
+                else None
+            ),
         }
         _write_immutable(output / "release.json", release)
     return {

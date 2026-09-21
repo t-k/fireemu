@@ -85,7 +85,7 @@ def test_a_rehearsal_descriptor_is_visibly_not_production():
     descriptor = campaign.rehearsal_descriptor(sleeper)
     assert descriptor.frozen_bounds["timingMode"] == "virtual-clock"
     assert descriptor.frozen_bounds["rehearsal"] is True
-    assert descriptor.window_seconds == 720
+    assert descriptor.window_seconds == 1440
     reference = descriptor.plan_compiler(NONCE)
     assert reference["timingMode"] == "virtual-clock"
     with pytest.raises(ValueError, match="wall-clock plan reference"):
@@ -98,7 +98,7 @@ def test_a_rehearsal_descriptor_is_visibly_not_production():
 def test_the_request_budget_is_re_derived_with_management_and_recovery_slots():
     budget = campaign.request_budget()
     assert budget["maxRequests"] == 400
-    assert budget["managementRequests"] == 21
+    assert budget["managementRequests"] == 6
     assert budget["managementSlots"]["preflight"] == [
         "oauth-tokeninfo",
         "auth-config-readback",
@@ -111,8 +111,10 @@ def test_the_request_budget_is_re_derived_with_management_and_recovery_slots():
         "auth-config-restore",
         "auth-config-restore-readback",
     ]
-    assert budget["recoveryRequests"] == 3 * len(owned_accounts()) == 33
-    assert budget["dataRequests"] == 160
+    # One address readback fewer than three per account: the anonymous account has
+    # no address to read back.
+    assert budget["recoveryRequests"] == 3 * len(owned_accounts()) - 1 == 32
+    assert budget["dataRequests"] == 93
     assert (
         budget["dataRequests"]
         + budget["managementRequests"]
@@ -127,13 +129,13 @@ def test_the_request_budget_is_re_derived_with_management_and_recovery_slots():
         "requests": 400,
         "accounts": 14,
         "resources": 14,
-        "costMicrousd": 100_021,
+        "costMicrousd": 100_006,
     }
     cost = campaign.cost_model()
     assert cost["estimatedCostMicrousd"] == 100_000
     assert cost["hardCeilingMicrousd"] == 500_000
     assert cost["configurationChangeMicrousd"] == 4
-    assert cost["totalCostMicrousd"] == 100_021
+    assert cost["totalCostMicrousd"] == 100_006
 
 
 def test_the_lock_scopes_carry_the_exclusive_configuration_lock():

@@ -226,10 +226,11 @@ def test_the_hosting_check_names_every_shared_module_refusal(tmp_path):
     assert [item["refusal"] for item in refusals] == [
         "ledger-claim-refused",
         "gate-wall-cap",
-        "gate-plan-refused",
+        "ledger-resource-refused",
     ]
     assert refusals[0]["value"] == {"durationSeconds": 2700, "cap": 1200}
     assert refusals[1]["value"] == {"wallSeconds": 2700, "cap": 1200}
+    assert refusals[2]["value"]["refusedResources"] == 2 + 11 + 1
     with pytest.raises(admission.HostingRefused, match="ledger-claim-refused"):
         admission.require_hosted(claim, gate_plan)
     # The shared Ledger itself refuses the same claim, in its own words.
@@ -244,7 +245,8 @@ def test_the_hosting_check_names_every_shared_module_refusal(tmp_path):
     }
     with pytest.raises(ValueError, match="bounded duration required"):
         ledger.reserve(envelope, claim, gate_plan)
-    # The rehearsal's short window passes the duration cap; the Gate still refuses.
+    # The rehearsal's window is the Gate's cap, so its plan is created by the shared
+    # Gate itself; what remains is the Ledger's resource scope.
     rehearsal_plan = admission.gate_plan_for(
         built.inputs, built.permission, built.descriptor
     )
@@ -257,7 +259,17 @@ def test_the_hosting_check_names_every_shared_module_refusal(tmp_path):
     assert [
         item["refusal"]
         for item in admission.hosting_check(rehearsal_claim, rehearsal_plan)
-    ] == ["gate-plan-refused"]
+    ] == ["ledger-resource-refused"]
+    with pytest.raises(ValueError, match="canonical Firestore resource required"):
+        ledger.reserve(
+            {
+                **envelope,
+                "limits": rehearsal_claim["budget"],
+                "scopes": rehearsal_claim["locks"],
+            },
+            rehearsal_claim,
+            rehearsal_plan,
+        )
 
 
 @pytest.mark.parametrize(

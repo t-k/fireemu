@@ -39,9 +39,19 @@ def _rows(result):
     return {row["id"]: row for row in result["rows"]}
 
 
-def test_the_full_walk_completes_cleans_up_and_restores(tmp_path):
-    built = RehearsalAdmission(tmp_path)
-    result = built.run()
+@pytest.fixture(scope="module")
+def completed(tmp_path_factory):
+    """One full rehearsal, shared by the tests that only read its evidence.
+
+    The shared Gate paces every slot by a quarter second in real time, so a full
+    walk costs about half a minute; the read-only assertions share one.
+    """
+    built = RehearsalAdmission(tmp_path_factory.mktemp("completed"))
+    return built, built.run()
+
+
+def test_the_full_walk_completes_cleans_up_and_restores(completed):
+    built, result = completed
     assert result["failure"] is None
     assert result["stopPoint"] is None
     assert [row["id"] for row in result["rows"]] == list(CASE_IDS)
@@ -80,26 +90,46 @@ def test_the_full_walk_completes_cleans_up_and_restores(tmp_path):
     assert result["executionKind"] == "injected-transport"
     assert result["productionExecuted"] is False
     assert result["timingMode"] == "virtual-clock"
-    assert result["releaseEligible"] is True
-    # The shared Ledger accepted the rehearsal's short reservation, and its release
-    # is refused by the shared Gate contract this campaign cannot satisfy; the row
-    # stays held and the receipt says so instead of claiming a release.
+    # The Gate side passes end to end: every slot admitted in order, one journaled
+    # zero-wire skip (the finalize behind the refused 1800 s start), every account
+    # created, deleted and read back absent, and the facade's finish accepted.
+    assert result["gateComplete"] is True and result["gateRefusal"] is None
+    evidence = result["accountEvidence"]
+    assert evidence["createdAccounts"] == evidence["deletedAccounts"] == 11
+    assert evidence["uidAbsenceReadbacks"] == 11
+    assert evidence["addressAbsenceReadbacks"] == 10
+    assert evidence["skips"] == 1 and evidence["complete"] is True
+    assert [item["id"] for item in result["managementEvidence"]] == [
+        "observation:oauth-tokeninfo",
+        "observation:auth-config-readback",
+        "observation:auth-config-apply",
+        "observation:auth-config-apply-readback",
+        "recovery:auth-config-restore",
+        "recovery:auth-config-restore-readback",
+    ]
+    assert result["chargedCalls"] == 93 + 32 - 1 + 6
+    # The shared Ledger refused the reservation by name: its reserve admits only
+    # Firestore document resources. The rehearsal recorded that and went on to
+    # prove the Gate side unreserved; production raises at the same point.
+    assert result["reservationRefusal"] == "canonical Firestore resource required"
+    assert result["ticket"] is None
+    assert result["releaseEligible"] is False
     assert result["reservationReleased"] is False
-    assert result["releaseRefusal"] == "HostingRefused"
-    assert built.ledger_row()["state"] == "held"
+    assert result["releaseRefusal"] == "Unreserved"
+    assert built.ledger_row() is None
     assert [item["refusal"] for item in result["hostingRefusals"]] == [
-        "gate-plan-refused"
+        "ledger-resource-refused"
     ]
     assert (built.output / "receipt.json").is_file()
     assert (built.output / "release.json").is_file()
+    assert (built.output / "gate-snapshot-00.json").is_file()
     receipt = json.loads((built.output / "receipt.json").read_bytes())
     admission.screen_receipt(receipt)
     assert receipt["cleanup"]["complete"] is True
 
 
-def test_the_comparator_refuses_a_rehearsal_record_as_production(tmp_path):
-    built = RehearsalAdmission(tmp_path)
-    result = built.run()
+def test_the_comparator_refuses_a_rehearsal_record_as_production(completed):
+    built, result = completed
     record = result["comparisonRecord"]
     assert record["side"] == "rehearsal" and record["productionExecuted"] is False
     assert record["recovery"]["configurationRestored"] is True
@@ -126,15 +156,14 @@ def test_a_stop_mid_run_restores_the_configuration_and_a_resume_completes(tmp_pa
     assert first["failure"] == "StopRequested"
     assert first["resumable"] is True
     assert first["stopPoint"] == "cases"
-    # The accounts stay owned across the stop, the configuration does not.
+    # The accounts stay owned across the pause and so does the configuration: the
+    # Gate's management phases admit the restore only after the recovery slots,
+    # and the exclusive lock is what keeps the configuration safe meanwhile.
     assert first["cleanup"]["attempted"] is False
     assert len(built.fake.accounts) == first["cleanup"]["ownedAccounts"] > 0
-    assert first["configuration"]["restoreStatus"] in (
-        "restored-verified",
-        "restored-verified-normalized",
-    )
-    assert not applied(built.fake.config)
-    assert built.ledger_row()["state"] == "held"
+    assert first["configuration"]["restoreStatus"] == "not-attempted"
+    assert applied(built.fake.config)
+    assert first["gateComplete"] is False
     assert (built.output / "receipt-00.json").is_file()
     assert (built.output / MATERIAL_FILE).stat().st_mode & 0o077 == 0
     del stops
@@ -142,7 +171,8 @@ def test_a_stop_mid_run_restores_the_configuration_and_a_resume_completes(tmp_pa
     assert second["failure"] is None
     assert second["resumeCount"] == 1
     assert [row["id"] for row in second["rows"]] == list(CASE_IDS)
-    assert second["configuration"]["restoreAttempts"] >= 1
+    assert second["configuration"]["restoreAttempts"] == 1
+    assert second["gateComplete"] is True
     assert second["cleanup"]["complete"] is True
     assert built.fake.accounts == {}
     assert not applied(built.fake.config)
@@ -171,6 +201,7 @@ def test_an_abandon_after_a_stop_deletes_every_account_and_restores(tmp_path):
     assert abandoned["resumable"] is False
     assert abandoned["stopPoint"] == "cleanup"
     assert abandoned["cleanup"]["complete"] is True
+    assert abandoned["gateComplete"] is True
     assert built.fake.accounts == {}
     assert not applied(built.fake.config)
     verdict = admission.classify_stop(abandoned)
@@ -268,13 +299,14 @@ def test_a_failed_restore_is_reported_and_never_verified(tmp_path):
     assert applied(built.fake.config)
     verdict = admission.classify_stop(result)
     assert verdict["disposition"] == "owner-escalation"
-    # A second attempt, through the abandon path, restores and verifies.
+    # A second attempt through the abandon path is refused by the shared Gate: its
+    # management slots are one-shot, so a failed restore cannot be retried inside
+    # the envelope. The receipt keeps saying so; the owner restores by hand.
     abandoned = built.run(abandon=True)
-    assert abandoned["configuration"]["restoreStatus"] in (
-        "restored-verified",
-        "restored-verified-normalized",
-    )
-    assert not applied(built.fake.config)
+    assert abandoned["configuration"]["restoreStatus"] == "restore-failed"
+    assert abandoned["configuration"]["restoreAttempts"] == 2
+    assert applied(built.fake.config)
+    assert admission.classify_stop(abandoned)["disposition"] == "owner-escalation"
 
 
 def test_a_restore_that_reads_back_an_exact_baseline_is_exact(tmp_path):
@@ -289,18 +321,16 @@ def test_a_restore_that_reads_back_an_exact_baseline_is_exact(tmp_path):
     assert result["configuration"]["restoreReadbackDigest"] == built.baseline_digest
 
 
-def test_the_enrollment_session_ages_are_taken_from_the_shared_clock(tmp_path):
-    built = RehearsalAdmission(tmp_path)
-    result = built.run()
+def test_the_enrollment_session_ages_are_taken_from_the_shared_clock(completed):
+    _built, result = completed
     rows = _rows(result)
     assert rows["totp-enroll-session-age-450s"]["sessionAgeSeconds"] == 450.0
     assert ENROLLMENT_TTL_SECONDS < 450 < 2 * ENROLLMENT_TTL_SECONDS
     assert rows["totp-enroll-session-age-450s"]["errorCode"] == "SESSION_EXPIRED"
 
 
-def test_the_receipt_and_the_run_directory_carry_no_secret_shaped_value(tmp_path):
-    built = RehearsalAdmission(tmp_path)
-    result = built.run()
+def test_the_receipt_and_the_run_directory_carry_no_secret_shaped_value(completed):
+    built, result = completed
     receipt = json.loads((built.output / "receipt.json").read_bytes())
     admission.screen_receipt(receipt)
     record = json.loads(max(built.output.glob("production-record-*.json")).read_bytes())

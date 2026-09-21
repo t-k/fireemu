@@ -1001,6 +1001,33 @@ def test_a_key_protected_server_needs_the_configured_key_file(
         key_file.write_text("local-secret-key-123\n")
         config = tmp_path / "config.json"
         config.write_text(json.dumps({"apiKeyFile": str(key_file)}))
+        # A key file other users can read is refused before any request.
+        key_file.chmod(0o644)
+        code, result, _ = run(
+            tmp_path,
+            packet,
+            state_dir,
+            name="loosekey.json",
+            extra_args=("--config", str(config)),
+        )
+        assert code == 1 and result is None
+        assert "readable by group or others" in capsys.readouterr().err
+        key_file.chmod(0o600)
+        # So is a symlink, whatever the target's mode.
+        link = tmp_path / "api-key.link"
+        link.symlink_to(key_file)
+        config.write_text(json.dumps({"apiKeyFile": str(link)}))
+        code, result, _ = run(
+            tmp_path,
+            packet,
+            state_dir,
+            name="linkkey.json",
+            extra_args=("--config", str(config)),
+        )
+        assert code == 1 and result is None
+        assert "must not be a symlink" in capsys.readouterr().err
+        config.write_text(json.dumps({"apiKeyFile": str(key_file)}))
+        requests_before = len(protected.requests)
         protected.replies.append(GOOD_FINDINGS)
         code, result, output = run(
             tmp_path,
@@ -1011,6 +1038,8 @@ def test_a_key_protected_server_needs_the_configured_key_file(
         )
         assert code == 0
         assert len(result["findings"]) == 2
+        # The two refusals sent nothing: only the successful run's requests.
+        assert len(protected.requests) - requests_before == 3
         captured = capsys.readouterr()
         assert "local-secret-key-123" not in captured.out + captured.err
         assert "local-secret-key-123" not in output.read_text()

@@ -68,9 +68,10 @@ the config file, then to `http://127.0.0.1:8011/v1/chat/completions`. Kinds:
  "contextTokens": 16384, "responseFormat": "json_schema", "stateDir": "/abs/private/state"}
 ```
 
-`apiKeyFile` (absolute path) holds the bearer token for a server started
+`apiKeyFile` (absolute path, not a symlink, mode 600: a group- or
+world-readable file is refused) holds the bearer token for a server started
 with `--api-key`/`--api-key-file`; the key is sent only to the loopback
-endpoint and never written to results or logs. `responseFormat` is `json_schema` (the schema is sent as
+endpoint and never written to results, logs or the cache key. `responseFormat` is `json_schema` (the schema is sent as
 `response_format`) or `prompt` (the schema is appended to the user message;
 use it for servers without grammar-constrained output). `modelId`/`quant`
 pin the runtime identity and skip the `/v1/models` probe.

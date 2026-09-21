@@ -124,6 +124,13 @@ def load_api_key(config: dict) -> str | None:
     if not key_path.is_absolute():
         raise ConfigError("config apiKeyFile must be an absolute path")
     try:
+        if key_path.is_symlink():
+            raise ConfigError("config apiKeyFile must not be a symlink")
+        mode = key_path.stat().st_mode
+        if mode & 0o077:
+            raise ConfigError(
+                "config apiKeyFile is readable by group or others; chmod 600 it"
+            )
         key = key_path.read_text(encoding="utf-8").strip()
     except OSError as error:
         raise ConfigError(f"config apiKeyFile: {type(error).__name__}")

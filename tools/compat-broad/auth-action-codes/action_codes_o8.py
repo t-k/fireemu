@@ -165,6 +165,7 @@ def execute(args: argparse.Namespace) -> dict:
             verify_handoff=remote._validate_handoff,
             fixture_origin=None,
             production=True,
+            permission_expires_at=approval["windowExpiresAt"],
         )
     finally:
         import o8_admission

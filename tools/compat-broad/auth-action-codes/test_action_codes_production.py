@@ -182,7 +182,7 @@ def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp
     assert actual_paths == expected_paths
     assert _ActionFixture.calls[0]["body"] == {
         "email": f"o1-oob-{NONCE}-a@example.invalid",
-        "password": "a",
+        "password": "secret-accountA-password",
         "returnSecureToken": True,
     }
     serialized = json.dumps(result) + json.dumps(reservations.Ledger(ledger_root).snapshot())
@@ -246,8 +246,8 @@ def test_observation_failure_attempts_all_known_cleanup_and_holds_unknown_signup
     rows = list(state["reservations"].values())
     assert len(rows) == 1 and rows[0]["state"] == "held"
     assert len(_ActionFixture.calls) == 7
-    assert all(
-        call["path"].split("?", 1)[0]
-        == "identitytoolkit.googleapis.com/v1/accounts:lookup"
-        for call in _ActionFixture.calls[1:]
-    )
+    expected_recovery_paths = [
+        row["path"].format(project=descriptor.AUTHORIZED_PROJECT).lstrip("/")
+        for row in plan_module.campaign_manifest(NONCE, project=descriptor.AUTHORIZED_PROJECT)["recovery"]
+    ]
+    assert [call["path"].split("?", 1)[0].lstrip("/") for call in _ActionFixture.calls[1:]] == expected_recovery_paths

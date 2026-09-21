@@ -145,8 +145,12 @@ def loopback_transport(origin: str):
 
 def local_baseline(origin: str, nonce: str) -> dict[str, Any]:
     """Read the local projection once, outside the gate, to derive the gate baseline."""
+    import time
+
     case = next(c for c in compile_cases(nonce) if c["id"] == "OC-01")
-    receipt = loopback_transport(origin)(http_request(case), deadline=1e18)
+    receipt = loopback_transport(origin)(
+        http_request(case), deadline=time.monotonic() + 10
+    )
     if receipt["status"] != 200 or not isinstance(receipt["body"], dict):
         raise ValueError("local projection unavailable")
     local = database_evidence(receipt["body"])

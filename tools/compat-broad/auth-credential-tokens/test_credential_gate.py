@@ -173,7 +173,7 @@ def _leaves(node):
 
 def test_the_shared_gate_admits_the_plan() -> None:
     plan = _plan()
-    assert plan["jobs"][gate_module.JOB]["resources"] == gate_module.route_resources(PROJECT)
+    assert plan["jobs"][gate_module.JOB]["resources"] == plan["accountResources"]
     assert plan["accountResources"] == [
         f"projects/{PROJECT}/auth/accounts/fireemu-cred-{NONCE[:8]}-0",
         f"projects/{PROJECT}/auth/accounts/fireemu-cred-{NONCE[:8]}-1",
@@ -190,12 +190,13 @@ def test_a_hosted_run_reaches_every_case_cleans_up_and_finishes(tmp_path, monkey
     _preflight(gate, "recovery")
     gate.finish()
     snapshot = gate.snapshot()
+    plan = snapshot["plan"]
     assert account_evidence(snapshot) == {
         "createdAccounts": 3,
         "deletedAccounts": 3,
         "uidAbsenceReadbacks": 3,
         "addressAbsenceReadbacks": 2,
-        "routesAbsent": sorted(gate_module.route_resources(PROJECT)),
+        "routesAbsent": sorted(plan["accountResources"]),
         "complete": True,
     }
     assert snapshot["total"] == 42 + 7

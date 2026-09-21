@@ -206,6 +206,7 @@ def typed_absence(status, body):
 
 
 _AUTH_ACCOUNT_IDENTIFIER = re.compile(r"[A-Za-z0-9_.@+-]{1,128}")
+BINDING_PREFIX = "$binding:"
 
 
 def _auth_account_form(resource, project=None):
@@ -247,6 +248,39 @@ def auth_typed_absence(status, body):
     return body == {"kind": "identitytoolkit#GetAccountInfoResponse"}
 
 
+def _auth_binding_name(operation):
+    account = operation.get("account")
+    return f"{account}Uid" if isinstance(account, str) and account else None
+
+
+def _auth_recovery_operation_valid(operation, project):
+    if not _auth_operation(operation):
+        return True
+    path = operation.get("path")
+    body = operation.get("body")
+    binding = _auth_binding_name(operation)
+    if not isinstance(path, str) or not isinstance(body, dict) or binding is None:
+        return False
+    prefix = f"identitytoolkit.googleapis.com/v1/projects/{project}/accounts:"
+    if path.endswith("/accounts:lookup"):
+        if "email" in body:
+            return path == prefix + "lookup" and set(body) == {"email"}
+        return (
+            path == prefix + "lookup"
+            and set(body) == {"localId"}
+            and isinstance(body["localId"], list)
+            and len(body["localId"]) == 1
+            and body["localId"][0] == BINDING_PREFIX + binding
+        )
+    if path.endswith("/accounts:delete"):
+        return (
+            path == prefix + "delete"
+            and set(body) == {"localId"}
+            and body["localId"] == BINDING_PREFIX + binding
+        )
+    return True
+
+
 def validate_absence_proofs(state, job_name):
     """Validate final typed readback against the registered recovery plan and journal."""
     policy = _stream_policy(state["plan"])
@@ -265,9 +299,7 @@ def validate_absence_proofs(state, job_name):
                 if _auth_operation(operation)
                 and operation.get("resource") == resource
                 and operation["method"] == "POST"
-                and operation["path"].endswith("/accounts:lookup")
-                and isinstance(operation.get("body"), dict)
-                and "localId" in operation["body"]
+                and _auth_recovery_operation_valid(operation, state["plan"].get("project"))
             ]
             absent = auth_typed_absence
         else:
@@ -577,8 +609,12 @@ def create(path, plan):
             resource = operation.get("resource")
             if resource is not None and not _auth_account_form(resource, project):
                 raise ValueError("canonical Auth account resource required")
+            if resource is not None and resource not in resources:
+                raise ValueError("Auth operation resource outside assigned resources")
             if operation in job.get("recovery", []) and resource not in resources:
                 raise ValueError("cleanup target outside assigned resources")
+            if operation in job.get("recovery", []) and resource is not None and not _auth_recovery_operation_valid(operation, project):
+                raise ValueError("canonical Auth UID binding or lookup route required")
     if (
         not _valid_request_seconds(plan, policy)
         or not _valid_ceiling(plan)
@@ -1791,6 +1827,18 @@ class Gate:
                 resource = _operation_resource(operation)
                 if recovery and resource not in job["resources"]:
                     raise ValueError("cleanup target outside assigned resources")
+                if (
+                    recovery
+                    and _auth_operation(operation)
+                    and operation.get("method") == "POST"
+                    and operation["path"].endswith("/accounts:delete")
+                    and not (
+                        isinstance(job.get("authAccounts"), dict)
+                        and isinstance(job["authAccounts"].get(operation.get("account")), dict)
+                        and "createEvent" in job["authAccounts"][operation.get("account")]
+                    )
+                ):
+                    raise ValueError("Auth delete requires creation ownership")
                 if operation["method"] == "DELETE" and (
                     source is None or valid_version
                 ):
@@ -1887,9 +1935,17 @@ class Gate:
             job[phase] += 1
             if schedule is not None:
                 job["scheduleDone"] += 1
-            if recovery and resource in job["absent"]:
+            if recovery and resource in job["absent"] and not (
+                _auth_operation(operation)
+                and isinstance(operation.get("body"), dict)
+                and "email" in operation["body"]
+            ):
                 job["absent"].remove(resource)
-            if recovery:
+            if recovery and not (
+                _auth_operation(operation)
+                and isinstance(operation.get("body"), dict)
+                and "email" in operation["body"]
+            ):
                 job.setdefault("absenceProofs", {}).pop(resource, None)
             job["inflight"] = True
             event = {
@@ -1971,6 +2027,7 @@ class Gate:
                     and _auth_operation(operation)
                     and resource in job["resources"]
                     and operation["path"].endswith("/accounts:lookup")
+                    and _auth_recovery_operation_valid(operation, plan.get("project"))
                 ):
                     if auth_typed_absence(status, body):
                         if resource not in job["absent"]:

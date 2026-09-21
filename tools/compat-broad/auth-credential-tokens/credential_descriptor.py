@@ -175,7 +175,7 @@ def ledger_budget() -> dict:
     return {
         "requests": int(BUDGET["maxRequests"]),
         "accounts": MAX_ACCOUNTS,
-        "resources": len(gate_module.route_resources(PROJECT)),
+        "resources": MAX_ACCOUNTS,
         "costMicrousd": math.ceil(BUDGET["maxCostUsd"] * 1_000_000),
     }
 

@@ -423,6 +423,14 @@ def gate_plan(
         raise ValueError("signing capability must be declared")
     observation = observation_operations(project, nonce, signing=signing)
     recovery = recovery_operations(project, nonce, signing=signing)
+    resources = {
+        account: account_resource(project, nonce, account)
+        for account in planned_accounts(signing)
+    }
+    for operation in observation + recovery:
+        account = operation.get("account")
+        if account is not None:
+            operation["resource"] = resources[account]
     slots = management_ids(signing)
     schedule = [
         {"phase": "observation", "index": index, "seconds": DATA_SLOT_SECONDS}
@@ -461,9 +469,7 @@ def gate_plan(
         "costMicrousd": cost_microusd,
         "receiptKind": "auth-credential-acquisition-receipt-v1",
         "plannedAccounts": list(planned_accounts(signing)),
-        "accountResources": [
-            account_resource(project, nonce, account) for account in planned_accounts(signing)
-        ],
+        "accountResources": list(resources.values()),
         "mintedBindings": list(MINTED_BINDINGS),
         "management": {
             "dispatchKind": "closed-v1",
@@ -487,7 +493,7 @@ def gate_plan(
         },
         "jobs": {
             JOB: {
-                "resources": route_resources(project),
+                "resources": list(resources.values()),
                 "observation": observation,
                 "recovery": recovery,
                 "schedule": schedule,

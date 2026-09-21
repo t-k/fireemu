@@ -177,6 +177,53 @@ def test_auth_legacy_plan_without_binding_map_keeps_the_derived_binding_contract
     create(tmp_path / "gate", plan)
 
 
+def test_auth_legacy_plan_cannot_override_its_derived_uid_binding(tmp_path: Path) -> None:
+    plan = _auth_plan()
+    plan["jobs"]["auth-credential"].pop("accountBindings")
+    with pytest.raises(ValueError, match="requires account map"):
+        create(tmp_path / "gate", plan)
+
+
+def test_auth_digest_only_adoption_cannot_authorize_a_delete(tmp_path: Path) -> None:
+    path = tmp_path / "gate"
+    plan = _auth_plan()
+    plan["costMicrousd"] = 3
+    lookup = plan["jobs"]["auth-credential"]["recovery"][0]
+    delete = dict(
+        lookup,
+        kind="delete",
+        path="identitytoolkit.googleapis.com/v1/projects/demo/accounts:delete",
+        body={"localId": "$binding:acct0Uid"},
+    )
+    plan["jobs"]["auth-credential"]["recovery"] = [delete, lookup]
+    create(path, plan)
+    gate = Gate(path, "auth-credential")
+    gate.claim()
+    state = gate.snapshot()
+    state["events"] = [
+        {
+            "job": "auth-credential",
+            "phase": "observation",
+            "completed": False,
+            "creationOutcome": "created",
+            "settledBy": {
+                "kind": "address-readback-present",
+                "responseDigest": "a" * 64,
+            },
+        }
+    ]
+    state["jobs"]["auth-credential"]["authAccounts"] = {
+        "acct0": {
+            "uid": "uid-0",
+            "resource": "projects/demo/auth/accounts/acct-0",
+            "createEvent": 0,
+        }
+    }
+    reservations._save(path, state)
+    with pytest.raises(ValueError, match="creation ownership"):
+        gate.dispatch(delete, True, lambda: pytest.fail("forged delete was sent"))
+
+
 def test_auth_plan_cannot_bind_absence_to_a_literal_or_foreign_uid(tmp_path: Path) -> None:
     plan = _auth_plan()
     operation = plan["jobs"]["auth-credential"]["recovery"][0]

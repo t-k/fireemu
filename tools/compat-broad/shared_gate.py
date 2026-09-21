@@ -354,7 +354,6 @@ def _auth_creation_ownership(state, job, operation):
         return False
     event = state["events"][event_index]
     evidence = event.get("authEvidence")
-    settled = event.get("settledBy")
     ordinary = (
         record.get("resource") == operation.get("resource")
         and event.get("phase") == "observation"
@@ -364,16 +363,7 @@ def _auth_creation_ownership(state, job, operation):
         and evidence.get("account") == account
         and evidence.get("creationOutcome") == "created"
     )
-    adopted = (
-        record.get("resource") == operation.get("resource")
-        and event.get("phase") == "observation"
-        and event.get("creationOutcome") == "created"
-        and isinstance(settled, dict)
-        and settled.get("kind") == "address-readback-present"
-        and isinstance(settled.get("responseDigest"), str)
-        and len(settled["responseDigest"]) == 64
-    )
-    return ordinary or adopted
+    return ordinary
 
 
 def validate_absence_proofs(state, job_name):
@@ -706,6 +696,8 @@ def create(path, plan):
         for operation in job.get("observation", []) + job.get("recovery", []):
             if not _auth_operation(operation):
                 continue
+            if account_bindings is None and "uidBinding" in operation:
+                raise ValueError("explicit Auth UID binding requires account map")
             resource = operation.get("resource")
             if resource is not None and not _auth_account_form(resource, project):
                 raise ValueError("canonical Auth account resource required")

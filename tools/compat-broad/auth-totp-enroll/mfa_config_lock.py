@@ -59,9 +59,19 @@ CAMPAIGN_SMS_REGIONS = {"allowByDefault": {"disallowedRegions": []}}
 RESTORE_STATUSES = (
     "not-attempted",
     "restored-verified",
+    "restored-verified-normalized",
     "restore-readback-differs",
     "restore-failed",
 )
+VERIFIED_RESTORE_STATUSES = ("restored-verified", "restored-verified-normalized")
+# The disabled shapes the service reads back for a masked field that was absent
+# before the run. The earlier production recorder observed that a null phone
+# configuration reads back as an empty object after a restore, so a byte-exact
+# whole-configuration digest can differ from the baseline while every field the run
+# touched is back in its disabled state. Equality under this normalization is
+# reported as its own status, never folded into the exact one.
+_DISABLED_PHONE = {"enabled": False, "testPhoneNumbers": {}}
+_DISABLED_MFA = {"state": "DISABLED"}
 LOCK_FILE = "config-lock.json"
 BASELINE_FILE = "config-baseline.json"
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -138,6 +148,21 @@ def applied(readback: dict) -> bool:
         and phone.get("testPhoneNumbers") == CAMPAIGN_PHONE["testPhoneNumbers"]
         and "allowByDefault" in (readback.get("smsRegionConfig") or {})
     )
+
+
+def normalized(body: dict) -> dict:
+    """The configuration with each masked field's absent and disabled shapes unified."""
+    value = copy.deepcopy(body)
+    sign_in = value.get("signIn") or {}
+    phone = sign_in.get("phoneNumber") or {}
+    if not phone.get("enabled") and not phone.get("testPhoneNumbers"):
+        sign_in = {**sign_in, "phoneNumber": copy.deepcopy(_DISABLED_PHONE)}
+    value["signIn"] = sign_in
+    mfa = value.get("mfa") or {}
+    if mfa.get("state") in (None, "DISABLED") and not mfa.get("enabledProviders"):
+        value["mfa"] = copy.deepcopy(_DISABLED_MFA)
+    value["smsRegionConfig"] = value.get("smsRegionConfig") or {}
+    return value
 
 
 def differing_fields(readback: dict, baseline: dict) -> list[str]:
@@ -243,12 +268,15 @@ class ConfigLock:
         return body
 
     # -- steps ---------------------------------------------------------------------
-    def preflight(self) -> str:
+    def preflight(self, *, resume: bool = False) -> str:
         """Read the live configuration; refuse to start unless it is the frozen baseline.
 
         The frozen digest came from the owner's baseline observation. A different live
         configuration means the project changed since the permission was written, and
-        a restore would then write back a configuration nobody reviewed.
+        a restore would then write back a configuration nobody reviewed. A resumed run
+        whose previous stop restored the baseline under the documented normalization
+        finds the normalized shape live, and is admitted only against the saved
+        baseline body it will restore again.
         """
         status, body = self._read()
         if status != 200:
@@ -257,10 +285,18 @@ class ConfigLock:
         observed = config_digest(body)
         self.record["preflightReadbackDigest"] = observed
         if observed != self.frozen_baseline_digest:
-            self.save()
-            raise ConfigLockError(
-                "Auth configuration readback differs from the frozen baseline digest"
+            admitted = (
+                resume
+                and self.record["restoreStatus"] == "restored-verified-normalized"
+                and normalized(body) == normalized(self._baseline_body())
             )
+            if not admitted:
+                self.save()
+                raise ConfigLockError(
+                    "Auth configuration readback differs from the frozen baseline digest"
+                )
+            self.save()
+            return observed
         # The pre-value is saved before the change can be attempted, under the private
         # directory, so a change that reaches the server without a readable response
         # can still be restored by a later process.
@@ -274,6 +310,9 @@ class ConfigLock:
         if self.record["baselineReference"] is None:
             raise ConfigLockError("configuration preflight required before apply")
         self.record["changeAttempted"] = True
+        self.record["restoreStatus"] = "not-attempted"
+        self.record["restoreReadbackDigest"] = None
+        self.record["restoreDifferingFields"] = None
         self.save()
         status, body = self._patch(campaign_patch(), UPDATE_MASK)
         if status != 200 or not isinstance(body, dict) or "error" in body:
@@ -288,40 +327,52 @@ class ConfigLock:
         self.save()
         return self.record["appliedReadbackDigest"]
 
-    def restore(self) -> str:
+    def restore(self) -> str | None:
         """Write the pre-value back and verify whole-configuration digest equality.
 
-        Idempotent: a restore that already verified is not repeated, and a restore
-        after a change that was never attempted verifies the live configuration is
-        still the baseline without writing anything.
+        Idempotent: a restore that already verified is not repeated. A change that was
+        never attempted has nothing to restore and sends nothing; the status stays
+        `not-attempted`, which the evidence check accepts only together with
+        `changeAttempted` false.
         """
-        if self.record["restoreStatus"] == "restored-verified":
+        if self.record["restoreStatus"] in VERIFIED_RESTORE_STATUSES:
             return self.record["restoreReadbackDigest"]
+        if not self.record["changeAttempted"]:
+            return None
         self.record["restoreAttempts"] += 1
         try:
-            if self.record["changeAttempted"]:
-                baseline = self._baseline_body()
+            baseline = self._baseline_body()
+            try:
                 status, body = self._patch(restore_patch(baseline), UPDATE_MASK)
-                if status != 200 or not isinstance(body, dict) or "error" in body:
-                    raise ConfigLockError(f"configuration restore answered {status}")
-            status, readback = self._read()
+            except ConfigLockError:
+                raise
+            except Exception as error:
+                raise ConfigLockError(
+                    "configuration restore transport failed"
+                ) from error
+            if status != 200 or not isinstance(body, dict) or "error" in body:
+                raise ConfigLockError(f"configuration restore answered {status}")
+            try:
+                status, readback = self._read()
+            except Exception as error:
+                raise ConfigLockError("restore readback transport failed") from error
             if status != 200:
                 raise ConfigLockError(f"restore readback answered {status}")
             validate_configuration(readback)
             observed = config_digest(readback)
             self.record["restoreReadbackDigest"] = observed
-            if observed != self.frozen_baseline_digest:
-                self.record["restoreStatus"] = "restore-readback-differs"
-                if self.record["changeAttempted"]:
-                    self.record["restoreDifferingFields"] = differing_fields(
-                        readback, self._baseline_body()
-                    )
-                raise ConfigLockError(
-                    "restored configuration digest differs from the frozen baseline"
-                )
-            self.record["restoreStatus"] = "restored-verified"
-            self.record["restoreDifferingFields"] = []
-            return observed
+            if observed == self.frozen_baseline_digest:
+                self.record["restoreStatus"] = "restored-verified"
+                self.record["restoreDifferingFields"] = []
+                return observed
+            self.record["restoreDifferingFields"] = differing_fields(readback, baseline)
+            if normalized(readback) == normalized(baseline):
+                self.record["restoreStatus"] = "restored-verified-normalized"
+                return observed
+            self.record["restoreStatus"] = "restore-readback-differs"
+            raise ConfigLockError(
+                "restored configuration digest differs from the frozen baseline"
+            )
         except ConfigLockError:
             if self.record["restoreStatus"] != "restore-readback-differs":
                 self.record["restoreStatus"] = "restore-failed"
@@ -335,26 +386,40 @@ class ConfigLock:
 
 
 def validate_evidence(value: Any, *, frozen_baseline_digest: str) -> bool:
-    """Whether a receipt's configuration evidence proves a verified restore."""
+    """Whether a receipt's configuration evidence proves a verified restore.
+
+    A change that was never attempted needs no restore; a change that was needs a
+    verified one, exact or under the documented normalization.
+    """
     if not isinstance(value, dict):
         return False
     try:
-        return (
-            value["frozenBaselineDigest"] == frozen_baseline_digest
-            and value["preflightReadbackDigest"] == frozen_baseline_digest
-            and value["restoreStatus"] == "restored-verified"
-            and value["restoreReadbackDigest"] == frozen_baseline_digest
-            and value["restoreDifferingFields"] == []
-            and isinstance(value["baselineReference"], dict)
-            and value["baselineReference"].get("valuesRetained") is False
-            and (
-                value["changeAttempted"] is False
-                or (
-                    value["applied"] is True
-                    and isinstance(value["appliedReadbackDigest"], str)
-                    and _HEX64.fullmatch(value["appliedReadbackDigest"]) is not None
-                )
+        if value["frozenBaselineDigest"] != frozen_baseline_digest:
+            return False
+        reference = value["baselineReference"]
+        if value["changeAttempted"] is False:
+            return (
+                value["restoreStatus"] == "not-attempted" and value["applied"] is False
             )
-        )
+        if (
+            not isinstance(reference, dict)
+            or reference.get("valuesRetained") is not False
+            or value["preflightReadbackDigest"] != frozen_baseline_digest
+            and value["restoreStatus"] != "restored-verified-normalized"
+            or value["applied"] is not True
+            or not isinstance(value["appliedReadbackDigest"], str)
+            or _HEX64.fullmatch(value["appliedReadbackDigest"]) is None
+            or value["restoreStatus"] not in VERIFIED_RESTORE_STATUSES
+            or not isinstance(value["restoreReadbackDigest"], str)
+            or _HEX64.fullmatch(value["restoreReadbackDigest"]) is None
+            or not isinstance(value["restoreDifferingFields"], list)
+        ):
+            return False
+        if value["restoreStatus"] == "restored-verified":
+            return (
+                value["restoreReadbackDigest"] == frozen_baseline_digest
+                and value["restoreDifferingFields"] == []
+            )
+        return True
     except (KeyError, TypeError):
         return False

@@ -48,6 +48,7 @@ from o8_admission import (
 
 import mfa_descriptor as campaign
 from mfa_collector import assert_no_sensitive_material
+from mfa_config_lock import VERIFIED_RESTORE_STATUSES
 from mfa_timing import WALL_CLOCK
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
@@ -392,7 +393,7 @@ def hosting_check(claim, gate_plan) -> list[dict]:
     except (ValueError, TypeError) as error:
         refusals.append(
             {
-                "code": "ledger-claim-refused",
+                "refusal": "ledger-claim-refused",
                 "module": "tools/compat-broad/production-admission/reservations.py",
                 "detail": str(error),
                 "value": {
@@ -404,7 +405,7 @@ def hosting_check(claim, gate_plan) -> list[dict]:
     if gate_plan["wallSeconds"] > shared_gate.WALL_CAP_SECONDS:
         refusals.append(
             {
-                "code": "gate-wall-cap",
+                "refusal": "gate-wall-cap",
                 "module": "tools/compat-broad/shared_gate.py",
                 "detail": "campaign wall exceeds WALL_CAP_SECONDS",
                 "value": {
@@ -419,7 +420,7 @@ def hosting_check(claim, gate_plan) -> list[dict]:
         except (ValueError, TypeError, KeyError) as error:
             refusals.append(
                 {
-                    "code": "gate-plan-refused",
+                    "refusal": "gate-plan-refused",
                     "module": "tools/compat-broad/shared_gate.py",
                     "detail": (
                         f"{type(error).__name__}: {error}; the Gate hosts a fixed queue of "
@@ -441,7 +442,7 @@ def require_hosted(claim, gate_plan) -> None:
     if refusals:
         raise HostingRefused(
             "shared Ledger/Gate cannot host this campaign: "
-            + ", ".join(item["code"] for item in refusals)
+            + ", ".join(item["refusal"] for item in refusals)
         )
 
 
@@ -520,7 +521,7 @@ def classify_stop(receipt) -> dict:
         }
     if stop not in CONFIG_CHANGED_STOP_POINTS and stop is not None:
         raise ValueError("unknown MFA stop point")
-    restored = configuration.get("restoreStatus") == "restored-verified"
+    restored = configuration.get("restoreStatus") in VERIFIED_RESTORE_STATUSES
     absent = cleanup.get("complete") is True
     if restored and absent:
         return {
@@ -573,7 +574,7 @@ def build_receipt(
             "pending": sum(step["status"] == "pending" for step in steps),
         },
         "configuration": copy.deepcopy(configuration),
-        "credentialEvidence": copy.deepcopy(credential),
+        "principalAttestation": copy.deepcopy(credential),
         "cleanup": copy.deepcopy(cleanup),
         "generation": copy.deepcopy(generation),
         "executionKind": execution_kind,

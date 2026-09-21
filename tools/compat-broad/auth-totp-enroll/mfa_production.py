@@ -30,7 +30,7 @@ from broad_contract import digest
 import mfa_admission as admission
 import mfa_descriptor as campaign
 import mfa_production_transport as transport
-from mfa_config_lock import ConfigLock, ConfigLockError
+from mfa_config_lock import VERIFIED_RESTORE_STATUSES, ConfigLock, ConfigLockError
 from mfa_provenance import compute_provenance, describe_worktree
 from mfa_timing import timing_mode
 from mfa_walk import BudgetError, Refused, StopRequested
@@ -239,7 +239,7 @@ def execute(
             walk.reconcile_intents()
             stop_point = "cleanup"
             raise StopRequested("abandon requested")
-        lock.preflight()
+        lock.preflight(resume=resume)
         stop_point = "config-apply"
         lock.apply()
         sleeper.sleep_until(sleeper.now() + campaign.CONFIG_ENFORCEMENT_LAG_SECONDS)
@@ -269,17 +269,22 @@ def execute(
     ) as error:
         failure = type(error).__name__
     finally:
+        if stop_point == "cases" and walk is not None and failure is not None:
+            # Which part of the walk the failure interrupted, read from what it left.
+            stop_point = (
+                "acquisition" if walk.material.value["origin"] is None else "cases"
+            )
+        resumable = stopped and not abandon and walk is not None
+        # With no walk nothing was created, so cleanup is vacuously complete on a
+        # terminal stop; a resumable stop has not attempted it.
         cleanup = {
             "ownedAccounts": 0,
             "deleted": 0,
             "absent": 0,
-            "complete": False,
-            "attempted": False,
+            "complete": not resumable,
+            "attempted": not resumable,
         }
-        resumable = stopped and not abandon and walk is not None
         if walk is not None and not resumable:
-            if stop_point == "cases":
-                stop_point = "cleanup" if failure else stop_point
             walk.cleanup()
         if walk is not None:
             owned = [r for r in walk.state["ownedResources"] if r["kind"] == "account"]
@@ -291,6 +296,9 @@ def execute(
                 "complete": (not resumable) and all_absent,
                 "attempted": not resumable,
             }
+            if cleanup["attempted"] and not cleanup["complete"]:
+                stop_point = "cleanup"
+                failure = failure or "CleanupIncomplete"
         if lock is not None:
             try:
                 lock.restore()
@@ -307,7 +315,7 @@ def execute(
         and walk.complete()
         and cleanup["complete"]
         and lock is not None
-        and lock.record["restoreStatus"] == "restored-verified"
+        and lock.record["restoreStatus"] in VERIFIED_RESTORE_STATUSES
     )
     if stop_point == "cases" and failure is None and complete:
         stop_point = None
@@ -366,16 +374,25 @@ def execute(
     released = False
     release = None
     release_refusal = None
-    if complete:
+    if complete and hosting:
+        # The shared Ledger releases a row only through the shared Gate's cleanup
+        # proof, and the hosting check has already established that this campaign
+        # has no Gate the shared module accepts. Asking anyway would only turn the
+        # named refusal into a missing-file error; the row stays held and the
+        # release record names why.
+        release_refusal = "HostingRefused"
+    elif complete:
         try:
             ledger.finish(ticket)
             released = True
         except Exception as error:  # noqa: BLE001 -- never report an unverified release
             release_refusal = type(error).__name__
+    if complete:
         release = {
             "receiptDigest": digest(receipt),
             "ticket": ticket,
             "failure": release_refusal,
+            "hostingRefusals": hosting,
             "reservationFinal": ledger.snapshot()["reservations"][
                 ticket["reservation"]
             ],
@@ -397,7 +414,9 @@ def comparison_record(
 ):
     """The receipt in the comparator's shape, so the shadow can be compared against it."""
     state = walk.state if walk is not None else None
-    restored = lock is not None and lock.record["restoreStatus"] == "restored-verified"
+    restored = (
+        lock is not None and lock.record["restoreStatus"] in VERIFIED_RESTORE_STATUSES
+    )
     owned = (
         [r for r in state["ownedResources"] if r["kind"] == "account"] if state else []
     )

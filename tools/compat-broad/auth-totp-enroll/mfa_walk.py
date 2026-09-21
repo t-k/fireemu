@@ -54,6 +54,10 @@ INTENT_FILE = "create-intents.jsonl"
 # token is a placeholder the request shape requires, as the earlier production
 # recorder for the same test number found.
 RECAPTCHA_PLACEHOLDER = "fireemu-test-phone-number"
+# Each aged sample is taken just past its target age, as the campaign document says
+# and as the local shadow does by advancing one millisecond beyond it; a refusal is
+# then attributed to the interval's upper endpoint rather than to the target itself.
+AGE_SAMPLE_MARGIN_SECONDS = 1.0
 ACCOUNT_ROLES_ANONYMOUS = ("interaction-anonymous",)
 ACCOUNT_ROLES_UNVERIFIED = ("interaction-unverified", "interaction-anonymous")
 
@@ -489,7 +493,9 @@ class Walk:
             if offset:
                 step = next(s for s in self.state["steps"] if s["id"] == case["id"])
                 if step["dueAt"] is None:
-                    step["dueAt"] = material["origin"] + offset
+                    step["dueAt"] = (
+                        material["origin"] + offset + AGE_SAMPLE_MARGIN_SECONDS
+                    )
         self._save_checkpoint()
 
     # -- the cases -----------------------------------------------------------------
@@ -742,12 +748,10 @@ class Walk:
             return
         if case_id == "project-mfa-config-readback":
             status, payload = self.session.admin(CONFIG_PATH, None)
-            # The local artifact reports the block as `mfaConfig` and the service as
-            # `mfa`; the row records whether either was present, which is the
-            # observation the case makes, not which spelling carried it.
-            present = isinstance(payload, dict) and (
-                "mfaConfig" in payload or "mfa" in payload
-            )
+            # The same predicate the local shadow records, so the row compares like
+            # for like: the service spells its block `mfa`, the local artifact
+            # `mfaConfig`, and the flag reports the local spelling on both sides.
+            present = isinstance(payload, dict) and "mfaConfig" in payload
             self._finish(case_id, status, code_of(payload), mfaConfigPresent=present)
             return
         raise ValueError(f"unknown interaction case: {case_id}")

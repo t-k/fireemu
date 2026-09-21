@@ -40,6 +40,7 @@ from broad_contract import digest
 from o5_user_token_campaign import (
     PERMISSION_ENVELOPE,
     admitted_manifest_digest,
+    rules_management_plan,
 )
 from o5_user_token_campaign import (
     budget as campaign_budget,
@@ -85,6 +86,8 @@ ABORT_CLOSURE_SOURCES = (
     "tools/compat-broad/production-admission/reservations.py",
     "tools/compat-broad/o8-core/o8_admission.py",
     COLLECTOR_ENTRY,
+    f"{LANE_DIRECTORY}/o5_user_token_remote_transport.py",
+    f"{LANE_DIRECTORY}/o5_user_token_https_worker.py",
     COMPARATOR_ENTRY,
     DESCRIPTOR_ENTRY,
 )
@@ -172,6 +175,8 @@ def frozen_bounds() -> dict[str, Any]:
         "perRequestTimeoutSeconds": float(estimate["perRequestTimeoutSeconds"]),
         "wallClockDeadlineSeconds": float(estimate["wallClockDeadlineSeconds"]),
         "recoveryDeadlineSeconds": float(estimate["recoveryDeadlineSeconds"]),
+        "rulesManagementRequests": int(estimate["rulesRequests"]),
+        "rulesManagement": rules_management_plan(),
     }
 
 
@@ -213,6 +218,47 @@ def cost_model() -> dict[str, Any]:
         "totalCostMicrousd": COST_CEILING_MICROUSD,
         "basis": estimate["estimateBasis"],
     }
+
+
+def gate_plan(plan: dict[str, Any], *, permission_expires_at: float | None = None) -> dict[str, Any]:
+    """Freeze the Rules management envelope consumed by ``Gate``."""
+    validate_case(plan)
+    management = rules_management_plan()
+    value = {
+        "contract": "shared-local-v1",
+        "kind": "fs-rules-user-token-gate-plan-v1",
+        "campaignId": CAMPAIGN,
+        "project": PROJECT,
+        "database": DATABASE,
+        "nonce": plan["nonce"],
+        "planDigest": plan["planDigest"],
+        "management": management,
+        "observationRequests": len(plan["observation"]) + len(management["observation"]),
+        "dataRequests": len(plan["observation"]),
+        "managementRequests": management["totalRequests"],
+        "requestCostMicrousd": management["requestCostMicrousd"],
+        "costMicrousd": management["totalRequests"],
+        "requestSeconds": 8.0,
+        "wallSeconds": 600.0,
+        "recoverySeconds": 300.0,
+        "intervalSeconds": 0.25,
+        "receiptKind": "fs-rules-management-receipt-v1",
+        "transport": "bounded-rules-worker",
+        "requestSeconds": 8.0,
+        "jobs": {
+            "rules-management": {
+                "resources": list(plan["ownedResources"][:1]),
+                "observation": [],
+                "recovery": [],
+            }
+        },
+        "jobSlots": 1,
+        "coordinatorRequests": 0,
+        "fixedCostMicrousd": 0,
+    }
+    if permission_expires_at is not None:
+        value["permissionExpiresAt"] = permission_expires_at
+    return value
 
 
 def permission_bindings(
@@ -257,6 +303,7 @@ def collector(
     run_id: str,
     acquisition: dict[str, Any],
     journal_path: Any = None,
+    management_session: Any = None,
 ) -> dict[str, Any]:
     """Drive the lane's collector as the production side, bound.
 
@@ -273,6 +320,7 @@ def collector(
         recovery_deadline_seconds=float(CAMPAIGN_SECONDS + RECOVERY_SECONDS),
         journal_path=journal_path,
         acquisition=acquisition,
+        management_session=management_session,
     )
 
 

@@ -4,9 +4,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { publishJson } from "./io.mjs";
+import { publish, publishJson } from "./io.mjs";
 import { requireThat, digestJson, safeCode } from "./core.mjs";
-import { g0SessionPythonSource, readOwnedProcessArgv, validateG0Origins } from "./g0.mjs";
+import { canonicalG0Origins, g0SessionPythonSource, readOwnedProcessArgv, resolveLockedUvCommand } from "./g0.mjs";
 
 const directory = process.env.PILOT_RUN_DIR;
 requireThat(typeof directory === "string", "missing-run-directory");
@@ -61,7 +61,10 @@ requireThat(
     Object.entries(expectedProvenance).every(([key, value]) => receipt[key] === value),
   "g0-build-provenance-invalid",
 );
-const origins = validateG0Origins(process.env);
+const canonicalOrigins = canonicalG0Origins(process.env);
+const pythonCommand = resolveLockedUvCommand();
+const python = g0SessionPythonSource();
+const pythonArgs = ["run", "--project", inventoryProject, "--locked", "--python", "3.12", "python", "-c", python, root, directory];
 const freshness = {
   schema: "fireemu-g0-freshness-v1",
   parentPid: receipt.pid,
@@ -76,30 +79,57 @@ const freshness = {
   runDirectory: receipt.runDirectory,
   import: null,
   exportOnExit: null,
-  origins,
+  origins: canonicalOrigins,
   programDigest: canonicalProgramDigest,
   ...expectedProvenance,
+  pythonArgv: [pythonCommand, ...pythonArgs],
 };
 await publishJson(join(directory, "freshness-handshake.json"), freshness);
-const python = g0SessionPythonSource();
 const result = await new Promise((done) => {
   const child = spawn(
-    "uv",
-    ["run", "--project", inventoryProject, "--locked", "--python", "3.12", "python", "-c", python, root, directory],
+    pythonCommand,
+    pythonArgs,
     {
       cwd: root,
       env: { ...process.env, PYTHONUNBUFFERED: "1" },
       stdio: ["ignore", "ignore", "pipe"],
     },
   );
-  child.once("error", () => done({ code: null, error: "python-start-failed" }));
-  child.once("close", (code) =>
-    done({
-      code,
-      stage: "python-g0-execute",
-      error: code === 0 ? null : "shared-g0-execution-failed",
-    }),
-  );
+  let stderrBytes = 0;
+  let stderrTruncated = false;
+  const stderrChunks = [];
+  let stderrCaptured = 0;
+  let settled = false;
+  child.stderr.on("data", (chunk) => {
+    stderrBytes += chunk.length;
+    if (stderrCaptured < 64 * 1024) {
+      const remaining = 64 * 1024 - stderrCaptured;
+      const bounded = chunk.subarray(0, remaining);
+      stderrChunks.push(bounded);
+      stderrCaptured += bounded.length;
+    }
+    if (stderrBytes > 64 * 1024) stderrTruncated = true;
+  });
+  const complete = async (code, error, stage) => {
+    if (settled) return;
+    settled = true;
+    const stderr = Buffer.concat(stderrChunks);
+    let stderrArtifact = null;
+    try {
+      await publish(join(directory, "python-stderr.log"), stderr);
+      stderrArtifact = {
+        path: "python-stderr.log",
+        bytes: stderr.length,
+        sha256: createHash("sha256").update(stderr).digest("hex"),
+        truncated: stderrTruncated,
+      };
+    } catch {
+      stderrArtifact = { path: "python-stderr.log", bytes: 0, sha256: null, truncated: stderrTruncated };
+    }
+    done({ code, error, stage, stderrBytes, stderrTruncated, stderrArtifact });
+  };
+  child.once("error", () => complete(null, "python-start-failed", "python-start"));
+  child.once("close", (code) => complete(code, code === 0 ? null : "shared-g0-execution-failed", "python-g0-execute"));
 });
 if (result.code !== 0) {
   await publishJson(join(directory, "session-result.json"), {
@@ -110,12 +140,16 @@ if (result.code !== 0) {
     completed: false,
     failure: result.error,
     failureStage: result.stage ?? "python-start",
+    failureCode: result.code === null ? "spawn-failed" : `exit-${result.code}`,
+    stderrBytes: result.stderrBytes ?? 0,
+    stderrTruncated: result.stderrTruncated === true,
+    stderrArtifact: result.stderrArtifact,
     cleanup: { state: "unconfirmed", absent: [], requests: 0 },
     requests: [],
     requestCount: 0,
     authRequests: 0,
     productionRequests: 0,
-    endpoint: null,
+    endpoint: canonicalOrigins.firestore,
   });
   process.exitCode = 2;
   process.exit();
@@ -146,6 +180,6 @@ await publishJson(join(directory, "session-result.json"), {
   requestCount: 0,
   authRequests: 0,
   productionRequests: 0,
-  endpoint: null,
+  endpoint: canonicalOrigins.firestore,
 });
 if (result.code !== 0 || !batch.completed) process.exitCode = 2;

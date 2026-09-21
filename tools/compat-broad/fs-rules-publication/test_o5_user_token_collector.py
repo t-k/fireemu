@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import json
+import copy
+import sys
+import time
+from pathlib import Path
 
 import pytest
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "o8-core"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "production-admission"))
 from o5_user_token_case import compile_case
+from broad_contract import digest
 from o5_user_token_collector import (
     COLLECTOR_CONTRACT,
     READBACK_PUBLISH_ECHO,
@@ -11,7 +19,15 @@ from o5_user_token_collector import (
     ROLE_LOCAL_SHADOW,
     ROLE_PRODUCTION,
     collect,
+    RulesManagementSession,
 )
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "fs-write-limits"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import limits_03_descriptor
+import compiler_03
+from reservations import Ledger
+import shared_gate
 
 PROJECT = "fireemu-35fe6"
 NONCE = "b" * 32
@@ -430,6 +446,75 @@ def test_an_already_absent_resource_is_not_deleted() -> None:
     assert bundle["cleanup"]["cleanupComplete"] is True
 
 
+def test_bound_local_acquisition_keeps_local_rules_publication_without_management_session() -> None:
+    plan = case()
+    principals = {
+        entry["ref"]: {
+            "uidFingerprint": "a" * 16,
+            "provider": "email",
+            "tenant": entry["tenant"],
+            "claimsDigest": digest(entry["claims"]),
+        }
+        for entry in plan["ownedAccounts"]
+    }
+    acquisition = {
+        "environment": {"kind": "local-fireemu"},
+        "campaignManifestDigest": "b" * 64,
+        "nonceReservation": None,
+        "ownerPermission": None,
+        "artifact": {"artifactSha256": "c" * 64, "sourceCommit": "d" * 40},
+        "principals": principals,
+        "window": None,
+    }
+    transport = Transport(plan, endpoint="127.0.0.1:52879", fingerprints={ref: value["uidFingerprint"] for ref, value in principals.items()})
+    bundle = collect(
+        plan,
+        transport,
+        role=ROLE_LOCAL_SHADOW,
+        run_id="local-bound-rules-publication",
+        acquisition=acquisition,
+    )
+    assert bundle["recordingComplete"] is True
+    assert bundle["abort"] is None
+    assert len(bundle["rows"]) == 33
+    assert [release["label"] for release in bundle["transport"]["rulesetReleases"]] == ["A", "B"]
+    assert bundle["productionExecuted"] is False
+
+
+def test_bound_production_still_refuses_without_rules_management_session() -> None:
+    plan = case()
+    principals = {
+        entry["ref"]: {
+            "uidFingerprint": "e" * 16,
+            "provider": "email",
+            "tenant": entry["tenant"],
+            "claimsDigest": digest(entry["claims"]),
+        }
+        for entry in plan["ownedAccounts"]
+    }
+    acquisition = {
+        "environment": {"kind": "production-oracle"},
+        "campaignManifestDigest": "f" * 64,
+        "nonceReservation": {"reservationId": "r", "campaignId": plan["campaignId"], "nonceDigest": digest(plan["nonce"])},
+        "ownerPermission": {"kind": "owner", "permissionDigest": "1" * 64},
+        "artifact": None,
+        "principals": principals,
+        "window": {"startsAt": time.time() - 1, "expiresAt": time.time() + 3600},
+    }
+    transport = Transport(plan, endpoint="firestore.googleapis.com:443", fingerprints={ref: value["uidFingerprint"] for ref, value in principals.items()})
+    bundle = collect(
+        plan,
+        transport,
+        role=ROLE_PRODUCTION,
+        run_id="production-without-rules-session",
+        acquisition=acquisition,
+    )
+    assert bundle["recordingComplete"] is False
+    assert bundle["abort"] == "collector:ValueError"
+    assert transport.requests
+    assert all(request.get("phase") == "recovery" for request in transport.requests)
+
+
 def test_attempted_creates_are_owned_even_when_the_response_is_lost() -> None:
     plan = case()
     transport = Transport(plan)
@@ -497,3 +582,66 @@ def test_a_malformed_case_is_rejected_before_any_request() -> None:
     with pytest.raises(ValueError):
         collect(plan, transport, role=ROLE_PRODUCTION, run_id="run-1")
     assert transport.requests == []
+
+
+def test_rules_management_baseline_and_dynamic_bindings_use_real_gate(tmp_path) -> None:
+    """The producer must derive A/B names from bounded response readbacks."""
+    plan = case()
+    gate_plan = {
+        "contract": "shared-local-v1", "campaignId": "FS-RULES-USER-TOKEN-MATRIX-01",
+        "project": PROJECT, "database": "(default)", "jobSlots": 1,
+        "nonce": plan["nonce"],
+        "jobs": {"rules-management": {"resources": [plan["ownedResources"][0]], "observation": [], "recovery": []}},
+        "requestSeconds": 8.0, "observationRequests": 13, "requestCostMicrousd": 1,
+        "costMicrousd": 23, "wallSeconds": 600.0, "recoverySeconds": 300.0,
+        "intervalSeconds": 0.25, "coordinatorRequests": 0, "fixedCostMicrousd": 0,
+        "permissionExpiresAt": time.time() + 3600,
+        "management": {"dispatchKind": "closed-v1", "observation": [], "recovery": []},
+    }
+    gate_plan["management"]["observation"] = [
+        {"id": slot, "timeout": 8.0}
+        for slot in ("baseline-release-get", "baseline-ruleset-get", "baseline-executable-get", "create-a", "create-a-get", "patch-a", "patch-a-get", "patch-a-executable", "create-b", "create-b-get", "patch-b", "patch-b-get", "patch-b-executable")
+    ]
+    gate_plan["management"]["recovery"] = []
+    gate_plan["observationRequests"] = len(gate_plan["management"]["observation"])
+    gate_plan["management"]["recovery"] = [{"id": slot, "timeout": 8.0} for slot in ("restore-patch", "restore-get", "restore-executable", "restore-get-executable", "delete-a-get", "delete-a", "delete-a-absence", "delete-b-get", "delete-b", "delete-b-absence")]
+    gate_plan["permissionExpiresAt"] = time.time() + 3600
+    gate_plan["costMicrousd"] = 23
+    ledger = Ledger.create(tmp_path / "ledger")
+    now = time.time()
+    envelope = {"permissionDigest": digest({"kind": "o5-test"}), "issuedAt": now - 1, "expiresAt": now + 3600, "limits": {"requests": 23, "accounts": 0, "resources": 1, "costMicrousd": 23}, "concurrency": 1, "scopes": [{"key": "project/fireemu-35fe6", "mode": "EXCLUSIVE"}]}
+    claim = {"campaignId": "FS-RULES-USER-TOKEN-MATRIX-01", "manifestDigest": digest(plan), "nonceDigest": digest(plan["nonce"]), "gatePath": str((tmp_path / "gate").resolve()), "gatePlanDigest": digest(gate_plan), "locks": [{"key": "project/fireemu-35fe6", "mode": "EXCLUSIVE"}], "budget": dict(envelope["limits"]), "durationSeconds": 600}
+    ticket = ledger.reserve(envelope, claim, gate_plan)
+    shared_gate.create(tmp_path / "gate", gate_plan)
+    gate = shared_gate.Gate(tmp_path / "gate", gate_plan["campaignId"])
+
+    names = {"A": "projects/fireemu-35fe6/rulesets/server-a", "B": "projects/fireemu-35fe6/rulesets/server-b"}
+    baseline = "projects/fireemu-35fe6/rulesets/pre-existing"
+    source = {label: plan["rulesets"][label]["source"] for label in ("A", "B")}
+
+    def execute(operation, **_kwargs):
+        action = operation["action"]
+        if action == "release-get":
+            target = execute.active
+            return {"status": 200, "body": {"name": operation["releaseName"], "rulesetName": target}}
+        if action == "release-get-executable":
+            target = execute.active
+            return {"status": 200, "body": {"rulesetName": target}}
+        if action == "create":
+            return {"status": 200, "body": {"name": names[operation["label"]]}}
+        if action == "get":
+            label = "A" if operation["rulesetName"] == names["A"] else "B"
+            return {"status": 200, "body": {"name": operation["rulesetName"], "source": {"files": [{"name": "firestore.rules", "content": source[label]}]}}}
+        if action == "release-patch":
+            execute.active = operation["rulesetName"]
+            return {"status": 200, "body": {"name": operation["releaseName"], "rulesetName": execute.active}}
+        raise AssertionError(action)
+
+    execute.active = baseline
+    session = RulesManagementSession(gate=gate, ledger=ledger, ticket=ticket, execute=execute, plan=plan)
+    result = session.run_observation()
+    assert result["created"] == names
+    assert result["active"] == names
+    assert gate.snapshot()["managementUsed"] == [
+        "observation:" + slot["id"] for slot in gate_plan["management"]["observation"]
+    ]

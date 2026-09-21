@@ -212,6 +212,216 @@ _JWT_SHAPE = re.compile(r"^[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*$
 # token-shaped value is.
 _SECRET_PREFIXES = ("ya29.", "AIza", "1//")
 
+RULES_MANAGEMENT_OBSERVATION = (
+    "baseline-release-get",
+    "baseline-ruleset-get",
+    "baseline-executable-get",
+    "create-a",
+    "create-a-get",
+    "patch-a",
+    "patch-a-get",
+    "patch-a-executable",
+    "create-b",
+    "create-b-get",
+    "patch-b",
+    "patch-b-get",
+    "patch-b-executable",
+)
+RULES_MANAGEMENT_RECOVERY = (
+    "restore-patch",
+    "restore-get",
+    "restore-executable",
+    "restore-get-executable",
+    "delete-a-get",
+    "delete-a",
+    "delete-a-absence",
+    "delete-b-get",
+    "delete-b",
+    "delete-b-absence",
+)
+_RULESET_RESOURCE = re.compile(r"^projects/fireemu-35fe6/rulesets/[A-Za-z0-9_-]{1,128}$")
+_RELEASE_RESOURCE = re.compile(r"^projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}$")
+
+
+class RulesManagementSession:
+    """Gate-owned Rules lifecycle with response-derived resource bindings.
+
+    The callback is deliberately narrow: it receives a prepared transport
+    operation and an absolute deadline and must return the bounded worker
+    receipt. Names used after a create/read are copied only from validated
+    response bodies; no plan-time or caller-supplied resource map is trusted.
+    """
+
+    def __init__(self, *, gate, ledger, ticket, execute, plan):
+        if gate is None or ledger is None or not isinstance(ticket, dict):
+            raise ValueError("Rules management requires real Gate and Ledger ownership")
+        gate_plan = gate.snapshot().get("plan", {})
+        management = gate_plan.get("management", {})
+        if (
+            gate_plan.get("campaignId") != CAMPAIGN
+            or gate_plan.get("project") != plan.get("project")
+            or gate_plan.get("database") != plan.get("database")
+            or [entry.get("id") for entry in management.get("observation", [])] != list(RULES_MANAGEMENT_OBSERVATION)
+            or [entry.get("id") for entry in management.get("recovery", [])] != list(RULES_MANAGEMENT_RECOVERY)
+        ):
+            raise ValueError("Rules management Gate plan binding differs")
+        state = ledger.snapshot()
+        reservation = ticket.get("reservation")
+        row = state.get("reservations", {}).get(reservation)
+        claim = row.get("claim") if isinstance(row, dict) else None
+        if (
+            ticket.get("ledgerPath") != str(ledger.path)
+            or not isinstance(claim, dict)
+            or claim.get("campaignId") != CAMPAIGN
+            or claim.get("nonceDigest") != digest(plan.get("nonce"))
+            or claim.get("manifestDigest") != digest(plan)
+            or claim.get("gatePath") != str(gate.path.resolve())
+            or claim.get("gatePlanDigest") != digest(gate_plan)
+        ):
+            raise ValueError("Rules management Ledger claim binding differs")
+        self.gate = gate
+        self.ledger = ledger
+        self.ticket = ticket
+        self.execute = execute
+        self.plan = plan
+        self.baseline: dict[str, Any] | None = None
+        self.created: dict[str, str] = {}
+        self.active: dict[str, str] = {}
+
+    def _dispatch(self, phase: str, slot: str, operation: dict[str, Any], *, allow_status: frozenset[int] = frozenset()) -> dict[str, Any]:
+        def send(deadline: float) -> dict[str, Any]:
+            if self.ledger is not None:
+                self.ledger.validate(self.ticket, duration=8)
+            request = {"kind": "rules-lifecycle", "phase": "ruleset", **operation}
+            raw = self.execute(request, deadline=deadline)
+            if not isinstance(raw, dict):
+                raise ValueError("bounded Rules worker receipt required")
+            if {"status", "complete", "workerReaped", "bodyKind", "body"} <= set(raw):
+                return raw
+            status = raw.get("status")
+            if not isinstance(status, int):
+                raise ValueError("typed Rules HTTP status required")
+            body = raw.get("body")
+            return {
+                "status": status,
+                "complete": raw.get("complete") is not False,
+                "workerReaped": raw.get("workerReaped", True) is True,
+                "bodyKind": "json",
+                "body": body,
+            }
+
+        receipt = self.gate.management_dispatch(phase, slot, send)
+        if not isinstance(receipt, dict) or receipt.get("complete") is not True or receipt.get("workerReaped") is not True:
+            raise ValueError("Rules management slot incomplete")
+        status = receipt.get("status")
+        if not isinstance(status, int) or not (200 <= status < 300 or status in allow_status):
+            raise ValueError("Rules management HTTP failure")
+        body = receipt.get("body")
+        if not isinstance(body, dict):
+            raise ValueError("Rules management JSON body required")
+        if status in allow_status:
+            error = body.get("error")
+            if status != 404 or not isinstance(error, dict) or error.get("code") != 404:
+                raise ValueError("typed Ruleset absence required")
+        return body
+
+    @staticmethod
+    def _release(body: Any, expected_name: str | None = None) -> tuple[str, str]:
+        if not isinstance(body, dict) or not {"name", "rulesetName"}.issubset(body):
+            raise ValueError("release readback shape refused")
+        name, ruleset = body["name"], body["rulesetName"]
+        if not isinstance(name, str) or _RELEASE_RESOURCE.fullmatch(name) is None or not isinstance(ruleset, str) or _RULESET_RESOURCE.fullmatch(ruleset) is None:
+            raise ValueError("release resource binding refused")
+        if expected_name is not None and name != expected_name:
+            raise ValueError("registered release binding changed")
+        return name, ruleset
+
+    @staticmethod
+    def _ruleset(body: Any, expected_digest: str | None, expected_name: str | None = None) -> str:
+        if not isinstance(body, dict) or not {"name", "source"}.issubset(body):
+            raise ValueError("Ruleset readback shape refused")
+        name, source = body["name"], body["source"]
+        if not isinstance(name, str) or _RULESET_RESOURCE.fullmatch(name) is None or not isinstance(source, dict) or set(source) != {"files"}:
+            raise ValueError("Ruleset resource binding refused")
+        files = source["files"]
+        if not isinstance(files, list) or len(files) != 1 or not isinstance(files[0], dict) or set(files[0]) != {"name", "content"} or files[0]["name"] != "firestore.rules" or not isinstance(files[0]["content"], str) or (expected_digest is not None and digest(files[0]["content"]) != expected_digest):
+            raise ValueError("Ruleset source digest mismatch")
+        if expected_name is not None and name != expected_name:
+            raise ValueError("Ruleset name changed")
+        return name
+
+    @staticmethod
+    def _ruleset_digest(body: Any) -> str:
+        if not isinstance(body, dict) or not isinstance(body.get("source"), dict):
+            raise ValueError("Ruleset source required")
+        files = body["source"].get("files")
+        if not isinstance(files, list) or len(files) != 1 or not isinstance(files[0], dict) or not isinstance(files[0].get("content"), str):
+            raise ValueError("Ruleset source required")
+        return digest(files[0]["content"])
+
+    def run_observation(self) -> dict[str, Any]:
+        """Capture the baseline, publish A/B, and verify each active release."""
+        release_name, baseline_ruleset = self._release(
+            self._dispatch("observation", "baseline-release-get", {"action": "release-get", "releaseName": "projects/fireemu-35fe6/releases/cloud.firestore"})
+        )
+        baseline_body = self._dispatch("observation", "baseline-ruleset-get", {"action": "get", "rulesetName": baseline_ruleset})
+        baseline_digest = self._ruleset_digest(baseline_body)
+        baseline_ruleset = self._ruleset(
+            baseline_body,
+            None,
+            baseline_ruleset,
+        )
+        executable = self._dispatch("observation", "baseline-executable-get", {"action": "release-get-executable", "releaseName": release_name})
+        if executable.get("rulesetName") != baseline_ruleset:
+            raise ValueError("baseline executable differs")
+        self.baseline = {"releaseName": release_name, "rulesetName": baseline_ruleset, "sourceDigest": baseline_digest}
+        for label, patch_base in (("A", "a"), ("B", "b")):
+            source_digest = digest(self.plan["rulesets"][label]["source"])
+            created = self._dispatch("observation", f"create-{patch_base}", {"action": "create", "label": label, "sourceDigest": source_digest})
+            if not isinstance(created, dict) or not isinstance(created.get("name"), str) or _RULESET_RESOURCE.fullmatch(created["name"]) is None:
+                raise ValueError("created Ruleset name missing")
+            name = self._ruleset(self._dispatch("observation", f"create-{patch_base}-get", {"action": "get", "rulesetName": created["name"]}), source_digest, created["name"])
+            self.created[label] = name
+            self._dispatch("observation", f"patch-{patch_base}", {"action": "release-patch", "releaseName": release_name, "rulesetName": name})
+            active_name, active_ruleset = self._release(self._dispatch("observation", f"patch-{patch_base}-get", {"action": "release-get", "releaseName": release_name}), release_name)
+            if active_name != release_name or active_ruleset != name:
+                raise ValueError("active Ruleset binding differs")
+            executable = self._dispatch("observation", f"patch-{patch_base}-executable", {"action": "release-get-executable", "releaseName": release_name})
+            if executable.get("rulesetName") != name:
+                raise ValueError("active executable differs")
+            self.active[label] = name
+        return {"baseline": dict(self.baseline), "created": dict(self.created), "active": dict(self.active)}
+
+    def run_recovery(self) -> dict[str, Any]:
+        """Restore only the captured baseline and prove created absence."""
+        if self.baseline is None or set(self.created) != {"A", "B"} or set(self.active) != {"A", "B"}:
+            raise ValueError("Rules observation binding required before recovery")
+        release_name = self.baseline["releaseName"]
+        current_name, current_target = self._release(
+            self._dispatch("recovery", "restore-patch", {"action": "release-get", "releaseName": release_name}),
+            release_name,
+        )
+        if current_target != self.active["B"]:
+            raise ValueError("foreign current Ruleset refuses restore")
+        self._dispatch("recovery", "restore-get", {"action": "release-patch", "releaseName": release_name, "rulesetName": self.baseline["rulesetName"]})
+        restored_name, restored_target = self._release(
+            self._dispatch("recovery", "restore-executable", {"action": "release-get", "releaseName": release_name}),
+            release_name,
+        )
+        if restored_name != release_name or restored_target != self.baseline["rulesetName"]:
+            raise ValueError("restore readback differs")
+        executable = self._dispatch("recovery", "restore-get-executable", {"action": "release-get-executable", "releaseName": release_name})
+        if executable.get("rulesetName") != self.baseline["rulesetName"]:
+            raise ValueError("restored executable differs")
+        for label in ("A", "B"):
+            name = self.created[label]
+            source_digest = digest(self.plan["rulesets"][label]["source"])
+            self._ruleset(self._dispatch("recovery", f"delete-{label.lower()}-get", {"action": "get", "rulesetName": name}), source_digest, name)
+            self._dispatch("recovery", f"delete-{label.lower()}", {"action": "delete", "rulesetName": name})
+            self._dispatch("recovery", f"delete-{label.lower()}-absence", {"action": "get", "rulesetName": name}, allow_status=frozenset({404}))
+        return {"restored": True, "rulesetName": self.baseline["rulesetName"]}
+
+
 
 class BudgetExhausted(RuntimeError):
     """Raised internally when a bound stops further requests."""
@@ -642,6 +852,7 @@ def collect(
     journal_path: str | os.PathLike[str] | None = None,
     acquisition: Mapping[str, Any] | None = None,
     wall_clock: Callable[[], float] = time.time,
+    management_session: RulesManagementSession | None = None,
 ) -> dict[str, Any]:
     """Run the compiled matrix through ``execute`` under enforced bounds.
 
@@ -720,13 +931,24 @@ def collect(
     worker_reaped: bool | None = None
     worker_state = {"unreaped": False}
     active_ruleset: str | None = None
+    rules_management: dict[str, Any] | None = None
 
     try:
+        if (
+            bindings is not None
+            and role == ROLE_PRODUCTION
+            and management_session is None
+        ):
+            raise ValueError("production Rules management session required")
+        if management_session is not None:
+            if bindings is None or role != ROLE_PRODUCTION:
+                raise ValueError("Rules management requires bound production acquisition")
+            rules_management = management_session.run_observation()
         for operation in operations:
             if journal.failures:
                 abort = "journal-failure"
                 break
-            if bindings is not None and operation["ruleset"] != active_ruleset:
+            if bindings is not None and management_session is None and operation["ruleset"] != active_ruleset:
                 release, release_failure = _release_ruleset(
                     plan, execute, budget, wire, journal, operation,
                     worker_state=worker_state,
@@ -812,6 +1034,12 @@ def collect(
                 )
                 if worker_state["unreaped"]:
                     cleanup = _blocked_cleanup(plan, attempted, worker_reaped=False)
+            if management_session is not None and rules_management is not None and not worker_state["unreaped"]:
+                try:
+                    rules_management["recovery"] = management_session.run_recovery()
+                except Exception as error:  # noqa: BLE001 - retain ownership on uncertainty
+                    failures.append("rules-management-recovery:" + type(error).__name__)
+                    abort = abort or "rules-management-recovery"
         finally:
             journal.close()
     finished = budget.stamp()
@@ -838,6 +1066,7 @@ def collect(
         "rulesetReleases": releases,
         "principalActions": actions,
         "workerReaped": worker_reaped,
+        "rulesManagement": rules_management,
         "clock": {
             "started": budget.started,
             "observationFinished": observation_finished,

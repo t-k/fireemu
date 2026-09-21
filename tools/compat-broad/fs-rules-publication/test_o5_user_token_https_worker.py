@@ -83,3 +83,18 @@ def test_worker_rejects_deadline_above_closed_eight_second_bound() -> None:
     }
     with pytest.raises(ValueError, match="bounded worker deadline"):
         worker.exchange(envelope, fixture_origin="http://127.0.0.1:1")
+
+
+@pytest.mark.parametrize(
+    ("route", "method", "path", "body"),
+    [
+        ("ruleset-create", "POST", "/v1/projects/fireemu-35fe6/rulesets", {"source": {"files": [{"name": "firestore.rules", "content": "rules"}]}}),
+        ("ruleset-get", "GET", "/v1/projects/fireemu-35fe6/rulesets/ruleset-a", None),
+        ("ruleset-delete", "DELETE", "/v1/projects/fireemu-35fe6/rulesets/ruleset-a", None),
+        ("release-get", "GET", "/v1/projects/fireemu-35fe6/releases/cloud.firestore", None),
+        ("release-patch", "PATCH", "/v1/projects/fireemu-35fe6/releases/cloud.firestore", {"release": {"name": "projects/fireemu-35fe6/releases/cloud.firestore", "rulesetName": "projects/fireemu-35fe6/rulesets/ruleset-a"}, "updateMask": "rulesetName"}),
+        ("release-get-executable", "GET", "/v1/projects/fireemu-35fe6/releases/cloud.firestore:getExecutable", None),
+    ],
+)
+def test_rules_lifecycle_routes_are_allowlisted(route, method, path, body):
+    worker._route("rules", route, method, path)

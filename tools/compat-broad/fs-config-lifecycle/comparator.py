@@ -75,8 +75,10 @@ COMPARISON_CONTRACT: dict[str, Any] = {
     ],
     "expectedLocalDeviation": (
         "A case the classification matrix says the local runtime refuses is reported "
-        "as an expected local deviation when the local side answered exactly that "
-        "refusal; it is neither a match nor a mismatch and never counts toward one."
+        "as an expected local deviation only when the local side answered exactly "
+        "that typed UNIMPLEMENTED refusal and the production side served the request "
+        "with a 2xx; it is neither a match nor a mismatch and never counts toward "
+        "one. A refusal on both sides is compared like any other row."
     ),
     "matchRequires": (
         "One side executed on the fixed production wire, both sides completed their "
@@ -130,11 +132,15 @@ def compare_rows(
         elif (
             expected["outcome"] == "not-served"
             and left["typedError"] is not None
-            and (
-                (left["typedError"] or {}).get("status")
-                in ("UNIMPLEMENTED", "NOT_FOUND")
-            )
+            and (left["typedError"] or {}).get("status") == "UNIMPLEMENTED"
+            and right["typedError"] is None
+            and type(right["status"]) is int
+            and 200 <= right["status"] < 300
         ):
+            # Only when production served the request that the classification
+            # matrix says the local runtime refuses. A refusal on both sides is
+            # compared like any other row, so it reads MATCH or MISMATCH and never
+            # hides behind the expected deviation.
             row["classification"] = EXPECTED_LOCAL_DEVIATION
             row["reason"] = expected.get("refusalReason")
         elif (

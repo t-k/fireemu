@@ -170,3 +170,35 @@ def test_row_summaries_carry_digests_and_never_a_body(tmp_path: Path) -> None:
         assert set(row["local"]) == {"status", "typedError", "shapeDigest", "complete"}
         assert len(row["local"]["shapeDigest"]) == 64
     assert "projects/fireemu-35fe6" not in json.dumps(rows)
+
+
+def test_the_comparator_does_not_mask_a_production_refusal_behind_an_expected_deviation(
+    tmp_path: Path,
+) -> None:
+    manifest = compile_manifest(NONCE)
+    local = _collection(tmp_path, "local", refuse_apply={"OC-18"})
+    same_refusal = _collection(tmp_path, "same", refuse_apply={"OC-18"})
+    result = compare(
+        manifest,
+        _record(LOCAL_KIND, local),
+        _record(PRODUCTION_KIND, same_refusal),
+        NONCE,
+    )
+    by_case = {row["case"]: row for row in result["rows"]}
+    # Both sides refused identically: a match on the refusal, visibly, not a
+    # deviation the local side declared for itself.
+    assert by_case["OC-18"]["classification"] == MATCH
+    other_refusal = copy.deepcopy(same_refusal)
+    for row in other_refusal["rows"]:
+        if row["case"] == "OC-18":
+            row["status"] = 400
+            row["typedError"] = {"code": 400, "status": "INVALID_ARGUMENT"}
+    result = compare(
+        manifest,
+        _record(LOCAL_KIND, local),
+        _record(PRODUCTION_KIND, other_refusal),
+        NONCE,
+    )
+    by_case = {row["case"]: row for row in result["rows"]}
+    assert by_case["OC-18"]["classification"] == MISMATCH
+    assert result["classification"] in (MISMATCH, INDETERMINATE)

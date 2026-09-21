@@ -230,7 +230,7 @@ def test_the_hosting_check_names_every_shared_module_refusal(tmp_path):
     ]
     assert refusals[0]["value"] == {"durationSeconds": 2700, "cap": 1200}
     assert refusals[1]["value"] == {"wallSeconds": 2700, "cap": 1200}
-    assert refusals[2]["value"]["refusedResources"] == 2 + 11 + 1
+    assert refusals[2]["value"]["refusedResources"] == 11 + 11 + 1
     with pytest.raises(admission.HostingRefused, match="ledger-claim-refused"):
         admission.require_hosted(claim, gate_plan)
     # The shared Ledger itself refuses the same claim, in its own words.
@@ -260,7 +260,7 @@ def test_the_hosting_check_names_every_shared_module_refusal(tmp_path):
         item["refusal"]
         for item in admission.hosting_check(rehearsal_claim, rehearsal_plan)
     ] == ["ledger-resource-refused"]
-    with pytest.raises(ValueError, match="canonical Firestore resource required"):
+    with pytest.raises(ValueError, match="canonical Firestore resource required|Gate resource lock is not covered"):
         ledger.reserve(
             {
                 **envelope,

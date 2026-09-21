@@ -86,7 +86,7 @@ def test_a_rehearsal_descriptor_is_visibly_not_production():
     descriptor = campaign.rehearsal_descriptor(sleeper)
     assert descriptor.frozen_bounds["timingMode"] == "virtual-clock"
     assert descriptor.frozen_bounds["rehearsal"] is True
-    assert descriptor.window_seconds == 1440
+    assert descriptor.window_seconds == 1500
     reference = descriptor.plan_compiler(NONCE)
     assert reference["timingMode"] == "virtual-clock"
     with pytest.raises(ValueError, match="wall-clock plan reference"):
@@ -112,9 +112,9 @@ def test_the_request_budget_is_re_derived_with_management_and_recovery_slots():
         "auth-config-restore",
         "auth-config-restore-readback",
     ]
-    # One address readback fewer than three per account: the anonymous account has
-    # no address to read back.
-    assert budget["recoveryRequests"] == 3 * len(owned_accounts()) - 1 == 32
+    # One reconciliation slot is added for each email-bearing account; the
+    # anonymous account has no address to reconcile.
+    assert budget["recoveryRequests"] == 4 * len(owned_accounts()) - 2 == 42
     assert budget["dataRequests"] == 93
     assert (
         budget["dataRequests"]

@@ -99,7 +99,7 @@ def test_the_full_walk_completes_cleans_up_and_restores(completed):
     assert evidence["createdAccounts"] == evidence["deletedAccounts"] == 11
     assert evidence["uidAbsenceReadbacks"] == 11
     assert evidence["addressAbsenceReadbacks"] == 10
-    assert evidence["skips"] == 1 and evidence["complete"] is True
+    assert evidence["skips"] == 11 and evidence["complete"] is True
     assert [item["id"] for item in result["managementEvidence"]] == [
         "observation:oauth-tokeninfo",
         "preflight:auth-key-project",
@@ -109,11 +109,12 @@ def test_the_full_walk_completes_cleans_up_and_restores(completed):
         "recovery:auth-config-restore",
         "recovery:auth-config-restore-readback",
     ]
-    assert result["chargedCalls"] == 93 + 32 - 1 + 6
-    # The shared Ledger refused the reservation by name: its reserve admits only
-    # Firestore document resources. The rehearsal recorded that and went on to
-    # prove the Gate side unreserved; production raises at the same point.
-    assert result["reservationRefusal"] == "canonical Firestore resource required"
+    assert result["chargedCalls"] == 93 + 42 - 11 + 6
+    # Canonical Auth account resources are deliberately not covered by the
+    # rehearsal's Firestore/configuration lock scopes, so Ledger.reserve refuses
+    # the claim before its Firestore-resource parser. The Gate side still runs
+    # unreserved in rehearsal; production raises at the same hosting boundary.
+    assert result["reservationRefusal"] == "Gate resource lock is not covered"
     assert result["ticket"] is None
     assert result["releaseEligible"] is False
     assert result["reservationReleased"] is False
@@ -208,6 +209,28 @@ def test_an_abandon_after_a_stop_deletes_every_account_and_restores(tmp_path):
     assert not applied(built.fake.config)
     verdict = admission.classify_stop(abandoned)
     assert verdict["disposition"] == "abandoned-cleanup-complete"
+
+
+def test_recover_unsettled_is_a_classifiable_cleanup_stop():
+    receipt = {
+        "stopPoint": "recover-unsettled",
+        "configuration": {
+            "frozenBaselineDigest": "a" * 64,
+            "changeAttempted": True,
+            "applied": True,
+            "appliedReadbackDigest": "b" * 64,
+            "baselineReference": {"valuesRetained": False},
+            "restoreStatus": "restored-verified",
+            "preflightReadbackDigest": "a" * 64,
+            "restoreReadbackDigest": "a" * 64,
+            "restoreDifferingFields": [],
+        },
+        "cleanup": {"complete": True, "ownedAccounts": 0},
+        "accountEvidence": {"createdAccounts": 0, "unsettledSignups": 0},
+        "gateComplete": True,
+        "untrackedIntents": [],
+    }
+    assert admission.classify_stop(receipt)["disposition"] == "abandoned-cleanup-complete"
 
 
 def test_a_key_of_another_project_refuses_before_any_patch_or_signup(tmp_path):
@@ -766,10 +789,7 @@ def test_a_lost_signup_answer_is_discovered_and_the_account_deleted(tmp_path):
     assert result["cleanup"]["complete"] is True
     assert built.fake.accounts == {}
     assert result["accountEvidence"]["createdAccounts"] == 3
-    assert any(
-        item["id"] == "recover:address-lookup" and item["chargedByGate"] is False
-        for item in result["managementEvidence"]
-    )
+    assert not any(item["id"] == "recover:address-lookup" for item in result["managementEvidence"])
     assert result["gateComplete"] is True
     assert result["untrackedIntents"] == []
 

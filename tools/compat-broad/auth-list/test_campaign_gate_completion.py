@@ -184,7 +184,7 @@ class Scenario:
         self.gate.finish()
 
 
-@pytest.mark.parametrize("absence", ["users", "kind", "404"])
+@pytest.mark.parametrize("absence", ["users", "kind"])
 def test_actual_manifest_completes_two_accounts_and_five_documents(tmp_path, monkeypatch, absence):
     scenario = Scenario(tmp_path, monkeypatch)
     scenario.backend.absence = absence
@@ -199,7 +199,11 @@ def test_actual_manifest_completes_two_accounts_and_five_documents(tmp_path, mon
     assert not scenario.backend.users and not scenario.backend.docs
     assert len(job["authAccounts"]) == 2
     assert len(job["creationProofs"]) == 5
-    assert len(job["absenceProofs"]) == 5
+    assert len(job["absenceProofs"]) == 7
+    assert sum(
+        resource.startswith("projects/demo-firestore-probe/auth/accounts/")
+        for resource in job["absenceProofs"]
+    ) == 2
     assert not any(word in (scenario.path / "state.json").read_text() for word in ("signup-id-uid", "signup-refresh-uid", "renewed-uid", '"id-uid', '"refresh-uid'))
 
 
@@ -208,7 +212,7 @@ def test_one_accounts_absence_never_completes_shared_route_sentinels(tmp_path, m
     scenario.observations()
     scenario.recovery(18)
     job = scenario.gate.snapshot()["jobs"]["auth-list"]
-    assert len(job["absent"]) == 5
+    assert len(job["absent"]) == 6
     assert all(item.startswith("projects/") for item in job["absent"])
     with pytest.raises(ValueError):
         scenario.gate.finish()
@@ -237,7 +241,7 @@ def test_final_absence_requires_typed_account_response(tmp_path, monkeypatch, re
         scenario.gate.finish()
     job = scenario.gate.snapshot()["jobs"]["auth-list"]
     assert job["complete"] is False
-    assert len(job["absent"]) == 5
+    assert len(job["absent"]) == 6
 
 
 @pytest.mark.parametrize("index,kind", [(5,"signup"),(6,"signin"),(7,"refresh"),(8,"lookup")])
@@ -490,6 +494,8 @@ def test_plain_gate_does_not_invent_auth_creation_proofs(tmp_path, monkeypatch):
     scenario.observations(5)
     generic = shared_gate.Gate(scenario.path, "auth-list")
     operation = scenario.operation("observation", 5)
+    from campaign_gate import _project_auth_operation
+    operation = _project_auth_operation(operation, "demo-firestore-probe")
     generic.dispatch(operation, False, lambda: scenario.backend(operation))
     state = generic.snapshot()
     assert shared_gate.unconfirmed_creates(state, "auth-list") == 1
@@ -497,6 +503,27 @@ def test_plain_gate_does_not_invent_auth_creation_proofs(tmp_path, monkeypatch):
     assert not state["jobs"]["auth-list"].get("authAccounts")
     with pytest.raises(ValueError):
         generic.finish()
+
+
+@pytest.mark.parametrize("mutation", ["foreign-resource", "cross-uid-binding"])
+def test_facade_rejects_runtime_auth_projection_tampering_before_send(
+    tmp_path, monkeypatch, mutation
+):
+    scenario = Scenario(tmp_path, monkeypatch)
+    scenario.observations(6)
+    operation = scenario.operation("observation", 6)
+    if mutation == "foreign-resource":
+        operation["resource"] = "foreign-account"
+    else:
+        operation["provenance"]["uid"] = "$binding:reference-" + scenario.plan["nonce"] + "Uid"
+    sent = []
+    with pytest.raises(ValueError, match="Auth (account binding|resource|UID binding)"):
+        scenario.gate.dispatch(
+            operation,
+            False,
+            lambda: sent.append(True),
+        )
+    assert sent == []
 
 
 def test_uid_equal_to_a_frozen_literal_does_not_rewrite_literal_metadata(tmp_path, monkeypatch):

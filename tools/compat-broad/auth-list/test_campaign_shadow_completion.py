@@ -237,11 +237,23 @@ def test_shadow_reader_closes_connection_after_receive_exception(monkeypatch):
     assert closed == [True]
 
 
-def test_actual_loopback_fixture_runs_full_auth_list_gate_recipe(tmp_path):
+def test_actual_loopback_fixture_runs_full_auth_list_gate_recipe(tmp_path, monkeypatch):
     """Real sockets and Gate, but a Python fixture rather than the Rust daemon."""
     for name in ('accounts', 'documents', 'tokens'):
         setattr(shadow.ShadowHandler, name, {})
     shadow.ShadowHandler.token_counter = 0
+    original_do_post = shadow.ShadowHandler.do_POST
+
+    def typed_absence_lookup(handler):
+        if ":lookup" not in handler.path:
+            return original_do_post(handler)
+        body = handler.body()
+        uid = body.get("localId") or shadow.ShadowHandler.tokens.get(body.get("idToken"))
+        if uid in shadow.ShadowHandler.accounts:
+            return handler.reply(200, {"users": [{"localId": uid}]})
+        return handler.reply(200, {"kind": KIND})
+
+    monkeypatch.setattr(shadow.ShadowHandler, "do_POST", typed_absence_lookup)
     server = shadow.ThreadingHTTPServer(('127.0.0.1', 0), shadow.ShadowHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -281,7 +293,7 @@ def test_actual_loopback_fixture_runs_full_auth_list_gate_recipe(tmp_path):
         assert state['total'] == 39
         assert state['jobs']['auth-list']['complete'] is True
         assert shared_gate.unconfirmed_creates(state, 'auth-list') == 0
-        assert len(state['jobs']['auth-list']['absenceProofs']) == 5
+        assert len(state['jobs']['auth-list']['absenceProofs']) == 7
         assert not shadow.ShadowHandler.accounts
         assert not shadow.ShadowHandler.documents
     finally:

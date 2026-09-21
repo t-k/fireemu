@@ -18,6 +18,11 @@ from shared_gate import (
 
 ROOT = "projects/p/databases/(default)/documents"
 RESOURCES = [ROOT + "/owned/a", ROOT + "/owned/b"]
+AUTH_RESOURCES = [
+    "projects/demo/auth/accounts/acct-0",
+    "projects/demo/auth/accounts/acct-1",
+    "projects/demo/auth/accounts/acct-2",
+]
 VERSION = "2026-09-18T00:00:00.000000Z"
 ABSENCE = {"error": {"code": 404, "status": "NOT_FOUND"}}
 
@@ -86,6 +91,23 @@ def read(resource):
     }
 
 
+def auth_lookup(resource, account, *, recovery_marker=False):
+    operation = {
+        "service": "auth",
+        "method": "POST",
+        "path": "identitytoolkit.googleapis.com/v1/projects/demo/accounts:lookup",
+        "body": {"localId": ["$binding:" + account + "Uid"]},
+        "form": False,
+        "owner": True,
+        "kind": "uid-absence",
+        "account": account,
+        "resource": resource,
+    }
+    if recovery_marker:
+        operation["recoveryMarker"] = True
+    return operation
+
+
 def plan(operation, *, scheduled=False, full_cleanup=False):
     recovery = []
     for resource in RESOURCES:
@@ -141,12 +163,18 @@ def recover(gate, p, created=()):
     for index, frozen in enumerate(operations):
         operation = copy.deepcopy(frozen)
         source = operation.pop("versionFrom", None)
-        resource = operation["path"].removeprefix("/v1/")
+        resource = (
+            operation["resource"]
+            if operation["service"] == "auth"
+            else operation["path"].removeprefix("/v1/")
+        )
         if source is not None and resource in created:
             operation["path"] += "?currentDocument.updateTime=" + quote(
                 VERSION, safe=""
             )
-        if operation["method"] == "DELETE":
+        if operation["service"] == "auth":
+            gate.dispatch(operation, True, lambda: (200, {"users": []}))
+        elif operation["method"] == "DELETE":
             gate.dispatch(operation, True, lambda: (200, {}))
         elif (
             resource in created
@@ -406,10 +434,18 @@ def test_generic_facade_completion_does_not_require_firestore_only_receipts(
     # boundaries. These synthetic facade responses test the former only;
     # they are not Identity Platform wire-format or production evidence.
     operation = read(RESOURCES[0])
-    operation["service"] = "auth"
     p = plan(operation)
-    for recovery, service in zip(p["jobs"]["case"]["recovery"], services, strict=True):
-        recovery["service"] = service
+    p["project"] = "demo"
+    job = p["jobs"]["case"]
+    job["resources"] = [AUTH_RESOURCES[0]]
+    job["recovery"] = [auth_lookup(AUTH_RESOURCES[0], "acct0", recovery_marker=True)]
+    for index, service in enumerate(services[1:], start=1):
+        if service == "auth":
+            job["resources"].append(AUTH_RESOURCES[index])
+            job["recovery"].append(auth_lookup(AUTH_RESOURCES[index], f"acct{index}"))
+        else:
+            job["resources"].append(RESOURCES[0])
+            job["recovery"].append(read(RESOURCES[0]))
     create(tmp_path / "gate", p)
     gate = Gate(tmp_path / "gate", "case")
     gate.claim()

@@ -1611,7 +1611,7 @@ def _validate_management_abort_marker(state):
         or marker["nonceDigest"] != digest(state["plan"].get("nonce"))
         or marker["prefixDigest"] != digest(prefix)
         or marker["journalDigest"] != _management_journal_digest(state)
-        or marker["applyOutcome"] != "may-have-landed"
+        or marker["applyOutcome"] not in ("may-have-landed", "coordinator-cancelled")
         or marker["recoveryPrerequisite"] is not True
         or marker["preValues"] != values
         or marker["prefixEventsDigest"]
@@ -1662,7 +1662,9 @@ def _validate_management_abort_marker(state):
         or any(
             event.get("completed") is not True
             or event.get("workerReaped") is not True
-            for event in state.get("managementEvents", [])[prefix_len:]
+            for event in state.get("managementEvents", [])[
+                0 if marker["applyOutcome"] == "coordinator-cancelled" else prefix_len :
+            ]
         )
     ):
         raise ValueError("forged management abort marker")
@@ -1908,7 +1910,42 @@ class Gate:
         expected_management_prefix_digest=None,
         expected_journal_digest=None,
     ):
-        """Close an OBS management suffix after a reaped, unknown outcome.
+        """Close an OBS suffix after a reaped, unknown outcome."""
+        return self._close_management_observation(
+            mode="may-have-landed",
+            expected_plan_digest=expected_plan_digest,
+            expected_nonce_digest=expected_nonce_digest,
+            expected_management_prefix_digest=expected_management_prefix_digest,
+            expected_journal_digest=expected_journal_digest,
+        )
+
+    def cancel_management_observation(
+        self,
+        *,
+        expected_plan_digest=None,
+        expected_nonce_digest=None,
+        expected_management_prefix_digest=None,
+        expected_journal_digest=None,
+    ):
+        """Cancel the remaining OBS suffix after completed, reaped applies."""
+        return self._close_management_observation(
+            mode="coordinator-cancelled",
+            expected_plan_digest=expected_plan_digest,
+            expected_nonce_digest=expected_nonce_digest,
+            expected_management_prefix_digest=expected_management_prefix_digest,
+            expected_journal_digest=expected_journal_digest,
+        )
+
+    def _close_management_observation(
+        self,
+        *,
+        mode,
+        expected_plan_digest=None,
+        expected_nonce_digest=None,
+        expected_management_prefix_digest=None,
+        expected_journal_digest=None,
+    ):
+        """Close an OBS management suffix under one typed coordinator mode.
 
         All authority is derived from the locked Gate journal. Optional expected
         digests are consistency checks only; they cannot assert worker exit,
@@ -1920,6 +1957,8 @@ class Gate:
             existing = state.get("managementAbort")
             if existing is not None:
                 _validate_management_abort_marker(state)
+                if existing["applyOutcome"] != mode:
+                    raise ValueError("management abort mode mismatch")
                 if any(
                     value is not None
                     and value != existing[key]
@@ -1965,6 +2004,11 @@ class Gate:
             ):
                 raise ValueError("management abort binding mismatch")
 
+            completed_prefix = all(
+                event.get("completed") is True
+                and event.get("workerReaped") is True
+                for event in events
+            )
             if (
                 management.get("dispatchKind") != "closed-v1"
                 or not used
@@ -1974,7 +2018,7 @@ class Gate:
                 or state.get("managementSkipped")
                 or [event.get("id") for event in events] != used
                 or state.get("coordinatorInflight") is not False
-                or state.get("stopped") is not True
+                or (mode == "may-have-landed" and state.get("stopped") is not True)
                 or state.get("events")
                 or state.get("coordinatorDone") != 0
                 or state.get("observation") != len(used)
@@ -1998,12 +2042,20 @@ class Gate:
                     )
                     for job in state["jobs"].values()
                 )
-                or not events[-1].get("workerReaped")
-                or events[-1].get("completed") is not False
-            ):
-                raise ValueError(
-                    "management abort requires reaped uncertain pre-data state"
+                or (
+                    (mode == "may-have-landed")
+                    and (
+                        not events[-1].get("workerReaped")
+                        or events[-1].get("completed") is not False
+                    )
                 )
+                or (mode == "coordinator-cancelled" and not completed_prefix)
+            ):
+                if mode == "may-have-landed":
+                    raise ValueError(
+                        "management abort requires reaped uncertain pre-data state"
+                    )
+                raise ValueError("management close requires an admissible state")
 
             suffix = [
                 {
@@ -2016,6 +2068,8 @@ class Gate:
             ]
             if len(suffix) != len(observation_declared) - len(used):
                 raise ValueError("management abort requires an observation suffix")
+            if mode == "coordinator-cancelled":
+                state["stopped"] = True
             pre_gate_digest = digest(state)
             state["managementSkipped"] = suffix
             marker = {
@@ -2041,7 +2095,7 @@ class Gate:
                 },
                 "skipped": list(suffix),
                 "coordinatorPid": state["coordinatorPid"],
-                "applyOutcome": "may-have-landed",
+                "applyOutcome": mode,
                 "recoveryPrerequisite": True,
             }
             state["managementAbort"] = marker

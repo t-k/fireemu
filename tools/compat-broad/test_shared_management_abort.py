@@ -198,6 +198,15 @@ def _child_abort(path, result):
         result.put("accepted")
 
 
+def _child_cancel(path, result):
+    try:
+        Gate(path, "a").cancel_management_observation()
+    except ValueError as error:
+        result.put(str(error))
+    else:
+        result.put("accepted")
+
+
 def test_restarted_coordinator_cannot_apply_transition(tmp_path):
     gate = make_gate(tmp_path)
     gate.management_dispatch(
@@ -207,6 +216,103 @@ def test_restarted_coordinator_cannot_apply_transition(tmp_path):
     context = mp.get_context("spawn")
     result = context.Queue()
     child = context.Process(target=_child_abort, args=(gate.path, result))
+    child.start()
+    child.join(10)
+    assert child.exitcode == 0
+    assert result.get(timeout=2) == "management abort coordinator ownership mismatch"
+    assert gate.snapshot() == before
+
+
+def test_coordinator_cancel_preserves_completed_apply_and_skips_remaining_observation(
+    tmp_path,
+):
+    gate = make_gate(tmp_path)
+    gate.claim()
+    first = gate.management_dispatch(
+        "observation", "first", lambda _deadline: receipt()
+    )
+    second = gate.management_dispatch(
+        "observation", "uncertain", lambda _deadline: receipt()
+    )
+
+    after = gate.cancel_management_observation()
+
+    assert first["complete"] is True
+    assert second["complete"] is True
+    assert after["managementUsed"] == [
+        "observation:first",
+        "observation:uncertain",
+    ]
+    assert after["managementSkipped"] == [
+        {
+            "id": "observation:last",
+            "phase": "observation",
+            "index": 2,
+            "reason": "management-not-run",
+        }
+    ]
+    assert after["managementAbort"]["applyOutcome"] == "coordinator-cancelled"
+    assert after["managementAbort"]["recoveryPrerequisite"] is True
+    assert after["managementEvents"][0]["status"] == first["status"]
+    assert after["managementEvents"][1]["responseDigest"]
+    assert after["jobs"]["a"]["complete"] is False
+    assert gate.cancel_management_observation() == after
+
+    restored = gate.management_dispatch(
+        "recovery", "restore", lambda _deadline: receipt()
+    )
+    assert restored["complete"] is True
+
+
+def test_coordinator_cancel_rejects_unreaped_or_foreign_data_state_unchanged(tmp_path):
+    gate = make_gate(tmp_path)
+    gate.claim()
+    gate.management_dispatch("observation", "first", lambda _deadline: receipt())
+    before = gate.snapshot()
+    with gate.locked() as state:
+        state["managementEvents"][0]["workerReaped"] = False
+        shared_gate._save(gate.path, state)
+    forged = gate.snapshot()
+    with pytest.raises(ValueError, match="admissible"):
+        gate.cancel_management_observation()
+    assert gate.snapshot() == forged
+
+    with gate.locked() as state:
+        state["managementEvents"][0]["workerReaped"] = True
+        state["jobs"]["a"]["pid"] = os.getpid() + 100000
+        shared_gate._save(gate.path, state)
+    foreign = gate.snapshot()
+    with pytest.raises(ValueError, match="admissible"):
+        gate.cancel_management_observation()
+    assert gate.snapshot() == foreign
+    assert before != forged
+
+
+def test_coordinator_cancel_accepts_reaped_semantic_error_and_preserves_receipt(
+    tmp_path,
+):
+    gate = make_gate(tmp_path)
+    gate.claim()
+    response = gate.management_dispatch(
+        "observation", "first", lambda _deadline: receipt(400)
+    )
+    gate.management_dispatch("observation", "uncertain", lambda _deadline: receipt())
+
+    state = gate.cancel_management_observation()
+
+    assert response["status"] == 400
+    assert state["managementEvents"][0]["status"] == 400
+    assert state["managementEvents"][0]["completed"] is True
+    assert state["managementEvents"][0]["workerReaped"] is True
+
+
+def test_coordinator_cancel_rejects_foreign_coordinator_without_state_change(tmp_path):
+    gate = make_gate(tmp_path)
+    gate.management_dispatch("observation", "first", lambda _deadline: receipt())
+    before = gate.snapshot()
+    context = mp.get_context("spawn")
+    result = context.Queue()
+    child = context.Process(target=_child_cancel, args=(gate.path, result))
     child.start()
     child.join(10)
     assert child.exitcode == 0

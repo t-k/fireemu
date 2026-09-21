@@ -173,6 +173,20 @@ def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp
     assert result["recovery"] == 6
     assert result["reservation"] == "released"
     assert len(_ActionFixture.calls) == 32
+    expected_paths = [
+        row["path"].format(project=descriptor.AUTHORIZED_PROJECT).lstrip("/")
+        for row in (*manifest["stages"], *manifest["recovery"])
+    ]
+    actual_paths = [call["path"].split("?", 1)[0].lstrip("/") for call in _ActionFixture.calls]
+    assert actual_paths == expected_paths
+    assert _ActionFixture.calls[0]["body"] == {
+        "email": f"o1-oob-{NONCE}-a@example.invalid",
+        "password": "a",
+        "returnSecureToken": True,
+    }
+    serialized = json.dumps(result) + json.dumps(reservations.Ledger(ledger_root).snapshot())
+    for secret in ("fixture-owner-token", "fixture-api-key", "token-a", "refresh-a"):
+        assert secret not in serialized
 
 
 @pytest.mark.parametrize(
@@ -230,10 +244,9 @@ def test_observation_failure_attempts_all_known_cleanup_and_holds_unknown_signup
     state = reservations.Ledger(ledger_root).snapshot()
     rows = list(state["reservations"].values())
     assert len(rows) == 1 and rows[0]["state"] == "held"
-    assert len(_ActionFixture.calls) == 4
-    assert [call["path"].split("?", 1)[0] for call in _ActionFixture.calls] == [
-        "identitytoolkit.googleapis.com/v1/accounts:signUp",
-        "identitytoolkit.googleapis.com/v1/accounts:lookup",
-        "identitytoolkit.googleapis.com/v1/accounts:lookup",
-        "identitytoolkit.googleapis.com/v1/accounts:lookup",
-    ]
+    assert len(_ActionFixture.calls) == 7
+    assert all(
+        call["path"].split("?", 1)[0]
+        == "/identitytoolkit.googleapis.com/v1/accounts:lookup"
+        for call in _ActionFixture.calls[1:]
+    )

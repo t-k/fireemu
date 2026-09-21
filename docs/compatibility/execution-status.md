@@ -20,10 +20,10 @@ One commit of checkpoint 1 (`ec1707dbe`, runner discovery fix) carried an attrib
 
 ## Production observation frame
 
-- Authorization: cumulative US$10 for every production observation of this program (owner, 2026-09-21), not per campaign or per session.
-- Conservative consumed `C` at the start of this execution: US$2.09 (shared Ledger allocations 1,744,610 micro-USD across five terminal reservations, the `0cbedb4b` planning estimate 0.3051, and allowances for two unpriced Auth probes and read-only preflights). Pre-frame September observations (first46 0.30513, second45 0.084) are recorded separately; no invoice has been measured anywhere.
-- Invariant `C + R + N + S + M <= 10.00` with `S = M = 1.00`, `R = 0`: `N` available 5.91 (internal cap 8.00 not binding).
-- Next observation: `FS-LIMIT-API-REQUEST-BYTES`, packet frozen at `2dd6d9d9d` (265 HTTP requests including 7 management calls, 51 owned documents, Ledger claim 303 micro-USD, hard ceiling US$0.50), independent O7 review in progress; no approval minted, no reservation, no request sent.
+- Authorization (owner, 2026-09-21, corrected the same day): US$10 per production observation task. A task is identified by its stable `observationTaskId` (the campaign id, for example `FS-LIMIT-API-REQUEST-BYTES`); preparation, failed attempts, retries, post-repair re-checks and recovery of that task all count against its US$10. Independent tasks each carry their own US$10 (A at US$8 and B at US$8 are both admitted; A at US$8 followed by a retry of A at US$3 is refused). The earlier reading of one cumulative US$10 for the whole program was wrong and is withdrawn; the program-wide total is still reported below for transparency but is not a stop condition.
+- Enforcement: the shared Ledger's `reserve` sums every allocation of the same task (held, released, aborted or closed) with the new claim and refuses beyond the cap (`task-budget-exceeded:<task>`), in addition to the per-envelope limits; landing through the single-writer shared lane.
+- Per-task allocations to date (micro-USD, conservative ceilings): FS-DATA-WRITE-LIMITS-02 44,000; FS-WRITE-TXN-PRECEDENCE-01 1,303,500; FS-DATA-WRITE-COMMIT-TRANSFORMS-03 397,110 (three reservations, two aborted before data); broad batch `0cbedb4b` 305,127 (planning estimate); Auth probes `e4d34ccc`, `97dd49dc` unpriced (allowance 10,000 each). Program-wide total of these: about US$2.09. No invoice has been measured anywhere.
+- Next observation: `FS-LIMIT-API-REQUEST-BYTES`, task allocation so far 0; its claim is 303 micro-USD with a hard ceiling of US$0.50. The packet built at `2dd6d9d9d` was blocked by its independent O7 review (a no-data stop after reservation could not be retired); the fix is in the shared lane and a new packet is built at the next bind. No approval minted, no reservation, no request sent.
 
 ## Parent state
 

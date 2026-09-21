@@ -110,10 +110,11 @@ def test_the_full_walk_completes_cleans_up_and_restores(completed):
         "recovery:auth-config-restore-readback",
     ]
     assert result["chargedCalls"] == 93 + 32 - 1 + 6
-    # The shared Ledger refused the reservation by name: its reserve admits only
-    # Firestore document resources. The rehearsal recorded that and went on to
-    # prove the Gate side unreserved; production raises at the same point.
-    assert result["reservationRefusal"] == "canonical Firestore resource required"
+    # Canonical Auth account resources are deliberately not covered by the
+    # rehearsal's Firestore/configuration lock scopes, so Ledger.reserve refuses
+    # the claim before its Firestore-resource parser. The Gate side still runs
+    # unreserved in rehearsal; production raises at the same hosting boundary.
+    assert result["reservationRefusal"] == "Gate resource lock is not covered"
     assert result["ticket"] is None
     assert result["releaseEligible"] is False
     assert result["reservationReleased"] is False

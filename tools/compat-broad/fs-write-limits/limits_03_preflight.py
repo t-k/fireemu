@@ -542,8 +542,17 @@ class ManagementSession:
         body = response.get("body")
         state = getattr(self, "_lifecycle", {})
         if slot == "index-lifecycle-before":
-            if not isinstance(body, dict) or body.get("name") != LIFECYCLE_FIELD or not isinstance(body.get("indexConfig"), dict) or body["indexConfig"].get("usesAncestorConfig") is not True:
-                self.lifecycle_failed = True
+            config = body.get("indexConfig") if isinstance(body, dict) else None
+            if (
+                not isinstance(body, dict)
+                or body.get("name") != LIFECYCLE_FIELD
+                or not isinstance(config, dict)
+                or not isinstance(config.get("indexes", []), list)
+                or config.get("usesAncestorConfig") is not True
+                or config.get("ancestorField") != DEFAULT_ANCESTOR_FIELD
+                or config.get("reverting", False) is not False
+            ):
+                raise ValueError("lifecycle baseline is not the bound inherited field")
             state["before"] = body
         elif slot == "index-lifecycle-apply":
             name = body.get("name") if isinstance(body, dict) else None
@@ -554,11 +563,23 @@ class ManagementSession:
                 return
             state["applyOperation"] = "https://firestore.googleapis.com/v1/" + name
         elif slot == "index-lifecycle-poll":
-            if not isinstance(body, dict) or body.get("done") is not True or body.get("error") is not None:
-                self.lifecycle_failed = True
+            expected = state.get("applyOperation", "").removeprefix("https://firestore.googleapis.com/v1/")
+            if not isinstance(body, dict) or body.get("name") != expected or body.get("done") is not True or body.get("error") is not None:
+                raise ValueError("one-poll lifecycle apply identity or completion differs")
         elif slot == "index-lifecycle-after":
-            if not isinstance(body, dict) or body.get("name") != LIFECYCLE_FIELD or not isinstance(body.get("indexConfig"), dict) or body["indexConfig"].get("indexes", []) != [] or body["indexConfig"].get("usesAncestorConfig", False) is not False:
-                self.lifecycle_failed = True
+            config = body.get("indexConfig") if isinstance(body, dict) else None
+            before = state.get("before", {})
+            if (
+                not isinstance(body, dict)
+                or body.get("name") != LIFECYCLE_FIELD
+                or not isinstance(config, dict)
+                or config.get("indexes", []) != []
+                or config.get("usesAncestorConfig", False) is not False
+                or config.get("ancestorField") != DEFAULT_ANCESTOR_FIELD
+                or config.get("reverting", False) is not False
+                or body.get("ttlConfig") != before.get("ttlConfig")
+            ):
+                raise ValueError("lifecycle after projection or unrelated configuration differs")
             state["after"] = body
         elif slot == "index-lifecycle-restore":
             name = body.get("name") if isinstance(body, dict) else None
@@ -569,8 +590,9 @@ class ManagementSession:
                 return
             state["restoreOperation"] = "https://firestore.googleapis.com/v1/" + name
         elif slot == "index-lifecycle-poll-restore":
-            if not isinstance(body, dict) or body.get("done") is not True or body.get("error") is not None:
-                self.lifecycle_failed = True
+            expected = state.get("restoreOperation", "").removeprefix("https://firestore.googleapis.com/v1/")
+            if not isinstance(body, dict) or body.get("name") != expected or body.get("done") is not True or body.get("error") is not None:
+                raise ValueError("one-poll lifecycle restore identity or completion differs")
         elif slot == "index-lifecycle-restored":
             if body != state.get("before"):
                 self.lifecycle_failed = True
@@ -668,8 +690,13 @@ def validate_saved_management(receipt, snapshot, permission):
         or before.get("name") != LIFECYCLE_FIELD
         or not isinstance(before.get("indexConfig"), dict)
         or before["indexConfig"].get("usesAncestorConfig") is not True
+        or before["indexConfig"].get("ancestorField") != DEFAULT_ANCESTOR_FIELD
+        or before["indexConfig"].get("reverting", False) is not False
         or not isinstance(after.get("indexConfig"), dict)
         or after["indexConfig"].get("indexes", []) != []
         or after["indexConfig"].get("usesAncestorConfig", False) is not False
+        or after["indexConfig"].get("ancestorField") != DEFAULT_ANCESTOR_FIELD
+        or after["indexConfig"].get("reverting", False) is not False
+        or after.get("ttlConfig") != before.get("ttlConfig")
     ):
         raise ValueError("saved lifecycle projection evidence differs")

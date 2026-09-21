@@ -82,9 +82,11 @@ def test_reaped_management_failure_skips_only_obs_suffix_and_allows_restore(
         "recovery", "restore", lambda _deadline: receipt()
     )
     assert restored["complete"] is True
+    assert gate.abort_management_observation()["total"] == 3
     gate.management_dispatch(
         "recovery", "restore-final", lambda _deadline: receipt()
     )
+    assert gate.abort_management_observation()["total"] == 4
     state = gate.snapshot()
     assert state["managementUsed"][-2:] == [
         "recovery:restore",
@@ -93,6 +95,14 @@ def test_reaped_management_failure_skips_only_obs_suffix_and_allows_restore(
     assert state["managementSkipped"][0]["id"] == "observation:last"
     with pytest.raises(ValueError, match="cleanup incomplete"):
         gate.finish()
+
+    context = mp.get_context("spawn")
+    result = context.Queue()
+    child = context.Process(target=_child_abort, args=(gate.path, result))
+    child.start()
+    child.join(10)
+    assert child.exitcode == 0
+    assert result.get(timeout=2) == "management abort coordinator ownership mismatch"
 
 
 @pytest.mark.parametrize("kind", ["inflight", "data-cursor"])

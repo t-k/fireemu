@@ -1520,6 +1520,154 @@ def _management_receipt_valid(result, slot_id):
     )
 
 
+def _management_journal_digest(state):
+    return digest(
+        {
+            "events": state.get("events", []),
+            "jobs": state.get("jobs", {}),
+            "coordinatorDone": state.get("coordinatorDone"),
+        }
+    )
+
+
+def _management_derived_pre_values(state, marker):
+    prefix_length = len(marker["prefix"])
+    recovery_count = len(state.get("managementUsed", [])) - prefix_length
+    prefix_events = state.get("managementEvents", [])[:prefix_length]
+    if not prefix_events or "started" not in prefix_events[-1]:
+        raise ValueError("forged management abort marker")
+    cost = state["plan"]["requestCostMicrousd"]
+    return {
+        "total": state["total"] - recovery_count,
+        "observation": state["observation"],
+        "recovery": state["recovery"] - recovery_count,
+        "costMicrousd": state["costMicrousd"] - recovery_count * cost,
+        "reservedRecovery": state["reservedRecovery"] + recovery_count,
+        "lastSent": prefix_events[-1]["started"],
+        "coordinatorInflight": False,
+    }
+
+
+def _management_abort_projection(state, marker, *, skipped):
+    projection = dict(state)
+    prefix = marker["prefix"]
+    projection["managementUsed"] = list(prefix)
+    projection["managementEvents"] = list(
+        state.get("managementEvents", [])[: len(prefix)]
+    )
+    values = _management_derived_pre_values(state, marker)
+    for key, value in values.items():
+        projection[key] = value
+    projection["managementSkipped"] = list(marker["skipped"] if skipped else [])
+    projection["managementAbort"] = None
+    return projection
+
+
+def _validate_management_abort_marker(state):
+    marker = state.get("managementAbort")
+    if marker is None:
+        return
+    required = {
+        "version",
+        "planDigest",
+        "nonceDigest",
+        "prefix",
+        "prefixDigest",
+        "prefixEventsDigest",
+        "journalDigest",
+        "preGateDigest",
+        "preValues",
+        "skipped",
+        "coordinatorPid",
+        "applyOutcome",
+        "recoveryPrerequisite",
+        "postGateDigest",
+    }
+    if not isinstance(marker, dict) or set(marker) != required:
+        raise ValueError("forged management abort marker")
+    if state.get("coordinatorPid") != marker["coordinatorPid"]:
+        raise ValueError("management abort coordinator ownership mismatch")
+    prefix = marker["prefix"]
+    skipped = marker["skipped"]
+    if (
+        not isinstance(prefix, list)
+        or not isinstance(skipped, list)
+        or not isinstance(marker["preValues"], dict)
+        or set(marker["preValues"]) != {
+            "total",
+            "observation",
+            "recovery",
+            "costMicrousd",
+            "reservedRecovery",
+            "lastSent",
+            "coordinatorInflight",
+        }
+    ):
+        raise ValueError("forged management abort marker")
+    values = _management_derived_pre_values(state, marker)
+    if (
+        marker["version"] != 2
+        or marker["planDigest"] != state["planDigest"]
+        or marker["nonceDigest"] != digest(state["plan"].get("nonce"))
+        or marker["prefixDigest"] != digest(prefix)
+        or marker["journalDigest"] != _management_journal_digest(state)
+        or marker["applyOutcome"] != "may-have-landed"
+        or marker["recoveryPrerequisite"] is not True
+        or marker["preValues"] != values
+        or marker["prefixEventsDigest"]
+        != digest(state.get("managementEvents", [])[: len(prefix)])
+    ):
+        raise ValueError("forged management abort marker")
+    if digest(_management_abort_projection(state, marker, skipped=False)) != marker[
+        "preGateDigest"
+    ]:
+        raise ValueError("forged management abort marker")
+    post_projection = _management_abort_projection(state, marker, skipped=True)
+    if digest(post_projection) != marker["postGateDigest"]:
+        raise ValueError("forged management abort marker")
+
+    management = state["plan"].get("management", {})
+    declared = [
+        (phase, entry)
+        for phase in PHASES
+        for entry in management.get(phase, [])
+    ]
+    identities = [phase + ":" + entry["id"] for phase, entry in declared]
+    observation_ids = [identity for identity in identities if identity.startswith("observation:")]
+    skipped_ids = [entry.get("id") for entry in skipped]
+    used = state.get("managementUsed", [])
+    prefix_len = len(prefix)
+    recovery_used = used[prefix_len:]
+    consumed = prefix + skipped_ids + recovery_used
+    if (
+        prefix != identities[:prefix_len]
+        or consumed != identities[: len(consumed)]
+        or [event.get("id") for event in state.get("managementEvents", [])]
+        != used
+        or skipped_ids != observation_ids[prefix_len:]
+        or any(
+            entry.get("phase") != "observation"
+            or entry.get("reason") != MANAGEMENT_SKIP_REASON
+            for entry in skipped
+        )
+        or state.get("coordinatorInflight") is not False
+        or state["total"] != values["total"] + len(recovery_used)
+        or state["observation"] != values["observation"]
+        or state["recovery"] != values["recovery"] + len(recovery_used)
+        or state["costMicrousd"]
+        != values["costMicrousd"]
+        + len(recovery_used) * state["plan"]["requestCostMicrousd"]
+        or state["reservedRecovery"]
+        != values["reservedRecovery"] - len(recovery_used)
+        or any(
+            event.get("completed") is not True
+            or event.get("workerReaped") is not True
+            for event in state.get("managementEvents", [])[prefix_len:]
+        )
+    ):
+        raise ValueError("forged management abort marker")
+
+
 class Gate:
     def __init__(self, path, job):
         self.path, self.job = Path(path), job
@@ -1618,6 +1766,8 @@ class Gate:
                 or (phase == "observation" and (state["stopped"] or state["events"]))
             ):
                 raise ValueError("closed management admission")
+            if state.get("managementAbort") is not None:
+                _validate_management_abort_marker(state)
             declared = [(p, entry) for p in PHASES for entry in management.get(p, [])]
             identities = [p + ":" + entry["id"] for p, entry in declared]
             used = state["managementUsed"]
@@ -1769,33 +1919,7 @@ class Gate:
                 raise ValueError("management abort coordinator ownership mismatch")
             existing = state.get("managementAbort")
             if existing is not None:
-                pre_projection = dict(state)
-                pre_projection["managementSkipped"] = []
-                pre_projection["managementAbort"] = None
-                journal_digest = digest(
-                    {
-                        "events": state.get("events", []),
-                        "jobs": state.get("jobs", {}),
-                        "coordinatorDone": state.get("coordinatorDone"),
-                    }
-                )
-                nonce_digest = digest(state["plan"].get("nonce"))
-                prefix_digest = digest(state.get("managementUsed", []))
-                projection = dict(state)
-                projection["managementAbort"] = None
-                if (
-                    not isinstance(existing, dict)
-                    or existing.get("version") != 1
-                    or existing.get("planDigest") != state["planDigest"]
-                    or existing.get("nonceDigest") != nonce_digest
-                    or existing.get("prefixDigest") != prefix_digest
-                    or existing.get("journalDigest") != journal_digest
-                    or existing.get("preGateDigest") != digest(pre_projection)
-                    or existing.get("applyOutcome") != "may-have-landed"
-                    or existing.get("recoveryPrerequisite") is not True
-                    or existing.get("postGateDigest") != digest(projection)
-                ):
-                    raise ValueError("forged management abort marker")
+                _validate_management_abort_marker(state)
                 if any(
                     value is not None
                     and value != existing[key]
@@ -1893,12 +2017,28 @@ class Gate:
             pre_gate_digest = digest(state)
             state["managementSkipped"] = suffix
             marker = {
-                "version": 1,
+                "version": 2,
                 "planDigest": state["planDigest"],
                 "nonceDigest": nonce_digest,
+                "prefix": list(used),
                 "prefixDigest": prefix_digest,
+                "prefixEventsDigest": digest(events),
                 "journalDigest": journal_digest,
                 "preGateDigest": pre_gate_digest,
+                "preValues": {
+                    key: state[key]
+                    for key in (
+                        "total",
+                        "observation",
+                        "recovery",
+                        "costMicrousd",
+                        "reservedRecovery",
+                        "lastSent",
+                        "coordinatorInflight",
+                    )
+                },
+                "skipped": list(suffix),
+                "coordinatorPid": state["coordinatorPid"],
                 "applyOutcome": "may-have-landed",
                 "recoveryPrerequisite": True,
             }

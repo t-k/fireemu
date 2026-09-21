@@ -98,13 +98,24 @@ export async function publish(path, bytes) {
 }
 export const publishJson = (path, value) => publish(path, JSON.stringify(value, null, 2) + "\n");
 
-/** Own one POSIX process group. A timeout/log overflow never becomes an executed pass. */
+/**
+ * Own one POSIX process group, not an arbitrary descendant tree. `exit` reaps the
+ * leader; `close` also waits for inherited pipes, which a detached descendant may
+ * keep open. TERM gets 2s, then KILL/drain gets 1s. If that final deadline expires,
+ * close our pipe handles and return unconfirmed -- never claim an escaped writer
+ * was stopped. All durations are event-loop deadlines, not hard real-time limits.
+ */
 export async function runProcess(
   command,
   args,
   { cwd, env, timeoutMs = 180000, maxLogBytes = 1024 * 1024 } = {},
 ) {
   requireThat(process.platform !== "win32", "posix-supervision-required");
+  requireThat(
+    Number.isInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 2147483647,
+    "invalid-process-timeout",
+  );
+  requireThat(Number.isSafeInteger(maxLogBytes) && maxLogBytes >= 0, "invalid-process-log-limit");
   return await new Promise((resolveResult) => {
     const child = spawn(command, args, {
       cwd,
@@ -114,67 +125,126 @@ export async function runProcess(
     });
     let reason = null,
       bytes = 0,
+      exitCode = null,
+      exitSignal = null,
+      exited = false,
+      closed = false,
+      groupGone = !child.pid,
+      stopping = false,
+      settled = false,
       killTimer,
-      settled = false;
+      finalTimer,
+      drainTimer,
+      pollTimer;
     const chunks = [];
-    const kill = (signal) => {
-      if (child.pid) {
-        try {
-          process.kill(-child.pid, signal);
-        } catch (e) {
-          if (e.code !== "ESRCH") reason ??= "group-kill-failed";
-        }
+    const groupState = () => {
+      if (groupGone) return "gone";
+      try {
+        process.kill(-child.pid, 0);
+        return "present";
+      } catch (error) {
+        if (error.code !== "ESRCH") return "unknown";
+        // Do not address a reused PGID after this owned group has disappeared.
+        groupGone = true;
+        return "gone";
       }
     };
-    const stop = (cause) => {
-      reason ??= cause;
-      kill("SIGTERM");
-      killTimer ??= setTimeout(() => kill("SIGKILL"), 2000);
+    const kill = (signal) => {
+      if (groupState() === "gone") return;
+      try {
+        process.kill(-child.pid, signal);
+      } catch (error) {
+        if (error.code === "ESRCH") groupGone = true;
+        else reason ??= "group-kill-failed";
+      }
     };
-    const timer = setTimeout(() => stop("process-timeout"), timeoutMs);
     const interrupt = () => stop("interrupted");
-    process.once("SIGINT", interrupt);
-    process.once("SIGTERM", interrupt);
-    const finish = (code, signal) => {
+    const timer = setTimeout(() => stop("process-timeout"), timeoutMs);
+    const finish = (forced = false) => {
       if (settled) return;
+      const gone = groupState() === "gone";
       settled = true;
-      clearTimeout(timer);
-      clearTimeout(killTimer);
+      for (const id of [timer, killTimer, finalTimer, drainTimer]) clearTimeout(id);
+      clearInterval(pollTimer);
       process.off("SIGINT", interrupt);
       process.off("SIGTERM", interrupt);
-      let residue = false;
-      if (child.pid) {
-        try {
-          process.kill(-child.pid, 0);
-          residue = true;
-        } catch (e) {
-          if (e.code !== "ESRCH") residue = true;
-        }
-      }
-      if (residue) {
-        reason ??= "remaining-process-group";
-        kill("SIGKILL");
+      if (forced) {
+        reason ??= "process-shutdown-unconfirmed";
+        // Closing our ends does not prove the writer died. Do not wait for
+        // another close event, nor leave an unconfirmed leader pinning Node.
+        child.stdout.destroy();
+        child.stderr.destroy();
+        child.unref();
       }
       resolveResult({
-        code,
-        signal,
+        code: exitCode,
+        signal: exitSignal,
         reason,
         pid: child.pid ?? null,
-        state: residue ? "unconfirmed" : "stopped",
+        state: !forced && exited && closed && gone ? "stopped" : "unconfirmed",
         log: Buffer.concat(chunks),
       });
     };
+    const inspect = () => {
+      if (settled) return;
+      if (exited && closed && groupState() === "gone") finish();
+    };
+    const stop = (cause) => {
+      if (settled) return;
+      reason ??= cause;
+      if (stopping) return;
+      stopping = true;
+      kill("SIGTERM");
+      killTimer = setTimeout(() => kill("SIGKILL"), 2000);
+      finalTimer = setTimeout(() => finish(true), 3000);
+      pollTimer = setInterval(inspect, 25);
+      inspect();
+    };
+    process.once("SIGINT", interrupt);
+    process.once("SIGTERM", interrupt);
     child.once("error", () => {
+      if (settled) return;
       reason ??= "spawn-failed";
-      finish(null, null);
+      if (!child.pid) {
+        // A failed spawn has no owned process and must not await a timeout.
+        exited = closed = true;
+        finish();
+      } else stop("process-error");
     });
-    for (const stream of [child.stdout, child.stderr])
+    child.once("exit", (code, signal) => {
+      if (settled) return;
+      exited = true;
+      exitCode = code;
+      exitSignal = signal;
+      // Ordinary pipe draining is allowed; inherited open descriptors are not
+      // allowed to stall a finished leader until the full replay timeout.
+      drainTimer = setTimeout(() => {
+        if (!closed) stop("process-output-open");
+      }, 250);
+      inspect();
+    });
+    for (const stream of [child.stdout, child.stderr]) {
       stream.on("data", (bytesIn) => {
-        bytes += bytesIn.length;
-        if (bytes <= maxLogBytes) chunks.push(bytesIn);
-        else stop("process-log-limit");
+        if (settled) return;
+        const remaining = Math.max(0, maxLogBytes - bytes);
+        if (remaining) chunks.push(Buffer.from(bytesIn.subarray(0, remaining)));
+        bytes = Math.min(Number.MAX_SAFE_INTEGER, bytes + bytesIn.length);
+        if (bytes > maxLogBytes) stop("process-log-limit");
       });
-    child.once("close", finish);
+      stream.on("error", () => stop("process-log-read-failed"));
+    }
+    child.once("close", (code, signal) => {
+      if (settled) return;
+      closed = true;
+      clearTimeout(drainTimer);
+      // Spawn failure is handled above. A real leader's exit is deliberately
+      // required separately from pipe closure before publishing stopped.
+      if (!exited) return stop("process-exit-unconfirmed");
+      exitCode = code;
+      exitSignal = signal;
+      if (groupState() !== "gone") stop("remaining-process-group");
+      inspect();
+    });
   });
 }
 

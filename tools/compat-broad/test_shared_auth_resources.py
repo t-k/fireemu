@@ -146,6 +146,33 @@ def test_auth_delete_requires_a_recorded_creation_before_send(tmp_path: Path) ->
     assert gate.snapshot()["events"] == []
 
 
+def test_auth_delete_rejects_forged_cross_resource_creation_record(tmp_path: Path) -> None:
+    path = tmp_path / "gate"
+    plan = _auth_plan()
+    delete = dict(
+        plan["jobs"]["auth-credential"]["recovery"][0],
+        kind="delete",
+        path="identitytoolkit.googleapis.com/v1/projects/demo/accounts:delete",
+        body={"localId": "$binding:acct0Uid"},
+    )
+    plan["jobs"]["auth-credential"]["recovery"] = [delete]
+    create(path, plan)
+    gate = Gate(path, "auth-credential")
+    gate.claim()
+    state = gate.snapshot()
+    state["jobs"]["auth-credential"]["authAccounts"] = {
+        "acct0": {
+            "uid": "acct1-uid",
+            "resource": "projects/demo/auth/accounts/acct-1",
+            "createEvent": 0,
+        }
+    }
+    reservations._save(path, state)
+    with pytest.raises(ValueError, match="creation ownership"):
+        gate.dispatch(delete, True, lambda: pytest.fail("forged Auth delete was sent"))
+    assert gate.snapshot()["events"] == []
+
+
 def test_auth_observation_delete_is_rejected_before_send(tmp_path: Path) -> None:
     path = tmp_path / "gate"
     plan = _auth_plan()

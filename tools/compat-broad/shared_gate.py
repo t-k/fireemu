@@ -293,6 +293,28 @@ def _auth_uid_absence_operation_valid(operation, project):
     )
 
 
+def _auth_creation_ownership(state, job, operation):
+    """Require a journaled creation event for this exact Auth account resource."""
+    account = operation.get("account")
+    record = job.get("authAccounts", {}).get(account)
+    if not isinstance(record, dict) or "createEvent" not in record:
+        return False
+    event_index = record["createEvent"]
+    if type(event_index) is not int or not 0 <= event_index < len(state["events"]):
+        return False
+    event = state["events"][event_index]
+    evidence = event.get("authEvidence")
+    return (
+        record.get("resource") == operation.get("resource")
+        and event.get("phase") == "observation"
+        and event.get("completed") is True
+        and event.get("creationOutcome") == "created"
+        and isinstance(evidence, dict)
+        and evidence.get("account") == account
+        and evidence.get("creationOutcome") == "created"
+    )
+
+
 def validate_absence_proofs(state, job_name):
     """Validate final typed readback against the registered recovery plan and journal."""
     policy = _stream_policy(state["plan"])
@@ -1857,11 +1879,7 @@ class Gate:
                     and _auth_operation(operation)
                     and operation.get("method") == "POST"
                     and operation["path"].endswith("/accounts:delete")
-                    and not (
-                        isinstance(job.get("authAccounts"), dict)
-                        and isinstance(job["authAccounts"].get(operation.get("account")), dict)
-                        and "createEvent" in job["authAccounts"][operation.get("account")]
-                    )
+                    and not _auth_creation_ownership(state, job, operation)
                 ):
                     raise ValueError("Auth delete requires creation ownership")
                 if operation["method"] == "DELETE" and (

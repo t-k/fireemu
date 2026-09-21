@@ -211,7 +211,9 @@ def _http_request(slot, secret, fixture_origin=None, *, timeout=REQUEST_SECONDS)
     response or credential bytes -- they are counts, a header value already
     bounded to MAX_BYTES, and exception type names."""
     import http.client
+    import socket
     import ssl
+    import threading
     import time
     from urllib.parse import urlsplit
 
@@ -285,6 +287,20 @@ def _http_request(slot, secret, fixture_origin=None, *, timeout=REQUEST_SECONDS)
         if headers_budget is None:
             return stamped(failure="headers-timeout", phase="headers")
         sock.settimeout(headers_budget)
+        header_expired = threading.Event()
+        header_finished = threading.Event()
+
+        def interrupt_headers():
+            if header_finished.wait(headers_budget):
+                return
+            header_expired.set()
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+        header_interrupt = threading.Thread(target=interrupt_headers, daemon=True)
+        header_interrupt.start()
         try:
             connection.request(
                 "POST",
@@ -296,6 +312,8 @@ def _http_request(slot, secret, fixture_origin=None, *, timeout=REQUEST_SECONDS)
                 },
             )
             response = connection.getresponse()
+            if header_expired.is_set():
+                return stamped(failure="headers-timeout", phase="headers")
         except TimeoutError as error:
             return stamped(
                 failure="headers-timeout",
@@ -303,14 +321,33 @@ def _http_request(slot, secret, fixture_origin=None, *, timeout=REQUEST_SECONDS)
                 phase="headers",
             )
         except OSError as error:
+            if header_expired.is_set():
+                return stamped(
+                    failure="headers-timeout",
+                    exceptionClass=type(error).__name__,
+                    phase="headers",
+                )
             return stamped(
                 failure="connect-failed",
                 exceptionClass=type(error).__name__,
                 phase="headers",
             )
+        finally:
+            header_finished.set()
+            header_interrupt.join(timeout=0.1)
         summary["status"] = response.status
         if response.status != 200:
             return stamped(failure="http-status", phase="headers")
+        transfer_encoding = response.getheader("Transfer-Encoding")
+        if (
+            transfer_encoding is not None
+            and response.getheader("Content-Length") is not None
+        ):
+            return stamped(
+                failure="transport-error",
+                exceptionClass="ConflictingMessageFraming",
+                phase="headers",
+            )
         length = response.getheader("Content-Length")
         declared = None
         if length is not None:

@@ -86,7 +86,10 @@ def test_lifecycle_transport_reaches_real_loopback_batch_wire() -> None:
             if "/operations/" in self.path:
                 self._respond({"name": self.path.removeprefix("/v1/"), "done": True})
                 return
-            if len([entry for entry in seen if entry[0] == "GET"]) == 1:
+            field_reads = len(
+                [entry for entry in seen if entry[0] == "GET" and "/operations/" not in entry[1]]
+            )
+            if field_reads == 1:
                 self._respond(
                     {
                         "name": preflight.LIFECYCLE_FIELD,
@@ -103,8 +106,8 @@ def test_lifecycle_transport_reaches_real_loopback_batch_wire() -> None:
                 {
                     "name": preflight.LIFECYCLE_FIELD,
                     "indexConfig": {
-                        "indexes": [],
-                        "usesAncestorConfig": True,
+                        "indexes": [] if field_reads == 2 else [{"queryScope": "COLLECTION"}],
+                        "usesAncestorConfig": field_reads != 2,
                         "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD,
                     },
                     "ttlConfig": {"state": "ENABLED"},
@@ -141,7 +144,14 @@ def test_lifecycle_transport_reaches_real_loopback_batch_wire() -> None:
             batch_adapter.wire(
                 field_url + "?updateMask=indexConfig",
                 "PATCH",
-                {"name": preflight.LIFECYCLE_FIELD, "indexConfig": {"indexes": {"usesAncestorConfig": True}}},
+                {
+                    "name": preflight.LIFECYCLE_FIELD,
+                    "indexConfig": {
+                        "indexes": [{"queryScope": "COLLECTION"}],
+                        "usesAncestorConfig": True,
+                        "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD,
+                    },
+                },
                 headers,
                 local=True,
                 timeout=3,

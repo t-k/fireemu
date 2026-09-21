@@ -30,12 +30,17 @@ Transport = Callable[[str, str, "dict | None", float], dict]
 
 
 class TransportError(Exception):
-    """A request failed. `status` is a finishStatus word, `reason` is short."""
+    """A request failed. `status` is a finishStatus word, `reason` is short.
 
-    def __init__(self, status: str, reason: str):
+    `inflight` is True when the request had already been sent and no complete
+    response came back, so the server may still be working on it.
+    """
+
+    def __init__(self, status: str, reason: str, inflight: bool = False):
         super().__init__(f"{status}: {reason}")
         self.status = status
         self.reason = reason
+        self.inflight = inflight
 
 
 def _remaining(deadline: float) -> float:
@@ -94,6 +99,7 @@ def http_json(
     )
     deadline = time.monotonic() + timeout
     sock = None
+    sent = False
     try:
         # The socket is ours: http.client only parses over it, so every read
         # below gets exactly the time that remains and close() abandons the
@@ -101,6 +107,7 @@ def http_json(
         sock = socket.create_connection((host, port), timeout=_remaining(deadline))
         sock.settimeout(_remaining(deadline))
         sock.sendall(head.encode("ascii") + b"\r\n" + data)
+        sent = True
         response = http.client.HTTPResponse(sock, method=method)
         sock.settimeout(_remaining(deadline))
         response.begin()
@@ -118,13 +125,15 @@ def http_json(
         if response.status != 200:
             raise TransportError("server-error", f"HTTP {response.status}")
         raw = _read_body(sock, response, deadline)
-    except TransportError:
+    except TransportError as error:
+        if error.status == "timeout":
+            error.inflight = sent
         raise
     except (TimeoutError, socket.timeout):  # noqa: UP041 - socket.timeout is distinct on 3.9
-        raise TransportError("timeout", "request deadline exceeded")
+        raise TransportError("timeout", "request deadline exceeded", inflight=sent)
     except (OSError, http.client.HTTPException) as error:
         raise TransportError(
-            "server-error", f"connection failed ({type(error).__name__})"
+            "server-error", f"connection failed ({type(error).__name__})", inflight=sent
         )
     finally:
         if sock is not None:

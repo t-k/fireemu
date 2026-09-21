@@ -59,9 +59,24 @@ DATABASE_BODY = {
     "locationId": "us-central1",
 }
 AUTH_BODY = {"name": "projects/592603257417/config", "mfa": {"state": "DISABLED"}}
-# Proto3 JSON omits empty and false members, so a deployed exemption reads as
-# an empty index configuration.
-EXEMPT_FIELD_BODY = {"name": preflight.INDEX_FIELD, "indexConfig": {}}
+# The observed production readback of `collectionGroups/pk/fields/*`, which
+# carries the identical `fieldPath: "*"`, `indexes: []` override (read-only GET,
+# HTTP 200, 2026-09-21 07:05 UTC), verbatim: `indexes` and `usesAncestorConfig`
+# are omitted as proto3 defaults and the ancestor is the database's default.
+OBSERVED_PRODUCTION_PK_FIELD_BODY = {
+    "name": "projects/fireemu-35fe6/databases/(default)/collectionGroups/pk/fields/*",
+    "indexConfig": {
+        "ancestorField": (
+            "projects/fireemu-35fe6/databases/(default)/collectionGroups/"
+            "__default__/fields/*"
+        )
+    },
+}
+# The same shape on the exempt group, which is what the preflight must see.
+EXEMPT_FIELD_BODY = {
+    "name": preflight.INDEX_FIELD,
+    "indexConfig": {"ancestorField": preflight.DEFAULT_ANCESTOR_FIELD},
+}
 DEFAULT_FIELD_BODY = {
     "name": preflight.INDEX_FIELD,
     "indexConfig": {
@@ -960,35 +975,37 @@ def test_the_worker_source_is_pinned_and_scoped_to_the_campaign():
     )
 
 
-# Fixture slot for the observed production body of `collectionGroups/pk/fields/*`,
-# which carries the identical `fieldPath: "*"` override (deployed 2026-09-08).
-# The commander supplies it from one read-only management call; until then the
-# test below is skipped, and the projection is judged on documented semantics.
-OBSERVED_PRODUCTION_PK_FIELD_BODY: dict | None = None
-
-
-def test_the_observed_production_override_body_is_accepted():
-    if OBSERVED_PRODUCTION_PK_FIELD_BODY is None:
-        pytest.skip("observed pk/fields/* body not yet supplied by the commander")
-    body = copy.deepcopy(OBSERVED_PRODUCTION_PK_FIELD_BODY)
-    assert body["name"].endswith("/collectionGroups/pk/fields/*")
-    body["name"] = preflight.INDEX_FIELD
-    ancestor = (body.get("indexConfig") or {}).get("ancestorField")
-    if ancestor is not None:
-        body["indexConfig"]["ancestorField"] = ancestor.replace("/pk/", "/nx/")
-    projection = preflight.index_exemption_projection(body)
+def test_the_observed_production_override_body_is_the_expected_shape():
+    """The production readback, verbatim, normalizes to the exempt shape."""
+    body = OBSERVED_PRODUCTION_PK_FIELD_BODY
+    assert set(body) == {"name", "indexConfig"}
+    assert set(body["indexConfig"]) == {"ancestorField"}
+    assert body["indexConfig"]["ancestorField"] == preflight.DEFAULT_ANCESTOR_FIELD
+    normalized = preflight._field_readback(body, field=body["name"])
+    assert normalized == {
+        **preflight.EXPECTED_INDEX_EXEMPTION_PROJECTION,
+        "name": body["name"],
+    }
+    # The exempt group differs from pk only in its name; the same body on the
+    # nx field is the after state the permission binds.
+    nx = {**body, "name": preflight.INDEX_FIELD}
+    assert nx == EXEMPT_FIELD_BODY
+    projection = preflight.index_exemption_projection(nx)
     assert projection == preflight.EXPECTED_INDEX_EXEMPTION_PROJECTION
     preflight.verify_index_exemption(
-        body, {"indexExemptionProjectionDigest": digest(projection)}
+        nx, {"indexExemptionProjectionDigest": digest(projection)}
     )
+    # The verbatim body under its own name is refused for the nx slot.
+    with pytest.raises(ValueError, match="typed index field readback"):
+        preflight.verify_index_exemption(
+            body, {"indexExemptionProjectionDigest": digest(projection)}
+        )
 
 
 @pytest.mark.parametrize(
     ("configuration", "accepted"),
     [
-        ({}, True),
         ({"ancestorField": preflight.DEFAULT_ANCESTOR_FIELD}, True),
-        ({"indexes": [], "usesAncestorConfig": False}, True),
         (
             {
                 "indexes": [],
@@ -997,25 +1014,63 @@ def test_the_observed_production_override_body_is_accepted():
             },
             True,
         ),
+        # The API always names the ancestor; a body without it is not a
+        # readback of a deployed override.
+        ({}, False),
+        ({"indexes": [], "usesAncestorConfig": False}, False),
         # A partial override: an index of its own is not the exemption.
-        ({"indexes": DEFAULT_FIELD_BODY["indexConfig"]["indexes"][:1]}, False),
+        (
+            {
+                "indexes": DEFAULT_FIELD_BODY["indexConfig"]["indexes"][:1],
+                "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD,
+            },
+            False,
+        ),
         # No override at all: the group still inherits the default.
-        ({"usesAncestorConfig": True}, False),
-        ({"indexes": [], "usesAncestorConfig": True}, False),
+        (
+            {
+                "usesAncestorConfig": True,
+                "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD,
+            },
+            False,
+        ),
+        (
+            {
+                "indexes": [],
+                "usesAncestorConfig": True,
+                "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD,
+            },
+            False,
+        ),
         # An ancestor other than the documented default.
         ({"ancestorField": preflight.INDEX_FIELD.replace("/nx/", "/pk/")}, False),
-        ({"usesAncestorConfig": "false"}, False),
-        ({"indexes": "none"}, False),
+        (
+            {
+                "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD.replace(
+                    "(default)", "other"
+                )
+            },
+            False,
+        ),
+        (
+            {
+                "usesAncestorConfig": "false",
+                "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD,
+            },
+            False,
+        ),
+        ({"indexes": "none", "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD}, False),
     ],
     ids=[
-        "omitted-members",
         "ancestor-named",
-        "explicit-false",
         "explicit-false-with-ancestor",
+        "omitted-ancestor",
+        "explicit-false-without-ancestor",
         "partial-override",
         "inherits-default",
         "empty-but-inherits",
         "other-ancestor",
+        "other-database-ancestor",
         "string-flag",
         "string-indexes",
     ],
@@ -1039,8 +1094,8 @@ def test_the_exemption_readback_is_judged_member_by_member(configuration, accept
         )
         assert attestation["complete"] is True
         assert attestation["body"]["baselineVerified"] is True
-        assert attestation["body"]["ancestorField"] == configuration.get(
-            "ancestorField"
+        assert attestation["body"]["projection"]["ancestorField"] == (
+            preflight.DEFAULT_ANCESTOR_FIELD
         )
         preflight.validate_index_exemption_attestation(attestation, permission)
     else:

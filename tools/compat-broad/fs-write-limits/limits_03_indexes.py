@@ -149,8 +149,7 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as error:
             print(f"deployed: refused ({error})", file=sys.stderr)
             return 2
-        ancestor = preflight._field_readback(readback)["ancestorField"]
-        print(f"deployed: exemption in force; ancestorField {ancestor!r}")
+        print("deployed: exemption in force; the default ancestor is named")
         return 0
     if args.verify_restored is not None:
         readback, raw = _readback(args.verify_restored)

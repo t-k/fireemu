@@ -37,6 +37,6 @@ def test_projection_refuses_incomplete_or_unbound_run(tmp_path, result):
 def test_projection_refuses_overwrite(tmp_path, monkeypatch):
     output = tmp_path / "reference.json"
     output.write_text("existing")
-    monkeypatch.setattr(projection, "project_run", lambda run: {})
+    monkeypatch.setattr(projection, "project_run", lambda run, historical_compiler=None: {})
     with pytest.raises(ValueError, match="already exists"):
         projection.write_projection(tmp_path / "run", output)

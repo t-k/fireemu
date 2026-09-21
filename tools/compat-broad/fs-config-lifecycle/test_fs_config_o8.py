@@ -352,11 +352,10 @@ def test_the_gate_plan_carries_the_frozen_baseline_and_the_permission_expiry(
     assert claim["locks"] == campaign.lock_scopes(built.plan)
 
 
-def test_release_is_blocked_by_the_shared_gate_contract_and_says_so() -> None:
+def test_release_policy_admits_only_the_typed_configuration_finalizer() -> None:
     supported, blocker = admission.release_supported()
-    assert supported is False
-    assert blocker["reason"] == "shared-gate-document-contract"
-    assert "shared_gate.py" in blocker["detail"]
+    assert supported is True
+    assert blocker["kind"] == "configuration-management-finalizer-v1"
 
 
 # -- temporary-Ledger integration proof -----------------------------------------
@@ -401,17 +400,24 @@ def test_all_twelve_cases_run_under_a_held_reservation_with_restore_verified(
     assert set(collection["observedCases"]) == {c["id"] for c in compile_cases(NONCE)}
     assert result["restore"]["ttl"]["restore"] == RESTORED
     assert result["restore"]["exemption"]["restore"] == RESTORED
-    assert result["disposition"]["disposition"] == admission.RESTORED_DISPOSITION
-    assert result["releaseEligible"] is False
-    assert result["reservationReleased"] is False
-    assert result["releaseBlocked"]["kind"] == admission.RELEASE_BLOCKED_KIND
+    assert result["disposition"]["disposition"] == "release-eligible"
+    assert result["releaseEligible"] is True
+    assert result["reservationReleased"] is True
+    assert result["releaseRecord"]["kind"] == "fs-config-lifecycle-release-v1"
     assert result["executionKind"] == "injected-transport"
     assert result["productionExecuted"] is False
-    # The Ledger row is held under the EXCLUSIVE field locks and never released.
+    # The Ledger row is released only after the lifecycle Gate proves restoration.
     row = reservations.Ledger(root).snapshot()["reservations"][
         result["ticket"]["reservation"]
     ]
-    assert row["state"] == "held"
+    assert row["state"] == "released"
+    assert row["finalGateDigest"] == result["releaseRecord"]["gateDigest"]
+    reservations.Ledger(root).finish_management_only(
+        result["ticket"], result["releaseRecord"]
+    )
+    assert reservations.Ledger(root).snapshot()["reservations"][
+        result["ticket"]["reservation"]
+    ]["state"] == "released"
     assert row["claim"]["locks"] == campaign.lock_scopes(built.plan)
     assert row["generation"]["sourceCommit"] == "0" * 40
     assert result["chargedCalls"] == collection["rowCount"]
@@ -431,8 +437,8 @@ def test_all_twelve_cases_run_under_a_held_reservation_with_restore_verified(
         admission.validate_fresh_admission(
             root, {**built.inputs["plan"], "nonce": "e" * 32}, built.permission
         )
-    with pytest.raises(ValueError, match="lock conflict"):
-        _reserve_conflicting(root, built)
+    _reserve_conflicting(root, built)
+    assert len(reservations.Ledger(root).snapshot()["reservations"]) == 2
 
 
 def _reserve_conflicting(root: Path, built: Admission) -> None:
@@ -510,6 +516,37 @@ def test_a_refused_revert_holds_the_reservation_with_a_typed_record(
     ref = result["collection"]["steps"]["exemption"]["preBodyRef"]
     saved = tmp_path / "run" / "collection" / ref["file"]
     assert hashlib.sha256(saved.read_bytes()).hexdigest() == ref["sha256"]
+
+
+def test_release_refusal_keeps_an_unrecovered_configuration_reservation_held(
+    tmp_path: Path,
+) -> None:
+    built = Admission(tmp_path)
+    root = _proof_ledger(tmp_path)
+    result = lifecycle_production.execute_reserved(
+        inputs=built.inputs,
+        permission=built.permission,
+        ledger_root=root,
+        output=tmp_path / "run",
+        transmit=FakeAdmin(refuse_revert={"OC-20"}).transmit,
+        sleeper=_no_sleep,
+    )
+    ticket = result["ticket"]
+    receipt_path = tmp_path / "run" / "receipt.json"
+    record = {
+        "kind": "fs-config-lifecycle-release-v1",
+        "ticket": ticket,
+        "receiptPath": str(receipt_path.resolve()),
+        "receiptDigest": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+        "gateDigest": result["gateDigest"],
+        "collectionDigest": digest(result["collection"]),
+        "generation": result["generation"],
+    }
+    with pytest.raises(ValueError, match="release evidence"):
+        reservations.Ledger(root).finish_management_only(ticket, record)
+    assert reservations.Ledger(root).snapshot()["reservations"][
+        ticket["reservation"]
+    ]["state"] == "held"
 
 
 def test_the_local_unimplemented_exemption_is_a_recorded_deviation_not_hidden(
@@ -668,7 +705,7 @@ def test_receipt_classification_names_the_three_dispositions() -> None:
     )
     with pytest.raises(ValueError):
         admission.classify_stop("x")
-    assert copy.deepcopy(admission.RELEASE_BLOCKER) == admission.release_supported()[1]
+    assert admission.release_supported()[1]["kind"] == "configuration-management-finalizer-v1"
 
 
 # -- credential preflight (review Must Fix 3) ------------------------------------

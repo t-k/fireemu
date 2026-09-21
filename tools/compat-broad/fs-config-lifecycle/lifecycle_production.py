@@ -7,9 +7,8 @@ collector through the capability-bound wire. `execute_reserved` is the same
 reservation-to-receipt path with an injected transport; it exists for the integration
 proof against a temporary Ledger and refuses any Ledger that is not marked as one.
 
-Neither path releases the reservation today: `lifecycle_admission.release_supported`
-says the shared core cannot retire a configuration-only reservation, and the receipt
-carries the typed release-blocked record instead of a release record.
+A completed configuration-management run attaches its receipt and registered Gate
+proof to the Ledger before the typed finalizer releases the reservation.
 
 `verify_saved` is the verified-input boundary for the comparator: it re-reads a saved
 receipt directory, checks every binding the receipt names (frozen inputs, gate
@@ -232,12 +231,41 @@ def execute_reserved(
         productionExecuted=capability is not None
         and bool((result or {}).get("rowCount")),
     )
-    _write_receipt(output / "receipt.json", receipt)
+    receipt_path = output / "receipt.json"
+    _write_receipt(receipt_path, receipt)
+    release_record = None
+    release_failure = None
+    if supported and receipt["releaseEligible"]:
+        try:
+            receipt_digest = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+            collection_digest = canonical_digest(receipt["collection"])
+            ledger.attach_evidence(
+                ticket,
+                receipt_digest,
+                receipt["gateDigest"],
+                collection_digest,
+            )
+            release_record = {
+                "kind": "fs-config-lifecycle-release-v1",
+                "ticket": ticket,
+                "receiptPath": str(receipt_path.resolve()),
+                "receiptDigest": receipt_digest,
+                "gateDigest": receipt["gateDigest"],
+                "collectionDigest": collection_digest,
+                "generation": copy.deepcopy(generation),
+            }
+            ledger.finish_management_only(ticket, release_record)
+        except Exception as error:  # noqa: BLE001 -- hold on any release uncertainty.
+            release_failure = type(error).__name__
+            failure = failure or "release-" + release_failure
+    final_row = ledger.snapshot()["reservations"][ticket["reservation"]]
     return {
         **receipt,
         "failure": failure,
-        "reservationReleased": False,
-        "reservationFinal": ledger.snapshot()["reservations"][ticket["reservation"]],
+        "releaseRecord": release_record,
+        "releaseFailure": release_failure,
+        "reservationReleased": final_row["state"] == "released",
+        "reservationFinal": final_row,
     }
 
 

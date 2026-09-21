@@ -5,8 +5,8 @@ It has no preparation mode, no injected transport mode and no credential discove
 the bearer token arrives only on a private descriptor, and only after admission, the
 shared Ledger reservation and the configuration gate exist.
 
-Exit 0 requires a verified restore and a released reservation, which the shared core
-cannot grant today (see lifecycle_admission.RELEASE_BLOCKER); exit 1 means the run
+Exit 0 requires a verified restore and a released reservation through the typed
+configuration-management finalizer; exit 1 means the run
 started and its reservation is held with `<output>/receipt.json` written; exit 2
 means admission refused before anything was sent.
 """

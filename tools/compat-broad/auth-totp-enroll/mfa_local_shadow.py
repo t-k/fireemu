@@ -854,12 +854,15 @@ def _walk(
     )
 
 
-def build_runtime_identity(binary: Path, config: Path, execution_commit: str) -> dict[str, str]:
+def build_runtime_identity(
+    binary: Path, config: Path, execution_commit: str, run_id: str
+) -> dict[str, str]:
     """Bind the local observation to the exact executable and launch configuration."""
     return {
         "artifactSha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
         "executionCommit": execution_commit,
         "configurationDigest": hashlib.sha256(config.read_bytes()).hexdigest(),
+        "runId": run_id,
     }
 
 
@@ -1095,7 +1098,7 @@ def parent(output: Path) -> int:
         json.dumps(
             {
                 "runtimeIdentity": build_runtime_identity(
-                    binary, config, worktree["commit"]
+                    binary, config, worktree["commit"], run_id
                 ),
                 "runId": run_id,
             },

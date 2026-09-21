@@ -66,7 +66,12 @@ def test_the_versioned_record_is_a_complete_local_shadow():
     assert recovery["ownedAccounts"] == len(owned_accounts())
     assert recovery["configurationMutated"] is False
     runtime = record["runtimeIdentity"]
-    assert set(runtime) == {"artifactSha256", "executionCommit", "configurationDigest"}
+    assert set(runtime) == {
+        "artifactSha256",
+        "executionCommit",
+        "configurationDigest",
+        "runId",
+    }
     assert len(runtime["artifactSha256"]) == 64
     assert runtime["executionCommit"] == record["worktree"]["commit"]
     assert recovery["runId"]

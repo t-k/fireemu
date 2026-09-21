@@ -119,14 +119,14 @@ def _runtime_identity_problems(
     retained artifact/configuration anchor for a new final-artifact comparison.
     """
     identity = local.get("runtimeIdentity") if isinstance(local, dict) else None
-    if identity is None and expected is None:
+    if identity is None and expected is None and local.get("productionExecuted") is not True:
         # Historical preparation receipts predate runtime identity and retain their
         # existing classification behavior. New records carry the field and therefore
         # enter the fail-closed path below when no independent anchor is supplied.
         return []
     if not isinstance(identity, dict):
         return ["local runtime identity unavailable"]
-    required = {"artifactSha256", "executionCommit", "configurationDigest"}
+    required = {"artifactSha256", "executionCommit", "configurationDigest", "runId"}
     if set(identity) != required:
         return ["local runtime identity shape is invalid"]
 
@@ -137,6 +137,8 @@ def _runtime_identity_problems(
         not valid(identity["artifactSha256"], 64)
         or not valid(identity["executionCommit"], 40)
         or not valid(identity["configurationDigest"], 64)
+        or not isinstance(identity["runId"], str)
+        or not identity["runId"]
     ):
         return ["local runtime identity digest is invalid"]
     if expected is None:
@@ -147,6 +149,8 @@ def _runtime_identity_problems(
         not valid(expected.get("artifactSha256"), 64)
         or not valid(expected.get("executionCommit"), 40)
         or not valid(expected.get("configurationDigest"), 64)
+        or not isinstance(expected.get("runId"), str)
+        or not expected["runId"]
     ):
         return ["independent local runtime anchor is invalid"]
     if identity != expected:
@@ -161,7 +165,7 @@ def _runtime_identity_problems(
     if (
         not isinstance(recovery, dict)
         or not isinstance(recovery.get("runId"), str)
-        or not recovery["runId"]
+        or recovery.get("runId") != identity["runId"]
     ):
         return ["local runtime cleanup identity unavailable"]
     return []

@@ -21,6 +21,7 @@ def anchor() -> dict[str, str]:
         "artifactSha256": "a" * 64,
         "executionCommit": "b" * 40,
         "configurationDigest": "c" * 64,
+        "runId": "run-1",
     }
 
 
@@ -65,11 +66,12 @@ def test_local_runtime_identity_is_derived_from_binary_and_config_bytes(tmp_path
     config = tmp_path / "fireemu.json"
     binary.write_bytes(b"binary")
     config.write_bytes(b"config")
-    value = build_runtime_identity(binary, config, "b" * 40)
+    value = build_runtime_identity(binary, config, "b" * 40, "run-1")
     assert value == {
         "artifactSha256": hashlib.sha256(b"binary").hexdigest(),
         "executionCommit": "b" * 40,
         "configurationDigest": hashlib.sha256(b"config").hexdigest(),
+        "runId": "run-1",
     }
 
 
@@ -79,6 +81,23 @@ def test_production_comparison_requires_an_independent_runtime_anchor() -> None:
     assert compare(local, production)["classification"] == "INDETERMINATE"
     result = compare(local, production, runtime_anchor=anchor())
     assert result["classification"] in {"DIFF", "EXPECTED_NONDETERMINISM", "MATCH"}
+
+
+def test_downgraded_final_record_without_identity_cannot_match() -> None:
+    local = receipt("local")
+    production = approved(receipt("production"))
+    local.pop("runtimeIdentity")
+    local["recovery"].pop("runId")
+    local["productionExecuted"] = True
+    local["ownerApproval"] = production["ownerApproval"]
+    assert compare(local, production)["classification"] == "INDETERMINATE"
+
+
+@pytest.mark.parametrize("malformed", [None, {}, {"artifactSha256": "A" * 64}])
+def test_malformed_independent_anchor_is_indeterminate(malformed) -> None:
+    local = receipt("local")
+    production = approved(receipt("production"))
+    assert compare(local, production, runtime_anchor=malformed)["classification"] == "INDETERMINATE"
 
 
 @pytest.mark.parametrize(
@@ -104,7 +123,7 @@ def test_wrong_runtime_identity_is_indeterminate(
 def test_runtime_identity_and_cleanup_must_share_the_run_id() -> None:
     local = receipt("local")
     production = approved(receipt("production"))
-    local["recovery"]["runId"] = ""
+    local["recovery"]["runId"] = "run-2"
     result = compare(local, production, runtime_anchor=anchor())
     assert result["classification"] == "INDETERMINATE"
 
@@ -116,6 +135,6 @@ def test_runtime_identity_has_no_path_or_secret_material(tmp_path: Path) -> None
     config = tmp_path / "config"
     binary.write_bytes(b"binary")
     config.write_bytes(b"config")
-    value = build_runtime_identity(binary, config, "b" * 40)
+    value = build_runtime_identity(binary, config, "b" * 40, "run-1")
     assert "path" not in json.dumps(value).lower()
     assert "binary" not in json.dumps(value).lower()

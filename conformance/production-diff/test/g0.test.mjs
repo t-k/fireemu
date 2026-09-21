@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { compareG0, g0SessionPythonSource, validateG0Origins } from "../g0.mjs";
 import { G0_CASE } from "../registry.mjs";
@@ -53,4 +56,64 @@ test("G0 session bridge compiles as the exact Python source it will execute", ()
     ["run", "python", "-c", "compile(__import__('sys').stdin.read(), '<g0-session>', 'exec')"],
     { input: source, encoding: "utf8", stdio: ["pipe", "ignore", "pipe"] },
   );
+});
+
+test("G0 session binds validated origins before the real Gate and Adapter are constructed", () => {
+  const directory = mkdtempSync(join(tmpdir(), "g0-binding-"));
+  const script = `
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+out = pathlib.Path(sys.argv[2])
+sys.path.insert(0, str(root / "tools/compat-broad"))
+from batch_adapter import Adapter, observer_digest
+from batch_contract import candidate
+from shared_gate import Gate, create
+from shared_production_pair import frozen_g0_manifest
+
+nonce = "68012694f81df504600f8e67301410c6"
+origins = {"firestore": "http://127.0.0.1:18080", "auth": "http://127.0.0.1:19090"}
+plan = frozen_g0_manifest(nonce)
+plan["observerSha256"] = observer_digest()
+plan["localOrigins"] = origins
+create(out / "gate", plan)
+adapter = Adapter(candidate(), nonce, out / "adapter", local_origins=origins)
+adapter.shared_gate = Gate(out / "gate", "partial")
+assert adapter.shared_gate.snapshot()["plan"]["localOrigins"] == origins
+
+for mutation in ("origin", "nonce", "observer"):
+    gate_path = out / ("gate-" + mutation)
+    gate_plan = dict(plan)
+    if mutation == "observer":
+        gate_plan["observerSha256"] = "f" * 64
+    create(gate_path, gate_plan)
+    adapter = Adapter(candidate(), nonce, out / ("adapter-" + mutation), local_origins=origins)
+    adapter.shared_gate = Gate(gate_path, "partial")
+    adapter.shared_gate.claim()
+    if mutation == "origin":
+        adapter.local = {"firestore": origins["firestore"], "auth": "http://127.0.0.1:19091"}
+    elif mutation == "nonce":
+        adapter.nonce = "0" * 32
+    called = []
+    try:
+        adapter.shared_gate.adapter_request(
+            adapter,
+            gate_plan["jobs"]["partial"]["observation"][0],
+            lambda: (called.append(True), (404, {"error": {"code": 404, "status": "NOT_FOUND"}}))[1],
+        )
+    except ValueError as error:
+        assert str(error) == "adapter origin/nonce/observer binding mismatch"
+    else:
+        raise AssertionError(mutation + " binding was accepted")
+print("binding-ok")
+`;
+  try {
+    const output = execFileSync(
+      "uv",
+      ["run", "python", "-c", script, process.cwd(), directory],
+      { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
+    assert.equal(output.trim(), "binding-ok");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

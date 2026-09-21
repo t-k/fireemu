@@ -377,10 +377,12 @@ def test_the_comparator_member_compares_against_the_published_shadow() -> None:
         acquisition=acquisition_for(shadow_plan, ROLE_PRODUCTION),
     )
     result = descriptor.comparator(production, shadow_plan)
-    # The checked-in shadow predates the production management closure. It is
-    # intentionally stale and must remain refused until refreshed separately.
-    assert result["classification"] == REFUSED
+    # The published local shadow is a valid reference, while this side is only
+    # a preparation bundle with no production management session. The
+    # comparator must preserve that uncertainty rather than call it refusal.
+    assert result["classification"] == "INDETERMINATE"
     assert "production:recording-incomplete" in result["errors"]
+    assert "production:recording-aborted" in result["errors"]
 
 
 def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_ledger(tmp_path) -> None:

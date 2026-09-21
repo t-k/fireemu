@@ -54,8 +54,9 @@ from o5_user_token_case import (
     principal_actions,
     validate_case,
 )
+from o5_user_token_semantics import BINDINGS_KEY, capture_principal_fields
 
-COLLECTOR_CONTRACT = "fs-rules-user-token-collector-v3"
+COLLECTOR_CONTRACT = "fs-rules-user-token-collector-v4"
 
 ROLE_PRODUCTION = "production-user-token"
 ROLE_LOCAL_SHADOW = "local-fireemu-shadow"
@@ -1077,7 +1078,14 @@ def _redact_principals(
     the collector learns a uid, and applied to every string in the rows and
     the recovery steps. The replacement is the principal reference, which is
     what the compiled matrix speaks in anyway.
+
+    Before any string is replaced, every row records which of its field
+    values were equal to a read-back uid (``principalFieldBindings``, refs
+    and readback indexes only). After the replacement a label in a field is
+    evidence of the principal only together with that binding; a literal
+    that merely looks like a label has none.
     """
+    capture_principal_fields(rows, cleanup)
     labels: dict[str, str] = {}
     for step in cleanup.get("accountSteps", []):
         observed = step.get("observed") or {}
@@ -1098,7 +1106,10 @@ def _redact_principals(
         return value
 
     for index, row in enumerate(rows):
+        bindings = row[BINDINGS_KEY]
         rows[index] = redact(row)
+        # Logical references are metadata, not observed strings.
+        rows[index][BINDINGS_KEY] = bindings
     for key in ("documentSteps", "accountSteps"):
         cleanup[key] = redact(cleanup[key])
     return sorted(set(labels.values()))

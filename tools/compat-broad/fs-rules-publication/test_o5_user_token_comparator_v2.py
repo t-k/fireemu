@@ -73,6 +73,25 @@ def bound_pair() -> tuple[dict, dict, dict]:
     return production, bound_local(local_plan()), plan
 
 
+def bind_principal(bundle: dict, field: str, ref: str, index: int = 0) -> None:
+    """Put the label of ``ref`` in ``field`` of row ``index`` the way the
+    collector leaves it: the redacted label in the field, and the binding
+    recorded before redaction pointing at the readback step of ``ref``."""
+    steps = bundle["cleanup"]["accountSteps"]
+    readback = next(
+        i
+        for i, step in enumerate(steps)
+        if step["kind"] == "account-readback" and step["accountRef"] == ref
+    )
+    row = bundle["rows"][index]
+    row["observed"]["fields"][field] = f"principal:{ref}"
+    row["principalFieldBindings"][field] = {"ref": ref, "readbackIndex": readback}
+
+
+def unbind_principal(bundle: dict, field: str, index: int = 0) -> None:
+    bundle["rows"][index]["principalFieldBindings"].pop(field, None)
+
+
 def errors_of(result: dict) -> str:
     return " ".join(result["errors"])
 
@@ -146,14 +165,15 @@ def test_principal_valued_fields_compare_by_logical_principal_not_by_presence() 
     no such binding is not a principal and leaves the row indeterminate.
     """
     production, local, plan = bound_pair()
-    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
-    local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    bind_principal(production, "ownerUid", "owner-a")
+    bind_principal(local, "ownerUid", "owner-a")
     result = compare(production, local, plan)
     assert result["classification"] == MATCH
     assert result["rows"][0]["production"]["fields"]["ownerUid"] == {
         "$principal": "owner-a"
     }
     assert result["rows"][0]["local"]["fields"]["ownerUid"] == {"$principal": "owner-a"}
+    unbind_principal(production, "ownerUid")
     production["rows"][0]["observed"]["fields"]["ownerUid"] = "abc123"
     result = compare(production, local, plan)
     assert result["classification"] == INDETERMINATE
@@ -180,8 +200,8 @@ def test_different_uids_bound_to_the_same_logical_principal_match() -> None:
         production["acquisition"]["principals"]["owner-a"]["uidFingerprint"]
         != local["acquisition"]["principals"]["owner-a"]["uidFingerprint"]
     )
-    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
-    local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    bind_principal(production, "ownerUid", "owner-a")
+    bind_principal(local, "ownerUid", "owner-a")
     result = compare(production, local, plan)
     assert result["classification"] == MATCH
     assert result["rows"][0]["classification"] == MATCH
@@ -190,8 +210,8 @@ def test_different_uids_bound_to_the_same_logical_principal_match() -> None:
 def test_uids_bound_to_different_logical_principals_mismatch_on_that_row() -> None:
     """Production uid A maps to owner-a, local uid Y maps to other-b."""
     production, local, plan = bound_pair()
-    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
-    local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:other-b"
+    bind_principal(production, "ownerUid", "owner-a")
+    bind_principal(local, "ownerUid", "other-b")
     result = compare(production, local, plan)
     assert result["classification"] == SEMANTIC_MISMATCH
     assert result["acquisitionValidated"] is True
@@ -209,7 +229,7 @@ def test_review_wrong_owner_is_not_hidden_by_principal_normalization() -> None:
     """Owner review recipe: ``principal:owner-b`` is not a campaign principal
     (the second owner is ``other-b``), so it is unmapped, never equal."""
     production, local, plan = bound_pair()
-    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    bind_principal(production, "ownerUid", "owner-a")
     local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-b"
     result = compare(production, local, plan)
     assert result["classification"] != MATCH
@@ -225,14 +245,23 @@ def test_review_wrong_owner_is_not_hidden_by_principal_normalization() -> None:
 
 def test_a_principal_label_without_its_readback_binding_is_unmapped() -> None:
     """The label must be the one this run's account readback recorded, not a
-    string in the self-reported ``redactedPrincipals`` list alone."""
+    string in the self-reported ``redactedPrincipals`` list alone. With the
+    row's own binding still pointing at that readback, the bundle is also
+    contradicting itself, which is named."""
     production, local, plan = bound_pair()
-    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
-    local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    bind_principal(production, "ownerUid", "owner-a")
+    bind_principal(local, "ownerUid", "owner-a")
     assert compare(production, local, plan)["classification"] == MATCH
     for step in local["cleanup"]["accountSteps"]:
         if step["kind"] == "account-readback" and step["accountRef"] == "owner-a":
             step["observed"]["uid"] = "principal:other-b"
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert (
+        "local:principal-binding:a-owner-reads-own-document:ownerUid:readback-mismatch"
+        in (result["errors"])
+    )
+    unbind_principal(local, "ownerUid")
     result = compare(production, local, plan)
     assert result["classification"] == INDETERMINATE
     assert (
@@ -241,10 +270,84 @@ def test_a_principal_label_without_its_readback_binding_is_unmapped() -> None:
     )
 
 
+def test_a_label_shaped_literal_without_a_binding_is_unmapped() -> None:
+    """External review RULES-SEMANTIC-REPAIR-006: the label alone is not
+    the principal. A field that carried the literal ``principal:owner-a``
+    before redaction has no binding, because no readback uid equalled it,
+    and is not mapped even though the label is declared and recorded."""
+    production, local, plan = bound_pair()
+    bind_principal(production, "ownerUid", "owner-a")
+    local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    assert "ownerUid" not in local["rows"][0]["principalFieldBindings"]
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert result["promotionReady"] is False
+    assert (
+        "local:principal-unmapped:a-owner-reads-own-document:ownerUid"
+        in (result["errors"])
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "problem"),
+    [
+        (lambda row: row.pop("principalFieldBindings"), "missing"),
+        (lambda row: row.__setitem__("principalFieldBindings", []), "missing"),
+        (
+            lambda row: row["principalFieldBindings"].__setitem__(
+                "ownerUid", {"ref": "owner-a"}
+            ),
+            "ownerUid:invalid",
+        ),
+        (
+            lambda row: row["principalFieldBindings"]["ownerUid"].__setitem__(
+                "ref", "stranger"
+            ),
+            "ownerUid:invalid",
+        ),
+        (
+            lambda row: row["principalFieldBindings"]["ownerUid"].__setitem__(
+                "readbackIndex", 10_000
+            ),
+            "ownerUid:invalid",
+        ),
+        (
+            lambda row: row["principalFieldBindings"]["ownerUid"].__setitem__(
+                "readbackIndex", 1
+            ),
+            "ownerUid:readback-mismatch",
+        ),
+        (
+            lambda row: row["principalFieldBindings"]["ownerUid"].__setitem__(
+                "ref", "other-b"
+            ),
+            "ownerUid:readback-mismatch",
+        ),
+    ],
+)
+def test_a_binding_that_the_readbacks_do_not_show_is_named(mutate, problem) -> None:
+    production, local, plan = bound_pair()
+    bind_principal(production, "ownerUid", "owner-a")
+    bind_principal(local, "ownerUid", "owner-a")
+    steps = local["cleanup"]["accountSteps"]
+    assert (
+        steps[0]["kind"] == "account-readback" and steps[0]["accountRef"] == "owner-a"
+    )
+    assert steps[1]["kind"] != "account-readback"
+    mutate(local["rows"][0])
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert result["acquisitionValidated"] is False
+    assert (
+        f"local:principal-binding:a-owner-reads-own-document:{problem}"
+        in result["errors"]
+    )
+
+
 def test_a_principal_label_missing_from_the_redaction_list_is_unmapped() -> None:
     production, local, plan = bound_pair()
-    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
-    local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    bind_principal(production, "ownerUid", "owner-a")
+    bind_principal(local, "ownerUid", "owner-a")
     local["redactedPrincipals"] = [
         label for label in local["redactedPrincipals"] if label != "principal:owner-a"
     ]
@@ -258,7 +361,7 @@ def test_a_principal_label_missing_from_the_redaction_list_is_unmapped() -> None
 
 def test_a_non_string_in_a_principal_slot_is_unmapped() -> None:
     production, local, plan = bound_pair()
-    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    bind_principal(production, "ownerUid", "owner-a")
     local["rows"][0]["observed"]["fields"]["ownerUid"] = {"principal": "owner-a"}
     result = compare(production, local, plan)
     assert result["classification"] == INDETERMINATE
@@ -280,8 +383,8 @@ def test_an_unmapped_principal_does_not_validate_the_acquisition() -> None:
     assert result["errors"] != []
     assert result["acquisitionValidated"] is False
     assert result["promotionReady"] is False
-    local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
-    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    bind_principal(local, "ownerUid", "owner-a")
+    bind_principal(production, "ownerUid", "owner-a")
     result = compare(production, local, plan)
     assert result["errors"] == []
     assert result["acquisitionValidated"] is True

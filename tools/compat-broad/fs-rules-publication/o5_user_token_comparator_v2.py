@@ -37,14 +37,16 @@ findings 1 and 3). An observed record is admitted only with a JSON-boolean
 ``documentPresent``, a non-empty string ``status`` and finite JSON throughout;
 values are compared as encoded JSON, so ``1`` and ``true`` differ. A field the
 plan resolves to a principal is mapped to the logical principal reference
-through the run's own binding, the ``principal:<ref>`` label the collector's
-account readback recorded; a value with no such binding is not a principal
-and leaves the row ``INDETERMINATE``, never equal.
+through the run's own binding: the ``principal:<ref>`` label the collector's
+account readback recorded, together with the row's pre-redaction
+``principalFieldBindings`` entry that proves the label replaced the uid the
+readback returned (external review RULES-SEMANTIC-REPAIR-006). A value with
+no such binding, a label-shaped literal included, is not a principal and
+leaves the row ``INDETERMINATE``, never equal.
 """
 
 from __future__ import annotations
 
-import json
 import math
 import re
 from collections.abc import Mapping
@@ -78,9 +80,15 @@ from o5_user_token_collector import (
     endpoint_host,
     ruleset_transitions,
 )
+from o5_user_token_semantics import (
+    BINDINGS_KEY,
+    binding_problem,
+    is_typed_json,
+    same_typed_json,
+)
 from o5_user_token_shadow import unredacted_identifiers
 
-COMPARATOR_CONTRACT = "fs-rules-user-token-comparator-v4"
+COMPARATOR_CONTRACT = "fs-rules-user-token-comparator-v5"
 
 MATCH = "MATCH"
 SEMANTIC_MISMATCH = "SEMANTIC_MISMATCH"
@@ -145,55 +153,6 @@ _CLOCK_TOLERANCE_SECONDS = 60.0
 
 def _is_number(value: Any) -> bool:
     return type(value) in (int, float) and math.isfinite(value)
-
-
-def _json_value(value: Any, depth: int = 0, active: set[int] | None = None) -> bool:
-    """Observed records are finite JSON, not arbitrary Python object graphs.
-
-    Copied from ``tools/compat-broad/auth-credential-tokens/credential_comparator.py``
-    (``_json_value``) rather than imported, so the lane's source map binds no
-    foreign file.
-    """
-    if depth > 128:
-        return False
-    kind = type(value)
-    if kind is int:
-        return value.bit_length() <= 4096
-    if kind in (str, bool) or value is None:
-        return True
-    if kind is float:
-        return math.isfinite(value)
-    if kind not in (dict, list):
-        return False
-    active = set() if active is None else active
-    identity = id(value)
-    if identity in active:
-        return False
-    active.add(identity)
-    try:
-        if kind is dict and any(type(key) is not str for key in value):
-            return False
-        items = value.values() if kind is dict else value
-        return all(_json_value(item, depth + 1, active) for item in items)
-    finally:
-        active.discard(identity)
-
-
-def _same_json(left: Any, right: Any) -> bool:
-    """Type-preserving JSON equality: bool, int and float stay distinct at
-    every depth, lists and mappings are compared element by element.
-
-    Copied from ``credential_comparator._same_json`` in the
-    auth-credential-tokens lane. Row admission has already excluded non-JSON
-    graphs and nonfinite numbers; if a value still cannot be encoded it is
-    not equal, so a malformed value never reads as a match.
-    """
-    try:
-        return json.dumps(left, sort_keys=True, allow_nan=False) == json.dumps(
-            right, sort_keys=True, allow_nan=False
-        )
-    except (TypeError, ValueError):
-        return False
 
 
 def _hex(value: Any, pattern: re.Pattern[str]) -> bool:
@@ -499,6 +458,11 @@ def _admit_rows(side: _Side, rows: list[Any]) -> None:
             side.fail(f"row-unobserved:{case_id}")
         else:
             _admit_observed(side, observed, case_id)
+        problem = binding_problem(
+            row, side.bundle.get("cleanup"), {e["ref"] for e in plan["ownedAccounts"]}
+        )
+        if problem is not None:
+            side.fail(f"principal-binding:{case_id}:{problem}")
         at = row.get("at")
         if not _is_number(at):
             side.fail("time-contradiction:row-timestamp")
@@ -513,7 +477,7 @@ def _admit_observed(side: _Side, observed: Mapping[str, Any], case_id: str) -> N
     a non-empty string status, a JSON-boolean presence flag, fields that are a
     mapping or absent, and finite JSON throughout. A number in a boolean slot
     is a malformed record, not a value to compare."""
-    if not _json_value(dict(observed)):
+    if not is_typed_json(dict(observed)):
         side.fail(f"row-schema:{case_id}:not-json")
     if not observed["status"]:
         side.fail(f"row-schema:{case_id}:status")
@@ -1037,12 +1001,12 @@ def _compare_rows(
             # compared at all; equality of two unmapped values is not agreement.
             row["classification"] = INDETERMINATE
             row["reasons"] = unmapped
-        elif not _same_json(row["production"], row["local"]):
+        elif not same_typed_json(row["production"], row["local"]):
             row["classification"] = SEMANTIC_MISMATCH
             row["reasons"] = sorted(
                 key
                 for key in row["production"]
-                if not _same_json(row["production"][key], row["local"][key])
+                if not same_typed_json(row["production"][key], row["local"][key])
             )
         hypothesis = operation["expect"].get("productionHypothesis")
         if isinstance(hypothesis, Mapping):
@@ -1128,13 +1092,18 @@ def _projection(
     Field values that resolve to a principal differ between sides by
     construction, because the two runs mint different accounts, so each is
     mapped through ``labels`` to the logical principal ``{"$principal": ref}``
-    and that is what is compared. A value ``labels`` does not name is
-    projected as ``{"$principal": None}`` and reported as unmapped; being a
-    non-empty string is not a mapping. Every other field value is compared
-    literally, by typed JSON equality.
+    and that is what is compared. The mapping needs two witnesses that agree:
+    the label the readback recorded, and the row's own pre-redaction binding
+    (validated by ``_admit_rows``) naming the same principal for that field.
+    A value without both is projected as ``{"$principal": None}`` and reported
+    as unmapped; being a non-empty string, or looking like a label, is not a
+    mapping. Every other field value is compared literally, by typed JSON
+    equality.
     """
     observed = row.get("observed") or {}
     fields = observed.get("fields")
+    bindings = row.get(BINDINGS_KEY)
+    bindings = bindings if isinstance(bindings, Mapping) else {}
     projected_fields: dict[str, Any] | None = None
     unmapped: list[str] = []
     if isinstance(fields, Mapping):
@@ -1144,6 +1113,11 @@ def _projection(
             value = fields[key]
             if isinstance(expected.get(key), Mapping):
                 ref = labels.get(value) if isinstance(value, str) else None
+                binding = bindings.get(key)
+                if ref is not None and not (
+                    isinstance(binding, Mapping) and binding.get("ref") == ref
+                ):
+                    ref = None
                 projected_fields[key] = {"$principal": ref}
                 if ref is None:
                     unmapped.append(key)

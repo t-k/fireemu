@@ -72,11 +72,11 @@ def lock_scopes(plan: dict) -> list[dict]:
     project = plan["localProject"]
     return [
         {
-            "key": f"project/{project}/auth/accounts/{nonce}/accountA",
+            "key": f"projects/{project}/auth/accounts/o1-oob-{nonce}-a",
             "mode": "WRITE",
         },
         {
-            "key": f"project/{project}/auth/accounts/{nonce}/accountB",
+            "key": f"projects/{project}/auth/accounts/o1-oob-{nonce}-b",
             "mode": "WRITE",
         },
     ]

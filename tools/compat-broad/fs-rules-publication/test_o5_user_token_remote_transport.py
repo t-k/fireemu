@@ -235,6 +235,32 @@ def ruleset_request(plan, label):
     }
 
 
+@pytest.mark.parametrize(
+    ("action", "extra", "route", "method"),
+    [
+        ("create", {"label": "A", "sourceDigest": digest("rules-a")}, "ruleset-create", "POST"),
+        ("get", {"rulesetName": "ruleset-a"}, "ruleset-get", "GET"),
+        ("delete", {"rulesetName": "ruleset-a"}, "ruleset-delete", "DELETE"),
+        ("release-get", {"releaseName": "cloud.firestore"}, "release-get", "GET"),
+        ("release-patch", {"releaseName": "cloud.firestore", "rulesetName": "ruleset-a"}, "release-patch", "PATCH"),
+        ("release-executable", {"releaseName": "cloud.firestore"}, "release-get-executable", "GET"),
+    ],
+)
+def test_rules_lifecycle_routes_are_closed(plan, action, extra, route, method):
+    plan = dict(plan, rulesets={"A": {"source": "rules-a"}, "B": {"source": "rules-b"}})
+    operation = {"kind": "rules-lifecycle", "phase": "ruleset", "action": action, **extra}
+    request = remote.prepare_request(plan, operation, credentials={"administrator": "fixture-admin"})
+    assert request["route"] == route
+    assert request["method"] == method
+    assert request["origin"] == remote.RULES_ORIGIN
+
+
+def test_rules_lifecycle_rejects_arbitrary_project_and_release_path(plan):
+    operation = {"kind": "rules-lifecycle", "phase": "ruleset", "action": "release-get", "releaseName": "projects/other/releases/x"}
+    with pytest.raises(ValueError, match="release resource shape refused"):
+        remote.prepare_request(plan, operation, credentials={"administrator": "fixture-admin"})
+
+
 def test_prepare_accepts_every_actual_collector_observation(plan):
     credentials = {
         "owner-a": "fixture-a",

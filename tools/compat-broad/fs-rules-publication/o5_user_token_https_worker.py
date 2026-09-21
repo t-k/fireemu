@@ -28,6 +28,9 @@ _DOCUMENT = re.compile(
 )
 _COMMIT = "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit"
 _RULESET = "/v1/projects/fireemu-35fe6/rulesets"
+_RULESET_ITEM = re.compile(r"^/v1/projects/fireemu-35fe6/rulesets/[A-Za-z0-9_-]{1,128}$")
+_RELEASE = re.compile(r"^/v1/projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}$")
+_EXECUTABLE = re.compile(r"^/v1/projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}:getExecutable$")
 _ACCOUNT = re.compile(
     r"^/v1/projects/fireemu-35fe6(?:/tenants/[A-Za-z0-9][A-Za-z0-9_-]{3,35})?/accounts:(lookup|update|delete)$"
 )
@@ -107,6 +110,34 @@ def _route(service: Any, route: Any, method: Any, path: Any) -> None:
         and path == _RULESET
     ):
         return
+    if (
+        service == "rules"
+        and route in {"ruleset-create", "ruleset-list"}
+        and method in {"POST", "GET"}
+        and path == _RULESET
+    ):
+        return
+    if (
+        service == "rules"
+        and route in {"ruleset-get", "ruleset-delete"}
+        and method in {"GET", "DELETE"}
+        and _RULESET_ITEM.fullmatch(path)
+    ):
+        return
+    if (
+        service == "rules"
+        and route in {"release-get", "release-patch"}
+        and method in {"GET", "PATCH"}
+        and _RELEASE.fullmatch(path)
+    ):
+        return
+    if (
+        service == "rules"
+        and route == "release-get-executable"
+        and method == "GET"
+        and _EXECUTABLE.fullmatch(path)
+    ):
+        return
     raise ValueError("closed service route required")
 
 
@@ -160,7 +191,7 @@ def exchange(
         method == "GET"
         and body is not None
         or method != "GET"
-        and route == "observation-commit"
+        and route in {"observation-commit", "ruleset-create", "release-patch"}
         and body is None
     ):
         raise ValueError("request body shape refused")

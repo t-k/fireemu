@@ -44,7 +44,9 @@ _DOCUMENT = re.compile(
     r"^projects/([a-z][a-z0-9-]{4,28}[a-z0-9])/databases/\(default\)/documents/"
     r"o5-user-token/n([0-9a-f]{32})/cases/([A-Za-z0-9_-]{1,128})$"
 )
-_WORKER_SHA256 = "547ff652b00eb667f1f0ccb6b35abc15dcabd4ddf174e489dafa39519ffcfaed"
+_RULESET_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_RELEASE_ID = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+_WORKER_SHA256 = "a3076ff8ed46c155e4fa81f5c0505a4fb63224d31417c2318e046aa4d8728022"
 _OWNED_CHILDREN: set[int] = set()
 
 
@@ -478,6 +480,44 @@ def _ruleset(
     }
 
 
+def _rules_route(
+    plan: dict[str, Any], operation: dict[str, Any], credentials: dict[str, Any]
+) -> dict[str, Any]:
+    """Build only the frozen Rules REST lifecycle routes."""
+    if not isinstance(operation, dict) or operation.get("phase") != "ruleset":
+        raise ValueError("rules lifecycle phase required")
+    token = _credential(credentials, "administrator", "administrator")
+    headers = _headers(token)
+    action = operation.get("action")
+    if action == "create":
+        if set(operation) != {"kind", "phase", "action", "label", "sourceDigest"} or operation.get("kind") != "rules-lifecycle":
+            raise ValueError("ruleset create shape refused")
+        label = operation["label"]
+        source = plan.get("rulesets", {}).get(label, {}).get("source")
+        if not isinstance(label, str) or not _RULESET_ID.fullmatch(label) or not isinstance(source, str) or digest(source) != operation["sourceDigest"]:
+            raise ValueError("ruleset source binding differs")
+        return {"service": "rules", "route": "ruleset-create", "origin": RULES_ORIGIN, "path": f"/v1/projects/{PROJECT}/rulesets", "method": "POST", "headers": headers, "body": {"source": {"files": [{"name": "firestore.rules", "content": source}]}}}
+    if action in {"get", "delete"}:
+        if set(operation) != {"kind", "phase", "action", "rulesetName"} or operation.get("kind") != "rules-lifecycle" or not isinstance(operation["rulesetName"], str) or not _RULESET_ID.fullmatch(operation["rulesetName"]):
+            raise ValueError("ruleset resource shape refused")
+        return {"service": "rules", "route": f"ruleset-{action}", "origin": RULES_ORIGIN, "path": f"/v1/projects/{PROJECT}/rulesets/{operation['rulesetName']}", "method": "GET" if action == "get" else "DELETE", "headers": headers, "body": None}
+    if action in {"release-get", "release-patch", "release-executable"}:
+        required = {"phase", "action", "releaseName"}
+        if action == "release-patch":
+            required |= {"rulesetName"}
+        if set(operation) != required | {"kind"} or operation.get("kind") != "rules-lifecycle" or not isinstance(operation["releaseName"], str) or not _RELEASE_ID.fullmatch(operation["releaseName"]):
+            raise ValueError("release resource shape refused")
+        release = operation["releaseName"]
+        if action == "release-patch":
+            ruleset = operation["rulesetName"]
+            if not isinstance(ruleset, str) or not _RULESET_ID.fullmatch(ruleset):
+                raise ValueError("release ruleset binding refused")
+            return {"service": "rules", "route": "release-patch", "origin": RULES_ORIGIN, "path": f"/v1/projects/{PROJECT}/releases/{release}", "method": "PATCH", "headers": headers, "body": {"release": {"name": f"projects/{PROJECT}/releases/{release}", "rulesetName": f"projects/{PROJECT}/rulesets/{ruleset}"}, "updateMask": "rulesetName"}}
+        executable = action == "release-executable"
+        return {"service": "rules", "route": "release-get-executable" if executable else "release-get", "origin": RULES_ORIGIN, "path": f"/v1/projects/{PROJECT}/releases/{release}{':getExecutable' if executable else ''}", "method": "GET", "headers": headers, "body": None}
+    raise ValueError("rules lifecycle action refused")
+
+
 def _account_path(tenant: str | None, suffix: str) -> str:
     prefix = f"/v1/projects/{PROJECT}"
     if tenant is not None:
@@ -665,6 +705,8 @@ def prepare_request(
         raise ValueError("operation required")  # noqa: TRY004
     if operation.get("kind") == "ruleset-release":
         return _ruleset(plan, operation, credentials)
+    if operation.get("kind") == "rules-lifecycle":
+        return _rules_route(plan, operation, credentials)
     if operation.get("kind") == "principal-action":
         return _principal(plan, operation, credentials, account_bindings)
     if operation.get("phase") == "recovery":

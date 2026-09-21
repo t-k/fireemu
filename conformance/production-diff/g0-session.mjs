@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { publishJson } from "./io.mjs";
 import { requireThat, digestJson, safeCode } from "./core.mjs";
-import { g0SessionPythonSource, readOwnedProcessArgv, validateG0Origins } from "./g0.mjs";
+import { g0SessionPythonSource, readOwnedProcessArgv, resolveLockedUvCommand, validateG0Origins } from "./g0.mjs";
 
 const directory = process.env.PILOT_RUN_DIR;
 requireThat(typeof directory === "string", "missing-run-directory");
@@ -62,7 +62,7 @@ requireThat(
   "g0-build-provenance-invalid",
 );
 const origins = validateG0Origins(process.env);
-const pythonCommand = execFileSync("which", ["uv"], { encoding: "utf8" }).trim();
+const pythonCommand = resolveLockedUvCommand();
 const python = g0SessionPythonSource();
 const pythonArgs = ["run", "--project", inventoryProject, "--locked", "--python", "3.12", "python", "-c", python, root, directory];
 const freshness = {

@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { compareG0, g0SessionPythonSource, readOwnedProcessArgv, validateG0Origins } from "../g0.mjs";
+import { compareG0, g0SessionPythonSource, readOwnedProcessArgv, resolveLockedUvCommand, validateG0Origins } from "../g0.mjs";
 import { verifyG0ProgramDigest } from "../pilot.mjs";
 import { digestJson } from "../core.mjs";
 import { G0_CASE } from "../registry.mjs";
@@ -108,6 +108,12 @@ test("G0 process identity uses the OS-native exact argv of a real owned child", 
   }
 });
 
+test("G0 session startup resolves the locked uv executable through its real launcher lookup", () => {
+  assert.match(resolveLockedUvCommand(), /^\//);
+  const source = readFileSync(new URL("../g0-session.mjs", import.meta.url), "utf8");
+  assert.match(source, /resolveLockedUvCommand\(\)/);
+});
+
 const nativeG0PathEnvironment = [
   "G0_RETAINED_ARTIFACT",
   "G0_BUILD_MANIFEST",
@@ -138,6 +144,7 @@ test("native G0 readiness separates absolute inputs from the registered profile 
 });
 
 test("G0 opt-in native handoff reaches the real worker and closes every recovery slot", { skip: !nativeG0Ready }, async () => {
+  assert.equal(existsSync(process.env.G0_NATIVE_OUTPUT_ROOT), true, "native output parent must exist");
   const output = join(process.env.G0_NATIVE_OUTPUT_ROOT, `g0-native-${process.pid}-${Date.now()}`);
   assert.equal(existsSync(output), false);
   const pilot = spawn(
@@ -154,10 +161,16 @@ test("G0 opt-in native handoff reaches the real worker and closes every recovery
       "--timeout",
       "600",
     ],
-    { cwd: process.cwd(), env: process.env, stdio: ["ignore", "ignore", "ignore"] },
+    { cwd: process.cwd(), env: process.env, stdio: ["ignore", "ignore", "pipe"] },
   );
+  let stderrBytes = 0;
+  let stderrTruncated = false;
+  pilot.stderr.on("data", (chunk) => {
+    stderrBytes += chunk.length;
+    if (stderrBytes > 64 * 1024) stderrTruncated = true;
+  });
   const exitCode = await new Promise((resolveExit) => pilot.once("close", resolveExit));
-  assert.equal(exitCode, 0, `native G0 replay failed; retained output: ${output}`);
+  assert.equal(exitCode, 0, `native G0 replay failed; retained output: ${output}; stderrBytes=${stderrBytes}; stderrTruncated=${stderrTruncated}`);
   const batch = JSON.parse(readFileSync(join(output, "batch", "result.json"), "utf8"));
   assert.equal(batch.completed, true);
   const jobs = Object.values(batch.jobs);

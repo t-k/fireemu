@@ -39,6 +39,12 @@ export function readOwnedProcessArgv(pid) {
   return null;
 }
 
+export function resolveLockedUvCommand() {
+  const command = execFileSync("which", ["uv"], { encoding: "utf8" }).trim();
+  requireThat(command.startsWith("/"), "g0-uv-command-unavailable");
+  return command;
+}
+
 export function g0SessionPythonSource() {
   return [
     "import json, os, pathlib, subprocess, sys",

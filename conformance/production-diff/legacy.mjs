@@ -24,6 +24,9 @@ const ADAPTER_FILES = [
   "local-session.mjs",
   "network.mjs",
   "pilot.mjs",
+  "commit-transform-plan.mjs",
+  "commit-transform.mjs",
+  "commit-transform-session.mjs",
 ];
 export async function adapterSourceDigests() {
   const hashes = {};

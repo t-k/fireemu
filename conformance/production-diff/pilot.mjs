@@ -2,7 +2,7 @@
 import net from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { CASE, selectCase } from "./registry.mjs";
+import { CASE, CASES, selectCase } from "./registry.mjs";
 import {
   compareRecords,
   resultEnvelope,
@@ -15,6 +15,11 @@ import {
   safeCode,
 } from "./core.mjs";
 import { prepare, stageLegacy, sourceUnchanged } from "./legacy.mjs";
+import {
+  prepareCommitTransform,
+  commitTransformSourceUnchanged,
+  compareCommitTransform,
+} from "./commit-transform.mjs";
 import {
   cleanEnvironment,
   newPrivateDirectory,
@@ -72,7 +77,13 @@ export function parseArgs(argv) {
   return values;
 }
 
-export function buildExecArgs(binary, directory, sessionEntry, node = process.execPath) {
+export function buildExecArgs(
+  binary,
+  directory,
+  sessionEntry,
+  node = process.execPath,
+  project = CASE.project,
+) {
   return {
     command: binary,
     args: [
@@ -80,7 +91,7 @@ export function buildExecArgs(binary, directory, sessionEntry, node = process.ex
       "--config",
       join(directory, "fireemu.json"),
       "--project",
-      CASE.project,
+      project,
       "--only",
       "firestore",
       "--firestore-port",
@@ -119,6 +130,11 @@ async function portIsClosed(endpoint) {
 }
 
 export function verifySession(session, prepared, localBytes) {
+  const entry = prepared.entry;
+  // The setup prefix (e.g. batch-write's reset+seed) is case-specific; a case with no separate
+  // setup phase (e.g. commit-transform, whose plan's own steps are the setup) declares [].
+  const setupPhases = entry.sessionSetupPhases ?? ["reset", "seed"];
+  const cleanupResetRequests = entry.cleanupResetRequests ?? 1;
   requireThat(
     typeof session?.completed === "boolean" &&
       (session.failure === null || typeof session.failure === "string"),
@@ -127,44 +143,44 @@ export function verifySession(session, prepared, localBytes) {
   requireThat(!session.completed || session.failure === null, "contradictory-session-completion");
   requireThat(
     session?.schema === "fireemu-production-diff-session-v1" &&
-      session.caseId === prepared.entry.id &&
+      session.caseId === entry.id &&
       session.programDigest === digestJson(prepared.program) &&
       session.localSha256 === sha256(localBytes),
     "local-record-binding",
   );
+  const expectedCount = setupPhases.length + entry.stepIds.length;
   requireThat(
     session.productionRequests === 0 &&
-      session.requestCount === 7 &&
+      session.requestCount === expectedCount &&
       Array.isArray(session.requests) &&
-      session.requests.length === 7,
+      session.requests.length === expectedCount,
     "local-request-count",
   );
-  requireThat(
-    session.requests[0]?.phase === "reset" &&
-      session.requests[0].status >= 200 &&
-      session.requests[0].status < 300 &&
-      session.requests[1]?.phase === "seed" &&
-      session.requests[1].status >= 200 &&
-      session.requests[1].status < 300,
-    "local-setup-unconfirmed",
-  );
+  for (let i = 0; i < setupPhases.length; i++)
+    requireThat(
+      session.requests[i]?.phase === setupPhases[i] &&
+        session.requests[i].status >= 200 &&
+        session.requests[i].status < 300,
+      "local-setup-unconfirmed",
+    );
   requireThat(
     equal(
-      session.requests.slice(2).map((row) => row.phase),
-      prepared.entry.stepIds,
+      session.requests.slice(setupPhases.length).map((row) => row.phase),
+      entry.stepIds,
     ),
     "local-operation-sequence",
   );
   requireThat(
     session.cleanup?.state !== "confirmed" ||
-      (equal(session.cleanup.absent, prepared.entry.ownedDocuments) &&
-        session.cleanup.requests === prepared.entry.ownedDocuments.length + 1),
+      (equal(session.cleanup.absent, entry.ownedDocuments) &&
+        session.cleanup.requests === entry.ownedDocuments.length + cleanupResetRequests),
     "local-cleanup-binding",
   );
 }
 
 async function replay(prepared, options, directory) {
-  await stageLegacy(prepared, join(directory, "legacy"));
+  const entry = prepared.entry;
+  if (entry.adapter === "batch-write") await stageLegacy(prepared, join(directory, "legacy"));
   await publishJson(join(directory, "program.json"), prepared.program);
   await publishJson(join(directory, "programs.json"), [prepared.program]);
   await publishJson(join(directory, "fireemu.json"), CONFIG);
@@ -172,10 +188,16 @@ async function replay(prepared, options, directory) {
   const binaryPath = join(directory, "fireemu");
   const artifact = await snapshotBinary(options.binary, binaryPath);
   const startedAt = new Date().toISOString();
-  const { command, args } = buildExecArgs(binaryPath, directory, join(HERE, "local-session.mjs"));
+  const { command, args } = buildExecArgs(
+    binaryPath,
+    directory,
+    join(HERE, entry.sessionScript ?? "local-session.mjs"),
+    process.execPath,
+    entry.project,
+  );
   const processResult = await runProcess(command, args, {
     cwd: directory,
-    env: { ...cleanEnvironment(directory), PILOT_RUN_DIR: directory },
+    env: { ...cleanEnvironment(directory), PILOT_RUN_DIR: directory, PILOT_CASE_ID: entry.id },
     timeoutMs: options.timeout * 1000,
   });
   await publish(join(directory, "process.log"), processResult.log);
@@ -188,12 +210,20 @@ async function replay(prepared, options, directory) {
     throw new Error("local-execution-incomplete");
   }
   const portClosed = await portIsClosed(session.endpoint);
-  const unchanged = await sourceUnchanged(
-    options.repo,
-    prepared.entry,
-    prepared.state,
-    prepared.provenance.implementation.adapterSha256,
-  );
+  const unchanged =
+    entry.adapter === "batch-write"
+      ? await sourceUnchanged(
+          options.repo,
+          prepared.entry,
+          prepared.state,
+          prepared.provenance.implementation.adapterSha256,
+        )
+      : await commitTransformSourceUnchanged(
+          options.repo,
+          prepared.entry,
+          prepared.state,
+          prepared.provenance.implementation.adapterSha256,
+        );
   const execution = {
     origin: "new-local-process",
     freshLocalExecution: true,
@@ -291,32 +321,42 @@ export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   if (options.mode === "help") {
     console.log(
-      "pilot.mjs list | plan | replay --binary /absolute/fireemu --out /absolute/new-dir | compare --run-dir /absolute/prior-run --out /absolute/new-dir [--repo /repo] [--case " +
-        CASE.id +
-        "]",
+      "pilot.mjs list | plan | replay --binary /absolute/fireemu --out /absolute/new-dir | compare --run-dir /absolute/prior-run --out /absolute/new-dir [--repo /repo] [--case <id>], one of " +
+        CASES.map((c) => c.id).join(" | "),
     );
     return 0;
   }
   if (options.mode === "list") {
-    console.log(JSON.stringify({ cases: [CASE], productionExecuted: false }, null, 2));
+    console.log(JSON.stringify({ cases: CASES, productionExecuted: false }, null, 2));
     return 0;
   }
   let directory;
+  let entry;
   try {
+    entry = selectCase(options.case);
     if (options.out) directory = await newPrivateDirectory(options.out, options.repo);
-    const prepared = await prepare(options.repo);
+    const prepared =
+      entry.adapter === "batch-write"
+        ? await prepare(options.repo, entry)
+        : await prepareCommitTransform(options.repo, entry);
     if (options.mode === "plan") {
       console.log(
         JSON.stringify(
           {
-            case: CASE.id,
+            case: entry.id,
             readyForLocalReplay: true,
-            operations: prepared.program.steps.length,
+            operations:
+              entry.adapter === "batch-write"
+                ? prepared.program.steps.length
+                : prepared.program.observation.length + prepared.program.recovery.length,
             source: prepared.state,
-            evidenceKind: "saved-production-reference",
+            evidenceKind:
+              entry.adapter === "batch-write"
+                ? "saved-production-reference"
+                : "documented-production-outcome-reference",
             productionRequests: 0,
-            compared: CASE.compared,
-            notEstablished: CASE.notEstablished,
+            compared: entry.compared,
+            notEstablished: entry.notEstablished,
             prerequisites: [
               "caller-built native fireemu; build provenance is a separate obligation",
             ],
@@ -331,9 +371,12 @@ export async function main(argv = process.argv.slice(2)) {
       options.mode === "replay"
         ? await replay(prepared, options, directory)
         : await loadRecording(prepared, options.runDir);
-    const comparison = compareRecords({ ...prepared, actual: run.actual });
+    const comparison =
+      entry.adapter === "batch-write"
+        ? compareRecords({ ...prepared, actual: run.actual })
+        : compareCommitTransform({ ...prepared, actual: run.actual });
     const result = resultEnvelope({
-      entry: CASE,
+      entry,
       comparison,
       execution: run.execution,
       provenance: run.provenance,
@@ -342,7 +385,7 @@ export async function main(argv = process.argv.slice(2)) {
     await publish(join(directory, "report.md"), renderReport(result));
     console.log(
       JSON.stringify({
-        caseId: CASE.id,
+        caseId: entry.id,
         verdict: result.comparison.verdict,
         counts: result.comparison.counts,
         gatePassed: result.gatePassed,
@@ -354,7 +397,7 @@ export async function main(argv = process.argv.slice(2)) {
   } catch (error) {
     const failure = {
       schema: "fireemu-production-diff-failure-v1",
-      caseId: CASE.id,
+      caseId: entry?.id ?? options.case,
       verdict: "INDETERMINATE",
       code: safeCode(error),
       gatePassed: false,

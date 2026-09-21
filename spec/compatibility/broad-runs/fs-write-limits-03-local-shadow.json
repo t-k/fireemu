@@ -13,9 +13,9 @@
     "tools/compat-broad/fs-write-limits/limits_03_admission.py": "3afe8fe67c997a64a616bab96fda3b4f2c1e7ff978f262ce0122b58678551221",
     "tools/compat-broad/fs-write-limits/limits_03_descriptor.py": "ab7932945349f7071a814f416f724108abe7ac5950370ca485b6903ced498f51",
     "tools/compat-broad/fs-write-limits/limits_03_https_worker.py": "bd3f9918f732e3edf95d5330924a2a2df234bd5a67aa8f659ac07e798b37508c",
-    "tools/compat-broad/fs-write-limits/limits_03_indexes.py": "a1bc215fead7de89e952eafd7a7d8713c53255309717f0ae895e3b89e38e5351",
+    "tools/compat-broad/fs-write-limits/limits_03_indexes.py": "274d1615a2286836c660da249267115cb9ff39d631372a61640901cf919eeaf4",
     "tools/compat-broad/fs-write-limits/limits_03_o8.py": "005c64bebdaf04f568189665eed3ca63f6d6bb06dd4315b658cf0e6e5d79231b",
-    "tools/compat-broad/fs-write-limits/limits_03_preflight.py": "1e11e5232f5046d47d2cb70ac1bef847bc97d5452e28a8c9757f2399a7f21757",
+    "tools/compat-broad/fs-write-limits/limits_03_preflight.py": "b4c43f20884013d0f65a96327b01f437949918892901209a6d1ce26e81c88d8e",
     "tools/compat-broad/fs-write-limits/limits_03_production.py": "054751403e334c01604fc381260e976f1462416890e876f24392f71a5d1f846f",
     "tools/compat-broad/fs-write-limits/limits_03_remote_transport.py": "d05a53423603931e8f469afc918fa3beec379cb0ee8b8767bae115242863933c",
     "tools/compat-broad/fs-write-limits/package_03.py": "bc1c948a4c7159595cda2eee0ca16b54e6b4f277938efaec4dd8d551552c511b",
@@ -33,7 +33,7 @@
     "tools/compat-broad/fs-write-limits/test_comparator.py": "ea9e03cf969d273d20dfe8a7cee4eec4126f726ca19bce04f6fa91f235d62c4b",
     "tools/compat-broad/fs-write-limits/test_compiler.py": "cea425492df4e9538ac9d738e9d71ab5c9eef04c3371909788b7e91aab9811ef",
     "tools/compat-broad/fs-write-limits/test_json_wire_integrity.py": "1fc185c1d1908c7b2b2ac6daae1f4155bcb20f3d03d94c88553ad64ab916da08",
-    "tools/compat-broad/fs-write-limits/test_limits_03_o8.py": "6482062bad1b7673bd02db6343d1cab41f0137b82cc21bfc2601d1cffd1b064d",
+    "tools/compat-broad/fs-write-limits/test_limits_03_o8.py": "5c9dad6e053e3c3a0c44f637eef43b5afb9e2ab6ac254259e8852ca56a3ee2c0",
     "tools/compat-broad/fs-write-limits/test_namespace_sizes.py": "dbb8df349490168d6f8ac55b392356c23f0a3b0ac24ab120cdb791c9ac65041b",
     "tools/compat-broad/fs-write-limits/test_package_03.py": "2e5f59ea320cb4658acbe8ac9018ebfcbbc65d7b0d303faa92fd175a77b65fa1",
     "tools/compat-broad/fs-write-limits/test_production.py": "e4e2b568b4d285c501a67e1689d742f3e98e25a706a66525e428aaa297cc6ff4",
@@ -62,20 +62,20 @@
         "runtimeInputCount": 420,
         "runtimeInputsDigest": "05fc94af37cb548efff489eb7b92218edc3ecde51d731df53e341e3a9f8df25a",
         "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-        "sha256": "c921fc49ba8170f3cccd78a435111c6770c4db0711eb868c43411a95c76e912c"
+        "sha256": "6d2a38b8108dc5820089f0180bcd6cb377821d8a7aacbc7069fcb669a0c68d42"
       },
       "campaignId": "FS-WRITE-LIMITS-03",
       "digests": {
-        "parentManifestSha256": "939c5a5de1499cf50fac42697d526e9eefa6d2541ce7bc0b6d2e0b74e9063925",
+        "parentManifestSha256": "6105b59d813b36d36bc9877518805aaee1d7d06a878be67c2a2b2165d44b9132",
         "sourceInputsBound": true,
-        "supervisorManifestSha256": "939c5a5de1499cf50fac42697d526e9eefa6d2541ce7bc0b6d2e0b74e9063925"
+        "supervisorManifestSha256": "6105b59d813b36d36bc9877518805aaee1d7d06a878be67c2a2b2165d44b9132"
       },
       "execution": {
         "allOwnedResourcesAbsentAfterRecovery": true,
         "cleanupComplete": false,
         "cleanupValidated": false,
         "completed": false,
-        "configurationDigest": "f69bf9c830f98574120d83cf73c8e78c817c5f446b26a52915ffe192f3f8db28",
+        "configurationDigest": "52c9ca809d43c5434f573a38adf1d871a24a51a0a1dfd363c0c75774a0c81e6f",
         "database": "(default)",
         "gateCloseRefused": true,
         "indexConfiguration": {
@@ -92,7 +92,7 @@
         "ownedDocuments": 29,
         "ownedProcess": {
           "listenersClosed": true,
-          "pid": 73713,
+          "pid": 89070,
           "stopped": true
         },
         "pendingDifferences": [
@@ -124,13 +124,13 @@
         "supervisorStatus": "incomplete",
         "target": "owned-local-artifact-on-loopback"
       },
-      "executionCommit": "404393d98ca2633172b69b97933692999f9e948c"
+      "executionCommit": "677ddf1fa056d1cba1c149fc3fbdf8e03e438031"
     }
   },
   "formalCompatibilityClaim": false,
   "kind": "fs-write-limits-03-local-shadow-v2",
   "note": "Local artifact evidence only. The executed nonces, the owned resource names and the retained binaries live in private output directories and are not published here. This is not a production observation and promotes nothing. The local shadow supervisor pins the historical index configuration and verifies its digest, so it cannot apply the declared exemption; the document-name rows are pending for exactly that reason. The schedule and the cleanup ran to the end and every owned document was proven absent, but HEAD's shared Gate refused the terminal close: it settles the R3 BatchWrite that carries an empty item as an unknown create. The record is published as recorded, not completed.",
   "productionExecuted": false,
-  "sourceCommit": "404393d98ca2633172b69b97933692999f9e948c",
+  "sourceCommit": "677ddf1fa056d1cba1c149fc3fbdf8e03e438031",
   "status": "recorded-local-only-gate-close-refused"
 }

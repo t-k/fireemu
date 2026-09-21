@@ -39,7 +39,7 @@ sys.path.insert(0, str(HERE))
 from broad_contract import digest
 from o5_user_token_campaign import (
     PERMISSION_ENVELOPE,
-    manifest,
+    admitted_manifest_digest,
 )
 from o5_user_token_campaign import (
     budget as campaign_budget,
@@ -230,9 +230,9 @@ def permission_bindings(
         "database": DATABASE,
         "nonce": plan["nonce"],
         "planDigest": plan["planDigest"],
-        "campaignManifestDigest": manifest(
-            plan["project"], plan["database"], plan["nonce"], plan["tenant"]
-        )["manifestDigest"],
+        "campaignManifestDigest": admitted_manifest_digest(
+            plan["project"], plan["database"], plan["nonce"]
+        ),
         "sourceCommit": source_commit,
         "sourceInputs": inputs,
         "collectorSourceDigest": digest(inputs),

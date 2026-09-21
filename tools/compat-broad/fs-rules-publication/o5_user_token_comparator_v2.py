@@ -15,7 +15,8 @@ and verified here against something the bundle itself cannot fabricate:
 * the principal provenance per credential reference, as fingerprints derived
   from the campaign nonce and the account identity, never a token or a uid;
 * the campaign manifest digest the run was admitted under, recomputed from the
-  checked-in campaign module;
+  checked-in campaign module with the placeholder tenant, because the tenant
+  identifier is assigned only once a run has started;
 * version-bound cleanup with typed final absence for every document and account;
 * monotonic time and wire-sequence consistency between rows, releases, recovery
   steps and the enforced budget;
@@ -38,7 +39,7 @@ from collections.abc import Mapping
 from itertools import pairwise
 from typing import Any
 
-from o5_user_token_campaign import manifest, source_digests
+from o5_user_token_campaign import admitted_manifest_digest, source_digests
 from o5_user_token_case import (
     ACCOUNT_PRINCIPALS,
     CAMPAIGN,
@@ -658,9 +659,9 @@ def _cross_errors(
         side.side: (side.acquisition or {}).get("campaignManifestDigest")
         for side in (production, local)
     }
-    expected = manifest(
-        plan["project"], plan["database"], plan["nonce"], plan["tenant"]
-    )["manifestDigest"]
+    expected = admitted_manifest_digest(
+        plan["project"], plan["database"], plan["nonce"]
+    )
     if any(value is not None and value != expected for value in declared.values()):
         errors.append("manifest-mismatch")
     if manifest_digest is not None and manifest_digest != expected:

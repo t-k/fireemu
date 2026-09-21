@@ -25,7 +25,12 @@ sys.path.insert(0, str(HERE))
 import o5_user_token_descriptor as lane
 import o8_admission
 from broad_contract import digest
-from o5_user_token_campaign import _SOURCE_FILES, admission, manifest
+from o5_user_token_campaign import (
+    _SOURCE_FILES,
+    admission,
+    admitted_manifest_digest,
+    manifest,
+)
 from o5_user_token_case import CAMPAIGN
 from o5_user_token_collector import ROLE_PRODUCTION
 from o8_campaign import REQUIRED_MEMBERS, CampaignDescriptor
@@ -203,11 +208,8 @@ def test_the_permission_bindings_name_the_collector_and_the_comparator(
         permission["comparatorSha256"]
         == hashlib.sha256((ROOT / lane.COMPARATOR_ENTRY).read_bytes()).hexdigest()
     )
-    assert (
-        permission["campaignManifestDigest"]
-        == manifest(lane.PROJECT, lane.DATABASE, NONCE, lane.PLACEHOLDER_TENANT)[
-            "manifestDigest"
-        ]
+    assert permission["campaignManifestDigest"] == admitted_manifest_digest(
+        lane.PROJECT, lane.DATABASE, NONCE
     )
     assert permission["wallSeconds"] == 600
     assert permission["recoverySeconds"] == 300

@@ -155,6 +155,17 @@ def manifest(
     return value
 
 
+def admitted_manifest_digest(project: str, database: str, nonce: str) -> str:
+    """The digest of the manifest a run of this nonce is admitted under.
+
+    The tenant identifier is assigned by Identity Platform (or by the local
+    Auth emulator) only once the run has started, so the admitted manifest is
+    the one compiled with the placeholder tenant. Both sides of a comparison
+    bind this digest; the tenant-specific plan digests are bound separately.
+    """
+    return manifest(project, database, nonce)["manifestDigest"]
+
+
 def validate_manifest(value: Any) -> None:
     if not isinstance(value, dict) or value.get("contract") != CAMPAIGN_CONTRACT:
         raise ValueError("manifest contract drift")

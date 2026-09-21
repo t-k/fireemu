@@ -8,7 +8,7 @@ import json
 import time
 
 import pytest
-from o5_user_token_campaign import manifest, source_digests
+from o5_user_token_campaign import admitted_manifest_digest, source_digests
 from o5_user_token_case import compile_case, digest
 from o5_user_token_collector import (
     COLLECTOR_CONTRACT,
@@ -48,9 +48,7 @@ def principals_for(plan: dict, salt: str) -> dict:
 
 def acquisition_for(plan: dict, role: str) -> dict:
     """The launcher bindings a bound run of ``role`` carries."""
-    manifest_digest = manifest(PROJECT, "(default)", NONCE, "o5-user-token-tenant")[
-        "manifestDigest"
-    ]
+    manifest_digest = admitted_manifest_digest(PROJECT, "(default)", plan["nonce"])
     now = time.time()
     if role == ROLE_PRODUCTION:
         return {

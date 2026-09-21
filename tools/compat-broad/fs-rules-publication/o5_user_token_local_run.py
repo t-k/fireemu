@@ -45,7 +45,7 @@ from typing import Any
 # entry point is imported or invoked by this local transport.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from batch_wire import NoRedirect, _read_bounded_response
-from o5_user_token_campaign import manifest
+from o5_user_token_campaign import admitted_manifest_digest
 from o5_user_token_case import (
     PRINCIPAL_EMPTY,
     PRINCIPAL_EXPIRED,
@@ -760,9 +760,9 @@ def _local_acquisition(output: Path, shadow: LocalShadow) -> dict[str, Any]:
         }
     return {
         "environment": {"kind": ENVIRONMENT_LOCAL},
-        "campaignManifestDigest": manifest(
-            plan["project"], plan["database"], plan["nonce"], plan["tenant"]
-        )["manifestDigest"],
+        "campaignManifestDigest": admitted_manifest_digest(
+            plan["project"], plan["database"], plan["nonce"]
+        ),
         "nonceReservation": None,
         "ownerPermission": None,
         "artifact": artifact,

@@ -826,7 +826,7 @@ def _validate_recovery_gate_plan(parent_plan, child_plan, child):
     if any(operation.get("versionFrom") != "recovery-inspection-read" for operation in operations if operation.get("kind") == "recovery-conditional-delete"):
         raise ValueError("version-bound delete inspection required")
     resources = sorted({operation.get("resource") for operation in operations})
-    if digest(resources) != child["resourceDigest"] or set(resources) != set(child["ownedResources"]):
+    if digest(resources) != child["resourceDigest"] or resources != child["ownedResources"] or child["manifestDigest"] != digest(recovery):
         raise ValueError("recovery resources differ from canonical plan")
 
 
@@ -1107,6 +1107,8 @@ class Ledger:
         O8 capability and therefore cannot consume one before a durable save.
         A later issuer must bind its capability to the returned child ticket.
         """
+        if not isinstance(canonical_parent_inputs, dict) or not isinstance(parent_permission, dict):
+            raise ValueError("canonical parent producer inputs and permission required")
         _recovery_child_claim(child_claim)
         _envelope(new_envelope)
         if now is not None:
@@ -1166,6 +1168,7 @@ class Ledger:
         expected_event = next(
             (event for event in parent_gate.get("events", [])
              if event.get("phase") == "observation"
+             and event.get("job") == initial_gate_job
              and event.get("index") == creating_index
              and event.get("requestDigest") == digest(expected_operation)),
             None,

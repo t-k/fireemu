@@ -146,6 +146,12 @@ def _recovery_fixture(tmp_path):
     envelope = {"permissionDigest": "b" * 64, "issuedAt": 1000, "expiresAt": time.time() + 3000,
                 "limits": {"requests": 85, "accounts": 0, "resources": 51, "costMicrousd": 85},
                 "concurrency": 1, "scopes": parent_envelope["scopes"]}
+    original_begin = ledger.begin_recovery_extension
+    def begin(*args, **kwargs):
+        kwargs.setdefault("canonical_parent_inputs", ACTUAL_INPUTS)
+        kwargs.setdefault("parent_permission", ACTUAL_PERMISSION)
+        return original_begin(*args, **kwargs)
+    ledger.begin_recovery_extension = begin
     return ledger, ticket, child_claim, envelope, parent_plan, recovery_plan
 
 
@@ -308,5 +314,23 @@ def test_recovery_extension_requires_uncertain_selected_create_event(tmp_path, o
         ledger.begin_recovery_extension(
             parent, child, envelope, parent_plan, child_plan, now=1100,
             canonical_parent_inputs=ACTUAL_INPUTS, parent_permission=ACTUAL_PERMISSION,
+        )
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.parametrize("missing", ["both", "inputs", "permission"])
+def test_recovery_extension_requires_canonical_parent_producer_inputs(tmp_path, missing):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    before = ledger.snapshot()
+    kwargs = {"canonical_parent_inputs": ACTUAL_INPUTS, "parent_permission": ACTUAL_PERMISSION}
+    if missing == "both":
+        kwargs = {"canonical_parent_inputs": None, "parent_permission": None}
+    elif missing == "inputs":
+        kwargs["canonical_parent_inputs"] = None
+    else:
+        kwargs["parent_permission"] = None
+    with pytest.raises(ValueError, match="canonical parent producer"):
+        reservations.Ledger.begin_recovery_extension(
+            ledger, parent, child, envelope, parent_plan, child_plan, now=1100, **kwargs
         )
     assert ledger.snapshot() == before

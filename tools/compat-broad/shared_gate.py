@@ -344,6 +344,24 @@ def _auth_uid_absence_operation_valid(operation, project, account_bindings=None)
     )
 
 
+def _action_observation_delete_plan_allowed(plan, job, operation):
+    """Recognize only the frozen AUTH-ACTION intentional delete slot."""
+    return (
+        plan.get("campaignId") == "AUTH-ACTION-OOB-DELIVERY-BOUNDARY-01"
+        and plan.get("observationDeletePolicy") == "auth-action-account-b-delete-v1"
+        and operation.get("id") == "account-b-delete"
+        and _auth_operation(operation)
+        and operation.get("method") == "POST"
+        and operation.get("path") == (
+            f"identitytoolkit.googleapis.com/v1/projects/{plan.get('project')}/accounts:delete"
+        )
+        and operation.get("account") == "accountB"
+        and operation.get("uidBinding") == "accountBUid"
+        and operation.get("body") == {"localId": "$binding:accountBUid"}
+        and operation.get("resource") in set(job.get("resources", []))
+    )
+
+
 def _auth_creation_ownership(state, job, operation):
     """Require a journaled creation event for this exact Auth account resource."""
     account = operation.get("account")
@@ -775,6 +793,7 @@ def create(path, plan):
                 operation in job.get("observation", [])
                 and operation.get("method") == "POST"
                 and operation.get("path", "").endswith("/accounts:delete")
+                and not _action_observation_delete_plan_allowed(plan, job, operation)
             ):
                 raise ValueError("destructive Auth delete is recovery-only")
             if (
@@ -2326,6 +2345,10 @@ class Gate:
         contract before settling an otherwise unknown creation acknowledgement.
         """
 
+    def _allow_observation_auth_delete(self, state, job, operation, index):
+        """Closed extension point; the base Gate never permits Auth observation deletes."""
+        return False
+
     def _validate_finish_evidence(self, state):
         """Validate protocol-specific terminal evidence while the lock is held."""
         if _stream_policy(state["plan"]):
@@ -2456,6 +2479,7 @@ class Gate:
                     and operation.get("method") == "POST"
                     and operation.get("path", "").endswith("/accounts:delete")
                     and not recovery
+                    and not self._allow_observation_auth_delete(state, job, operation, index)
                 ):
                     raise ValueError("destructive Auth delete is recovery-only")
                 if (

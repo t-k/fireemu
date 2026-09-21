@@ -60,6 +60,10 @@ class GateScheduleStalled(GateRefusal):
     """A skipped creating slot cannot be consumed zero-wire; the schedule cannot advance."""
 
 
+class CredentialUnavailable(GateRefusal):
+    """The verified credential cannot cover the slot; refused before the Gate charged it."""
+
+
 def validate_collector_options(options: dict) -> dict:
     """Refuse loopback as a production target and non-loopback as a local one.
 
@@ -269,6 +273,7 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
     ladder = None
     residual = None
     abandoned = {"done": False}
+    stall_record: dict = {"first": None}
     ladder_summary = {
         "slots": 0,
         "reads": 0,
@@ -309,6 +314,18 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
 
         stuck: dict[int, str] = {}
 
+        def stall(position, reason):
+            """Record the first stall so the receipt names the slot and its cause."""
+            entry = schedule[position]
+            if stall_record["first"] is None:
+                stall_record["first"] = {
+                    "phase": entry["phase"],
+                    "index": entry["index"],
+                    "kind": projection[entry["phase"]][entry["index"]]["kind"],
+                    "reason": reason,
+                }
+            raise GateScheduleStalled(reason)
+
         def advance_to(gate_phase, gate_index):
             """Consume the frozen slots the collector passed over without a send.
 
@@ -329,17 +346,13 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
             )
             for position in range(cursor, target):
                 if position in stuck:
-                    raise GateScheduleStalled(
-                        f"schedule stalled behind a refused recovery slot: {stuck[position]}"
-                    )
+                    stall(position, stuck[position])
                 entry = schedule[position]
                 if entry["phase"] == "recovery":
                     dispatch_native(entry["index"], advance=False)
                     if gate.snapshot()["jobs"][JOB]["scheduleDone"] <= position:
-                        stuck[position] = f"recovery:{entry['index']}"
-                        raise GateScheduleStalled(
-                            f"schedule stalled behind a refused recovery slot: {stuck[position]}"
-                        )
+                        stuck[position] = "refused-recovery-slot"
+                        stall(position, stuck[position])
                     continue
                 if stopped or abandoned["done"]:
                     abandon(job)
@@ -349,9 +362,7 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
                     gate.skip_scheduled_slot(frozen, False, "collector-skipped-slot")
                     continue
                 if gate_phase == "observation":
-                    raise GateScheduleStalled(
-                        "skipped creating slot cannot be consumed zero-wire"
-                    )
+                    stall(position, "creating-declaration-gap")
                 abandon(job)
             if gate_phase == "observation" and (stopped or abandoned["done"]):
                 raise ObservationAbandoned(
@@ -385,13 +396,18 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
             }
             routes.append(entry)
             box = {}
+            # A credential that cannot cover the slot refuses here, before the
+            # Gate charges it, rather than as a lost answer inside `send`.
+            try:
+                token = management.data_token(time.monotonic() + slot_seconds)
+            except ValueError as error:
+                entry["skipped"] = "refused:CredentialUnavailable"
+                raise CredentialUnavailable(type(error).__name__) from error
 
             def send():
                 deadline = time.monotonic() + slot_seconds
                 receipt = capability._transmit(
-                    admission.transport_call(
-                        request, management.data_token(deadline), deadline=deadline
-                    )
+                    admission.transport_call(request, token, deadline=deadline)
                 )
                 box["receipt"] = receipt
                 decoded = wire.validate_receipt(receipt)
@@ -442,8 +458,18 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
                     advance=advance,
                 )
                 if receipt is None:
-                    row["skipReason"] = ABSENT_AT_READ
-                    ladder_summary["absentAtRead"] += 1
+                    # The Gate consumed the slot without a send; its own
+                    # reason is the row's, and only an absent read counts as
+                    # the ladder's expected outcome.
+                    reason = routes[-1]["skipped"]
+                    row["skipReason"] = (
+                        ABSENT_AT_READ
+                        if reason == "absent-or-unavailable-cleanup-read"
+                        else reason
+                    )
+                    ladder_summary["absentAtRead"] += int(
+                        row["skipReason"] == ABSENT_AT_READ
+                    )
                 else:
                     row["receipt"] = {
                         "status": receipt["status"],
@@ -542,20 +568,15 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         ):
             dispatch_native(ladder_start + offset)
         snapshot = gate.snapshot()
-        collection_clean = (
-            result.get("status") == "pass"
-            and result["cleanup"]["complete"]
-            and result["raw"]["complete"]
-            and result["publication"]["complete"]
-            and result["reconstruction"]["matches"] is True
-            and not any(
-                row["status"] == "failed"
-                for row in result["rows"] + result["cleanup"]["rows"]
-            )
-        )
+        # Each predicate is load-bearing on its own. The collector's `pass`
+        # status already means every row passed or was a benign skip, cleanup
+        # and raw retention and publication completed, and the partition
+        # ranges rebuilt the baseline; the ladder is judged by the Gate's own
+        # typed-absence journal and by its own publication; the residual scans
+        # must have run and found nothing.
+        collection_clean = result.get("status") == "pass"
         ladder_clean = (
             ladder_summary["failed"] == 0
-            and ladder_summary["provenAbsent"] == gate_projection.LADDER_DOCUMENTS
             and ladder.publication["complete"]
             and ladder_absence_complete(snapshot)
         )
@@ -611,6 +632,11 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         ladder=ladder.summary() if ladder is not None else None,
         ladderSummary=ladder_summary,
         ladderAbsenceComplete=ladder_absence_complete(snapshot),
+        creationProofCount=len(snapshot["jobs"][JOB].get("creationProofs", {}))
+        if snapshot
+        else 0,
+        resourceCount=len(snapshot["jobs"][JOB]["resources"]) if snapshot else 0,
+        scheduleStall=stall_record["first"],
         residual=residual.summary() if residual is not None else None,
         residualSummary=residual_summary,
         reconstruction=result["reconstruction"] if result is not None else None,

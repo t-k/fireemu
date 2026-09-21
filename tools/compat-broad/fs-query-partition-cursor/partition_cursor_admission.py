@@ -52,6 +52,7 @@ MEASURED_SHADOW = "measured-shadow-percentile"
 RESERVATION_BASES = (PLANNING_ASSUMPTION, MEASURED_SHADOW)
 
 __all__ = [
+    "ESCALATION_ONLY_STOP_POINTS",
     "MEASURED_SHADOW",
     "MISSING_APPROVAL",
     "NO_DATA_STOP_POINTS",
@@ -320,13 +321,18 @@ def transport_call(request, token, *, deadline) -> dict:
 
 
 # Every point this campaign can stop at, split by what may exist afterwards.
-# The first data slot is the typed-absence preflight read of the root, which
-# creates nothing; a stop there or earlier is retirable as no data. The next two
-# slots create: a lost answer to either may have been applied, and that is the
-# one outcome that must never be retired as no data. Any later stop follows a
-# seed Commit whose outcome is known, and its cleanup ladder either proves every
-# document absent or leaves the row with the owner.
-NO_DATA_STOP_POINTS = ("schedule-not-started", "preflight-absence")
+# A stop during the management preflight, before any data slot, is retirable
+# as no data. The first data slot is the typed-absence preflight read of the
+# root; it creates nothing, but once it was sent the receipt carries a
+# collector bundle and `productionExecuted` is true, which the shared Ledger's
+# no-data contract refuses, so that stop is escalation-only in practice and is
+# named as such rather than promised. The next two slots create: a lost answer
+# to either may have been applied, and that is the one outcome that must never
+# be retired as no data. Any later stop follows a seed Commit whose outcome is
+# known; its cleanup ladder either proves every document absent, or leaves the
+# row with the owner.
+NO_DATA_STOP_POINTS = ("schedule-not-started",)
+ESCALATION_ONLY_STOP_POINTS = ("preflight-absence",)
 UNCERTAIN_STOP_POINTS = ("create-uncertain", "seed-uncertain")
 ABANDONED_STOP_POINTS = ("observation-incomplete", "recovery-incomplete")
 
@@ -334,60 +340,88 @@ ABANDONED_STOP_POINTS = ("observation-incomplete", "recovery-incomplete")
 def stop_points() -> dict[str, tuple[str, ...]]:
     return {
         "noData": NO_DATA_STOP_POINTS,
+        "escalationOnly": ESCALATION_ONLY_STOP_POINTS,
         "uncertain": UNCERTAIN_STOP_POINTS,
         "abandoned": ABANDONED_STOP_POINTS,
     }
 
 
+def _escalation(stop, reason):
+    return {
+        "stopPoint": stop,
+        "disposition": "owner-escalation",
+        "retirableAsNoData": False,
+        "reason": reason,
+    }
+
+
 def classify_stop(receipt) -> dict:
-    """Name the terminal disposition a stopped run is entitled to."""
+    """Name the terminal disposition a stopped run is entitled to.
+
+    The abandoned-cleanup close is named only when the shared Ledger will
+    accept it: every assigned resource carries a creation proof and every one
+    is proven absent. A partial creation, the seed Commit refused after the
+    root was created, has proofs for fewer resources than the job holds, and
+    `close_after_abandon` refuses it; that stop is the owner's.
+    """
     if not isinstance(receipt, dict):
         raise ValueError("bounded receipt required")  # noqa: TRY004 -- refusal class, not a type report
     stop = receipt.get("stopPoint")
-    if (
-        stop in UNCERTAIN_STOP_POINTS
-        or receipt.get("mayHaveCreated") is True
-        and stop not in ABANDONED_STOP_POINTS
+    if stop in UNCERTAIN_STOP_POINTS or (
+        receipt.get("mayHaveCreated") is True and stop not in ABANDONED_STOP_POINTS
     ):
-        return {
-            "stopPoint": stop,
-            "disposition": "owner-escalation",
-            "retirableAsNoData": False,
-            "reason": "a create whose answer was lost may have been applied; up to 21 documents can remain",
-        }
+        return _escalation(
+            stop,
+            "a create whose answer was lost may have been applied; up to 21 documents can remain",
+        )
     if stop in ABANDONED_STOP_POINTS:
-        complete = receipt.get("ladderAbsenceComplete") is True
-        return {
-            "stopPoint": stop,
-            "disposition": "abandoned-cleanup-close"
-            if complete
-            else "owner-escalation",
-            "retirableAsNoData": False,
-            "reason": (
-                "documents were created and every one is proven absent by the recovery ladder"
-                if complete
-                else "documents were created and the recovery ladder did not prove every one absent"
-            ),
-        }
+        residual = receipt.get("residualSummary") or {}
+        if residual.get("complete") is True and residual.get("documents") != 0:
+            return _escalation(
+                stop,
+                "the residual scan found documents under the owned scope that this run did not prove absent",
+            )
+        absent = receipt.get("ladderAbsenceComplete") is True
+        proofs = receipt.get("creationProofCount")
+        resources = receipt.get("resourceCount")
+        fully_created = (
+            type(proofs) is int and type(resources) is int and proofs == resources
+        )
+        if absent and fully_created:
+            return {
+                "stopPoint": stop,
+                "disposition": "abandoned-cleanup-close",
+                "retirableAsNoData": False,
+                "reason": "every document was created and every one is proven absent by the recovery ladder",
+            }
+        if absent:
+            return _escalation(
+                stop,
+                "documents were partially created; the shared Ledger closes an abandoned run only when every resource has a creation proof",
+            )
+        return _escalation(
+            stop,
+            "documents were created and the recovery ladder did not prove every one absent",
+        )
+    if stop in ESCALATION_ONLY_STOP_POINTS:
+        return _escalation(
+            stop,
+            "a data read was dispatched; the shared no-data contract cannot retire a receipt that carries a collector bundle",
+        )
     if stop not in NO_DATA_STOP_POINTS:
         raise ValueError("unknown partition/cursor stop point")
     if (
         receipt.get("productionExecuted") is not False
         or receipt.get("collection") is not None
         or receipt.get("mayHaveCreated") is not False
-        or receipt.get("dataDispatches") not in (0, 1)
+        or receipt.get("dataDispatches") != 0
     ):
-        return {
-            "stopPoint": stop,
-            "disposition": "owner-escalation",
-            "retirableAsNoData": False,
-            "reason": "the journal does not prove that nothing was written",
-        }
+        return _escalation(stop, "the journal does not prove that nothing was written")
     return {
         "stopPoint": stop,
         "disposition": "aborted-no-data",
         "retirableAsNoData": True,
-        "reason": "no creating request was dispatched and no document was created",
+        "reason": "no data request was dispatched and no document was created",
     }
 
 

@@ -95,9 +95,11 @@ Two facts a reviewer should read before an execution:
   creation outcome from the typed response. The one consequence is that the
   page-token continuation slot, which the collector skips when the paged
   response carried no token, cannot be consumed zero-wire; a production
-  response without a page token would end the observation at that slot and the
-  ladder would clean up. `creating_declaration_gap` names the slots, and the
-  fix is a shared-Gate change outside this lane.
+  response without a page token, likely for twelve documents, ends the
+  observation at that slot, the ladder cleans up, and the run is incomplete
+  (`test_the_slot_eight_early_end_is_recorded_incomplete_and_recovered` pins
+  this). `creating_declaration_gap` names the slots, and the fix is a
+  shared-Gate change outside this lane; do not schedule the run before it.
 
 Run the focused checks with:
 

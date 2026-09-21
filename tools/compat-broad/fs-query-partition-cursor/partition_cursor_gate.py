@@ -81,12 +81,13 @@ LADDER_STEPS = 3
 RESIDUAL_SLOTS = 2
 # Every slot reserves at least the whole-worker wire ceiling plus spawn slack.
 SLOT_FLOOR_SECONDS = PRODUCTION_REQUEST_SECONDS + 1.0
+# The one read-only RPC the shared Gate does not recognize. `runQuery` with a
+# bare `structuredQuery` is already a read to the Gate, so it never reaches the
+# facade's settlement; `partitionQuery` takes the database parent only.
 _READ_ONLY_RPC = re.compile(
-    r"^/v1/projects/[^/?#:%]+/databases/[^/?#:%]+/documents"
-    r"(?:/[^/?#:%]+/[^/?#:%]+)*:(runQuery|partitionQuery)$"
+    r"^/v1/projects/[^/?#:%]+/databases/[^/?#:%]+/documents:(partitionQuery)$"
 )
 _READ_ONLY_KEYS = {
-    "runQuery": {"structuredQuery"},
     "partitionQuery": {"structuredQuery", "partitionCount", "pageSize", "pageToken"},
 }
 _TIMESTAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$")
@@ -445,21 +446,6 @@ def _typed_error(body: Any, status: int) -> bool:
     )
 
 
-def _query_stream_usable(body: Any) -> bool:
-    if not isinstance(body, list):
-        return False
-    for entry in body:
-        if not isinstance(entry, dict) or "error" in entry:
-            return False
-        if "document" in entry:
-            document = entry["document"]
-            if not isinstance(document, dict) or "error" in document:
-                return False
-        elif not isinstance(entry.get("readTime"), str):
-            return False
-    return True
-
-
 def _delete_commit_usable(body: Any, count: int) -> bool:
     return (
         isinstance(body, dict)
@@ -582,12 +568,18 @@ class PartitionCursorGate(FrozenGate):
                 raise ValueError("delete batch differs from its frozen slot")
             normalized = []
             for write, expected in zip(writes, frozen["body"]["writes"], strict=True):
-                name = write.get("delete") if isinstance(write, dict) else None
-                version = (
-                    (write.get("currentDocument") or {}).get("updateTime")
-                    if isinstance(write, dict)
-                    else None
-                )
+                # Exact shape: a write carries the delete name and the version
+                # precondition and nothing else, so the normalization is
+                # lossless and an extra key cannot ride along to the wire.
+                if (
+                    not isinstance(write, dict)
+                    or set(write) != {"delete", "currentDocument"}
+                    or not isinstance(write["currentDocument"], dict)
+                    or set(write["currentDocument"]) != {"updateTime"}
+                ):
+                    raise ValueError("delete write differs from its frozen shape")
+                name = write["delete"]
+                version = write["currentDocument"]["updateTime"]
                 if (
                     name != expected["delete"]
                     or name not in proofs
@@ -657,15 +649,9 @@ class PartitionCursorGate(FrozenGate):
                 self._observed["pageToken"] = token
         if event.get("creationOutcome") != "unknown":
             return
-        rpc = _read_only_rpc(operation)
-        if rpc is not None:
+        if _read_only_rpc(operation) is not None:
             if _typed_error(body, status) or (
-                status == 200
-                and (
-                    _partition_response_usable(body)
-                    if rpc == "partitionQuery"
-                    else _query_stream_usable(body)
-                )
+                status == 200 and _partition_response_usable(body)
             ):
                 # A read-only RPC cannot bring a document into existence. The
                 # shared Gate does not recognize this shape, so the facade

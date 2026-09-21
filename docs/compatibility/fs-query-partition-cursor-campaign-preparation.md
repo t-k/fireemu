@@ -162,8 +162,10 @@ Two facts a reviewer should hold before an execution:
   response carried no token, cannot be consumed without a send. A production
   response without a page token would therefore end the observation at that
   slot; the ladder would still recover every document, and the run would be
-  incomplete rather than unsafe. Twelve documents may well return no partition
-  cursors in production. The remedy is a shared-Gate change outside this lane,
+  incomplete rather than unsafe. With twelve documents, production is likely
+  to return no partition cursors and no page token, so this is the expected
+  first production outcome until the shared-Gate change lands; the lane should
+  not be scheduled before it. The remedy is a shared-Gate change outside this lane,
   recognizing `partitionQuery` with the closed keys `structuredQuery`,
   `partitionCount`, `pageSize`, `pageToken` as a non-creating read; the
   descriptor's `creatingDeclarationGap` names the affected slots on the record
@@ -172,11 +174,23 @@ Two facts a reviewer should hold before an execution:
 Exit codes: 0, cleanup verified and the reservation released; 1, the run did
 not complete and the reservation is still held with a receipt whose
 `stopPoint` names the disposition (`aborted-no-data`, `abandoned-cleanup-close`
-or `owner-escalation`); 2, admission refused before anything was created. A stop
-at the management preflight or at the typed-absence read of the root is
-retirable as no data. A lost answer to the root create or to the seed Commit is
-never retirable as no data. A later stop whose ladder proved every document
-absent closes through the abandoned-cleanup exit.
+or `owner-escalation`); 2, admission refused before anything was created. Only
+a stop during the management preflight, before any data slot, is retirable as
+no data. A stop at the typed-absence read of the root creates nothing, but the
+receipt then carries a collector bundle and `productionExecuted` is true, which
+the shared no-data contract refuses, so that stop is the owner's; it is named
+`preflight-absence` and never claimed as retirable. A lost answer to the root
+create or to the seed Commit is never retirable as no data. A later stop closes
+through the abandoned-cleanup exit only when every owned document carries a
+creation proof and every one is proven absent by the ladder; a partial
+creation, the seed Commit refused after the root was created, is proven absent
+too but has proofs for one resource, and the shared Ledger refuses the
+abandoned close for it, so that stop is the owner's as well. One more shared
+rule to know: a run-created document that was modified before the ladder
+reached it is never deleted (its version no longer matches the creation
+proof), and because a proven resource cannot be skipped, the ladder stalls
+there and the documents behind it stay in place for the owner. The receipt
+records the first stall as `scheduleStall` with the slot and its cause.
 
 Offline integration proof, executed against a temporary Ledger and an injected
 oracle, never the canonical Ledger and never the wire
@@ -222,9 +236,9 @@ instance rather than the source.
 
 | Binding | Value |
 | --- | --- |
-| Artifact source commit | `b25d9227276707c6ce9238ebac7820ca5ef85c74` |
+| Artifact source commit | `429ff0b7a70f2678d41fb5098a9d24add96e944b` |
 | Rust sources | unchanged from base `0cd79d3f48052e5e3fdb3c22ca10656b2951fd2f` |
-| Artifact SHA-256 | `d08337f9ecc5b211998c6205af45d0f3292438e27ba44686bc6beae566db768b` |
+| Artifact SHA-256 | `dce61bf5c75e7618b8a4537824daf294f457ace6273e118e6a9df5a24e4e7b25` |
 | Result | `MATCHED`, 37 of 37 raw sidecars, reconstruction matches, zero residual documents |
 
 The record also carries the SHA-256 of every lane module it was produced by, so
@@ -298,7 +312,7 @@ immutable receipt; `unobserved` means no production observation exists.
 | Condition | Implemented | Local test | Production evidence class | Campaign |
 | --- | --- | --- | --- | --- |
 | Filter and order combinations on missing fields and mixed types (`orderBy` on a missing field excludes documents, type-restricted range filters, `values/type-order`) | `crates/fireemu-core-firestore/src/query.rs` | conformance matrix against the official emulator (`conformance/firestore-matrix.json`) | immutable receipt: the live 2026-09-07 corpus `conformance/firestore-production-matrix.json` covers the named cases; the full missing-type matrix beyond them is unobserved | none prepared |
-| Aggregation (`count`, `sum`, `avg`, intersection, boundary controls) | fixed at `fe37fe0` | local corpus, [aggregation evidence](aggregation-evidence.md) 14/14 | immutable receipt: 23/23 saved production aggregation observations replayed; one open divergence recorded in the local issue `aggregation-limit-default-order-production-divergence` (`count + sum(x)` with `limit: 2`, missing and non-numeric `x`, no explicit order: local `sum=10`, production `sum=30.5`), retained as a mismatch and excluded from approval, not rewritten from the observation | none prepared; the issue names the bounded follow-up (explicit `__name__ ASC` and `x ASC` variants with document-ID comparison) |
+| Aggregation (`count`, `sum`, `avg`, intersection, boundary controls) | runtime ordering and validation fixed at `fe37fe0` (2026-09-10) | local corpus, [aggregation evidence](aggregation-evidence.md): revised corpus 14/14 locally | immutable receipt: the revised corpus matched 14/14 in a fresh production run with scoped approval (2026-09-10), and 23/23 saved production aggregation observations replay on the current artifact; the historical 9/10 receipt for `count + sum(x)` with `limit: 2`, missing and non-numeric `x` and no explicit order (old local `sum=10`, production `sum=30.5`) is retained in history unchanged, not rewritten; the local issue `aggregation-limit-default-order-production-divergence` stays open for its bounded follow-up (explicit `__name__ ASC` and `x ASC` variants with document-ID comparison), not for a current divergence | none prepared beyond that follow-up |
 | Explain (`explainOptions`, plan and execution stats) | Explain v5/v9 | 117-test Explain suite | saved-reference replay: [current Explain v5 replay](query-explain-current-saved-reference-v5.md), 12/12 on `cce4a4f9b` against the unchanged receipt; the original observation is immutable | `prod-campaign-explain-01` v9 (executed historically) |
 | Index merge and exemption acceptance (equality merge, `__name__` under wildcard exclusion, bare `orderBy(__name__, desc)`) | `index.rs`, `index_usage.rs`, `crates/fireemu/src/control.rs` (indexes file including `vectorConfig`) | `244dc525-index-merge-local.json` 20-case strict SDK regression; `tests/index.rs` | check without receipt: `tools/sdk-smoke/index-merge-oracle.mjs` on 2026-09-08 (equality merge accepted, `__name__` unaffected by wildcard exclusion, bare descending `__name__` refused without an explicit index); no immutable receipt under `spec/compatibility` | none prepared |
 | Vector `findNearest` (euclidean, cosine, dot product, dimension and non-vector exclusion, limit and threshold) | Standard local execution, REST and gRPC | `crates/fireemu-core-firestore/tests/execute.rs` nearest-vector tests | unobserved; the official emulator refuses `findNearest` on REST while fireemu serves it, a documented non-parity claim | none prepared |

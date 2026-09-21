@@ -814,3 +814,417 @@ def test_the_saved_evidence_chain_refuses_a_replaced_row(built, tmp_path, monkey
             expected_inputs_digest=built.inputs["inputsDigest"],
             ledger_root=built.ledger,
         )
+
+
+def _rewrite_receipt_and_release(output, mutate):
+    """Test scaffolding: a consistent receipt/release rewrite by someone who
+    controls the evidence directory but not the Ledger-anchored Gate digest."""
+    receipt = json.loads((output / "receipt.json").read_bytes())
+    mutate(receipt)
+    for name in ("receipt.json", "release.json"):
+        (output / name).chmod(0o600)
+        (output / name).unlink()
+    production._write_receipt(output / "receipt.json", receipt)
+    release = {
+        "receiptDigest": digest(receipt),
+        "ticket": receipt["ticket"],
+        "failure": None,
+        "reservationFinal": reservations.Ledger(output.parent / "ledger").snapshot()[
+            "reservations"
+        ][receipt["ticket"]["reservation"]],
+    }
+    production._write_receipt(output / "release.json", release)
+
+
+def test_the_slot_eight_early_end_is_recorded_incomplete_and_recovered(
+    built, tmp_path, monkeypatch
+):
+    """The paged response carries no page token, the likely production case
+    for twelve documents: the continuation is skipped, the schedule stalls on
+    that creating slot, the observation ends, the ladder recovers everything,
+    the observation is INDETERMINATE and the row closes after abandon."""
+    oracle = oracle_wire(monkeypatch, built.plan, partitions=0, page_token="")
+    result = run(built, tmp_path)
+    assert result["reservationReleased"] is False
+    assert result["failure"] == "collection-incomplete"
+    output = tmp_path / "output"
+    receipt = json.loads((output / "receipt.json").read_bytes())
+    bundle = receipt["collection"]
+    statuses = {
+        row["kind"]: (row["status"], row.get("skipReason"), row.get("failure"))
+        for row in bundle["rows"]
+    }
+    assert statuses["partition-count-4-page-size-2"] == ("pass", None, None)
+    assert statuses["partition-page-token-continuation"] == (
+        "skipped",
+        "no-page-token",
+        None,
+    )
+    assert statuses["partition-not-collection-group"] == (
+        "failed",
+        None,
+        "GateScheduleStalled",
+    )
+    assert statuses["cursor-start-at-value"] == (
+        "skipped",
+        "aborted-after-failure",
+        None,
+    )
+    assert receipt["scheduleStall"] == {
+        "phase": "observation",
+        "index": 8,
+        "kind": "partition-page-token-continuation",
+        "reason": "creating-declaration-gap",
+    }
+    cleanup = {row["kind"]: row for row in bundle["cleanup"]["rows"]}
+    assert cleanup["cleanup-seed-delete"]["failure"] == "ObservationAbandoned"
+    assert cleanup["cleanup-root-delete"]["status"] == "pass"
+    assert cleanup["cleanup-verify-root-absence"]["status"] == "pass"
+    assert receipt["ladderSummary"]["deleted"] == 20
+    assert receipt["ladderSummary"]["provenAbsent"] == 21
+    assert receipt["ladderSummary"]["failed"] == 0
+    assert receipt["ladderAbsenceComplete"] is True
+    assert receipt["residualSummary"]["complete"] is False
+    assert receipt["stopPoint"] == "observation-incomplete"
+    assert receipt["mayHaveCreated"] is True
+    assert bundle["status"] == "incomplete"
+    assert not oracle.live
+    # 8 observation slots sent, ownership read, root delete, root absence, 20
+    # ladder reads + 20 deletes + 20 absences, root ladder read + absence.
+    assert len(oracle.calls) == 8 + 3 + 60 + 2
+    assert receipt["chargedCalls"] == len(oracle.calls) + 4
+    comparison = compare_evidence(bundle, local_bundle(tmp_path))
+    assert comparison["classification"] == "INDETERMINATE"
+    assert admission.classify_stop(receipt)["disposition"] == "abandoned-cleanup-close"
+    ledger = reservations.Ledger(built.ledger)
+    snapshot = _prove_workers_exited(output / "gate")
+    ledger.close_after_abandon(
+        receipt["ticket"],
+        {
+            "kind": reservations.ABANDON_KIND,
+            "ticket": receipt["ticket"],
+            "gateDigest": digest(snapshot),
+            "receiptPath": str((output / "receipt.json").resolve()),
+            "receiptDigest": digest(receipt),
+        },
+    )
+    assert (
+        ledger.snapshot()["reservations"][receipt["ticket"]["reservation"]]["state"]
+        == "closed-after-abandon"
+    )
+
+
+def test_a_partial_creation_is_the_owners_and_the_abandoned_close_refuses_it(
+    built, tmp_path, monkeypatch
+):
+    """Seed Commit typed-refused after the root create: every resource is
+    proven absent, but only the root has a creation proof, and the shared
+    Ledger closes an abandoned run only when every resource has one."""
+    oracle = oracle_wire(monkeypatch, built.plan)
+    original = oracle._body
+
+    def refuse_seed(request):
+        if request["kind"] == "seed-commit":
+            return 400, {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}
+        return original(request)
+
+    monkeypatch.setattr(oracle, "_body", refuse_seed)
+    result = run(built, tmp_path)
+    assert result["reservationReleased"] is False
+    output = tmp_path / "output"
+    receipt = json.loads((output / "receipt.json").read_bytes())
+    assert receipt["ladderAbsenceComplete"] is True
+    assert receipt["creationProofCount"] == 1
+    assert receipt["resourceCount"] == 21
+    assert receipt["stopPoint"] == "observation-incomplete"
+    verdict = admission.classify_stop(receipt)
+    assert verdict["disposition"] == "owner-escalation"
+    assert "partially created" in verdict["reason"]
+    assert not oracle.live
+    ledger = reservations.Ledger(built.ledger)
+    snapshot = _prove_workers_exited(output / "gate")
+    with pytest.raises(ValueError, match="complete abandoned cleanup"):
+        ledger.close_after_abandon(
+            receipt["ticket"],
+            {
+                "kind": reservations.ABANDON_KIND,
+                "ticket": receipt["ticket"],
+                "gateDigest": digest(snapshot),
+                "receiptPath": str((output / "receipt.json").resolve()),
+                "receiptDigest": digest(receipt),
+            },
+        )
+
+
+def test_a_foreign_root_at_the_preflight_read_is_never_deleted_and_not_no_data(
+    built, tmp_path, monkeypatch
+):
+    """The root already exists: one non-creating read was sent, the collector
+    stops, the ladder refuses to delete a document without a creation proof,
+    and the stop is the owner's, not a no-data abort."""
+    oracle = oracle_wire(monkeypatch, built.plan)
+    foreign = {"marker": {"stringValue": "someone-else"}}
+    oracle.live[built.plan["ownedScope"]] = foreign
+    result = run(built, tmp_path)
+    assert result["reservationReleased"] is False
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    assert receipt["stopPoint"] == "preflight-absence"
+    assert receipt["dataDispatches"] >= 1
+    assert receipt["productionExecuted"] is True
+    verdict = admission.classify_stop(receipt)
+    assert verdict["disposition"] == "owner-escalation"
+    assert verdict["retirableAsNoData"] is False
+    with pytest.raises(ValueError, match="not a no-data stop"):
+        admission.validate_no_data_receipt(receipt)
+    assert oracle.live == {built.plan["ownedScope"]: foreign}
+    # The Gate itself skipped every cleanup slot: no creation proof, nothing
+    # to delete, and the one request sent was the preflight read.
+    assert len(oracle.calls) == 1
+    assert not any(call["method"] == "DELETE" for call in oracle.calls)
+    ladder = {row["index"]: row for row in receipt["ladder"]["rows"]}
+    assert ladder[1]["skipReason"] == "creating-slot-never-dispatched"
+    assert receipt["ladderSummary"]["absentAtRead"] == 0
+    assert receipt["ladderAbsenceComplete"] is False
+
+
+def test_a_no_data_receipt_with_a_dispatch_is_not_retirable(
+    built, tmp_path, monkeypatch
+):
+    """A03: `dataDispatches` is load-bearing in the no-data classification."""
+    oracle_wire(monkeypatch, built.plan)
+    built.write_handoff("0" * 64)
+    run(built, tmp_path)
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    assert admission.classify_stop(receipt)["retirableAsNoData"] is True
+    assert (
+        admission.classify_stop({**receipt, "dataDispatches": 1})["retirableAsNoData"]
+        is False
+    )
+    with pytest.raises(ValueError, match="not a no-data stop"):
+        admission.validate_no_data_receipt({**receipt, "dataDispatches": 1})
+
+
+def test_a_document_that_reappears_after_its_delete_refuses_release(
+    built, tmp_path, monkeypatch
+):
+    """P02: the root answers 200 at its typed-absence read, the last slot of
+    the schedule, after both residual scans found nothing; every other
+    predicate holds, and the reservation stays held."""
+    oracle = oracle_wire(monkeypatch, built.plan)
+    ghost = built.plan["ownedResources"][0]
+    original = oracle._body
+
+    def revive(request):
+        if (
+            request["kind"] == "ladder-typed-absence"
+            and request["path"] == "/v1/" + ghost
+        ):
+            oracle.live[ghost] = {"marker": {"stringValue": "revived"}}
+        return original(request)
+
+    monkeypatch.setattr(oracle, "_body", revive)
+    result = run(built, tmp_path)
+    assert result["reservationReleased"] is False
+    assert result["failure"] == "collection-incomplete"
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    assert receipt["collection"]["status"] == "pass"
+    assert receipt["ladderSummary"]["failed"] == 0
+    assert receipt["ladderSummary"]["provenAbsent"] == 20
+    assert receipt["ladderAbsenceComplete"] is False
+    assert receipt["residualSummary"] == {"complete": True, "documents": 0}
+    assert receipt["stopPoint"] == "recovery-incomplete"
+    assert admission.classify_stop(receipt)["disposition"] == "owner-escalation"
+    # The predicate refused before the postflight and before Gate.finish: no
+    # recovery management slot was charged for a run that cannot release.
+    assert receipt["postflightComplete"] is False
+    assert [row["id"] for row in receipt["managementEvidence"]] == [
+        "observation:oauth-tokeninfo",
+        "observation:project",
+        "observation:database",
+        "observation:auth",
+    ]
+    assert (
+        reservations.Ledger(built.ledger).snapshot()["reservations"][
+            receipt["ticket"]["reservation"]
+        ]["state"]
+        == "held"
+    )
+
+
+def test_a_residual_document_under_the_owned_scope_refuses_release(
+    built, tmp_path, monkeypatch
+):
+    """P03: the residual scan finds a document this run never created; the
+    ladder and the collection are clean, and the reservation stays held."""
+    oracle = oracle_wire(monkeypatch, built.plan)
+    original = oracle._body
+    stranger = built.plan["ownedScope"] + "/cur/stranger"
+
+    def stranger_in_scan(request):
+        status, body = original(request)
+        if request["kind"] == "residual-cursor-scan":
+            body = [
+                {
+                    "document": {
+                        "name": stranger,
+                        "fields": {"n": {"integerValue": "99"}},
+                        "createTime": TIME,
+                        "updateTime": TIME,
+                    }
+                }
+            ]
+        return status, body
+
+    monkeypatch.setattr(oracle, "_body", stranger_in_scan)
+    result = run(built, tmp_path)
+    assert result["reservationReleased"] is False
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    assert receipt["collection"]["status"] == "pass"
+    assert receipt["ladderAbsenceComplete"] is True
+    assert receipt["residualSummary"] == {"complete": True, "documents": 1}
+    verdict = admission.classify_stop(receipt)
+    assert verdict["disposition"] == "owner-escalation"
+    assert "residual scan" in verdict["reason"]
+
+
+def test_a_broken_reconstruction_refuses_release(built, tmp_path, monkeypatch):
+    """P04: every row passes but the ranges do not rebuild the baseline; the
+    collector reports `incomplete` and the reservation stays held."""
+    oracle = oracle_wire(monkeypatch, built.plan)
+    original = oracle._body
+
+    def truncate(request):
+        status, body = original(request)
+        if request["kind"] == "partition-reconstruction-range-1":
+            body = body[:2]
+        return status, body
+
+    monkeypatch.setattr(oracle, "_body", truncate)
+    result = run(built, tmp_path)
+    assert result["reservationReleased"] is False
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    bundle = receipt["collection"]
+    assert all(
+        row["status"] in ("pass", "skipped")
+        for row in bundle["rows"] + bundle["cleanup"]["rows"]
+    )
+    assert bundle["reconstruction"]["matches"] is False
+    assert bundle["status"] == "incomplete"
+    assert receipt["ladderAbsenceComplete"] is True
+    assert receipt["residualSummary"] == {"complete": True, "documents": 0}
+    assert not oracle.live
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("ladderAbsenceComplete", False),
+        ("residualSummary", {"complete": True, "documents": 1}),
+    ],
+    ids=["P06-ladder-absence", "P07-residual"],
+)
+def test_the_saved_chain_refuses_a_receipt_that_withdraws_a_release_predicate(
+    built, tmp_path, monkeypatch, field, value
+):
+    """P06/P07: a receipt and release rewritten consistently, without the
+    Ledger-anchored Gate digest changing, must still be refused when the
+    receipt no longer claims the predicate the release depended on."""
+    oracle_wire(monkeypatch, built.plan)
+    run(built, tmp_path)
+    output = tmp_path / "output"
+    production.verify_saved(
+        output,
+        expected_inputs_digest=built.inputs["inputsDigest"],
+        ledger_root=built.ledger,
+    )
+    _rewrite_receipt_and_release(
+        output, lambda receipt: receipt.__setitem__(field, value)
+    )
+    with pytest.raises(ValueError, match="saved route journal differs"):
+        production.verify_saved(
+            output,
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
+        )
+
+
+def test_a_credential_that_cannot_cover_a_slot_is_refused_before_the_gate_charges_it(
+    built, tmp_path, monkeypatch
+):
+    """The data token is fetched before `dispatch_slot`, so an unusable
+    credential is a refusal, not a lost answer that leaves a create uncertain."""
+    oracle = oracle_wire(monkeypatch, built.plan)
+    original = preflight.management_transport
+
+    def short_lived(slot, token, **kwargs):
+        response = original(slot, token, **kwargs)
+        if slot == "oauth-tokeninfo":
+            response["body"]["expires_in"] = 3600
+        return response
+
+    monkeypatch.setattr(preflight, "management_transport", short_lived)
+    real_data_token = preflight.ManagementSession.data_token
+
+    def failing_token(self, deadline):
+        if self.credential is not None and any(
+            call["kind"] == "seed-commit" for call in oracle.calls
+        ):
+            self.credential.fail()
+        return real_data_token(self, deadline)
+
+    monkeypatch.setattr(preflight.ManagementSession, "data_token", failing_token)
+    result = run(built, tmp_path)
+    assert result["reservationReleased"] is False
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    bundle = receipt["collection"]
+    failed = [row for row in bundle["rows"] if row["status"] == "failed"]
+    assert failed[0]["kind"] == "baseline-group-name-order"
+    assert failed[0]["failure"] == "CredentialUnavailable"
+    gate = shared_gate.Gate(tmp_path / "output/gate", gate_projection.JOB).snapshot()
+    assert [
+        event["index"] for event in gate["events"] if event["phase"] == "observation"
+    ] == [0, 1, 2]
+    assert shared_gate.unconfirmed_creates(gate, gate_projection.JOB) == 0
+    assert receipt["stopPoint"] == "observation-incomplete"
+
+
+def test_a_request_outside_the_frozen_slot_map_is_refused_by_name(
+    built, tmp_path, monkeypatch
+):
+    """P12: a collector that sent a request the projection never froze, such
+    as the local shadow's `verification` residual reads, is refused before
+    the Gate sees it; the refusal is named, not an indexing error."""
+    oracle = oracle_wire(monkeypatch, built.plan)
+    real_collector = campaign.collector
+    seen = {}
+
+    def probing_collector(plan, transmit, output):
+        stray = {
+            "phase": "verification",
+            "index": 0,
+            "kind": "residual-scan",
+            "method": "POST",
+            "path": "/v1/" + plan["databaseRoot"] + ":runQuery",
+            "body": {
+                "structuredQuery": {
+                    "from": [
+                        {
+                            "collectionId": plan["groupCollection"],
+                            "allDescendants": True,
+                        }
+                    ]
+                }
+            },
+        }
+        try:
+            transmit(stray)
+        except Exception as error:  # noqa: BLE001 -- the class name is the assertion
+            seen["error"] = error
+        return real_collector(plan, transmit, output)
+
+    monkeypatch.setattr(campaign, "collector", probing_collector)
+    result = run(built, tmp_path)
+    assert type(seen["error"]).__name__ == "GateRefusal"
+    assert "outside the frozen slot map" in str(seen["error"])
+    assert not any(call["kind"] == "residual-scan" for call in oracle.calls)
+    assert result["reservationReleased"] is True

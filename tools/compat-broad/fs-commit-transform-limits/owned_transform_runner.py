@@ -231,6 +231,62 @@ def validate_retained_artifact(
     return runtime
 
 
+def validate_current_g0_artifact(
+    artifact: Path,
+    manifest_path: Path,
+    *,
+    profile: dict | str,
+    repo: Path,
+    max_manifest_bytes: int = 4 * 1024 * 1024,
+    max_artifact_bytes: int = 1024 * 1024 * 1024,
+) -> dict:
+    """Validate a retained artifact against an ancestor source and current Rust inputs.
+
+    This is a provenance-only extension for the G0 adapter. It reuses the registered profile,
+    receipt schema, exact build command and artifact hashing above; it does not alter historical
+    profile semantics or execute the artifact.
+    """
+    profile = resolve_profile(profile)
+    repo = Path(repo).resolve()
+    if repo != ROOT.resolve():
+        raise ValueError("current source checkout differs from validator checkout")
+    if artifact.is_symlink() or manifest_path.is_symlink():
+        raise ValueError("retained inputs must be regular files")
+    if not artifact.is_file() or not manifest_path.is_file():
+        raise ValueError("retained inputs must be regular files")
+    if manifest_path.stat().st_size > max_manifest_bytes:
+        raise ValueError("retained manifest exceeds bound")
+    if artifact.stat().st_size > max_artifact_bytes:
+        raise ValueError("retained artifact exceeds bound")
+    runtime = validate_retained_artifact(artifact, manifest_path, profile=profile)
+    manifest = json.loads(manifest_path.read_bytes())
+    source_commit = manifest.get(profile["manifestCommitField"])
+    current_commit = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+    try:
+        subprocess.run(
+            ["git", "-C", str(repo), "merge-base", "--is-ancestor", source_commit, current_commit],
+            check=True,
+            capture_output=True,
+        )
+    except (subprocess.CalledProcessError, TypeError):
+        raise ValueError("retained source is not an ancestor of current checkout") from None
+    source_inputs = runtime_inputs_at_commit(source_commit, repo)
+    current_inputs = runtime_inputs_at_commit(current_commit, repo)
+    receipt_inputs = manifest.get("build", {}).get("inputs")
+    if receipt_inputs != source_inputs or source_inputs != current_inputs:
+        raise ValueError("retained runtime input map differs from current checkout")
+    return {
+        **runtime,
+        "runtimeSourceCommit": source_commit,
+        "currentSourceCommit": current_commit,
+        "sourceInputsDigest": digest(source_inputs),
+        "currentInputsDigest": digest(current_inputs),
+        "sourceInputsEqualCurrent": True,
+    }
+
+
 def source_inputs() -> dict:
     inputs = broad.source_inputs()
     inputs.update(

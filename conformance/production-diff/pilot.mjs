@@ -347,7 +347,7 @@ export async function main(argv = process.argv.slice(2)) {
         ? await prepare(options.repo, entry)
         : entry.adapter === "commit-transform"
           ? await prepareCommitTransform(options.repo, entry)
-          : await prepareG0(options.repo, entry);
+          : await prepareG0(options.repo, entry, options.binary ?? null);
     if (options.mode === "plan") {
       console.log(
         JSON.stringify(

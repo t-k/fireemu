@@ -17,7 +17,33 @@ async function sourceDigests() {
   return output;
 }
 
-export async function prepareG0(repo, entry) {
+export function validateBuildBinding(repo, artifact) {
+  const manifest = process.env.G0_BUILD_MANIFEST;
+  const profile = process.env.G0_ARTIFACT_PROFILE;
+  requireThat(typeof artifact === "string" && artifact.startsWith("/"), "g0-build-provenance-unavailable");
+  requireThat(typeof manifest === "string" && manifest.startsWith("/"), "g0-build-provenance-unavailable");
+  requireThat(typeof profile === "string" && /^[a-z0-9][a-z0-9-]{1,80}$/.test(profile), "g0-build-provenance-unavailable");
+  const script = [
+    "import json,sys",
+    "from pathlib import Path",
+    "sys.path.insert(0, sys.argv[1])",
+    "from owned_transform_runner import validate_current_g0_artifact",
+    "result=validate_current_g0_artifact(Path(sys.argv[2]),Path(sys.argv[3]),profile=sys.argv[4],repo=Path(sys.argv[5]))",
+    "print(json.dumps({k:result[k] for k in ('artifactSha256','runtimeSourceCommit','currentSourceCommit','sourceInputsDigest','currentInputsDigest','retainedManifestSha256','artifactProfile')}))",
+  ].join("; ");
+  try {
+    const output = execFileSync(
+      "uv",
+      ["run", "python", "-c", script, `${repo}/tools/compat-broad/fs-commit-transform-limits`, artifact, manifest, profile, repo],
+      { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
+    return JSON.parse(output);
+  } catch {
+    throw new Error("g0-build-provenance-refused");
+  }
+}
+
+export async function prepareG0(repo, entry, artifact = null) {
   const state = gitState(repo);
   const productionPath = process.env[entry.productionResultPath];
   requireThat(typeof productionPath === "string" && productionPath.startsWith("/"), "g0-production-input-unavailable");
@@ -50,6 +76,7 @@ export async function prepareG0(repo, entry) {
         adapterSha256: await sourceDigests(),
         comparator: "tools/compat-broad/shared_production_pair.py:compare_g0_current_runtime_recompare",
         frozenRecipe: "tools/compat-broad/shared_production_pair.py:frozen_g0_manifest",
+        build: artifact ? validateBuildBinding(repo, artifact) : null,
       },
     },
   };

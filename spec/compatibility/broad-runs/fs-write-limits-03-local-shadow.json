@@ -18,7 +18,7 @@
     "tools/compat-broad/fs-write-limits/limits_03_preflight.py": "b4c43f20884013d0f65a96327b01f437949918892901209a6d1ce26e81c88d8e",
     "tools/compat-broad/fs-write-limits/limits_03_production.py": "054751403e334c01604fc381260e976f1462416890e876f24392f71a5d1f846f",
     "tools/compat-broad/fs-write-limits/limits_03_remote_transport.py": "d05a53423603931e8f469afc918fa3beec379cb0ee8b8767bae115242863933c",
-    "tools/compat-broad/fs-write-limits/package_03.py": "49a7690c6d94f115f48d5c45aa3c4b8fa22d368ad96e37623c9633719fb70a40",
+    "tools/compat-broad/fs-write-limits/package_03.py": "2de6d3988a8b5f6ff7569bbca9acd8e3bec2085975121581ab85621b4d25ea21",
     "tools/compat-broad/fs-write-limits/production.py": "a1e1b2c2cf39fdc244aa174e1d23b0625025787b38d5b919cd32b0406348774b",
     "tools/compat-broad/fs-write-limits/production_bridge.py": "6780a04c346b5a445916f9457146cf582e9a552eecc8000df0afc373f37370df",
     "tools/compat-broad/fs-write-limits/production_plan.py": "325cf3bf53af8ad5962feec6808bf05ec846b87fb92c3e5422f68ae38d9cee22",
@@ -62,20 +62,20 @@
         "runtimeInputCount": 427,
         "runtimeInputsDigest": "3749015f7545e91b371564767ce1dd99d302f596fa32285089b629629594d0ac",
         "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-        "sha256": "a1fa62db75e8ea22b8a5d05c414418775b3ace114c43671eb9f6a92e29baef69"
+        "sha256": "acadd68aa3186bea9dcfce5ee6aff512e96ee86c1409a64944ee4d303077fd4b"
       },
       "campaignId": "FS-WRITE-LIMITS-03",
       "digests": {
-        "parentManifestSha256": "570d9b1cc66f269e57efcc255c13ae68fe563bba41d6eccb2b8bb65ddcf561c2",
+        "parentManifestSha256": "7f407d7b9869b5a26d889e8933aabf53ced0ec1e7b654fcbe94871168fb97e58",
         "sourceInputsBound": true,
-        "supervisorManifestSha256": "570d9b1cc66f269e57efcc255c13ae68fe563bba41d6eccb2b8bb65ddcf561c2"
+        "supervisorManifestSha256": "7f407d7b9869b5a26d889e8933aabf53ced0ec1e7b654fcbe94871168fb97e58"
       },
       "execution": {
         "allOwnedResourcesAbsentAfterRecovery": true,
         "cleanupComplete": true,
         "cleanupValidated": true,
         "completed": true,
-        "configurationDigest": "34be27b61fec1a696d503e0b5df12f247b81b1b7984eab03fea9718edabf04b9",
+        "configurationDigest": "f58433f124e0ed789cea7acd18caf878854c21e9e83a9a8e87ff955b5aa57d19",
         "database": "(default)",
         "gateCloseRefused": false,
         "indexConfiguration": {
@@ -87,7 +87,7 @@
         "ownedDocuments": 29,
         "ownedProcess": {
           "listenersClosed": true,
-          "pid": 15395,
+          "pid": 17880,
           "stopped": true
         },
         "pendingDifferences": [
@@ -119,13 +119,13 @@
         "supervisorStatus": "completed",
         "target": "owned-local-artifact-on-loopback"
       },
-      "executionCommit": "c426f997216f3e3ef953cc0a273b410260b351a1"
+      "executionCommit": "5076c77df3454b5ca1ca62ebdb0938092989c602"
     }
   },
   "formalCompatibilityClaim": false,
   "kind": "fs-write-limits-03-local-shadow-v2",
   "note": "Local artifact evidence only. The executed nonces, the owned resource names and the retained binaries live in private output directories and are not published here. This is not a production observation and promotes nothing. The local shadow supervisor pins the historical index configuration and verifies its digest, so it cannot apply the declared exemption; the document-name rows are pending for exactly that reason.",
   "productionExecuted": false,
-  "sourceCommit": "c426f997216f3e3ef953cc0a273b410260b351a1",
+  "sourceCommit": "5076c77df3454b5ca1ca62ebdb0938092989c602",
   "status": "completed-local-only"
 }

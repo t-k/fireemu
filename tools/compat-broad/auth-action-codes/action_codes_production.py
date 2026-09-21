@@ -78,6 +78,14 @@ def _runtime_body(operation: dict, bindings: dict[str, str]) -> dict:
     return _resolve(operation["body"], bindings)
 
 
+def _wire_body(plan: dict, operation: dict, bindings: dict[str, str]) -> dict:
+    rows = (*plan["stages"], *plan["recovery"])
+    row = next((candidate for candidate in rows if candidate["id"] == operation["id"]), None)
+    if row is None:
+        raise ValueError("Action operation is outside frozen manifest")
+    return _resolve(row["body"], bindings)
+
+
 def execute(
     *,
     capability,
@@ -143,7 +151,7 @@ def execute(
     try:
         for is_recovery, operations in ((False, observations), (True, recovery)):
             for operation in operations:
-                body = _runtime_body(operation, runtime)
+                body = _wire_body(plan, operation, runtime)
                 result = remote.send(
                     capability,
                     stage_id=operation["id"],

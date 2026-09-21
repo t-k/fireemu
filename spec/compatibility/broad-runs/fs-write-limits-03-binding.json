@@ -2,9 +2,10 @@
   "blockingReasons": [
     "owner permission envelope fields are unset",
     "no production release artifact SHA-256 is bound",
-    "the limits production runner is bound to the limits-02 compiler and cannot execute this campaign",
-    "no fresh production nonce is reserved for either part",
-    "the declared index exemption is not deployed"
+    "no fresh production nonce is reserved",
+    "the declared index exemption is not deployed",
+    "shared_gate settles the R3 malformed-item BatchWrite as an unknown create",
+    "shared_gate's abandoned close requires a creation proof for every declared resource"
   ],
   "campaignId": "FS-WRITE-LIMITS-03",
   "campaignIds": [
@@ -17,7 +18,7 @@
     "productionCollector": null,
     "scope": "REST BatchWrite per-position outcome, create-only document writes, typed readbacks and request-stage name refusals, with ownership and version bound cleanup. No configuration, index, Rules or account operation.",
     "status": "local-only",
-    "technicalBlocker": "The limits production runner in tools/compat-broad/fs-write-limits/production.py is bound to the limits-02 compiler and does not yet accept this campaign."
+    "technicalBlocker": "The O8 launcher exists and drives collector_03 through the shared Gate, but HEAD's shared_gate settles the R3 malformed-item BatchWrite as an unknown create, so a production run could not reach its normal close until the proposed accounting rule lands."
   },
   "comparator": {
     "addition": "A per-row structural field reports status, typed error code and status, the per-item BatchWrite codes and whether the document is present, with diagnostic wording removed. It is additive and never changes the classification. It is what keeps a known wording difference from hiding the answer this campaign exists to get.",
@@ -55,20 +56,26 @@
   "localShadow": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03-local-shadow.json",
     "productionExecuted": false,
-    "sha256": "2ba79c5be80b7cdbdfcaabb2178cdcb48faa3715bd54b32d66b5dabcdffb50df",
-    "status": "completed"
+    "sha256": "7de23361b420690596719ea21db14d1e339828c23405ddb3e20d0eb7f95e6f79",
+    "status": "recorded; Gate close refused"
   },
   "manifest": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03.json",
-    "sha256": "2c980933eb11a361c0ff2020d9822722423be8d9d5606ce422c03f0a6d21545b"
+    "sha256": "1b604cea2e535c4dd392124dc5bf215dab684528bb9b490853a29cd4c7a32b93"
+  },
+  "o8": {
+    "descriptor": "tools/compat-broad/fs-write-limits/limits_03_descriptor.py",
+    "launcher": "tools/compat-broad/fs-write-limits/limits_03_o8.py",
+    "launcherSha256": "005c64bebdaf04f568189665eed3ca63f6d6bb06dd4315b658cf0e6e5d79231b",
+    "workerSha256": "bd3f9918f732e3edf95d5330924a2a2df234bd5a67aa8f659ac07e798b37508c"
   },
   "productionExecuted": false,
   "source": {
-    "codeSourceHead": "2906dffc3bbdceae13e9e29157e8e7cc2cd5847a",
-    "commit": "2906dffc3bbdceae13e9e29157e8e7cc2cd5847a",
+    "codeSourceHead": "b76c5d8003b52d74ead4c291068794c9b9d03a96",
+    "commit": "b76c5d8003b52d74ead4c291068794c9b9d03a96",
     "productionArtifactSha256": null,
     "shadowArtifactSha256": {
-      "ALL": "f3308333c4e7dd1acead9db87cdbc07781f925105881cdc55e1c90b8546aae60"
+      "ALL": "e6bbd43c00932a0c515f5349a258a49ac725c9f82c9b68986630428d7258a8b1"
     }
   },
   "status": "BLOCKED_OWNER",

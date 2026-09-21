@@ -3,7 +3,8 @@
     "chargedBy": "shared_gate",
     "earlyStop": "Every slot that cannot create an owned document is declared creates:false, so the Gate can admit a no-data abort while the run is still inside that prefix. Past that, a run that stops part way through observation ends it with the Gate's abandon transition, which reopens the recovery slots in their declared order: every document the run created is deleted and verified absent, so a frozen schedule costs this campaign no fail-closed recovery.",
     "gateWallCapSeconds": 1200,
-    "openGateDefect": "The terminal close of an abandoned run is blocked in shared_gate today. A recovery slot skipped because its resource was never created records no absence proof, so finish and abandoned_cleanup_complete compare `absent` against every declared resource and can never match for a campaign that declares any resource it may refuse to create. Nothing is orphaned by this: the created documents are deleted first. Comparing `absent` against the resources that carry a creation proof would close it. A test pins the current behaviour so the fix is visible when it lands.",
+    "managementCharged": "The shared Gate charges the closed management slots against the same allocation as the data schedule: five before the first data request and four after the last cleanup, thirteen seconds and one request each, all inside the published wall and recovery reserve.",
+    "openGateDefect": "shared_gate._creation_outcome settles a BatchWrite as an unknown create as soon as one item is not a create-shaped write, so the R3 batch that carries an empty item leaves one create unconfirmed and the normal close is refused although every owned document is proven absent. The proposed rule, applied in the lane tests as a fixture, accounts an empty item only when production refused it per item with INVALID_ARGUMENT and the empty result slot. shared_gate.abandoned_cleanup_complete compares the creation proofs, not only the absence proofs, against every declared resource. This campaign declares resources it expects production to refuse, so a run that created and then abandoned can never reach the abandoned close even with absence proven for the whole assignment. After an abandon the collector still walks the recovery schedule and the Gate consumes each slot of an uncreated resource as a zero-wire skip, so a stop inside the typed-absence preflight leaves a non-zero recovery count and shared_gate.non_creating_dispatches no longer holds; the lane classifies the stop as no-data from the journal instead.",
     "parts": 1,
     "reason": "One admitted allocation carries every case. Each slot declares what it can spend rather than paying the lane default: a request carrying a body reserves the transport ceiling, which the Gate's own ceiling check enforces, and a read or delete reserves the small bound that is also its timeout. The totals come from shared_gate's own charging helpers."
   },
@@ -13,23 +14,49 @@
     "costNote": "dataCostMicrousd is the per-request tariff for the data requests alone, which the envelope already counts: the envelope charges every request, data and management, at requestCostMicrousd on top of the fixed reserve. It is published as a breakdown, not as an additional term.",
     "dataCostIsIncludedInEnvelope": true,
     "dataCostMicrousd": 17600,
-    "envelopeCostMicrousd": 58800,
+    "envelopeCostMicrousd": 58500,
     "fixedCostMicrousd": 40000,
-    "managementObservationRequests": 6,
-    "managementRecoveryRequests": 6,
+    "managementObservationRequests": 5,
+    "managementRecoveryRequests": 4,
+    "managementSlots": {
+      "observation": [
+        "oauth-tokeninfo",
+        "project",
+        "database",
+        "index-exemption",
+        "auth"
+      ],
+      "phaseSeconds": {
+        "observation": 66.25,
+        "recovery": 53.0
+      },
+      "recovery": [
+        "project",
+        "database",
+        "index-exemption",
+        "auth"
+      ],
+      "slotSeconds": 13.0
+    },
     "maxConcurrency": 1,
     "maxOwnedDocuments": 29,
     "maxProbedNames": 3,
     "maxRequestBodyBytes": 1048818,
     "maxResponseBytes": 40895971,
-    "maxWallSeconds": 1181,
+    "maxWallSeconds": 1060,
     "observationRequests": 89,
     "part": "ALL",
     "planningCostUsd": 0.02,
     "recoveryRequests": 87,
-    "recoveryReserveSeconds": 487,
+    "recoveryReserveSeconds": 394,
     "requestCostMicrousd": 100,
-    "requestUpperBound": 188,
+    "requestUpperBound": 185,
+    "slotReservationSeconds": {
+      "body": 12.0,
+      "management": 13.0,
+      "readback": 5.0,
+      "small": 3.0
+    },
     "tariffsConfirmed": false
   },
   "campaignId": "FS-WRITE-LIMITS-03",
@@ -43,7 +70,7 @@
       ],
       "id": "FS-WRITE-LIMITS-03/batch-malformed-middle",
       "kind": "per-item-continuation",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 29 to 29",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 29 to 29",
       "part": "ALL",
       "residue": "R3",
       "semantics": "A BatchWrite of three create-only writes whose middle item carries no operation. The question is whether the request is evaluated per position, with the valid prefix and suffix still published, or refused whole."
@@ -56,7 +83,7 @@
       ],
       "id": "FS-WRITE-LIMITS-03/batch-undecodable-value",
       "kind": "whole-request-decode",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 32 to 32",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 32 to 32",
       "part": "ALL",
       "residue": "R3",
       "semantics": "The same three-write shape with a middle item whose value is well-formed JSON that cannot be decoded into the protobuf repeated field. This separates a decoder refusal from a per-item evaluation."
@@ -71,7 +98,7 @@
       ],
       "id": "FS-WRITE-LIMITS-03/batch-duplicate-document",
       "kind": "control",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 36 to 36",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 36 to 36",
       "part": "ALL",
       "residue": "R3",
       "semantics": "The duplicate-document shape production is already known to answer with a whole-request 400. It is the control that establishes the validation stage the other two cases are measured against."
@@ -96,7 +123,7 @@
       "id": "FS-WRITE-LIMITS-03/collection-id",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-COLLECTION-ID",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 39 to 42",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 39 to 42",
       "part": "ALL",
       "residue": "R4",
       "semantics": "A create-only write under a collection id of exactly 1500 UTF-8 bytes is accepted and read back; one of 1501 bytes is refused, and a read of the refused name is refused the same way."
@@ -121,7 +148,7 @@
       "id": "FS-WRITE-LIMITS-03/subcollection-depth",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-SUBCOLLECTION-DEPTH",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 43 to 46",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 43 to 46",
       "part": "ALL",
       "residue": "R4",
       "semantics": "The same shape at exactly 100 collection levels below the database root and at 101. Both names stay well under the document-name and collection-id maxima, so the refusal cannot be attributed to another limit."
@@ -158,7 +185,7 @@
       "indexExemptionReason": "Without it every document named at this boundary is refused for FS-LIMIT-INDEX-ENTRY-BYTES before the name limit is reached.",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-DOCUMENT-NAME-BYTES",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 47 to 50",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 47 to 50",
       "part": "ALL",
       "pendingReason": "the local shadow supervisor pins the historical index configuration and cannot apply the declared exemption, so the local run shows the index-entry refusal the exemption exists to remove",
       "residue": "R4",
@@ -185,7 +212,7 @@
       "id": "FS-WRITE-LIMITS-03/index-entry-bytes",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-INDEX-ENTRY-BYTES",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 51 to 54",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 51 to 54",
       "part": "ALL",
       "residue": "R4",
       "semantics": "One automatic single-field entry of exactly 7680 bytes is accepted and one of 7681 is refused."
@@ -211,7 +238,7 @@
       "id": "FS-WRITE-LIMITS-03/index-entries",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 55 to 58",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 55 to 58",
       "part": "ALL",
       "residue": "R4",
       "semantics": "A document generating exactly 40,000 automatic index entries is accepted and the next representable total is refused."
@@ -237,7 +264,7 @@
       "id": "FS-WRITE-LIMITS-03/index-entry-sum",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 59 to 62",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 59 to 62",
       "part": "ALL",
       "residue": "R4",
       "semantics": "A document whose automatic index entries sum to exactly 8,388,608 bytes is accepted; lengthening its name by one byte raises every entry by one and the sum past the maximum."
@@ -262,7 +289,7 @@
       "id": "FS-WRITE-LIMITS-03/indexed-value",
       "kind": "truncating-maximum",
       "limitId": "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 63 to 66",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 63 to 66",
       "part": "ALL",
       "residue": "R4",
       "semantics": "Both documents are sized so their one indexed entry is exactly at the entry maximum under truncation. The second carries a value twice the truncation ceiling: if the indexed representation were charged in full its entry would be 9180 bytes and the write would be refused. Accepting both, and reading both back with their values intact, is what confirms that the truncation is of the index and not of the stored value."
@@ -287,7 +314,7 @@
       "id": "FS-WRITE-LIMITS-03/implied-map",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-FIELD-PATH-BYTES",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 67 to 70",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 67 to 70",
       "part": "ALL",
       "pathShape": "map",
       "residue": "R4",
@@ -313,7 +340,7 @@
       "id": "FS-WRITE-LIMITS-03/implied-array",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-FIELD-PATH-BYTES",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 71 to 74",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 71 to 74",
       "part": "ALL",
       "pathShape": "array",
       "residue": "R4",
@@ -339,7 +366,7 @@
       "id": "FS-WRITE-LIMITS-03/field-path",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-FIELD-PATH-BYTES",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 75 to 78",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 75 to 78",
       "part": "ALL",
       "residue": "R4",
       "semantics": "An update mask whose canonical field path is exactly 1500 bytes is accepted and one of 1501 bytes is refused. Two segments share the length so neither reaches the field-name maximum."
@@ -366,7 +393,7 @@
       "id": "FS-WRITE-LIMITS-03/field-value",
       "kind": "refusal-only",
       "limitId": "FS-LIMIT-FIELD-VALUE-BYTES",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 79 to 80",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 79 to 80",
       "part": "ALL",
       "residue": "R4",
       "semantics": "A single string value one byte over the maximum is refused, with the diagnostic naming the property and the maximum."
@@ -393,7 +420,7 @@
       "id": "FS-WRITE-LIMITS-03/agg-string",
       "kind": "metric-discriminator",
       "limitId": "FS-LIMIT-FIELD-VALUE-BYTES",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 81 to 84",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 81 to 84",
       "metricEvidence": {
         "namesTheDocumentSize": "production does not apply the value metric to this shape",
         "namesTheProperty": "production applies the value metric to this shape"
@@ -424,7 +451,7 @@
       "id": "FS-WRITE-LIMITS-03/agg-map",
       "kind": "metric-discriminator",
       "limitId": "FS-LIMIT-FIELD-VALUE-BYTES",
-      "localBasis": "artifact shadow at 2906dffc3bbdceae13e9e29157e8e7cc2cd5847a, part ALL observation rows 85 to 88",
+      "localBasis": "artifact shadow at b76c5d8003b52d74ead4c291068794c9b9d03a96, part ALL observation rows 85 to 88",
       "metricEvidence": {
         "namesTheDocumentSize": "production does not apply the value metric to this shape",
         "namesTheProperty": "production applies the value metric to this shape"
@@ -451,9 +478,10 @@
     "digest": "94e41aaff2441f5d3e32a64c6799297fca72e75543d31ac054e58c6799e55fe3",
     "path": "tools/compat-broad/fs-write-limits/collector_03.py",
     "productionCollector": null,
+    "productionRunner": "tools/compat-broad/fs-write-limits/limits_03_production.py",
     "scope": "REST BatchWrite per-position outcome, create-only document writes, typed readbacks and request-stage name refusals, with ownership and version bound cleanup. No configuration, index, Rules or account operation.",
     "status": "local-only",
-    "technicalBlocker": "The limits production runner in tools/compat-broad/fs-write-limits/production.py is bound to the limits-02 compiler and does not yet accept this campaign."
+    "technicalBlocker": "The O8 launcher exists and drives collector_03 through the shared Gate, but HEAD's shared_gate settles the R3 malformed-item BatchWrite as an unknown create, so a production run could not reach its normal close until the proposed accounting rule lands."
   },
   "comparatorBinding": {
     "addition": "A per-row structural field reports status, typed error code and status, the per-item BatchWrite codes and whether the document is present, with diagnostic wording removed. It is additive and never changes the classification. It is what keeps a known wording difference from hiding the answer this campaign exists to get.",
@@ -497,6 +525,14 @@
   "excludedSurfaces": {
     "FS-LIMIT-API-REQUEST-BYTES": "Assigned to the request-byte collector in tools/compat-broad/fs-request-bytes-boundary/, not to this campaign. Its refusal is expected to be transport-level rather than a typed Firestore error, which needs a collector that can tell the two apart."
   },
+  "executionBlockers": [
+    "owner permission envelope, window, nonce reservation and tariff acceptance",
+    "no production release artifact SHA-256 is bound",
+    "the declared index exemption is not deployed",
+    "frozen artifact, collector and comparator bindings through O7",
+    "shared_gate._creation_outcome settles a BatchWrite as an unknown create as soon as one item is not a create-shaped write, so the R3 batch that carries an empty item leaves one create unconfirmed and the normal close is refused although every owned document is proven absent. The proposed rule, applied in the lane tests as a fixture, accounts an empty item only when production refused it per item with INVALID_ARGUMENT and the empty result slot.",
+    "shared_gate.abandoned_cleanup_complete compares the creation proofs, not only the absence proofs, against every declared resource. This campaign declares resources it expects production to refuse, so a run that created and then abandoned can never reach the abandoned close even with absence proven for the whole assignment."
+  ],
   "executionMode": {
     "exclusive": false,
     "parallelCampaigns": true,
@@ -540,6 +576,50 @@
     "conformanceIndexesSha256Before": "62d5387f860555c8a966d115ea95c2619c907c498b75e4c2e7a465503b452ec7",
     "derivation": "The three index-entry boundaries are reached under the project's default single-field configuration, in which each field carries ascending, descending and array-membership modes at collection scope: the entry-bytes boundary is tuned with the document and parent name bytes, the entry-count boundary with the number of distinct array elements, and the entry-sum boundary with both plus a filler field whose name length is solved for. No composite index is required. One exemption is required, and only for FS-LIMIT-DOCUMENT-NAME-BYTES: an index entry is charged the document name and its parent's name, and that charge is smallest when the final identifiers are as long as the identifier limit allows, so at a 6144-byte protocol name the floor is a name sum of 9214 bytes, giving a 9249-byte floor for any document with at least one indexed field and 10759 for a marker-bearing one, against a 7680-byte maximum. Every document this campaign owns carries the ownership marker, so none is writable at that name without the exemption; a document with no fields generates no entries at all and would be. The exemption names its own collection group, so it cannot reach the padding collection the index cases use.",
     "digestNote": "The after digest is the digest of conformance/firestore.indexes.json with the declared exemptions appended and the file re-serialized with two-space indent and a trailing newline. The executor must confirm the file it deploys matches it, or rebind this field to the file it actually deploys.",
+    "precondition": {
+      "conformanceIndexesSha256After": "1e645c04419ac8418e9d05ebceb7a11d641f7127260de5cd1f307570cc93f332",
+      "conformanceIndexesSha256Before": "62d5387f860555c8a966d115ea95c2619c907c498b75e4c2e7a465503b452ec7",
+      "deploy": [
+        "uv run --project tools/compat-inventory --locked --python 3.12 python tools/compat-broad/fs-write-limits/limits_03_indexes.py --write-after conformance/firestore.indexes.json",
+        "uv run --project tools/compat-inventory --locked --python 3.12 python tools/compat-broad/fs-write-limits/limits_03_indexes.py --verify after  # 1e645c04419ac8418e9d05ebceb7a11d641f7127260de5cd1f307570cc93f332",
+        "cd conformance && firebase deploy --only firestore:indexes --project fireemu-35fe6 --non-interactive",
+        "curl -sS -H 'Authorization: Bearer $(gcloud auth print-access-token)' -H 'x-goog-user-project: fireemu-35fe6' 'https://firestore.googleapis.com/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/nx/fields/*'  # must show no indexes and no ancestor config before admission"
+      ],
+      "file": "conformance/firestore.indexes.json",
+      "kind": "limits-03-index-exemption-precondition-v1",
+      "lockScope": {
+        "key": "project/fireemu-35fe6/firestore/(default)/indexes",
+        "mode": "WRITE"
+      },
+      "override": {
+        "collectionGroup": "nx",
+        "fieldPath": "*",
+        "indexes": []
+      },
+      "readback": {
+        "projection": {
+          "ancestorField": null,
+          "indexes": [],
+          "name": "projects/fireemu-35fe6/databases/(default)/collectionGroups/nx/fields/*",
+          "usesAncestorConfig": false
+        },
+        "projectionDigest": "f118852a0db2ff9cc9e9115b3d5f99148d3b98dc37076935083e846fe01120cf",
+        "route": "https://firestore.googleapis.com/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/nx/fields/*",
+        "slots": [
+          "observation:index-exemption",
+          "recovery:index-exemption"
+        ]
+      },
+      "restore": [
+        "git checkout -- conformance/firestore.indexes.json",
+        "uv run --project tools/compat-inventory --locked --python 3.12 python tools/compat-broad/fs-write-limits/limits_03_indexes.py --verify before  # 62d5387f860555c8a966d115ea95c2619c907c498b75e4c2e7a465503b452ec7",
+        "cd conformance && firebase deploy --only firestore:indexes --project fireemu-35fe6 --non-interactive --force",
+        "curl -sS -H 'Authorization: Bearer $(gcloud auth print-access-token)' -H 'x-goog-user-project: fireemu-35fe6' 'https://firestore.googleapis.com/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/nx/fields/*'  # must show usesAncestorConfig: true again"
+      ],
+      "restoreNote": "Without --force the deploy never removes an exemption the file no longer lists, so the restore must pass --force and the commander must confirm the field readback returns to usesAncestorConfig: true.",
+      "restoreRequiredAfterRun": true,
+      "step": "deploy-single-field-exemption"
+    },
     "shadowDifference": "The shadow supervisor pins a historical conformance/firestore.indexes.json by commit and verifies its digest, so the shadow did not run under the digest this manifest declares, and it could not apply the declared exemption. The difference is immaterial to every case but the document-name one: neither version declares an override or composite index on any collection group this plan uses, so the default single-field configuration applies under both and every boundary derivation is unchanged. The document-name rows are pending for exactly this reason.",
     "shadowRanUnder": {
       "ALL": {
@@ -552,13 +632,14 @@
   "kind": "firestore-write-limits-oracle-preparation-v2",
   "localShadow": {
     "commands": [
-      "uv run --project tools/compat-inventory --locked pytest tools/compat-broad/fs-write-limits -q",
-      "uv run --project tools/compat-inventory --locked python tools/compat-broad/fs-write-limits/shadow_03.py --output <new-private-directory> --part A",
-      "uv run --project tools/compat-inventory --locked python tools/compat-broad/fs-write-limits/shadow_03.py --output <new-private-directory> --part B"
+      "uv run --project tools/compat-inventory --locked --python 3.12 -m pytest -q -p no:cacheprovider tools/compat-broad/fs-write-limits",
+      "uv run --project tools/compat-inventory --locked --python 3.12 python tools/compat-broad/fs-write-limits/shadow_03.py --output <new-private-directory>",
+      "uv run --project tools/compat-inventory --locked --python 3.12 python tools/compat-broad/fs-write-limits/package_03.py freeze --shadow-run <that-directory>"
     ],
     "productionExecuted": false,
     "record": "spec/compatibility/broad-runs/fs-write-limits-03-local-shadow.json",
-    "status": "completed"
+    "recordStatus": "recorded-local-only-gate-close-refused",
+    "status": "recorded; Gate close refused"
   },
   "locks": [
     {
@@ -574,9 +655,174 @@
       "mode": "READ"
     }
   ],
+  "o8": {
+    "admission": "tools/compat-broad/fs-write-limits/limits_03_admission.py",
+    "approvalFields": [
+      "artifactProfile",
+      "artifactSha256",
+      "campaignId",
+      "executionHost",
+      "inputsDigest",
+      "kind",
+      "launcherSha256",
+      "ledgerRoot",
+      "manifestSha256",
+      "nonceDigest",
+      "permissionDigest",
+      "planDigest",
+      "sourceCommit",
+      "sourceInputsDigest",
+      "status",
+      "windowExpiresAt",
+      "windowStartsAt"
+    ],
+    "artifactProfile": "limits-03-b76c5d800",
+    "descriptor": "tools/compat-broad/fs-write-limits/limits_03_descriptor.py",
+    "exitCodes": {
+      "0": "verified cleanup and Ledger release",
+      "1": "stopped; a create may have been applied or documents were created and the row stays held",
+      "2": "refused before execution, or stopped with no create dispatched"
+    },
+    "indexTool": "tools/compat-broad/fs-write-limits/limits_03_indexes.py",
+    "kinds": {
+      "approval": "limits-03-o8-approval-v1",
+      "frozenInputs": "limits-03-frozen-inputs-v1",
+      "manifest": "limits-03-o8-manifest-v1",
+      "permission": "limits-03-owner-execution-permission-v1",
+      "receipt": "limits-03-acquisition-receipt-v1"
+    },
+    "launcher": "tools/compat-broad/fs-write-limits/limits_03_o8.py",
+    "ledgerBudget": {
+      "accounts": 1,
+      "costMicrousd": 58500,
+      "requests": 185,
+      "resources": 29
+    },
+    "lockScopes": [
+      {
+        "key": "project/fireemu-35fe6/firestore/(default)/documents/oracle/{freshNonce}/limits-03/*",
+        "mode": "WRITE"
+      },
+      {
+        "key": "project/fireemu-35fe6/identity",
+        "mode": "READ"
+      },
+      {
+        "key": "project/fireemu-35fe6/firestore/(default)/indexes",
+        "mode": "WRITE"
+      },
+      {
+        "key": "project/fireemu-35fe6/firestore/(default)/ruleset",
+        "mode": "READ"
+      },
+      {
+        "key": "project/fireemu-35fe6/firestore/(default)/database",
+        "mode": "READ"
+      },
+      {
+        "key": "project/fireemu-35fe6/auth/config",
+        "mode": "READ"
+      }
+    ],
+    "managementContract": {
+      "credentialIds": [
+        "oauth-tokeninfo"
+      ],
+      "credentialSlots": [
+        "tokeninfo"
+      ],
+      "dispatchKind": "closed-v1",
+      "intervalSeconds": 0.25,
+      "observation": [
+        {
+          "duration": 12.0,
+          "id": "oauth-tokeninfo",
+          "seconds": 13.0,
+          "timeout": 13.0
+        },
+        {
+          "duration": 12.0,
+          "id": "project",
+          "seconds": 13.0,
+          "timeout": 13.0
+        },
+        {
+          "duration": 12.0,
+          "id": "database",
+          "seconds": 13.0,
+          "timeout": 13.0
+        },
+        {
+          "duration": 12.0,
+          "id": "index-exemption",
+          "seconds": 13.0,
+          "timeout": 13.0
+        },
+        {
+          "duration": 12.0,
+          "id": "auth",
+          "seconds": 13.0,
+          "timeout": 13.0
+        }
+      ],
+      "phaseSeconds": {
+        "observation": 66.25,
+        "recovery": 53.0
+      },
+      "recovery": [
+        {
+          "duration": 12.0,
+          "id": "project",
+          "seconds": 13.0,
+          "timeout": 13.0
+        },
+        {
+          "duration": 12.0,
+          "id": "database",
+          "seconds": 13.0,
+          "timeout": 13.0
+        },
+        {
+          "duration": 12.0,
+          "id": "index-exemption",
+          "seconds": 13.0,
+          "timeout": 13.0
+        },
+        {
+          "duration": 12.0,
+          "id": "auth",
+          "seconds": 13.0,
+          "timeout": 13.0
+        }
+      ],
+      "slotSeconds": 13.0,
+      "totalRequests": 9
+    },
+    "preflight": "tools/compat-broad/fs-write-limits/limits_03_preflight.py",
+    "stopPoints": {
+      "abandoned": [
+        "observation-incomplete",
+        "recovery-incomplete"
+      ],
+      "noData": [
+        "schedule-not-started",
+        "namespace-preflight"
+      ],
+      "uncertain": [
+        "create-deadline"
+      ]
+    },
+    "transport": "tools/compat-broad/fs-write-limits/limits_03_remote_transport.py",
+    "worker": "tools/compat-broad/fs-write-limits/limits_03_https_worker.py",
+    "workerSha256": "bd3f9918f732e3edf95d5330924a2a2df234bd5a67aa8f659ac07e798b37508c"
+  },
   "parentFeatureGroups": [
     "FS-DATA-WRITE"
   ],
+  "partition": {
+    "parts": 1,
+    "reason": "One allocation carries every case. With management charged the bodyless slots reserve by their response ceiling instead of a flat five seconds, which is what keeps the allocation under the Gate's 1200-second cap; the A and B selections stay compilable for a run that has to be split for some other reason."
+  },
   "pendingLocalImplementation": {
     "differences": [
       {
@@ -610,12 +856,13 @@
   "productionExecuted": false,
   "promotion": {
     "remaining": [
-      "connect the limits production runner to this compiler and collector",
+      "land the shared-Gate accounting rule for the R3 malformed-item batch",
       "freeze artifact, collector and comparator bindings",
       "obtain the owner envelope fields and tariff acceptance",
-      "deploy the declared index exemption",
-      "production observation of both parts and immutable receipts",
-      "comparison and mismatch triage",
+      "deploy the declared index exemption and verify the field readback",
+      "production observation and immutable receipt through limits_03_o8.py",
+      "restore the index configuration and verify the readback",
+      "comparison against the private shadow journal and mismatch triage",
       "cleanup verification",
       "independent review",
       "final artifact regression"
@@ -635,9 +882,9 @@
     "FS-LIMIT-SUBCOLLECTION-DEPTH"
   ],
   "safetyClass": "OWNED_DATA",
-  "scheduleDeclined": {
-    "declared": false,
-    "reason": "The Gate can take a per-slot reservation through a declared schedule, and this campaign deliberately does not declare one. With a schedule the Gate admits only the next unconsumed slot, so an observation that stops early can no longer dispatch its recovery: every cleanup request is refused as outside the frozen schedule. Stopping early and still reclaiming every owned document is this campaign's fail-closed guarantee, so it pays the lane default reservation for every request instead."
+  "schedule": {
+    "declared": true,
+    "reason": "Every slot declares its own reservation and whether it can create, so the Gate charges the schedule rather than the lane default and a stop inside the non-creating prefix is admissible as no data. An observation that ends early uses the Gate's abandon transition, which reopens the recovery slots in their declared order."
   },
   "sourceBinding": {
     "artifactBuild": {
@@ -654,31 +901,78 @@
     "artifactKind": "locally-built-debug-shadow-artifact",
     "campaignSourceDigests": {
       "spec/limits/firestore-standard-2026-08-25.json": "f12ab3686e197be53b14880beec8c6bc72970ca55a72e780fa9d4e99c7abd625",
+      "tools/compat-broad/batch_adapter.py": "5f42ec0ad88d350aff0925a435049cdb05a67f97bc1825888ccfe0c2ebff0d36",
+      "tools/compat-broad/batch_contract.py": "06cb50513edf937bee3486c1649d480b663d255d8f023d3d5187ceff212e79ef",
+      "tools/compat-broad/batch_wire.py": "f9d3a579026135fbf7255c79a241fa668d826b07e48c1352630c762b5b8037e4",
+      "tools/compat-broad/broad_contract.py": "43ab6ea10dbb5fc3e774d43624799be4fc741bf2c1a6f19681006f5af9602356",
+      "tools/compat-broad/fs-request-bytes-boundary/request_bytes_preflight.py": "a735989d8582c4429425fb42f62f162700ed56af279b4224168e4b6a46b32a2f",
+      "tools/compat-broad/fs-request-bytes-boundary/request_bytes_process_exchange.py": "6f20146d9195dce77a4be58b9c89cc4ca79d4720d737c644974cc9d4f408b485",
+      "tools/compat-broad/fs-write-limits/collector.py": "3e7615cad40aa403d9a845fe36276ee1d4c222d996d0834b48dae02506ade0bf",
       "tools/compat-broad/fs-write-limits/collector_03.py": "94e41aaff2441f5d3e32a64c6799297fca72e75543d31ac054e58c6799e55fe3",
+      "tools/compat-broad/fs-write-limits/comparator.py": "2c770f32aab5cedd16982b9a796db17c33ac2308a491bb5564f66d12d78fcae9",
       "tools/compat-broad/fs-write-limits/comparator_03.py": "1528fd6bb73c9c7228a155d4228893cda0653d2547b41042cd7a2668b091d843",
-      "tools/compat-broad/fs-write-limits/compiler_03.py": "a2fc320c422a8236b4b0a59a5183e23a652957d3e4a4b76899e2bccd4a446d54",
+      "tools/compat-broad/fs-write-limits/compiler.py": "55c747dde6e8bceb0e0fa4f998af68d72fe11fa26856277ea97772cfcd970bf2",
+      "tools/compat-broad/fs-write-limits/compiler_03.py": "9c707349cf26f84d48cabf425dc151c2e0e1ba7ec28170f853bbe52a4523b1ed",
+      "tools/compat-broad/fs-write-limits/conftest.py": "3e66bc2c2bc6b353d4d6069ab61176a1a5a8470730d81b5851b1870943492f8c",
       "tools/compat-broad/fs-write-limits/expectations_03.py": "99510c025eb2527b43a20bfefe2d7ca88f889b8f1e1cba1d2a473ea6730c740b",
-      "tools/compat-broad/fs-write-limits/shadow.py": "a340d768ad298390ea64d027cc9b798111e157e5207790c398baaefe012db712",
-      "tools/compat-broad/fs-write-limits/shadow_03.py": "65a00fb9888f1acf5ca759031d8556dd46bfcb2bae6c5a8d038d1c7715a916c3",
+      "tools/compat-broad/fs-write-limits/limits_03_admission.py": "8f34c8cbf054f2c27bf15ad7d0682c5d227b2d5baf102efdf309711e48137b00",
+      "tools/compat-broad/fs-write-limits/limits_03_descriptor.py": "5b9ecbc9bf40df82cb5868e695f72fcd6f283a0dba27781aa7ccbc23247d278d",
+      "tools/compat-broad/fs-write-limits/limits_03_https_worker.py": "bd3f9918f732e3edf95d5330924a2a2df234bd5a67aa8f659ac07e798b37508c",
+      "tools/compat-broad/fs-write-limits/limits_03_indexes.py": "5d546eecd99c4d52f496898ab44f8065bbc96c62d4de95037e216e01afed5c41",
+      "tools/compat-broad/fs-write-limits/limits_03_o8.py": "005c64bebdaf04f568189665eed3ca63f6d6bb06dd4315b658cf0e6e5d79231b",
+      "tools/compat-broad/fs-write-limits/limits_03_preflight.py": "971abd5501ae78e5eb1214e5faa6cddf9124c7c8370263a18887a14ca863fe6a",
+      "tools/compat-broad/fs-write-limits/limits_03_production.py": "054751403e334c01604fc381260e976f1462416890e876f24392f71a5d1f846f",
+      "tools/compat-broad/fs-write-limits/limits_03_remote_transport.py": "bb2379b5c1bcf67f4cee430bd74169dd9b055924a9c5ac862109335d0787d5ee",
+      "tools/compat-broad/fs-write-limits/package_03.py": "d542b3e7f67c827b9a486ef626b8a8a654546de47f34473d7b62696de3ed80c5",
+      "tools/compat-broad/fs-write-limits/production.py": "a1e1b2c2cf39fdc244aa174e1d23b0625025787b38d5b919cd32b0406348774b",
+      "tools/compat-broad/fs-write-limits/production_bridge.py": "6780a04c346b5a445916f9457146cf582e9a552eecc8000df0afc373f37370df",
+      "tools/compat-broad/fs-write-limits/production_plan.py": "325cf3bf53af8ad5962feec6808bf05ec846b87fb92c3e5422f68ae38d9cee22",
+      "tools/compat-broad/fs-write-limits/rehearsal.py": "0b7f8e41e0350a09edb0383f3e3864f07fae2c5c50ef28447cd696ed0a7f76e2",
+      "tools/compat-broad/fs-write-limits/remote_transport.py": "367901d2b020ca15a35042a8609843270216bf0b3e50ee3367926bedf89069c2",
+      "tools/compat-broad/fs-write-limits/shadow.py": "3f7405386baafa151fc2b8e89e15b0a153d054c9efc6bb66103ccc4ff1f9a68d",
+      "tools/compat-broad/fs-write-limits/shadow_03.py": "fcc1d23f3cbbd04891870fcb7791ab35f1a0551f285f666fe11c49b691eebfc9",
       "tools/compat-broad/fs-write-limits/shadow_03b.py": "87924f501a6c5a6173eb887bf12e44c75a61e89084f2be8b2e37c10b43684899",
-      "tools/compat-broad/shared_gate.py": "a614a960d6a640967d485f2802b98055cd6ccd0dd998c3759863dfca17a2a5ae"
+      "tools/compat-broad/fs-write-limits/test_campaign_03.py": "43901b00f66a282e50773741abf99058a7494f11608ce28839218fe9709f572b",
+      "tools/compat-broad/fs-write-limits/test_collection_recording_recovery.py": "d0f39bd17c55232e4df304713d523e7cb5f8d2be1d34d0197a500709cedcaa5c",
+      "tools/compat-broad/fs-write-limits/test_collector.py": "e3e3a70cf20d4d5a381cb8817f9980ebdbd281ca385a3f169de6b83f011e8980",
+      "tools/compat-broad/fs-write-limits/test_comparator.py": "ea9e03cf969d273d20dfe8a7cee4eec4126f726ca19bce04f6fa91f235d62c4b",
+      "tools/compat-broad/fs-write-limits/test_compiler.py": "cea425492df4e9538ac9d738e9d71ab5c9eef04c3371909788b7e91aab9811ef",
+      "tools/compat-broad/fs-write-limits/test_json_wire_integrity.py": "1fc185c1d1908c7b2b2ac6daae1f4155bcb20f3d03d94c88553ad64ab916da08",
+      "tools/compat-broad/fs-write-limits/test_limits_03_o8.py": "0e6549c6e5980e03b34a8f1dda009393e8b70c145776bbf5932045887a6496a9",
+      "tools/compat-broad/fs-write-limits/test_namespace_sizes.py": "dbb8df349490168d6f8ac55b392356c23f0a3b0ac24ab120cdb791c9ac65041b",
+      "tools/compat-broad/fs-write-limits/test_package_03.py": "2e5f59ea320cb4658acbe8ac9018ebfcbbc65d7b0d303faa92fd175a77b65fa1",
+      "tools/compat-broad/fs-write-limits/test_production.py": "e4e2b568b4d285c501a67e1689d742f3e98e25a706a66525e428aaa297cc6ff4",
+      "tools/compat-broad/fs-write-limits/test_production_bridge.py": "0524cac790abe161649e10e8aa517943e14c8e0e1443496bf6fc0d83a89b63e4",
+      "tools/compat-broad/fs-write-limits/test_production_plan.py": "fef8e6e786da5f3ef1336b4edb66e1acc177dafa2856f16bd800f664ac04ad5d",
+      "tools/compat-broad/fs-write-limits/test_rehearsal.py": "61f4bde46cbfc4116ed3c058e0e90633d8fd0d8e3d744e02d3df42006a2541ac",
+      "tools/compat-broad/fs-write-limits/test_remote_transport.py": "847208e741dc63e8087e8a989e3f41c2f107d05a36c20dad1b4f4a0763c4dcab",
+      "tools/compat-broad/fs-write-limits/test_reservation_bridge.py": "112a75aa5472eb6f7f90af5ec15f4a9b715e600a1e5d4bb19eee1c2b4f3a442d",
+      "tools/compat-broad/fs-write-limits/test_response_envelope_wire.py": "b014e77b1da79491f3b199f3794b1ca999680b82ba88f2d5ef27e50bd6ee30b3",
+      "tools/compat-broad/fs-write-limits/test_shadow.py": "83fa0d485ea74f463460a4710e9d1df4dd607135f8c946824c157a026d059e82",
+      "tools/compat-broad/fs-write-limits/test_shadow_integrity.py": "1760e75a7b2e6ece85e4360982dd1f064ba5e1a70154c038452a7ea5bdaf5944",
+      "tools/compat-broad/fs-write-limits/test_transport.py": "8c8a6330ad9ea8abe862613cb6253a0a355f97174e256c87b43e623fd7bf2b29",
+      "tools/compat-broad/fs-write-limits/transport.py": "5269b07da605919edf4016c0d108175487d97474ddb07f969e56b9b19fd25688",
+      "tools/compat-broad/fs-write-txn/credential_prep.py": "0834de259d6f63fb67eda249ff83e97ba6786c1927ca098b455d73d14425152e",
+      "tools/compat-broad/o8-core/o8_admission.py": "1adf21e8815ff8131377a6d776f56027bb9a24a5201b22dbff98d9fabd70b334",
+      "tools/compat-broad/o8-core/o8_campaign.py": "fa19fb8f445729ecdc9cd64779511f99537dee7fa405053927355b62bdf76ca5",
+      "tools/compat-broad/production-admission/reservations.py": "77227f5a173e28953f48bc1a8df8eb8f13eaf36f6e417ab741da1d44667c237e",
+      "tools/compat-broad/shared_gate.py": "74d0912a6cd1102e3b918511a98e67e01e442415f59a9e9f1e7def630a859045"
     },
-    "codeSourceHead": "2906dffc3bbdceae13e9e29157e8e7cc2cd5847a",
-    "featureHead": "2906dffc3bbdceae13e9e29157e8e7cc2cd5847a",
+    "codeSourceHead": "b76c5d8003b52d74ead4c291068794c9b9d03a96",
+    "featureHead": "b76c5d8003b52d74ead4c291068794c9b9d03a96",
     "runtimeSourceDigests": {
       "crates/fireemu-adapter-grpc/src/local.rs": "2521846305073dfd50a04c844feb98b033a8d80f49992734a0245a83b7a93aed",
       "crates/fireemu-adapter-grpc/tests/rest.rs": "a74099aa329ad837a0f006612b81a97d65004f7c094d7f44ff2830b03cd970f3",
       "crates/fireemu-core-firestore/src/field_path.rs": "bebf2d27d530840cd478358848bb1ab417e8a66fccef15a093fd80c5ba0c45b1",
       "crates/fireemu-core-firestore/src/index_usage.rs": "b3221cfa8d2d60830f6385991e1f5e2eda08b01770444a9cbd6798e6fab2601c",
       "crates/fireemu-core-firestore/src/path.rs": "ebede692cd48c5c37d2e5942f12899e572559a678ad63ff9e0cc84411b44c7b0",
-      "crates/fireemu-core-firestore/src/size.rs": "0c2608e5836159f566857e730b985fdc8f43ea8dcde42df15408854bbc57ad5d"
+      "crates/fireemu-core-firestore/src/size.rs": "1ce649dd78029b3d692e8e23fbdbdd47db49de84c2fd5fd5f78a7decee3f7f8c"
     },
     "shadowArtifactSha256": {
-      "ALL": "f3308333c4e7dd1acead9db87cdbc07781f925105881cdc55e1c90b8546aae60"
+      "ALL": "e6bbd43c00932a0c515f5349a258a49ac725c9f82c9b68986630428d7258a8b1"
     }
   },
   "status": "BLOCKED_OWNER",
-  "supersededPartitionReason": "The Gate caps an allocation at 1200 seconds of wall time and reserves the lane default for every recovery request. A combined campaign carrying all 29 owned documents has 87 recovery requests, whose reserve alone exceeds that ceiling before any observation time is counted, so the compiler refuses to compile it and a test pins the refusal. The per-slot reservation the Gate now offers does not change this, because taking it would cost the campaign its fail-closed recovery: see scheduleDeclined. Splitting is arithmetic, not a reduction in scope: every declared condition is carried by one part, and the parts take separate nonces and may run in either order.",
   "target": {
     "configuration": "read-only preflight; no config mutation during the run",
     "database": null,

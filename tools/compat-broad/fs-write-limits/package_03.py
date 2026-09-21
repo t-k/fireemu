@@ -149,6 +149,12 @@ def shadow_record(run: Path, commit: str) -> dict:
     sources = binding["sourceInputsBefore"]
     if sources != source_inputs():
         raise SystemExit("the shadow ran under other lane sources than HEAD's")
+    # The run may predate HEAD by commits that touch nothing the shadow sweeps
+    # (the check above is what proves that); the commit it executed at is
+    # recorded beside the commit the record binds.
+    execution_commit = supervisor.get("executionCommit")
+    if not isinstance(execution_commit, str) or len(execution_commit) != 40:
+        raise SystemExit("the shadow run records no execution commit")
     execution = {
         key: result[key]
         for key in (
@@ -217,6 +223,7 @@ def shadow_record(run: Path, commit: str) -> dict:
         "execution": {
             "ALL": {
                 "campaignId": CAMPAIGN,
+                "executionCommit": execution_commit,
                 "artifact": {
                     "buildCommand": build["command"],
                     "runtimeInputCount": len(build["inputs"]),
@@ -330,7 +337,7 @@ def manifest(previous: dict, shadow: dict, commit: str) -> dict:
         if case.get("limitId") == "FS-LIMIT-DOCUMENT-NAME-BYTES":
             prefix = len("projects/fireemu-35fe6/databases/(default)/documents/")
             floors = name_charge_floor(prefix, DOCUMENT_NAME_MAX)
-            document = plan["documents"]["name-exact"]
+            document = plan["documents"]["document-name-accept"]
             case["derivedFigures"] = {
                 **floors,
                 "compiledDocumentEntry": compiler_03.largest_index_entry_bytes(

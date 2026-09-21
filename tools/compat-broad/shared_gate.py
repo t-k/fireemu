@@ -1765,8 +1765,13 @@ class Gate:
         cursor state, or a no-data result.
         """
         with self.locked() as state:
+            if state.get("coordinatorPid") != os.getpid():
+                raise ValueError("management abort coordinator ownership mismatch")
             existing = state.get("managementAbort")
             if existing is not None:
+                pre_projection = dict(state)
+                pre_projection["managementSkipped"] = []
+                pre_projection["managementAbort"] = None
                 journal_digest = digest(
                     {
                         "events": state.get("events", []),
@@ -1785,6 +1790,7 @@ class Gate:
                     or existing.get("nonceDigest") != nonce_digest
                     or existing.get("prefixDigest") != prefix_digest
                     or existing.get("journalDigest") != journal_digest
+                    or existing.get("preGateDigest") != digest(pre_projection)
                     or existing.get("applyOutcome") != "may-have-landed"
                     or existing.get("recoveryPrerequisite") is not True
                     or existing.get("postGateDigest") != digest(projection)

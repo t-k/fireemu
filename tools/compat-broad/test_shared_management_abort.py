@@ -1,7 +1,9 @@
 """Focused management-observation abort tests for the durable shared Gate."""
 
-import pytest
+import multiprocessing as mp
 import time
+
+import pytest
 
 import shared_gate
 from shared_gate import Gate, create
@@ -153,3 +155,43 @@ def test_forged_abort_marker_is_rejected_without_state_repair(tmp_path):
         gate.abort_management_observation()
     assert gate.snapshot() == forged
     assert before != forged
+
+
+def test_changed_pre_gate_digest_is_rejected_without_state_repair(tmp_path):
+    gate = make_gate(tmp_path)
+    gate.management_dispatch(
+        "observation", "first", lambda _deadline: reaped_unknown()
+    )
+    gate.abort_management_observation()
+    with gate.locked() as state:
+        state["managementAbort"]["preGateDigest"] = "forged"
+        shared_gate._save(gate.path, state)
+    forged = gate.snapshot()
+    with pytest.raises(ValueError, match="forged"):
+        gate.abort_management_observation()
+    assert gate.snapshot() == forged
+
+
+def _child_abort(path, result):
+    try:
+        Gate(path, "a").abort_management_observation()
+    except ValueError as error:
+        result.put(str(error))
+    else:
+        result.put("accepted")
+
+
+def test_restarted_coordinator_cannot_apply_transition(tmp_path):
+    gate = make_gate(tmp_path)
+    gate.management_dispatch(
+        "observation", "first", lambda _deadline: reaped_unknown()
+    )
+    before = gate.snapshot()
+    context = mp.get_context("spawn")
+    result = context.Queue()
+    child = context.Process(target=_child_abort, args=(gate.path, result))
+    child.start()
+    child.join(10)
+    assert child.exitcode == 0
+    assert result.get(timeout=2) == "management abort coordinator ownership mismatch"
+    assert gate.snapshot() == before

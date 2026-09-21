@@ -406,7 +406,7 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
             binding_digest=binding_digest,
         )
     if set(value) != {"request", "token", "deadline"}:
-        raise ValueError("closed partition/cursor wire call required")  # noqa: TRY004 -- refusal class, not a type report
+        raise ValueError("closed partition/cursor wire call required")
     if (
         type(value["deadline"]) not in (int, float)
         or isinstance(value["deadline"], bool)

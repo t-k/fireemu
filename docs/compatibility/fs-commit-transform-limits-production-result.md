@@ -119,3 +119,7 @@ remain open: BatchWrite continuation past a malformed or undecodable item; the c
 index-configuration decision; the four write-path limits the catalog declares `unsupported`; and
 final-artifact regression plus independent closure review. The local side of this comparison is the
 retained `repaired-567565bdd` artifact, not the current build.
+
+## Addendum (2026-09-21)
+
+The limitation above that names "the four write-path limits the catalog declares `unsupported`" reflects the catalog at the time of the 2026-09-18 observation. Since `6cb5c3d29` the catalog declares those four limits `implemented`; the observation receipt is immutable and its wording is left as recorded. The limits themselves remain production-unobserved except for the scalar `FIELD-VALUE-BYTES` refusal, and are covered by the limits-03 and request-byte campaigns.

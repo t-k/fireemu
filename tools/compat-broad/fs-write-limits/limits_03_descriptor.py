@@ -390,11 +390,12 @@ def index_exemption_precondition() -> dict:
             " > <private>/nx-field-restored.json",
             "uv run --project tools/compat-inventory --locked --python 3.12 python "
             f"{LANE_DIRECTORY}/limits_03_indexes.py --verify-restored "
-            "<private>/nx-field-restored.json --record "
-            f"{RESTORE_RECORD}",
+            "<private>/nx-field-restored.json --receipt <private>/receipt.json "
+            f"--record {RESTORE_RECORD}",
             "uv run --project tools/compat-inventory --locked --python 3.12 python "
             f"{LANE_DIRECTORY}/package_03.py freeze --keep-shadow-record "
-            f"--restore-record {RESTORE_RECORD}",
+            f"--restore-record {RESTORE_RECORD} "
+            "--production-receipt <private>/receipt.json",
         ],
         "restoreNote": (
             "Without --force the deploy never removes an exemption the file no "
@@ -402,7 +403,10 @@ def index_exemption_precondition() -> dict:
             "every composite index and override the file does not list, so the "
             "listing must be checked against the file first. The restore is "
             "verified by the field readback, not by the deploy's exit status, and "
-            "the campaign does not close until the restore record is bound."
+            "bound to the production receipt.json of the run it restores -- a "
+            "record cannot be produced before that run's postflight confirmed "
+            "the exemption was in force, and the campaign does not close until "
+            "the record is bound here."
         ),
         "restoreEvidence": {
             "recordKind": RESTORE_RECORD_KIND,

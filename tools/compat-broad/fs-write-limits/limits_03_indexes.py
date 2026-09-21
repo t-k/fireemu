@@ -19,10 +19,12 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+sys.path.insert(0, str(ROOT / "tools/compat-broad"))
 sys.path.insert(0, str(HERE))
 
 import limits_03_descriptor as campaign
 import limits_03_preflight as preflight
+from broad_contract import digest
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -54,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="READBACK",
         help="check a saved field readback against the restored default and "
-        "write the restore record",
+        "write the restore record; requires --receipt",
     )
     parser.add_argument("--file", type=Path, default=ROOT / campaign.INDEXES_FILE)
     parser.add_argument(
@@ -63,10 +65,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=ROOT / campaign.RESTORE_RECORD,
         help="where --verify-restored writes the restore record",
     )
+    parser.add_argument(
+        "--receipt",
+        type=Path,
+        metavar="RECEIPT",
+        help="the production receipt.json of the run --verify-restored restores",
+    )
     return parser
 
 
 MAX_READBACK_BYTES = 256 * 1024
+MAX_RECEIPT_BYTES = 4 * 1024 * 1024
 
 
 def _readback(path: Path) -> tuple[dict, bytes]:
@@ -84,17 +93,54 @@ def _readback(path: Path) -> tuple[dict, bytes]:
     return value, raw
 
 
-def restore_record(readback: dict, raw: bytes, *, indexes_path: Path) -> dict:
+def _load_receipt(path: Path) -> dict:
+    """One saved production receipt.json, bounded and regular."""
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or path.stat().st_size > MAX_RECEIPT_BYTES
+    ):
+        raise SystemExit("bounded regular receipt file required")
+    value = json.loads(path.read_bytes())
+    if not isinstance(value, dict):
+        raise SystemExit("JSON object receipt required")
+    return value
+
+
+def restore_record(
+    readback: dict, raw: bytes, *, indexes_path: Path, receipt: dict
+) -> dict:
     """The evidence that the exempt group inherits the default again.
 
     Judged on the readback alone: the deploy's exit status proves nothing about
     the field. The record also binds the index file on disk, which must be the
-    committed before state, so a restore run against an edited file is refused.
+    committed before state, so a restore run against an edited file is
+    refused, and binds the production receipt of the run it restores -- a
+    record cannot be produced before any production run, or from a run whose
+    postflight never confirmed the exemption was in force.
     """
     verified = preflight.verify_index_restored(readback)
     file_digest = hashlib.sha256(indexes_path.read_bytes()).hexdigest()
     if file_digest != campaign.INDEXES_SHA256_BEFORE:
-        raise SystemExit("index configuration file is not the declared before state")
+        raise ValueError("index configuration file is not the declared before state")
+    if receipt.get("postflightComplete") is not True:
+        raise ValueError("production receipt does not confirm postflight completed")
+    exemption = receipt.get("indexExemption")
+    if (
+        not isinstance(exemption, dict)
+        or exemption.get("verifiedAtPostflight") is not True
+    ):
+        raise ValueError(
+            "production receipt does not confirm the exemption was verified "
+            "at postflight"
+        )
+    ticket = receipt.get("ticket")
+    reservation = ticket.get("reservation") if isinstance(ticket, dict) else None
+    if not isinstance(reservation, str) or not reservation:
+        raise ValueError("production receipt does not carry a reservation ticket")
+    gate_digest = receipt.get("gateDigest")
+    if not isinstance(gate_digest, str) or len(gate_digest) != 64:
+        raise ValueError("production receipt does not carry a Gate digest")
     return {
         "kind": campaign.RESTORE_RECORD_KIND,
         "campaignId": campaign.CAMPAIGN,
@@ -105,12 +151,16 @@ def restore_record(readback: dict, raw: bytes, *, indexes_path: Path) -> dict:
         "projectionDigest": verified["projectionDigest"],
         "inheritedIndexes": verified["inheritedIndexes"],
         "conformanceIndexesSha256": file_digest,
+        "receiptDigest": digest(receipt),
+        "reservationTicket": reservation,
+        "gateDigest": gate_digest,
         "verified": True,
     }
 
 
 def validate_restore_record(record: dict) -> None:
-    """A restore record must be this campaign's, judged on the restored state."""
+    """A restore record must be this campaign's, judged on the restored state,
+    and bound to the production receipt of the run it restores."""
     if (
         not isinstance(record, dict)
         or record.get("kind") != campaign.RESTORE_RECORD_KIND
@@ -121,12 +171,17 @@ def validate_restore_record(record: dict) -> None:
         or record.get("projectionDigest") != preflight.expected_index_restored_digest()
         or record.get("conformanceIndexesSha256") != campaign.INDEXES_SHA256_BEFORE
         or not isinstance(record.get("inheritedIndexes"), list)
+        or not isinstance(record.get("reservationTicket"), str)
+        or not record.get("reservationTicket")
         or any(
             not isinstance(record.get(key), str) or len(record[key]) != 64
-            for key in ("readbackSha256", "bodyDigest")
+            for key in ("readbackSha256", "bodyDigest", "receiptDigest", "gateDigest")
         )
     ):
-        raise ValueError("restore record does not prove the restored default")
+        raise ValueError(
+            "restore record does not prove the restored default bound to a "
+            "production receipt"
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -152,9 +207,18 @@ def main(argv: list[str] | None = None) -> int:
         print("deployed: exemption in force; the default ancestor is named")
         return 0
     if args.verify_restored is not None:
+        if args.receipt is None:
+            print(
+                "restored: --receipt is required with --verify-restored",
+                file=sys.stderr,
+            )
+            return 2
         readback, raw = _readback(args.verify_restored)
+        receipt = _load_receipt(args.receipt)
         try:
-            record = restore_record(readback, raw, indexes_path=args.file)
+            record = restore_record(
+                readback, raw, indexes_path=args.file, receipt=receipt
+            )
         except ValueError as error:
             print(f"restored: refused ({error})", file=sys.stderr)
             return 2

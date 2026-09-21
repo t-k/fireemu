@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, promises as fs, rmSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
@@ -18,8 +18,10 @@ import {
   closeAll,
   compactWebChannelRows,
   launchChromium,
+  openMounted,
   parseWebChannelRow,
   resolveMounted,
+  resolveMountedEntry,
   serveStatic,
   summarizeWebChannel,
 } from "./browser_harness.mjs";
@@ -67,6 +69,34 @@ test("mount resolution never leaves a mounted directory", () => {
     "/x\0y", "relative", "/%zz", "/./x"]) {
     assert.equal(resolveMounted(mounts, bad), null, bad);
   }
+  assert.deepEqual(resolveMountedEntry(mounts, "/collector/x.mjs"),
+    { prefix: "/collector/", root: path.resolve("/srv/lane"), target: path.resolve("/srv/lane/x.mjs") });
+});
+
+test("openMounted follows symlinks only as far as the real mount root", async () => {
+  const base = mkdtempSync(path.join(tmpdir(), "fireemu-web-"));
+  try {
+    const root = path.join(base, "web");
+    mkdirSync(root);
+    mkdirSync(path.join(base, "outside"));
+    writeFileSync(path.join(root, "a.json"), "{}");
+    writeFileSync(path.join(base, "outside", "b.json"), "{}");
+    symlinkSync(path.join("..", "outside", "b.json"), path.join(root, "b.json"));
+    symlinkSync(path.join("..", "outside"), path.join(root, "dir"));
+    const realRoot = await fs.realpath(root);
+    const inside = await openMounted(realRoot, path.join(root, "a.json"));
+    assert.equal(inside.size, 2);
+    await inside.handle.close();
+    assert.equal(await openMounted(realRoot, path.join(root, "b.json")), null);
+    assert.equal(await openMounted(realRoot, path.join(root, "dir", "b.json")), null);
+    assert.equal(await openMounted(realRoot, path.join(root, "missing.json")), null);
+    assert.equal(await openMounted(realRoot, root), null, "a directory is not served");
+    // The root must be the real root: a lexical root would let a symlinked
+    // temporary directory prefix disagree with the resolved target.
+    assert.equal(await openMounted(path.join(base, "elsewhere"), path.join(root, "a.json")), null);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });
 
 test("the static server serves only known file types under the mounts", async () => {
@@ -108,6 +138,76 @@ test("the static server serves only known file types under the mounts", async ()
       await server.close();
     }
     await assert.rejects(fetch(`${server.origin}/page.html`));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("the static server refuses symlinks that leave the mount", async () => {
+  const base = mkdtempSync(path.join(tmpdir(), "fireemu-web-"));
+  const root = path.join(base, "web");
+  const outside = path.join(base, "outside");
+  mkdirSync(root);
+  mkdirSync(outside);
+  const body = async (origin, urlPath) => {
+    const response = await fetch(`${origin}${urlPath}`);
+    return { status: response.status, text: await response.text() };
+  };
+  try {
+    writeFileSync(path.join(outside, "leak.json"), '{"leak":true}');
+    writeFileSync(path.join(outside, "leak.html"), "<p>leak</p>");
+    writeFileSync(path.join(root, "inside.json"), '{"inside":true}');
+    mkdirSync(path.join(root, "real-dir"));
+    writeFileSync(path.join(root, "real-dir", "nested.json"), '{"nested":true}');
+    // A file symlink out of the mount, a directory symlink out of the mount and
+    // a symlink that stays inside the mount.
+    symlinkSync(path.join("..", "outside", "leak.json"), path.join(root, "linked.json"));
+    symlinkSync(path.join("..", "outside"), path.join(root, "linked-dir"));
+    symlinkSync(path.join(base, "outside"), path.join(root, "linked-abs-dir"));
+    symlinkSync("inside.json", path.join(root, "alias.json"));
+    symlinkSync("real-dir", path.join(root, "alias-dir"));
+    const server = await serveStatic({ "/": root });
+    try {
+      // Positive controls: regular files and symlinks that stay inside are served.
+      assert.deepEqual(await body(server.origin, "/inside.json"), { status: 200, text: '{"inside":true}' });
+      assert.deepEqual(await body(server.origin, "/real-dir/nested.json"), { status: 200, text: '{"nested":true}' });
+      assert.deepEqual(await body(server.origin, "/alias.json"), { status: 200, text: '{"inside":true}' });
+      assert.deepEqual(await body(server.origin, "/alias-dir/nested.json"), { status: 200, text: '{"nested":true}' });
+      // Escapes: every response is a bodiless refusal.
+      for (const escape of ["/linked.json", "/linked-dir/leak.json", "/linked-dir/leak.html", "/linked-abs-dir/leak.json"]) {
+        const response = await body(server.origin, escape);
+        assert.equal(response.status, 404, escape);
+        assert.ok(!response.text.includes("leak"), escape);
+      }
+    } finally {
+      await server.close();
+    }
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("a mount root reached through a symlink still serves its own files", async () => {
+  const base = mkdtempSync(path.join(tmpdir(), "fireemu-web-"));
+  const real = path.join(base, "real-web");
+  const link = path.join(base, "link-web");
+  mkdirSync(real);
+  writeFileSync(path.join(real, "page.html"), "<p>via link</p>");
+  writeFileSync(path.join(base, "outside.html"), "leak");
+  symlinkSync(path.join("..", "outside.html"), path.join(real, "escape.html"));
+  symlinkSync("real-web", link);
+  try {
+    const server = await serveStatic({ "/": link });
+    try {
+      const page = await fetch(`${server.origin}/page.html`);
+      assert.equal(page.status, 200);
+      assert.equal(await page.text(), "<p>via link</p>");
+      const escape = await fetch(`${server.origin}/escape.html`);
+      assert.equal(escape.status, 404);
+      assert.ok(!(await escape.text()).includes("leak"));
+    } finally {
+      await server.close();
+    }
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

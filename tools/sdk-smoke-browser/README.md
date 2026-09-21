@@ -94,6 +94,18 @@ The checked-in result is `spec/compatibility/fs-listen-sdk-browser-local-shadow.
 bound by `test_o6_listen_sdk_browser_local_shadow.py`. Each per-mode receipt
 inside it passes `local_shadow_check.mjs` unchanged.
 
+## Static server boundary
+
+`browser_harness.mjs` serves the mounted directories on 127.0.0.1 read-only.
+A request passes two gates: the decoded path may not contain `.`/`..`
+segments or a backslash and must resolve lexically under its mount, and the
+real path of the target (every symlink followed, including intermediate
+directories) must stay under the real path of the mount root fixed at start.
+The file is then opened by that real path with `O_NOFOLLOW`, so the path
+that was checked is the path that is read; a symlink out of the mount is a
+bodiless 404. `run-browser.test.mjs` covers file and directory escapes, a
+mount root that is itself a symlink and the in-mount positive controls.
+
 ## Process hygiene
 
 Both runners own their Chromium and their static server and close them in a

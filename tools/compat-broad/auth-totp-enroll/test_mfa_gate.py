@@ -119,6 +119,47 @@ def test_mfa_foreign_resource_and_uid_binding_are_refused_before_creation(tmp_pa
         mfa_gate.create(tmp_path / "foreign-binding", value)
 
 
+def test_cleanup_authorization_rejects_cross_role_uid_collision(tmp_path):
+    value = plan()
+    job_name = mfa_gate.JOB
+    observation = value["jobs"][job_name]["observation"]
+    first = next(
+        (index, operation)
+        for index, operation in enumerate(observation)
+        if operation["kind"] == "sign-up" and operation["account"] == "pending-control"
+    )
+    second = next(
+        (index, operation)
+        for index, operation in enumerate(observation)
+        if operation["kind"] == "sign-up" and operation["account"] == "pending-age-300"
+    )
+    events = [
+        {
+            "job": job_name,
+            "phase": "observation",
+            "index": index,
+            "requestDigest": shared_gate.digest(operation),
+            "completed": True,
+            "creationOutcome": "created",
+            "authEvidence": {"account": operation["account"], "creationOutcome": "created"},
+        }
+        for index, operation in (first, second)
+    ]
+    state = {"plan": value, "events": events}
+    job = {
+        "authAccounts": {
+            "pending-control": {"uid": "same-uid", "createEvent": 0, "resource": first[1]["resource"]},
+            "pending-age-300": {"uid": "same-uid", "createEvent": 1, "resource": second[1]["resource"]},
+        }
+    }
+    delete = next(
+        operation
+        for operation in value["jobs"][job_name]["recovery"]
+        if operation["kind"] == "delete" and operation["account"] == "pending-control"
+    )
+    assert shared_gate._auth_creation_ownership(state, job, delete) is False
+
+
 def test_no_binding_value_is_in_the_plan_and_every_placeholder_is_declared():
     value = plan()
     names = set()

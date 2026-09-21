@@ -354,6 +354,13 @@ def _auth_creation_ownership(state, job, operation):
         return False
     event = state["events"][event_index]
     evidence = event.get("authEvidence")
+    uid = record.get("uid")
+    if not isinstance(uid, str) or sum(
+        other.get("uid") == uid
+        for other in job.get("authAccounts", {}).values()
+        if isinstance(other, dict)
+    ) != 1:
+        return False
     ordinary = (
         record.get("resource") == operation.get("resource")
         and event.get("phase") == "observation"
@@ -625,6 +632,11 @@ def unconfirmed_creates(state, job_name):
         and event.get("index") in indices
         and event.get("creationOutcome") != "refused"
         and event.get("creationOutcome") != "created"
+        and not (
+            event.get("settlementOutcome") in {"present", "absent"}
+            and isinstance(event.get("settledBy"), dict)
+            and isinstance(event["settledBy"].get("responseDigest"), str)
+        )
     )
 
 

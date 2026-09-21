@@ -211,6 +211,28 @@ def test_an_abandon_after_a_stop_deletes_every_account_and_restores(tmp_path):
     assert verdict["disposition"] == "abandoned-cleanup-complete"
 
 
+def test_recover_unsettled_is_a_classifiable_cleanup_stop():
+    receipt = {
+        "stopPoint": "recover-unsettled",
+        "configuration": {
+            "frozenBaselineDigest": "a" * 64,
+            "changeAttempted": True,
+            "applied": True,
+            "appliedReadbackDigest": "b" * 64,
+            "baselineReference": {"valuesRetained": False},
+            "restoreStatus": "restored-verified",
+            "preflightReadbackDigest": "a" * 64,
+            "restoreReadbackDigest": "a" * 64,
+            "restoreDifferingFields": [],
+        },
+        "cleanup": {"complete": True, "ownedAccounts": 0},
+        "accountEvidence": {"createdAccounts": 0, "unsettledSignups": 0},
+        "gateComplete": True,
+        "untrackedIntents": [],
+    }
+    assert admission.classify_stop(receipt)["disposition"] == "abandoned-cleanup-complete"
+
+
 def test_a_key_of_another_project_refuses_before_any_patch_or_signup(tmp_path):
     # Owner review a2d2db49c item 1: the public routes (signUp first of all) are
     # selected by the Web API key alone, with nothing binding it to the approved

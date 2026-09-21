@@ -876,6 +876,7 @@ class MfaGate(FrozenGate):
             if event.get("job") == self.job
             and event.get("phase") == "observation"
             and recipe[event["index"]]["kind"] in CREATING_KINDS
+            and event.get("settlementOutcome") not in {"present", "absent"}
             and event.get("creationOutcome") in ("pending", "unknown")
         ]
 
@@ -923,8 +924,9 @@ class MfaGate(FrozenGate):
                 for event in state["events"]
                 if event.get("job") == self.job
                 and event.get("phase") == "observation"
-                and recipe[event["index"]]["kind"] in CREATING_KINDS
-                and recipe[event["index"]]["account"] == role
+            and recipe[event["index"]]["kind"] in CREATING_KINDS
+            and recipe[event["index"]]["account"] == role
+            and event.get("settlementOutcome") not in {"present", "absent"}
             ]
             if len(events) != 1 or events[0].get("creationOutcome") not in (
                 "pending",
@@ -953,6 +955,7 @@ class MfaGate(FrozenGate):
             if role in accounts:
                 raise ValueError("an owned account was created twice")
             if uid is None:
+                event["settlementOutcome"] = "absent"
                 event["settledBy"] = {
                     "kind": "address-readback-absent",
                     "responseDigest": reconcile.get("responseDigest"),
@@ -969,9 +972,9 @@ class MfaGate(FrozenGate):
                     "resource": create_operation.get("resource"),
                     "reconcileEvent": state["events"].index(reconcile),
                 }
-                # This is journal classification, not a replacement of the lost
-                # wire fields: failure, completion and response digest stay intact.
-                event["creationOutcome"] = "created"
+                # Settlement is separate from the lost wire outcome: failure,
+                # completion and response digest stay intact.
+                event["settlementOutcome"] = "present"
                 event["settledBy"] = {
                     "kind": "address-readback-present",
                     "responseDigest": reconcile.get("responseDigest"),
@@ -1300,7 +1303,13 @@ class MfaGate(FrozenGate):
                     or event["authEvidence"].get("account") != name
                 ):
                     raise ValueError("account evidence binding differs")
-            if create_event.get("creationOutcome") != "created":
+            if not (
+                create_event.get("creationOutcome") == "created"
+                or (
+                    record.get("adopted")
+                    and create_event.get("settlementOutcome") == "present"
+                )
+            ):
                 raise ValueError("account creation event differs")
             for position in cleanup_events:
                 event = state["events"][position]
@@ -1327,6 +1336,7 @@ def account_evidence(snapshot: dict[str, Any]) -> dict[str, Any]:
         and event.get("phase") == "observation"
         and recipe[event["index"]]["kind"] in CREATING_KINDS
         and event.get("creationOutcome") in ("pending", "unknown")
+        and event.get("settlementOutcome") not in {"present", "absent"}
     )
     return {
         "plannedAccounts": len(snapshot["plan"]["plannedAccounts"]),

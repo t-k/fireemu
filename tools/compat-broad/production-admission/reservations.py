@@ -149,8 +149,13 @@ DEFAULT_CREDENTIAL_SLOTS = ("refresh", "tokeninfo")
 COMMIT_NO_DATA_SCHEMA = "commit-credential-slots-v1"
 REQUEST_BYTES_NO_DATA_SCHEMA = "request-bytes-management-attestation-v1"
 REQUEST_BYTES_RECEIPT_KIND = "request-bytes-acquisition-receipt-v1"
+# The transaction-expiry lane projects its receipt onto the Commit vocabulary
+# (credential slot items, management slot ids in `metadata`) under a kind of
+# its own, so it is held to the Commit contract by name, not by resemblance.
+TXN_EXPIRY_RECEIPT_KIND = "txn-expiry-acquisition-receipt-v1"
 NO_DATA_RECEIPT_SCHEMAS = {
     DEFAULT_RECEIPT_KIND: COMMIT_NO_DATA_SCHEMA,
+    TXN_EXPIRY_RECEIPT_KIND: COMMIT_NO_DATA_SCHEMA,
     REQUEST_BYTES_RECEIPT_KIND: REQUEST_BYTES_NO_DATA_SCHEMA,
 }
 TOKEN_ATTESTATION_KIND = "request-byte-token-attestation-v1"

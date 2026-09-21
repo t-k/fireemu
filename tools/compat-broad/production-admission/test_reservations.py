@@ -243,7 +243,9 @@ CREDENTIAL_SLOTS = ("oauth-refresh", "oauth-tokeninfo")
 PREFLIGHT = ("project", "database", "auth", "key")
 
 
-def _no_data_attempt(tmp_path, source_generation=None, stop=2, mode="decision"):
+def _no_data_attempt(
+    tmp_path, source_generation=None, stop=2, mode="decision", kind=None
+):
     """One failed attempt that stopped at preflight slot `stop` with no data sent.
 
     `mode` is "decision" when the request was sent and its evidence appended
@@ -267,6 +269,8 @@ def _no_data_attempt(tmp_path, source_generation=None, stop=2, mode="decision"):
         ],
         "recovery": [],
     }
+    if kind is not None:
+        frozen["receiptKind"] = kind
     used = [f"observation:{name}" for name in (*CREDENTIAL_SLOTS, *PREFLIGHT[:stop])]
     observed = PREFLIGHT[: stop if mode == "decision" else stop - 1]
     first["gatePlanDigest"] = digest(frozen)
@@ -290,7 +294,7 @@ def _no_data_attempt(tmp_path, source_generation=None, stop=2, mode="decision"):
         _save(gate.path, state)
     snapshot = gate.snapshot()
     receipt = {
-        "kind": "commit-acquisition-receipt-v2",
+        "kind": "commit-acquisition-receipt-v2" if kind is None else kind,
         "ticket": ticket,
         "planDigest": first["gatePlanDigest"],
         "claimDigest": ticket["claimDigest"],
@@ -1627,6 +1631,19 @@ def _readonly_attempt(
         "sourceDigests": COMMIT_SOURCE_DIGESTS,
     }
     return ledger, gate, ticket, record
+
+
+def test_the_txn_expiry_kind_is_held_to_the_commit_contract_by_name(tmp_path):
+    """A lane that projects onto the Commit vocabulary is mapped, not guessed."""
+    ledger, gate, ticket, record = _no_data_attempt(
+        tmp_path, kind="txn-expiry-acquisition-receipt-v1"
+    )
+    ledger.abort_no_data(ticket, record)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        == "aborted-no-data"
+    )
+    assert gate.snapshot()["stopped"] is True
 
 
 def test_a_receipt_kind_outside_the_closed_schema_map_has_no_retirement(tmp_path):

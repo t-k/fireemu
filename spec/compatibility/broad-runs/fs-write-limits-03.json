@@ -70,7 +70,7 @@
       ],
       "id": "FS-WRITE-LIMITS-03/batch-malformed-middle",
       "kind": "per-item-continuation",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 29 to 29",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 29 to 29",
       "part": "ALL",
       "residue": "R3",
       "semantics": "A BatchWrite of three create-only writes whose middle item carries no operation. The question is whether the request is evaluated per position, with the valid prefix and suffix still published, or refused whole."
@@ -83,7 +83,7 @@
       ],
       "id": "FS-WRITE-LIMITS-03/batch-undecodable-value",
       "kind": "whole-request-decode",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 32 to 32",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 32 to 32",
       "part": "ALL",
       "residue": "R3",
       "semantics": "The same three-write shape with a middle item whose value is well-formed JSON that cannot be decoded into the protobuf repeated field. This separates a decoder refusal from a per-item evaluation."
@@ -98,7 +98,7 @@
       ],
       "id": "FS-WRITE-LIMITS-03/batch-duplicate-document",
       "kind": "control",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 36 to 36",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 36 to 36",
       "part": "ALL",
       "residue": "R3",
       "semantics": "The duplicate-document shape production is already known to answer with a whole-request 400. It is the control that establishes the validation stage the other two cases are measured against."
@@ -123,7 +123,7 @@
       "id": "FS-WRITE-LIMITS-03/collection-id",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-COLLECTION-ID",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 39 to 42",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 39 to 42",
       "part": "ALL",
       "residue": "R4",
       "semantics": "A create-only write under a collection id of exactly 1500 UTF-8 bytes is accepted and read back; one of 1501 bytes is refused, and a read of the refused name is refused the same way."
@@ -148,7 +148,7 @@
       "id": "FS-WRITE-LIMITS-03/subcollection-depth",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-SUBCOLLECTION-DEPTH",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 43 to 46",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 43 to 46",
       "part": "ALL",
       "residue": "R4",
       "semantics": "The same shape at exactly 100 collection levels below the database root and at 101. Both names stay well under the document-name and collection-id maxima, so the refusal cannot be attributed to another limit."
@@ -185,7 +185,7 @@
       "indexExemptionReason": "Without it every document named at this boundary is refused for FS-LIMIT-INDEX-ENTRY-BYTES before the name limit is reached.",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-DOCUMENT-NAME-BYTES",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 47 to 50",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 47 to 50",
       "part": "ALL",
       "pendingReason": "the local shadow supervisor pins the historical index configuration and cannot apply the declared exemption, so the local run shows the index-entry refusal the exemption exists to remove",
       "residue": "R4",
@@ -212,7 +212,7 @@
       "id": "FS-WRITE-LIMITS-03/index-entry-bytes",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-INDEX-ENTRY-BYTES",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 51 to 54",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 51 to 54",
       "part": "ALL",
       "residue": "R4",
       "semantics": "One automatic single-field entry of exactly 7680 bytes is accepted and one of 7681 is refused."
@@ -238,7 +238,7 @@
       "id": "FS-WRITE-LIMITS-03/index-entries",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 55 to 58",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 55 to 58",
       "part": "ALL",
       "residue": "R4",
       "semantics": "A document generating exactly 40,000 automatic index entries is accepted and the next representable total is refused."
@@ -264,7 +264,7 @@
       "id": "FS-WRITE-LIMITS-03/index-entry-sum",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 59 to 62",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 59 to 62",
       "part": "ALL",
       "residue": "R4",
       "semantics": "A document whose automatic index entries sum to exactly 8,388,608 bytes is accepted; lengthening its name by one byte raises every entry by one and the sum past the maximum."
@@ -289,7 +289,7 @@
       "id": "FS-WRITE-LIMITS-03/indexed-value",
       "kind": "truncating-maximum",
       "limitId": "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 63 to 66",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 63 to 66",
       "part": "ALL",
       "residue": "R4",
       "semantics": "Both documents are sized so their one indexed entry is exactly at the entry maximum under truncation. The second carries a value twice the truncation ceiling: if the indexed representation were charged in full its entry would be 9180 bytes and the write would be refused. Accepting both, and reading both back with their values intact, is what confirms that the truncation is of the index and not of the stored value."
@@ -314,7 +314,7 @@
       "id": "FS-WRITE-LIMITS-03/implied-map",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-FIELD-PATH-BYTES",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 67 to 70",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 67 to 70",
       "part": "ALL",
       "pathShape": "map",
       "residue": "R4",
@@ -340,7 +340,7 @@
       "id": "FS-WRITE-LIMITS-03/implied-array",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-FIELD-PATH-BYTES",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 71 to 74",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 71 to 74",
       "part": "ALL",
       "pathShape": "array",
       "residue": "R4",
@@ -366,7 +366,7 @@
       "id": "FS-WRITE-LIMITS-03/field-path",
       "kind": "boundary-pair",
       "limitId": "FS-LIMIT-FIELD-PATH-BYTES",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 75 to 78",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 75 to 78",
       "part": "ALL",
       "residue": "R4",
       "semantics": "An update mask whose canonical field path is exactly 1500 bytes is accepted and one of 1501 bytes is refused. Two segments share the length so neither reaches the field-name maximum."
@@ -393,7 +393,7 @@
       "id": "FS-WRITE-LIMITS-03/field-value",
       "kind": "refusal-only",
       "limitId": "FS-LIMIT-FIELD-VALUE-BYTES",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 79 to 80",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 79 to 80",
       "part": "ALL",
       "residue": "R4",
       "semantics": "A single string value one byte over the maximum is refused, with the diagnostic naming the property and the maximum."
@@ -420,7 +420,7 @@
       "id": "FS-WRITE-LIMITS-03/agg-string",
       "kind": "metric-discriminator",
       "limitId": "FS-LIMIT-FIELD-VALUE-BYTES",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 81 to 84",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 81 to 84",
       "metricEvidence": {
         "namesTheDocumentSize": "production does not apply the value metric to this shape",
         "namesTheProperty": "production applies the value metric to this shape"
@@ -451,7 +451,7 @@
       "id": "FS-WRITE-LIMITS-03/agg-map",
       "kind": "metric-discriminator",
       "limitId": "FS-LIMIT-FIELD-VALUE-BYTES",
-      "localBasis": "artifact shadow at 5076c77df3454b5ca1ca62ebdb0938092989c602, part ALL observation rows 85 to 88",
+      "localBasis": "artifact shadow at 8f129b10aac6cf9a875fbf67fd8775a746daec40, part ALL observation rows 85 to 88",
       "metricEvidence": {
         "namesTheDocumentSize": "production does not apply the value metric to this shape",
         "namesTheProperty": "production applies the value metric to this shape"
@@ -647,11 +647,12 @@
       "required": true,
       "verified": false
     },
-    "shadowDifference": "The shadow supervisor pins a historical conformance/firestore.indexes.json by commit and verifies its digest, so the shadow did not run under the digest this manifest declares, and it could not apply the declared exemption. The difference is immaterial to every case but the document-name one: neither version declares an override or composite index on any collection group this plan uses, so the default single-field configuration applies under both and every boundary derivation is unchanged. The document-name rows are pending for exactly this reason.",
+    "shadowDifference": false,
     "shadowRanUnder": {
       "ALL": {
-        "sha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
-        "sourceCommit": "2526c61eda5fc53ac91250307786127ae3c601be"
+        "profile": "nx-local",
+        "sha256": "1e645c04419ac8418e9d05ebceb7a11d641f7127260de5cd1f307570cc93f332",
+        "sourceCommit": null
       }
     },
     "singleFieldExemptions": 1
@@ -703,7 +704,7 @@
       "windowExpiresAt",
       "windowStartsAt"
     ],
-    "artifactProfile": "limits-03-5076c77df",
+    "artifactProfile": "limits-03-8f129b10a",
     "descriptor": "tools/compat-broad/fs-write-limits/limits_03_descriptor.py",
     "exitCodes": {
       "0": "verified cleanup and Ledger release",
@@ -851,20 +852,7 @@
     "reason": "One allocation carries every case. With management charged the bodyless slots reserve by their response ceiling instead of a flat five seconds, which is what keeps the allocation under the Gate's 1200-second cap; the A and B selections stay compilable for a run that has to be split for some other reason."
   },
   "pendingLocalImplementation": {
-    "differences": [
-      {
-        "basis": "exact typed document/version not returned",
-        "index": 47,
-        "pending": true,
-        "reason": "the local shadow supervisor pins the historical index configuration and cannot apply the declared exemption, so the local run shows the index-entry refusal the exemption exists to remove"
-      },
-      {
-        "basis": "exact typed document/version not returned",
-        "index": 50,
-        "pending": true,
-        "reason": "the local shadow supervisor pins the historical index configuration and cannot apply the declared exemption, so the local run shows the index-entry refusal the exemption exists to remove"
-      }
-    ],
+    "differences": [],
     "meaning": "These rows state the documented production behaviour for something the local side cannot yet show, and each carries its own reason. A difference on one is evidence about the local side, not a campaign failure, and it is recorded rather than discarded. A pending row is also excused from the write-safety predicate, because a row the campaign cannot predict cannot serve as a local safety invariant.",
     "rows": [
       47,
@@ -949,14 +937,14 @@
       "tools/compat-broad/fs-write-limits/limits_03_preflight.py": "b4c43f20884013d0f65a96327b01f437949918892901209a6d1ce26e81c88d8e",
       "tools/compat-broad/fs-write-limits/limits_03_production.py": "054751403e334c01604fc381260e976f1462416890e876f24392f71a5d1f846f",
       "tools/compat-broad/fs-write-limits/limits_03_remote_transport.py": "d05a53423603931e8f469afc918fa3beec379cb0ee8b8767bae115242863933c",
-      "tools/compat-broad/fs-write-limits/package_03.py": "2de6d3988a8b5f6ff7569bbca9acd8e3bec2085975121581ab85621b4d25ea21",
+      "tools/compat-broad/fs-write-limits/package_03.py": "dac6d427854b354eac69b271dbfb6db24fe648aa53bed3a596e5a61f3bcbd5bc",
       "tools/compat-broad/fs-write-limits/production.py": "a1e1b2c2cf39fdc244aa174e1d23b0625025787b38d5b919cd32b0406348774b",
       "tools/compat-broad/fs-write-limits/production_bridge.py": "6780a04c346b5a445916f9457146cf582e9a552eecc8000df0afc373f37370df",
       "tools/compat-broad/fs-write-limits/production_plan.py": "325cf3bf53af8ad5962feec6808bf05ec846b87fb92c3e5422f68ae38d9cee22",
       "tools/compat-broad/fs-write-limits/rehearsal.py": "0b7f8e41e0350a09edb0383f3e3864f07fae2c5c50ef28447cd696ed0a7f76e2",
       "tools/compat-broad/fs-write-limits/remote_transport.py": "367901d2b020ca15a35042a8609843270216bf0b3e50ee3367926bedf89069c2",
       "tools/compat-broad/fs-write-limits/shadow.py": "3f7405386baafa151fc2b8e89e15b0a153d054c9efc6bb66103ccc4ff1f9a68d",
-      "tools/compat-broad/fs-write-limits/shadow_03.py": "fcc1d23f3cbbd04891870fcb7791ab35f1a0551f285f666fe11c49b691eebfc9",
+      "tools/compat-broad/fs-write-limits/shadow_03.py": "2e9a80f0cda2a8a1ae1eee06eb43bc6c5712c95b8cc402aa351633917f4d6e27",
       "tools/compat-broad/fs-write-limits/shadow_03b.py": "87924f501a6c5a6173eb887bf12e44c75a61e89084f2be8b2e37c10b43684899",
       "tools/compat-broad/fs-write-limits/test_campaign_03.py": "4f3b40f85127402eb4f3c51285739fa4b40c0c543b0bc2af6057da5a6422538d",
       "tools/compat-broad/fs-write-limits/test_collection_recording_recovery.py": "d0f39bd17c55232e4df304713d523e7cb5f8d2be1d34d0197a500709cedcaa5c",
@@ -966,7 +954,7 @@
       "tools/compat-broad/fs-write-limits/test_json_wire_integrity.py": "1fc185c1d1908c7b2b2ac6daae1f4155bcb20f3d03d94c88553ad64ab916da08",
       "tools/compat-broad/fs-write-limits/test_limits_03_o8.py": "0949901dff93b4169a7321408cc57f1660c68ed0e56c3e121e0da4cb84964fa5",
       "tools/compat-broad/fs-write-limits/test_namespace_sizes.py": "dbb8df349490168d6f8ac55b392356c23f0a3b0ac24ab120cdb791c9ac65041b",
-      "tools/compat-broad/fs-write-limits/test_package_03.py": "d903854513cbc3e0e4307077d5db1fc1e8df535ceb6a26ecd5de92c579aaf46f",
+      "tools/compat-broad/fs-write-limits/test_package_03.py": "bf7bbce6d1134138eedaa83590ef93064d01fa9ad6f5729665323df5c771b54e",
       "tools/compat-broad/fs-write-limits/test_production.py": "e4e2b568b4d285c501a67e1689d742f3e98e25a706a66525e428aaa297cc6ff4",
       "tools/compat-broad/fs-write-limits/test_production_bridge.py": "0524cac790abe161649e10e8aa517943e14c8e0e1443496bf6fc0d83a89b63e4",
       "tools/compat-broad/fs-write-limits/test_production_plan.py": "fef8e6e786da5f3ef1336b4edb66e1acc177dafa2856f16bd800f664ac04ad5d",
@@ -975,17 +963,17 @@
       "tools/compat-broad/fs-write-limits/test_reservation_bridge.py": "cf0498ec8cddaf50fb98fc79ea55aadc4f93a28d33cef3d1b7f606a51c920843",
       "tools/compat-broad/fs-write-limits/test_response_envelope_wire.py": "b014e77b1da79491f3b199f3794b1ca999680b82ba88f2d5ef27e50bd6ee30b3",
       "tools/compat-broad/fs-write-limits/test_shadow.py": "83fa0d485ea74f463460a4710e9d1df4dd607135f8c946824c157a026d059e82",
-      "tools/compat-broad/fs-write-limits/test_shadow_integrity.py": "1760e75a7b2e6ece85e4360982dd1f064ba5e1a70154c038452a7ea5bdaf5944",
+      "tools/compat-broad/fs-write-limits/test_shadow_integrity.py": "2cbd2a55f077f508bbe91e7a09bbc783672a39e616acf3bb0792fb7ea058229d",
       "tools/compat-broad/fs-write-limits/test_transport.py": "8c8a6330ad9ea8abe862613cb6253a0a355f97174e256c87b43e623fd7bf2b29",
       "tools/compat-broad/fs-write-limits/transport.py": "5269b07da605919edf4016c0d108175487d97474ddb07f969e56b9b19fd25688",
       "tools/compat-broad/fs-write-txn/credential_prep.py": "71fd03dce79004c48d5f4cf66bbaf637ba5321e0c830eedd965b0514c76564df",
       "tools/compat-broad/o8-core/o8_admission.py": "1adf21e8815ff8131377a6d776f56027bb9a24a5201b22dbff98d9fabd70b334",
       "tools/compat-broad/o8-core/o8_campaign.py": "fa19fb8f445729ecdc9cd64779511f99537dee7fa405053927355b62bdf76ca5",
-      "tools/compat-broad/production-admission/reservations.py": "660babb49c00ee73371ffcecde2685d989e2ef07997db7e184775c36068b1488",
-      "tools/compat-broad/shared_gate.py": "fa12543084a02a3ffc3aa28aecb539feeb7046961de16179a919378c1c6078fe"
+      "tools/compat-broad/production-admission/reservations.py": "49874dc4862a848b6e42974a92c02af5de29a9551d3625aa4b3b716cc920a0e0",
+      "tools/compat-broad/shared_gate.py": "91179a36bed03a5dc78bb0c1c6bc4abebfe2afb28617100664c70e6baf743e22"
     },
-    "codeSourceHead": "5076c77df3454b5ca1ca62ebdb0938092989c602",
-    "featureHead": "5076c77df3454b5ca1ca62ebdb0938092989c602",
+    "codeSourceHead": "8f129b10aac6cf9a875fbf67fd8775a746daec40",
+    "featureHead": "8f129b10aac6cf9a875fbf67fd8775a746daec40",
     "runtimeSourceDigests": {
       "crates/fireemu-adapter-grpc/src/local.rs": "eaf3edba09cfb331e76f9f134cc16413cba93471e159ee37fa3609d0c94b8660",
       "crates/fireemu-adapter-grpc/tests/rest.rs": "702508db2d0cbfc16ebce33b044415b62a53e6cb1ce0d859a29cef06120b44f6",
@@ -995,7 +983,7 @@
       "crates/fireemu-core-firestore/src/size.rs": "1ce649dd78029b3d692e8e23fbdbdd47db49de84c2fd5fd5f78a7decee3f7f8c"
     },
     "shadowArtifactSha256": {
-      "ALL": "acadd68aa3186bea9dcfce5ee6aff512e96ee86c1409a64944ee4d303077fd4b"
+      "ALL": "bf713deb0952db610c840d6233b9c343496df5b69b9c4e934a4054c27f765897"
     }
   },
   "status": "BLOCKED_OWNER",

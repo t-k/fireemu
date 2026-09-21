@@ -88,7 +88,7 @@ def plan(surface, scheduled):
 def start(tmp_path, surface, scheduled):
     frozen = plan(surface, scheduled)
     ledger = Ledger.create(tmp_path / "ledger")
-    claim = {"campaignId": "offline-envelope-integrity", "manifestDigest": digest("offline"),
+    claim = {"campaignId": "FS-DATA-WRITE-LIMITS-02", "manifestDigest": digest("offline"),
              "nonceDigest": digest(frozen["nonce"]), "gatePath": str(tmp_path / "gate"),
              "gatePlanDigest": digest(frozen),
              "locks": [{"key": "project/demo-envelope/firestore/(default)/documents/owned", "mode": "WRITE"}],

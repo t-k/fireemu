@@ -4,6 +4,7 @@
 import multiprocessing
 import json
 import os
+import re
 from types import SimpleNamespace
 import threading
 import time
@@ -12,6 +13,7 @@ from urllib.parse import quote
 
 import pytest
 from reservations import (
+    CATALOGUED_CAMPAIGN_IDS,
     COMMIT_COLLECTOR_SOURCE_DIGEST,
     COMMIT_SOURCE_COMMIT,
     COMMIT_SOURCE_DIGESTS,
@@ -73,6 +75,14 @@ def plan(label="a"):
     }
 
 
+# Fixture labels stand for catalogued tasks: `reserve` refuses any other id.
+TASKS = {
+    "a": "FS-DATA-WRITE-LIMITS-02",
+    "b": "FS-DATA-WRITE-COMMIT-TRANSFORMS-03",
+    "c": "FS-LIMIT-API-REQUEST-BYTES",
+}
+
+
 def claim(tmp_path, label, locks=None):
     owned = {
         "key": f"project/p/firestore/(default)/documents/owned/{label}",
@@ -82,7 +92,7 @@ def claim(tmp_path, label, locks=None):
     if owned not in locks:
         locks.append(owned)
     return {
-        "campaignId": label,
+        "campaignId": TASKS[label],
         "manifestDigest": digest(label),
         "nonceDigest": digest(plan(label)["nonce"]),
         "gatePath": str((tmp_path / label).resolve()),
@@ -2319,3 +2329,46 @@ def test_a_receipt_need_not_carry_the_gate_it_binds(tmp_path):
         ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
         == "closed-after-abandon"
     )
+
+
+@pytest.mark.parametrize(
+    "campaign_id",
+    ["a", digest("nonce")[:32], "FS-WRITE-TXN-PRECEDENCE-01-V9", "limits"],
+    ids=["label", "nonce-shaped", "versioned", "lane-nickname"],
+)
+def test_reserve_refuses_a_campaign_id_outside_the_catalogue(tmp_path, campaign_id):
+    """A renamed task would earn itself a fresh US$10; only catalogued ids reserve."""
+    ledger = Ledger.create(tmp_path / "ledger")
+    first = claim(tmp_path, "a")
+    first["campaignId"] = campaign_id
+    before = (tmp_path / "ledger" / "state.json").read_bytes()
+    with pytest.raises(ValueError, match="uncatalogued campaign id"):
+        ledger.reserve(envelope(), first, plan("a"), now=1100)
+    assert (tmp_path / "ledger" / "state.json").read_bytes() == before
+
+
+def test_every_lane_descriptor_campaign_id_is_catalogued():
+    """The catalogue is a closed literal; the lanes' declared ids must be in it.
+
+    Read from source text rather than imported, so this module never pulls a
+    lane's import graph into the shared Ledger's own test run.
+    """
+    root = Path(__file__).resolve().parents[1]
+    for relative, name in (
+        ("fs-commit-transform-limits/commit_acquisition.py", "CAMPAIGN_ID"),
+        ("fs-request-bytes-boundary/request_bytes_compiler.py", "CAMPAIGN"),
+        ("fs-write-limits/compiler.py", "CAMPAIGN"),
+        ("fs-query-in-boundary/query_in_compiler.py", "CAMPAIGN"),
+        ("fs-query-partition-cursor/partition_cursor_case.py", "CAMPAIGN"),
+        ("fs-write-txn/txn_expiry_cases.py", "CAMPAIGN"),
+        ("auth-action-codes/action_codes_plan.py", "CAMPAIGN_ID"),
+        ("auth-credential-tokens/credential_cases.py", "CAMPAIGN_ID"),
+        ("auth-totp-enroll/mfa_cases.py", "CAMPAIGN_ID"),
+        ("auth-totp-enroll/totp_plan.py", "CAMPAIGN_ID"),
+        ("fs-rules-publication/o5_rules_case.py", "CAMPAIGN"),
+        ("fs-rules-publication/o5_user_token_case.py", "CAMPAIGN"),
+    ):
+        source = (root / relative).read_text()
+        match = re.search(rf'^{name} = "([^"]+)"$', source, re.MULTILINE)
+        assert match, relative
+        assert match.group(1) in CATALOGUED_CAMPAIGN_IDS, (relative, match.group(1))

@@ -167,10 +167,19 @@ the stop's label:
    reproduce the Gate's charged slots and data events one for one, and the
    coordinator and job PIDs are gone. The allocation stays charged; only the
    conflict locks and the concurrency slot are released.
-3. Otherwise the recovery owner removes any residue, collects a typed
-   `NOT_FOUND` for every owned resource, writes the owner attestation and calls
-   `Ledger.close_after_escalation`. The no-data abort refuses such a row and
-   the escalation close refuses a no-data row, so the two cannot be confused.
+3. Otherwise a Commit was dispatched. If the run itself went on to delete
+   every document it created and proved each one absent (a stop after a
+   probe's cleanup, such as a recording failure once the deletes had run),
+   the Gate journal carries the typed absence for every created document and
+   `Ledger.close_after_abandon` retires the row without an owner statement:
+   this is the recoverable branch. If a Commit's answer was lost, or a
+   created document is not proven absent, the recovery owner removes any
+   residue, collects a typed `NOT_FOUND` for every owned resource, writes the
+   owner attestation and calls `Ledger.close_after_escalation`. The three
+   exits are disjoint by evidence: the no-data abort refuses a row with a
+   dispatched Commit, the abandoned close refuses one whose cleanup is
+   incomplete or whose Gate proves no creation, and the escalation close
+   refuses both of those.
 
 `test_request_bytes_production.py` drives the real launcher to each of these
 stops against a temporary Ledger, in a forked child so its PIDs are genuinely

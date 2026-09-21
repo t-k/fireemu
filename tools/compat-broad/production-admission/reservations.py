@@ -19,7 +19,6 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 import os
 import platform
 
@@ -33,9 +32,38 @@ from shared_gate import (
     unconfirmed_creates,
     validate_absence_proofs,
 )
-from task_budget import task_budget_check
 
 DIMENSIONS = {"requests", "accounts", "resources", "costMicrousd"}
+# The owner's US$10 is per production observation task, identified by the
+# claim's campaignId, and never cumulative across the program. Every earlier
+# reservation of the task counts whatever state it reached, because an
+# allocation is never refunded.
+TASK_CAP_MICROUSD = 10_000_000
+TASK_BUDGET_REFUSAL = "task-budget-exceeded:"
+# The closed set of production observation tasks that budget is authorized
+# for: the stable campaign id each lane declares, without attempt or version
+# suffixes (the write-txn stream lane's v2..v9 records are re-checks of the
+# one task). A claim naming anything else (a nonce, a fixture label, a
+# versioned id) is refused at reservation time, so an attempt cannot earn
+# itself a fresh US$10 by renaming its task. Rows already in a ledger are
+# not re-validated against this set: a reservation is history once written.
+CATALOGUED_CAMPAIGN_IDS = frozenset(
+    {
+        "AUTH-ACTION-OOB-DELIVERY-BOUNDARY-01",
+        "AUTH-CREDENTIAL-TOKENS-01",
+        "AUTH-MFA-AGE-TOTP-01",
+        "AUTH-MFA-TOTP-ENROLL-RETRY-01",
+        "FS-DATA-QUERY-IN-BOUNDARY-04",
+        "FS-DATA-WRITE-COMMIT-TRANSFORMS-03",
+        "FS-DATA-WRITE-LIMITS-02",
+        "FS-LIMIT-API-REQUEST-BYTES",
+        "FS-QUERY-PARTITION-CURSOR-04",
+        "FS-RULES-PUBLICATION-USER-TOKEN-01",
+        "FS-RULES-USER-TOKEN-MATRIX-01",
+        "FS-TRANSACTION-EXPIRY-RETRY-04",
+        "FS-WRITE-TXN-PRECEDENCE-01",
+    }
+)
 GENERATION_FIELDS = {"sourceCommit", "collectorSourceDigest", "sourceDigests"}
 MAX_GENERATION_SOURCES = 64
 # The source closure of the reservations written before a reservation recorded
@@ -458,6 +486,50 @@ def _generation(value):
         _hash(sources[name])
 
 
+def task_spent_microusd(ledger_state, campaign_id):
+    """Micro-USD already allocated to one task, across every reservation state."""
+    if not isinstance(ledger_state, dict) or not isinstance(campaign_id, str):
+        raise ValueError("ledger state and campaign id required")  # noqa: TRY004 -- refusal class, not a type report
+    total = 0
+    for row in ledger_state.get("reservations", {}).values():
+        claim = row.get("claim") if isinstance(row, dict) else None
+        if not isinstance(claim, dict) or claim.get("campaignId") != campaign_id:
+            continue
+        cost = claim.get("budget", {}).get("costMicrousd")
+        if type(cost) is not int or cost < 0:
+            raise ValueError("closed integer budget required")
+        total += cost
+    return total
+
+
+def task_budget_check(
+    ledger_state, campaign_id, new_cost_microusd, cap_microusd=TASK_CAP_MICROUSD
+):
+    """Refuse a claim that would take one task past its cap.
+
+    Returns the task's projected total when admitted. The sum is over every
+    reservation whose claim names the task, in every state, plus the new
+    claim; the refusal names the task so the operator knows which US$10 is
+    exhausted. Preparation, failed attempts, retries, re-checks after a fix
+    and recovery of one task all land here; independent tasks each have
+    their own cap, and the program-wide total is never a stop condition.
+    """
+    if (
+        type(new_cost_microusd) is not int
+        or new_cost_microusd < 0
+        or type(cap_microusd) is not int
+        or cap_microusd <= 0
+    ):
+        raise ValueError("closed integer task budget required")
+    projected = task_spent_microusd(ledger_state, campaign_id) + new_cost_microusd
+    if projected > cap_microusd:
+        raise ValueError(
+            f"{TASK_BUDGET_REFUSAL}{campaign_id} "
+            f"({projected} > {cap_microusd} micro-USD)"
+        )
+    return projected
+
+
 def _scope(lock):
     if (
         not isinstance(lock, dict)
@@ -691,6 +763,8 @@ class Ledger:
             _number(now)
         _envelope(envelope)
         _claim(claim)
+        if claim["campaignId"] not in CATALOGUED_CAMPAIGN_IDS:
+            raise ValueError(f"uncatalogued campaign id: {claim['campaignId']}")
         if generation is not None:
             _generation(generation)
         if (

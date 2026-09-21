@@ -27,7 +27,7 @@
     "tools/compat-broad/fs-write-limits/shadow.py": "3f7405386baafa151fc2b8e89e15b0a153d054c9efc6bb66103ccc4ff1f9a68d",
     "tools/compat-broad/fs-write-limits/shadow_03.py": "fcc1d23f3cbbd04891870fcb7791ab35f1a0551f285f666fe11c49b691eebfc9",
     "tools/compat-broad/fs-write-limits/shadow_03b.py": "87924f501a6c5a6173eb887bf12e44c75a61e89084f2be8b2e37c10b43684899",
-    "tools/compat-broad/fs-write-limits/test_campaign_03.py": "43901b00f66a282e50773741abf99058a7494f11608ce28839218fe9709f572b",
+    "tools/compat-broad/fs-write-limits/test_campaign_03.py": "a09a4c1d294e0a0ad5ba5d82bcc01832f6ce7728b1a4fae18a37d4dc87d4acfb",
     "tools/compat-broad/fs-write-limits/test_collection_recording_recovery.py": "d0f39bd17c55232e4df304713d523e7cb5f8d2be1d34d0197a500709cedcaa5c",
     "tools/compat-broad/fs-write-limits/test_collector.py": "e3e3a70cf20d4d5a381cb8817f9980ebdbd281ca385a3f169de6b83f011e8980",
     "tools/compat-broad/fs-write-limits/test_comparator.py": "ea9e03cf969d273d20dfe8a7cee4eec4126f726ca19bce04f6fa91f235d62c4b",
@@ -62,20 +62,20 @@
         "runtimeInputCount": 420,
         "runtimeInputsDigest": "05fc94af37cb548efff489eb7b92218edc3ecde51d731df53e341e3a9f8df25a",
         "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-        "sha256": "c275301b2d1f7663eb7ad691dcd61ac6a6f4cd7ec338a77c66f9fc2627e95b2b"
+        "sha256": "c921fc49ba8170f3cccd78a435111c6770c4db0711eb868c43411a95c76e912c"
       },
       "campaignId": "FS-WRITE-LIMITS-03",
       "digests": {
-        "parentManifestSha256": "7e6da1064432a1ac378050ff6ff9dfa40f5872758739815db5132c8490200574",
+        "parentManifestSha256": "939c5a5de1499cf50fac42697d526e9eefa6d2541ce7bc0b6d2e0b74e9063925",
         "sourceInputsBound": true,
-        "supervisorManifestSha256": "7e6da1064432a1ac378050ff6ff9dfa40f5872758739815db5132c8490200574"
+        "supervisorManifestSha256": "939c5a5de1499cf50fac42697d526e9eefa6d2541ce7bc0b6d2e0b74e9063925"
       },
       "execution": {
         "allOwnedResourcesAbsentAfterRecovery": true,
         "cleanupComplete": false,
         "cleanupValidated": false,
         "completed": false,
-        "configurationDigest": "af16f4c9bbc8f9c16cb76c7c9f9e61f62b37851cae98adb32c2c2fba6efeebf6",
+        "configurationDigest": "f69bf9c830f98574120d83cf73c8e78c817c5f446b26a52915ffe192f3f8db28",
         "database": "(default)",
         "gateCloseRefused": true,
         "indexConfiguration": {
@@ -92,7 +92,7 @@
         "ownedDocuments": 29,
         "ownedProcess": {
           "listenersClosed": true,
-          "pid": 46160,
+          "pid": 73713,
           "stopped": true
         },
         "pendingDifferences": [
@@ -124,13 +124,13 @@
         "supervisorStatus": "incomplete",
         "target": "owned-local-artifact-on-loopback"
       },
-      "executionCommit": "f7f1c636026f995dd522205bd72baea4121bfb9e"
+      "executionCommit": "404393d98ca2633172b69b97933692999f9e948c"
     }
   },
   "formalCompatibilityClaim": false,
   "kind": "fs-write-limits-03-local-shadow-v2",
   "note": "Local artifact evidence only. The executed nonces, the owned resource names and the retained binaries live in private output directories and are not published here. This is not a production observation and promotes nothing. The local shadow supervisor pins the historical index configuration and verifies its digest, so it cannot apply the declared exemption; the document-name rows are pending for exactly that reason. The schedule and the cleanup ran to the end and every owned document was proven absent, but HEAD's shared Gate refused the terminal close: it settles the R3 BatchWrite that carries an empty item as an unknown create. The record is published as recorded, not completed.",
   "productionExecuted": false,
-  "sourceCommit": "f7f1c636026f995dd522205bd72baea4121bfb9e",
+  "sourceCommit": "404393d98ca2633172b69b97933692999f9e948c",
   "status": "recorded-local-only-gate-close-refused"
 }

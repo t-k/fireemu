@@ -55,6 +55,7 @@ MISSING_APPROVAL = "a fresh owner approval for an unreserved nonce is required"
 RELEASE_BLOCKED_KIND = "fs-config-lifecycle-release-blocked-v1"
 UNRECOVERED_DISPOSITION = "owner-restore"
 RESTORED_DISPOSITION = "release-blocked-restored"
+NO_MUTATION_DISPOSITION = "held-no-mutation"
 ESCALATION_DISPOSITION = "owner-escalation"
 _HEX64 = re.compile(r"[a-f0-9]{64}")
 
@@ -351,6 +352,15 @@ def classify_stop(receipt) -> dict:
             "releaseEligible": False,
             "reason": "a patched field configuration is not proven back at its baseline",
             "resources": [item.get("resource") for item in unrecovered],
+        }
+    if restored and collection.get("mutationAttempted") is False:
+        # Stopped before any patch left (credential preflight, projection drift,
+        # an unavailable control): nothing to restore, nothing released either.
+        return {
+            "stopPoint": collection.get("stopPoint"),
+            "disposition": NO_MUTATION_DISPOSITION,
+            "releaseEligible": False,
+            "reason": "no patch was sent; the reservation is held with an empty ledger",
         }
     if restored and collection.get("cleanupComplete") is True:
         supported, blocker = release_supported()

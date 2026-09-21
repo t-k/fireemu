@@ -38,6 +38,7 @@ import reservations
 from broad_contract import digest
 from fs_config_lifecycle import lifecycle_admission as admission
 from fs_config_lifecycle import lifecycle_descriptor as campaign
+from fs_config_lifecycle import lifecycle_preflight as preflight
 from fs_config_lifecycle.lifecycle_collector import collect
 from fs_config_lifecycle.lifecycle_gate import ConfigurationGate, create
 
@@ -86,14 +87,21 @@ def execute_reserved(
     capability=None,
     credential_reader=None,
     sleeper=None,
+    tokeninfo=None,
 ):
-    """Reserve, gate, collect, receipt, and the typed release disposition."""
+    """Reserve, gate, collect, receipt, and the typed release disposition.
+
+    `tokeninfo` is the credential preflight's exchange. The production launcher
+    passes nothing and gets the real one; an injected exchange is admitted only
+    against a proof Ledger, like an injected transport.
+    """
     inputs, permission = copy.deepcopy(inputs), copy.deepcopy(permission)
     admission.validate_frozen_inputs(inputs)
     if digest(permission) != inputs["permissionDigest"]:
         raise ValueError("independent permission differs from frozen inputs")
-    if capability is None:
+    if capability is None or tokeninfo is not None:
         _proof_ledger(ledger_root)
+    if capability is None:
         o8_admission.reject_production_transport(admission.descriptor(), transmit)
     output = Path(output)
     if output.exists() or output.is_symlink():
@@ -125,6 +133,7 @@ def execute_reserved(
     try:
         create(output / "gate", gate_plan)
         gate = ConfigurationGate(output / "gate")
+        extra = {} if sleeper is None else {"sleeper": sleeper}
         if capability is not None:
             token = credential_reader()
 
@@ -134,9 +143,15 @@ def execute_reserved(
                 )
 
             wire = execute_wire
+            # The token is attested before OC-01: principal, scope and a lifetime
+            # covering the wall plus the recovery reserve, or nothing is patched.
+            extra["credential_preflight"] = preflight.credential_preflight(
+                token,
+                permission["credentialPrincipal"],
+                tokeninfo=tokeninfo or preflight.tokeninfo_receipt,
+            )
         else:
             wire = transmit
-        extra = {} if sleeper is None else {"sleeper": sleeper}
         result = collect(plan["nonce"], wire, output / "collection", gate=gate, **extra)
         token = None
         if not result.get("cleanupComplete"):

@@ -502,6 +502,17 @@ class _Run:
         other refusal gets exactly one recovery attempt.
         """
         self.gate.begin_recovery()
+        if self.enumeration is None and all(
+            state["restore"] == NOT_APPLIED
+            for state in self.gate.snapshot()["steps"].values()
+        ):
+            # Stopped before OC-02 captured anything and before any patch left: no
+            # field is owned and there is no enumeration to compare, so no request
+            # is spent on a reconciliation that could prove nothing.
+            self.gate.record_reconciliation(
+                {"ok": False, "skipped": "no-mutation-before-enumeration"}
+            )
+            return
         for step in reversed(self.steps):
             state = self.gate.snapshot()["steps"][step["id"]]
             if state["restore"] in FINISHED_STATES:

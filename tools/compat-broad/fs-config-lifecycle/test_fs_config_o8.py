@@ -669,3 +669,146 @@ def test_receipt_classification_names_the_three_dispositions() -> None:
     with pytest.raises(ValueError):
         admission.classify_stop("x")
     assert copy.deepcopy(admission.RELEASE_BLOCKER) == admission.release_supported()[1]
+
+
+# -- credential preflight (review Must Fix 3) ------------------------------------
+
+
+def _tokeninfo(body: dict | None, status: int = 200):
+    def exchange(token, *, deadline):
+        assert token == "tok"
+        assert deadline > time.monotonic()
+        return {
+            "complete": body is not None,
+            "workerReaped": True,
+            "status": status,
+            "body": body,
+        }
+
+    return exchange
+
+
+GOOD_TOKENINFO = {
+    "issued_to": "client",
+    "audience": "client",
+    "user_id": "subject",
+    "scope": "https://www.googleapis.com/auth/cloud-platform openid",
+    "expires_in": 3599,
+}
+PRINCIPAL = {
+    "clientId": "client",
+    "subject": "subject",
+    "requiredScopes": [campaign.PRINCIPAL_SCOPE],
+}
+
+
+def test_the_attestation_verifies_principal_scope_and_lifetime_and_keeps_no_body() -> (
+    None
+):
+    from fs_config_lifecycle import lifecycle_preflight as preflight
+
+    assert preflight.required_seconds() == 1260
+    run = preflight.credential_preflight(
+        "tok", PRINCIPAL, tokeninfo=_tokeninfo(GOOD_TOKENINFO)
+    )
+    receipt = run(time.monotonic() + 30)
+    assert receipt["complete"] is True and receipt["failure"] is None
+    body = receipt["body"]
+    assert body["verified"] is True
+    assert body["requiredSeconds"] == 1260
+    assert body["remainingSecondsAtVerification"] >= 1260
+    assert "user_id" not in json.dumps(body) and "tok" not in json.dumps(body)
+    for bad, reason in (
+        ({**GOOD_TOKENINFO, "user_id": "someone-else"}, "identity"),
+        ({**GOOD_TOKENINFO, "issued_to": "other", "audience": "other"}, "identity"),
+        ({**GOOD_TOKENINFO, "scope": "openid email"}, "identity"),
+        ({**GOOD_TOKENINFO, "expires_in": 1200}, "lifetime"),
+        (None, "attestation"),
+    ):
+        refused = preflight.credential_preflight(
+            "tok", PRINCIPAL, tokeninfo=_tokeninfo(bad)
+        )(time.monotonic() + 30)
+        assert refused["complete"] is False
+        assert refused["failure"] == "credential-preflight"
+        assert refused["body"]["verified"] is False
+        assert reason in refused["body"]["reason"], (bad, refused["body"]["reason"])
+
+
+def _capability_run(tmp_path: Path, tokeninfo):
+    built = Admission(tmp_path)
+    root = _proof_ledger(tmp_path)
+    built.approval["ledgerRoot"] = str(root.resolve())
+    binding, binding_digest = campaign.worker_binding()
+    capability = admission.issue_production_capability(
+        binding=binding,
+        binding_digest=binding_digest,
+        **built.bindings(ledger_root=root),
+    )
+    result = lifecycle_production.execute_reserved(
+        inputs=built.inputs,
+        permission=built.permission,
+        ledger_root=root,
+        output=tmp_path / "run",
+        transmit=None,
+        capability=capability,
+        credential_reader=lambda: "tok",
+        tokeninfo=tokeninfo,
+    )
+    return built, root, result
+
+
+def test_a_foreign_principal_or_short_lived_token_stops_before_oc_01(
+    tmp_path: Path,
+) -> None:
+    for bad in (
+        {**GOOD_TOKENINFO, "user_id": "someone-else"},
+        {**GOOD_TOKENINFO, "expires_in": 600},
+    ):
+        run_dir = tmp_path / digest(bad)[:8]
+        run_dir.mkdir()
+        _built, root, result = _capability_run(run_dir, _tokeninfo(bad))
+        collection = result["collection"]
+        assert collection["stopPoint"] == "credential-preflight"
+        assert collection["mutationAttempted"] is False
+        assert collection["rowCount"] == 1
+        assert collection["rows"][0]["case"] == "PRE-01"
+        assert collection["rows"][0]["role"] == "preflight"
+        assert collection["credentialPreflight"]["complete"] is False
+        assert not any(row["case"].startswith("OC-") for row in collection["rows"])
+        assert result["disposition"]["disposition"] == admission.NO_MUTATION_DISPOSITION
+        row = reservations.Ledger(root).snapshot()["reservations"][
+            result["ticket"]["reservation"]
+        ]
+        assert row["state"] == "held"
+        receipt = json.loads((run_dir / "run" / "receipt.json").read_bytes())
+        assert "user_id" not in json.dumps(receipt)
+
+
+def test_an_injected_tokeninfo_exchange_is_refused_against_a_ledger_without_the_proof_marker(
+    tmp_path: Path,
+) -> None:
+    built = Admission(tmp_path)
+    root = tmp_path / "canonical-shaped"
+    reservations.Ledger.create(root)
+    built.approval["ledgerRoot"] = str(root.resolve())
+    binding, binding_digest = campaign.worker_binding()
+    capability = admission.issue_production_capability(
+        binding=binding,
+        binding_digest=binding_digest,
+        **built.bindings(ledger_root=root),
+    )
+    try:
+        with pytest.raises(ValueError, match="proof Ledger"):
+            lifecycle_production.execute_reserved(
+                inputs=built.inputs,
+                permission=built.permission,
+                ledger_root=root,
+                output=tmp_path / "run",
+                transmit=None,
+                capability=capability,
+                credential_reader=lambda: "tok",
+                tokeninfo=_tokeninfo(GOOD_TOKENINFO),
+            )
+    finally:
+        o8_admission.revoke_production_capability(capability)
+    assert not (tmp_path / "run").exists()

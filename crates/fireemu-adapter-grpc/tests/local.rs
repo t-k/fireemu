@@ -8350,3 +8350,271 @@ async fn batch_write_refuses_a_repeated_document_as_a_whole_with_production_word
         handle.abort();
     }
 }
+
+/// One gRPC server and one REST surface over the same backend, so a shape sent on either
+/// transport lands in (or is refused from) the same store.
+async fn start_with_rest_surface() -> (
+    FirestoreClient<tonic::transport::Channel>,
+    fireemu_adapter_grpc::rest::RestState,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Production,
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let backend = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+    let rest = fireemu_adapter_grpc::rest::RestState {
+        local: Arc::clone(&backend),
+        gateway: Arc::new(gateway.clone()),
+        rules: None,
+        app_check: None,
+        control_token: None,
+    };
+    let svc = FirestoreServer::new(GatewayService::local(gateway, backend));
+    let handle = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(svc)
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    (FirestoreClient::new(channel), rest, handle)
+}
+
+/// How a BatchWrite answered: refused as a whole request, or answered per item.
+#[derive(Debug, PartialEq, Eq)]
+enum BatchWriteAnswer {
+    /// `(code, message)` of the whole-request refusal; no position got a status.
+    WholeRequest(i32, String),
+    /// `(code, message)` per position, `0` and empty for a write that landed.
+    PerItem(Vec<(i32, String)>),
+}
+
+/// The transport-independent outcome of one BatchWrite: the answer and which of the named
+/// documents exist afterwards, with their `v` field.
+#[derive(Debug, PartialEq, Eq)]
+struct BatchWriteOutcome {
+    answer: BatchWriteAnswer,
+    present: Vec<Option<i64>>,
+}
+
+/// `google.rpc.Code` of a REST error body's `status` name (the ones a BatchWrite can answer).
+fn rpc_code_of_status_name(name: &str) -> i32 {
+    match name {
+        "INVALID_ARGUMENT" => 3,
+        "NOT_FOUND" => 5,
+        "ALREADY_EXISTS" => 6,
+        "FAILED_PRECONDITION" => 9,
+        "ABORTED" => 10,
+        other => panic!("unexpected REST status {other}"),
+    }
+}
+
+/// Reads `v` of every document under `paths` (relative to `DOCS`), `None` when absent.
+async fn read_v_of(
+    client: &mut FirestoreClient<tonic::transport::Channel>,
+    paths: &[String],
+) -> Vec<Option<i64>> {
+    let mut present = Vec::with_capacity(paths.len());
+    for path in paths {
+        let read = client
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/{path}"),
+                ..Default::default()
+            })
+            .await;
+        present.push(match read {
+            Ok(document) => match document.into_inner().fields.get("v") {
+                Some(pb::Value {
+                    value_type: Some(pb::value::ValueType::IntegerValue(v)),
+                }) => Some(*v),
+                other => panic!("{path} has no integer v: {other:?}"),
+            },
+            Err(status) if status.code() == tonic::Code::NotFound => None,
+            Err(status) => panic!("{path}: {status}"),
+        });
+    }
+    present
+}
+
+/// FS-WRITE-006. The three BatchWrite item shapes whose classification (per position or
+/// whole request) is not yet production-observed for a malformed middle item
+/// (`spec/compatibility/broad-runs/fs-write-limits-03.json`, cases `batch-malformed-middle`
+/// and `batch-undecodable-value`, pending) answer identically on REST and gRPC today, with
+/// identical post-state. Each shape is a three-write batch whose middle write is the shape and
+/// whose neighbours are ordinary updates:
+///
+/// - `operation-less`: a write with no operation. Per position: code 3 at position 1, the
+///   neighbours land.
+/// - `invalid-name`: a decodable `update` whose document name is not a resource name. Per
+///   position: code 3 at position 1, the neighbours land.
+/// - `duplicate-document`: the middle write names the first write's document again. Whole
+///   request, production's wording, nothing lands (production-observed on REST,
+///   `writes/batch-write#non-atomic-batch`).
+///
+/// The per-position classification of the first two shapes, and the wording of their item
+/// statuses, is fireemu's current reading of section 11 of the mission document, not a
+/// production observation; the test fails if the two transports diverge, whichever way
+/// production turns out to answer.
+#[tokio::test]
+async fn batch_write_item_shapes_answer_identically_on_rest_and_grpc() {
+    struct Shape {
+        name: &'static str,
+        /// The middle write, given the collection and the first write's document path.
+        middle_grpc: fn(&str, &str) -> pb::Write,
+        middle_rest: fn(&str, &str) -> serde_json::Value,
+        expected: fn(&str) -> BatchWriteOutcome,
+    }
+    let shapes = [
+        Shape {
+            name: "operation-less",
+            middle_grpc: |_, _| pb::Write::default(),
+            middle_rest: |_, _| serde_json::json!({}),
+            expected: |_| BatchWriteOutcome {
+                answer: BatchWriteAnswer::PerItem(vec![
+                    (0, String::new()),
+                    (3, "invalid query: write without operation".to_owned()),
+                    (0, String::new()),
+                ]),
+                present: vec![Some(0), None, Some(2)],
+            },
+        },
+        Shape {
+            name: "invalid-name",
+            middle_grpc: |_, _| pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: "bad name".to_owned(),
+                    fields: [("v".to_owned(), i(1))].into_iter().collect(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+            middle_rest: |_, _| serde_json::json!({"update": {"name": "bad name", "fields": {"v": {"integerValue": "1"}}}}),
+            expected: |_| BatchWriteOutcome {
+                answer: BatchWriteAnswer::PerItem(vec![
+                    (0, String::new()),
+                    (3, "invalid parent: bad name".to_owned()),
+                    (0, String::new()),
+                ]),
+                present: vec![Some(0), None, Some(2)],
+            },
+        },
+        Shape {
+            name: "duplicate-document",
+            middle_grpc: |_, first| update_write(first, &[("v", i(1))]),
+            middle_rest: |_, first| serde_json::json!({"update": {"name": format!("{DOCS}/{first}"), "fields": {"v": {"integerValue": "1"}}}}),
+            expected: |_| BatchWriteOutcome {
+                answer: BatchWriteAnswer::WholeRequest(3, BATCH_WRITE_REPEATED_DOCUMENT.to_owned()),
+                present: vec![None, None, None],
+            },
+        },
+    ];
+
+    let (mut client, rest, handle) = start_with_rest_surface().await;
+    for shape in &shapes {
+        let mut outcomes = Vec::new();
+        for transport in ["grpc", "rest"] {
+            let collection = format!("batch-parity-{transport}-{}", shape.name);
+            let paths: Vec<String> = (0..3).map(|n| format!("{collection}/{n}")).collect();
+            let answer = if transport == "grpc" {
+                let writes = vec![
+                    update_write(&paths[0], &[("v", i(0))]),
+                    (shape.middle_grpc)(&collection, &paths[0]),
+                    update_write(&paths[2], &[("v", i(2))]),
+                ];
+                match client
+                    .batch_write(pb::BatchWriteRequest {
+                        database: DB.to_owned(),
+                        writes,
+                        ..Default::default()
+                    })
+                    .await
+                {
+                    Ok(response) => BatchWriteAnswer::PerItem(
+                        response
+                            .into_inner()
+                            .status
+                            .into_iter()
+                            .map(|status| (status.code, status.message))
+                            .collect(),
+                    ),
+                    Err(status) => BatchWriteAnswer::WholeRequest(
+                        i32::from(status.code()),
+                        status.message().to_owned(),
+                    ),
+                }
+            } else {
+                let writes = vec![
+                    serde_json::json!({"update": {"name": format!("{DOCS}/{}", paths[0]), "fields": {"v": {"integerValue": "0"}}}}),
+                    (shape.middle_rest)(&collection, &paths[0]),
+                    serde_json::json!({"update": {"name": format!("{DOCS}/{}", paths[2]), "fields": {"v": {"integerValue": "2"}}}}),
+                ];
+                let response = rest.handle(&fireemu_adapter_grpc::rest::RestRequest {
+                    method: "POST".to_owned(),
+                    path: format!("/v1/{DOCS}:batchWrite"),
+                    query: String::new(),
+                    authorization: Some("Bearer owner".to_owned()),
+                    app_check: Vec::new(),
+                    body: serde_json::json!({"writes": writes}),
+                    origin: None,
+                    browser_metadata: false,
+                });
+                if response.status == 200 {
+                    let body = &response.body;
+                    assert!(body.get("error").is_none(), "{} {body}", shape.name);
+                    BatchWriteAnswer::PerItem(
+                        body["status"]
+                            .as_array()
+                            .unwrap_or_else(|| panic!("{} {body}", shape.name))
+                            .iter()
+                            .map(|status| {
+                                (
+                                    i32::try_from(status["code"].as_i64().unwrap_or(0)).unwrap(),
+                                    status["message"].as_str().unwrap_or_default().to_owned(),
+                                )
+                            })
+                            .collect(),
+                    )
+                } else {
+                    let body = &response.body;
+                    assert!(body.get("status").is_none(), "{} {body}", shape.name);
+                    assert!(body.get("writeResults").is_none(), "{} {body}", shape.name);
+                    BatchWriteAnswer::WholeRequest(
+                        rpc_code_of_status_name(body["error"]["status"].as_str().unwrap()),
+                        body["error"]["message"].as_str().unwrap().to_owned(),
+                    )
+                }
+            };
+            let present = read_v_of(&mut client, &paths).await;
+            outcomes.push((transport, BatchWriteOutcome { answer, present }));
+        }
+        let (grpc, rest_outcome) = (&outcomes[0].1, &outcomes[1].1);
+        assert_eq!(
+            grpc, rest_outcome,
+            "{}: REST and gRPC classify the shape differently",
+            shape.name
+        );
+        assert_eq!(
+            *grpc,
+            (shape.expected)(shape.name),
+            "{}: the documented classification changed",
+            shape.name
+        );
+    }
+    handle.abort();
+}

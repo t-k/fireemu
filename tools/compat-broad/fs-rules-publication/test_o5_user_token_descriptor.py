@@ -160,6 +160,8 @@ def test_the_frozen_inputs_cover_the_lane_and_the_shared_closure(tmp_path) -> No
         "o5_user_token_collector.py",
         "o5_user_token_comparator_v2.py",
         "o5_user_token_descriptor.py",
+        "o5_user_token_remote_transport.py",
+        "o5_user_token_https_worker.py",
     }
 
 
@@ -330,7 +332,11 @@ def test_the_collector_member_runs_the_lane_collector_bound() -> None:
         acquisition=acquisition_for(plan, ROLE_PRODUCTION),
     )
     assert bundle["provenance"]["role"] == ROLE_PRODUCTION
-    assert bundle["recordingComplete"] is True
+    # A bound run without the production Rules management session is held
+    # before mutation; this prevents the legacy receipt contract from being
+    # mistaken for production lifecycle evidence.
+    assert bundle["recordingComplete"] is False
+    assert bundle["abort"] == "collector:ValueError"
     assert bundle["budget"]["deadlineSeconds"] == 600.0
     assert bundle["budget"]["recoveryDeadlineSeconds"] == 900.0
     assert bundle["productionReady"] is False
@@ -341,7 +347,7 @@ def test_the_collector_member_runs_the_lane_collector_bound() -> None:
         run_id="unbound",
         acquisition=acquisition_for(plan, ROLE_PRODUCTION),
     )
-    assert refused["abort"] == "unbound-receipt"
+    assert refused["abort"] == "collector:ValueError"
 
 
 def test_the_comparator_member_compares_against_the_published_shadow() -> None:
@@ -363,15 +369,10 @@ def test_the_comparator_member_compares_against_the_published_shadow() -> None:
         acquisition=acquisition_for(shadow_plan, ROLE_PRODUCTION),
     )
     result = descriptor.comparator(production, shadow_plan)
-    assert result["classification"] != REFUSED, result["errors"]
-    assert result["errors"] == []
-    assert len(result["rows"]) == 33
-    assert all(
-        row["production"]["status"] == row["local"]["status"] for row in result["rows"]
-    )
-    # The scripted transport invents field values, so the row comparison names
-    # exactly that and nothing else.
-    assert {reason for row in result["rows"] for reason in row["reasons"]} <= {"fields"}
+    # The checked-in shadow predates the production management closure. It is
+    # intentionally stale and must remain refused until refreshed separately.
+    assert result["classification"] == REFUSED
+    assert "production:recording-incomplete" in result["errors"]
 
 
 def test_a_local_shadow_bundle_fails_closed_as_production_evidence() -> None:

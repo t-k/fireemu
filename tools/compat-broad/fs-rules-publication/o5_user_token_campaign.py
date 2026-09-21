@@ -41,6 +41,7 @@ RULES_MANAGEMENT_OBSERVATION = (
 )
 RULES_MANAGEMENT_RECOVERY = (
     "restore-patch", "restore-get", "restore-executable",
+    "restore-get-executable",
     "delete-a-get", "delete-a", "delete-a-absence",
     "delete-b-get", "delete-b", "delete-b-absence",
 )

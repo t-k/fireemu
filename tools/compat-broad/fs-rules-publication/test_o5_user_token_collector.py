@@ -556,3 +556,31 @@ def test_rules_management_baseline_and_dynamic_bindings_use_real_gate(tmp_path) 
     assert gate.snapshot()["managementUsed"] == [
         "observation:" + slot["id"] for slot in gate_plan["management"]["observation"]
     ]
+
+
+def test_rules_management_type_error_is_not_retried(tmp_path) -> None:
+    gate_plan = limits_03_descriptor.gate_plan(
+        compiler_03.compile_limits_plan("fireemu-35fe6", "(default)", "a" * 32)
+    )
+    gate_plan = copy.deepcopy(gate_plan)
+    gate_plan["management"]["observation"] = [{"id": "baseline-release-get", "timeout": 8.0}]
+    gate_plan["management"]["recovery"] = []
+    gate_plan["observationRequests"] = 1
+    gate_plan["permissionExpiresAt"] = 4_000_000_000.0
+    shared_gate.create(tmp_path / "gate", gate_plan)
+    calls = []
+
+    def execute(_operation, *, deadline):
+        calls.append(deadline)
+        raise TypeError("callback contract failure")
+
+    session = RulesManagementSession(
+        gate=shared_gate.Gate(tmp_path / "gate", gate_plan["campaignId"]),
+        ledger=None,
+        ticket=None,
+        execute=execute,
+        plan=case(),
+    )
+    with pytest.raises(TypeError, match="callback contract failure"):
+        session._dispatch("observation", "baseline-release-get", {"action": "release-get", "releaseName": "projects/fireemu-35fe6/releases/cloud.firestore"})
+    assert len(calls) == 1

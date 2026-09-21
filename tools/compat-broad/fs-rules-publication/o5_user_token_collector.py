@@ -231,6 +231,7 @@ RULES_MANAGEMENT_RECOVERY = (
     "restore-patch",
     "restore-get",
     "restore-executable",
+    "restore-get-executable",
     "delete-a-get",
     "delete-a",
     "delete-a-absence",
@@ -265,11 +266,8 @@ class RulesManagementSession:
         def send(deadline: float) -> dict[str, Any]:
             if self.ledger is not None:
                 self.ledger.validate(self.ticket, duration=8)
-            try:
-                request = {"kind": "rules-lifecycle", "phase": "ruleset", **operation}
-                raw = self.execute(request, deadline=deadline)
-            except TypeError:
-                raw = self.execute(request)
+            request = {"kind": "rules-lifecycle", "phase": "ruleset", **operation}
+            raw = self.execute(request, deadline=deadline)
             if not isinstance(raw, dict):
                 raise ValueError("bounded Rules worker receipt required")
             if {"status", "complete", "workerReaped", "bodyKind", "body"} <= set(raw):
@@ -298,7 +296,7 @@ class RulesManagementSession:
 
     @staticmethod
     def _release(body: Any, expected_name: str | None = None) -> tuple[str, str]:
-        if not isinstance(body, dict) or set(body) != {"name", "rulesetName"}:
+        if not isinstance(body, dict) or not {"name", "rulesetName"}.issubset(body):
             raise ValueError("release readback shape refused")
         name, ruleset = body["name"], body["rulesetName"]
         if not isinstance(name, str) or _RELEASE_RESOURCE.fullmatch(name) is None or not isinstance(ruleset, str) or _RULESET_RESOURCE.fullmatch(ruleset) is None:
@@ -309,7 +307,7 @@ class RulesManagementSession:
 
     @staticmethod
     def _ruleset(body: Any, expected_digest: str | None, expected_name: str | None = None) -> str:
-        if not isinstance(body, dict) or set(body) != {"name", "source"}:
+        if not isinstance(body, dict) or not {"name", "source"}.issubset(body):
             raise ValueError("Ruleset readback shape refused")
         name, source = body["name"], body["source"]
         if not isinstance(name, str) or _RULESET_RESOURCE.fullmatch(name) is None or not isinstance(source, dict) or set(source) != {"files"}:
@@ -381,7 +379,7 @@ class RulesManagementSession:
         )
         if restored_name != release_name or restored_target != self.baseline["rulesetName"]:
             raise ValueError("restore readback differs")
-        executable = self._dispatch("recovery", "restore-executable", {"action": "release-get-executable", "releaseName": release_name})
+        executable = self._dispatch("recovery", "restore-get-executable", {"action": "release-get-executable", "releaseName": release_name})
         if executable.get("rulesetName") != self.baseline["rulesetName"]:
             raise ValueError("restored executable differs")
         for label in ("A", "B"):
@@ -905,6 +903,8 @@ def collect(
     rules_management: dict[str, Any] | None = None
 
     try:
+        if bindings is not None and management_session is None:
+            raise ValueError("production Rules management session required")
         if management_session is not None:
             if bindings is None or role != ROLE_PRODUCTION:
                 raise ValueError("Rules management requires bound production acquisition")
@@ -913,7 +913,7 @@ def collect(
             if journal.failures:
                 abort = "journal-failure"
                 break
-            if bindings is not None and operation["ruleset"] != active_ruleset:
+            if bindings is not None and management_session is None and operation["ruleset"] != active_ruleset:
                 release, release_failure = _release_ruleset(
                     plan, execute, budget, wire, journal, operation,
                     worker_state=worker_state,
@@ -1246,10 +1246,9 @@ def _release_ruleset(
     except BudgetExhausted as error:
         return None, str(error)
     request = {
-        "kind": "rules-lifecycle",
+        "kind": "ruleset-release",
         "phase": "ruleset",
-        "action": "create",
-        "label": label,
+        "ruleset": label,
         "sourceDigest": source_digest,
         "credentialRef": "administrator",
         "credentialClass": "administrator",

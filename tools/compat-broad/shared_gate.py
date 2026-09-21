@@ -206,6 +206,7 @@ def typed_absence(status, body):
 
 
 _AUTH_ACCOUNT_IDENTIFIER = re.compile(r"[A-Za-z0-9_.@+-]{1,128}")
+_AUTH_UID_BINDING = re.compile(r"[A-Za-z][A-Za-z0-9]*Uid")
 BINDING_PREFIX = "$binding:"
 
 
@@ -248,17 +249,24 @@ def auth_typed_absence(status, body):
     return body == {"kind": "identitytoolkit#GetAccountInfoResponse"}
 
 
-def _auth_binding_name(operation):
+def _auth_binding_name(operation, account_bindings=None):
+    explicit = operation.get("uidBinding")
+    if isinstance(explicit, str):
+        return explicit
     account = operation.get("account")
+    if isinstance(account_bindings, dict):
+        entry = account_bindings.get(account)
+        if isinstance(entry, dict) and isinstance(entry.get("uidBinding"), str):
+            return entry["uidBinding"]
     return f"{account}Uid" if isinstance(account, str) and account else None
 
 
-def _auth_recovery_operation_valid(operation, project):
+def _auth_recovery_operation_valid(operation, project, account_bindings=None):
     if not _auth_operation(operation):
         return True
     path = operation.get("path")
     body = operation.get("body")
-    binding = _auth_binding_name(operation)
+    binding = _auth_binding_name(operation, account_bindings)
     if not isinstance(path, str) or not isinstance(body, dict) or binding is None:
         return False
     prefix = f"identitytoolkit.googleapis.com/v1/projects/{project}/accounts:"
@@ -281,13 +289,55 @@ def _auth_recovery_operation_valid(operation, project):
     return True
 
 
-def _auth_uid_absence_operation_valid(operation, project):
+def _validate_auth_account_bindings(plan, job):
+    """Validate an optional frozen account/resource/UID-binding projection."""
+    account_bindings = job.get("accountBindings")
+    if account_bindings is None:
+        return None
+    if not isinstance(account_bindings, dict) or not account_bindings:
+        raise ValueError("Auth account binding map required")
+    resources = set(job.get("resources", []))
+    seen_bindings = set()
+    project = plan.get("project")
+    for account, entry in account_bindings.items():
+        if not isinstance(account, str) or not account or not isinstance(entry, dict):
+            raise ValueError("Auth account binding map malformed")
+        resource = entry.get("resource")
+        binding = entry.get("uidBinding")
+        if (
+            not _auth_account_form(resource, project)
+            or resource not in resources
+            or not isinstance(binding, str)
+            or _AUTH_UID_BINDING.fullmatch(binding) is None
+            or binding in seen_bindings
+        ):
+            raise ValueError("Auth account binding resource or binding differs")
+        seen_bindings.add(binding)
+    for phase in ("observation", "recovery"):
+        for operation in job.get(phase, []):
+            if not _auth_operation(operation) or operation.get("account") is None:
+                continue
+            account = operation["account"]
+            entry = account_bindings.get(account)
+            if not isinstance(entry, dict):
+                raise ValueError("Auth operation account binding missing")
+            if operation.get("resource") != entry["resource"]:
+                raise ValueError("Auth operation resource binding differs")
+            if operation.get("uidBinding") != entry["uidBinding"]:
+                raise ValueError("Auth operation UID binding differs")
+            if phase == "observation" and operation.get("kind") == "sign-up":
+                if operation.get("binds", {}).get(entry["uidBinding"]) != "localId":
+                    raise ValueError("Auth signup UID binding differs")
+    return account_bindings
+
+
+def _auth_uid_absence_operation_valid(operation, project, account_bindings=None):
     """Only a bound UID read can settle an Auth account resource."""
     return (
         operation.get("kind") == "uid-absence"
         and operation.get("method") == "POST"
         and operation.get("path", "").endswith("/accounts:lookup")
-        and _auth_recovery_operation_valid(operation, project)
+        and _auth_recovery_operation_valid(operation, project, account_bindings)
         and isinstance(operation.get("body"), dict)
         and set(operation["body"]) == {"localId"}
     )
@@ -304,7 +354,8 @@ def _auth_creation_ownership(state, job, operation):
         return False
     event = state["events"][event_index]
     evidence = event.get("authEvidence")
-    return (
+    settled = event.get("settledBy")
+    ordinary = (
         record.get("resource") == operation.get("resource")
         and event.get("phase") == "observation"
         and event.get("completed") is True
@@ -313,6 +364,16 @@ def _auth_creation_ownership(state, job, operation):
         and evidence.get("account") == account
         and evidence.get("creationOutcome") == "created"
     )
+    adopted = (
+        record.get("resource") == operation.get("resource")
+        and event.get("phase") == "observation"
+        and event.get("creationOutcome") == "created"
+        and isinstance(settled, dict)
+        and settled.get("kind") == "address-readback-present"
+        and isinstance(settled.get("responseDigest"), str)
+        and len(settled["responseDigest"]) == 64
+    )
+    return ordinary or adopted
 
 
 def validate_absence_proofs(state, job_name):
@@ -333,7 +394,11 @@ def validate_absence_proofs(state, job_name):
                 if _auth_operation(operation)
                 and operation.get("resource") == resource
                 and operation["method"] == "POST"
-                and _auth_uid_absence_operation_valid(operation, state["plan"].get("project"))
+                and _auth_uid_absence_operation_valid(
+                    operation,
+                    state["plan"].get("project"),
+                    job.get("accountBindings"),
+                )
             ]
             absent = auth_typed_absence
         else:
@@ -636,6 +701,7 @@ def create(path, plan):
         policy.validate_plan(plan)
     project = plan.get("project")
     for job in plan.get("jobs", {}).values():
+        account_bindings = _validate_auth_account_bindings(plan, job)
         resources = set(job.get("resources", []))
         for operation in job.get("observation", []) + job.get("recovery", []):
             if not _auth_operation(operation):
@@ -653,7 +719,13 @@ def create(path, plan):
                 and operation.get("path", "").endswith("/accounts:delete")
             ):
                 raise ValueError("destructive Auth delete is recovery-only")
-            if operation in job.get("recovery", []) and resource is not None and not _auth_recovery_operation_valid(operation, project):
+            if (
+                operation in job.get("recovery", [])
+                and resource is not None
+                and not _auth_recovery_operation_valid(
+                    operation, project, account_bindings
+                )
+            ):
                 raise ValueError("canonical Auth UID binding or lookup route required")
     if (
         not _valid_request_seconds(plan, policy)

@@ -45,7 +45,22 @@ def test_the_frozen_plan_is_created_by_the_shared_gate_at_its_wall_cap(tmp_path)
     job = snapshot["plan"]["jobs"][mfa_gate.JOB]
     assert len(job["observation"]) == 93
     assert len(job["recovery"]) == 32
-    assert job["resources"] == mfa_gate.route_resources("fireemu-35fe6")
+    assert job["resources"] == [
+        mfa_gate.account_resource("fireemu-35fe6", NONCE, role)
+        for role in mfa_gate.ROLE_ORDER
+    ]
+    assert job["accountBindings"] == {
+        role: {
+            "resource": mfa_gate.account_resource("fireemu-35fe6", NONCE, role),
+            "uidBinding": f"{mfa_gate._camel(role)}Uid",
+        }
+        for role in mfa_gate.ROLE_ORDER
+    }
+    for phase in ("observation", "recovery"):
+        for operation in job[phase]:
+            if operation.get("account") is not None:
+                assert operation["resource"] == job["accountBindings"][operation["account"]]["resource"]
+                assert operation["uidBinding"] == job["accountBindings"][operation["account"]]["uidBinding"]
     assert snapshot["plan"]["accountResources"] == [
         f"projects/fireemu-35fe6/auth/accounts/o2-mfa-{role}-{NONCE}"
         for role in mfa_gate.ROLE_ORDER
@@ -75,6 +90,33 @@ def test_the_ledger_refuses_the_auth_resources_by_name():
         with pytest.raises(ValueError, match="canonical Firestore resource required"):
             reservations._firestore_resource_scope(name)
     assert shared_gate.typed_absence(200, {"users": []}) is False
+
+
+def test_each_mfa_signup_extracts_its_declared_camel_uid_binding(tmp_path):
+    value = plan()
+    signup = next(
+        operation
+        for operation in value["jobs"][mfa_gate.JOB]["observation"]
+        if operation["kind"] == "sign-up" and operation["account"] == "pending-control"
+    )
+    signup["binds"]["pendingControlUid"] = "idToken"
+    with pytest.raises(ValueError, match="signup UID binding differs"):
+        mfa_gate.create(tmp_path / "gate", value)
+
+
+def test_mfa_foreign_resource_and_uid_binding_are_refused_before_creation(tmp_path):
+    value = plan()
+    recovery = value["jobs"][mfa_gate.JOB]["recovery"][0]
+    recovery["resource"] = mfa_gate.account_resource(
+        "fireemu-35fe6", NONCE, "pending-age-2"
+    )
+    with pytest.raises(ValueError, match="resource binding differs"):
+        mfa_gate.create(tmp_path / "foreign-resource", value)
+
+    value = plan()
+    value["jobs"][mfa_gate.JOB]["recovery"][0]["uidBinding"] = "pendingAge2Uid"
+    with pytest.raises(ValueError, match="UID binding differs"):
+        mfa_gate.create(tmp_path / "foreign-binding", value)
 
 
 def test_no_binding_value_is_in_the_plan_and_every_placeholder_is_declared():

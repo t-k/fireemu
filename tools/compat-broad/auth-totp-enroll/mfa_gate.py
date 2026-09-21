@@ -20,11 +20,11 @@ start was refused, and the cleanup of an account that was never created has noth
 send. Both are zero-wire skips the facade admits only for slots its own contract says
 cannot create an account, and both are journaled with a reason.
 
-Resources are the two cleanup routes, because the base Gate derives a cleanup target
-from the request path and requires it among the job's resources. The accounts and the
-configuration lock are named separately in the plan (`accountResources`,
-`configResource`) as `projects/<project>/auth/...`; the shared Ledger does not admit
-those on the current tree, and the lane's hosting check says so by name.
+Resources are canonical Auth account resources. Each account-bearing operation carries
+the exact account resource and frozen UID binding for its kebab-case role; the
+camel-cased binding is extracted from the signup `localId` and reused by cleanup.
+Cleanup routes remain request paths, not substitute resources. The configuration lock
+is still named separately in `configResource`.
 """
 
 from __future__ import annotations
@@ -523,6 +523,19 @@ def gate_plan(
         raise ValueError("the campaign is fixed to the oracle project")
     observation = observation_operations(nonce)
     recovery = recovery_operations(nonce)
+    account_bindings = {
+        role: {
+            "resource": account_resource(project, nonce, role),
+            "uidBinding": f"{_camel(role)}Uid",
+        }
+        for role in ROLE_ORDER
+    }
+    for operation in (*observation, *recovery):
+        account = operation.get("account")
+        if account is not None:
+            binding = account_bindings[account]
+            operation["resource"] = binding["resource"]
+            operation["uidBinding"] = binding["uidBinding"]
     schedule = [
         {"phase": "observation", "index": index, "seconds": DATA_SLOT_SECONDS}
         | ({"creates": False} if _known_noncreating(operation) else {})
@@ -597,7 +610,8 @@ def gate_plan(
         },
         "jobs": {
             JOB: {
-                "resources": route_resources(project),
+                "resources": [entry["resource"] for entry in account_bindings.values()],
+                "accountBindings": account_bindings,
                 "observation": observation,
                 "recovery": recovery,
                 "schedule": schedule,
@@ -894,6 +908,7 @@ class MfaGate(FrozenGate):
                     "uid": uid,
                     "createEvent": position,
                     "adopted": True,
+                    "resource": recipe[event["index"]].get("resource"),
                 }
                 event["creationOutcome"] = "created"
                 event["settledBy"] = {"kind": "address-readback-present", **evidence}
@@ -1108,7 +1123,11 @@ class MfaGate(FrozenGate):
                 if created:
                     if account in accounts:
                         raise ValueError("an owned account was created twice")
-                    accounts[account] = {"uid": uid, "createEvent": position}
+                    accounts[account] = {
+                        "uid": uid,
+                        "createEvent": position,
+                        "resource": operation.get("resource"),
+                    }
                     outcome = "created"
                 elif not typed_refusal(status, body):
                     outcome = "unknown"

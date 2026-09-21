@@ -241,3 +241,44 @@ def admission(value: dict[str, Any]) -> dict[str, Any]:
         "ownerPreconditions": list(value["ownerPreconditions"]),
         "admit": admit,
     }
+
+
+def validate_production_packet(
+    plan: dict[str, Any],
+    *,
+    approval: dict[str, Any],
+    permission: dict[str, Any],
+    capability_inputs: dict[str, Any],
+    credentials: dict[str, Any],
+    account_bindings: dict[str, Any],
+    identity_proofs: dict[str, Any],
+    gate: Any,
+    ledger: Any,
+    ticket: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate commander material before O7 capability issuance.
+
+    This is a readiness check, not an authority grant. O8 admission remains
+    the only issuer, and the campaign's preparation manifest stays closed.
+    """
+    estimate = budget(plan)
+    if estimate["requestUpperBound"] != 146:
+        raise ValueError("production packet budget differs")
+    if (
+        capability_inputs.get("plan") != plan
+        or capability_inputs.get("planDigest") != plan.get("planDigest")
+        or approval.get("status") != "approved"
+        or permission.get("campaignId") != CAMPAIGN
+        or permission.get("planDigest") != plan.get("planDigest")
+        or not isinstance(credentials, dict)
+        or not isinstance(account_bindings, dict)
+        or not isinstance(identity_proofs, dict)
+        or set(identity_proofs) != {entry["ref"] for entry in plan["ownedAccounts"]}
+        or not isinstance(ticket, dict)
+        or gate is None
+        or ledger is None
+        or not callable(getattr(gate, "snapshot", None))
+        or not callable(getattr(ledger, "snapshot", None))
+    ):
+        raise ValueError("production packet bindings differ")
+    return estimate

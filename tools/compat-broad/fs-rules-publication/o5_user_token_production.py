@@ -17,6 +17,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "production-admission"))
 sys.path.insert(0, str(HERE.parent / "o8-core"))
 
+from o5_user_token_campaign import validate_production_packet
 from o5_user_token_descriptor import descriptor
 from o5_user_token_production_bridge import bound_execute, run_bound_collection
 from o8_admission import issue_production_capability, revoke_production_capability
@@ -88,6 +89,18 @@ def _require_packet(packet: Any) -> dict[str, Any]:
 def run_approved(packet: dict[str, Any]) -> dict[str, Any]:
     """Consume one commander-approved packet and run the bound campaign."""
     values = _require_packet(packet)
+    validate_production_packet(
+        values["plan"],
+        approval=values["approval"],
+        permission=values["permission"],
+        capability_inputs=values["capabilityInputs"],
+        credentials=values["credentials"],
+        account_bindings=values["accountBindings"],
+        identity_proofs=values["identityProofs"],
+        gate=values["gate"],
+        ledger=values["ledger"],
+        ticket=values["ticket"],
+    )
     campaign = descriptor()
     capability = issue_production_capability(
         campaign,

@@ -4,6 +4,7 @@ import base64
 import hashlib
 import http.server
 import json
+import os
 import socketserver
 import subprocess
 import sys
@@ -27,7 +28,7 @@ from o8_admission import (
 )
 
 ROOT = Path(__file__).resolve().parents[3]
-PORTCTL = Path("/Users/tk/.agents/skills/port-registry/scripts/portctl.py")
+PORTCTL = os.environ.get("FIREEMU_PORTCTL")
 
 
 class _FixtureHandler(http.server.BaseHTTPRequestHandler):
@@ -72,48 +73,54 @@ class _FixtureHandler(http.server.BaseHTTPRequestHandler):
 
 @pytest.fixture
 def fixture_origin():
-    claim = subprocess.run(
-        [
-            sys.executable,
-            str(PORTCTL),
-            "claim",
-            "--service",
-            "o5-user-token-test",
-            "--preferred",
-            "10000",
-            "--range",
-            "10000-19999",
-            "--ttl",
-            "10m",
-            "--format",
-            "json",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    reservation = json.loads(claim.stdout)
-    port = int(reservation["port"])
-    server = socketserver.TCPServer(("127.0.0.1", port), _FixtureHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{port}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        subprocess.run(
+    reservation = None
+    if PORTCTL:
+        claim = subprocess.run(
             [
                 sys.executable,
-                str(PORTCTL),
-                "release",
-                "--token",
-                reservation["token"],
+                PORTCTL,
+                "claim",
+                "--service",
+                "o5-user-token-test",
+                "--preferred",
+                "10000",
+                "--range",
+                "10000-19999",
+                "--ttl",
+                "10m",
+                "--format",
+                "json",
             ],
             check=True,
             capture_output=True,
             text=True,
         )
+        reservation = json.loads(claim.stdout)
+        port = int(reservation["port"])
+        server = socketserver.TCPServer(("127.0.0.1", port), _FixtureHandler)
+    else:
+        server = socketserver.TCPServer(("127.0.0.1", 0), _FixtureHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = int(reservation["port"]) if reservation is not None else int(server.server_address[1])
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        if reservation is not None:
+            subprocess.run(
+                [
+                    sys.executable,
+                    PORTCTL,
+                    "release",
+                    "--token",
+                    reservation["token"],
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
 
 
 @pytest.fixture

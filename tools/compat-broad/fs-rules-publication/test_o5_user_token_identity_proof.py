@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import http.server
 import json
+import os
 import socketserver
 import subprocess
 import sys
@@ -20,7 +21,7 @@ from broad_contract import digest
 from o5_user_token_case import compile_case
 from o5_user_token_collector import _request
 
-PORTCTL = Path("/Users/tk/.agents/skills/port-registry/scripts/portctl.py")
+PORTCTL = os.environ.get("FIREEMU_PORTCTL")
 
 
 def _segment(value):
@@ -72,41 +73,49 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 @pytest.fixture
 def fixture_origin():
-    claim = subprocess.run(
-        [
-            sys.executable,
-            str(PORTCTL),
-            "claim",
-            "--service",
-            "o5-user-token-identity-proof",
-            "--preferred",
-            "10000",
-            "--range",
-            "10000-19999",
-            "--ttl",
-            "10m",
-            "--format",
-            "json",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    reservation = json.loads(claim.stdout)
-    server = socketserver.TCPServer(("127.0.0.1", int(reservation["port"])), _Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{reservation['port']}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        subprocess.run(
-            [sys.executable, str(PORTCTL), "release", "--token", reservation["token"]],
+    reservation = None
+    if PORTCTL:
+        claim = subprocess.run(
+            [
+                sys.executable,
+                PORTCTL,
+                "claim",
+                "--service",
+                "o5-user-token-identity-proof",
+                "--preferred",
+                "10000",
+                "--range",
+                "10000-19999",
+                "--ttl",
+                "10m",
+                "--format",
+                "json",
+            ],
             check=True,
             capture_output=True,
             text=True,
         )
+        reservation = json.loads(claim.stdout)
+        server = socketserver.TCPServer(
+            ("127.0.0.1", int(reservation["port"])), _Handler
+        )
+    else:
+        server = socketserver.TCPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = int(reservation["port"]) if reservation is not None else int(server.server_address[1])
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        if reservation is not None:
+            subprocess.run(
+                [sys.executable, PORTCTL, "release", "--token", reservation["token"]],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
 
 
 def test_closed_issuance_binds_response_and_exact_request(fixture_origin):

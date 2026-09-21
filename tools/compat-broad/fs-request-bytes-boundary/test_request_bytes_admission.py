@@ -8,6 +8,7 @@ Ledger is only ever a temporary copy.
 import copy
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -438,9 +439,13 @@ def test_current_generation_cannot_select_legacy_closure(tmp_path):
 
 
 def test_retained_historical_generation_uses_allowlisted_metadata():
-    record = Path("/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-21/reqbytes-o8-run-v1")
-    if not (record / "inputs.json").is_file():
+    record_path = os.environ.get("FIREEMU_REQUEST_BYTES_HISTORICAL_METADATA")
+    if record_path is None:
         pytest.skip("retained request-byte metadata is unavailable")
+    record = Path(record_path)
+    assert (record / "inputs.json").is_file(), (
+        f"configured request-byte metadata is unavailable: {record}"
+    )
     inputs = json.loads((record / "inputs.json").read_bytes())
     generation = json.loads((record / "receipt.json").read_bytes())["generation"]
     campaign.validate_generation(generation, inputs)

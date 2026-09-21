@@ -1189,6 +1189,129 @@ CAMPAIGN_PROBES = ("p1", "p2", "p3")
 CAMPAIGN_RECEIPT_KIND = "request-bytes-acquisition-receipt-v1"
 
 
+def token_attestation():
+    """The public body the request-byte lane publishes for a verified token."""
+    return {
+        "kind": "request-byte-token-attestation-v1",
+        "principalDigest": digest("principal"),
+        "requiredScopeVerified": True,
+        "identityMode": "subject",
+        "identityVerified": True,
+        "oauthClientVerified": True,
+        "expiresInSeconds": 3600,
+        "remainingSecondsAtVerification": 3599.0,
+        "requiredSeconds": 600,
+        "complete": True,
+        "workerReaped": True,
+    }
+
+
+def management_response(identity, *, complete=True, transport=True):
+    """One bounded management receipt as the Gate charges and digests it."""
+    if not transport:
+        return {
+            "status": None,
+            "complete": False,
+            "workerReaped": True,
+            "bodyKind": None,
+            "body": None,
+        }
+    slot = identity.split(":", 1)[1]
+    if slot in CAMPAIGN_CREDENTIALS:
+        body = token_attestation() if complete else None
+    else:
+        body = {
+            "kind": "request-byte-metadata-attestation-v1",
+            "slot": slot,
+            "bodyDigest": digest(slot),
+            "baselineVerified": complete,
+        }
+    return {
+        "status": 200,
+        "complete": complete,
+        "workerReaped": True,
+        "bodyKind": "json",
+        "body": body,
+    }
+
+
+def charge_management(state, responses):
+    """Record charged management slots on a Gate state the way `management_dispatch` does."""
+    state["managementUsed"] = [identity for identity, _ in responses]
+    state["managementEvents"] = [
+        {
+            "id": identity,
+            "started": index,
+            "durationReserved": 12,
+            "status": response["status"],
+            "complete": response["complete"],
+            "workerReaped": response["workerReaped"],
+            "bodyKind": response["bodyKind"],
+            "responseDigest": digest(response),
+            "bodyDigest": digest(response["body"]),
+            "completed": bool(response["complete"] and response["workerReaped"]),
+        }
+        for index, (identity, response) in enumerate(responses)
+    ]
+    state["total"] += len(responses)
+    state["observation"] += len(responses)
+    state["costMicrousd"] += len(responses)
+
+
+def request_bytes_receipt(snapshot, ticket, plan_digest, responses, **overrides):
+    """A receipt in the shape `request_bytes_production.execute` persists."""
+    rows = [
+        {"id": identity, "response": response, "responseDigest": digest(response)}
+        for identity, response in responses
+    ]
+    credentials = [
+        response["body"]
+        for identity, response in responses
+        if identity.split(":", 1)[1] in CAMPAIGN_CREDENTIALS
+        and response["complete"] is True
+    ]
+    routes = [
+        {
+            "id": f"observation:{index:03d}",
+            "route": "/v1/"
+            + snapshot["plan"]["jobs"][event["job"]]["observation"][event["index"]][
+                "path"
+            ].removeprefix("/v1/"),
+            "status": event.get("status") if event.get("completed") else None,
+            "responseDigest": event.get("responseDigest", digest(None))
+            if event.get("completed")
+            else digest({"failure": event.get("failure")}),
+        }
+        for index, event in enumerate(snapshot["events"])
+    ]
+    receipt = {
+        "kind": CAMPAIGN_RECEIPT_KIND,
+        "ticket": ticket,
+        "planDigest": plan_digest,
+        "claimDigest": ticket["claimDigest"],
+        "gateDigest": digest(snapshot),
+        "chargedCalls": snapshot["total"],
+        "collection": None
+        if not routes
+        else {"rowCount": len(routes), "recoveryRowCount": 0, "completed": False},
+        "productionExecuted": bool(routes),
+        "mayHaveCreated": False,
+        "preflightComplete": len(responses)
+        == len(CAMPAIGN_CREDENTIALS) + len(CAMPAIGN_PREFLIGHT),
+        "postflightComplete": False,
+        "failure": "ValueError",
+        "releaseEligible": False,
+        "reservationStateAtPublication": "held",
+        "executionKind": "fixed-production-wire",
+        "metadata": routes,
+        "routeDigest": digest(routes),
+        "managementEvidence": rows,
+        "credentialEvidence": credentials,
+    }
+    receipt.update(overrides)
+    return receipt
+
+
 def campaign_plan(tmp_path):
     op = lambda key: {
         "service": "firestore",
@@ -1264,19 +1387,25 @@ def _campaign_attempt(tmp_path, *, stop=1, mode="decision", dispatched=False):
         f"observation:{name}"
         for name in (*CAMPAIGN_CREDENTIALS, *CAMPAIGN_PREFLIGHT[:stop])
     ]
-    observed = CAMPAIGN_PREFLIGHT[: stop if mode == "decision" else stop - 1]
+    # A slot is charged before its evidence is appended: a "decision" stop is
+    # a slot whose transport answered and whose baseline comparison failed, a
+    # "transport" stop is a slot the worker never answered.
+    responses = [
+        (
+            identity,
+            management_response(
+                identity,
+                complete=index < len(used) - 1,
+                transport=mode == "decision" or index < len(used) - 1,
+            ),
+        )
+        for index, identity in enumerate(used)
+    ]
     with gate.locked() as state:
         state["coordinatorPid"] = _stopped_pid()
         for probe in CAMPAIGN_PROBES:
             state["jobs"][probe]["pid"] = state["coordinatorPid"]
-        state["total"] = len(used)
-        state["observation"] = len(used)
-        state["costMicrousd"] = len(used)
-        state["managementUsed"] = used
-        state["managementEvents"] = [
-            {"id": item, "started": index, "durationReserved": 12}
-            for index, item in enumerate(used)
-        ]
+        charge_management(state, responses)
         if dispatched:
             # The transport-deadline stop: a probe Commit was sent and its
             # outcome is unknown, so no evidence can prove that no data exists.
@@ -1286,30 +1415,9 @@ def _campaign_attempt(tmp_path, *, stop=1, mode="decision", dispatched=False):
             state["observation"] += 1
         _save(gate.path, state)
     snapshot = gate.snapshot()
-    receipt = {
-        "kind": CAMPAIGN_RECEIPT_KIND,
-        "ticket": ticket,
-        "planDigest": first["gatePlanDigest"],
-        "claimDigest": ticket["claimDigest"],
-        "gate": snapshot,
-        "chargedCalls": snapshot["total"],
-        "collection": None,
-        "productionExecuted": False,
-        "failure": "ValueError",
-        "releaseEligible": False,
-        "reservationStateAtPublication": "held",
-        "executionKind": "fixed-production-wire",
-        "metadata": [{"id": f"observation:{name}", "status": 200} for name in observed],
-        "credentialEvidence": [
-            {
-                "slot": "bearer",
-                "workerReaped": True,
-                "complete": True,
-                "verified": True,
-                "status": 200,
-            }
-        ],
-    }
+    receipt = request_bytes_receipt(
+        snapshot, ticket, first["gatePlanDigest"], responses, gate=snapshot
+    )
     path = tmp_path / "a" / "receipt.json"
     path.write_text(json.dumps(receipt))
     record = {
@@ -1361,11 +1469,18 @@ def test_a_second_campaign_receipt_must_carry_its_own_declared_kind(tmp_path):
 
 
 def test_a_second_campaign_credential_slot_set_is_its_own(tmp_path):
+    """Commit-shaped credential items do not satisfy the request-byte contract."""
     ledger, _gate, ticket, record = _campaign_attempt(tmp_path)
     receipt_path = Path(record["receiptPath"])
     receipt = json.loads(receipt_path.read_text())
     receipt["credentialEvidence"] = [
-        {**receipt["credentialEvidence"][0], "slot": slot}
+        {
+            "slot": slot,
+            "workerReaped": True,
+            "complete": True,
+            "verified": True,
+            "status": 200,
+        }
         for slot in ("refresh", "tokeninfo")
     ]
     receipt_path.write_text(json.dumps(receipt))
@@ -1377,21 +1492,19 @@ def test_a_second_campaign_credential_slot_set_is_its_own(tmp_path):
 def test_management_outside_the_declared_campaign_prefix_is_refused(tmp_path):
     ledger, _gate, ticket, record = _campaign_attempt(tmp_path, stop=2)
     gate = Gate(Path(record["receiptPath"]).parent / "gate", CAMPAIGN_PROBES[0])
+    responses = [
+        (identity, management_response(identity))
+        for identity in ("observation:bearer-issue", "observation:owned-scope")
+    ]
     with gate.locked() as state:
-        state["managementUsed"] = [
-            "observation:bearer-issue",
-            "observation:owned-scope",
-        ]
-        state["managementEvents"] = [
-            {"id": item, "started": index, "durationReserved": 12}
-            for index, item in enumerate(state["managementUsed"])
-        ]
+        state["total"] = state["observation"] = state["costMicrousd"] = 0
+        charge_management(state, responses)
         _save(gate.path, state)
     snapshot = gate.snapshot()
     receipt_path = Path(record["receiptPath"])
-    receipt = json.loads(receipt_path.read_text())
-    receipt["gate"] = snapshot
-    receipt["chargedCalls"] = snapshot["total"]
+    receipt = request_bytes_receipt(
+        snapshot, ticket, record["planDigest"], responses, gate=snapshot
+    )
     receipt_path.write_text(json.dumps(receipt))
     with pytest.raises(ValueError, match="no-data attempt"):
         ledger.abort_no_data(
@@ -1411,7 +1524,7 @@ def test_management_outside_the_declared_campaign_prefix_is_refused(tmp_path):
 READONLY_RECEIPT_KIND = "request-bytes-acquisition-receipt-v1"
 
 
-def readonly_plan(creates=False):
+def readonly_plan(creates=False, kind=READONLY_RECEIPT_KIND):
     owned = "projects/p/databases/(default)/documents/owned/a/probe/u01"
     op = {
         "service": "firestore",
@@ -1432,7 +1545,7 @@ def readonly_plan(creates=False):
         "intervalSeconds": 0.25,
         "requestSeconds": 2,
         "jobSlots": 1,
-        "receiptKind": READONLY_RECEIPT_KIND,
+        "receiptKind": kind,
         "collectorSourceDigest": COMMIT_COLLECTOR_SOURCE_DIGEST,
         "management": {
             "observation": [],
@@ -1456,12 +1569,14 @@ def readonly_plan(creates=False):
     }
 
 
-def _readonly_attempt(tmp_path, *, dispatched=0, creates=False):
+def _readonly_attempt(
+    tmp_path, *, dispatched=0, creates=False, kind=READONLY_RECEIPT_KIND
+):
     ledger = Ledger.create(tmp_path / "ledger")
     first = claim(tmp_path, "a")
     first["gatePath"] = str((tmp_path / "a" / "gate").resolve())
     first["gateJob"] = "probe"
-    frozen = readonly_plan(creates)
+    frozen = readonly_plan(creates, kind)
     first["gatePlanDigest"] = digest(frozen)
     first["budget"] = {
         "requests": 60,
@@ -1485,22 +1600,9 @@ def _readonly_attempt(tmp_path, *, dispatched=0, creates=False):
         state["jobs"]["probe"]["pid"] = state["coordinatorPid"]
         _save(gate.path, state)
     snapshot = gate.snapshot()
-    receipt = {
-        "kind": READONLY_RECEIPT_KIND,
-        "ticket": ticket,
-        "planDigest": first["gatePlanDigest"],
-        "claimDigest": ticket["claimDigest"],
-        "gate": snapshot,
-        "chargedCalls": snapshot["total"],
-        "collection": None,
-        "productionExecuted": False,
-        "failure": "ValueError",
-        "releaseEligible": False,
-        "reservationStateAtPublication": "held",
-        "executionKind": "fixed-production-wire",
-        "metadata": [],
-        "credentialEvidence": [],
-    }
+    receipt = request_bytes_receipt(
+        snapshot, ticket, first["gatePlanDigest"], [], gate=snapshot, kind=kind
+    )
     path = tmp_path / "a" / "receipt.json"
     path.write_text(json.dumps(receipt))
     record = {
@@ -1515,6 +1617,37 @@ def _readonly_attempt(tmp_path, *, dispatched=0, creates=False):
         "sourceDigests": COMMIT_SOURCE_DIGESTS,
     }
     return ledger, gate, ticket, record
+
+
+def test_a_receipt_kind_outside_the_closed_schema_map_has_no_retirement(tmp_path):
+    """An unfamiliar receipt shape is refused, never read as a known one."""
+    ledger, gate, ticket, record = _readonly_attempt(tmp_path, kind="other-receipt-v9")
+    with pytest.raises(ValueError, match="no-data attempt"):
+        ledger.abort_no_data(ticket, record)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+    assert gate.snapshot()["stopped"] is False
+
+
+def test_the_commit_shape_is_refused_under_the_request_bytes_kind_and_back(tmp_path):
+    """The reserving plan's receipt kind selects the contract; shapes do not mix."""
+    ledger, _gate, ticket, record = _readonly_attempt(tmp_path)
+    receipt_path = Path(record["receiptPath"])
+    receipt = json.loads(receipt_path.read_text())
+    # The Commit lane's contract would accept this: no management, no routes,
+    # nothing executed. The request-byte contract needs its own fields.
+    for key in ("managementEvidence", "mayHaveCreated", "routeDigest"):
+        receipt.pop(key)
+    receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match="no-data attempt"):
+        ledger.abort_no_data(ticket, {**record, "receiptDigest": digest(receipt)})
+    ledger, _gate, ticket, record = _no_data_attempt(tmp_path / "commit")
+    receipt_path = Path(record["receiptPath"])
+    receipt = json.loads(receipt_path.read_text())
+    # And a request-byte-shaped receipt under the Commit kind is refused too.
+    receipt.update(managementEvidence=[], mayHaveCreated=False, credentialEvidence=[])
+    receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match="no-data attempt"):
+        ledger.abort_no_data(ticket, {**record, "receiptDigest": digest(receipt)})
 
 
 def test_a_stop_before_the_schedule_starts_is_retirable(tmp_path):
@@ -1833,22 +1966,14 @@ def test_a_stop_before_any_create_retires_as_no_data(tmp_path):
         _save(gate.path, state)
     snapshot = gate.snapshot()
     assert snapshot["jobs"]["probe"]["stopReason"] == "transport-deadline"
-    receipt = {
-        "kind": READONLY_RECEIPT_KIND,
-        "ticket": ticket,
-        "planDigest": first["gatePlanDigest"],
-        "claimDigest": ticket["claimDigest"],
-        "gate": snapshot,
-        "chargedCalls": snapshot["total"],
-        "collection": None,
-        "productionExecuted": False,
-        "failure": "TimeoutError",
-        "releaseEligible": False,
-        "reservationStateAtPublication": "held",
-        "executionKind": "fixed-production-wire",
-        "metadata": [],
-        "credentialEvidence": [],
-    }
+    receipt = request_bytes_receipt(
+        snapshot,
+        ticket,
+        first["gatePlanDigest"],
+        [],
+        gate=snapshot,
+        failure="TimeoutError",
+    )
     path = tmp_path / "a" / "receipt.json"
     path.write_text(json.dumps(receipt))
     record = {

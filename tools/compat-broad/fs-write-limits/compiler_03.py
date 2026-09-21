@@ -649,7 +649,9 @@ def compile_limits_plan(
         row["responseByteLimit"] = _response_limit(row, documents)
 
     keys = ("service", "path", "method", "body", "privileged", "form", "versionFrom")
-    operations = [{k: row[k] for k in keys if k in row} for row in requests]
+    operations = [
+        gate_operation({k: row[k] for k in keys if k in row}) for row in requests
+    ]
     recovery_operations = operations[observation_count:]
     schedule = [
         {
@@ -677,6 +679,11 @@ def compile_limits_plan(
         # timeout. The totals below are what the Gate will charge, computed by
         # calling it rather than derived alongside it.
         "transportCeilingSeconds": TRANSPORT_CEILING_SECONDS,
+        # A body above this size travels in the plan as its digest and length,
+        # so the Gate state the plan is saved into on every dispatch does not
+        # carry the megabyte bodies; the dispatch still receives and checks the
+        # exact bytes. The Gate refuses an inline body above the threshold.
+        "bodyReferenceThresholdBytes": BODY_REFERENCE_THRESHOLD_BYTES,
         "wallSeconds": _wall_seconds(schedule, recovery_operations, operations),
         "recoverySeconds": _recovery_seconds(schedule, recovery_operations, operations),
         "observationRequests": observation_count,
@@ -1421,6 +1428,55 @@ MANAGEMENT_OBSERVATION_IDS = (
 )
 MANAGEMENT_RECOVERY_IDS = ("project", "database", "index-exemption", "auth")
 MANAGEMENT_REQUEST_COST_MICROUSD = 100
+
+
+# A body larger than this is carried in the Gate plan by reference; the Gate
+# plan is written into its state file on every dispatch, and the campaign's
+# bodies sum to over six mebibytes.
+BODY_REFERENCE_THRESHOLD_BYTES = 4096
+
+
+def gate_operation(operation: dict[str, Any]) -> dict[str, Any]:
+    """The operation as the Gate plan carries it: a large body by reference."""
+    from shared_gate import body_reference, canonical_body_bytes
+
+    body = operation.get("body")
+    if (
+        body is None
+        or len(canonical_body_bytes(body)) <= BODY_REFERENCE_THRESHOLD_BYTES
+    ):
+        return operation
+    value = {key: item for key, item in operation.items() if key != "body"}
+    value["bodyRef"] = body_reference(body)
+    return value
+
+
+def resolve_body(operation: dict[str, Any], body: Any) -> dict[str, Any]:
+    """The operation to dispatch: the referenced body put back in place."""
+    if "bodyRef" not in operation:
+        return operation
+    from shared_gate import body_reference
+
+    if body is None or body_reference(body) != operation["bodyRef"]:
+        raise ValueError("request body differs from its plan reference")
+    value = {key: item for key, item in operation.items() if key != "bodyRef"}
+    value["body"] = body
+    return value
+
+
+def dispatched_operations(plan: dict[str, Any], phase: str = "observation") -> list:
+    """The operations of one phase as they are dispatched, bodies resolved.
+
+    The Gate plan carries a large body by reference; the journals record the
+    operation that was actually sent, with its body, so anything that compares
+    a journal row against the plan compares against this list.
+    """
+    job = plan["localGatePlan"]["jobs"]["limits"]
+    offset = 0 if phase == "observation" else len(job["observation"])
+    return [
+        resolve_body(operation, plan["requests"][offset + index]["body"])
+        for index, operation in enumerate(job[phase])
+    ]
 
 
 def slot_seconds(row: dict[str, Any]) -> float:

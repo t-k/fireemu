@@ -22,7 +22,7 @@ import json
 import re
 from datetime import UTC, datetime
 
-from compiler_03 import compile_limits_plan
+from compiler_03 import compile_limits_plan, dispatched_operations
 
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z")
 
@@ -39,7 +39,7 @@ def _validated(plan, rows):
     expected = compile_limits_plan(parts[1], parts[3], plan["nonce"], plan["part"])
     if not _exact(plan, expected):
         raise ValueError("compiler plan drift")
-    operations = plan["localGatePlan"]["jobs"]["limits"]["observation"]
+    operations = dispatched_operations(plan)
     if len(rows) != len(operations):
         raise ValueError("incomplete observation journal")
     for index, (row, operation) in enumerate(zip(rows, operations, strict=True)):

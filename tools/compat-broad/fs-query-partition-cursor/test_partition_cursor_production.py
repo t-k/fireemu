@@ -528,8 +528,12 @@ def test_the_complete_run_reaches_every_slot_and_releases_the_temporary_ledger(
     }
     assert receipt["ladderAbsenceComplete"] is True
     assert receipt["ladderEvidenceComplete"] is True
+    assert receipt["ladder"]["raw"]["complete"] is True
+    assert receipt["ladder"]["raw"]["complete"] == receipt["ladderEvidenceComplete"]
     assert receipt["residualSummary"] == {"complete": True, "documents": 0}
     assert receipt["residualEvidenceComplete"] is True
+    assert receipt["residual"]["raw"]["complete"] is True
+    assert receipt["residual"]["raw"]["complete"] == receipt["residualEvidenceComplete"]
     assert not oracle.live
     assert (
         len(oracle.calls)
@@ -1294,6 +1298,11 @@ def test_a_ladder_raw_write_failure_blocks_readiness_but_cleanup_continues(
     assert receipt["ladderSummary"]["failed"] == 0
     assert receipt["ladderAbsenceComplete"] is True
     assert receipt["ladderEvidenceComplete"] is False
+    # The journal's own summary must report the same verified verdict as
+    # `ladderEvidenceComplete`, never the bare publication flag: a raw
+    # sidecar write can fail without ever touching `publication["complete"]`.
+    assert receipt["ladder"]["raw"]["complete"] is False
+    assert receipt["ladder"]["raw"]["complete"] == receipt["ladderEvidenceComplete"]
     assert not (output / "release.json").exists()
     assert not oracle.live
     with pytest.raises(ValueError):
@@ -1346,6 +1355,10 @@ def test_a_residual_raw_write_failure_blocks_readiness_but_cleanup_continues(
     receipt = json.loads((output / "receipt.json").read_bytes())
     assert receipt["residualSummary"] == {"complete": True, "documents": 0}
     assert receipt["residualEvidenceComplete"] is False
+    # Same verified verdict as `residualEvidenceComplete`, not the bare
+    # publication flag (see the ladder raw-write-failure test above).
+    assert receipt["residual"]["raw"]["complete"] is False
+    assert receipt["residual"]["raw"]["complete"] == receipt["residualEvidenceComplete"]
     assert not (output / "release.json").exists()
     assert not oracle.live
     with pytest.raises(ValueError):
@@ -1378,3 +1391,64 @@ def test_a_residual_row_write_failure_blocks_readiness_but_cleanup_continues(
             expected_inputs_digest=built.inputs["inputsDigest"],
             ledger_root=built.ledger,
         )
+
+
+def _journal_row(monkeypatch, tmp_path, *, break_raw_write=False):
+    """Record one dispatched row on a fresh `_Journal`, optionally with a
+    failing raw sidecar write, and return the journal before it is closed."""
+    if break_raw_write:
+        _break_raw_write(monkeypatch, "observation-00.raw")
+    journal = production._Journal(tmp_path / "journal")
+    row = collector._row("observation", 0, {"kind": "test-kind"})
+    row["status"] = "pass"
+    receipt = {"rawBody": b"{}", "complete": True, "byteCount": 2}
+    journal.record(row, receipt)
+    return journal
+
+
+def test_a_journal_raw_write_failure_makes_raw_complete_false_and_matches_evidence_complete(
+    tmp_path, monkeypatch
+):
+    """The journal's own summary must not claim complete raw evidence when a
+    raw sidecar write failed: `raw.complete` must equal `evidence_complete()`,
+    never the bare `publication["complete"]` flag (which a raw write failure
+    never touches)."""
+    journal = _journal_row(monkeypatch, tmp_path, break_raw_write=True)
+    evidence_complete = journal.evidence_complete()
+    summary = journal.summary()
+    journal.close()
+    assert evidence_complete is False
+    assert summary["raw"]["complete"] is False
+    assert summary["raw"]["complete"] == evidence_complete
+    # The bug this guards against: `publication["complete"]` alone would
+    # still read True here, since a raw sidecar write failure is recorded on
+    # the row, not on `publication`.
+    assert summary["publication"]["complete"] is True
+
+
+def test_a_journal_with_clean_raw_writes_reports_raw_complete_true(tmp_path):
+    """Happy path: unchanged. A clean dispatched row makes `raw.complete`
+    true and equal to `evidence_complete()`."""
+    journal = production._Journal(tmp_path / "journal")
+    row = collector._row("observation", 0, {"kind": "test-kind"})
+    row["status"] = "pass"
+    receipt = {"rawBody": b"{}", "complete": True, "byteCount": 2}
+    journal.record(row, receipt)
+    evidence_complete = journal.evidence_complete()
+    summary = journal.summary()
+    journal.close()
+    assert evidence_complete is True
+    assert summary["raw"]["complete"] is True
+    assert summary["raw"]["complete"] == evidence_complete
+
+
+def test_a_journal_summary_before_evidence_complete_refuses_to_guess(tmp_path):
+    """`summary()` must not report a raw-evidence verdict it never verified;
+    calling it before `evidence_complete()` is a caller error, not a silent
+    True."""
+    journal = production._Journal(tmp_path / "journal")
+    try:
+        with pytest.raises(RuntimeError):
+            journal.summary()
+    finally:
+        journal.close()

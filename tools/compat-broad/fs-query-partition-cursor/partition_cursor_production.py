@@ -127,6 +127,7 @@ class _Journal:
         self.bindings: list[dict] = []
         self.publication: dict = {"complete": True, "failures": []}
         self.rows: list[dict] = []
+        self._evidence_complete: bool | None = None
 
     def record(self, row: dict, receipt) -> None:
         self.rows.append(row)
@@ -140,11 +141,23 @@ class _Journal:
         )
 
     def summary(self) -> dict:
+        """Report the retained rows, one raw-evidence verdict, and publication detail.
+
+        `raw.complete` must be the same verified verdict `evidence_complete()`
+        returns, never the bare `publication["complete"]` flag: a raw sidecar
+        write can fail without ever touching `publication`, and a receipt must
+        not be able to carry `raw.complete: true` next to
+        `<journal>EvidenceComplete: false`. `evidence_complete()` must be
+        called first (it re-reads the retained sidecars, which needs the file
+        descriptors this journal still holds open).
+        """
+        if self._evidence_complete is None:
+            raise RuntimeError("evidence_complete() must be called before summary()")
         return {
             "rows": copy.deepcopy(self.rows),
             "raw": {
                 "bindings": len(self.bindings),
-                "complete": self.publication["complete"],
+                "complete": self._evidence_complete,
             },
             "publication": copy.deepcopy(self.publication),
         }
@@ -157,6 +170,8 @@ class _Journal:
         re-read and hash to what was recorded, and every row/manifest write
         must have durably published. Must be called once, before the
         journal's file descriptors close: it re-reads the retained sidecars.
+        The result is cached so `summary()` can report the same verdict after
+        the descriptors close, instead of recomputing it from a weaker signal.
         """
         dispatched = [row for row in self.rows if row["status"] != "skipped"]
         try:
@@ -167,12 +182,13 @@ class _Journal:
             self.publication["failures"].append(
                 {"file": "raw", "error": type(error).__name__}
             )
-        return (
+        self._evidence_complete = (
             verified
             and len(self.bindings) == len(dispatched)
             and all(row["raw"]["present"] for row in dispatched)
             and self.publication["complete"]
         )
+        return self._evidence_complete
 
     def close(self) -> None:
         os.close(self.raw_fd)

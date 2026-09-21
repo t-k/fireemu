@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -23,7 +22,6 @@ import action_codes_admission as admission
 import action_codes_descriptor as descriptor
 import action_codes_production as production
 import action_codes_plan as plan_module
-import credential_remote_transport as credential_remote
 import reservations
 
 from broad_contract import digest
@@ -100,6 +98,21 @@ def _bindings():
     return result
 
 
+def _handoff(permission):
+    return {
+        "token": "fixture-owner-token",
+        "apiKey": "fixture-api-key",
+        "permissionDigest": digest(permission),
+        "principal": "owner@example.test",
+        "scope": descriptor.IDENTITY_SCOPE,
+    }
+
+
+def _verify_handoff(handoff, permission):
+    if handoff != _handoff(permission):
+        raise ValueError("fixture handoff differs")
+
+
 @pytest.fixture
 def fixture_origin():
     _ActionFixture.calls = []
@@ -141,8 +154,8 @@ def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp
         ledger_root=ledger_root,
         output=tmp_path / "output",
         bindings=_bindings(),
-        token="fixture-owner-token",
-        api_key="fixture-api-key",
+        credential_handoff=_handoff(permission),
+        verify_handoff=_verify_handoff,
         fixture_origin=fixture_origin,
     )
     assert result["requests"] == 32
@@ -174,6 +187,6 @@ def test_recovery_error_is_not_typed_absence(tmp_path, fixture_origin, status, b
         production.execute(
             capability=capability, inputs=inputs, permission=permission,
             ledger_root=ledger_root, output=tmp_path / "output",
-            bindings=_bindings(), token="fixture-owner-token",
-            api_key="fixture-api-key", fixture_origin=fixture_origin,
+            bindings=_bindings(), credential_handoff=_handoff(permission),
+            verify_handoff=_verify_handoff, fixture_origin=fixture_origin,
         )

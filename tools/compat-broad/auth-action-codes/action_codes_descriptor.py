@@ -27,6 +27,7 @@ PERMISSION_KIND = "auth-action-codes-owner-permission-v1"
 APPROVAL_KIND = "auth-action-codes-o8-approval-v1"
 MANIFEST_KIND = "auth-action-codes-o8-manifest-v1"
 ARTIFACT_PROFILE = "auth-action-codes-local-shadow-v1"
+IDENTITY_SCOPE = action_codes_remote_transport.IDENTITY_SCOPE
 LANE_DIRECTORY = "tools/compat-broad/auth-action-codes"
 COLLECTOR_ENTRY = f"{LANE_DIRECTORY}/action_codes_collector.py"
 COMPARATOR_ENTRY = f"{LANE_DIRECTORY}/action_codes_comparator.py"
@@ -46,6 +47,10 @@ ABORT_CLOSURE_SOURCES = (
     "tools/compat-broad/o8-core/o8_admission.py",
     f"{LANE_DIRECTORY}/action_codes_plan.py",
     f"{LANE_DIRECTORY}/action_codes_admission.py",
+    f"{LANE_DIRECTORY}/action_codes_descriptor.py",
+    f"{LANE_DIRECTORY}/action_codes_remote_transport.py",
+    f"{LANE_DIRECTORY}/action_codes_production.py",
+    f"{LANE_DIRECTORY}/action_codes_collector.py",
 )
 
 
@@ -118,6 +123,10 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
         "projectId": AUTHORIZED_PROJECT,
         "role": plan["permissionEnvelope"]["role"],
         "scope": plan["permissionEnvelope"]["scope"],
+        "credentialPrincipal": {
+            "subject": "owner@example.test",
+            "requiredScopes": [action_codes_remote_transport.IDENTITY_SCOPE],
+        },
         "methods": list(plan["permissionEnvelope"]["methods"]),
         "nonce": plan["nonce"],
         "planDigest": digest(plan),
@@ -140,6 +149,10 @@ def validate_permission(permission, plan, *, source_inputs=None, source_commit=N
         "projectId": AUTHORIZED_PROJECT,
         "role": envelope["role"],
         "scope": envelope["scope"],
+        "credentialPrincipal": {
+            "subject": "owner@example.test",
+            "requiredScopes": [action_codes_remote_transport.IDENTITY_SCOPE],
+        },
         "methods": list(envelope["methods"]),
         "nonce": plan["nonce"],
         "planDigest": digest(plan),
@@ -158,7 +171,7 @@ def validate_permission(permission, plan, *, source_inputs=None, source_commit=N
 def transport_bound(value, *, binding, binding_digest, capability=None):
     if capability is None or not isinstance(value, dict):
         raise ValueError("closed Action wire call required")
-    required = {"stageId", "project", "nonce", "body", "deadline", "token", "apiKey", "fixtureOrigin"}
+    required = {"stageId", "project", "nonce", "body", "deadline", "inputsDigest"}
     if set(value) != required:
         raise ValueError("closed Action credential envelope required")
     return action_codes_remote_transport._transmit_bound(

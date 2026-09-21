@@ -85,9 +85,9 @@ def execute(
     permission: dict,
     ledger_root: Path,
     output: Path,
-    bindings: dict[str, str],
-    token: str,
-    api_key: str,
+    bindings: dict[str, dict[str, str]],
+    credential_handoff: dict,
+    verify_handoff,
     fixture_origin: str,
 ) -> dict:
     """Run all 26 observation and 6 recovery slots through one O8 capability."""
@@ -121,6 +121,13 @@ def execute(
     gate_module.create(output / "gate", gate_plan)
     handle = gate_module.ActionGate(output / "gate", gate_module.JOB)
     handle.claim()
+    remote.make_transport(
+        frozen_inputs=inputs,
+        declared_bindings=bindings,
+        credential_handoff=credential_handoff,
+        verify_handoff=verify_handoff,
+        fixture_origin=fixture_origin,
+    )
     binding = (ROOT / descriptor.WORKER_ENTRY).read_bytes()
     binding_digest = hashlib.sha256(binding).hexdigest()
     runtime = {
@@ -133,34 +140,35 @@ def execute(
             runtime[account + "Uid"] = runtime[account + ".localId"]
     observations = gate_plan["jobs"][gate_module.JOB]["observation"]
     recovery = gate_plan["jobs"][gate_module.JOB]["recovery"]
-    for is_recovery, operations in ((False, observations), (True, recovery)):
-        for operation in operations:
-            body = _runtime_body(operation, runtime)
-            result = remote.send(
-                capability,
-                stage_id=operation["id"],
-                project=project,
-                nonce=nonce,
-                body=body,
-                deadline=time.monotonic() + 12,
-                binding=binding,
-                binding_digest=binding_digest,
-                token=token,
-                api_key=api_key,
-                fixture_origin=fixture_origin,
-            )
-            handle.dispatch(operation, is_recovery, lambda result=result: result)
-            status, response = result
-            if status == 200 and operation.get("kind") == "sign-up":
-                account = operation["account"]
-                runtime[account + ".localId"] = response["localId"]
-                runtime[account + "Uid"] = response["localId"]
-            for name in operation.get("binds", {}):
-                if isinstance(response, dict) and isinstance(response.get(operation["binds"][name]), str):
-                    runtime[name] = response[operation["binds"][name]]
-    handle.finish()
-    ledger.finish(ticket)
-    snapshot = handle.snapshot()
+    try:
+        for is_recovery, operations in ((False, observations), (True, recovery)):
+            for operation in operations:
+                body = _runtime_body(operation, runtime)
+                result = remote.send(
+                    capability,
+                    stage_id=operation["id"],
+                    project=project,
+                    nonce=nonce,
+                    body=body,
+                    deadline=time.monotonic() + 8,
+                    binding=binding,
+                    binding_digest=binding_digest,
+                    inputs_digest=inputs["inputsDigest"],
+                )
+                handle.dispatch(operation, is_recovery, lambda result=result: result)
+                status, response = result
+                if status == 200 and operation.get("kind") == "sign-up":
+                    account = operation["account"]
+                    runtime[account + ".localId"] = response["localId"]
+                    runtime[account + "Uid"] = response["localId"]
+                for name in operation.get("binds", {}):
+                    if isinstance(response, dict) and isinstance(response.get(operation["binds"][name]), str):
+                        runtime[name] = response[operation["binds"][name]]
+        handle.finish()
+        ledger.finish(ticket)
+        snapshot = handle.snapshot()
+    finally:
+        remote.forget_transport(inputs["inputsDigest"])
     return {
         "campaignId": descriptor.CAMPAIGN,
         "planDigest": digest(plan),

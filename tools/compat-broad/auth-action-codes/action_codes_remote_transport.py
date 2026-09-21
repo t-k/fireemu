@@ -28,12 +28,14 @@ from action_codes_plan import CAMPAIGN_ID, LOCAL_PROJECT, campaign_manifest
 from broad_contract import digest
 
 NONCE = re.compile(r"^[0-9a-f]{32}$")
+AUTHORIZED_PROJECT = "fireemu-35fe6"
 EMAIL = re.compile(r"^o1-oob-([0-9a-f]{32})-(?:a|b|absent)@example\.invalid$")
 UID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 SERVICE_PREFIX = "/identitytoolkit.googleapis.com/v1/"
 IDENTITY_SCOPE = "https://www.googleapis.com/auth/identitytoolkit"
 ENVELOPE_FIELDS = frozenset({"stageId", "project", "nonce", "body", "deadline"})
 HANDOFF_FIELDS = frozenset({"token", "apiKey", "permissionDigest", "principal", "scope"})
+_BOUND_TRANSPORTS: dict[str, Callable[..., tuple[int, dict[str, Any]]]] = {}
 
 
 def _freeze(value: Any) -> Any:
@@ -188,7 +190,7 @@ def _validate_inputs(value: dict):
     nonce = plan.get("nonce")
     if not isinstance(project, str) or not project or not isinstance(nonce, str) or NONCE.fullmatch(nonce) is None:
         raise ValueError("frozen Action project or nonce required")
-    if project != LOCAL_PROJECT:
+    if project not in {LOCAL_PROJECT, AUTHORIZED_PROJECT}:
         raise ValueError("noncanonical Action project refused")
     if raw.get("permissionDigest") != digest(permission):
         raise ValueError("frozen Action permission digest differs")
@@ -282,7 +284,12 @@ def make_transport(
             fixture_origin=fixture_origin,
         )
 
+    _BOUND_TRANSPORTS[expected_inputs_digest] = transport
     return transport
+
+
+def forget_transport(inputs_digest: str) -> None:
+    _BOUND_TRANSPORTS.pop(inputs_digest, None)
 
 
 def send(
@@ -295,6 +302,7 @@ def send(
     deadline: float,
     binding: bytes,
     binding_digest: str,
+    inputs_digest: str | None = None,
     token: str | None = None,
     api_key: str | None = None,
     fixture_origin: str | None = None,
@@ -315,40 +323,23 @@ def send(
         if not all(isinstance(value, str) and value for value in (token, api_key, fixture_origin)):
             raise ValueError("closed Action credential envelope required")
         envelope.update(token=token, apiKey=api_key, fixtureOrigin=fixture_origin)
+    if inputs_digest is not None:
+        if not isinstance(inputs_digest, str) or not inputs_digest:
+            raise ValueError("frozen Action inputs digest required")
+        envelope["inputsDigest"] = inputs_digest
     return capability._transmit(envelope)
 
 
 def _transmit_bound(capability, value, *, binding, binding_digest):
     """Adapt the O8 envelope to the existing bounded credential worker."""
-    if not isinstance(value, dict):
+    if not isinstance(value, dict) or not isinstance(value.get("inputsDigest"), str):
         raise ValueError("closed Action credential envelope required")
-    stage_id = value["stageId"]
-    project = value["project"]
-    nonce = value["nonce"]
-    if project != "fireemu-35fe6" or NONCE.fullmatch(nonce) is None:
-        raise ValueError("authorized Action project and nonce required")
-    stage = _stage(_freeze(_canonical_plan(project, nonce)), stage_id)
-    body = value["body"]
-    if not isinstance(body, dict) or set(body) != set(stage["body"]):
-        raise ValueError("Action body shape differs")
-    path = stage["path"].format(project=project).lstrip("/")
-    declared = {
-        "kind": "action-recovery" if stage_id.startswith("recover-") else "action-stage",
-        "path": path,
-        "body": body,
-        "owner": stage["routeClass"] == "admin",
-    }
-    return credential_remote.transmit(
-        declared,
-        body,
-        token=value["token"],
-        api_key=value["apiKey"],
-        deadline=value["deadline"],
-        capability=capability,
-        binding=binding,
-        binding_digest=binding_digest,
-        fixture_origin=value["fixtureOrigin"],
-    )
+    transport = _BOUND_TRANSPORTS.get(value["inputsDigest"])
+    if transport is None:
+        raise ValueError("issuer-owned Action transport context required")
+    forwarded = dict(value)
+    forwarded.pop("inputsDigest")
+    return transport(forwarded, binding=binding, binding_digest=binding_digest, capability=capability)
 
 
 __all__ = ["CAMPAIGN_ID", "IDENTITY_SCOPE", "make_transport", "send"]

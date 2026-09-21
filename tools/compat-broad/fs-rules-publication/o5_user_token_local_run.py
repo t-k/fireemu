@@ -32,6 +32,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import traceback
 import time
 import urllib.error
 import urllib.parse
@@ -888,6 +889,7 @@ def run_child(output: Path, nonce: str) -> int:
     shadow = LocalShadow(firestore, auth, PROJECT, nonce)
     shadow.setup_journal = output / "setup-journal.jsonl"
     setup_finished = False
+    stage = "initialization"
     record: dict[str, Any] = {
         "contract": "fs-rules-user-token-local-shadow-run-v1",
         "status": "LOCAL_SHADOW_ONLY",
@@ -901,13 +903,18 @@ def run_child(output: Path, nonce: str) -> int:
         "authOrigin": auth,
     }
     try:
+        stage = "tenant-create"
         tenant = shadow.create_tenant()
         record["tenant"] = tenant
+        stage = "plan-compile"
         shadow.plan = compile_case(PROJECT, "(default)", nonce, tenant)
         record["planDigest"] = shadow.plan["planDigest"]
+        stage = "ruleset-publish"
         shadow.publish("A")
+        stage = "fixture-setup"
         shadow.setup()
         setup_finished = True
+        stage = "collector"
         bundle = collect(
             shadow.plan,
             shadow.execute,
@@ -923,6 +930,7 @@ def run_child(output: Path, nonce: str) -> int:
         # `$principal` to that label: a field equals the label exactly when it
         # equalled the uid the administrator lookup returned for that account.
         # The raw uids stay in this process.
+        stage = "local-comparison"
         labels = {ref: f"principal:{ref}" for ref in shadow.uids}
         deviations = local_deviations(bundle, shadow.plan, labels)
         bundle["journal"] = Path(bundle["journal"]).name
@@ -941,6 +949,16 @@ def run_child(output: Path, nonce: str) -> int:
         record["failure"] = str(error).split(":", 1)[0]
     except Exception as error:  # noqa: BLE001 - type name only
         record["failure"] = f"{type(error).__name__}"
+        frames = traceback.extract_tb(error.__traceback__)
+        if frames:
+            frame = frames[-1]
+            record["failureDetail"] = {
+                "type": type(error).__name__,
+                "stage": stage,
+                "file": Path(frame.filename).name,
+                "line": frame.lineno,
+                "function": frame.name,
+            }
     finally:
         if not setup_finished and shadow.plan:
             try:
@@ -1127,11 +1145,24 @@ def build() -> tuple[Path, dict[str, Any]]:
     }
 
 
+def _validated_child_python() -> str:
+    """Use the same absolute Python 3.12 interpreter for the child driver."""
+    executable = Path(sys.executable)
+    if (
+        not executable.is_absolute()
+        or not executable.is_file()
+        or sys.version_info[:2] != (3, 12)
+    ):
+        raise Refused("python-3.12-child-runtime-required")
+    return str(executable)
+
+
 def run_parent(output: Path) -> int:
     if output.exists() or output.is_symlink():
         raise Refused("fresh-parent-output-required")
     output = output.resolve()
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
+    python_executable = _validated_child_python()
     nonce = uuid.uuid4().hex
     environment = {
         key: os.environ[key] for key in ENVIRONMENT_ALLOWLIST if key in os.environ
@@ -1188,7 +1219,7 @@ def run_parent(output: Path) -> int:
                 "--log-verbosity",
                 "silent",
                 "--",
-                sys.executable,
+                python_executable,
                 str(Path(__file__).resolve()),
                 "--child",
                 str(output),
@@ -1199,6 +1230,8 @@ def run_parent(output: Path) -> int:
                 output / "launch.json",
                 {
                     "artifact": artifact,
+                    "pythonExecutable": python_executable,
+                    "pythonVersion": "3.12",
                     "environment": sorted(environment),
                     "privateExecutable": "fireemu",
                     "newProcessGroup": True,

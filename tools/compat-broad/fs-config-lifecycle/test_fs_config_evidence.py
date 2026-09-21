@@ -91,10 +91,9 @@ def test_the_local_projection_shape_equals_production_but_its_digest_differs() -
     )
 
 
-def test_the_record_carries_no_private_path_and_no_raw_body() -> None:
+def test_the_record_carries_no_secret_and_no_raw_body() -> None:
+    """Personal absolute paths are refused by the publication-hygiene suite."""
     text = RECORD.read_text(encoding="utf-8")
-    for forbidden in ("/Users/", "/home/", "/private/tmp/", "/var/folders/"):
-        assert forbidden not in text
     assert "Bearer" not in text
     record = _record()
     for row in record["collection"]["rows"]:

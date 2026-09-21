@@ -1,6 +1,7 @@
 """Focused management-observation abort tests for the durable shared Gate."""
 
 import multiprocessing as mp
+import os
 import time
 
 import pytest
@@ -52,6 +53,7 @@ def test_reaped_management_failure_skips_only_obs_suffix_and_allows_restore(
     tmp_path,
 ):
     gate = make_gate(tmp_path)
+    gate.claim()
     gate.management_dispatch("observation", "first", lambda _deadline: receipt())
     gate.management_dispatch(
         "observation", "uncertain", lambda _deadline: reaped_unknown()
@@ -76,6 +78,7 @@ def test_reaped_management_failure_skips_only_obs_suffix_and_allows_restore(
     assert after["costMicrousd"] == before["costMicrousd"]
     assert after["managementAbort"]["applyOutcome"] == "may-have-landed"
     assert after["managementAbort"]["recoveryPrerequisite"] is True
+    assert after["jobs"]["a"]["pid"] == after["coordinatorPid"]
     assert after["jobs"]["a"]["complete"] is False
 
     restored = gate.management_dispatch(
@@ -105,16 +108,20 @@ def test_reaped_management_failure_skips_only_obs_suffix_and_allows_restore(
     assert result.get(timeout=2) == "management abort coordinator ownership mismatch"
 
 
-@pytest.mark.parametrize("kind", ["inflight", "data-cursor"])
+@pytest.mark.parametrize("kind", ["inflight", "data-cursor", "claimed-cursor", "foreign-pid"])
 def test_abort_refuses_when_state_is_not_pre_data(tmp_path, kind):
     gate = make_gate(tmp_path)
+    if kind in ("claimed-cursor", "foreign-pid"):
+        gate.claim()
     gate.management_dispatch("observation", "first", lambda _deadline: receipt())
     before = gate.snapshot()
     with gate.locked() as state:
         if kind == "inflight":
             state["coordinatorInflight"] = True
-        else:
+        elif kind in ("data-cursor", "claimed-cursor"):
             state["jobs"]["a"]["observation"] = 1
+        else:
+            state["jobs"]["a"]["pid"] = os.getpid() + 100000
         shared_gate._save(gate.path, state)
     changed = gate.snapshot()
     with pytest.raises(ValueError):

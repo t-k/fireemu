@@ -36,6 +36,16 @@ def validate_frozen_inputs(inputs):
         ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
     ).strip()
     expected_sources = campaign.source_map()
+    for name, expected_digest in expected_sources.items():
+        try:
+            committed = subprocess.check_output(
+                ["git", "-C", str(ROOT), "show", f"{expected_commit}:{name}"],
+                stderr=subprocess.DEVNULL,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise ValueError("frozen source path is not present in checkout HEAD") from exc
+        if hashlib.sha256(committed).hexdigest() != expected_digest:
+            raise ValueError("frozen source differs from checkout HEAD")
     campaign.validate_permission(
         inputs["permission"],
         inputs["plan"],

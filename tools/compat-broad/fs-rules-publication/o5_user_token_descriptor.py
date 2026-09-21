@@ -407,6 +407,17 @@ def transport_bound(
         raise ValueError("closed Rules wire call required")
     if capability is None:
         raise ValueError("active O7 production capability required")
+    if (
+        not isinstance(value["plan"], dict)
+        or not isinstance(value["operation"], dict)
+        or not isinstance(value["credentials"], dict)
+        or not isinstance(value["frozenInputs"], dict)
+        or not isinstance(value["accountBindings"], dict)
+        or not isinstance(value["identityProofs"], dict)
+        or value["fixtureOrigin"] is not None
+        and not isinstance(value["fixtureOrigin"], str)
+    ):
+        raise ValueError("closed Rules wire call required")
     deadline = value["deadline"]
     if (
         type(deadline) not in (int, float)

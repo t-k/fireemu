@@ -689,6 +689,8 @@ def _run_worker(
     fixture_origin: str | None,
 ) -> dict[str, Any]:
     verify_worker_binding(binding, binding_digest, None)
+    if _OWNED_CHILDREN:
+        raise WorkerExchangeError("unreaped worker ownership remains", worker_reaped=False)
     payload = _compact(envelope)
     if len(payload) > MAX_ENVELOPE_BYTES:
         raise ValueError("worker envelope exceeds bound")
@@ -709,9 +711,13 @@ def _run_worker(
     _OWNED_CHILDREN.add(child.pid)
     reaped = False
     try:
-        io_timeout = max(0.001, seconds - _REAP_RESERVE_SECONDS)
+        io_timeout = max(
+            0.001, deadline - time.monotonic() - _REAP_RESERVE_SECONDS
+        )
         stdout, _stderr = child.communicate(input=payload, timeout=io_timeout)
         reaped = child.poll() is not None
+        if time.monotonic() > deadline:
+            raise WorkerExchangeError("worker walltime exceeded", worker_reaped=reaped)
     except subprocess.TimeoutExpired:
         reaped = _reap_owned(child, deadline=deadline)
         raise WorkerExchangeError(

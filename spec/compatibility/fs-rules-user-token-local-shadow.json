@@ -1,98 +1,98 @@
 {
   "artifact": {
-    "artifactSha256": "642fde1a0f71061172e1a741acd4d881e123f4ef0e7309a2bc90ea2ff55a3cc2",
+    "artifactSha256": "73670ec5e745b8f54dcdd0603200002ff4d2b04dcfd8858c277ad3cd503bfa56",
     "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-    "sourceCommit": "888a77f498216780cdce3d87a4011a31866cf4d5",
-    "worktree": "compatibility-inventory"
+    "sourceCommit": "4b11162925e0f30247024d648fec14b98a669587",
+    "worktree": "agent-rules-cmp-fix"
   },
-  "authOrigin": "http://127.0.0.1:49358",
+  "authOrigin": "http://127.0.0.1:55996",
   "bundle": {
     "abort": null,
     "acquisition": {
       "artifact": {
-        "artifactSha256": "642fde1a0f71061172e1a741acd4d881e123f4ef0e7309a2bc90ea2ff55a3cc2",
-        "sourceCommit": "888a77f498216780cdce3d87a4011a31866cf4d5"
+        "artifactSha256": "73670ec5e745b8f54dcdd0603200002ff4d2b04dcfd8858c277ad3cd503bfa56",
+        "sourceCommit": "4b11162925e0f30247024d648fec14b98a669587"
       },
-      "campaignManifestDigest": "0d26672b7f8048f6e36dc1ca800a66d884617d9621d6a774aba0c1a8383b6216",
+      "campaignManifestDigest": "62c2425fef89b8c3044f54d85ace55d1047ba25fd6f9990344280260f1bb2a7c",
       "endpoint": [
-        "127.0.0.1:49357",
-        "127.0.0.1:49358"
+        "127.0.0.1:55995",
+        "127.0.0.1:55996"
       ],
       "environment": {
         "kind": "local-fireemu"
       },
       "nonceReservation": null,
-      "observerDigest": "1c54bb6b78bab4bfb2f0752d5e5fd7f6f53a7e2f785867a5f453df11572ac2b7",
+      "observerDigest": "5fc5f79672092b519c0be16e76901f72c09572ccc20516cd75c91ad92978772a",
       "ownerPermission": null,
       "principals": {
         "anonymous-c": {
           "claimsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
           "provider": "anonymous",
           "tenant": null,
-          "uidFingerprint": "ef6fb23034c4650a"
+          "uidFingerprint": "d0fc2029f911a58f"
         },
         "deleted-g": {
           "claimsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
           "provider": "email",
           "tenant": null,
-          "uidFingerprint": "855a2e74209b8145"
+          "uidFingerprint": "3642018400996293"
         },
         "disabled-f": {
           "claimsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
           "provider": "email",
           "tenant": null,
-          "uidFingerprint": "b292d5709c9955f4"
+          "uidFingerprint": "6827741480352637"
         },
         "other-b": {
           "claimsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
           "provider": "email",
           "tenant": null,
-          "uidFingerprint": "eae6550bfa428eed"
+          "uidFingerprint": "2ead6c345e344a3b"
         },
         "owner-a": {
           "claimsDigest": "d85388caaad08043411279418cafd5435d13b0be384c755f2d4e7d3a8cc926e7",
           "provider": "email",
           "tenant": null,
-          "uidFingerprint": "a4914bfa471f9ebd"
+          "uidFingerprint": "ffbee8458b80160d"
         },
         "revoked-e": {
           "claimsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
           "provider": "email",
           "tenant": null,
-          "uidFingerprint": "6bc69f2a7bd16966"
+          "uidFingerprint": "1ce4f41d534ba792"
         },
         "tenant-d": {
           "claimsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
           "provider": "email",
           "tenant": "fireemu-00000000000000000001",
-          "uidFingerprint": "d0f139fe1f79fa16"
+          "uidFingerprint": "6561755182038ccf"
         }
       },
       "rulesetReleases": [
         {
-          "activeFrom": 2176041.606945125,
+          "activeFrom": 2185898.773077208,
           "beforeIndex": 0,
-          "endpoint": "127.0.0.1:49357",
+          "endpoint": "127.0.0.1:55995",
           "label": "A",
           "readback": {
-            "digest": "b0a710d5f61131496b37b6b881873b0234b7009c852732a14f5d2b89c250fffb",
+            "digest": "8f69618b45c58e115832ac65cc6a135e3fc75e40372569aea4975e1c0d017425",
             "kind": "publish-echo"
           },
           "releaseName": "local-A-1",
-          "sourceDigest": "b0a710d5f61131496b37b6b881873b0234b7009c852732a14f5d2b89c250fffb",
+          "sourceDigest": "8f69618b45c58e115832ac65cc6a135e3fc75e40372569aea4975e1c0d017425",
           "wireSequence": 22
         },
         {
-          "activeFrom": 2176041.7233565,
+          "activeFrom": 2185898.899501875,
           "beforeIndex": 30,
-          "endpoint": "127.0.0.1:49357",
+          "endpoint": "127.0.0.1:55995",
           "label": "B",
           "readback": {
-            "digest": "fe38a872e57873f13c2681b550151bc3635e900914d7bd8b8028908a26ab1513",
+            "digest": "0868317c35715394178b6129a87efb8c465f4c2167320b1ca00b6ba72a44f248",
             "kind": "publish-echo"
           },
           "releaseName": "local-B-2",
-          "sourceDigest": "fe38a872e57873f13c2681b550151bc3635e900914d7bd8b8028908a26ab1513",
+          "sourceDigest": "0868317c35715394178b6129a87efb8c465f4c2167320b1ca00b6ba72a44f248",
           "wireSequence": 59
         }
       ],
@@ -112,10 +112,10 @@
       "deleted-g"
     ],
     "attemptedResources": [
-      "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-target",
-      "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-guard",
-      "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-control-target",
-      "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/multiwrite-y"
+      "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-target",
+      "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-guard",
+      "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-control-target",
+      "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/multiwrite-y"
     ],
     "budget": {
       "deadlineSeconds": 300.0,
@@ -133,8 +133,8 @@
       "accountSteps": [
         {
           "accountRef": "owner-a",
-          "at": 2176041.843162708,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.025446416,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-readback",
           "observed": {
@@ -149,8 +149,8 @@
         },
         {
           "accountRef": "owner-a",
-          "at": 2176041.84588275,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.028538375,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-delete",
           "observed": {
@@ -165,8 +165,8 @@
         },
         {
           "accountRef": "owner-a",
-          "at": 2176041.848447583,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.031478583,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-absence",
           "observed": {
@@ -181,8 +181,8 @@
         },
         {
           "accountRef": "other-b",
-          "at": 2176041.850911166,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.034260791,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-readback",
           "observed": {
@@ -197,8 +197,8 @@
         },
         {
           "accountRef": "other-b",
-          "at": 2176041.853440125,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.037347125,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-delete",
           "observed": {
@@ -213,8 +213,8 @@
         },
         {
           "accountRef": "other-b",
-          "at": 2176041.855892375,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.039999833,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-absence",
           "observed": {
@@ -229,8 +229,8 @@
         },
         {
           "accountRef": "anonymous-c",
-          "at": 2176041.858428,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.042602541,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-readback",
           "observed": {
@@ -245,8 +245,8 @@
         },
         {
           "accountRef": "anonymous-c",
-          "at": 2176041.861044833,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.045295958,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-delete",
           "observed": {
@@ -261,8 +261,8 @@
         },
         {
           "accountRef": "anonymous-c",
-          "at": 2176041.863587166,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.047983208,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-absence",
           "observed": {
@@ -277,8 +277,8 @@
         },
         {
           "accountRef": "tenant-d",
-          "at": 2176041.86602875,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.050641583,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-readback",
           "observed": {
@@ -293,8 +293,8 @@
         },
         {
           "accountRef": "tenant-d",
-          "at": 2176041.868536541,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.053288708,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-delete",
           "observed": {
@@ -309,8 +309,8 @@
         },
         {
           "accountRef": "tenant-d",
-          "at": 2176041.871162416,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.055967958,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-absence",
           "observed": {
@@ -325,8 +325,8 @@
         },
         {
           "accountRef": "revoked-e",
-          "at": 2176041.873925708,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.058631666,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-readback",
           "observed": {
@@ -341,8 +341,8 @@
         },
         {
           "accountRef": "revoked-e",
-          "at": 2176041.879124166,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.064295583,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-delete",
           "observed": {
@@ -357,8 +357,8 @@
         },
         {
           "accountRef": "revoked-e",
-          "at": 2176041.881679125,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.067113666,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-absence",
           "observed": {
@@ -373,8 +373,8 @@
         },
         {
           "accountRef": "disabled-f",
-          "at": 2176041.884105791,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.069996208,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-readback",
           "observed": {
@@ -389,8 +389,8 @@
         },
         {
           "accountRef": "disabled-f",
-          "at": 2176041.886549083,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.072925625,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-delete",
           "observed": {
@@ -405,8 +405,8 @@
         },
         {
           "accountRef": "disabled-f",
-          "at": 2176041.889043666,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.075654041,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-absence",
           "observed": {
@@ -421,8 +421,8 @@
         },
         {
           "accountRef": "deleted-g",
-          "at": 2176041.891470916,
-          "endpoint": "127.0.0.1:49358",
+          "at": 2185899.078389208,
+          "endpoint": "127.0.0.1:55996",
           "failure": null,
           "kind": "account-readback",
           "observed": {
@@ -440,8 +440,8 @@
       "documentSteps": [
         {
           "accountRef": null,
-          "at": 2176041.732364,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.909170125,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "readback",
           "observed": {
@@ -449,15 +449,15 @@
             "documentPresent": true,
             "status": "OK",
             "uid": null,
-            "version": "2026-09-21T06:46:44.759949Z"
+            "version": "2026-09-21T09:31:01.985894Z"
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-a",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-a",
           "wireSequence": 63
         },
         {
           "accountRef": null,
-          "at": 2176041.735418541,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.91204025,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "delete",
           "observed": {
@@ -467,13 +467,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-a",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-a",
           "wireSequence": 64
         },
         {
           "accountRef": null,
-          "at": 2176041.738540916,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.915081416,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "absence",
           "observed": {
@@ -483,13 +483,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-a",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-a",
           "wireSequence": 65
         },
         {
           "accountRef": null,
-          "at": 2176041.741462666,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.918186708,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "readback",
           "observed": {
@@ -497,15 +497,15 @@
             "documentPresent": true,
             "status": "OK",
             "uid": null,
-            "version": "2026-09-21T06:46:44.763803Z"
+            "version": "2026-09-21T09:31:01.989612Z"
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-b",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-b",
           "wireSequence": 66
         },
         {
           "accountRef": null,
-          "at": 2176041.744281,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.921186333,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "delete",
           "observed": {
@@ -515,13 +515,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-b",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-b",
           "wireSequence": 67
         },
         {
           "accountRef": null,
-          "at": 2176041.747188041,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.924223791,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "absence",
           "observed": {
@@ -531,13 +531,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-b",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-b",
           "wireSequence": 68
         },
         {
           "accountRef": null,
-          "at": 2176041.749989416,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.927167666,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "readback",
           "observed": {
@@ -545,15 +545,15 @@
             "documentPresent": true,
             "status": "OK",
             "uid": null,
-            "version": "2026-09-21T06:46:44.767119Z"
+            "version": "2026-09-21T09:31:01.992829Z"
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/public-open",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/public-open",
           "wireSequence": 69
         },
         {
           "accountRef": null,
-          "at": 2176041.752741708,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.930091125,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "delete",
           "observed": {
@@ -563,13 +563,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/public-open",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/public-open",
           "wireSequence": 70
         },
         {
           "accountRef": null,
-          "at": 2176041.755571958,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.933181083,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "absence",
           "observed": {
@@ -579,13 +579,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/public-open",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/public-open",
           "wireSequence": 71
         },
         {
           "accountRef": null,
-          "at": 2176041.760676708,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.938596416,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "readback",
           "observed": {
@@ -593,15 +593,15 @@
             "documentPresent": true,
             "status": "OK",
             "uid": null,
-            "version": "2026-09-21T06:46:44.772551Z"
+            "version": "2026-09-21T09:31:01.998212Z"
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/claim-gated",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/claim-gated",
           "wireSequence": 72
         },
         {
           "accountRef": null,
-          "at": 2176041.763406958,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.94148725,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "delete",
           "observed": {
@@ -611,13 +611,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/claim-gated",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/claim-gated",
           "wireSequence": 73
         },
         {
           "accountRef": null,
-          "at": 2176041.766171708,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.944441125,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "absence",
           "observed": {
@@ -627,13 +627,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/claim-gated",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/claim-gated",
           "wireSequence": 74
         },
         {
           "accountRef": null,
-          "at": 2176041.768942625,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.947327041,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "readback",
           "observed": {
@@ -641,15 +641,15 @@
             "documentPresent": true,
             "status": "OK",
             "uid": null,
-            "version": "2026-09-21T06:46:44.775400Z"
+            "version": "2026-09-21T09:31:02.001180Z"
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/tenant-gated",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/tenant-gated",
           "wireSequence": 75
         },
         {
           "accountRef": null,
-          "at": 2176041.771686875,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.950221208,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "delete",
           "observed": {
@@ -659,13 +659,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/tenant-gated",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/tenant-gated",
           "wireSequence": 76
         },
         {
           "accountRef": null,
-          "at": 2176041.774570625,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.953220041,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "absence",
           "observed": {
@@ -675,13 +675,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/tenant-gated",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/tenant-gated",
           "wireSequence": 77
         },
         {
           "accountRef": null,
-          "at": 2176041.777504333,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.956074375,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "readback",
           "observed": {
@@ -689,15 +689,15 @@
             "documentPresent": true,
             "status": "OK",
             "uid": null,
-            "version": "2026-09-21T06:46:44.778150Z"
+            "version": "2026-09-21T09:31:02.004116Z"
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guard-present",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guard-present",
           "wireSequence": 78
         },
         {
           "accountRef": null,
-          "at": 2176041.780359,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.959082875,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "delete",
           "observed": {
@@ -707,13 +707,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guard-present",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guard-present",
           "wireSequence": 79
         },
         {
           "accountRef": null,
-          "at": 2176041.783122458,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.96209075,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "absence",
           "observed": {
@@ -723,13 +723,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guard-present",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guard-present",
           "wireSequence": 80
         },
         {
           "accountRef": null,
-          "at": 2176041.785875041,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.9649945,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "readback",
           "observed": {
@@ -737,15 +737,15 @@
             "documentPresent": true,
             "status": "OK",
             "uid": null,
-            "version": "2026-09-21T06:46:44.780837Z"
+            "version": "2026-09-21T09:31:02.007191Z"
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded",
           "wireSequence": 81
         },
         {
           "accountRef": null,
-          "at": 2176041.788648958,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.967850416,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "delete",
           "observed": {
@@ -755,13 +755,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded",
           "wireSequence": 82
         },
         {
           "accountRef": null,
-          "at": 2176041.791445541,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.9707405,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "absence",
           "observed": {
@@ -771,13 +771,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded",
           "wireSequence": 83
         },
         {
           "accountRef": null,
-          "at": 2176041.794105708,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.973740083,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "readback",
           "observed": {
@@ -785,15 +785,15 @@
             "documentPresent": true,
             "status": "OK",
             "uid": null,
-            "version": "2026-09-21T06:46:44.783552Z"
+            "version": "2026-09-21T09:31:02.010519Z"
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded-missing",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded-missing",
           "wireSequence": 84
         },
         {
           "accountRef": null,
-          "at": 2176041.798760416,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.97871575,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "delete",
           "observed": {
@@ -803,13 +803,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded-missing",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded-missing",
           "wireSequence": 85
         },
         {
           "accountRef": null,
-          "at": 2176041.801553,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.981697583,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "absence",
           "observed": {
@@ -819,13 +819,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded-missing",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded-missing",
           "wireSequence": 86
         },
         {
           "accountRef": null,
-          "at": 2176041.804136041,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.984688833,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "readback",
           "observed": {
@@ -833,15 +833,15 @@
             "documentPresent": true,
             "status": "OK",
             "uid": null,
-            "version": "2026-09-21T06:46:44.786280Z"
+            "version": "2026-09-21T09:31:02.014120Z"
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/get-guarded",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/get-guarded",
           "wireSequence": 87
         },
         {
           "accountRef": null,
-          "at": 2176041.806883875,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.987532791,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "delete",
           "observed": {
@@ -851,13 +851,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/get-guarded",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/get-guarded",
           "wireSequence": 88
         },
         {
           "accountRef": null,
-          "at": 2176041.809532625,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.990497208,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "absence",
           "observed": {
@@ -867,13 +867,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/get-guarded",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/get-guarded",
           "wireSequence": 89
         },
         {
           "accountRef": null,
-          "at": 2176041.812196166,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.993238291,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "readback",
           "observed": {
@@ -881,15 +881,15 @@
             "documentPresent": true,
             "status": "OK",
             "uid": null,
-            "version": "2026-09-21T06:46:44.788947Z"
+            "version": "2026-09-21T09:31:02.017187Z"
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/multiwrite-x",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/multiwrite-x",
           "wireSequence": 90
         },
         {
           "accountRef": null,
-          "at": 2176041.814924958,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.995889416,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "delete",
           "observed": {
@@ -899,13 +899,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/multiwrite-x",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/multiwrite-x",
           "wireSequence": 91
         },
         {
           "accountRef": null,
-          "at": 2176041.817592916,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185898.998663958,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "absence",
           "observed": {
@@ -915,13 +915,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/multiwrite-x",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/multiwrite-x",
           "wireSequence": 92
         },
         {
           "accountRef": null,
-          "at": 2176041.8201595,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185899.001321666,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "readback",
           "observed": {
@@ -929,15 +929,15 @@
             "documentPresent": true,
             "status": "OK",
             "uid": null,
-            "version": "2026-09-21T06:46:44.848571Z"
+            "version": "2026-09-21T09:31:02.083776Z"
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-target",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-target",
           "wireSequence": 93
         },
         {
           "accountRef": null,
-          "at": 2176041.822658625,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185899.004034083,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "delete",
           "observed": {
@@ -947,13 +947,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-target",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-target",
           "wireSequence": 94
         },
         {
           "accountRef": null,
-          "at": 2176041.825262875,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185899.006763916,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "absence",
           "observed": {
@@ -963,13 +963,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-target",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-target",
           "wireSequence": 95
         },
         {
           "accountRef": null,
-          "at": 2176041.827787166,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185899.009388666,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "readback",
           "observed": {
@@ -977,15 +977,15 @@
             "documentPresent": true,
             "status": "OK",
             "uid": null,
-            "version": "2026-09-21T06:46:44.848571Z"
+            "version": "2026-09-21T09:31:02.083776Z"
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-guard",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-guard",
           "wireSequence": 96
         },
         {
           "accountRef": null,
-          "at": 2176041.830282625,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185899.012053666,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "delete",
           "observed": {
@@ -995,13 +995,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-guard",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-guard",
           "wireSequence": 97
         },
         {
           "accountRef": null,
-          "at": 2176041.832795208,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185899.01477025,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "absence",
           "observed": {
@@ -1011,13 +1011,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-guard",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-guard",
           "wireSequence": 98
         },
         {
           "accountRef": null,
-          "at": 2176041.837767125,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185899.019829083,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "readback",
           "observed": {
@@ -1027,13 +1027,13 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-control-target",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-control-target",
           "wireSequence": 99
         },
         {
           "accountRef": null,
-          "at": 2176041.840435333,
-          "endpoint": "127.0.0.1:49357",
+          "at": 2185899.022675208,
+          "endpoint": "127.0.0.1:55995",
           "failure": null,
           "kind": "readback",
           "observed": {
@@ -1043,7 +1043,7 @@
             "uid": null,
             "version": null
           },
-          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/multiwrite-y",
+          "resource": "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/multiwrite-y",
           "wireSequence": 100
         }
       ],
@@ -1056,32 +1056,32 @@
     "journal": "journal.jsonl",
     "observer": {
       "contract": "fs-rules-user-token-collector-v3",
-      "observerDigest": "1c54bb6b78bab4bfb2f0752d5e5fd7f6f53a7e2f785867a5f453df11572ac2b7",
+      "observerDigest": "5fc5f79672092b519c0be16e76901f72c09572ccc20516cd75c91ad92978772a",
       "sourceDigests": {
         "o5_user_token_campaign.py": "106bf76fbca1fb99a70c55181efca6e26101f170f281a927e0997719be824c31",
         "o5_user_token_case.py": "1524aac3d40f78ba8688ecd574784dd8c0cdf63d26e2ff7289d421825a981a0d",
         "o5_user_token_collector.py": "60d993ebe20ed04a6c923e78fe2e9249f5fba4202f60cda8ae1bf94322f69df8",
         "o5_user_token_comparator.py": "d17e7c85ec7eb113c724c4d3767dfff63c80dc9fd3ff90c76838531391fc0424",
-        "o5_user_token_comparator_v2.py": "78b1eb77d5151a0131fda1aa9248ca4c7aece6f7e4f1e3f24467ff65c1bc593e",
+        "o5_user_token_comparator_v2.py": "0f76faa71d1df5cd5d7457a91462c669c3e6fed7909af68e5e50f6b84ed101ea",
         "o5_user_token_descriptor.py": "16b05bbdc786515847350b62262ac0bb56f5c3de9d4be9f9429a418739f9ab07",
         "o5_user_token_local_run.py": "e1d0537b93de30abb9a5a9cbb413270dfd52352b247dca228812edacefbd0fc6",
         "o5_user_token_shadow.py": "f84ca68a1d954aa5dd14fa8fe1f756f32e4a173ed885e623ef2ccf7ac752ebe4"
       }
     },
-    "planDigest": "59e5e19a9b5372cf2f837be5d73f7dab67b23e8ecc3b88f47d35f103b668f3b0",
+    "planDigest": "974c6bc255e40d0f1b95862daf988c98c7bc0e41d2e1a79e814ea08ac5694316",
     "productionExecuted": false,
     "productionReady": false,
     "provenance": {
       "case": {
         "database": "(default)",
-        "nonce": "db9a2ddb62664e16af7227fb832dbbbe",
+        "nonce": "6035e5c4eaf84304ae70f922a92b6e88",
         "project": "fireemu-35fe6",
         "tenant": "fireemu-00000000000000000001"
       },
       "caseContract": "fs-rules-user-token-case-v2",
       "collectorContract": "fs-rules-user-token-collector-v3",
       "role": "local-fireemu-shadow",
-      "runId": "local-db9a2ddb62664e16af7227fb832dbbbe"
+      "runId": "local-6035e5c4eaf84304ae70f922a92b6e88"
     },
     "recordingComplete": true,
     "redactedPrincipals": [
@@ -1094,12 +1094,12 @@
     ],
     "rows": [
       {
-        "at": 2176041.606994541,
+        "at": 2185898.77313475,
         "caseId": "a-owner-reads-own-document",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "987a191fefba533a",
+        "credentialFingerprint": "174e11901832fd49",
         "credentialRef": "owner-a",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 0,
         "method": "get",
@@ -1108,24 +1108,24 @@
           "documentPresent": true,
           "fields": {
             "document": "owned-a",
-            "nonce": "db9a2ddb62664e16af7227fb832dbbbe",
+            "nonce": "6035e5c4eaf84304ae70f922a92b6e88",
             "ownerUid": "principal:owner-a"
           },
           "status": "OK"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-a"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-a"
         ],
         "ruleset": "A",
         "wireSequence": 23
       },
       {
-        "at": 2176041.609979583,
+        "at": 2185898.776569583,
         "caseId": "a-second-user-denied-on-foreign-document",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "edd94abeff1f2e1b",
+        "credentialFingerprint": "14cf176216070378",
         "credentialRef": "other-b",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 1,
         "method": "get",
@@ -1136,18 +1136,18 @@
           "status": "PERMISSION_DENIED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-a"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-a"
         ],
         "ruleset": "A",
         "wireSequence": 24
       },
       {
-        "at": 2176041.612948166,
+        "at": 2185898.779845791,
         "caseId": "a-second-user-reads-own-document",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "edd94abeff1f2e1b",
+        "credentialFingerprint": "14cf176216070378",
         "credentialRef": "other-b",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 2,
         "method": "get",
@@ -1156,24 +1156,24 @@
           "documentPresent": true,
           "fields": {
             "document": "owned-b",
-            "nonce": "db9a2ddb62664e16af7227fb832dbbbe",
+            "nonce": "6035e5c4eaf84304ae70f922a92b6e88",
             "ownerUid": "principal:other-b"
           },
           "status": "OK"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-b"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-b"
         ],
         "ruleset": "A",
         "wireSequence": 25
       },
       {
-        "at": 2176041.615842416,
+        "at": 2185898.782996958,
         "caseId": "a-anonymous-principal-denied-on-owned-document",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "1f0a7070f67c416f",
+        "credentialFingerprint": "32f5d424973790f0",
         "credentialRef": "anonymous-c",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 3,
         "method": "get",
@@ -1184,18 +1184,18 @@
           "status": "PERMISSION_DENIED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-a"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-a"
         ],
         "ruleset": "A",
         "wireSequence": 26
       },
       {
-        "at": 2176041.618737375,
+        "at": 2185898.786088125,
         "caseId": "a-unauthenticated-denied-on-owned-document",
         "credentialClass": "absent",
-        "credentialFingerprint": "6c0ed039d312205c",
+        "credentialFingerprint": "9e559e1da79c236d",
         "credentialRef": "unauthenticated",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 4,
         "method": "get",
@@ -1206,18 +1206,18 @@
           "status": "PERMISSION_DENIED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-a"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-a"
         ],
         "ruleset": "A",
         "wireSequence": 27
       },
       {
-        "at": 2176041.621527833,
+        "at": 2185898.789052,
         "caseId": "a-unauthenticated-allowed-by-explicit-null-clause",
         "credentialClass": "absent",
-        "credentialFingerprint": "6c0ed039d312205c",
+        "credentialFingerprint": "9e559e1da79c236d",
         "credentialRef": "unauthenticated",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 5,
         "method": "get",
@@ -1226,23 +1226,23 @@
           "documentPresent": true,
           "fields": {
             "document": "public-open",
-            "nonce": "db9a2ddb62664e16af7227fb832dbbbe"
+            "nonce": "6035e5c4eaf84304ae70f922a92b6e88"
           },
           "status": "OK"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/public-open"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/public-open"
         ],
         "ruleset": "A",
         "wireSequence": 28
       },
       {
-        "at": 2176041.624224708,
+        "at": 2185898.792231916,
         "caseId": "a-anonymous-denied-by-explicit-null-clause",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "1f0a7070f67c416f",
+        "credentialFingerprint": "32f5d424973790f0",
         "credentialRef": "anonymous-c",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 6,
         "method": "get",
@@ -1253,18 +1253,18 @@
           "status": "PERMISSION_DENIED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/public-open"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/public-open"
         ],
         "ruleset": "A",
         "wireSequence": 29
       },
       {
-        "at": 2176041.627073708,
+        "at": 2185898.795403,
         "caseId": "a-authenticated-denied-by-explicit-null-clause",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "987a191fefba533a",
+        "credentialFingerprint": "174e11901832fd49",
         "credentialRef": "owner-a",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 7,
         "method": "get",
@@ -1275,18 +1275,18 @@
           "status": "PERMISSION_DENIED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/public-open"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/public-open"
         ],
         "ruleset": "A",
         "wireSequence": 30
       },
       {
-        "at": 2176041.6298175,
+        "at": 2185898.798533541,
         "caseId": "a-custom-claim-principal-allowed",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "987a191fefba533a",
+        "credentialFingerprint": "174e11901832fd49",
         "credentialRef": "owner-a",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 8,
         "method": "get",
@@ -1295,23 +1295,23 @@
           "documentPresent": true,
           "fields": {
             "document": "claim-gated",
-            "nonce": "db9a2ddb62664e16af7227fb832dbbbe"
+            "nonce": "6035e5c4eaf84304ae70f922a92b6e88"
           },
           "status": "OK"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/claim-gated"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/claim-gated"
         ],
         "ruleset": "A",
         "wireSequence": 31
       },
       {
-        "at": 2176041.632570625,
+        "at": 2185898.801674916,
         "caseId": "a-principal-without-custom-claim-denied",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "edd94abeff1f2e1b",
+        "credentialFingerprint": "14cf176216070378",
         "credentialRef": "other-b",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 9,
         "method": "get",
@@ -1322,18 +1322,18 @@
           "status": "PERMISSION_DENIED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/claim-gated"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/claim-gated"
         ],
         "ruleset": "A",
         "wireSequence": 32
       },
       {
-        "at": 2176041.637114458,
+        "at": 2185898.8067035,
         "caseId": "a-tenant-principal-allowed",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "c35417bcd8195215",
+        "credentialFingerprint": "8a985617509c1635",
         "credentialRef": "tenant-d",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 10,
         "method": "get",
@@ -1342,23 +1342,23 @@
           "documentPresent": true,
           "fields": {
             "document": "tenant-gated",
-            "nonce": "db9a2ddb62664e16af7227fb832dbbbe"
+            "nonce": "6035e5c4eaf84304ae70f922a92b6e88"
           },
           "status": "OK"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/tenant-gated"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/tenant-gated"
         ],
         "ruleset": "A",
         "wireSequence": 33
       },
       {
-        "at": 2176041.639946208,
+        "at": 2185898.809835875,
         "caseId": "a-non-tenant-principal-denied",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "987a191fefba533a",
+        "credentialFingerprint": "174e11901832fd49",
         "credentialRef": "owner-a",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 11,
         "method": "get",
@@ -1369,18 +1369,18 @@
           "status": "PERMISSION_DENIED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/tenant-gated"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/tenant-gated"
         ],
         "ruleset": "A",
         "wireSequence": 34
       },
       {
-        "at": 2176041.642717125,
+        "at": 2185898.812984041,
         "caseId": "a-exists-guard-present-allows-read",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "987a191fefba533a",
+        "credentialFingerprint": "174e11901832fd49",
         "credentialRef": "owner-a",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 12,
         "method": "get",
@@ -1389,23 +1389,23 @@
           "documentPresent": true,
           "fields": {
             "document": "exists-guarded",
-            "nonce": "db9a2ddb62664e16af7227fb832dbbbe"
+            "nonce": "6035e5c4eaf84304ae70f922a92b6e88"
           },
           "status": "OK"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded"
         ],
         "ruleset": "A",
         "wireSequence": 35
       },
       {
-        "at": 2176041.645550541,
+        "at": 2185898.816231125,
         "caseId": "a-exists-guard-absent-denies-read",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "987a191fefba533a",
+        "credentialFingerprint": "174e11901832fd49",
         "credentialRef": "owner-a",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 13,
         "method": "get",
@@ -1416,18 +1416,18 @@
           "status": "PERMISSION_DENIED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded-missing"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded-missing"
         ],
         "ruleset": "A",
         "wireSequence": 36
       },
       {
-        "at": 2176041.648311958,
+        "at": 2185898.819469708,
         "caseId": "a-get-guard-matches-principal",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "987a191fefba533a",
+        "credentialFingerprint": "174e11901832fd49",
         "credentialRef": "owner-a",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 14,
         "method": "get",
@@ -1436,24 +1436,24 @@
           "documentPresent": true,
           "fields": {
             "document": "get-guarded",
-            "nonce": "db9a2ddb62664e16af7227fb832dbbbe",
+            "nonce": "6035e5c4eaf84304ae70f922a92b6e88",
             "ownerUid": "principal:owner-a"
           },
           "status": "OK"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/get-guarded"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/get-guarded"
         ],
         "ruleset": "A",
         "wireSequence": 37
       },
       {
-        "at": 2176041.651029833,
+        "at": 2185898.822618291,
         "caseId": "a-get-guard-rejects-other-principal",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "edd94abeff1f2e1b",
+        "credentialFingerprint": "14cf176216070378",
         "credentialRef": "other-b",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 15,
         "method": "get",
@@ -1464,18 +1464,18 @@
           "status": "PERMISSION_DENIED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/get-guarded"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/get-guarded"
         ],
         "ruleset": "A",
         "wireSequence": 38
       },
       {
-        "at": 2176041.653693958,
+        "at": 2185898.825707541,
         "caseId": "a-getafter-satisfied-by-same-commit-write",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "987a191fefba533a",
+        "credentialFingerprint": "174e11901832fd49",
         "credentialRef": "owner-a",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 16,
         "method": "commit",
@@ -1486,19 +1486,19 @@
           "status": "OK"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-target",
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-guard"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-target",
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-guard"
         ],
         "ruleset": "A",
         "wireSequence": 39
       },
       {
-        "at": 2176041.656920583,
+        "at": 2185898.829343916,
         "caseId": "a-getafter-unsatisfied-without-partner-write",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "987a191fefba533a",
+        "credentialFingerprint": "174e11901832fd49",
         "credentialRef": "owner-a",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 17,
         "method": "commit",
@@ -1509,18 +1509,18 @@
           "status": "PERMISSION_DENIED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-control-target"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-control-target"
         ],
         "ruleset": "A",
         "wireSequence": 40
       },
       {
-        "at": 2176041.659763958,
+        "at": 2185898.83262225,
         "caseId": "a-atomic-multiwrite-refused-as-a-whole",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "987a191fefba533a",
+        "credentialFingerprint": "174e11901832fd49",
         "credentialRef": "owner-a",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 18,
         "method": "commit",
@@ -1531,19 +1531,19 @@
           "status": "PERMISSION_DENIED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/multiwrite-x",
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/multiwrite-y"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/multiwrite-x",
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/multiwrite-y"
         ],
         "ruleset": "A",
         "wireSequence": 41
       },
       {
-        "at": 2176041.66264175,
+        "at": 2185898.836161291,
         "caseId": "a-multiwrite-poststate-is-unchanged",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "987a191fefba533a",
+        "credentialFingerprint": "174e11901832fd49",
         "credentialRef": "owner-a",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 19,
         "method": "get",
@@ -1553,24 +1553,24 @@
           "fields": {
             "document": "multiwrite-x",
             "generation": "initial",
-            "nonce": "db9a2ddb62664e16af7227fb832dbbbe",
+            "nonce": "6035e5c4eaf84304ae70f922a92b6e88",
             "ownerUid": "principal:owner-a"
           },
           "status": "OK"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/multiwrite-x"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/multiwrite-x"
         ],
         "ruleset": "A",
         "wireSequence": 42
       },
       {
-        "at": 2176041.6654795,
+        "at": 2185898.839403291,
         "caseId": "a-expired-token-is-unauthenticated",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "dd47ba78025328f5",
+        "credentialFingerprint": "b0491a47ebbbc953",
         "credentialRef": "expired-token",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 20,
         "method": "get",
@@ -1581,18 +1581,18 @@
           "status": "UNAUTHENTICATED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-a"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-a"
         ],
         "ruleset": "A",
         "wireSequence": 43
       },
       {
-        "at": 2176041.66974475,
+        "at": 2185898.84410725,
         "caseId": "a-malformed-bearer-is-unauthenticated",
         "credentialClass": "malformed",
-        "credentialFingerprint": "05df48f372119be5",
+        "credentialFingerprint": "b679b97f86a0b168",
         "credentialRef": "malformed-bearer",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 21,
         "method": "get",
@@ -1603,18 +1603,18 @@
           "status": "UNAUTHENTICATED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-a"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-a"
         ],
         "ruleset": "A",
         "wireSequence": 44
       },
       {
-        "at": 2176041.672398375,
+        "at": 2185898.846884,
         "caseId": "a-empty-bearer-is-unauthenticated",
         "credentialClass": "empty",
-        "credentialFingerprint": "60101bcbedc1fbad",
+        "credentialFingerprint": "7aed6246462c0b03",
         "credentialRef": "empty-bearer",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 22,
         "method": "get",
@@ -1625,18 +1625,18 @@
           "status": "UNAUTHENTICATED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-a"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-a"
         ],
         "ruleset": "A",
         "wireSequence": 45
       },
       {
-        "at": 2176041.674921916,
+        "at": 2185898.849713791,
         "caseId": "a-revoked-refresh-tokens-accepted-before-the-action",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "208283e4feddfc85",
+        "credentialFingerprint": "e26ad7d401cfe71b",
         "credentialRef": "revoked-e",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 23,
         "method": "get",
@@ -1645,23 +1645,23 @@
           "documentPresent": true,
           "fields": {
             "document": "exists-guarded",
-            "nonce": "db9a2ddb62664e16af7227fb832dbbbe"
+            "nonce": "6035e5c4eaf84304ae70f922a92b6e88"
           },
           "status": "OK"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded"
         ],
         "ruleset": "A",
         "wireSequence": 46
       },
       {
-        "at": 2176041.683440291,
+        "at": 2185898.858450916,
         "caseId": "a-revoked-refresh-tokens-within-exp",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "208283e4feddfc85",
+        "credentialFingerprint": "e26ad7d401cfe71b",
         "credentialRef": "revoked-e",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 24,
         "method": "get",
@@ -1672,18 +1672,18 @@
           "status": "UNAUTHENTICATED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded"
         ],
         "ruleset": "A",
         "wireSequence": 49
       },
       {
-        "at": 2176041.686316333,
+        "at": 2185898.861227416,
         "caseId": "a-disabled-account-accepted-before-the-action",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "8cdb6a114677bba4",
+        "credentialFingerprint": "b5b65aab0a834abf",
         "credentialRef": "disabled-f",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 25,
         "method": "get",
@@ -1692,23 +1692,23 @@
           "documentPresent": true,
           "fields": {
             "document": "exists-guarded",
-            "nonce": "db9a2ddb62664e16af7227fb832dbbbe"
+            "nonce": "6035e5c4eaf84304ae70f922a92b6e88"
           },
           "status": "OK"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded"
         ],
         "ruleset": "A",
         "wireSequence": 50
       },
       {
-        "at": 2176041.69509525,
+        "at": 2185898.870411291,
         "caseId": "a-disabled-account-within-exp",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "8cdb6a114677bba4",
+        "credentialFingerprint": "b5b65aab0a834abf",
         "credentialRef": "disabled-f",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 26,
         "method": "get",
@@ -1719,18 +1719,18 @@
           "status": "UNAUTHENTICATED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded"
         ],
         "ruleset": "A",
         "wireSequence": 53
       },
       {
-        "at": 2176041.697968166,
+        "at": 2185898.873455166,
         "caseId": "a-deleted-account-accepted-before-the-action",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "c83af325a8e3ffa2",
+        "credentialFingerprint": "88c268537dd183b7",
         "credentialRef": "deleted-g",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 27,
         "method": "get",
@@ -1739,23 +1739,23 @@
           "documentPresent": true,
           "fields": {
             "document": "exists-guarded",
-            "nonce": "db9a2ddb62664e16af7227fb832dbbbe"
+            "nonce": "6035e5c4eaf84304ae70f922a92b6e88"
           },
           "status": "OK"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded"
         ],
         "ruleset": "A",
         "wireSequence": 54
       },
       {
-        "at": 2176041.706770208,
+        "at": 2185898.882650666,
         "caseId": "a-deleted-account-within-exp",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "c83af325a8e3ffa2",
+        "credentialFingerprint": "88c268537dd183b7",
         "credentialRef": "deleted-g",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 28,
         "method": "get",
@@ -1766,18 +1766,18 @@
           "status": "UNAUTHENTICATED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded"
         ],
         "ruleset": "A",
         "wireSequence": 57
       },
       {
-        "at": 2176041.712955208,
+        "at": 2185898.888920208,
         "caseId": "a-revoked-account-expired-token-control",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "30e197a63cec68e6",
+        "credentialFingerprint": "6d7025b50ac158e9",
         "credentialRef": "revoked-expired-token",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 29,
         "method": "get",
@@ -1788,18 +1788,18 @@
           "status": "UNAUTHENTICATED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded"
         ],
         "ruleset": "A",
         "wireSequence": 58
       },
       {
-        "at": 2176041.723411833,
+        "at": 2185898.89956225,
         "caseId": "b-owner-denied-after-ruleset-transition",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "987a191fefba533a",
+        "credentialFingerprint": "174e11901832fd49",
         "credentialRef": "owner-a",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 30,
         "method": "get",
@@ -1810,18 +1810,18 @@
           "status": "PERMISSION_DENIED"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-a"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-a"
         ],
         "ruleset": "B",
         "wireSequence": 60
       },
       {
-        "at": 2176041.726432208,
+        "at": 2185898.902803208,
         "caseId": "b-unchanged-null-clause-still-allows-unauthenticated",
         "credentialClass": "absent",
-        "credentialFingerprint": "6c0ed039d312205c",
+        "credentialFingerprint": "9e559e1da79c236d",
         "credentialRef": "unauthenticated",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 31,
         "method": "get",
@@ -1830,23 +1830,23 @@
           "documentPresent": true,
           "fields": {
             "document": "public-open",
-            "nonce": "db9a2ddb62664e16af7227fb832dbbbe"
+            "nonce": "6035e5c4eaf84304ae70f922a92b6e88"
           },
           "status": "OK"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/public-open"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/public-open"
         ],
         "ruleset": "B",
         "wireSequence": 61
       },
       {
-        "at": 2176041.72926825,
+        "at": 2185898.905969375,
         "caseId": "b-unchanged-claim-clause-still-allows-owner",
         "credentialClass": "user-id-token",
-        "credentialFingerprint": "987a191fefba533a",
+        "credentialFingerprint": "174e11901832fd49",
         "credentialRef": "owner-a",
-        "endpoint": "127.0.0.1:49357",
+        "endpoint": "127.0.0.1:55995",
         "failure": null,
         "index": 32,
         "method": "get",
@@ -1855,12 +1855,12 @@
           "documentPresent": true,
           "fields": {
             "document": "claim-gated",
-            "nonce": "db9a2ddb62664e16af7227fb832dbbbe"
+            "nonce": "6035e5c4eaf84304ae70f922a92b6e88"
           },
           "status": "OK"
         },
         "resources": [
-          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/claim-gated"
+          "projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/claim-gated"
         ],
         "ruleset": "B",
         "wireSequence": 62
@@ -1869,42 +1869,42 @@
     "status": "PREPARATION_ONLY",
     "transport": {
       "clock": {
-        "finished": 2176041.893864375,
-        "observationFinished": 2176041.732358375,
-        "started": 2176041.599354208
+        "finished": 2185899.081076916,
+        "observationFinished": 2185898.90916525,
+        "started": 2185898.764928
       },
       "endpoints": [
-        "127.0.0.1:49357",
-        "127.0.0.1:49358"
+        "127.0.0.1:55995",
+        "127.0.0.1:55996"
       ],
       "firstSequence": 22,
       "lastSequence": 119,
       "principalActions": [
         {
           "action": "revoke",
-          "at": 2176041.677959583,
-          "authTime": 1789973204,
+          "at": 2185898.852653375,
+          "authTime": 1789983061,
           "beforeIndex": 24,
-          "endpoint": "127.0.0.1:49358",
+          "endpoint": "127.0.0.1:55996",
           "readback": {
             "disabled": false,
             "present": true,
-            "uidFingerprint": "6bc69f2a7bd16966"
+            "uidFingerprint": "1ce4f41d534ba792"
           },
           "ref": "revoked-e",
-          "validSince": 1789973205,
+          "validSince": 1789983062,
           "wireSequence": 48
         },
         {
           "action": "disable",
-          "at": 2176041.689374166,
-          "authTime": 1789973204,
+          "at": 2185898.8643155,
+          "authTime": 1789983061,
           "beforeIndex": 26,
-          "endpoint": "127.0.0.1:49358",
+          "endpoint": "127.0.0.1:55996",
           "readback": {
             "disabled": true,
             "present": true,
-            "uidFingerprint": "b292d5709c9955f4"
+            "uidFingerprint": "6827741480352637"
           },
           "ref": "disabled-f",
           "validSince": null,
@@ -1912,14 +1912,14 @@
         },
         {
           "action": "delete",
-          "at": 2176041.701072875,
-          "authTime": 1789973204,
+          "at": 2185898.876892416,
+          "authTime": 1789983061,
           "beforeIndex": 28,
-          "endpoint": "127.0.0.1:49358",
+          "endpoint": "127.0.0.1:55996",
           "readback": {
             "disabled": null,
             "present": false,
-            "uidFingerprint": "855a2e74209b8145"
+            "uidFingerprint": "3642018400996293"
           },
           "ref": "deleted-g",
           "validSince": null,
@@ -1929,46 +1929,46 @@
       "receipts": 95,
       "rulesetReleases": [
         {
-          "activeFrom": 2176041.606945125,
+          "activeFrom": 2185898.773077208,
           "beforeIndex": 0,
-          "endpoint": "127.0.0.1:49357",
+          "endpoint": "127.0.0.1:55995",
           "label": "A",
           "readback": {
-            "digest": "b0a710d5f61131496b37b6b881873b0234b7009c852732a14f5d2b89c250fffb",
+            "digest": "8f69618b45c58e115832ac65cc6a135e3fc75e40372569aea4975e1c0d017425",
             "kind": "publish-echo"
           },
           "releaseName": "local-A-1",
-          "sourceDigest": "b0a710d5f61131496b37b6b881873b0234b7009c852732a14f5d2b89c250fffb",
+          "sourceDigest": "8f69618b45c58e115832ac65cc6a135e3fc75e40372569aea4975e1c0d017425",
           "wireSequence": 22
         },
         {
-          "activeFrom": 2176041.7233565,
+          "activeFrom": 2185898.899501875,
           "beforeIndex": 30,
-          "endpoint": "127.0.0.1:49357",
+          "endpoint": "127.0.0.1:55995",
           "label": "B",
           "readback": {
-            "digest": "fe38a872e57873f13c2681b550151bc3635e900914d7bd8b8028908a26ab1513",
+            "digest": "0868317c35715394178b6129a87efb8c465f4c2167320b1ca00b6ba72a44f248",
             "kind": "publish-echo"
           },
           "releaseName": "local-B-2",
-          "sourceDigest": "fe38a872e57873f13c2681b550151bc3635e900914d7bd8b8028908a26ab1513",
+          "sourceDigest": "0868317c35715394178b6129a87efb8c465f4c2167320b1ca00b6ba72a44f248",
           "wireSequence": 59
         }
       ],
       "sequenceMonotonic": true,
       "sequencedReceipts": 95,
       "wallClock": {
-        "finishedAt": 1789973205.086057,
-        "startedAt": 1789973204.7915468
+        "finishedAt": 1789983062.336141,
+        "startedAt": 1789983062.019992
       }
     }
   },
-  "childPid": 1004,
+  "childPid": 48073,
   "completed": true,
   "contract": "fs-rules-user-token-local-shadow-run-v1",
   "deviations": [],
   "exitCode": 0,
-  "firestoreOrigin": "http://127.0.0.1:49357",
+  "firestoreOrigin": "http://127.0.0.1:55995",
   "httpRequests": 119,
   "launchSpecification": {
     "argv": [
@@ -2023,8 +2023,8 @@
     "notes": "the local Auth emulator mints unsigned tokens, so a local allow proves the Rules decision, never production token verification",
     "portAssignment": "os-assigned",
     "rulesFiles": {
-      "A": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/{document} {\n      allow read, write: if false;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-a {\n      allow get: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-b {\n      allow get: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/public-open {\n      allow get: if request.auth == null;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/claim-gated {\n      allow get: if request.auth != null && request.auth.token.o5role == 'editor';\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/tenant-gated {\n      allow get: if request.auth != null && request.auth.token.firebase.tenant == 'fireemu-00000000000000000001';\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guard-present);\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded-missing {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guard-absent);\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/get-guarded {\n      allow get: if request.auth != null && get(/databases/$(database)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-a).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-control-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-control-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-guard {\n      allow create: if request.auth != null && request.resource.data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/multiwrite-x {\n      allow get, update: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/multiwrite-y {\n      allow create: if false;\n    }\n  }\n}",
-      "B": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/{document} {\n      allow read, write: if false;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-a {\n      allow get: if false;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-b {\n      allow get: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/public-open {\n      allow get: if request.auth == null;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/claim-gated {\n      allow get: if request.auth != null && request.auth.token.o5role == 'editor';\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/tenant-gated {\n      allow get: if request.auth != null && request.auth.token.firebase.tenant == 'fireemu-00000000000000000001';\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guard-present);\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guarded-missing {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/exists-guard-absent);\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/get-guarded {\n      allow get: if request.auth != null && get(/databases/$(database)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/owned-a).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-control-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-control-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/getafter-guard {\n      allow create: if request.auth != null && request.resource.data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/multiwrite-x {\n      allow get, update: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/ndb9a2ddb62664e16af7227fb832dbbbe/cases/multiwrite-y {\n      allow create: if false;\n    }\n  }\n}"
+      "A": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/{document} {\n      allow read, write: if false;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-a {\n      allow get: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-b {\n      allow get: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/public-open {\n      allow get: if request.auth == null;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/claim-gated {\n      allow get: if request.auth != null && request.auth.token.o5role == 'editor';\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/tenant-gated {\n      allow get: if request.auth != null && request.auth.token.firebase.tenant == 'fireemu-00000000000000000001';\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guard-present);\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded-missing {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guard-absent);\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/get-guarded {\n      allow get: if request.auth != null && get(/databases/$(database)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-a).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-control-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-control-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-guard {\n      allow create: if request.auth != null && request.resource.data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/multiwrite-x {\n      allow get, update: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/multiwrite-y {\n      allow create: if false;\n    }\n  }\n}",
+      "B": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/{document} {\n      allow read, write: if false;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-a {\n      allow get: if false;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-b {\n      allow get: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/public-open {\n      allow get: if request.auth == null;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/claim-gated {\n      allow get: if request.auth != null && request.auth.token.o5role == 'editor';\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/tenant-gated {\n      allow get: if request.auth != null && request.auth.token.firebase.tenant == 'fireemu-00000000000000000001';\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guard-present);\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guarded-missing {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/exists-guard-absent);\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/get-guarded {\n      allow get: if request.auth != null && get(/databases/$(database)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/owned-a).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-control-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-control-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/getafter-guard {\n      allow create: if request.auth != null && request.resource.data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/multiwrite-x {\n      allow get, update: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n6035e5c4eaf84304ae70f922a92b6e88/cases/multiwrite-y {\n      allow create: if false;\n    }\n  }\n}"
     },
     "rulesPublishRoute": "PUT /emulator/v1/projects/{project}:securityRules on the Firestore origin",
     "teardown": [
@@ -2034,10 +2034,10 @@
     ],
     "tenant": "fireemu-00000000000000000001"
   },
-  "nonce": "db9a2ddb62664e16af7227fb832dbbbe",
+  "nonce": "6035e5c4eaf84304ae70f922a92b6e88",
   "originsClosed": true,
-  "parentPid": 998,
-  "planDigest": "59e5e19a9b5372cf2f837be5d73f7dab67b23e8ecc3b88f47d35f103b668f3b0",
+  "parentPid": 48072,
+  "planDigest": "974c6bc255e40d0f1b95862daf988c98c7bc0e41d2e1a79e814ea08ac5694316",
   "productionExecuted": false,
   "productionReady": false,
   "recordingComplete": true,

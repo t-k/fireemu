@@ -106,6 +106,11 @@ MODES = {"READ": 0, "WRITE": 1, "EXCLUSIVE": 2}
 MAX_BYTES = 16 * 1024 * 1024
 MAX_RESERVATIONS = 10000
 
+CONFIGURATION_RELEASE_KIND = "fs-config-lifecycle-release-v1"
+CONFIGURATION_GATE_PLAN_KIND = "fs-config-lifecycle-gate-plan-v1"
+CONFIGURATION_CAMPAIGN = "FS-CONFIG-LIFECYCLE-01"
+CONFIGURATION_FINISHED_STATES = frozenset({"not-applied", "apply-refused", "restored"})
+
 
 ABANDON_KIND = "shared-abandoned-cleanup-close-v1"
 ABANDON_FIELDS = {"kind", "ticket", "gateDigest", "receiptPath", "receiptDigest"}
@@ -1019,6 +1024,151 @@ class Ledger:
             row["finalGateDigest"] = digest(gate)
             self._save(state)
 
+    @staticmethod
+    def _read_bounded_json(path):
+        path = Path(path)
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or str(path.resolve()) != str(path)
+            or path.stat().st_size > MAX_BYTES
+        ):
+            raise ValueError("bounded canonical evidence file required")
+        value = json.loads(path.read_bytes())
+        if not isinstance(value, dict):
+            raise ValueError("bounded evidence object required")
+        return value
+
+    def _configuration_gate(self, claim, record, receipt):
+        gate_path = Path(claim["gatePath"])
+        gate = self._read_bounded_json(gate_path / "state.json")
+        collection = receipt.get("collection")
+        plan_steps = {
+            step.get("id"): step
+            for step in gate.get("plan", {}).get("steps", [])
+            if isinstance(step, dict)
+        }
+        receipt_steps = collection.get("steps") if isinstance(collection, dict) else None
+        if (
+            gate.get("planDigest") != claim["gatePlanDigest"]
+            or digest(gate.get("plan")) != gate.get("planDigest")
+            or gate.get("plan", {}).get("kind") != CONFIGURATION_GATE_PLAN_KIND
+            or gate.get("plan", {}).get("campaignId") != CONFIGURATION_CAMPAIGN
+            or gate.get("complete") is not True
+            or gate.get("phase") != "recovery"
+            or gate.get("inflight") is not False
+            or not isinstance(gate.get("steps"), dict)
+            or not gate["steps"]
+            or set(gate["steps"]) != set(plan_steps)
+            or not isinstance(receipt_steps, dict)
+            or set(receipt_steps) != set(gate["steps"])
+            or not isinstance(gate.get("reconciliation"), dict)
+            or gate["reconciliation"].get("ok") is not True
+            or collection.get("reconciliation") != gate["reconciliation"]
+            or collection.get("stopPoint") is not None
+            or collection.get("failure") is not None
+            or collection.get("unrecovered") != []
+            or set(collection.get("observedCases", []))
+            != set(gate["plan"].get("executionOrder", []))
+            or digest(gate) != record["gateDigest"]
+            or receipt.get("gateDigest") != record["gateDigest"]
+        ):
+            raise ValueError("configuration restoration proof differs")
+        for step_id, step in gate["steps"].items():
+            if (
+                not isinstance(step, dict)
+                or step.get("restore") not in CONFIGURATION_FINISHED_STATES
+            ):
+                raise ValueError("configuration restoration incomplete")
+            plan_step = plan_steps[step_id]
+            receipt_step = receipt_steps[step_id]
+            if (
+                step.get("resource") != plan_step.get("resource")
+                or not isinstance(receipt_step, dict)
+                or any(
+                    receipt_step.get(key) != step.get(key)
+                    for key in ("restore", "preDigest", "postDigest", "verifyDigest")
+                )
+            ):
+                raise ValueError("configuration terminal step proof differs")
+            if step["restore"] == "restored" and any(
+                not isinstance(step.get(key), str) or not step[key]
+                for key in ("preDigest", "postDigest", "verifyDigest")
+            ):
+                raise ValueError("configuration before/after proof required")
+        return gate
+
+    def finish_management_only(self, ticket, record):
+        """Release a configuration-only reservation from its typed Gate proof.
+
+        This is deliberately separate from ``finish``: no document resource or
+        typed document absence is invented for a management-only campaign.
+        """
+        required = {
+            "kind", "ticket", "receiptPath", "receiptDigest", "gateDigest",
+            "collectionDigest", "generation",
+        }
+        if not isinstance(record, dict) or set(record) != required:
+            raise ValueError("exact configuration release record required")
+        if record["kind"] != CONFIGURATION_RELEASE_KIND or record["ticket"] != ticket:
+            raise ValueError("configuration release record binding changed")
+        _hash(record["receiptDigest"])
+        _hash(record["gateDigest"])
+        _hash(record["collectionDigest"])
+        _generation(record["generation"])
+        receipt_path = Path(record["receiptPath"])
+        receipt = self._read_bounded_json(receipt_path)
+        if digest(receipt) != record["receiptDigest"]:
+            raise ValueError("configuration receipt digest changed")
+        with self._locked() as state:
+            row = self._row(state, ticket)
+            if row["state"] == "released":
+                if row.get("releaseRecordDigest") != digest(record):
+                    raise ValueError("different configuration release record")
+                return copy.deepcopy(row)
+            if row["state"] != "held":
+                raise ValueError("configuration reservation is not held")
+            claim = row["claim"]
+            evidence = row.get("evidence")
+            if (
+                claim.get("campaignId") != CONFIGURATION_CAMPAIGN
+                or claim.get("gatePlanDigest") != receipt.get("gatePlanDigest")
+                or row.get("generation") != record["generation"]
+                or row.get("generation") is None
+                or receipt.get("generation") != row["generation"]
+                or receipt.get("ticket") != ticket
+                or receipt.get("claimDigest") != row["claimDigest"]
+                or receipt.get("reservationStateAtPublication") != "held"
+                or not isinstance(receipt.get("collection"), dict)
+                or digest(receipt["collection"]) != record["collectionDigest"]
+                or not isinstance(evidence, dict)
+                or evidence.get("receiptSha256") != record["receiptDigest"]
+                or evidence.get("gateDigest") != record["gateDigest"]
+                or evidence.get("collectionDigest") != record["collectionDigest"]
+                or evidence.get("ledgerIdentity") != self.identity
+            ):
+                raise ValueError("configuration release evidence is not attached")
+            row["state"] = "closing"
+            row["releaseRecordDigest"] = digest(record)
+            self._save(state)
+        try:
+            gate = self._configuration_gate(claim, record, receipt)
+        except Exception:
+            with self._locked() as state:
+                row = self._row(state, ticket)
+                if row["state"] == "closing" and row.get("releaseRecordDigest") == digest(record):
+                    row["state"] = "held"
+                    row.pop("releaseRecordDigest", None)
+                    self._save(state)
+            raise
+        with self._locked() as state:
+            row = self._row(state, ticket)
+            if row["state"] != "closing" or row.get("releaseRecordDigest") != digest(record):
+                raise ValueError("configuration closing reservation changed")
+            row["state"] = "released"
+            row["finalGateDigest"] = digest(gate)
+            self._save(state)
+            return copy.deepcopy(row)
     def attach_evidence(self, ticket, receipt_sha256, gate_digest, collection_digest):
         """Anchor a run's observed bytes to its reservation before any terminal close.
 

@@ -217,6 +217,15 @@ def assert_held(ledger, ticket, before=None):
         assert current == before
 
 
+def test_management_finalizer_rejects_untyped_release_document_without_mutation(tmp_path):
+    plan = make_plan()
+    ledger, ticket, _ = reserve(tmp_path, plan)
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="exact configuration release record"):
+        ledger.finish_management_only(ticket, {"kind": "fake-owned-document-release"})
+    assert ledger.snapshot() == before
+
+
 @pytest.mark.parametrize("mode", ["uncertain", "abandoned"])
 @pytest.mark.parametrize("embedded", [False, True])
 @pytest.mark.parametrize("drift", ["event", "clock", "stopped"])

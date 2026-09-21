@@ -6,8 +6,9 @@ Ledger claim with the EXCLUSIVE field-configuration locks, and classifies a stop
 run's terminal disposition. It has no command line; the launcher is `lifecycle_o8.py`.
 
 What still stops a run is the owner's side: a fresh approval for an unreserved nonce
-and a frozen database projection digest. And what stops a release today is the
-shared core: `release_supported()` says so in code rather than in prose.
+and a frozen database projection digest. A clean run can retire through the typed
+configuration-management finalizer; document campaigns retain the shared Gate's
+document-absence contract.
 """
 
 from __future__ import annotations
@@ -59,24 +60,13 @@ NO_MUTATION_DISPOSITION = "held-no-mutation"
 ESCALATION_DISPOSITION = "owner-escalation"
 _HEX64 = re.compile(r"[a-f0-9]{64}")
 
-# The shared core cannot retire a configuration-only reservation: shared_gate.create
-# refuses a plan that owns no document (`or not resources`), and Ledger.finish,
-# abort_no_data and close_after_escalation all re-read that Gate. Until the core
-# admits a configuration contract, every run of this campaign ends held, and this
-# lane says so here instead of attempting a release it knows will be refused.
 RELEASE_BLOCKER = {
-    "reason": "shared-gate-document-contract",
+    "kind": "configuration-management-finalizer-v1",
+    "reason": "typed-configuration-restoration-proof",
     "detail": (
-        "tools/compat-broad/shared_gate.py create() refuses a Gate plan whose jobs "
-        "own no document resource, and every terminal Ledger transition re-reads a "
-        "shared Gate at the claim's gatePath; a configuration campaign owns field "
-        "configurations, not documents"
-    ),
-    "unblocks": (
-        "a shared_gate contract that admits a management-only plan (empty resources, "
-        "empty data slots, management slots as the request allowance) or a "
-        "configuration policy module loaded the way _stream_policy loads "
-        "fs-write-txn/stream_bridge.py"
+        "reservations.Ledger.finish_management_only() retires only after attached "
+        "receipt evidence and the registered lifecycle Gate prove before/after "
+        "restoration and reconciliation"
     ),
 }
 
@@ -131,8 +121,8 @@ def issue_production_capability(**bindings):
 
 
 def release_supported() -> tuple[bool, dict]:
-    """Whether the shared Ledger can release this campaign's reservation today."""
-    return False, copy.deepcopy(RELEASE_BLOCKER)
+    """Whether the typed configuration-management finalizer is available."""
+    return True, copy.deepcopy(RELEASE_BLOCKER)
 
 
 def _read(path):
@@ -364,6 +354,7 @@ def classify_stop(receipt) -> dict:
         }
     if restored and collection.get("cleanupComplete") is True:
         supported, blocker = release_supported()
+        supported = supported and collection.get("completed") is True
         return {
             "stopPoint": collection.get("stopPoint"),
             "disposition": "release-eligible" if supported else RESTORED_DISPOSITION,

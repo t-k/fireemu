@@ -1,0 +1,134 @@
+"""Externally approved launcher for the O5 Rules user-token campaign.
+
+This module never creates approval material or credentials. A commander-owned
+packet carries the independently reviewed O7 artifacts, response-bound Auth
+proofs, and already-reserved Gate/Ledger objects. The launcher validates the
+packet shape, consumes the one-shot capability, and delegates all wire and
+cleanup behavior to the existing bridge and collector.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import Any
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "production-admission"))
+sys.path.insert(0, str(HERE.parent / "o8-core"))
+
+from o5_user_token_descriptor import descriptor
+from o5_user_token_production_bridge import bound_execute, run_bound_collection
+from o8_admission import issue_production_capability, revoke_production_capability
+from reservations import Ledger
+from shared_gate import Gate
+
+REQUIRED_PACKET_KEYS = frozenset(
+    {
+        "plan",
+        "approval",
+        "manifest",
+        "manifestBytes",
+        "manifestPath",
+        "permission",
+        "capabilityInputs",
+        "artifactPath",
+        "launcherPath",
+        "ledgerRoot",
+        "binding",
+        "bindingDigest",
+        "credentials",
+        "frozenInputs",
+        "accountBindings",
+        "identityProofs",
+        "gate",
+        "ledger",
+        "ticket",
+        "acquisition",
+        "runId",
+    }
+)
+
+
+def _require_packet(packet: Any) -> dict[str, Any]:
+    if not isinstance(packet, dict) or set(packet) != REQUIRED_PACKET_KEYS:
+        raise ValueError("approved O5 packet required")
+    if (
+        not isinstance(packet["plan"], dict)
+        or not isinstance(packet["approval"], dict)
+        or not isinstance(packet["manifest"], dict)
+        or not isinstance(packet["manifestBytes"], bytes)
+        or not isinstance(packet["permission"], dict)
+        or not isinstance(packet["capabilityInputs"], dict)
+        or not isinstance(packet["credentials"], dict)
+        or not isinstance(packet["frozenInputs"], dict)
+        or not isinstance(packet["accountBindings"], dict)
+        or not isinstance(packet["identityProofs"], dict)
+        or not isinstance(packet["ticket"], dict)
+        or not isinstance(packet["acquisition"], dict)
+        or not isinstance(packet["runId"], str)
+        or not packet["runId"]
+        or not isinstance(packet["binding"], bytes)
+        or not isinstance(packet["bindingDigest"], str)
+        or not isinstance(packet["ledgerRoot"], (str, Path))
+        or not isinstance(packet["manifestPath"], (str, Path))
+        or not isinstance(packet["artifactPath"], (str, Path))
+        or not isinstance(packet["launcherPath"], (str, Path))
+        or not isinstance(packet["gate"], Gate)
+        or not isinstance(packet["ledger"], Ledger)
+    ):
+        raise ValueError("approved O5 packet required")
+    if packet["capabilityInputs"].get("plan") != packet["plan"]:
+        raise ValueError("approved O5 packet plan binding differs")
+    if packet["frozenInputs"].get("plan") != packet["plan"]:
+        raise ValueError("approved O5 packet frozen plan differs")
+    return packet
+
+
+def run_approved(packet: dict[str, Any]) -> dict[str, Any]:
+    """Consume one commander-approved packet and run the bound campaign."""
+    values = _require_packet(packet)
+    campaign = descriptor()
+    capability = issue_production_capability(
+        campaign,
+        inputs=values["capabilityInputs"],
+        approval=values["approval"],
+        manifest=values["manifest"],
+        manifest_bytes=values["manifestBytes"],
+        manifest_path=values["manifestPath"],
+        permission=values["permission"],
+        ledger_root=values["ledgerRoot"],
+        artifact_path=values["artifactPath"],
+        launcher_path=values["launcherPath"],
+        binding=values["binding"],
+        binding_digest=values["bindingDigest"],
+    )
+    try:
+        inputs = values["capabilityInputs"]
+        capability._consume(
+            campaign_id=inputs["plan"]["campaignId"],
+            inputs_digest=inputs["inputsDigest"],
+            ledger_root=values["ledgerRoot"],
+        )
+        execute = bound_execute(
+            values["plan"],
+            credentials=values["credentials"],
+            frozen_inputs=values["frozenInputs"],
+            account_bindings=values["accountBindings"],
+            identity_proofs=values["identityProofs"],
+            capability=capability,
+        )
+        return run_bound_collection(
+            plan=values["plan"],
+            gate=values["gate"],
+            ledger=values["ledger"],
+            ticket=values["ticket"],
+            execute=execute,
+            acquisition=values["acquisition"],
+            run_id=values["runId"],
+        )
+    finally:
+        revoke_production_capability(capability)
+
+
+__all__ = ["REQUIRED_PACKET_KEYS", "run_approved"]

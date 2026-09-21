@@ -9,7 +9,9 @@ and query cursors for the [FS-QUERY-INDEX row](ip-fs-production-compatibility.md
 of the Identity Platform and Firestore Standard production-compatibility goal. It
 is preparation only. No production operation, Cloud read, credential use or index
 deployment occurred, and production-unobserved conditions are reduced by zero.
-Vector and index-merge conditions are owned elsewhere and are out of scope here.
+Vector and index-merge conditions are owned elsewhere and are out of scope for the
+campaign; the [finite condition list](#finite-condition-list) at the end names
+them alongside the campaign's own conditions, as facts, without promoting any.
 
 ## What the blocking condition asks for
 
@@ -83,11 +85,20 @@ check, and which check answers first in production is itself the observation.
 
 | Bound | Value |
 | --- | --- |
-| Wire requests in one run | 37 |
+| Compiled slots in one run | 37 (31 observation, 6 recovery) |
+| Gate-charged requests, completed run | 88 (37 slots, 42 ladder reads, 2 residual scans, 7 management) |
+| Gate-charged requests, upper bound | 109 (adds 21 ladder deletes taken only when a read finds a document) |
 | Owned documents | 21 |
 | Document writes including deletes | 42 |
 | Concurrency | 1 |
-| Cost ceiling | under US$0.01 |
+| Cost ceiling | 10,000 micro-USD (US$0.01), reserved in full against the shared Ledger |
+| Wall and recovery reserve | 840 s and 520 s; approval window 1360 s |
+
+The compiled case set is unchanged at 37 slots. The additional requests are the
+shared Gate's own cleanup contract: a typed-absence read per owned document, and
+a read plus a version-bound delete per document that only send when a document
+is still present, which on a completed run is never. They are described under
+[Production path](#production-path-o8).
 
 ## Owner preconditions
 
@@ -98,29 +109,123 @@ indexes already cover. The ordering control is deliberately left unindexed. The
 nonce-unique collection group must have no field override, exemption or
 time-to-live policy.
 
-The remaining owner inputs are unresolved and are named in the manifest: owner
-identity and permission reference, execution window and nonce reservation,
-current pricing acceptance and a retention bound for the retained bundle, a typed
-production collector with its raw retention boundary, and a named recovery owner
-for an interrupted run. `admission_status` reports these as blockers and its gate
-always refuses; `validate_permission` accepts no permission while they stand.
+The remaining owner inputs are named in the manifest: owner identity and
+permission reference, execution window and nonce reservation, current pricing
+acceptance and a retention bound for the retained bundle, a named recovery owner
+for an interrupted run, and an independent O7 review of the frozen packet. They
+enter through the frozen owner permission and the approval of the O8 path below;
+the manifest's own `admission_status` still reports them as blockers and its gate
+always refuses, and `validate_permission` accepts no permission while they stand.
+The typed production collector that the earlier revision listed as missing exists
+now; see the next section.
+
+## Production path (O8)
+
+The production path is the same O8 boundary the request-byte campaign uses: an
+independently frozen owner permission, an approval minted outside the packet
+after an independent review, a private bearer-token handoff on a file descriptor,
+and a reservation in the shared Ledger. The launcher is
+`tools/compat-broad/fs-query-partition-cursor/partition_cursor_o8.py`; the
+descriptor is `tools/compat-broad/o8-core/o4_partition_cursor_descriptor.py`,
+and every member the shared admission core requires is real. The only production
+origin the lane's wire module can address is `https://firestore.googleapis.com`;
+a loopback origin is refused there, and the local collector refuses anything but
+a numeric loopback origin, so neither entry point can be steered at the other's
+target.
+
+The compiled 37-slot plan is driven unchanged by the lane's own collector. What
+the shared Gate adds, in `partition_cursor_gate.py`, is a projection of those
+slots onto one Gate job in a frozen schedule, plus a Gate-native recovery ladder:
+one read, one version-bound delete and one typed-absence read for each of the 21
+owned documents, the root last. The ladder exists for two reasons. The shared
+Ledger releases a reservation only when every assigned resource ends with a typed
+`NOT_FOUND` read journaled by the Gate, and the compiled plan proves absence with
+two queries instead. And the compiled cleanup is one Commit of twenty deletes,
+which the Gate cannot host as a recovery slot because a recovery slot must
+address a single assigned resource; when a run stops mid-observation, that Commit
+is refused by name and the ladder deletes what the seed Commit created, each
+delete bound to the version the Gate's own creation proof recorded. On a
+completed run the ladder's reads find every document already absent and its
+deletes are consumed without a send. Two residual-scan queries run after the
+ladder on a completed observation.
+
+Two facts a reviewer should hold before an execution:
+
+- The Gate contract is `shared-local-v1`. The compiled documents carry no
+  `_sharedOwner` reference and no nonce field, so no ownership-marker convention
+  applies; ownership is the plan's own `conditional-create-plus-exact-fields`
+  under the nonce-scoped owned path, which the projection checks.
+- The shared Gate does not recognize `partitionQuery` as a read-only RPC, so its
+  eleven slots are declared as able to create and the facade settles their
+  creation outcome from the typed response. The one consequence is that the
+  page-token continuation slot, which the collector skips when the paged
+  response carried no token, cannot be consumed without a send. A production
+  response without a page token would therefore end the observation at that
+  slot; the ladder would still recover every document, and the run would be
+  incomplete rather than unsafe. Twelve documents may well return no partition
+  cursors in production. The remedy is a shared-Gate change outside this lane,
+  recognizing `partitionQuery` with the closed keys `structuredQuery`,
+  `partitionCount`, `pageSize`, `pageToken` as a non-creating read; the
+  descriptor's `creatingDeclarationGap` names the affected slots on the record
+  until then.
+
+Exit codes: 0, cleanup verified and the reservation released; 1, the run did
+not complete and the reservation is still held with a receipt whose
+`stopPoint` names the disposition (`aborted-no-data`, `abandoned-cleanup-close`
+or `owner-escalation`); 2, admission refused before anything was created. A stop
+at the management preflight or at the typed-absence read of the root is
+retirable as no data. A lost answer to the root create or to the seed Commit is
+never retirable as no data. A later stop whose ladder proved every document
+absent closes through the abandoned-cleanup exit.
+
+Offline integration proof, executed against a temporary Ledger and an injected
+oracle, never the canonical Ledger and never the wire
+(`test_partition_cursor_production.py`): all 37 slots dispatched and the
+reservation released; an early stop before any create retired as no data; a
+transport failure at a cursor slot recovered all 21 documents through the ladder
+and closed after abandon; a binding drift refused before any wire; a credential
+refusal named and sent nothing. These are local results and not production
+evidence.
+
+Launch command line, credential never on the command line:
+
+```text
+uv run --python 3.12 python $FROZEN/tools/compat-broad/fs-query-partition-cursor/partition_cursor_o8.py \
+  --inputs <pkg>/partition-cursor-frozen-inputs-v1.json \
+  --approval $APPROVAL_DIR/partition-cursor-o8-approval-v1.json \
+  --manifest <pkg>/partition-cursor-o8-manifest-v1.json \
+  --permission <pkg>/partition-cursor-owner-execution-permission-v1.json \
+  --source $FROZEN --artifact <retained fireemu> \
+  --ledger <canonical shared Ledger root> \
+  --output <fresh private directory> --credential-fd 3  3< <private handoff>
+```
+
+The handoff is `{"kind": "partition-cursor-bearer-token-v1", "permissionDigest":
+<permissionDigest>, "token": <bearer>}`, at most 16 KiB, read only after the
+Ledger reservation and the Gate claim.
 
 ## Local shadow
 
 The plan was driven against a `fireemu` built in the lane worktree. The runner
 records that binding itself and refuses a binary from another checkout.
 The historical run remains immutable at
-[`fs-query-partition-cursor-local-shadow.json`](../../spec/compatibility/broad-runs/fs-query-partition-cursor-local-shadow.json).
-The current native run is published separately at
-[`fs-query-partition-cursor-current-v2-local-shadow.json`](../../spec/compatibility/broad-runs/fs-query-partition-cursor-current-v2-local-shadow.json).
+[`fs-query-partition-cursor-local-shadow.json`](../../spec/compatibility/broad-runs/fs-query-partition-cursor-local-shadow.json),
+as does the v2 run at
+[`fs-query-partition-cursor-current-v2-local-shadow.json`](../../spec/compatibility/broad-runs/fs-query-partition-cursor-current-v2-local-shadow.json)
+(source commit `905ede564c6d40498b615183db9f4103756585ba`, artifact SHA-256
+`3c486cee6cd842039f114bc5d154d71e2b242b18381960716f4e1433e134a9e5`, `MATCHED`).
+The current native run, made after the production path landed so that the
+record binds those lane modules too, is published at
+[`fs-query-partition-cursor-current-v3-local-shadow.json`](../../spec/compatibility/broad-runs/fs-query-partition-cursor-current-v3-local-shadow.json).
 A debug build is not bit-reproducible, so the digest identifies one build
 instance rather than the source.
 
 | Binding | Value |
 | --- | --- |
-| Artifact source commit | `905ede564c6d40498b615183db9f4103756585ba` |
-| Rust sources | unchanged from base `3d0e56bdf` |
-| Artifact SHA-256 | `3c486cee6cd842039f114bc5d154d71e2b242b18381960716f4e1433e134a9e5` |
+| Artifact source commit | `b25d9227276707c6ce9238ebac7820ca5ef85c74` |
+| Rust sources | unchanged from base `0cd79d3f48052e5e3fdb3c22ca10656b2951fd2f` |
+| Artifact SHA-256 | `d08337f9ecc5b211998c6205af45d0f3292438e27ba44686bc6beae566db768b` |
+| Result | `MATCHED`, 37 of 37 raw sidecars, reconstruction matches, zero residual documents |
 
 The record also carries the SHA-256 of every lane module it was produced by, so
 the withdrawal of `O4-REPAIR-001` and every other recorded result can be
@@ -177,3 +282,29 @@ REST reference and on local behavior, not on observed production responses; the
 campaign exists to replace that reasoning with receipts. The comparator
 canonicalizes server timestamps to a placeholder because no case in this set
 asserts a time relation, and a future case that does must compare them exactly.
+
+## Finite condition list
+
+The FS-QUERY-INDEX row's closure sentence is not a finite list. This section
+names every condition the row declares, with what exists for each. It states
+facts about evidence classes and promotes nothing; the acceptance table itself
+lives in the [row](ip-fs-production-compatibility.md) and is not edited here.
+Evidence classes: `immutable receipt` is a live production observation with a
+retained receipt under `spec/compatibility`; `saved-reference replay` is a local
+artifact compared against an unchanged production receipt; `check without
+receipt` is a production comparison whose output was not retained as an
+immutable receipt; `unobserved` means no production observation exists.
+
+| Condition | Implemented | Local test | Production evidence class | Campaign |
+| --- | --- | --- | --- | --- |
+| Filter and order combinations on missing fields and mixed types (`orderBy` on a missing field excludes documents, type-restricted range filters, `values/type-order`) | `crates/fireemu-core-firestore/src/query.rs` | conformance matrix against the official emulator (`conformance/firestore-matrix.json`) | immutable receipt: the live 2026-09-07 corpus `conformance/firestore-production-matrix.json` covers the named cases; the full missing-type matrix beyond them is unobserved | none prepared |
+| Aggregation (`count`, `sum`, `avg`, intersection, boundary controls) | fixed at `fe37fe0` | local corpus, [aggregation evidence](aggregation-evidence.md) 14/14 | immutable receipt: 23/23 saved production aggregation observations replayed; one open divergence recorded in the local issue `aggregation-limit-default-order-production-divergence` (`count + sum(x)` with `limit: 2`, missing and non-numeric `x`, no explicit order: local `sum=10`, production `sum=30.5`), retained as a mismatch and excluded from approval, not rewritten from the observation | none prepared; the issue names the bounded follow-up (explicit `__name__ ASC` and `x ASC` variants with document-ID comparison) |
+| Explain (`explainOptions`, plan and execution stats) | Explain v5/v9 | 117-test Explain suite | saved-reference replay: [current Explain v5 replay](query-explain-current-saved-reference-v5.md), 12/12 on `cce4a4f9b` against the unchanged receipt; the original observation is immutable | `prod-campaign-explain-01` v9 (executed historically) |
+| Index merge and exemption acceptance (equality merge, `__name__` under wildcard exclusion, bare `orderBy(__name__, desc)`) | `index.rs`, `index_usage.rs`, `crates/fireemu/src/control.rs` (indexes file including `vectorConfig`) | `244dc525-index-merge-local.json` 20-case strict SDK regression; `tests/index.rs` | check without receipt: `tools/sdk-smoke/index-merge-oracle.mjs` on 2026-09-08 (equality merge accepted, `__name__` unaffected by wildcard exclusion, bare descending `__name__` refused without an explicit index); no immutable receipt under `spec/compatibility` | none prepared |
+| Vector `findNearest` (euclidean, cosine, dot product, dimension and non-vector exclusion, limit and threshold) | Standard local execution, REST and gRPC | `crates/fireemu-core-firestore/tests/execute.rs` nearest-vector tests | unobserved; the official emulator refuses `findNearest` on REST while fireemu serves it, a documented non-parity claim | none prepared |
+| PartitionQuery (database parent, `partitionCount`, `pageSize` and page token, refusals for document parent, non-group query, filter, zero count, limit, offset, non-`__name__` order; range reconstruction) | `crates/fireemu-adapter-grpc/src/local.rs` partition path, `query.rs` | `local.rs` partition reconstruction test; this lane's 37-slot shadow v3 `MATCHED` | unobserved | `FS-QUERY-PARTITION-CURSOR-04`, production path prepared (this record); execution not performed |
+| Cursor validation (`startAt`, `startAfter`, `endAt`, `endBefore`, reference cursor under `__name__`, offset with limit, `limitToLast` wire form, too many values, reference type mismatch, foreign reference, negative offset) | `query.rs` cursor rules, strict-only via `IndexValidationPolicy::Production` | `crates/fireemu-core-firestore/tests/query.rs` cursor suite; shadow v3 `MATCHED` | unobserved | `FS-QUERY-PARTITION-CURSOR-04`, as above |
+| Projection, offset, limit and collection-group queries outside the cases above | `query.rs` | conformance matrix | immutable receipt for the cases the 2026-09-07 corpus and the Explain setup queries carry; other shapes unobserved | none prepared |
+
+No condition moves on this list. The partition and cursor rows are the only
+ones with a prepared production path, and that path has not been executed.

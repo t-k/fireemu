@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { digestJson, requireThat, sha256 } from "./core.mjs";
@@ -19,19 +20,38 @@ export function validateG0Origins(env) {
   return values;
 }
 
+export function readOwnedProcessArgv(pid) {
+  try {
+    if (process.platform === "linux") return readFileSync(`/proc/${pid}/cmdline`).toString("utf8").split("\0").filter(Boolean);
+    if (process.platform === "darwin") {
+      const source = [
+        "import ctypes,json,struct,sys",
+        "pid=int(sys.argv[1]); libc=ctypes.CDLL(None); mib=(ctypes.c_int*3)(1,49,pid); size=ctypes.c_size_t(0)",
+        "if libc.sysctl(mib,3,None,ctypes.byref(size),None,0)!=0: raise OSError()",
+        "buffer=ctypes.create_string_buffer(size.value)",
+        "if libc.sysctl(mib,3,buffer,ctypes.byref(size),None,0)!=0: raise OSError()",
+        "argc=struct.unpack_from('i',buffer.raw)[0]; parts=buffer.raw[4:].split(b'\\0'); first=parts[0]; rest=parts[1:]; start=next(i for i,value in enumerate(rest) if value); start=start+1 if rest[start]==first else start; values=[first]+rest[start:start+argc-1]",
+        "print(json.dumps([value.decode('utf-8') for value in values if value]))",
+      ].join("\n");
+      return JSON.parse(execFileSync("python3", ["-c", source, String(pid)], { encoding: "utf8", maxBuffer: 128 * 1024 }));
+    }
+  } catch {}
+  return null;
+}
+
 export function g0SessionPythonSource() {
   return [
     "import json, os, pathlib, subprocess, sys",
     "root=pathlib.Path(sys.argv[1]); out=pathlib.Path(sys.argv[2])",
     "sys.path.insert(0, str(root/'tools/compat-broad'))",
-    "from broad_contract import local_origin",
+    "from broad_contract import digest, local_origin",
     "from batch_adapter import observer_digest",
-    "from shared_cases import execute",
+    "from g0_local_recovery import execute",
     "from shared_gate import create",
     "firestore=os.environ.get('FIRESTORE_EMULATOR_HOST'); auth=os.environ.get('FIREBASE_AUTH_EMULATOR_HOST')",
     "if not firestore or not auth: raise ValueError('g0-owned-origins-missing')",
     "origins={'firestore': local_origin('http://' + firestore), 'auth': local_origin('http://' + auth)}",
-    "plan=json.loads((out/'program.json').read_bytes()); plan['observerSha256']=observer_digest(); plan['localOrigins']=origins",
+    "plan=json.loads((out/'program.json').read_bytes()); canonical_program_digest=digest(plan); plan['observerSha256']=observer_digest(); plan['localOrigins']=origins",
     "create(out/'gate', plan)",
     "if not execute(out, origins): raise SystemExit(3)",
   ].join("\n");
@@ -42,6 +62,9 @@ const adapterFiles = ["g0-plan.mjs", "g0-session.mjs", "g0.mjs", "pilot.mjs", "r
 async function sourceDigests() {
   const output = {};
   for (const name of adapterFiles) output[name] = sha256(await readSource(HERE, name));
+  output["tools/compat-broad/g0_local_recovery.py"] = sha256(
+    await readSource(resolve(HERE, "../../tools/compat-broad"), "g0_local_recovery.py"),
+  );
   return output;
 }
 

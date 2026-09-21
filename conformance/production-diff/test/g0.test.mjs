@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { compareG0, g0SessionPythonSource, validateG0Origins } from "../g0.mjs";
+import { compareG0, g0SessionPythonSource, readOwnedProcessArgv, validateG0Origins } from "../g0.mjs";
+import { verifyG0ProgramDigest } from "../pilot.mjs";
+import { digestJson } from "../core.mjs";
 import { G0_CASE } from "../registry.mjs";
 
 test("G0 compare refuses a missing retained build binding", () => {
@@ -51,6 +53,7 @@ test("G0 origin binding requires both real loopback services", () => {
 
 test("G0 session bridge compiles as the exact Python source it will execute", () => {
   const source = g0SessionPythonSource();
+  assert.match(source, /from g0_local_recovery import execute/);
   execFileSync(
     "uv",
     ["run", "python", "-c", "compile(__import__('sys').stdin.read(), '<g0-session>', 'exec')"],
@@ -79,6 +82,30 @@ test("G0 session uses the locked Python 3.12 inventory runtime for generated cod
     { cwd: process.cwd(), input: source, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
   );
   assert.match(output.trim(), /^3\.12(?:\.|$)/);
+});
+
+test("G0 session rejects stale or substituted launcher receipts before Python dispatch", () => {
+  const source = readFileSync(new URL("../g0-session.mjs", import.meta.url), "utf8");
+  for (const token of [
+    "receipt.pid === process.ppid",
+    "receipt.binarySha256 === binaryHash",
+    "receipt.configSha256 === configHash",
+    "receipt.rulesSha256 === rulesHash",
+    "receipt.runDirectory?.ino === runInfo.ino",
+    "!receipt.args.includes(\"--import\")",
+    "receipt.import === null",
+  ]) assert.ok(source.includes(token), token);
+});
+
+test("G0 process identity uses the OS-native exact argv of a real owned child", async () => {
+  const child = spawn("/bin/sleep", ["1"]);
+  try {
+    assert.ok(Number.isInteger(child.pid) && child.pid > 0);
+    assert.deepEqual(readOwnedProcessArgv(child.pid), ["/bin/sleep", "1"]);
+  } finally {
+    child.kill("SIGTERM");
+    await new Promise((resolve) => child.once("close", resolve));
+  }
 });
 
 test("G0 session binds validated origins before the real Gate and Adapter are constructed", () => {
@@ -139,4 +166,14 @@ print("binding-ok")
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("session verification binds the prepared canonical program, not its runtime-enriched clone", () => {
+  const prepared = { jobs: { partial: { observation: [] } }, nonce: "a".repeat(32) };
+  const canonical = digestJson(prepared);
+  verifyG0ProgramDigest(canonical, prepared);
+  const runtimePlan = { ...prepared, localOrigins: { firestore: "127.0.0.1:18080" } };
+  assert.notEqual(digestJson(runtimePlan), canonical);
+  assert.throws(() => verifyG0ProgramDigest(digestJson(runtimePlan), prepared), /local-record-binding/);
+  assert.throws(() => verifyG0ProgramDigest("0".repeat(64), prepared), /local-record-binding/);
 });

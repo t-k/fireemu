@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { statSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -131,6 +132,10 @@ async function portIsClosed(endpoint) {
   });
 }
 
+export function verifyG0ProgramDigest(sessionDigest, preparedProgram) {
+  requireThat(sessionDigest === digestJson(preparedProgram), "local-record-binding");
+}
+
 export function verifySession(session, prepared, localBytes) {
   const entry = prepared.entry;
   // The setup prefix (e.g. batch-write's reset+seed) is case-specific; a case with no separate
@@ -146,10 +151,10 @@ export function verifySession(session, prepared, localBytes) {
   requireThat(
     session?.schema === "fireemu-production-diff-session-v1" &&
       session.caseId === entry.id &&
-      session.programDigest === digestJson(prepared.program) &&
       session.localSha256 === sha256(localBytes),
     "local-record-binding",
   );
+  verifyG0ProgramDigest(session.programDigest, prepared.program);
   const expectedCount = setupPhases.length + entry.stepIds.length;
   requireThat(
     session.productionRequests === 0 &&
@@ -182,6 +187,16 @@ export function verifySession(session, prepared, localBytes) {
 
 async function replay(prepared, options, directory) {
   const entry = prepared.entry;
+  const build = prepared.provenance.implementation.build;
+  if (entry.adapter === "g0")
+    requireThat(
+      build &&
+        typeof build.retainedManifestSha256 === "string" &&
+        typeof build.artifactProfile === "string" &&
+        typeof build.runtimeSourceCommit === "string" &&
+        typeof build.sourceInputsDigest === "string",
+      "g0-build-provenance-unavailable",
+    );
   if (entry.adapter === "batch-write") await stageLegacy(prepared, join(directory, "legacy"));
   await publishJson(join(directory, "program.json"), prepared.program);
   await publishJson(join(directory, "programs.json"), [prepared.program]);
@@ -203,15 +218,52 @@ async function replay(prepared, options, directory) {
     entry.project,
     entry.adapter === "g0" ? "auth,firestore" : "firestore",
   );
+  const cleanEnv = cleanEnvironment(directory);
   const processResult = await runProcess(command, args, {
     cwd: directory,
     env: {
-      ...cleanEnvironment(directory),
+      ...cleanEnv,
       PILOT_RUN_DIR: directory,
       PILOT_CASE_ID: entry.id,
       PILOT_REPO: options.repo,
+      ...(entry.adapter === "g0"
+        ? {
+            PILOT_PROGRAM_DIGEST: digestJson(prepared.program),
+            G0_RETAINED_MANIFEST_SHA256: build.retainedManifestSha256,
+            G0_ARTIFACT_PROFILE: build.artifactProfile,
+            G0_RUNTIME_SOURCE_COMMIT: build.runtimeSourceCommit,
+            G0_SOURCE_INPUTS_DIGEST: build.sourceInputsDigest,
+          }
+        : {}),
     },
     timeoutMs: options.timeout * 1000,
+    onSpawn:
+      entry.adapter === "g0"
+        ? ({ pid }) => {
+            requireThat(Number.isInteger(pid) && pid > 0, "g0-spawn-pid-unavailable");
+            const info = statSync(directory);
+            const receipt = {
+              schema: "fireemu-g0-launch-v1",
+              pid,
+              command,
+              args: [...args],
+              binarySha256: artifact.sha256,
+              sourceCommit: prepared.state.head,
+              configSha256: sha256(Buffer.from(JSON.stringify(CONFIG, null, 2) + "\n")),
+              rulesSha256: sha256(RULES),
+              environmentSha256: digestJson(cleanEnv),
+              retainedManifestSha256: build?.retainedManifestSha256,
+              artifactProfile: build?.artifactProfile,
+              runtimeSourceCommit: build?.runtimeSourceCommit,
+              sourceInputsDigest: build?.sourceInputsDigest,
+              runDirectory: { path: directory, dev: info.dev, ino: info.ino, mode: info.mode & 0o777 },
+              import: null,
+              exportOnExit: null,
+            };
+            const bytes = Buffer.from(JSON.stringify(receipt) + "\n");
+            writeFileSync(join(directory, "launch-receipt.json"), bytes, { flag: "wx", mode: 0o600 });
+          }
+        : null,
   });
   await publish(join(directory, "process.log"), processResult.log);
   let session, localBytes;
@@ -259,6 +311,7 @@ async function replay(prepared, options, directory) {
       signal: processResult.signal,
       listenerClosed: portClosed,
     },
+    launchReceiptSha256: sha256(await readSource(directory, "launch-receipt.json", 128 * 1024)),
     cleanup: session.cleanup,
     artifact,
     sourceUnchanged: unchanged,

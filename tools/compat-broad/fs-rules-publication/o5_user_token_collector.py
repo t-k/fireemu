@@ -321,20 +321,31 @@ class RulesManagementSession:
             raise ValueError("Ruleset name changed")
         return name
 
+    @staticmethod
+    def _ruleset_digest(body: Any) -> str:
+        if not isinstance(body, dict) or not isinstance(body.get("source"), dict):
+            raise ValueError("Ruleset source required")
+        files = body["source"].get("files")
+        if not isinstance(files, list) or len(files) != 1 or not isinstance(files[0], dict) or not isinstance(files[0].get("content"), str):
+            raise ValueError("Ruleset source required")
+        return digest(files[0]["content"])
+
     def run_observation(self) -> dict[str, Any]:
         """Capture the baseline, publish A/B, and verify each active release."""
         release_name, baseline_ruleset = self._release(
             self._dispatch("observation", "baseline-release-get", {"action": "release-get", "releaseName": "projects/fireemu-35fe6/releases/cloud.firestore"})
         )
+        baseline_body = self._dispatch("observation", "baseline-ruleset-get", {"action": "get", "rulesetName": baseline_ruleset})
+        baseline_digest = self._ruleset_digest(baseline_body)
         baseline_ruleset = self._ruleset(
-            self._dispatch("observation", "baseline-ruleset-get", {"action": "get", "rulesetName": baseline_ruleset}),
+            baseline_body,
             None,
             baseline_ruleset,
         )
         executable = self._dispatch("observation", "baseline-executable-get", {"action": "release-get-executable", "releaseName": release_name})
         if executable.get("rulesetName") != baseline_ruleset:
             raise ValueError("baseline executable differs")
-        self.baseline = {"releaseName": release_name, "rulesetName": baseline_ruleset}
+        self.baseline = {"releaseName": release_name, "rulesetName": baseline_ruleset, "sourceDigest": baseline_digest}
         for label, patch_base in (("A", "a"), ("B", "b")):
             source_digest = digest(self.plan["rulesets"][label]["source"])
             created = self._dispatch("observation", f"create-{patch_base}", {"action": "create", "label": label, "sourceDigest": source_digest})

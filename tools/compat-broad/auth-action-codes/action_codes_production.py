@@ -124,6 +124,9 @@ def execute(
     binding = (ROOT / descriptor.WORKER_ENTRY).read_bytes()
     binding_digest = hashlib.sha256(binding).hexdigest()
     runtime = dict(bindings)
+    for account in ("accountA", "accountB"):
+        if account + ".localId" in runtime:
+            runtime[account + "Uid"] = runtime[account + ".localId"]
     observations = gate_plan["jobs"][gate_module.JOB]["observation"]
     recovery = gate_plan["jobs"][gate_module.JOB]["recovery"]
     for is_recovery, operations in ((False, observations), (True, recovery)):
@@ -142,7 +145,7 @@ def execute(
                 api_key=api_key,
                 fixture_origin=fixture_origin,
             )
-            handle.dispatch(operation | {"body": body}, is_recovery, lambda result=result: result)
+            handle.dispatch(operation, is_recovery, lambda result=result: result)
             status, response = result
             if status == 200 and operation.get("kind") == "sign-up":
                 account = operation["account"]

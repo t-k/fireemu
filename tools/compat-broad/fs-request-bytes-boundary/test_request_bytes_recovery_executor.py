@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import sys
 import threading
@@ -17,6 +16,8 @@ sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE.parent / "o8-core"))
 sys.path.insert(0, str(HERE.parent / "production-admission"))
 
+import o8_admission
+import request_bytes_descriptor
 import request_bytes_recovery_admission as issuer
 import request_bytes_recovery_executor as executor
 from test_request_bytes_recovery_admission import _actual_child, _o7_files
@@ -63,12 +64,35 @@ def _server(owned, versions, fields):
     return server, f"http://127.0.0.1:{server.server_port}"
 
 
+def _issued_fixture(tmp_path):
+    o7, ledger, child_ticket, parent_plan, child_gate_plan, permission = _actual_child(tmp_path)
+    inputs = issuer.freeze_inputs(
+        ledger,
+        child_ticket,
+        parent_plan,
+        permission,
+        selected_probe="under",
+        source_commit=o7.commit,
+        artifact_sha256=o7.inputs["artifactSha256"],
+    )
+    files = _o7_files(tmp_path, o7, inputs)
+    capability = issuer.issue_production_capability(
+        ledger=ledger,
+        child_ticket=child_ticket,
+        parent_plan=parent_plan,
+        child_gate_plan=child_gate_plan,
+        selected_probe="under",
+        inputs=inputs,
+        permission=permission,
+        ledger_root=o7.ledger,
+        **files,
+    )
+    return o7, ledger, child_ticket, parent_plan, child_gate_plan, permission, inputs, capability
+
+
 @pytest.mark.parametrize("owned_count", [0, 3])
 def test_real_executor_runs_85_slots_and_settles_child(tmp_path, owned_count):
-    o7, ledger, child_ticket, parent_plan, child_gate_plan, permission = _actual_child(tmp_path)
-    inputs = issuer.freeze_inputs(ledger, child_ticket, parent_plan, permission, selected_probe="under", source_commit=o7.commit, artifact_sha256=o7.inputs["artifactSha256"])
-    files = _o7_files(tmp_path, o7, inputs)
-    issuer.issue_production_capability(ledger=ledger, child_ticket=child_ticket, parent_plan=parent_plan, child_gate_plan=child_gate_plan, selected_probe="under", inputs=inputs, permission=permission, ledger_root=o7.ledger, **files)
+    _o7, ledger, child_ticket, parent_plan, child_gate_plan, permission, inputs, capability = _issued_fixture(tmp_path)
     operations = child_gate_plan["jobs"][executor.RECOVERY_JOB]["recovery"]
     candidates = [
         operation["resource"]
@@ -87,7 +111,7 @@ def test_real_executor_runs_85_slots_and_settles_child(tmp_path, owned_count):
     }
     server, base_url = _server(owned, versions, fields)
     try:
-        result = executor.execute_recovery(ledger=ledger, child_ticket=child_ticket, canonical_parent_plan=parent_plan, child_gate_plan=child_gate_plan, gate_path=tmp_path / "child-gate", base_url=base_url)
+        result = executor.execute_recovery(ledger=ledger, child_ticket=child_ticket, canonical_parent_plan=parent_plan, child_gate_plan=child_gate_plan, capability=capability, inputs=inputs, permission=permission, gate_path=tmp_path / "child-gate", base_url=base_url)
     finally:
         server.shutdown()
         server.server_close()
@@ -95,6 +119,7 @@ def test_real_executor_runs_85_slots_and_settles_child(tmp_path, owned_count):
     state = ledger.snapshot()
     child = state["reservations"][child_ticket["parentReservation"]]["recoveryChildren"][0]
     assert child["state"] == "settled"
+    assert capability.consumed is True
     gate_state = json.loads((tmp_path / "child-gate" / "state.json").read_text())
     job = gate_state["jobs"][executor.RECOVERY_JOB]
     events = [event for event in gate_state["events"] if event["phase"] == "recovery"]
@@ -118,15 +143,73 @@ def test_executor_rejects_non_loopback_without_ledger_change(tmp_path):
     _o7, ledger, child_ticket, parent_plan, child_gate_plan, _permission = _actual_child(tmp_path)
     before = ledger.snapshot()
     with pytest.raises(ValueError, match="loopback"):
-        executor.execute_recovery(ledger=ledger, child_ticket=child_ticket, canonical_parent_plan=parent_plan, child_gate_plan=child_gate_plan, gate_path=tmp_path / "child-gate", base_url="https://example.invalid")
+        executor.execute_recovery(ledger=ledger, child_ticket=child_ticket, canonical_parent_plan=parent_plan, child_gate_plan=child_gate_plan, capability=None, inputs={}, permission={}, gate_path=tmp_path / "child-gate", base_url="https://example.invalid")
     assert ledger.snapshot() == before
 
 
-def test_executor_rejects_tampered_child_plan_before_gate_write(tmp_path):
+def test_executor_rejects_missing_capability_before_gate_write(tmp_path):
     _o7, ledger, child_ticket, parent_plan, child_gate_plan, _permission = _actual_child(tmp_path)
-    tampered = copy.deepcopy(child_gate_plan)
-    tampered["jobs"][executor.RECOVERY_JOB]["recovery"][0]["path"] += "/foreign"
     before = ledger.snapshot()
-    with pytest.raises(ValueError, match="persisted child Gate plan"):
-        executor.execute_recovery(ledger=ledger, child_ticket=child_ticket, canonical_parent_plan=parent_plan, child_gate_plan=tampered, gate_path=tmp_path / "child-gate", base_url="http://127.0.0.1:1")
+    with pytest.raises(ValueError, match="active O7 production capability"):
+        executor.execute_recovery(ledger=ledger, child_ticket=child_ticket, canonical_parent_plan=parent_plan, child_gate_plan=child_gate_plan, capability=None, inputs={}, permission={}, gate_path=tmp_path / "child-gate", base_url="http://127.0.0.1:1")
     assert ledger.snapshot() == before
+
+
+@pytest.mark.parametrize("mutation", ["expired", "source", "permission", "host", "bytechange", "consumed"])
+def test_post_issue_binding_refusal_has_no_gate_or_ledger_side_effects(tmp_path, monkeypatch, mutation):
+    _o7, ledger, child_ticket, parent_plan, child_gate_plan, permission, inputs, capability = _issued_fixture(tmp_path)
+    if mutation == "expired":
+        import time
+
+        expired = time.time() + 10_000
+        monkeypatch.setattr(executor.time, "time", lambda: expired)
+    elif mutation == "source":
+        source_name = next(iter(inputs["sourceInputs"]))
+        inputs["sourceInputs"][source_name] = "0" * 64
+    elif mutation == "permission":
+        permission["budget"] = {"requests": 1}
+    elif mutation == "host":
+        monkeypatch.setattr(o8_admission, "execution_host", lambda: {"platform": "foreign", "machine": "foreign"})
+    elif mutation == "bytechange":
+        monkeypatch.setattr(request_bytes_descriptor.request_bytes_remote_transport, "_WORKER_SHA256", "0" * 64)
+    else:
+        capability._consume(
+            campaign_id=issuer.CAMPAIGN,
+            inputs_digest=inputs["inputsDigest"],
+            ledger_root=ledger.path,
+        )
+    before = ledger.snapshot()
+    with pytest.raises(ValueError):
+        executor.execute_recovery(
+            ledger=ledger,
+            child_ticket=child_ticket,
+            canonical_parent_plan=parent_plan,
+            child_gate_plan=child_gate_plan,
+            capability=capability,
+            inputs=inputs,
+            permission=permission,
+            gate_path=tmp_path / "child-gate",
+            base_url="http://127.0.0.1:1",
+        )
+    assert ledger.snapshot() == before
+    assert not (tmp_path / "child-gate").exists()
+
+
+def test_foreign_issued_capability_refuses_before_gate_write(tmp_path):
+    _o7, ledger, child_ticket, parent_plan, child_gate_plan, permission, inputs, _capability = _issued_fixture(tmp_path / "local")
+    _foreign_o7, _foreign_ledger, _foreign_ticket, _foreign_parent, _foreign_gate, _foreign_permission, _foreign_inputs, foreign_capability = _issued_fixture(tmp_path / "foreign")
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="other frozen inputs|shared Ledger"):
+        executor.execute_recovery(
+            ledger=ledger,
+            child_ticket=child_ticket,
+            canonical_parent_plan=parent_plan,
+            child_gate_plan=child_gate_plan,
+            capability=foreign_capability,
+            inputs=inputs,
+            permission=permission,
+            gate_path=tmp_path / "local" / "child-gate",
+            base_url="http://127.0.0.1:1",
+        )
+    assert ledger.snapshot() == before
+    assert not (tmp_path / "local" / "child-gate").exists()

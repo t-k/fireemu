@@ -16,6 +16,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "production-admission"))
 sys.path.insert(0, str(HERE.parent))
 
+import o8_admission
+import request_bytes_descriptor
+import request_bytes_recovery_admission as recovery_admission
 import request_bytes_recovery_campaign as recovery_campaign
 import reservations
 import shared_gate
@@ -75,15 +78,44 @@ def execute_recovery(
     child_ticket: dict,
     canonical_parent_plan: dict,
     child_gate_plan: dict,
+    capability,
+    inputs: dict,
+    permission: dict,
     gate_path: Path,
     base_url: str,
 ) -> dict:
     """Run the exact persisted 85-slot child against a bounded loopback server."""
     if not str(base_url).startswith("http://127.0.0.1:"):
         raise ValueError("loopback transport endpoint required")
+    if not o8_admission.issued_capability(capability):
+        raise ValueError("active O7 production capability required")
+    o8_admission.validate_frozen_inputs(recovery_admission.descriptor(), inputs)
     bound = ledger.bound_recovery_claim(child_ticket)
-    if bound["state"] != "allocated":
-        raise ValueError("allocated child required")
+    validated = recovery_admission.validate_bound_child(bound)
+    claim = validated["childClaim"]
+    _, recovery_plan, expected_gate = recovery_admission._canonical_plans(
+        canonical_parent_plan,
+        selected_probe=inputs["plan"].get("selectedProbe", "under"),
+        recovery_nonce=claim["recoveryNonce"],
+    )
+    recovery_plan["childClaimDigest"] = digest(claim)
+    recovery_plan["childTicketDigest"] = digest(validated["ticket"])
+    if inputs["plan"] != recovery_plan:
+        raise ValueError("frozen authoritative recovery plan differs")
+    if expected_gate != child_gate_plan:
+        raise ValueError("authoritative child Gate plan differs")
+    recovery_admission._validate_current_binding(validated, inputs, permission, recovery_plan)
+    if recovery_admission.descriptor().source_map() != inputs["sourceInputs"]:
+        raise ValueError("current recovery source closure differs")
+    request_bytes_descriptor.verify_worker_binding(
+        capability._binding, capability.binding_digest, inputs["sourceInputs"]
+    )
+    if capability.campaign_id != recovery_admission.CAMPAIGN:
+        raise ValueError("production capability belongs to another campaign")
+    if capability.inputs_digest != inputs["inputsDigest"]:
+        raise ValueError("production capability belongs to other frozen inputs")
+    if capability.ledger_root != str(ledger.path.resolve()):
+        raise ValueError("production capability belongs to another shared Ledger")
     if digest(child_gate_plan) != bound["childClaim"]["gatePlanDigest"]:
         raise ValueError("persisted child Gate plan differs")
     expected_fields = {
@@ -94,6 +126,11 @@ def execute_recovery(
         if isinstance(write.get("update"), dict)
         and isinstance(write["update"].get("fields"), dict)
     }
+    capability._consume(
+        campaign_id=recovery_admission.CAMPAIGN,
+        inputs_digest=inputs["inputsDigest"],
+        ledger_root=ledger.path,
+    )
     shared_gate.create(gate_path, child_gate_plan)
     gate = _RecoveryGate(gate_path, RECOVERY_JOB, expected_fields)
     gate.claim()
@@ -107,6 +144,13 @@ def execute_recovery(
         admitted_operation.pop("versionFrom", None)
 
         def send(operation=admitted_operation):
+            if time.time() > validated["deadline"]:
+                raise ValueError("recovery child deadline expired")
+            o8_admission.authorize_transport(
+                capability,
+                binding=capability._binding,
+                binding_digest=capability.binding_digest,
+            )
             status, body = _response(base_url, operation, versions)
             if operation["kind"] == "recovery-inspection-read" and status == 200:
                 if body.get("name") != operation["resource"]:

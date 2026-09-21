@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import fcntl
+import hashlib
 import json
 import math
 import re
@@ -29,6 +30,7 @@ from shared_gate import (
     Gate,
     _save,
     abandoned_cleanup_complete,
+    canonical_body_bytes,
     non_creating_dispatches,
     typed_absence,
     unconfirmed_creates,
@@ -864,11 +866,29 @@ def _validate_recovery_terminal_slots(gate, job_name):
             status = event.get("status")
             capture = job.get("captures", {}).get(str(index), {})
             if status == 404:
-                if capture.get("status") != 404:
+                if (
+                    capture.get("status") != 404
+                    or capture.get("name") is not None
+                    or capture.get("updateTime") is not None
+                    or capture.get("fieldsDigest") != digest(None)
+                ):
                     raise ValueError("recovery inspection absence proof differs")
+                if "responseDigest" in capture:
+                    if re.fullmatch(r"[a-f0-9]{64}", capture["responseDigest"]) is None or event.get("responseDigest") != capture["responseDigest"]:
+                        raise ValueError("recovery inspection response binding differs")
             elif status == 200:
-                if capture.get("status") != 200 or capture.get("name") != operation["resource"] or not isinstance(capture.get("updateTime"), str) or not capture["updateTime"]:
+                if (
+                    capture.get("status") != 200
+                    or capture.get("name") != operation["resource"]
+                    or not isinstance(capture.get("fieldsDigest"), str)
+                    or re.fullmatch(r"[a-f0-9]{64}", capture["fieldsDigest"]) is None
+                    or not isinstance(capture.get("updateTime"), str)
+                    or not capture["updateTime"]
+                ):
                     raise ValueError("recovery inspection capture differs")
+                if "responseDigest" in capture:
+                    if re.fullmatch(r"[a-f0-9]{64}", capture["responseDigest"]) is None or event.get("responseDigest") != capture["responseDigest"]:
+                        raise ValueError("recovery inspection response binding differs")
             else:
                 raise ValueError("recovery inspection status differs")
         elif operation["kind"] == "recovery-conditional-delete":
@@ -1259,6 +1279,28 @@ class Ledger:
         if creating_index is None:
             raise ValueError("selected parent create operation missing")
         expected_operation = selected_job["observation"][creating_index]
+        if expected_operation.get("bodyRef") is not None:
+            materialized = next(
+                (
+                    operation
+                    for operation in actual_parent_plan.get("observation", [])
+                    if operation.get("kind") == expected_operation.get("kind")
+                    and operation.get("probe") == expected_operation.get("probe")
+                    and operation.get("resource") == expected_operation.get("resource")
+                ),
+                None,
+            )
+            if not isinstance(materialized, dict) or not isinstance(materialized.get("body"), dict):
+                raise ValueError("authoritative parent operation body missing")
+            body = canonical_body_bytes(materialized["body"])
+            reference = expected_operation["bodyRef"]
+            if (
+                len(body) != reference.get("bytes")
+                or hashlib.sha256(body).hexdigest() != reference.get("sha256")
+            ):
+                raise ValueError("authoritative parent operation body reference differs")
+            expected_operation = copy.deepcopy(materialized)
+            expected_operation.pop("bodyRef", None)
         expected_event = next(
             (event for event in parent_gate.get("events", [])
              if event.get("phase") == "observation"

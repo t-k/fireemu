@@ -110,9 +110,18 @@ def _recovery_fixture(tmp_path):
         (index, operation) for index, operation in enumerate(job["observation"])
         if operation.get("kind") == "conditional-create-commit"
     )
+    event_operation = json.loads(json.dumps(create_operation))
+    if event_operation.get("bodyRef") is not None:
+        event_operation["body"] = next(
+            operation["body"]
+            for operation in parent_plan["observation"]
+            if operation.get("kind") == event_operation["kind"]
+            and operation.get("probe") == event_operation.get("probe")
+        )
+        event_operation.pop("bodyRef", None)
     gate_state["events"] = [{"job": job_name, "phase": "observation", "index": create_index,
                               "started": time.monotonic(), "ended": time.monotonic(),
-                              "requestDigest": digest(create_operation),
+                              "requestDigest": digest(event_operation),
                               "service": create_operation["service"], "method": create_operation["method"],
                               "completed": False, "creationOutcome": "unknown"}]
     gate_state["stopped"] = True

@@ -205,6 +205,48 @@ def typed_absence(status, body):
     return _typed_firestore_error(status, body, 404, "NOT_FOUND")
 
 
+_AUTH_ACCOUNT_IDENTIFIER = re.compile(r"[A-Za-z0-9_.@+-]{1,128}")
+
+
+def _auth_account_form(resource, project=None):
+    if not isinstance(resource, str):
+        return False
+    parts = resource.split("/")
+    return (
+        len(parts) == 5
+        and parts[0] == "projects"
+        and bool(parts[1])
+        and (project is None or parts[1] == project)
+        and parts[2] == "auth"
+        and parts[3] == "accounts"
+        and _AUTH_ACCOUNT_IDENTIFIER.fullmatch(parts[4]) is not None
+        and parts[4] not in {".", ".."}
+    )
+
+
+def _auth_operation(operation):
+    return isinstance(operation, dict) and operation.get("service") == "auth"
+
+
+def _operation_resource(operation):
+    if _auth_operation(operation):
+        resource = operation.get("resource")
+        return resource if isinstance(resource, str) else ""
+    return operation["path"].split("?", 1)[0].removeprefix("/v1/")
+
+
+def auth_typed_absence(status, body):
+    if type(status) is not int or status != 200 or not isinstance(body, dict) or not body:
+        return False
+    if set(body) - {"kind", "users"}:
+        return False
+    if "kind" in body and body["kind"] != "identitytoolkit#GetAccountInfoResponse":
+        return False
+    if "users" in body:
+        return isinstance(body["users"], list) and body["users"] == []
+    return body == {"kind": "identitytoolkit#GetAccountInfoResponse"}
+
+
 def validate_absence_proofs(state, job_name):
     """Validate final typed readback against the registered recovery plan and journal."""
     policy = _stream_policy(state["plan"])
@@ -216,13 +258,27 @@ def validate_absence_proofs(state, job_name):
         raise ValueError("typed cleanup absence evidence incomplete")
     operations = state["plan"]["jobs"][job_name]["recovery"]
     for resource, proof in proofs.items():
-        candidates = [
-            index
-            for index, operation in enumerate(operations)
-            if operation["method"] == "GET"
-            and operation["service"] == "firestore"
-            and operation["path"] == "/v1/" + resource
-        ]
+        if _auth_account_form(resource):
+            candidates = [
+                index
+                for index, operation in enumerate(operations)
+                if _auth_operation(operation)
+                and operation.get("resource") == resource
+                and operation["method"] == "POST"
+                and operation["path"].endswith("/accounts:lookup")
+                and isinstance(operation.get("body"), dict)
+                and "localId" in operation["body"]
+            ]
+            absent = auth_typed_absence
+        else:
+            candidates = [
+                index
+                for index, operation in enumerate(operations)
+                if operation["method"] == "GET"
+                and operation["service"] == "firestore"
+                and operation["path"] == "/v1/" + resource
+            ]
+            absent = typed_absence
         index = proof.get("eventIndex")
         if (
             not candidates
@@ -244,7 +300,7 @@ def validate_absence_proofs(state, job_name):
             or event.get("requestDigest") != digest(expected)
             or event.get("completed") is not True
             or event.get("failure") is not None
-            or not typed_absence(event.get("status"), proof.get("body"))
+            or not absent(event.get("status"), proof.get("body"))
             or event.get("responseDigest") != digest(proof["body"])
         ):
             raise ValueError("typed cleanup absence evidence differs")
@@ -512,6 +568,17 @@ def create(path, plan):
     policy = _stream_policy(plan)
     if policy:
         policy.validate_plan(plan)
+    project = plan.get("project")
+    for job in plan.get("jobs", {}).values():
+        resources = set(job.get("resources", []))
+        for operation in job.get("observation", []) + job.get("recovery", []):
+            if not _auth_operation(operation):
+                continue
+            resource = operation.get("resource")
+            if resource is not None and not _auth_account_form(resource, project):
+                raise ValueError("canonical Auth account resource required")
+            if operation in job.get("recovery", []) and resource not in resources:
+                raise ValueError("cleanup target outside assigned resources")
     if (
         not _valid_request_seconds(plan, policy)
         or not _valid_ceiling(plan)
@@ -1518,7 +1585,7 @@ class Gate:
             expected.pop("versionFrom", None)
             if digest(operation) != digest(expected):
                 raise ValueError("request outside closed scenario")
-            resource = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+            resource = _operation_resource(operation)
             if resource in job.get("creationProofs", {}):
                 raise ValueError("a created resource must be cleaned, not skipped")
             job["scheduleDone"] += 1
@@ -1721,7 +1788,7 @@ class Gate:
                         )
                 if digest(operation) != digest(expected):
                     raise ValueError("request outside closed scenario")
-                resource = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+                resource = _operation_resource(operation)
                 if recovery and resource not in job["resources"]:
                     raise ValueError("cleanup target outside assigned resources")
                 if operation["method"] == "DELETE" and (
@@ -1899,6 +1966,22 @@ class Gate:
                     ):
                         job["stopped"] = True
                         raise ValueError("readback identity/body mismatch")
+                if (
+                    recovery
+                    and _auth_operation(operation)
+                    and resource in job["resources"]
+                    and operation["path"].endswith("/accounts:lookup")
+                ):
+                    if auth_typed_absence(status, body):
+                        if resource not in job["absent"]:
+                            job["absent"].append(resource)
+                        job.setdefault("absenceProofs", {})[resource] = {
+                            "eventIndex": len(state["events"]) - 1,
+                            "body": body,
+                        }
+                    elif status == 200:
+                        job["stopped"] = True
+                        raise ValueError("typed Auth absence required")
                 self._record_response(state, operation, recovery, event, status, body)
                 if recovery:
                     job["captures"][str(index)] = self._recovery_capture(

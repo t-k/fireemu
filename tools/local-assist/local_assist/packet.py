@@ -6,6 +6,7 @@ validated at this boundary; the rest of the tool trusts the resulting values.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
@@ -170,7 +171,8 @@ def parse_packet(raw: object) -> Packet:
     deadline = raw.get("deadlineSeconds", DEFAULT_DEADLINE_SECONDS)
     if isinstance(deadline, bool) or not isinstance(deadline, (int, float)):
         raise PacketError("deadlineSeconds must be a number")
-    if deadline <= 0 or deadline > MAX_DEADLINE_SECONDS:
+    # NaN compares false against every bound, so it must be refused explicitly.
+    if not math.isfinite(deadline) or deadline <= 0 or deadline > MAX_DEADLINE_SECONDS:
         raise PacketError(
             f"deadlineSeconds must be within (0, {MAX_DEADLINE_SECONDS:g}]"
         )

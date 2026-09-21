@@ -16,17 +16,25 @@ from __future__ import annotations
 
 import http.client
 import io
+import ipaddress
 import json
+import math
+import re
 import socket
 import time
 from collections.abc import Callable
 from urllib.parse import urlsplit
 
-from local_assist.packet import validate_loopback_url
+from local_assist.packet import MAX_DEADLINE_SECONDS, validate_loopback_url
 
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 READ_CHUNK_BYTES = 64 * 1024
 USER_AGENT = "fireemu-local-assist/1"
+MAX_API_KEY_BYTES = 512
+_METHOD = re.compile(r"^[A-Z]{3,10}$")
+# A bearer credential is a single line of printable ASCII: anything else could
+# split the request head or is not a token the server hands out.
+_API_KEY = re.compile(r"^[\x21-\x7e]+$")
 
 # A transport takes (method, url, body-or-None, timeout) and returns the decoded
 # JSON object. Tests can substitute an in-memory function.
@@ -82,6 +90,93 @@ class _DeadlineReader(io.RawIOBase):
         return io.BufferedReader(self, READ_CHUNK_BYTES)
 
 
+class _StrictResponse(http.client.HTTPResponse):
+    """HTTPResponse that treats EOF inside the chunked trailer as truncation.
+
+    The standard parser tolerates a server that closes right after the `0`
+    size line without the final CRLF; for this transport a chunked reply is
+    complete only when its terminator was received in full.
+    """
+
+    def _read_and_discard_trailer(self) -> None:  # standard-library hook
+        while True:
+            line = self.fp.readline(http.client._MAXLINE + 1)
+            if len(line) > http.client._MAXLINE:
+                raise http.client.LineTooLong("trailer line")
+            if not line:
+                raise http.client.IncompleteRead(b"")
+            if line in (b"\r\n", b"\n"):
+                break
+
+
+def _check_framing(response: http.client.HTTPResponse) -> None:
+    """Refuse replies whose body length is declared ambiguously.
+
+    Exactly one framing is accepted: one Content-Length, or a single
+    `Transfer-Encoding: chunked`, or neither (delimited by close).
+    """
+    lengths = response.headers.get_all("Content-Length") or []
+    encodings = response.headers.get_all("Transfer-Encoding") or []
+    if len(lengths) > 1:
+        raise TransportError("server-error", "duplicate Content-Length")
+    if len(encodings) > 1:
+        raise TransportError("server-error", "duplicate Transfer-Encoding")
+    if encodings and encodings[0].strip().lower() != "chunked":
+        raise TransportError("server-error", "unsupported transfer encoding")
+    if encodings and lengths:
+        raise TransportError("server-error", "conflicting body framing")
+    if lengths and not re.fullmatch(r"\d{1,12}", lengths[0].strip()):
+        raise TransportError("server-error", "invalid Content-Length")
+
+
+def _connect(host: str, port: int, timeout: float) -> socket.socket:
+    """Open the loopback connection without a resolver.
+
+    `localhost` is bound to 127.0.0.1 explicitly and IPv6 loopback is given
+    as `[::1]`; either way the address is a literal, so no DNS lookup, proxy
+    variable or ambient credential can take part.
+    """
+    literal = "127.0.0.1" if host == "localhost" else host
+    address = ipaddress.ip_address(literal)
+    family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(timeout)
+        sock.connect((literal, port))
+    except BaseException:
+        sock.close()
+        raise
+    return sock
+
+
+def _validate_call(method: str, url: str, timeout: object, api_key: str | None) -> int:
+    """Check the arguments that must never reach a socket when wrong."""
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        raise TransportError("server-error", "timeout must be a number")
+    try:
+        seconds = float(timeout)
+    except OverflowError:
+        raise TransportError("server-error", "timeout out of range") from None
+    if not math.isfinite(seconds) or seconds <= 0 or seconds > MAX_DEADLINE_SECONDS:
+        raise TransportError("server-error", "timeout out of range")
+    if not isinstance(method, str) or not _METHOD.fullmatch(method):
+        raise TransportError("server-error", "invalid HTTP method")
+    if api_key is not None and (
+        not isinstance(api_key, str)
+        or not _API_KEY.fullmatch(api_key)
+        or len(api_key) > MAX_API_KEY_BYTES
+    ):
+        raise TransportError("server-error", "invalid api key")
+    validate_loopback_url(url)
+    try:
+        port = urlsplit(url).port
+    except ValueError:
+        raise TransportError("server-error", "invalid port") from None
+    if port is None or not 1 <= port <= 65535:
+        raise TransportError("server-error", "invalid port")
+    return port
+
+
 def _read_body(response: http.client.HTTPResponse) -> bytes:
     """Read the whole body; refuse it unless the response was received in full.
 
@@ -125,9 +220,9 @@ def http_json(
 
     `api_key`, when given, is sent as a bearer token; it is never logged.
     """
-    validate_loopback_url(url)
+    port = _validate_call(method, url, timeout, api_key)
     parts = urlsplit(url)
-    host, port = parts.hostname, parts.port or 80
+    host = parts.hostname or ""
     path = parts.path or "/"
     data = b""
     headers = [
@@ -153,14 +248,13 @@ def http_json(
         # below gets exactly the time that remains and close() abandons the
         # request whatever the server is still doing. sendall is bounded as a
         # whole by the timeout it is given.
-        sock = socket.create_connection((host, port), timeout=_remaining(deadline))
+        sock = _connect(host, port, _remaining(deadline))
         sock.settimeout(_remaining(deadline))
         sock.sendall(head.encode("ascii") + b"\r\n" + data)
         sent = True
-        response = http.client.HTTPResponse(
-            _DeadlineReader(sock, deadline), method=method
-        )
+        response = _StrictResponse(_DeadlineReader(sock, deadline), method=method)
         response.begin()
+        _check_framing(response)
         if 300 <= response.status < 400:
             raise TransportError(
                 "server-error", f"redirect refused (HTTP {response.status})"

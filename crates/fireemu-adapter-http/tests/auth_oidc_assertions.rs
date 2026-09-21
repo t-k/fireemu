@@ -773,13 +773,37 @@ fn signed_continuation_checks_current_provider_configuration_not_cached_acceptan
     let mut changed = original.clone();
     changed.issuer = "https://changed.invalid".into();
     s.store.lock().unwrap().replace_oidc_config(changed);
-    assert_eq!(signed_post(&s, &trust(), &body).status, 400);
+    let issuer_changed = signed_post(&s, &trust(), &body);
+    assert_eq!(issuer_changed.status, 400);
+    assert_eq!(
+        issuer_changed.body["error"]["message"],
+        "INVALID_IDP_RESPONSE"
+    );
+    assert!(issuer_changed.body.get("idToken").is_none());
     assert_eq!(
         before,
         format!("{:?}", s.store.lock().unwrap().users_by_creation())
     );
+
+    let mut client_changed = original.clone();
+    client_changed.client_id = "changed-client".into();
+    s.store.lock().unwrap().replace_oidc_config(client_changed);
+    let client_changed = signed_post(&s, &trust(), &body);
+    assert_eq!(client_changed.status, 400);
+    assert_eq!(
+        client_changed.body["error"]["message"],
+        "INVALID_IDP_RESPONSE"
+    );
+    assert!(client_changed.body.get("idToken").is_none());
+    assert_eq!(
+        before,
+        format!("{:?}", s.store.lock().unwrap().users_by_creation())
+    );
+
     s.store.lock().unwrap().replace_oidc_config(original);
-    assert_eq!(signed_post(&s, &trust(), &body).status, 200);
+    let restored = signed_post(&s, &trust(), &body);
+    assert_eq!(restored.status, 200, "{}", restored.body);
+    assert_eq!(restored.body["pendingToken"], first.body["pendingToken"]);
 }
 
 #[test]

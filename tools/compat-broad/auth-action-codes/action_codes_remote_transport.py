@@ -87,6 +87,12 @@ def _canonical_plan(project: str, nonce: str) -> dict[str, Any]:
     return campaign_manifest(nonce, project=project)
 
 
+def _legacy_canonical_plan(project: str, nonce: str) -> dict[str, Any]:
+    plan = campaign_manifest(nonce)
+    plan["ownerInputs"]["projectId"] = project
+    return plan
+
+
 def _resource_map(project: str, nonce: str) -> dict[str, dict[str, str]]:
     return {
         name: {"resource": f"projects/{project}/auth/accounts/o1-oob-{nonce}-{suffix}"}
@@ -204,7 +210,7 @@ def _validate_inputs(value: dict):
         raise ValueError("noncanonical Action project refused")
     if raw.get("permissionDigest") != digest(permission):
         raise ValueError("frozen Action permission digest differs")
-    if plan != _canonical_plan(project, nonce):
+    if plan not in (_canonical_plan(project, nonce), _legacy_canonical_plan(project, nonce)):
         raise ValueError("frozen Action plan is not the canonical compiler output")
     if permission.get("logicalAccounts") != _resource_map(project, nonce):
         raise ValueError("frozen Action logical account resources differ")

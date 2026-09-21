@@ -58,10 +58,13 @@ class IdentityProof:
     def __init__(self, *_args: Any, **_kwargs: Any):
         raise TypeError("identity proofs are issued only by the Auth exchange")
 
-    def trusted(self) -> bool:
+    def trusted(self, now: float | None = None) -> bool:
+        capture = time.time() if now is None else now
         return (
             self._seal is _SEAL
             and hashlib.sha256(self.token.encode()).hexdigest() == self.token_hash
+            and type(capture) in (int, float)
+            and self.issued_at <= capture < self.expires_at
         )
 
 

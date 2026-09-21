@@ -109,7 +109,11 @@ def _credential(
         raise ValueError("bounded credential required")
     if credential_class != "empty" and not value:
         raise ValueError("bounded credential required")
-    if credential_class == "user-id-token" and identity_proofs is not None:
+    if (
+        credential_class == "user-id-token"
+        and identity_proofs is not None
+        and "expired" not in reference
+    ):
         proof = identity_proofs.get(reference)
         if (
             not isinstance(proof, IdentityProof)
@@ -310,7 +314,11 @@ def _observation(
             None,
         )
         bound = account_bindings.get(principal) if isinstance(principal, str) else None
-        if identity_proofs is not None and credential_class == "user-id-token":
+        if (
+            identity_proofs is not None
+            and credential_class == "user-id-token"
+            and "expired" not in reference
+        ):
             proof = identity_proofs.get(reference)
             if (
                 not isinstance(proof, IdentityProof)
@@ -683,6 +691,9 @@ def make_transport(
     frozen = copy.deepcopy(frozen_inputs)
     trusted_bindings = copy.deepcopy(account_bindings or {})
     if identity_proofs is not None:
+        required_refs = {entry["ref"] for entry in plan["ownedAccounts"]}
+        if set(identity_proofs) != required_refs:
+            raise ValueError("complete identity proof map required")
         for ref, proof in identity_proofs.items():
             if (
                 not isinstance(proof, IdentityProof)
@@ -690,13 +701,21 @@ def make_transport(
                 or proof.principal_ref != ref
             ):
                 raise ValueError("trusted identity proof map required")
-            trusted_bindings[ref] = {
-                **trusted_bindings.get(ref, {}),
+            current = trusted_bindings.get(ref, {})
+            if not isinstance(current, dict):
+                raise ValueError("account binding shape required")  # noqa: TRY004
+            supplied = {
                 "uid": proof.uid,
                 "provider": proof.provider,
                 "tenant": proof.tenant,
                 "claimsDigest": proof.claims_digest,
             }
+            if any(
+                key in current and current[key] != value
+                for key, value in supplied.items()
+            ):
+                raise ValueError("identity proof conflicts with account binding")
+            trusted_bindings[ref] = {**current, **supplied}
     sequence = 0
 
     def transmit(
@@ -709,6 +728,8 @@ def make_transport(
         nonlocal sequence
         if capability is None:
             raise ValueError("active O8 production capability required")
+        if identity_proofs is None:
+            raise ValueError("complete identity proof map required")
         snapshot = _frozen_inputs(plan, frozen)
         if getattr(capability, "inputs_digest", None) != snapshot["inputsDigest"]:
             raise ValueError("capability inputs digest differs")

@@ -7,6 +7,7 @@ import socketserver
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import ClassVar
 
@@ -31,7 +32,7 @@ def _segment(value):
 
 
 def _token(uid="uid-a", provider="password", tenant=None, custom=None):
-    now = 1_700_000_000
+    now = int(time.time())
     firebase = {"sign_in_provider": provider}
     if tenant is not None:
         firebase["tenant"] = tenant
@@ -131,7 +132,7 @@ def test_closed_issuance_binds_response_and_exact_request(fixture_origin):
         expected_tenant=None,
         expected_claims={},
         fixture_origin=fixture_origin,
-        now=1_700_000_000,
+        now=int(time.time()),
     )
     assert result.trusted() and result.uid == "uid-a"
     assert result.token_hash == __import__("hashlib").sha256(token.encode()).hexdigest()
@@ -155,7 +156,7 @@ def test_proof_rejects_wrong_identity_and_claims(fixture_origin):
             expected_tenant=None,
             expected_claims={},
             fixture_origin=fixture_origin,
-            now=1_700_000_000,
+            now=int(time.time()),
         )
     _Handler.body = {"localId": "uid-a", "idToken": _token(custom={"o5role": "viewer"})}
     with pytest.raises(ValueError, match="claims"):
@@ -166,7 +167,7 @@ def test_proof_rejects_wrong_identity_and_claims(fixture_origin):
             expected_tenant=None,
             expected_claims={"o5role": "editor"},
             fixture_origin=fixture_origin,
-            now=1_700_000_000,
+            now=int(time.time()),
         )
 
 
@@ -207,7 +208,7 @@ def test_issuance_proof_binds_the_same_token_before_firestore(fixture_origin):
         expected_tenant=None,
         expected_claims={"o5role": "editor"},
         fixture_origin=fixture_origin,
-        now=1_700_000_000,
+        now=int(time.time()),
     )
     plan = compile_case("fireemu-35fe6", "(default)", "a" * 32, "tenant1234")
     operation = _request(plan["observation"][0], plan["nonce"])

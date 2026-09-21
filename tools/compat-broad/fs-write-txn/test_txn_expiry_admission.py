@@ -380,8 +380,8 @@ def test_another_campaigns_approval_is_refused(tmp_path):
         {"artifactProfile": "request-bytes-000000000"},
         {"ledgerRoot": "/nonexistent/ledger"},
         {"launcherSha256": "0" * 64},
-        {"windowExpiresAt": time.time() + 60},
-        {"executionHost": {"platform": "linux", "machine": "x86_64"}},
+        {"windowExpiresAt": lambda now: now + 60},
+        {"executionHost": {"platform": "other", "machine": "other"}},
     ],
     ids=[
         "not-approved",
@@ -394,6 +394,17 @@ def test_another_campaigns_approval_is_refused(tmp_path):
 )
 def test_an_approval_binding_that_differs_is_refused(tmp_path, damage):
     built = Admission(tmp_path)
+    # Window cases are resolved now, not at import: a long suite would
+    # otherwise leave a "future" window already in the past by the time the
+    # case runs, and a literal offset computed at collection time is not
+    # deterministic relative to the test's own clock. The host case uses a
+    # platform/machine pair that cannot equal any real `execution_host()`
+    # value, so it refuses on every runner instead of only ones that are not
+    # linux/x86_64.
+    now = time.time()
+    damage = {
+        key: value(now) if callable(value) else value for key, value in damage.items()
+    }
     with pytest.raises(ValueError):
         admission.validate_o7_admission(
             **built.bindings(approval={**built.approval, **damage})

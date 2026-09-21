@@ -130,7 +130,12 @@ def gate_plan(project: str, nonce: str) -> dict:
         for account in ("accountA", "accountB")
     }
     schedule = [
-        {"phase": "observation", "index": index, "seconds": 1}
+        {
+            "phase": "observation",
+            "index": index,
+            "seconds": 1,
+            "creates": index in (0, 1),
+        }
         for index in range(len(observation))
     ] + [
         {"phase": "recovery", "index": index, "seconds": 1}

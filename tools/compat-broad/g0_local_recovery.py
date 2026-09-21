@@ -8,9 +8,11 @@ nonce-derived G0 resources; no generic Gate authority is widened.
 from __future__ import annotations
 
 import itertools
+import hashlib
 import json
 import multiprocessing as mp
 import os
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -52,6 +54,101 @@ def _resources(plan: dict) -> set[str]:
     if any(nonce not in resource for resource in resources):
         raise ValueError("g0-resource-nonce-mismatch")
     return set(resources)
+
+
+def _bounded_regular_bytes(path: Path, limit: int) -> tuple[bytes, os.stat_result]:
+    """Read one immutable regular file without following a substitution symlink."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as error:
+        raise ValueError("g0-launch-file-invalid") from error
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            raise ValueError("g0-launch-file-invalid")
+        chunks = []
+        remaining = limit + 1
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        if len(data) > limit:
+            raise ValueError("g0-launch-file-too-large")
+        return data, info
+    finally:
+        os.close(descriptor)
+
+
+def _pid_parent(pid: int) -> int:
+    try:
+        value = subprocess.check_output(
+            ["ps", "-ww", "-p", str(pid), "-o", "ppid="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        ).strip()
+        return int(value)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError("g0-launch-chain-unavailable") from error
+
+
+def _validate_launch_receipt(output: Path, handshake: dict) -> None:
+    receipt_bytes, receipt_info = _bounded_regular_bytes(output / "launch-receipt.json", 128 * 1024)
+    if receipt_info.st_mode & 0o077 != 0:
+        raise ValueError("g0-launch-receipt-permissions")
+    try:
+        receipt = json.loads(receipt_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("g0-launch-receipt-invalid") from error
+    run_info = os.stat(output, follow_symlinks=False)
+    if not stat.S_ISDIR(run_info.st_mode) or run_info.st_mode & 0o777 != 0o700:
+        raise ValueError("g0-run-directory-invalid")
+    binary_bytes, _ = _bounded_regular_bytes(output / "fireemu", 256 * 1024 * 1024)
+    config_bytes, _ = _bounded_regular_bytes(output / "fireemu.json", 128 * 1024)
+    rules_bytes, _ = _bounded_regular_bytes(output / "firestore.rules", 128 * 1024)
+    binary_sha = hashlib.sha256(binary_bytes).hexdigest()
+    config_sha = hashlib.sha256(config_bytes).hexdigest()
+    rules_sha = hashlib.sha256(rules_bytes).hexdigest()
+    parent_pid = receipt.get("pid")
+    command = str(output / "fireemu")
+    if (
+        receipt.get("schema") != "fireemu-g0-launch-v1"
+        or type(parent_pid) is not int
+        or parent_pid <= 0
+        or receipt.get("command") != command
+        or not isinstance(receipt.get("args"), list)
+        or any(not isinstance(item, str) for item in receipt["args"])
+        or "--import" in receipt["args"]
+        or "--export-on-exit" in receipt["args"]
+        or receipt.get("binarySha256") != binary_sha
+        or receipt.get("configSha256") != config_sha
+        or receipt.get("rulesSha256") != rules_sha
+        or receipt.get("environmentSha256") != handshake.get("environmentSha256")
+        or receipt.get("sourceCommit") != handshake.get("sourceCommit")
+        or receipt.get("runDirectory")
+        != {
+            "path": str(output),
+            "dev": run_info.st_dev,
+            "ino": run_info.st_ino,
+            "mode": run_info.st_mode & 0o777,
+        }
+        or receipt.get("import") is not None
+        or receipt.get("exportOnExit") is not None
+        or hashlib.sha256(receipt_bytes).hexdigest() != handshake.get("receiptSha256")
+        or handshake.get("parentPid") != parent_pid
+        or handshake.get("binarySha256") != binary_sha
+        or handshake.get("configSha256") != config_sha
+        or handshake.get("rulesSha256") != rules_sha
+        or handshake.get("runDirectory") != receipt.get("runDirectory")
+        or handshake.get("argv") != [receipt.get("command"), *receipt.get("args", [])]
+    ):
+        raise ValueError("g0-launch-receipt-invalid")
+    child_pid = handshake.get("childPid")
+    if child_pid != os.getppid() or _pid_parent(child_pid) != parent_pid:
+        raise ValueError("g0-launch-chain-invalid")
 
 
 class G0RecoveryGate(Gate):
@@ -148,6 +245,7 @@ def _freshness_handshake(output: Path, origins: dict[str, str]) -> None:
         or handshake.get("exportOnExit") is not None
     ):
         raise ValueError("g0-freshness-handshake-invalid")
+    _validate_launch_receipt(output, handshake)
 
 
 def _worker(output: Path, key: str, origins: dict[str, str]) -> None:

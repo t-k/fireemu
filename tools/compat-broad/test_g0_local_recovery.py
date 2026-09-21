@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -26,6 +28,60 @@ def plan():
     value["observerSha256"] = observer_digest()
     value["localOrigins"] = ORIGINS
     return value
+
+
+def _write_valid_launch_artifacts(output: Path, value: dict) -> None:
+    output.chmod(0o700)
+    binary = b"owned-fireemu-artifact"
+    config = b'{"profile":"strict"}\n'
+    rules = b"rules_version = '2';\n"
+    (output / "fireemu").write_bytes(binary)
+    (output / "fireemu.json").write_bytes(config)
+    (output / "firestore.rules").write_bytes(rules)
+    child_pid = os.getppid()
+    parent_pid = int(
+        subprocess.check_output(["ps", "-ww", "-p", str(child_pid), "-o", "ppid="], text=True).strip()
+    )
+    run_info = output.stat()
+    receipt = {
+        "schema": "fireemu-g0-launch-v1",
+        "pid": parent_pid,
+        "command": str(output / "fireemu"),
+        "args": ["exec"],
+        "binarySha256": hashlib.sha256(binary).hexdigest(),
+        "sourceCommit": "source-bound",
+        "configSha256": hashlib.sha256(config).hexdigest(),
+        "rulesSha256": hashlib.sha256(rules).hexdigest(),
+        "environmentSha256": "e" * 64,
+        "runDirectory": {"path": str(output), "dev": run_info.st_dev, "ino": run_info.st_ino, "mode": run_info.st_mode & 0o777},
+        "import": None,
+        "exportOnExit": None,
+    }
+    receipt_bytes = json.dumps(receipt, separators=(",", ":")).encode() + b"\n"
+    receipt_path = output / "launch-receipt.json"
+    receipt_path.write_bytes(receipt_bytes)
+    receipt_path.chmod(0o600)
+    (output / "freshness-handshake.json").write_text(
+        json.dumps(
+            {
+                "schema": "fireemu-g0-freshness-v1",
+                "parentPid": parent_pid,
+                "childPid": child_pid,
+                "receiptSha256": hashlib.sha256(receipt_bytes).hexdigest(),
+                "programDigest": digest(value),
+                "argv": [receipt["command"], *receipt["args"]],
+                "binarySha256": receipt["binarySha256"],
+                "sourceCommit": receipt["sourceCommit"],
+                "configSha256": receipt["configSha256"],
+                "rulesSha256": receipt["rulesSha256"],
+                "environmentSha256": receipt["environmentSha256"],
+                "runDirectory": receipt["runDirectory"],
+                "import": None,
+                "exportOnExit": None,
+                "origins": ORIGINS,
+            }
+        )
+    )
 
 
 def test_frozen_projection_derives_exact_four_resources_without_owner_marker():
@@ -117,26 +173,55 @@ def test_freshness_handshake_rejects_missing_or_imported_receipt(tmp_path: Path)
 def test_freshness_handshake_rejects_mutated_program_and_child_identity(tmp_path: Path):
     value = plan()
     (tmp_path / "program.json").write_text(json.dumps(value))
-    (tmp_path / "freshness-handshake.json").write_text(
-        json.dumps(
-            {
-                "schema": "fireemu-g0-freshness-v1",
-                "parentPid": os.getpid(),
-                "childPid": os.getppid(),
-                "receiptSha256": "a" * 64,
-                "programDigest": digest(value),
-                "argv": ["/tmp/fireemu", "exec"],
-                "binarySha256": "b" * 64,
-                "import": None,
-                "exportOnExit": None,
-                "origins": ORIGINS,
-            }
-        )
-    )
+    _write_valid_launch_artifacts(tmp_path, value)
     _freshness_handshake(tmp_path, ORIGINS)
     changed = {**value, "nonce": "0" * 32}
     (tmp_path / "program.json").write_text(json.dumps(changed))
     with pytest.raises(ValueError, match="g0-freshness-handshake-invalid"):
+        _freshness_handshake(tmp_path, ORIGINS)
+
+
+@pytest.mark.parametrize("mutation", ["path", "inode", "mode", "import", "argv", "pid", "source", "hash"])
+def test_freshness_handshake_rejects_tampered_owned_receipt_fields(tmp_path: Path, mutation: str):
+    value = plan()
+    (tmp_path / "program.json").write_text(json.dumps(value))
+    _write_valid_launch_artifacts(tmp_path, value)
+    receipt_path = tmp_path / "launch-receipt.json"
+    receipt = json.loads(receipt_path.read_text())
+    if mutation == "path":
+        receipt["runDirectory"]["path"] = str(tmp_path / "elsewhere")
+    elif mutation == "inode":
+        receipt["runDirectory"]["ino"] += 1
+    elif mutation == "mode":
+        receipt_path.chmod(0o644)
+    elif mutation == "import":
+        receipt["import"] = "substituted"
+    elif mutation == "argv":
+        receipt["args"] = ["exec", "--import"]
+    elif mutation == "pid":
+        receipt["pid"] += 1
+    elif mutation == "source":
+        receipt["sourceCommit"] = "other-source"
+    else:
+        receipt["binarySha256"] = "0" * 64
+    if mutation != "mode":
+        receipt_path.write_text(json.dumps(receipt) + "\n")
+    elif receipt_path.is_symlink():
+        raise AssertionError("test setup unexpectedly created a symlink")
+    with pytest.raises(ValueError):
+        _freshness_handshake(tmp_path, ORIGINS)
+
+
+def test_freshness_handshake_rejects_receipt_symlink_before_read(tmp_path: Path):
+    value = plan()
+    (tmp_path / "program.json").write_text(json.dumps(value))
+    _write_valid_launch_artifacts(tmp_path, value)
+    receipt_path = tmp_path / "launch-receipt.json"
+    target = tmp_path / "receipt-copy.json"
+    target.write_bytes(receipt_path.read_bytes())
+    receipt_path.unlink()
+    receipt_path.symlink_to(target)
+    with pytest.raises(ValueError, match="g0-launch-file-invalid"):
         _freshness_handshake(tmp_path, ORIGINS)
     (tmp_path / "program.json").write_text(json.dumps(value))
     handshake = json.loads((tmp_path / "freshness-handshake.json").read_text())

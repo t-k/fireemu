@@ -1,0 +1,58 @@
+........................................................................ [ 94%]
+........................................................................ [ 95%]
+................................................ssssssssss.............. [ 97%]
+........................................................................ [ 98%]
+........................................................................ [ 99%]
+............................                                             [100%]
+=================================== FAILURES ===================================
+_ test_real_cli_with_missing_sdk_fails_after_persisting_launch_without_cloud_access _
+
+tmp_path = PosixPath('/tmp/pytest/test_real_cli_with_missing_sdk0')
+
+    def test_real_cli_with_missing_sdk_fails_after_persisting_launch_without_cloud_access(tmp_path):
+        env = env_for(tmp_path)
+        code = subprocess.run([sys.executable, "-I", "-S", str(m.HERE / "local_supervisor.py"),
+                               "--output", str(tmp_path / "new"), "--timeout-seconds", "5"],
+                              env=env, capture_output=True, timeout=10)
+        assert code.returncode == 2
+        result = json.loads((tmp_path / "new/result.json").read_bytes())
+        assert result["completed"] is False
+        assert result["execution"]["leaderStopped"] is True
+        assert (tmp_path / "new/launch.json").exists()
+>       assert (tmp_path / "new/checkpoints/0-ready.json").exists()
+E       AssertionError: assert False
+E        +  where False = exists()
+E        +    where exists = (PosixPath('/tmp/pytest/test_real_cli_with_missing_sdk0') / 'new/checkpoints/0-ready.json').exists
+
+tools/compat-broad/fs-listen-resume/test_local_supervisor.py:276: AssertionError
+_____ test_actual_node_unresolved_sdk_promise_keeps_durable_account_intent _____
+
+tmp_path = PosixPath('/tmp/pytest/test_actual_node_unresolved_sd0')
+
+    def test_actual_node_unresolved_sdk_promise_keeps_durable_account_intent(tmp_path):
+        """Fixed CLI + real Node + loopback HTTP; SDK methods are test doubles."""
+        import http.server
+        import threading
+        package = tmp_path / "node_modules/firebase"
+        package.mkdir(parents=True)
+        (package / "package.json").write_text(json.dumps({"name": "firebase", "type": "module",
+            "exports": {"./app": "./app.mjs", "./firestore": "./firestore.mjs", "./auth": "./auth.mjs"}}))
+        (package / "app.mjs").write_text("export const initializeApp=()=>({}); export const deleteApp=async()=>{};")
+        (package / "firestore.mjs").write_text("export const getFirestore=()=>({}); export const connectFirestoreEmulator=()=>{}; export const terminate=async()=>{};")
+        (package / "auth.mjs").write_text("""
+    export const getAuth=()=>({}); export const connectAuthEmulator=()=>{};
+    export const createUserWithEmailAndPassword=async()=>{
+      setInterval(()=>{},1000); return new Promise(()=>{});
+    };
+    """)
+        calls = []
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                calls.append(self.path)
+
+tools/compat-broad/fs-listen-resume/test_local_supervisor.py:316: AssertionError
+=============================== warnings summary ===============================
+=========================== short test summary info ============================
+FAILED tools/compat-broad/fs-listen-resume/test_local_supervisor.py::test_real_cli_with_missing_sdk_fails_after_persisting_launch_without_cloud_access
+FAILED tools/compat-broad/fs-listen-resume/test_local_supervisor.py::test_actual_node_unresolved_sdk_promise_keeps_durable_account_intent
+2 failed, 6048 passed, 20 skipped, 4 warnings, 6 subtests passed in 1718.19s (0:28:38)

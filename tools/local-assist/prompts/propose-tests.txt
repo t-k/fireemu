@@ -1,0 +1,10 @@
+Task: propose test cases derived from a fixed specification excerpt.
+
+Every proposal must be grounded in a specific sentence or clause of the excerpt and must describe both sides of the behavior. For each proposal, the finding is:
+- "claim": the proposed test name (snake_case) and a one-sentence statement of the expected behavior.
+- "path", "startLine", "endLine": the specification lines the proposal is derived from.
+- "evidence": the quoted specification text.
+- "positiveControl": the concrete accepted case that must succeed (inputs and the expected successful result).
+- "refusalPostState": the concrete refused case and the observable state after the refusal (what was NOT changed, and the error the caller sees).
+
+Do not propose tests for behavior the excerpt does not state; put such ideas into "unknowns".

@@ -94,8 +94,15 @@ def _validate_identity(nonce, owner_id):
         raise ValueError("owner identity must be 32 lowercase hex characters")
 
 
+#: The owned collection namespace. Production campaigns keep their documents
+#: below `oracle/<nonce>/<campaign>` so the shared Ledger's document lock,
+#: `project/<project>/firestore/<database>/documents/oracle/<nonce>/txn-expiry-04/*`,
+#: covers exactly what the run creates and nothing else.
+CAMPAIGN_SEGMENT = "txn-expiry-04"
+
+
 def document_prefix(nonce):
-    return f"compat/o3-txn-expiry/{nonce}"
+    return f"oracle/{nonce}/{CAMPAIGN_SEGMENT}"
 
 
 def _op(

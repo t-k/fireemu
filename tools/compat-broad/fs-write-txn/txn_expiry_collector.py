@@ -394,6 +394,12 @@ class Collection:
             "maxResponseBytes": plan_module.MAX_RESPONSE_BYTES,
             "maxRequestBytes": plan_module.MAX_REQUEST_BYTES,
             "timeoutSeconds": timeout,
+            # The plan slot this request serves, so a transport that admits
+            # requests through a frozen per-slot schedule can find the slot
+            # without guessing from the request shape. Observation sites are
+            # the plan's own slot names; recovery sites are `release/<tag>`
+            # and the plan's three cleanup slots per document.
+            "site": self.current_site,
         }
         self.request_count += 1
         response = self.transport(request)
@@ -1137,6 +1143,7 @@ class Collection:
         if recovery.expired():
             entry.update(skipped=True, failure="recovery-deadline-reached")
             return entry
+        self.current_site = f"cleanup/owned-read/{role}"
         read = self._get(role)
         entry["ownedRead"] = {
             "code": read.get("code"),
@@ -1147,9 +1154,14 @@ class Collection:
                 # A read can precede the late application of a timed-out create.
                 # Preserve the observed absence, but not a false terminal result.
                 entry.update(skipped=True, absent=True, failure="create-outcome-still-unknown")
-            else:
-                entry.update(skipped=True, complete=True, absent=True)
-            return entry
+                return entry
+            # The document this run created is already gone. The recovery
+            # contract proves absence with the final read of each document,
+            # so that read is still taken: a reader of the receipt, and a
+            # schedule that admits requests slot by slot, both find the proof
+            # where the plan says it is, not folded into the ownership read.
+            entry["skipped"] = True
+            return self._prove_absence(role, entry)
         if read.get("code") in AUTHORITY_REFUSALS:
             entry.update(skipped=True, failure="owned-read-refused-authority")
             return entry
@@ -1186,6 +1198,7 @@ class Collection:
             entry["resourceState"] = CREATION_CONFIRMED
             entry["createdByThisRun"] = True
             entry["creationEvidence"] = evidence
+        self.current_site = f"cleanup/conditional-delete/{role}"
         delete = self._commit(
             [
                 {
@@ -1201,6 +1214,11 @@ class Collection:
         if not complete_response(delete) or delete.get("code") != OK:
             entry["failure"] = "conditional-delete-refused"
             return entry
+        return self._prove_absence(role, entry)
+
+    def _prove_absence(self, role, entry):
+        """The final read of one document; only a typed NOT_FOUND completes it."""
+        self.current_site = f"cleanup/typed-absence/{role}"
         absence = self._get(role)
         entry["absence"] = {
             "code": absence.get("code"),

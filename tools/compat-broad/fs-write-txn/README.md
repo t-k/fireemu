@@ -114,3 +114,76 @@ The frozen proposal and the recorded rehearsal are
 The reasoning, the budget and the conditions this campaign deliberately does not
 prepare are in
 [`docs/compatibility/fs-transaction-next-campaign-preparation.md`](../../../docs/compatibility/fs-transaction-next-campaign-preparation.md).
+
+## O8 descriptor and launcher for `FS-TRANSACTION-EXPIRY-RETRY-04`
+
+`txn_expiry_descriptor.py` declares the campaign to the shared O8 core
+(`tools/compat-broad/o8-core`): a 1200-second Gate wall plus the plan's
+180-second recovery window (a 1380-second owner window), 95 Ledger request
+slots, five owned documents, a 16,688 micro-USD planning ceiling, one
+`EXCLUSIVE` lock on
+`project/fireemu-35fe6/firestore/(default)/documents/oracle/<nonce>/txn-expiry-04/*`
+and `READ` locks on the indexes, the ruleset, the database configuration, the
+Auth configuration and the API-key binding. The nonce is 32 lowercase hex
+characters and the owner marker identity is derived from it, so a frozen plan
+reference names exactly one compiled plan. Timing is wall-clock only: the
+collector member refuses the rehearsal's clock advance outright, and the one
+documented switch that shortens the real sleeper, `Rehearsal(sleep_scale)` on
+`txn_expiry_production.rehearse`, is refused on the production wire and
+produces a receipt the comparator rejects (`wait-shorter-than-requested`).
+
+The frozen plan is projected onto the shared Gate with `$binding:` placeholders
+where a request carries a transaction token or the update time an ownership read
+observed. `txn_expiry_gate.py` resolves them the way the Auth-list Gate does: a
+value the Gate itself journaled in a response may be installed, and a request is
+normalized to its placeholder only where it carries exactly that value. The
+facade also settles the creation outcome of begins, rollbacks and transactional
+updates against typed answers, and admits the recovery rollbacks and
+delete-carrying Commits the shared recovery phase cannot host, under the same
+rules. Every recovery slot the run has nothing to send for is consumed as a
+journaled zero-wire skip; a skipped absence read leaves its document unproven
+and the run unreleasable.
+
+`txn_expiry_remote_transport.py` and `txn_expiry_https_worker.py` are the fixed
+production wire: one digest-pinned worker process per request, only this
+campaign's routes, a 120-second maximum for the two contended commits and the
+same normalizer the rehearsal transport uses. `txn_expiry_preflight.py` drives
+the request-byte lane's tokeninfo and metadata attestations through this
+campaign's Gate and Ledger. `txn_expiry_admission.py` freezes the inputs, runs
+the shared O7 check set, compiles the Gate plan and the Ledger claim, and
+classifies a stopped run: `abort_no_data` for a stop before any create,
+`close_after_abandon` for a stop that created and then proved every document
+absent again, owner escalation otherwise.
+
+The launcher is `txn_expiry_o8.py`. It reads the bearer token only on a private
+descriptor and only after the Ledger reservation and the Gate claim exist:
+
+```sh
+uv run --python 3.12 python tools/compat-broad/fs-write-txn/txn_expiry_o8.py \
+  --inputs <pkg>/txn-expiry-frozen-inputs-v1.json \
+  --approval <private>/txn-expiry-o8-approval-v1.json \
+  --manifest <pkg>/txn-expiry-o8-manifest-v1.json \
+  --permission <pkg>/txn-expiry-owner-execution-permission-v1.json \
+  --source <frozen clean checkout> --artifact <retained fireemu> \
+  --ledger ~/.local/state/fireemu-broad/production-admission-v1 \
+  --output <fresh directory> --credential-fd 3  3< <private handoff>
+```
+
+Exit 0: complete and released. Exit 1: a reservation is held;
+`<output>/receipt.json` carries `stopPoint` and `retirement.disposition`, one
+of `aborted-no-data` (retire with `txn_expiry_admission.build_abort_record` and
+`Ledger.abort_no_data` once the launcher process is gone), `closed-after-abandon`
+(`build_abandon_record` and `Ledger.close_after_abandon`) or `owner-escalation`
+(the owner removes any residue, collects typed absence for all five documents
+and calls `Ledger.close_after_escalation`); the same classification is
+`txn_expiry_admission.classify_stop(receipt)`. Exit 2: refused before any
+reservation existed. The handoff on the descriptor is
+`{"kind": "txn-expiry-bearer-token-v1", "permissionDigest": ..., "token": ...}`.
+
+The credential-free integration proof (`test_txn_expiry_production.py`) drives
+the real Ledger, Gate and receipt path against an offline backend: all 13 cases
+with the shortened real sleeper, a stop before any create retired through
+`abort_no_data`, and a stop after the first case whose four open transactions
+are rolled back and whose five documents are recovered and closed through
+`close_after_abandon`. No test uses a credential, a network origin, a production
+project or the canonical Ledger.

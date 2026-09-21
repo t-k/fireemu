@@ -23,8 +23,12 @@ ROOT = Path(__file__).resolve().parents[3]
 RUNS = ROOT / "spec/compatibility/broad-runs"
 LEGACY_MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest.json"
 PREVIOUS_MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest-v2.json"
-MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest-v3.json"
-SHADOW = RUNS / "fs-transaction-expiry-retry-04-local-shadow.json"
+PREVIOUS_MANIFEST_V3 = RUNS / "fs-transaction-expiry-retry-04-manifest-v3.json"
+MANIFEST = RUNS / "fs-transaction-expiry-retry-04-manifest-v4.json"
+# The current record. Earlier records stay byte-identical below; each one was
+# produced by the collector of its day against the prefix of its day.
+SHADOW = RUNS / "fs-transaction-expiry-retry-04-local-shadow-v3.json"
+HISTORICAL_SHADOW = RUNS / "fs-transaction-expiry-retry-04-local-shadow.json"
 HISTORICAL_SHADOW_V2 = RUNS / "fs-transaction-expiry-retry-04-local-shadow-v2.json"
 
 REGENERATE = (
@@ -298,13 +302,14 @@ def test_previous_manifest_and_native_receipt_remain_immutable():
 
     assert hashlib.sha256(LEGACY_MANIFEST.read_bytes()).hexdigest() == "e8f80fc0c35c2c64c87cbb6bf4bf5d9bae61f86ba097e89b7e6a8a05e76ef752"
     assert hashlib.sha256(HISTORICAL_SHADOW_V2.read_bytes()).hexdigest() == "e8ac9c831772245e1798bcd5a0295ac3fdcd6c972b9b574a297d339bf5551b71"
+    assert hashlib.sha256(HISTORICAL_SHADOW.read_bytes()).hexdigest() == "1e7007e6b0a0b79f9532bdfcf65edb17e4327bcf57bc2fbdf04c274000a4b105"
 
 
 def test_current_preparation_is_reproducible_but_grants_no_production_permission():
     value = manifest()
     expected = plan.proposal("o3expiry-reference-000000001", "0" * 32)
     expected.update(
-        preparationVersion=3,
+        preparationVersion=4,
         authorizesProduction=False,
         productionExecuted=False,
         requiresFreshPermissionBinding=True,
@@ -315,6 +320,23 @@ def test_current_preparation_is_reproducible_but_grants_no_production_permission
 def test_prior_v2_preparation_stays_immutable():
     import hashlib
     assert hashlib.sha256(PREVIOUS_MANIFEST.read_bytes()).hexdigest() == 'd46ec59979c9e11f6635308329754b01cd67319a1e4ca9231066038bec9703e1'
+
+
+def test_prior_v3_preparation_stays_immutable():
+    import hashlib
+
+    assert (
+        hashlib.sha256(PREVIOUS_MANIFEST_V3.read_bytes()).hexdigest()
+        == "b2ff7225572eca6a536e4ace10cc1304e7a0d801d35faad37bd85a32a3beb61d"
+    )
+
+
+def test_the_current_shadow_owns_documents_below_the_oracle_prefix():
+    """The production lock key covers exactly the collection the run creates in."""
+    value = shadow()
+    prefix = value["receipt"]["documentPrefix"]
+    assert prefix == plan.document_prefix(value["nonce"])
+    assert prefix.startswith("oracle/") and prefix.endswith("/txn-expiry-04")
 
 
 def test_local_worker_and_decoder_belong_to_current_source_closure():

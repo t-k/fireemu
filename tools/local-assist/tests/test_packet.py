@@ -3,7 +3,7 @@
 import copy
 
 import pytest
-from packet import PacketError, parse_packet, validate_loopback_url
+from local_assist.packet import PacketError, parse_packet, validate_loopback_url
 
 VALID = {
     "taskId": "LOCAL-AUTH-TESTMAP-001",

@@ -15,11 +15,11 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from context_builder import ReadInput, estimate_tokens, render_numbered
-from packet import Packet
-from transport import Transport, TransportError
+from local_assist.context_builder import ReadInput, estimate_tokens, render_numbered
+from local_assist.packet import Packet
+from local_assist.transport import Transport, TransportError
 
-PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 PROMPT_FORMAT_VERSION = 1
 # Rough cost of the JSON scaffolding and chat template around the content.
 TEMPLATE_RESERVE_TOKENS = 256

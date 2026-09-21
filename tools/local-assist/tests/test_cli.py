@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 import pytest
-from fake_server import FakeLlamaServer
+from local_assist_fake_server import FakeLlamaServer
 from main import main
 
 BASE = "a" * 40

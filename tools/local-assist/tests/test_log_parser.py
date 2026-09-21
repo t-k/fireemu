@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from log_parser import parse_log, render_excerpt
+from local_assist.log_parser import parse_log, render_excerpt
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

@@ -3,7 +3,7 @@
 import os
 
 import pytest
-from runtime import (
+from local_assist.runtime import (
     InferenceLock,
     OutputError,
     cache_get,

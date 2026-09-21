@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from context_builder import read_inputs
-from inference import (
+from local_assist.context_builder import read_inputs
+from local_assist.inference import (
     RuntimeIdentity,
     accept_findings,
     budget_check,
@@ -18,8 +18,8 @@ from inference import (
     run_inference,
     validate_response,
 )
-from packet import InputSelection, parse_packet
-from transport import TransportError
+from local_assist.packet import InputSelection, parse_packet
+from local_assist.transport import TransportError
 
 GOOD = {
     "claim": "c",
@@ -222,7 +222,7 @@ def test_budget_is_estimated_conservatively_and_reserves_the_output(repo):
 
 
 def test_prompt_version_changes_with_the_prompt_text(monkeypatch, tmp_path):
-    import inference
+    from local_assist import inference
 
     original = load_prompt("classify-log").version
     assert original.startswith("classify-log@1-")

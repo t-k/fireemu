@@ -18,8 +18,8 @@ import sys
 import time
 from pathlib import Path
 
-from context_builder import ContextError, read_inputs
-from inference import (
+from local_assist.context_builder import ContextError, read_inputs
+from local_assist.inference import (
     RuntimeIdentity,
     budget_check,
     build_messages,
@@ -28,9 +28,9 @@ from inference import (
     probe_runtime,
     run_inference,
 )
-from log_parser import parse_log, render_excerpt
-from packet import PacketError, parse_packet, validate_loopback_url
-from runtime import (
+from local_assist.log_parser import parse_log, render_excerpt
+from local_assist.packet import PacketError, parse_packet, validate_loopback_url
+from local_assist.runtime import (
     DEFAULT_STATE_DIR,
     InferenceLock,
     OutputError,
@@ -39,7 +39,7 @@ from runtime import (
     check_new_output_path,
     write_new_file,
 )
-from transport import Transport, TransportError, http_json
+from local_assist.transport import Transport, TransportError, http_json
 
 TOOL_VERSION = "0.1.0"
 DEFAULT_ENDPOINT = "http://127.0.0.1:8011/v1/chat/completions"

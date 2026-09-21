@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 from urllib.parse import urlsplit
 
-from packet import validate_loopback_url
+from local_assist.packet import validate_loopback_url
 
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 READ_CHUNK_BYTES = 64 * 1024

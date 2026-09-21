@@ -14,7 +14,7 @@ import os
 import re
 from dataclasses import dataclass
 
-from packet import InputSelection
+from local_assist.packet import InputSelection
 
 MAX_FILE_BYTES = 4 * 1024 * 1024
 BYTES_PER_TOKEN = (

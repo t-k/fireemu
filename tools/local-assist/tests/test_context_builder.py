@@ -4,7 +4,7 @@ import hashlib
 import os
 
 import pytest
-from context_builder import (
+from local_assist.context_builder import (
     ContextError,
     estimate_tokens,
     read_inputs,
@@ -12,7 +12,7 @@ from context_builder import (
     render_numbered,
     resolve_repo_root,
 )
-from packet import InputSelection
+from local_assist.packet import InputSelection
 
 
 @pytest.fixture
@@ -118,7 +118,7 @@ def test_a_binary_file_with_an_allowed_extension_is_refused(repo):
 
 
 def test_an_oversized_file_is_refused_before_it_is_read(repo, monkeypatch):
-    import context_builder
+    from local_assist import context_builder
 
     monkeypatch.setattr(context_builder, "MAX_FILE_BYTES", 16)
     with pytest.raises(ContextError, match="larger than 16 bytes"):

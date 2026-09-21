@@ -40,6 +40,18 @@ def _row(*fields: Any) -> tuple[Any, ...]:
     return fields
 
 
+TICKET_OPEN = "OPEN"
+TICKET_PARTIAL = "PARTIALLY_FIXED"
+TICKET_FIXED = "FIXED"
+TICKET_STATES = (TICKET_OPEN, TICKET_PARTIAL, TICKET_FIXED)
+
+# Commits that closed or narrowed a ticket. Cited by full hash so the state is
+# checkable with `git show`; the ticket's summary and reproduction stay as the
+# historical statement of the gap.
+COMMIT_REFUSE_UNCREATED_DATABASE = "cb429f2c4d4ad4065c37c68b5e4f4dcb37679ff7"
+COMMIT_PRODUCTION_DATABASE_RESOURCE = "62d8a1d22deedd33b793fa5a160f8bc5fcac4c83"
+
+
 def _ticket(
     ticket_id: str,
     title: str,
@@ -47,8 +59,19 @@ def _ticket(
     reproduction: str,
     citations: tuple[str, ...],
     klass: str,
+    status: str = TICKET_OPEN,
+    fixed_at: str | None = None,
+    resolution: str | None = None,
 ) -> dict[str, Any]:
-    """Collect one open repair ticket; a ticket never records an applied fix."""
+    """Collect one repair ticket.
+
+    A ticket is OPEN until a commit closes it; a FIXED or PARTIALLY_FIXED ticket
+    names that commit and states what it changed, and keeps its original summary
+    and reproduction as the record of the gap. The fix is never applied by the work
+    that renders this matrix.
+    """
+    if status not in TICKET_STATES or (status != TICKET_OPEN) != (fixed_at is not None):
+        raise ValueError("a fixed ticket names its commit; an open ticket names none")
     return {
         "id": ticket_id,
         "title": title,
@@ -56,8 +79,10 @@ def _ticket(
         "reproduction": reproduction,
         "citations": list(citations),
         "class": klass,
-        "status": "OPEN",
-        "fixApplied": False,
+        "status": status,
+        "fixApplied": status == TICKET_FIXED,
+        "fixedAt": fixed_at,
+        "resolution": resolution,
     }
 
 
@@ -71,6 +96,7 @@ _EXPORT_FS = "crates/fireemu-core-export/src/firestore.rs"
 _IDS = "crates/fireemu-core-types/src/ids.rs"
 _FIELDS = "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs"
 _TTL = "crates/fireemu-core-firestore/src/ttl.rs"
+
 
 def _at(path: str, anchor: str) -> str:
     """`file:line` of the one line of `path` containing `anchor`.
@@ -110,7 +136,10 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         _PARTIAL,
         (
             _at(_REST, "fn admin_inventory_route("),
-            _at(_REST, '"Project \'{project}\' or database \'{database}\' does not exist."'),
+            _at(
+                _REST,
+                "\"Project '{project}' or database '{database}' does not exist.\"",
+            ),
             _at(_REST, "fn admin_database_json("),
         ),
     ),
@@ -198,7 +227,11 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "read and write what the official tooling produces, which is already covered by "
         "local format evidence.",
         _EXTENSION,
-        (_at(_IMPORT_EXPORT, "pub fn export("), f"{_EXPORT_FS}:480", f"{_METADATA}:142"),
+        (
+            _at(_IMPORT_EXPORT, "pub fn export("),
+            f"{_EXPORT_FS}:480",
+            f"{_METADATA}:142",
+        ),
     ),
     _row(
         "databases.importDocuments",
@@ -566,7 +599,11 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "The on-disk format must match what official tooling writes, otherwise a real "
         "export cannot be loaded locally.",
         _IMPLEMENTED,
-        (_at(_IMPORT_EXPORT, "pub fn export("), f"{_IMPORT_EXPORT}:353", f"{_METADATA}:142"),
+        (
+            _at(_IMPORT_EXPORT, "pub fn export("),
+            f"{_IMPORT_EXPORT}:353",
+            f"{_METADATA}:142",
+        ),
     ),
     _row(
         "cli.namedDatabaseExportExtension",
@@ -628,9 +665,10 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         DATA_PLANE,
         "Edition decides which methods are served at all; the local inventory route "
         "already refuses non-Standard Native combinations.",
-        "The projection hardcodes STANDARD and does not reflect the configured edition "
-        "enum, so an Enterprise run reports the wrong edition.",
-        _PARTIAL,
+        "The projection reports the configured edition in the API's upper-case "
+        "spelling; only Standard reaches the route because every other edition is "
+        "refused above it (fixed at 62d8a1d22).",
+        _IMPLEMENTED,
         (
             _at(_REST, '"databaseEdition": edition.as_config_str()'),
             _at(_REST, "database inventory is supported only for Standard Native"),
@@ -664,9 +702,10 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         "request is checked against, and it advances continuously.",
         "It is excluded from settings equality by the database projection because it "
         "moves on its own, but the data-plane bound it expresses is still a contract. "
-        "The local projection omits the field entirely.",
-        _NOT_SERVED,
-        (),
+        "The local projection derives it from the retention window floored at the "
+        "database's creation, the bound read_time is checked against (62d8a1d22).",
+        _IMPLEMENTED,
+        (_at(_REST, '"earliestVersionTime": json::timestamp_to_json'),),
         True,
     ),
     _row(
@@ -743,18 +782,20 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         MANAGED,
         "The server-assigned unique id identifies one provisioning instance.",
         "None, but it is an identity field the database projection requires, so a change "
-        "must stop a campaign rather than be normalized away.",
-        _NOT_SERVED,
-        (),
+        "must stop a campaign rather than be normalized away. The local value is "
+        "derived deterministically from the project and database ids (62d8a1d22).",
+        _IMPLEMENTED,
+        (_at(_REST, '"uid": database_uid(project, database)'),),
         True,
     ),
     _row(
         "etag",
         MANAGED,
         "The etag supports optimistic concurrency on managed patch calls.",
-        "None; it is excluded from settings equality by the database projection.",
-        _NOT_SERVED,
-        (),
+        "None; it is excluded from settings equality by the database projection. The "
+        "local value is a digest of the projected resource (62d8a1d22).",
+        _IMPLEMENTED,
+        (_at(_REST, 'resource["etag"] = json!(etag);'),),
         True,
     ),
     _row(
@@ -762,27 +803,30 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         MANAGED,
         "Free tier eligibility is a billing attribute of the managed resource.",
         "None, but it is the precondition that decides whether a second named database "
-        "costs anything, so a campaign must read it before creating one.",
-        _NOT_SERVED,
-        (),
+        "costs anything. The local projection reports true for the default database "
+        "and omits the field for any other, as production does (62d8a1d22).",
+        _IMPLEMENTED,
+        (_at(_REST, 'resource["freeTier"] = json!(true);'),),
         True,
     ),
     _row(
         "createTime",
         MANAGED,
         "Provisioning timestamps describe the managed resource lifecycle.",
-        "None; no data-plane result depends on it.",
-        _NOT_SERVED,
-        (),
+        "None; no data-plane result depends on it. The local value is the database's "
+        "creation instant on the logical clock (62d8a1d22).",
+        _IMPLEMENTED,
+        (_at(_REST, '"createTime": created_json,'),),
         True,
     ),
     _row(
         "updateTime",
         MANAGED,
         "Provisioning timestamps describe the managed resource lifecycle.",
-        "None; no data-plane result depends on it.",
-        _NOT_SERVED,
-        (),
+        "None; no data-plane result depends on it. The local value equals createTime "
+        "because no local call updates the resource (62d8a1d22).",
+        _IMPLEMENTED,
+        (_at(_REST, '"updateTime": created_json,'),),
         True,
     ),
     _row(
@@ -866,8 +910,23 @@ _REPAIR_TICKETS: tuple[dict[str, Any], ...] = (
         "projects/{project}/databases/never-created/documents/c/d. The local runtime "
         "creates the database and answers NOT_FOUND for the document; production answers "
         "NOT_FOUND for the database before the document is considered.",
-        (f"{_LOCAL}:2629", f"{_IDS}:183"),
+        (
+            _at(_LOCAL, "pub const fn with_implicit_database_creation("),
+            _at(
+                _LOCAL,
+                "fn a_database_nothing_created_is_refused_and_is_not_materialized",
+            ),
+            f"{_IDS}:183",
+        ),
         LOCAL_SAFETY,
+        status=TICKET_FIXED,
+        fixed_at=COMMIT_REFUSE_UNCREATED_DATABASE,
+        resolution=(
+            "The strict profile answers NOT_FOUND for a database nothing created and "
+            "does not materialize it on the refusal; the emulator profile keeps "
+            "materializing any database on first touch, as the official emulator does. "
+            "Fixed for the strict profile only, by design."
+        ),
     ),
     _ticket(
         "FS-CONFIG-RT-002",
@@ -885,6 +944,13 @@ _REPAIR_TICKETS: tuple[dict[str, Any], ...] = (
             _at(_REST, '"locationId": "us-central1"'),
         ),
         DATA_PLANE,
+        status=TICKET_PARTIAL,
+        fixed_at=COMMIT_PRODUCTION_DATABASE_RESOURCE,
+        resolution=(
+            "databaseEdition now comes from the configuration; locationId is still the "
+            "constant us-central1. The remaining half is FS-LIFE-003 (database "
+            "projection completeness)."
+        ),
     ),
     _ticket(
         "FS-CONFIG-RT-003",
@@ -902,6 +968,14 @@ _REPAIR_TICKETS: tuple[dict[str, Any], ...] = (
             "tools/compat-broad/fixtures/database-settings-7be6cf08.json:1",
         ),
         DATA_PLANE,
+        status=TICKET_FIXED,
+        fixed_at=COMMIT_PRODUCTION_DATABASE_RESOURCE,
+        resolution=(
+            "uid, createTime, updateTime, earliestVersionTime, freeTier and etag are "
+            "emitted; the local rehearsal record of 2026-09-21 shows the local "
+            "projection carrying the same field set as the saved production response, "
+            "with local values for uid and the timestamps."
+        ),
     ),
     _ticket(
         "FS-CONFIG-RT-004",
@@ -933,7 +1007,10 @@ _REPAIR_TICKETS: tuple[dict[str, Any], ...] = (
         "projects/{project}/databases/Invalid_Id/documents/c/d and observe NOT_FOUND "
         "with the message naming the database.",
         (
-            _at("crates/fireemu-adapter-grpc/src/decode.rs", "DecodeError::UnknownDatabase {"),
+            _at(
+                "crates/fireemu-adapter-grpc/src/decode.rs",
+                "DecodeError::UnknownDatabase {",
+            ),
             f"{_IDS}:183",
         ),
         DATA_PLANE,
@@ -1028,6 +1105,9 @@ def build_matrix() -> dict[str, Any]:
         "localSurfacesByClass": class_counts(local_surfaces),
         "databaseFieldsByClass": class_counts(database_fields),
         "repairTickets": len(_REPAIR_TICKETS),
+        "openRepairTickets": sum(
+            1 for ticket in _REPAIR_TICKETS if ticket["status"] == TICKET_OPEN
+        ),
         "productionUnobservedConditionsReduced": 0,
     }
     discovery = {

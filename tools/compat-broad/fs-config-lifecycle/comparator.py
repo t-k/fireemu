@@ -1,9 +1,15 @@
-"""Comparator boundary for the FS-CONFIG-LIFECYCLE preparation contract.
+"""Comparator for FS-CONFIG-LIFECYCLE collection records.
 
-This version cannot classify anything as a production match. It accepts preparation
-receipts only, states the normalization rules a future measurement version must apply,
-and always returns PREPARATION_ONLY with no rows. The nonce is required, so every call
-recompiles the manifest and rejects drift unconditionally.
+A record is `{executionKind, collection}` where `collection` is a result written by
+`lifecycle_collector.collect`. The comparator lines the two records up case by case
+on the rows the collector marked `role: case`, and compares HTTP status, typed error
+code and the type shape of the body: field presence, JSON types and enum spelling.
+Values are never compared; the shape already collapsed them.
+
+It can classify a comparison as MATCH only when one side executed on the fixed
+production wire. Every other pairing is PREPARATION_ONLY, so a local rehearsal
+compared against a fake or against another local run can never read as production
+evidence. Promotion is never decided here.
 """
 
 from __future__ import annotations
@@ -11,15 +17,20 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .cases import compile_cases
 from .manifest import SCHEMA as MANIFEST_SCHEMA
 from .manifest import compile_manifest
 from .surface_matrix import CASE_ID, digest
 
-SCHEMA = "fs-config-lifecycle-preparation-v1"
+SCHEMA = "fs-config-lifecycle-comparison-v2"
+PRODUCTION_KIND = "fixed-production-wire"
+LOCAL_KIND = "injected-local-transport"
+EXECUTION_KINDS = (PRODUCTION_KIND, LOCAL_KIND)
 
-_OBSERVED_FIELDS = frozenset(
-    {"responses", "observations", "collector", "transport", "operations", "receiptRows"}
-)
+MATCH = "MATCH"
+MISMATCH = "MISMATCH"
+INDETERMINATE = "INDETERMINATE"
+EXPECTED_LOCAL_DEVIATION = "EXPECTED_LOCAL_DEVIATION"
 
 _VALUE_NORMALIZED = (
     "earliestVersionTime",
@@ -29,104 +40,141 @@ _VALUE_NORMALIZED = (
     "deleteTime",
     "uid",
     "snapshotTime",
-)
-
-_NAME_NORMALIZED = (
-    "the run nonce inside any database id, collection group id or operation name",
-    "the long-running operation identifier assigned by the server",
-)
-
-_TERMINAL_STATES = {
-    "ttlConfig.state": ["ACTIVE"],
-    "indexConfig.reverting": [False],
-    "index.state": ["READY"],
-}
-
-_SIGNIFICANT = (
-    "field presence and absence",
-    "JSON types",
-    "array order",
-    "enum spelling",
-    "HTTP status and canonical error code",
-)
-
-_REPORTED_NOT_REQUIRED = (
-    "error message prose",
-    "long-running operation metadata progress counters",
-    "response latency",
-)
-
-_INDETERMINATE = (
-    (
-        "A non-terminal configuration state read before the poll deadline is "
-        "indeterminate, never a mismatch."
-    ),
-    "A transport failure, authentication refusal or quota refusal is indeterminate.",
-    "A case whose revert did not complete is indeterminate and marks its run invalid.",
-    (
-        "A field present on one side and absent on the other is a mismatch, not an "
-        "indeterminate result; only the listed value-normalized fields are exempt."
-    ),
-)
-
-_FUTURE_REQUIREMENTS = (
-    "Path-specific SHA-256 digests for the source, collector, comparator and lockfiles.",
-    "A resolved runtime identity and artifact digest for the local side.",
-    "Per-case request and response records with status, canonical code and typed body.",
-    "The owned-resource ledger in its final state with every entry recovered.",
-    "The operation checkpoint showing every poll and its terminal state.",
-    "A separately supplied owner permission bound to this manifest and an unused nonce.",
+    "startTime",
+    "endTime",
+    "name",
 )
 
 COMPARISON_CONTRACT: dict[str, Any] = {
-    "kind": "fs-config-lifecycle-comparison-contract-v1",
+    "kind": "fs-config-lifecycle-comparison-contract-v2",
     "valueNormalizedFields": list(_VALUE_NORMALIZED),
     "valueNormalizedRule": (
         "Presence and JSON type are compared; the value is not. These fields either "
-        "advance on their own or identify one provisioning instance, so an equal value "
-        "would be accidental and an unequal value is not evidence of incompatibility."
+        "advance on their own, identify one provisioning instance or carry the run "
+        "nonce, so an equal value would be accidental and an unequal value is not "
+        "evidence of incompatibility."
     ),
-    "nameNormalized": list(_NAME_NORMALIZED),
-    "acceptableTerminalStates": {k: list(v) for k, v in _TERMINAL_STATES.items()},
-    "significant": list(_SIGNIFICANT),
-    "reportedButNotRequiredToMatch": list(_REPORTED_NOT_REQUIRED),
-    "indeterminate": list(_INDETERMINATE),
+    "significant": [
+        "HTTP status",
+        "typed error code and status",
+        "field presence and absence",
+        "JSON types",
+        "array order",
+        "enum spelling",
+    ],
+    "reportedButNotRequiredToMatch": [
+        "error message prose",
+        "long-running operation metadata progress counters",
+        "response latency",
+        "the number of operation polls",
+    ],
+    "indeterminate": [
+        "A case one side never reached is indeterminate, never a mismatch.",
+        "A transport failure, credential refusal or quota refusal is indeterminate.",
+        "A run whose cleanup did not complete is indeterminate as a whole.",
+    ],
+    "expectedLocalDeviation": (
+        "A case the classification matrix says the local runtime refuses is reported "
+        "as an expected local deviation only when the local side answered exactly "
+        "that typed UNIMPLEMENTED refusal and the production side served the request "
+        "with a 2xx; it is neither a match nor a mismatch and never counts toward "
+        "one. A refusal on both sides is compared like any other row."
+    ),
     "matchRequires": (
-        "Both sides carry the same ordered case list, the same abstract request for each "
-        "case, a complete recording and a completed cleanup. A case missing on both "
-        "sides is invalid even when the two records agree with each other."
+        "One side executed on the fixed production wire, both sides completed their "
+        "cleanup, and every case is MATCH or EXPECTED_LOCAL_DEVIATION."
     ),
 }
 
 
-def _receipt_errors(manifest: dict[str, Any], receipt: Any) -> list[str]:
-    if not isinstance(receipt, dict):
-        return ["receipt-shape"]
-    errors: list[str] = []
-    if receipt.get("schema") != SCHEMA:
-        errors.append("receipt-shape")
-    if receipt.get("caseId") != CASE_ID:
-        errors.append("case-binding")
-    if receipt.get("manifestDigest") != digest(manifest):
-        errors.append("manifest-binding")
-    if receipt.get("status") != "PREPARATION_ONLY":
-        errors.append("status")
-    if receipt.get("productionExecuted") is not False:
-        errors.append("production-executed")
-    if _OBSERVED_FIELDS & set(receipt.keys()):
-        errors.append("observation-shaped-fields")
-    if not isinstance(receipt.get("expectedCaseOutcomes"), list):
-        errors.append("expected-outcomes-shape")
-    binding = receipt.get("sourceBinding")
-    if not isinstance(binding, dict) or binding.get("commit") is not None:
-        errors.append("source-binding")
+def _case_rows(collection: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    for row in collection.get("rows", []):
+        if row.get("role") == "case" and row.get("case") not in rows:
+            rows[row["case"]] = row
+    return rows
+
+
+def _record_errors(record: Any, side: str) -> list[str]:
+    if not isinstance(record, dict):
+        return [f"{side}-record-shape"]
+    errors = []
+    if record.get("executionKind") not in EXECUTION_KINDS:
+        errors.append(f"{side}-execution-kind")
+    collection = record.get("collection")
+    if not isinstance(collection, dict) or collection.get("campaignId") != CASE_ID:
+        errors.append(f"{side}-collection-shape")
     return errors
 
 
+def compare_rows(
+    local: dict[str, Any], production: dict[str, Any], nonce: str
+) -> list[dict[str, Any]]:
+    expected_local = {
+        case["id"]: case["expectedLocal"] for case in compile_cases(nonce)
+    }
+    local_rows, production_rows = _case_rows(local), _case_rows(production)
+    rows = []
+    for case_id, expected in expected_local.items():
+        left, right = local_rows.get(case_id), production_rows.get(case_id)
+        row: dict[str, Any] = {
+            "case": case_id,
+            "local": _summary(left),
+            "production": _summary(right),
+        }
+        if (
+            left is None
+            or right is None
+            or not left["complete"]
+            or not right["complete"]
+        ):
+            row["classification"] = INDETERMINATE
+        elif (
+            expected["outcome"] == "not-served"
+            and left["typedError"] is not None
+            and (left["typedError"] or {}).get("status") == "UNIMPLEMENTED"
+            and right["typedError"] is None
+            and type(right["status"]) is int
+            and 200 <= right["status"] < 300
+        ):
+            # Only when production served the request that the classification
+            # matrix says the local runtime refuses. A refusal on both sides is
+            # compared like any other row, so it reads MATCH or MISMATCH and never
+            # hides behind the expected deviation.
+            row["classification"] = EXPECTED_LOCAL_DEVIATION
+            row["reason"] = expected.get("refusalReason")
+        elif (
+            left["status"] == right["status"]
+            and left["typedError"] == right["typedError"]
+            and left["shape"] == right["shape"]
+        ):
+            row["classification"] = MATCH
+        else:
+            row["classification"] = MISMATCH
+            row["differs"] = [
+                key
+                for key in ("status", "typedError", "shape")
+                if left[key] != right[key]
+            ]
+        rows.append(row)
+    return rows
+
+
+def _summary(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return {
+        "status": row.get("status"),
+        "typedError": row.get("typedError"),
+        "shapeDigest": digest(row.get("shape")),
+        "complete": row.get("complete"),
+    }
+
+
 def compare(
-    manifest: dict[str, Any], left: Any, right: Any, nonce: str
+    manifest: dict[str, Any], local: Any, production: Any, nonce: str
 ) -> dict[str, Any]:
-    """Always returns PREPARATION_ONLY; no input can make this version report a match."""
+    """Compare a local record with a production record under a drift-checked manifest."""
     result: dict[str, Any] = {
         "kind": SCHEMA,
         "classification": "PREPARATION_ONLY",
@@ -134,7 +182,6 @@ def compare(
         "acquisitionValidated": False,
         "productionUnobservedConditionsReduced": 0,
         "contract": COMPARISON_CONTRACT,
-        "futureMeasurementRequires": list(_FUTURE_REQUIREMENTS),
         "rows": [],
         "errors": [],
     }
@@ -149,9 +196,29 @@ def compare(
     if json.loads(json.dumps(manifest)) != json.loads(json.dumps(expected)):
         result["errors"] = ["manifest-drift"]
         return result
-    errors = _receipt_errors(manifest, left) + _receipt_errors(manifest, right)
+    errors = _record_errors(local, "local") + _record_errors(production, "production")
     if errors:
         result["errors"] = sorted(set(errors))
-    else:
+        return result
+    if local["executionKind"] != LOCAL_KIND or production["executionKind"] != (
+        PRODUCTION_KIND
+    ):
         result["errors"] = ["preparation-only"]
+        return result
+    rows = compare_rows(local["collection"], production["collection"], nonce)
+    result["rows"] = rows
+    result["localCleanupComplete"] = local["collection"].get("cleanupComplete") is True
+    result["productionCleanupComplete"] = (
+        production["collection"].get("cleanupComplete") is True
+    )
+    classes = {row["classification"] for row in rows}
+    if not result["localCleanupComplete"] or not result["productionCleanupComplete"]:
+        result["classification"] = INDETERMINATE
+    elif classes <= {MATCH, EXPECTED_LOCAL_DEVIATION}:
+        result["classification"] = MATCH
+    elif MISMATCH in classes:
+        result["classification"] = MISMATCH
+    else:
+        result["classification"] = INDETERMINATE
+    result["acquisitionValidated"] = result["classification"] in (MATCH, MISMATCH)
     return result

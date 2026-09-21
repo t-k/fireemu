@@ -96,10 +96,10 @@ A **data-plane contract** surface changes what an ordinary Firestore request ret
 | --- | --- | --- | --- | --- |
 | `name` | data-plane-contract | The resource name identifies the project and database every data-plane request addresses. | A mismatched name routes requests to a different database. | `crates/fireemu-adapter-grpc/src/rest/mod.rs:291` |
 | `type` | data-plane-contract | FIRESTORE_NATIVE and DATASTORE_MODE expose different APIs entirely. | A caller that trusts this field picks the wrong API surface. | `crates/fireemu-adapter-grpc/src/rest/mod.rs:296` |
-| `databaseEdition` | data-plane-contract | Edition decides which methods are served at all; the local inventory route already refuses non-Standard Native combinations. | The projection hardcodes STANDARD and does not reflect the configured edition enum, so an Enterprise run reports the wrong edition. | `crates/fireemu-adapter-grpc/src/rest/mod.rs:307` `crates/fireemu-adapter-grpc/src/rest/mod.rs:707` `crates/fireemu-core-types/src/edition.rs:12` |
+| `databaseEdition` | data-plane-contract | Edition decides which methods are served at all; the local inventory route already refuses non-Standard Native combinations. | The projection reports the configured edition in the API's upper-case spelling; only Standard reaches the route because every other edition is refused above it (fixed at 62d8a1d22). | `crates/fireemu-adapter-grpc/src/rest/mod.rs:307` `crates/fireemu-adapter-grpc/src/rest/mod.rs:707` `crates/fireemu-core-types/src/edition.rs:12` |
 | `concurrencyMode` | data-plane-contract | PESSIMISTIC and OPTIMISTIC change when a transaction blocks and when it aborts. | Transaction contention and retry behavior depend on this value. | `crates/fireemu-adapter-grpc/src/rest/mod.rs:297` |
 | `versionRetentionPeriod` | data-plane-contract | Retention bounds how far back a read_time query may address. | A read_time older than the retention window must be refused; a wrong period moves that boundary. | `crates/fireemu-adapter-grpc/src/rest/mod.rs:298` |
-| `earliestVersionTime` | data-plane-contract | The earliest addressable version time is the concrete lower bound a read_time request is checked against, and it advances continuously. | It is excluded from settings equality by the database projection because it moves on its own, but the data-plane bound it expresses is still a contract. The local projection omits the field entirely. | not implemented |
+| `earliestVersionTime` | data-plane-contract | The earliest addressable version time is the concrete lower bound a read_time request is checked against, and it advances continuously. | It is excluded from settings equality by the database projection because it moves on its own, but the data-plane bound it expresses is still a contract. The local projection derives it from the retention window floored at the database's creation, the bound read_time is checked against (62d8a1d22). | `crates/fireemu-adapter-grpc/src/rest/mod.rs:299` |
 | `pointInTimeRecoveryEnablement` | data-plane-contract | Enabling point-in-time recovery extends the retention window, which widens the range of accepted read_time values. | The accepted read_time range changes with this setting. | `crates/fireemu-adapter-grpc/src/rest/mod.rs:301` |
 | `realtimeUpdatesMode` | data-plane-contract | Realtime updates decide whether Listen is served for the database. | A disabled mode must refuse Listen; the local projection reports enabled unconditionally. | `crates/fireemu-adapter-grpc/src/rest/mod.rs:308` |
 | `firestoreDataAccessMode` | data-plane-contract | The Firestore data access mode gates whether the Firestore data API is served for the database at all. | A disabled mode must refuse data-plane requests; the local projection omits the field. | not implemented |
@@ -107,11 +107,11 @@ A **data-plane contract** surface changes what an ordinary Firestore request ret
 | `locationId` | managed-infrastructure | The region is fixed by provisioning and cannot be chosen by a local process. | It is echoed to callers, so a hardcoded value must be recognised as declared rather than observed; the local value is a constant. | `crates/fireemu-adapter-grpc/src/rest/mod.rs:295` |
 | `appEngineIntegrationMode` | managed-infrastructure | App Engine integration is a legacy managed binding with no local analogue. | None; the local projection reports DISABLED as a declared constant. | `crates/fireemu-adapter-grpc/src/rest/mod.rs:300` |
 | `deleteProtectionState` | managed-infrastructure | Delete protection only gates the managed databases.delete call. | None; no data-plane request observes it. It is an abort precondition for any campaign that creates and deletes a database. | `crates/fireemu-adapter-grpc/src/rest/mod.rs:302` |
-| `uid` | managed-infrastructure | The server-assigned unique id identifies one provisioning instance. | None, but it is an identity field the database projection requires, so a change must stop a campaign rather than be normalized away. | not implemented |
-| `etag` | managed-infrastructure | The etag supports optimistic concurrency on managed patch calls. | None; it is excluded from settings equality by the database projection. | not implemented |
-| `freeTier` | managed-infrastructure | Free tier eligibility is a billing attribute of the managed resource. | None, but it is the precondition that decides whether a second named database costs anything, so a campaign must read it before creating one. | not implemented |
-| `createTime` | managed-infrastructure | Provisioning timestamps describe the managed resource lifecycle. | None; no data-plane result depends on it. | not implemented |
-| `updateTime` | managed-infrastructure | Provisioning timestamps describe the managed resource lifecycle. | None; no data-plane result depends on it. | not implemented |
+| `uid` | managed-infrastructure | The server-assigned unique id identifies one provisioning instance. | None, but it is an identity field the database projection requires, so a change must stop a campaign rather than be normalized away. The local value is derived deterministically from the project and database ids (62d8a1d22). | `crates/fireemu-adapter-grpc/src/rest/mod.rs:292` |
+| `etag` | managed-infrastructure | The etag supports optimistic concurrency on managed patch calls. | None; it is excluded from settings equality by the database projection. The local value is a digest of the projected resource (62d8a1d22). | `crates/fireemu-adapter-grpc/src/rest/mod.rs:317` |
+| `freeTier` | managed-infrastructure | Free tier eligibility is a billing attribute of the managed resource. | None, but it is the precondition that decides whether a second named database costs anything. The local projection reports true for the default database and omits the field for any other, as production does (62d8a1d22). | `crates/fireemu-adapter-grpc/src/rest/mod.rs:314` |
+| `createTime` | managed-infrastructure | Provisioning timestamps describe the managed resource lifecycle. | None; no data-plane result depends on it. The local value is the database's creation instant on the logical clock (62d8a1d22). | `crates/fireemu-adapter-grpc/src/rest/mod.rs:293` |
+| `updateTime` | managed-infrastructure | Provisioning timestamps describe the managed resource lifecycle. | None; no data-plane result depends on it. The local value equals createTime because no local call updates the resource (62d8a1d22). | `crates/fireemu-adapter-grpc/src/rest/mod.rs:294` |
 | `deleteTime` | managed-infrastructure | The deletion timestamp appears only for soft-deleted managed databases. | It is the field that makes showDeleted meaningful; the local inventory accepts showDeleted but has no deleted state to report. | not implemented |
 | `keyPrefix` | managed-infrastructure | The key prefix is a Datastore-era managed identifier. | None; no data-plane result depends on it. | not implemented |
 | `cmekConfig` | managed-infrastructure | Customer-managed encryption keys are a managed KMS binding. | None; encryption is transparent to the data plane. | not implemented |
@@ -122,7 +122,7 @@ A **data-plane contract** surface changes what an ordinary Firestore request ret
 
 ## Repair tickets
 
-Each ticket is an open local runtime gap found while building the matrix. None was fixed here; a fix is separate work with its own review.
+Each ticket was an open local runtime gap when the matrix was first built. None was fixed by the work that renders this page; a ticket marked FIXED or PARTIALLY_FIXED cites the commit that changed the runtime, and its summary and reproduction are kept as the historical statement of the gap.
 
 ### FS-CONFIG-RT-001: A named database is materialized on first touch instead of returning NOT_FOUND
 
@@ -130,7 +130,9 @@ Any syntactically valid database id becomes usable without a create call, so a r
 
 Reproduction: Start fireemu with only the default database configured, then issue any Firestore REST read against projects/{project}/databases/never-created/documents/c/d. The local runtime creates the database and answers NOT_FOUND for the document; production answers NOT_FOUND for the database before the document is considered.
 
-Class: local-safety-extension. Status: OPEN. Evidence: `crates/fireemu-adapter-grpc/src/local.rs:2629` `crates/fireemu-core-types/src/ids.rs:183`
+Class: local-safety-extension. Status: FIXED. Evidence: `crates/fireemu-adapter-grpc/src/local.rs:1630` `crates/fireemu-adapter-grpc/src/local.rs:1398` `crates/fireemu-core-types/src/ids.rs:183`
+
+Resolution (`cb429f2c4`): The strict profile answers NOT_FOUND for a database nothing created and does not materialize it on the refusal; the emulator profile keeps materializing any database on first touch, as the official emulator does. Fixed for the strict profile only, by design.
 
 ### FS-CONFIG-RT-002: The database projection reports a constant edition and location
 
@@ -138,7 +140,9 @@ databaseEdition is hardcoded to STANDARD and locationId to us-central1, so the p
 
 Reproduction: Start fireemu configured for the Enterprise edition and read projects/{project}/databases/(default) on the Firestore REST port. The response still reports STANDARD while the same route refuses non-Standard Native traffic a few lines earlier.
 
-Class: data-plane-contract. Status: OPEN. Evidence: `crates/fireemu-adapter-grpc/src/rest/mod.rs:307` `crates/fireemu-adapter-grpc/src/rest/mod.rs:707` `crates/fireemu-adapter-grpc/src/rest/mod.rs:295`
+Class: data-plane-contract. Status: PARTIALLY_FIXED. Evidence: `crates/fireemu-adapter-grpc/src/rest/mod.rs:307` `crates/fireemu-adapter-grpc/src/rest/mod.rs:707` `crates/fireemu-adapter-grpc/src/rest/mod.rs:295`
+
+Resolution (`62d8a1d22`): databaseEdition now comes from the configuration; locationId is still the constant us-central1. The remaining half is FS-LIFE-003 (database projection completeness).
 
 ### FS-CONFIG-RT-003: The database projection omits fields the saved production response carries
 
@@ -146,7 +150,9 @@ uid, freeTier, etag, createTime, updateTime and earliestVersionTime are absent f
 
 Reproduction: Compare the local response of projects/{project}/databases/(default) with the saved offline fixture at tools/compat-broad/fixtures/database-settings-7be6cf08.json. The local body is a strict subset and would fail the identity check the batch contract applies.
 
-Class: data-plane-contract. Status: OPEN. Evidence: `crates/fireemu-adapter-grpc/src/rest/mod.rs:278` `tools/compat-broad/batch_contract.py:230` `tools/compat-broad/fixtures/database-settings-7be6cf08.json:1`
+Class: data-plane-contract. Status: FIXED. Evidence: `crates/fireemu-adapter-grpc/src/rest/mod.rs:278` `tools/compat-broad/batch_contract.py:230` `tools/compat-broad/fixtures/database-settings-7be6cf08.json:1`
+
+Resolution (`62d8a1d22`): uid, createTime, updateTime, earliestVersionTime, freeTier and etag are emitted; the local rehearsal record of 2026-09-21 shows the local projection carrying the same field set as the saved production response, with local values for uid and the timestamps.
 
 ### FS-CONFIG-RT-004: The indexConfig half of fields.patch has no runtime transition
 
@@ -168,6 +174,6 @@ Class: data-plane-contract. Status: OPEN. Evidence: `crates/fireemu-adapter-grpc
 
 The classification was derived from the pinned Discovery document and from reading this checkout. It is not a production observation. Whether production agrees with any local behavior recorded here is unknown, and the local column describes only what this source tree does today.
 
-The repair tickets above are reproductions, not fixes. No runtime file was changed by the work that produced this page.
+The repair tickets above are reproductions. Where one is marked fixed, the fix landed in the cited commit; no runtime file was changed by the work that produced this page.
 
 The bounded observation that would begin answering the second half of the blocking condition is prepared separately in [the campaign preparation](fs-config-lifecycle-campaign-preparation.md). It has not run.

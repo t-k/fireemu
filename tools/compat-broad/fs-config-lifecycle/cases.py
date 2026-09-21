@@ -3,6 +3,11 @@
 Every case is an abstract request definition. Nothing here issues a request, resolves a
 credential, or records a result. Expected local results are read from the classification
 matrix, so they state what this checkout implements, never what production returned.
+
+The plan carries twelve cases. The thirteen that created or deleted a named database
+(OC-03..OC-12 and OC-23..OC-25 of the first preparation) are managed-infrastructure
+surfaces excluded by the 2026-09-18 owner scope decision, so they are dropped rather
+than renumbered: the surviving identifiers keep their meaning across both revisions.
 """
 
 from __future__ import annotations
@@ -14,11 +19,55 @@ from typing import Any
 from .surface_matrix import CASE_ID, build_matrix, digest, pinned_definition
 
 NONCE_PATTERN = re.compile(r"^[0-9a-f]{32}$")
-CASE_KINDS = ("control", "observation", "negative", "cleanup")
-OWNED_DATABASE_PREFIX = "fsconfig-"
+CASE_KINDS = ("control", "observation")
 PROJECT = "fireemu-35fe6"
 DEFAULT_DATABASE = "(default)"
 _M = "firestore.projects."
+
+# Dropped 2026-09-21 under the 2026-09-18 owner decision: every case that created,
+# deleted or probed creation of a named database is managed infrastructure.
+DROPPED_CASES = tuple(f"OC-{n:02d}" for n in (*range(3, 13), 23, 24, 25))
+
+# The order a collector issues the cases in. A revert always follows the readback of
+# the patch it reverts, so the readback observes the applied state.
+EXECUTION_ORDER = (
+    "OC-01",
+    "OC-02",
+    "OC-13",
+    "OC-14",
+    "OC-22",
+    "OC-15",
+    "OC-16",
+    "OC-17",
+    "OC-18",
+    "OC-19",
+    "OC-20",
+    "OC-21",
+)
+
+# Each locked step is one configuration change modelled as: baseline read, patch,
+# readback, revert, verify. The shared Ledger holds an EXCLUSIVE lock on the step's
+# field key for the whole run, so no other campaign may touch the same field.
+LOCKED_STEPS = (
+    {
+        "id": "ttl",
+        "baseline": "OC-13",
+        "apply": "OC-14",
+        "poll": "OC-22",
+        "readback": "OC-15",
+        "revert": "OC-16",
+        "updateMask": "ttlConfig",
+    },
+    {
+        "id": "exemption",
+        "baseline": "OC-17",
+        "apply": "OC-18",
+        "poll": None,
+        "readback": "OC-19",
+        "revert": "OC-20",
+        "updateMask": "indexConfig",
+    },
+)
 
 _SERVED = "served"
 _NOT_SERVED = "not-served"
@@ -28,7 +77,6 @@ _REFUSAL = "refusal"
 # The request-body alias each case uses, for methods whose Discovery entry declares a
 # request body. A method absent from this map may carry query parameters only.
 BODY_KEYS = {
-    f"{_M}databases.create": "database",
     f"{_M}databases.collectionGroups.fields.patch": "field",
 }
 
@@ -51,12 +99,6 @@ def declared_request_keys(method: str) -> set[str]:
     return keys
 
 
-_CONDITIONAL_EXEMPT = (
-    "This cleanup addresses the identifier a refused create used. It runs only if that "
-    "create was unexpectedly accepted, so the identifier is the invalid one under test."
-)
-
-
 def _case(
     case_id: str,
     kind: str,
@@ -68,9 +110,6 @@ def _case(
     mutates: bool = False,
     reverted_by: str | None = None,
     is_revert_of: str | None = None,
-    namespace_exempt_reason: str | None = None,
-    possibly_allocates: bool = False,
-    conditional: bool = False,
 ) -> dict[str, Any]:
     return {
         "id": case_id,
@@ -82,11 +121,8 @@ def _case(
         "expectedProductionOutcome": expected_production,
         "productionObserved": False,
         "mutates": mutates,
-        "possiblyAllocates": possibly_allocates,
-        "conditional": conditional,
         "revertedBy": reverted_by,
         "isRevertOf": is_revert_of,
-        "namespaceExemptReason": namespace_exempt_reason,
     }
 
 
@@ -95,11 +131,15 @@ def _case(
 # to a served/not-served outcome per case never claims a refusal is an answer.
 _PARTIAL_REFUSALS = {
     f"{_M}databases.collectionGroups.fields.patch": (
-        lambda request: "indexConfig" in str(request.get("updateMask", ""))
-        or "indexConfig" in request.get("field", {}),
-        "the local runtime refuses a fields.patch naming indexConfig with UNIMPLEMENTED: "
-        "single-field exemptions are taken from the project's index configuration and have "
-        "no runtime transition (FS-CONFIG-RT-004)",
+        lambda request: (
+            "indexConfig" in str(request.get("updateMask", ""))
+            or "indexConfig" in request.get("field", {})
+        ),
+        (
+            "the local runtime refuses a fields.patch naming indexConfig with "
+            "UNIMPLEMENTED: single-field exemptions are taken from the project's index "
+            "configuration and have no runtime transition (FS-CONFIG-RT-004)"
+        ),
     ),
 }
 
@@ -126,25 +166,60 @@ def _expected_local(
     return expected
 
 
+def _field_names(nonce: str) -> dict[str, str]:
+    short = nonce[:12]
+    ttl_group = f"fsconfig_ttl_{short}"
+    exempt_group = f"fsconfig_exempt_{short}"
+    return {
+        "ttlGroup": ttl_group,
+        "exemptGroup": exempt_group,
+        "ttlField": (
+            f"projects/{PROJECT}/databases/{DEFAULT_DATABASE}/collectionGroups/"
+            f"{ttl_group}/fields/expiresAt"
+        ),
+        "exemptField": (
+            f"projects/{PROJECT}/databases/{DEFAULT_DATABASE}/collectionGroups/"
+            f"{exempt_group}/fields/payload"
+        ),
+    }
+
+
+def field_lock_key(field_resource: str) -> str:
+    """The shared Ledger key for one field configuration.
+
+    `project/<project>/firestore/<database>/fields/<collectionGroup>/<field>` uses the
+    Ledger's segment grammar directly: every segment is letters, digits, parentheses,
+    underscores or hyphens. A document lock under the same database is a sibling and
+    does not overlap, so a data campaign is refused only when it names the same field.
+    """
+    parts = field_resource.split("/")
+    if (
+        len(parts) != 8
+        or parts[0] != "projects"
+        or parts[2] != "databases"
+        or parts[4] != "collectionGroups"
+        or parts[6] != "fields"
+    ):
+        raise ValueError("canonical field configuration resource required")
+    return f"project/{parts[1]}/firestore/{parts[3]}/fields/{parts[5]}/{parts[7]}"
+
+
 def compile_cases(nonce: str) -> list[dict[str, Any]]:
     """Bind the abstract case list to one nonce-owned namespace."""
     if not isinstance(nonce, str) or not NONCE_PATTERN.fullmatch(nonce):
         raise ValueError("nonce must be exactly 32 lowercase hexadecimal characters")
-    short = nonce[:12]
-    owned_db = f"{OWNED_DATABASE_PREFIX}{short}"
-    absent_db = f"{OWNED_DATABASE_PREFIX}absent-{short}"
-    absent_project = f"fireemu-absent-{short}"
-    ttl_group = f"fsconfig_ttl_{short}"
-    exempt_group = f"fsconfig_exempt_{short}"
-    ttl_field = f"projects/{PROJECT}/databases/{DEFAULT_DATABASE}/collectionGroups/{ttl_group}/fields/expiresAt"
-    exempt_field = f"projects/{PROJECT}/databases/{DEFAULT_DATABASE}/collectionGroups/{exempt_group}/fields/payload"
+    names = _field_names(nonce)
+    ttl_field = names["ttlField"]
+    exempt_field = names["exemptField"]
+    exempt_group = names["exemptGroup"]
 
     cases = [
         _case(
             "OC-01",
             "control",
             "databases.get",
-            "Read the default database projection before anything is changed.",
+            "Read the default database projection before anything is changed; the "
+            "projection digest must equal the frozen baseline or the run stops here.",
             (DEFAULT_DATABASE,),
             {"name": f"projects/{PROJECT}/databases/{DEFAULT_DATABASE}"},
             _SUCCESS,
@@ -153,153 +228,11 @@ def compile_cases(nonce: str) -> list[dict[str, Any]]:
             "OC-02",
             "control",
             "databases.list",
-            "Enumerate databases so an unexpected pre-existing one aborts the run.",
+            "Enumerate databases so an unexpected change during the run is detected "
+            "by the closing reconciliation.",
             (DEFAULT_DATABASE,),
             {"parent": f"projects/{PROJECT}", "showDeleted": False},
             _SUCCESS,
-        ),
-        _case(
-            "OC-03",
-            "observation",
-            "databases.create",
-            "Create one throwaway named database with delete protection disabled.",
-            (owned_db,),
-            {
-                "parent": f"projects/{PROJECT}",
-                "databaseId": owned_db,
-                "database": {
-                    "locationId": "us-central1",
-                    "type": "FIRESTORE_NATIVE",
-                    "databaseEdition": "STANDARD",
-                    "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-                    "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-                },
-            },
-            _SUCCESS,
-            mutates=True,
-            possibly_allocates=True,
-            reverted_by="OC-06",
-        ),
-        _case(
-            "OC-04",
-            "observation",
-            "databases.get",
-            "Read back the created database to compare the full projection.",
-            (owned_db,),
-            {"name": f"projects/{PROJECT}/databases/{owned_db}"},
-            _SUCCESS,
-        ),
-        _case(
-            "OC-05",
-            "observation",
-            "databases.list",
-            "Confirm the created database appears in enumeration exactly once.",
-            (DEFAULT_DATABASE, owned_db),
-            {"parent": f"projects/{PROJECT}", "showDeleted": False},
-            _SUCCESS,
-        ),
-        _case(
-            "OC-06",
-            "observation",
-            "databases.delete",
-            "Delete the throwaway database; this is the revert for OC-03.",
-            (owned_db,),
-            {"name": f"projects/{PROJECT}/databases/{owned_db}"},
-            _SUCCESS,
-            is_revert_of="OC-03",
-        ),
-        _case(
-            "OC-07",
-            "negative",
-            "databases.get",
-            "A syntactically valid but never-created database id must be refused.",
-            (absent_db,),
-            {"name": f"projects/{PROJECT}/databases/{absent_db}"},
-            _REFUSAL,
-        ),
-        _case(
-            "OC-08",
-            "negative",
-            "databases.create",
-            "An uppercase and underscored database id must be refused before creation.",
-            (f"Invalid_Id_{short}",),
-            {
-                "parent": f"projects/{PROJECT}",
-                "databaseId": f"Invalid_Id_{short}",
-                "database": {
-                    "locationId": "us-central1",
-                    "type": "FIRESTORE_NATIVE",
-                    "databaseEdition": "STANDARD",
-                    "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-                    "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-                },
-            },
-            _REFUSAL,
-            possibly_allocates=True,
-            reverted_by="OC-23",
-        ),
-        _case(
-            "OC-09",
-            "negative",
-            "databases.create",
-            "A database id shorter than the documented minimum must be refused.",
-            (f"a{short[:1]}",),
-            {
-                "parent": f"projects/{PROJECT}",
-                "databaseId": f"a{short[:1]}",
-                "database": {
-                    "locationId": "us-central1",
-                    "type": "FIRESTORE_NATIVE",
-                    "databaseEdition": "STANDARD",
-                    "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-                    "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-                },
-            },
-            _REFUSAL,
-            possibly_allocates=True,
-            reverted_by="OC-24",
-            namespace_exempt_reason="An id short enough to be refused cannot also carry "
-            "the nonce prefix; the request is refused before any resource exists.",
-        ),
-        _case(
-            "OC-10",
-            "negative",
-            "databases.create",
-            "A database id longer than sixty-three characters must be refused.",
-            (f"{OWNED_DATABASE_PREFIX}{short}-{'x' * 50}",),
-            {
-                "parent": f"projects/{PROJECT}",
-                "databaseId": f"{OWNED_DATABASE_PREFIX}{short}-{'x' * 50}",
-                "database": {
-                    "locationId": "us-central1",
-                    "type": "FIRESTORE_NATIVE",
-                    "databaseEdition": "STANDARD",
-                    "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-                    "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-                },
-            },
-            _REFUSAL,
-            possibly_allocates=True,
-            reverted_by="OC-25",
-        ),
-        _case(
-            "OC-11",
-            "negative",
-            "databases.get",
-            "A database id that is not lowercase hyphenated must be refused; this is the "
-            "shape the local runtime deliberately answers NOT_FOUND for.",
-            (f"Invalid_Id_{short}",),
-            {"name": f"projects/{PROJECT}/databases/Invalid_Id_{short}"},
-            _REFUSAL,
-        ),
-        _case(
-            "OC-12",
-            "negative",
-            "databases.get",
-            "A project the caller cannot see must be refused without leaking existence.",
-            (f"{absent_project}:(default)",),
-            {"name": f"projects/{absent_project}/databases/{DEFAULT_DATABASE}"},
-            _REFUSAL,
         ),
         _case(
             "OC-13",
@@ -385,7 +318,8 @@ def compile_cases(nonce: str) -> list[dict[str, Any]]:
             "OC-20",
             "observation",
             "databases.collectionGroups.fields.patch",
-            "Clear the exemption so the inherited configuration applies again; this is the revert for OC-18.",
+            "Clear the exemption so the inherited configuration applies again; this is "
+            "the revert for OC-18.",
             (exempt_field,),
             {
                 "name": exempt_field,
@@ -415,51 +349,11 @@ def compile_cases(nonce: str) -> list[dict[str, Any]]:
             "OC-22",
             "observation",
             "databases.operations.get",
-            "Poll one long-running operation produced by an owned mutation.",
+            "Poll the long-running operation the time-to-live patch returned until it "
+            "is done or the bounded poll deadline stops the run.",
             (ttl_field,),
-            {"name": "<bound at run time to the operation an owned mutation returned>"},
+            {"name": "<bound at run time to the operation OC-14 returned>"},
             _SUCCESS,
-        ),
-        _case(
-            "OC-23",
-            "cleanup",
-            "databases.delete",
-            "Delete the database OC-08 would have created if production accepted it.",
-            (f"Invalid_Id_{short}",),
-            {"name": f"projects/{PROJECT}/databases/Invalid_Id_{short}"},
-            _REFUSAL,
-            is_revert_of="OC-08",
-            conditional=True,
-            namespace_exempt_reason=_CONDITIONAL_EXEMPT,
-        ),
-        _case(
-            "OC-24",
-            "cleanup",
-            "databases.delete",
-            "Delete the database OC-09 would have created if production accepted it.",
-            (f"a{short[:1]}",),
-            {"name": f"projects/{PROJECT}/databases/a{short[:1]}"},
-            _REFUSAL,
-            is_revert_of="OC-09",
-            conditional=True,
-            namespace_exempt_reason=_CONDITIONAL_EXEMPT,
-        ),
-        _case(
-            "OC-25",
-            "cleanup",
-            "databases.delete",
-            "Delete the database OC-10 would have created if production accepted it.",
-            (f"{OWNED_DATABASE_PREFIX}{short}-{'x' * 50}",),
-            {
-                "name": (
-                    f"projects/{PROJECT}/databases/"
-                    f"{OWNED_DATABASE_PREFIX}{short}-{'x' * 50}"
-                )
-            },
-            _REFUSAL,
-            is_revert_of="OC-10",
-            conditional=True,
-            namespace_exempt_reason=_CONDITIONAL_EXEMPT,
         ),
     ]
     matrix_rows = {row["locator"]: row for row in build_matrix()["methods"]}
@@ -471,20 +365,36 @@ def compile_cases(nonce: str) -> list[dict[str, Any]]:
     return cases
 
 
+def locked_steps(nonce: str) -> list[dict[str, Any]]:
+    """The two configuration changes as locked steps bound to one nonce."""
+    cases = {case["id"]: case for case in compile_cases(nonce)}
+    steps = []
+    for step in LOCKED_STEPS:
+        resource = cases[step["baseline"]]["resources"][0]
+        steps.append(
+            {
+                **step,
+                "resource": resource,
+                "lockKey": field_lock_key(resource),
+                "lockMode": "EXCLUSIVE",
+            }
+        )
+    return steps
+
+
 def owned_resources(cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The ledger a run must recover: everything it mutates or could allocate."""
+    """The ledger a run must recover: every field configuration it patches."""
     ledger: list[dict[str, Any]] = []
     for case in cases:
-        if not (case["mutates"] or case["possiblyAllocates"]):
+        if not case["mutates"]:
             continue
-        creates = case["method"].endswith("databases.create")
         ledger.append(
             {
-                "kind": "database" if creates else "fieldConfig",
+                "kind": "fieldConfig",
                 "name": case["resources"][0],
                 "createdBy": case["id"],
                 "revertCase": case["revertedBy"],
-                "conditional": not case["mutates"],
+                "conditional": False,
                 "recovered": False,
             }
         )

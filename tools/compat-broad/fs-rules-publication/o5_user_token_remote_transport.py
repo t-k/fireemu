@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "o8-core"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from broad_contract import digest
+from o5_user_token_identity_proof import IdentityProof
 from o8_admission import authorize_transport
 
 CAMPAIGN = "FS-RULES-USER-TOKEN-MATRIX-01"
@@ -92,7 +93,10 @@ def _frozen_inputs(plan: dict[str, Any], frozen: Any) -> dict[str, Any]:
 
 
 def _credential(
-    credentials: dict[str, Any], reference: str, credential_class: str
+    credentials: dict[str, Any],
+    reference: str,
+    credential_class: str,
+    identity_proofs: dict[str, IdentityProof] | None = None,
 ) -> str | None:
     if credential_class == "absent":
         return None
@@ -105,6 +109,14 @@ def _credential(
         raise ValueError("bounded credential required")
     if credential_class != "empty" and not value:
         raise ValueError("bounded credential required")
+    if credential_class == "user-id-token" and identity_proofs is not None:
+        proof = identity_proofs.get(reference)
+        if (
+            not isinstance(proof, IdentityProof)
+            or not proof.trusted()
+            or proof.token != value
+        ):
+            raise ValueError("trusted identity proof required")
     return value
 
 
@@ -161,6 +173,16 @@ def _typed(value: Any, account_bindings: dict[str, Any] | None) -> dict[str, Any
             }
         }
     raise ValueError("unsupported Firestore field")
+
+
+def _has_principal(value: Any) -> bool:
+    if isinstance(value, dict):
+        return (set(value) == {"$principal"}) or any(
+            _has_principal(item) for item in value.values()
+        )
+    if isinstance(value, list):
+        return any(_has_principal(item) for item in value)
+    return False
 
 
 def _write_resource(document: Any, plan: dict[str, Any]) -> str:
@@ -250,6 +272,7 @@ def _observation(
     *,
     nonce: str,
     account_bindings: dict[str, Any] | None,
+    identity_proofs: dict[str, IdentityProof] | None,
 ) -> dict[str, Any]:
     index = operation.get("index")
     observations = plan.get("observation")
@@ -287,6 +310,14 @@ def _observation(
             None,
         )
         bound = account_bindings.get(principal) if isinstance(principal, str) else None
+        if identity_proofs is not None and credential_class == "user-id-token":
+            proof = identity_proofs.get(reference)
+            if (
+                not isinstance(proof, IdentityProof)
+                or not proof.trusted()
+                or proof.principal_ref != principal
+            ):
+                raise ValueError("trusted identity proof required")
         if expected_account is None and (
             reference in {"malformed-bearer", "empty-bearer", "expired-token"}
             or "expired" in str(principal)
@@ -309,7 +340,13 @@ def _observation(
                 raise ValueError("credential claims scope differs")
             if not isinstance(bound.get("uid"), str):
                 raise ValueError("credential UID binding required")
-    token = _credential(credentials, reference, credential_class)
+    token = _credential(credentials, reference, credential_class, identity_proofs)
+    if (
+        credential_class == "user-id-token"
+        and ("expired" in reference or "expired" in str(principal))
+        and (operation["method"] == "commit" or _has_principal(operation.get("writes")))
+    ):
+        raise ValueError("expired credential cannot authorize writes")
     path = _resource(operation["resources"][0], nonce=nonce)
     headers = _headers(token)
     if operation["method"] == "get":
@@ -386,6 +423,7 @@ def _principal(
     operation: dict[str, Any],
     credentials: dict[str, Any],
     account_bindings: dict[str, Any] | None,
+    identity_proofs: dict[str, IdentityProof] | None = None,
 ) -> dict[str, Any]:
     required = {
         "kind",
@@ -553,6 +591,7 @@ def prepare_request(
     *,
     credentials: dict[str, Any],
     account_bindings: dict[str, Any] | None = None,
+    identity_proofs: dict[str, IdentityProof] | None = None,
 ) -> dict[str, Any]:
     nonce, _tenant = _plan_identity(plan)
     if not isinstance(operation, dict):
@@ -566,7 +605,12 @@ def prepare_request(
             plan, operation, credentials, nonce=nonce, account_bindings=account_bindings
         )
     return _observation(
-        plan, operation, credentials, nonce=nonce, account_bindings=account_bindings
+        plan,
+        operation,
+        credentials,
+        nonce=nonce,
+        account_bindings=account_bindings,
+        identity_proofs=identity_proofs,
     )
 
 
@@ -632,10 +676,27 @@ def make_transport(
     credentials: dict[str, Any],
     frozen_inputs: dict[str, Any] | None = None,
     account_bindings: dict[str, Any] | None = None,
+    identity_proofs: dict[str, IdentityProof] | None = None,
     fixture_origin: str | None = None,
 ):
     _plan_identity(plan)
     frozen = copy.deepcopy(frozen_inputs)
+    trusted_bindings = copy.deepcopy(account_bindings or {})
+    if identity_proofs is not None:
+        for ref, proof in identity_proofs.items():
+            if (
+                not isinstance(proof, IdentityProof)
+                or not proof.trusted()
+                or proof.principal_ref != ref
+            ):
+                raise ValueError("trusted identity proof map required")
+            trusted_bindings[ref] = {
+                **trusted_bindings.get(ref, {}),
+                "uid": proof.uid,
+                "provider": proof.provider,
+                "tenant": proof.tenant,
+                "claimsDigest": proof.claims_digest,
+            }
     sequence = 0
 
     def transmit(
@@ -656,7 +717,8 @@ def make_transport(
             plan,
             copy.deepcopy(value),
             credentials=credentials,
-            account_bindings=account_bindings,
+            account_bindings=trusted_bindings,
+            identity_proofs=identity_proofs,
         )
         envelope = {
             key: prepared[key]

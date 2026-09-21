@@ -5525,16 +5525,17 @@ impl LocalBackend {
                 Ok(write)
             })
             .collect();
+        // A document named twice refuses the whole request, in production's words (matrix
+        // `writes/batch-write#non-atomic-batch`: no status array, nothing landed).
         let mut targets = std::collections::BTreeSet::new();
         for path in decoded
             .iter()
             .filter_map(|w| w.as_ref().ok().map(|w| w.op.path()))
         {
             if !targets.insert(path.clone()) {
-                return Err(Status::invalid_argument(format!(
-                    "BatchWrite contains multiple writes to {}",
-                    path.resource_name()
-                )));
+                return Err(Status::invalid_argument(
+                    "the same document cannot be written more than once in a single request",
+                ));
             }
         }
         self.with_db(&parent, |db| {

@@ -958,10 +958,25 @@ def test_known_action_stage_readback_is_noncreating():
         "id": "account-a-readback",
         "service": "auth",
         "method": "POST",
-        "path": "identitytoolkit.googleapis.com/v1/accounts:lookup",
-        "body": {"localId": "uid-a"},
+        "path": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+        "resource": "projects/fireemu-35fe6/auth/accounts/o1-oob-" + ("a" * 32) + "-a",
+        "body": {"localId": "$binding:accountAUid"},
     }
     assert can_create(readback) is False
+
+
+@pytest.mark.parametrize("route", ("signUp", "import", "update", "create"))
+@pytest.mark.parametrize("identifier", ("account-a-readback", "reset-link-generate", "account-b-delete"))
+def test_action_noncreating_id_cannot_override_creation_route(route, identifier):
+    operation = {
+        "kind": "action-stage",
+        "id": identifier,
+        "service": "auth",
+        "method": "POST",
+        "path": f"identitytoolkit.googleapis.com/v1/accounts:{route}",
+        "body": {"localId": "$binding:accountAUid"},
+    }
+    assert can_create(operation) is True
 
 
 def commit_plan(marker="shared", writes=2, alias=True):

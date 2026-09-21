@@ -1145,6 +1145,58 @@ def _auth_noncreating_rpc(operation):
     )
 
 
+_ACTION_NONCREATING_CONTRACTS = {
+    "reset-link-generate": ("/v1/projects/{project}/accounts:sendOobCode", {"requestType": "PASSWORD_RESET", "email": "$binding:accountA.email", "returnOobLink": True}),
+    "reset-code-lookup": ("/v1/accounts:resetPassword", {"oobCode": "$binding:resetCode"}),
+    "reset-weak-password": ("/v1/accounts:resetPassword", {"oobCode": "$binding:resetCode", "newPassword": "$binding:weakPassword"}),
+    "reset-weak-password-retry": ("/v1/accounts:resetPassword", {"oobCode": "$binding:resetCode"}),
+    "reset-consume": ("/v1/accounts:resetPassword", {"oobCode": "$binding:resetCode", "newPassword": "$binding:accountA.nextPassword"}),
+    "reset-reuse": ("/v1/accounts:resetPassword", {"oobCode": "$binding:resetCode", "newPassword": "$binding:accountA.thirdPassword"}),
+    "reset-wrong-code": ("/v1/accounts:resetPassword", {"oobCode": "$binding:wrongCode", "newPassword": "$binding:accountA.thirdPassword"}),
+    "reset-link-generate-second": ("/v1/projects/{project}/accounts:sendOobCode", {"requestType": "PASSWORD_RESET", "email": "$binding:accountA.email", "returnOobLink": True}),
+    "admin-password-update": ("/v1/projects/{project}/accounts:update", {"localId": "$binding:accountAUid", "password": "$binding:accountA.fourthPassword"}),
+    "reset-after-password-change": ("/v1/accounts:resetPassword", {"oobCode": "$binding:resetCodeSecond", "newPassword": "$binding:accountA.fifthPassword"}),
+    "account-a-readback": ("/v1/projects/{project}/accounts:lookup", {"localId": "$binding:accountAUid"}),
+    "verify-link-generate": ("/v1/projects/{project}/accounts:sendOobCode", {"requestType": "VERIFY_EMAIL", "email": "$binding:accountA.email", "returnOobLink": True}),
+    "verify-apply": ("/v1/accounts:update", {"oobCode": "$binding:verifyCode"}),
+    "verify-reuse": ("/v1/accounts:update", {"oobCode": "$binding:verifyCode"}),
+    "verify-wrong-code": ("/v1/accounts:update", {"oobCode": "$binding:wrongCode"}),
+    "email-link-generate": ("/v1/projects/{project}/accounts:sendOobCode", {"requestType": "EMAIL_SIGNIN", "email": "$binding:accountA.email", "returnOobLink": True}),
+    "email-link-signin": ("/v1/accounts:signInWithEmailLink", {"email": "$binding:accountA.email", "oobCode": "$binding:emailLinkCode"}),
+    "email-link-reuse": ("/v1/accounts:signInWithEmailLink", {"email": "$binding:accountA.email", "oobCode": "$binding:emailLinkCode"}),
+    "email-link-generate-second": ("/v1/projects/{project}/accounts:sendOobCode", {"requestType": "EMAIL_SIGNIN", "email": "$binding:accountA.email", "returnOobLink": True}),
+    "email-link-mismatched-email": ("/v1/accounts:signInWithEmailLink", {"email": "$binding:accountB.email", "oobCode": "$binding:emailLinkCodeSecond"}),
+    "deleted-user-link-generate": ("/v1/projects/{project}/accounts:sendOobCode", {"requestType": "PASSWORD_RESET", "email": "$binding:accountB.email", "returnOobLink": True}),
+    "account-b-delete": ("/v1/projects/{project}/accounts:delete", {"localId": "$binding:accountBUid"}),
+    "reset-after-delete": ("/v1/accounts:resetPassword", {"oobCode": "$binding:deletedUserCode", "newPassword": "$binding:accountB.nextPassword"}),
+    "link-generate-unknown-email": ("/v1/projects/{project}/accounts:sendOobCode", {"requestType": "PASSWORD_RESET", "email": "$binding:unknownEmail", "returnOobLink": True}),
+}
+
+
+def _action_noncreating_contract_matches(operation):
+    contract = _ACTION_NONCREATING_CONTRACTS.get(operation.get("id"))
+    if contract is None:
+        return False
+    suffix, expected_body = contract
+    path = operation.get("path")
+    if not isinstance(path, str) or not path.startswith("identitytoolkit.googleapis.com"):
+        return False
+    canonical_path = path.removeprefix("identitytoolkit.googleapis.com")
+    if "/projects/" in suffix:
+        resource = operation.get("resource")
+        if not isinstance(resource, str) or not resource.startswith("projects/"):
+            return False
+        project = resource.split("/", 2)[1]
+        if canonical_path != suffix.format(project=project):
+            return False
+    elif canonical_path != suffix:
+        return False
+    body = operation.get("body")
+    if not isinstance(body, dict) or set(body) != set(expected_body):
+        return False
+    return all(body[key] == value for key, value in expected_body.items())
+
+
 def can_create(operation):
     """Whether a request could bring a document into existence.
 
@@ -1160,22 +1212,11 @@ def can_create(operation):
     path = path if isinstance(path, str) else ""
     method = operation.get("method")
     body = operation.get("body")
-    action_noncreating_ids = {
-        "reset-link-generate", "reset-code-lookup", "reset-weak-password",
-        "reset-weak-password-retry", "reset-consume", "reset-reuse",
-        "reset-wrong-code", "reset-link-generate-second", "admin-password-update",
-        "reset-after-password-change", "account-a-readback", "verify-link-generate",
-        "verify-apply", "verify-reuse", "verify-wrong-code", "email-link-generate",
-        "email-link-signin", "email-link-reuse", "email-link-generate-second",
-        "email-link-mismatched-email", "deleted-user-link-generate", "account-b-delete",
-        "reset-after-delete", "link-generate-unknown-email",
-    }
     if (
         operation.get("kind") == "action-stage"
-        and operation.get("id") in action_noncreating_ids
         and operation.get("service") == "auth"
         and method == "POST"
-        and path.startswith("identitytoolkit.googleapis.com/v1/")
+        and _action_noncreating_contract_matches(operation)
     ):
         return False
     if _document_read_rpc(operation) or _auth_noncreating_rpc(operation):

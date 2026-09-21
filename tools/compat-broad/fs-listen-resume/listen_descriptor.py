@@ -24,7 +24,7 @@ if _PACKAGE not in sys.modules:
     package = types.ModuleType(_PACKAGE)
     package.__path__ = [str(HERE)]
     sys.modules[_PACKAGE] = package
-from o6_listen_o8 import campaign
+from o6_listen_o8 import campaign, observation
 
 CAMPAIGN = "FS-LISTEN-SDK"
 FROZEN_INPUTS_KIND = "fs-listen-sdk-o8-frozen-inputs-v1"
@@ -104,11 +104,17 @@ def cost_model() -> dict:
 
 
 def collector(*_args, **_kwargs):
-    raise ValueError("FS-LISTEN-SDK production collector is disabled")
+    return {"entry": "tools/compat-broad/fs-listen-resume/listen_collector.mjs"}
 
 
-def comparator(*_args, **_kwargs):
-    raise ValueError("FS-LISTEN-SDK production comparison is disabled")
+def comparator(result, shadow=None):
+    if not isinstance(result, dict):
+        raise ValueError("Listen comparison result required")
+    local = result.get("local")
+    production = result.get("production", shadow)
+    return observation.compare_observations(
+        result.get("campaign", {}), local, production, base_dir=ROOT
+    )
 
 
 def permission_bindings(plan, source_commit, artifact_digest, inputs):
@@ -128,8 +134,16 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs):
     }
 
 
-def transport_bound(*_args, **_kwargs):
-    raise ValueError("FS-LISTEN-SDK production transport disabled")
+def transport_bound(value, *, binding, binding_digest, capability=None):
+    if capability is not None:
+        raise ValueError("FS-LISTEN-SDK production transport is not enabled")
+    return {
+        "kind": "fs-listen-sdk-transport-binding-v1",
+        "adapter": ADAPTER_ENTRY,
+        "valueKind": type(value).__name__,
+        "bindingDigest": binding_digest,
+        "productionEnabled": False,
+    }
 
 
 def binding_verifier(binding, binding_digest, frozen):

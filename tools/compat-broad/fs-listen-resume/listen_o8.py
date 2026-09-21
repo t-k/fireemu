@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "tools/compat-broad/production-admission"))
+sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 
 import listen_descriptor as campaign
 from o8_admission import validate_o7_admission
+from reservations import CATALOGUED_CAMPAIGN_IDS
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,6 +39,8 @@ def _read_json(path: Path, *, private: bool = False) -> tuple[dict, bytes]:
 
 
 def execute(args: argparse.Namespace) -> dict:
+    if campaign.CAMPAIGN not in CATALOGUED_CAMPAIGN_IDS:
+        raise ValueError("FS-LISTEN-SDK is not admitted by the shared Ledger registry")
     descriptor = campaign.descriptor()
     inputs, _ = _read_json(args.inputs)
     manifest, manifest_bytes = _read_json(args.manifest, private=True)
@@ -50,9 +58,7 @@ def execute(args: argparse.Namespace) -> dict:
         artifact_path=args.artifact,
         launcher_path=Path(__file__),
     )
-    # The shared reservation registry intentionally does not yet admit this
-    # campaign. Even a complete O7 shape cannot enable production here.
-    raise ValueError("FS-LISTEN-SDK production transport disabled")
+    raise ValueError("FS-LISTEN-SDK production transport is not enabled")
 
 
 def main(argv: list[str] | None = None) -> int:

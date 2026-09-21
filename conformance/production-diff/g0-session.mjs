@@ -11,15 +11,20 @@ import { g0SessionPythonSource, validateG0Origins } from "./g0.mjs";
 const directory = process.env.PILOT_RUN_DIR;
 requireThat(typeof directory === "string", "missing-run-directory");
 const root = resolve(process.env.PILOT_REPO ?? resolve(dirname(fileURLToPath(import.meta.url)), "../.."));
+const inventoryProject = resolve(root, "tools/compat-inventory");
 validateG0Origins(process.env);
 const plan = JSON.parse(await fs.readFile(join(directory, "program.json"), "utf8"));
 const python = g0SessionPythonSource();
 const result = await new Promise((done) => {
-  const child = spawn("uv", ["run", "python", "-c", python, root, directory], {
-    cwd: root,
-    env: { ...process.env, PYTHONUNBUFFERED: "1" },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
+  const child = spawn(
+    "uv",
+    ["run", "--project", inventoryProject, "--locked", "--python", "3.12", "python", "-c", python, root, directory],
+    {
+      cwd: root,
+      env: { ...process.env, PYTHONUNBUFFERED: "1" },
+      stdio: ["ignore", "ignore", "pipe"],
+    },
+  );
   child.once("error", () => done({ code: null, error: "python-start-failed" }));
   child.once("close", (code) =>
     done({

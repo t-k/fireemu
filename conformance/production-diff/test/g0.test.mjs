@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { compareG0, g0SessionPythonSource, validateG0Origins } from "../g0.mjs";
 import { G0_CASE } from "../registry.mjs";
@@ -56,6 +56,29 @@ test("G0 session bridge compiles as the exact Python source it will execute", ()
     ["run", "python", "-c", "compile(__import__('sys').stdin.read(), '<g0-session>', 'exec')"],
     { input: source, encoding: "utf8", stdio: ["pipe", "ignore", "pipe"] },
   );
+});
+
+test("G0 session uses the locked Python 3.12 inventory runtime for generated code", () => {
+  const sessionSource = readFileSync(new URL("../g0-session.mjs", import.meta.url), "utf8");
+  for (const token of ["--project", "inventoryProject", "--locked", "--python", '"3.12"'])
+    assert.match(sessionSource, new RegExp(token.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")));
+  const source = g0SessionPythonSource();
+  const output = execFileSync(
+    "uv",
+    [
+      "run",
+      "--project",
+      resolve(process.cwd(), "tools/compat-inventory"),
+      "--locked",
+      "--python",
+      "3.12",
+      "python",
+      "-c",
+      "import sys; assert sys.version_info >= (3, 12); compile(sys.stdin.read(), '<g0-session>', 'exec'); print(sys.version.split()[0])",
+    ],
+    { cwd: process.cwd(), input: source, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
+  );
+  assert.match(output.trim(), /^3\.12(?:\.|$)/);
 });
 
 test("G0 session binds validated origins before the real Gate and Adapter are constructed", () => {

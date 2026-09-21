@@ -668,7 +668,7 @@ pub struct AuthState {
     pub fake_custom_token_expiry: FakeCustomTokenExpiry,
     /// Profile-specific Admin query behavior.
     pub query_limits: AuthQueryLimits,
-    /// Explicit local IdP continuation policy, independent of query paging.
+    /// Explicit local `IdP` continuation policy, independent of query paging.
     pub idp_continuations: IdpContinuationPolicy,
     /// App Check exchange, JWKS and debug-token management, when `appCheck.enabled` selects
     /// them. `None` makes every App Check route a 404 (the activation table of section 8).
@@ -7620,7 +7620,7 @@ fn admin_batch_delete(store: &mut AuthStore, body: &Value) -> JsonResponse {
 
 /// Admin `accounts:query` (`queryAccounts`): count or a bounded, field-sorted page.
 /// The Firebase profile preserves its unimplemented expression/ignored paging behavior.
-/// Strict mode accepts the typed SqlExpression shape, with an explicit local exact-union policy.
+/// Strict mode accepts the typed `SqlExpression` shape, with an explicit local exact-union policy.
 fn admin_query(store: &AuthStore, body: &Value, limits: AuthQueryLimits) -> JsonResponse {
     let expressions = if limits == AuthQueryLimits::ProductionBounded {
         match parse_admin_query_expressions(body) {
@@ -7683,7 +7683,7 @@ fn admin_query(store: &AuthStore, body: &Value, limits: AuthQueryLimits) -> Json
     }
 }
 
-/// Decode SqlExpression, not a SQL string. Validate every field before applying the
+/// Decode `SqlExpression`, not a SQL string. Validate every field before applying the
 /// documented priority email > phoneNumber > userId. Reject empty/unrecognized selectors
 /// rather than turning a malformed filter into an unfiltered query. Limits below are local
 /// parser safety limits, not claimed Identity Platform quotas.

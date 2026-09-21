@@ -994,7 +994,7 @@ pub struct AuthStore {
     /// credential is resolved directly rather than by scanning every user
     /// (`AUTH-TRANSIENT-04`). Kept in step with the users' own pending maps.
     pending_sign_in_owners: Arc<BTreeMap<String, LocalId>>,
-    /// Process-local raw IdP requests; detached from default snapshots and restore.
+    /// Process-local raw `IdP` requests; detached from default snapshots and restore.
     pending_idp: PendingIdpCache,
     /// Generated IDs held by in-flight blocking Auth candidates, grouped by reset generation and
     /// request ticket. This registry is shared by snapshots so concurrent candidates avoid each
@@ -1583,7 +1583,7 @@ impl AuthStore {
         }
     }
 
-    /// Retains a previously resolved IdP request under a namespace-bound opaque handle.
+    /// Retains a previously resolved `IdP` request under a namespace-bound opaque handle.
     ///
     /// The adapter supplies only original provider credentials, never a linking user's ID
     /// token. Authority binds the assertion validation mode/trust pin. Full caches omit this
@@ -1646,7 +1646,7 @@ impl AuthStore {
         self.pending_idp.get(token, authority, now)
     }
 
-    /// Number of retained IdP continuation handles in this namespace.
+    /// Number of retained `IdP` continuation handles in this namespace.
     #[must_use]
     pub fn pending_idp_count(&self) -> usize {
         self.pending_idp.len()
@@ -2374,7 +2374,7 @@ impl AuthStore {
     /// Number of copy-on-write transient registries this store shares with `other`.
     ///
     /// The seven registries are refresh sessions, deletion digests, their per-user index,
-    /// email action codes, phone verification codes, pending-MFA owners, and IdP
+    /// email action codes, phone verification codes, pending-MFA owners, and `IdP`
     /// continuations. Issuing a refresh session leaves the other five allocations shared.
     #[must_use]
     pub fn transient_registries_shared_with(&self, other: &Self) -> usize {
@@ -5947,28 +5947,11 @@ impl AuthRegistry {
             .tenant_metadata
             .lock()
             .map_err(|_| "tenant metadata registry is poisoned")?;
-        let metadata_tenants = metadata
-            .keys()
-            .filter(|(candidate, _)| candidate == project)
-            .map(|(_, tenant)| tenant.clone())
-            .collect::<Vec<_>>();
         let tenant_ids = tenant_entries
             .iter()
             .map(|(tenant, _)| tenant.clone())
             .collect::<Vec<_>>();
-        if tenant_ids != metadata_tenants {
-            return Err("tenant store and metadata membership differ");
-        }
-        let tenant_metadata = tenant_entries
-            .iter()
-            .map(|(tenant, _)| {
-                metadata
-                    .get(&(project.to_owned(), tenant.clone()))
-                    .cloned()
-                    .map(|value| (tenant.clone(), value))
-                    .ok_or("tenant metadata disappeared during Auth export")
-            })
-            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let tenant_metadata = Self::export_tenant_metadata(project, &tenant_ids, &metadata)?;
         let startup_overrides = self
             .tenant_config_overrides
             .lock()
@@ -5977,16 +5960,12 @@ impl AuthRegistry {
             .tenant_runtime_config_overrides
             .lock()
             .map_err(|_| "tenant runtime config override registry is poisoned")?;
-        let tenant_config_overrides = tenant_entries
-            .iter()
-            .filter_map(|(tenant, _)| {
-                let key = (project.to_owned(), tenant.clone());
-                let startup = startup_overrides.get(&key).copied().unwrap_or_default();
-                let runtime = runtime_overrides.get(&key).copied().unwrap_or_default();
-                let merged = startup.merge(runtime);
-                (!merged.is_empty()).then_some((tenant.clone(), merged))
-            })
-            .collect();
+        let tenant_config_overrides = Self::export_tenant_config_overrides(
+            project,
+            &tenant_ids,
+            &startup_overrides,
+            &runtime_overrides,
+        );
         // Export views are serialization inputs, not a way to transfer raw IdP
         // continuation credentials between processes/namespaces.
         let mut exported_default = default_guard.clone();
@@ -6007,6 +5986,56 @@ impl AuthRegistry {
             tenant_config_overrides,
         };
         Ok(Some(snapshot))
+    }
+
+    /// Projects the published tenant metadata of `project` for an export view.
+    ///
+    /// The tenant store membership must match the metadata membership exactly; a mismatch
+    /// means a tenant publication is mid-flight and the export is rejected.
+    fn export_tenant_metadata(
+        project: &str,
+        tenant_ids: &[String],
+        metadata: &BTreeMap<TenantKey, TenantMetadata>,
+    ) -> Result<BTreeMap<String, TenantMetadata>, &'static str> {
+        let metadata_tenants = metadata
+            .keys()
+            .filter(|(candidate, _)| candidate == project)
+            .map(|(_, tenant)| tenant.clone())
+            .collect::<Vec<_>>();
+        if tenant_ids != metadata_tenants {
+            return Err("tenant store and metadata membership differ");
+        }
+        tenant_ids
+            .iter()
+            .map(|tenant| {
+                metadata
+                    .get(&(project.to_owned(), tenant.clone()))
+                    .cloned()
+                    .map(|value| (tenant.clone(), value))
+                    .ok_or("tenant metadata disappeared during Auth export")
+            })
+            .collect()
+    }
+
+    /// Merges the startup and runtime tenant config overrides of `project` for an export view.
+    ///
+    /// Tenants without an effective override are omitted.
+    fn export_tenant_config_overrides(
+        project: &str,
+        tenant_ids: &[String],
+        startup_overrides: &BTreeMap<TenantKey, AuthNamespaceConfigPatch>,
+        runtime_overrides: &BTreeMap<TenantKey, AuthNamespaceConfigPatch>,
+    ) -> BTreeMap<String, AuthNamespaceConfigPatch> {
+        tenant_ids
+            .iter()
+            .filter_map(|tenant| {
+                let key = (project.to_owned(), tenant.clone());
+                let startup = startup_overrides.get(&key).copied().unwrap_or_default();
+                let runtime = runtime_overrides.get(&key).copied().unwrap_or_default();
+                let merged = startup.merge(runtime);
+                (!merged.is_empty()).then_some((tenant.clone(), merged))
+            })
+            .collect()
     }
 
     fn effective_tenant_config_override(

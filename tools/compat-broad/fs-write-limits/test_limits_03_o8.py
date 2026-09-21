@@ -1135,6 +1135,22 @@ def test_the_exemption_readback_requires_the_field_name_and_a_200():
             preflight.validate_index_exemption_attestation(attestation, permission)
 
 
+def _production_receipt(
+    *,
+    reservation="fs-write-limits-03-reservation-1",
+    postflight_complete=True,
+    verified_at_postflight=True,
+    gate_digest=None,
+):
+    """The narrow slice of a production receipt.json the restore binds to."""
+    return {
+        "ticket": {"reservation": reservation},
+        "gateDigest": gate_digest or ("7" * 64),
+        "postflightComplete": postflight_complete,
+        "indexExemption": {"verifiedAtPostflight": verified_at_postflight},
+    }
+
+
 def test_the_restored_readback_is_judged_and_recorded(tmp_path):
     import limits_03_indexes as indexes
 
@@ -1156,34 +1172,100 @@ def test_the_restored_readback_is_judged_and_recorded(tmp_path):
             preflight.verify_index_restored(body)
     readback = tmp_path / "restored.json"
     readback.write_text(json.dumps(DEFAULT_FIELD_BODY))
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(_production_receipt()))
     record_path = tmp_path / "restore.json"
+
+    # --verify-restored refuses without --receipt: a restore record cannot be
+    # produced without binding it to the production run it restores.
     assert (
         indexes.main(["--verify-restored", str(readback), "--record", str(record_path)])
+        == 2
+    )
+    assert not record_path.exists()
+
+    # A receipt whose postflight never confirmed the exemption also refuses.
+    for damage in (
+        {"postflight_complete": False},
+        {"verified_at_postflight": False},
+    ):
+        incomplete = tmp_path / f"receipt-{len(damage)}-{list(damage)[0]}.json"
+        incomplete.write_text(json.dumps(_production_receipt(**damage)))
+        assert (
+            indexes.main(
+                [
+                    "--verify-restored",
+                    str(readback),
+                    "--receipt",
+                    str(incomplete),
+                    "--record",
+                    str(record_path),
+                ]
+            )
+            == 2
+        )
+        assert not record_path.exists()
+
+    assert (
+        indexes.main(
+            [
+                "--verify-restored",
+                str(readback),
+                "--receipt",
+                str(receipt_path),
+                "--record",
+                str(record_path),
+            ]
+        )
         == 0
     )
     record = json.loads(record_path.read_text())
     assert record["kind"] == campaign.RESTORE_RECORD_KIND
     assert record["projectionDigest"] == preflight.expected_index_restored_digest()
     assert record["conformanceIndexesSha256"] == campaign.INDEXES_SHA256_BEFORE
+    receipt = json.loads(receipt_path.read_text())
+    assert record["receiptDigest"] == digest(receipt)
+    assert record["reservationTicket"] == receipt["ticket"]["reservation"]
+    assert record["gateDigest"] == receipt["gateDigest"]
     indexes.validate_restore_record(record)
     for damage in (
         {"verified": False},
         {"projection": preflight.EXPECTED_INDEX_EXEMPTION_PROJECTION},
         {"campaignId": "FS-LIMIT-API-REQUEST-BYTES"},
         {"conformanceIndexesSha256": campaign.INDEXES_SHA256_AFTER},
+        # An unbound record: the receipt binding fields are missing entirely.
+        {"receiptDigest": None},
+        {"reservationTicket": None},
+        {"gateDigest": None},
     ):
         with pytest.raises(ValueError, match="restore record"):
             indexes.validate_restore_record({**record, **damage})
     # A record is written once; the exempt readback is refused as restored.
     assert (
-        indexes.main(["--verify-restored", str(readback), "--record", str(record_path)])
+        indexes.main(
+            [
+                "--verify-restored",
+                str(readback),
+                "--receipt",
+                str(receipt_path),
+                "--record",
+                str(record_path),
+            ]
+        )
         == 2
     )
     exempt = tmp_path / "exempt.json"
     exempt.write_text(json.dumps(EXEMPT_FIELD_BODY))
     assert (
         indexes.main(
-            ["--verify-restored", str(exempt), "--record", str(tmp_path / "x")]
+            [
+                "--verify-restored",
+                str(exempt),
+                "--receipt",
+                str(receipt_path),
+                "--record",
+                str(tmp_path / "x"),
+            ]
         )
         == 2
     )
@@ -1201,29 +1283,60 @@ def test_the_package_binds_the_restore_evidence_only_when_verified(tmp_path):
     assert unbound["record"] is None
     readback = tmp_path / "restored.json"
     readback.write_text(json.dumps(DEFAULT_FIELD_BODY))
-    record_path = ROOT / "spec/compatibility/broad-runs/.limits-03-restore-test.json"
-    assert not record_path.exists()
-    try:
-        assert (
-            indexes.main(
-                ["--verify-restored", str(readback), "--record", str(record_path)]
-            )
-            == 0
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(_production_receipt()))
+    # The record is written entirely under tmp_path: an interrupted run never
+    # dirties the tracked spec/compatibility/broad-runs/ tree.
+    record_path = tmp_path / "limits-03-restore.json"
+    assert (
+        indexes.main(
+            [
+                "--verify-restored",
+                str(readback),
+                "--receipt",
+                str(receipt_path),
+                "--record",
+                str(record_path),
+            ]
         )
-        bound = package_03.restore_binding(record_path)
-        assert bound["verified"] is True
-        assert (
-            bound["record"]["sha256"]
-            == hashlib.sha256(record_path.read_bytes()).hexdigest()
+        == 0
+    )
+    bound = package_03.restore_binding(
+        record_path, root=tmp_path, production_receipt=receipt_path
+    )
+    assert bound["verified"] is True
+    assert bound["record"]["path"] == "limits-03-restore.json"
+    assert (
+        bound["record"]["sha256"]
+        == hashlib.sha256(record_path.read_bytes()).hexdigest()
+    )
+    assert bound["record"]["projectionDigest"] == (
+        preflight.expected_index_restored_digest()
+    )
+    receipt = json.loads(receipt_path.read_text())
+    assert bound["record"]["receiptDigest"] == digest(receipt)
+    assert bound["record"]["reservationTicket"] == receipt["ticket"]["reservation"]
+
+    # Bound without cross-checking a receipt: the record's self-carried
+    # binding is still required, but nothing is compared against it.
+    self_bound = package_03.restore_binding(record_path, root=tmp_path)
+    assert self_bound["verified"] is True
+
+    # A record bound to another ticket (a different production receipt) is
+    # refused by the cross-check.
+    other_receipt_path = tmp_path / "other-receipt.json"
+    other_receipt_path.write_text(
+        json.dumps(_production_receipt(reservation="a-different-reservation"))
+    )
+    with pytest.raises(ValueError, match="not bound to the given production receipt"):
+        package_03.restore_binding(
+            record_path, root=tmp_path, production_receipt=other_receipt_path
         )
-        assert bound["record"]["projectionDigest"] == (
-            preflight.expected_index_restored_digest()
-        )
-    finally:
-        record_path.unlink(missing_ok=True)
+
     precondition = campaign.index_exemption_precondition()
     assert precondition["deploy"][-2].startswith("git checkout -- conformance/")
     assert "--verify-restored" in " ".join(precondition["restore"])
+    assert "--receipt" in " ".join(precondition["restore"])
     assert precondition["restoreEvidence"]["expectedProjectionDigest"] == (
         preflight.expected_index_restored_digest()
     )

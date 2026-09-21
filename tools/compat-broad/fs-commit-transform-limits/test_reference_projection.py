@@ -6,8 +6,8 @@ import shutil
 from pathlib import Path
 
 import pytest
-
 import reference_projection as projection
+
 V6_RUN = (
     Path(os.environ["FIREEMU_COMMIT_TRANSFORM_V6_RUN"])
     if "FIREEMU_COMMIT_TRANSFORM_V6_RUN" in os.environ

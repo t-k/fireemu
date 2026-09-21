@@ -7,18 +7,16 @@ scopes, the collector and comparator the campaign runs, the cost model and the
 abort closure.
 
 It authorizes nothing and opens nothing. The lane's own ``admission()`` still
-raises. The members that would let a campaign reach a production wire have no
-working default here, because this lane has no reviewed production transport
-and no worker archive: ``transport_bound`` and ``binding_verifier`` refuse when
-called, so a descriptor built here can freeze inputs and pass the O7 admission
-check set against a synthetic approval, and can do nothing else. The collector
-and the acquisition comparator are the lane's real modules, reached only
-through an injected transport that the core's ``reject_production_transport``
-has inspected.
+raises. The transport and binding members require an independently issued O7
+capability and the reviewed worker bytes; descriptor construction alone cannot
+reach a production wire. The collector and acquisition comparator are the
+lane's real modules, reached only through an injected transport that the
+core's ``reject_production_transport`` has inspected.
 
 The window is the collector's: 600 seconds of observation and 300 seconds of
 recovery on top of it, which is the collector's 900 second recovery deadline
-measured from the start of the run.
+measured from the start of the run. The transport adapter is closed over one
+request bundle and delegates wire execution to the reviewed remote transport.
 """
 
 from __future__ import annotations
@@ -26,7 +24,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -244,7 +244,6 @@ def gate_plan(plan: dict[str, Any], *, permission_expires_at: float | None = Non
         "intervalSeconds": 0.25,
         "receiptKind": "fs-rules-management-receipt-v1",
         "transport": "bounded-rules-worker",
-        "requestSeconds": 8.0,
         "jobs": {
             "rules-management": {
                 "resources": list(plan["ownedResources"][:1]),
@@ -371,8 +370,69 @@ def unwired(member: str):
     return refuse
 
 
-transport_bound = unwired("production transport")
-binding_verifier = unwired("worker archive closure")
+_WORKER_TIMEOUT_SECONDS = 8.0
+
+
+def binding_verifier(binding: Any, binding_digest: Any, frozen: Any) -> None:
+    """Verify the reviewed worker bytes and the frozen source-map entry."""
+    from o5_user_token_remote_transport import verify_worker_binding
+
+    verify_worker_binding(binding, binding_digest, frozen)
+
+
+def transport_bound(
+    value: Any,
+    *,
+    binding: bytes,
+    binding_digest: str,
+    capability: Any = None,
+) -> dict[str, Any]:
+    """Run one closed Rules request through the admitted worker.
+
+    Credentials and identity proofs are accepted only in this in-memory call
+    bundle; collector receipts never receive the bundle. The O8 capability and
+    worker binding remain the authority for dispatch.
+    """
+    required = {
+        "plan",
+        "operation",
+        "credentials",
+        "frozenInputs",
+        "accountBindings",
+        "identityProofs",
+        "fixtureOrigin",
+        "deadline",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise ValueError("closed Rules wire call required")
+    if capability is None:
+        raise ValueError("active O7 production capability required")
+    deadline = value["deadline"]
+    if (
+        type(deadline) not in (int, float)
+        or not math.isfinite(deadline)
+        or deadline - time.monotonic() < _WORKER_TIMEOUT_SECONDS
+    ):
+        raise TimeoutError("Rules worker cannot fit within Gate deadline")
+    binding_verifier(binding, binding_digest, value["frozenInputs"].get("sourceInputs"))
+    from o5_user_token_remote_transport import make_transport
+    from o8_admission import authorize_transport
+
+    authorize_transport(capability, binding=binding, binding_digest=binding_digest)
+    transmit = make_transport(
+        value["plan"],
+        credentials=value["credentials"],
+        frozen_inputs=value["frozenInputs"],
+        account_bindings=value["accountBindings"],
+        identity_proofs=value["identityProofs"],
+        fixture_origin=value["fixtureOrigin"],
+    )
+    return transmit(
+        value["operation"],
+        binding=binding,
+        binding_digest=binding_digest,
+        capability=capability,
+    )
 
 
 def retained_artifact_validator(

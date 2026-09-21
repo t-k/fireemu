@@ -1,8 +1,8 @@
 """Offline dry run of the user-token O8 descriptor.
 
 Nothing here reaches production: no credential, no origin, no Ledger and no
-process. The synthetic approval is built from local files in tmp_path, and
-the members that would reach a wire are left refusing.
+process. The synthetic approval is built from local files in tmp_path, and the
+production adapter is exercised only against bounded loopback fixtures.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -30,6 +31,7 @@ sys.path.insert(0, str(HERE))
 import o5_user_token_descriptor as lane
 import o5_user_token_remote_transport as remote
 import o8_admission
+import shared_gate
 from broad_contract import digest
 from o5_user_token_campaign import (
     _SOURCE_FILES,
@@ -38,11 +40,15 @@ from o5_user_token_campaign import (
     manifest,
 )
 from o5_user_token_case import CAMPAIGN, compile_case
-from o5_user_token_collector import ROLE_LOCAL_SHADOW, ROLE_PRODUCTION, RulesManagementSession, collect
-from reservations import Ledger
-import shared_gate
+from o5_user_token_collector import (
+    ROLE_LOCAL_SHADOW,
+    ROLE_PRODUCTION,
+    RulesManagementSession,
+    collect,
+)
 from o5_user_token_comparator_v2 import REFUSED
 from o8_campaign import REQUIRED_MEMBERS, CampaignDescriptor
+from reservations import Ledger
 from test_o5_user_token_collector import Transport
 from test_o5_user_token_collector_bound import (
     acquisition_for,
@@ -271,11 +277,14 @@ def test_lock_scopes_hold_the_ruleset_exclusively_and_the_nonce_subtree() -> Non
     assert conflicts(scopes[1], other)
 
 
-def test_every_unwired_member_refuses() -> None:
+def test_bound_members_require_closed_o7_inputs() -> None:
     descriptor = lane.descriptor()
-    for member in ("transport_bound", "binding_verifier"):
-        with pytest.raises(PermissionError, match="not wired"):
-            getattr(descriptor, member)()
+    source, source_digest = remote.worker_binding()
+    descriptor.binding_verifier(source, source_digest, None)
+    with pytest.raises(ValueError, match="closed Rules wire call"):
+        descriptor.transport_bound(
+            {}, binding=source, binding_digest=source_digest, capability=object()
+        )
     assert descriptor.forbidden_transports() == (lane.transport_bound,)
 
 
@@ -303,7 +312,7 @@ def test_a_capability_cannot_be_issued_without_a_worker_binding(
     with_synthetic_build(monkeypatch, hashlib.sha256(b"synthetic artifact").hexdigest())
     descriptor = lane.descriptor()
     bindings = synthetic(tmp_path, descriptor)
-    with pytest.raises(PermissionError, match="worker archive closure"):
+    with pytest.raises(ValueError, match="worker source"):
         o8_admission.issue_production_capability(
             descriptor, binding=b"worker", binding_digest="c" * 64, **bindings
         )
@@ -401,8 +410,8 @@ def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_l
     baseline = "projects/fireemu-35fe6/rulesets/pre-existing"
     class Handler(http.server.BaseHTTPRequestHandler):
         active = baseline
-        deleted: set[str] = set()
-        requests: list[tuple[str, str, dict]] = []
+        deleted: ClassVar[set[str]] = set()
+        requests: ClassVar[list[tuple[str, str, dict]]] = []
         def do_any(self):
             size = int(self.headers.get("Content-Length", "0"))
             body = json.loads(self.rfile.read(size) or b"{}")

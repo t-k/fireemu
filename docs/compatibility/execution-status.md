@@ -4,6 +4,12 @@ Plan: [execution-plan.md](execution-plan.md). Scope: [emulator-scope.md](emulato
 
 ## Validated continuation checkpoint (2026-09-22)
 
+### Current bounded verification correction (as of 2026-09-22)
+
+The non-MFA full run at `28e90c0b3` reports 6,740 passes, 103 failures, 26 skips and six passing subtests. The failures are bounded to the Auth-list (100), shared completion (2) and Explain (1) areas; this is not a green full-Python gate. Shared completion later passed 154 tests on the pushed repair, and the Auth-list `f497` repair has 279 independent and 279 integration tests recorded while its push/integration is still in progress. These results do not rewrite the earlier source-bound records.
+
+Durable recovery `881` has 230 security-review tests plus the lint-only `e3` result and a 230-test integration result at `36d`; it remains structural allocation preparation only. The real-wire fixture, issuer, executor and settlement are not implemented, and canonical Ledger allocation and production execution remain zero. The separate reader `818` review is still in progress. MFA `c420` is a new typed-reconcile source under review with its full suite in progress; the older 592-pass/one-stale-provenance result is historical. G0 `4b` attempted an actual native run but is `INDETERMINATE` before the first row: the primary embedded-Python syntax error and missing Auth-origin contract remain, and the `30ee` origin fix still has a compile bug. No 12-row native MATCH exists. Limits has only an author-only seven-request wire fixture and remains unaccepted; producer-fixture debugging and safe host routing continue. No API production call or synthetic TCP result is production evidence.
+
 ### Current verification boundary (as of 2026-09-21T19:48:25Z)
 
 The integration source reviewed here is `5fb29d0e881430dddd9da7869a4631e7f0c6804e`. The fixed Rust verification at `28e90c0b3` passed 3,165 tests with 81 configured skips and workspace Clippy passed; no Rust-bound source inputs changed between that fixed verification and `5fb29d0e`. This is reusable Rust-bound evidence, not a claim that the current Python inventory is complete. For the exact latest public SHA, normal CI run `35643173410` completed successfully, while compatibility-inventory run `35643173963` remains in progress; its feature-integrity job succeeded but its offline-acquisition job has pending checks. The older inventory run `35638650070` for `68016ee3c` completed with failure in its offline-acquisition check and is historical, not evidence for `5fb29d0e`.

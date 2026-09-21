@@ -194,6 +194,18 @@ def _pytest_short(
     ]
     valid = [pair for pair in candidates if _well_formed_nodeid(pair[0])]
     if len(valid) == 1:
+        # A leading empty parameter group followed by another bracketed
+        # segment can be either a value beginning with a close bracket or a
+        # message whose text happens to contain brackets. The short summary
+        # cannot distinguish those readings; retain the raw row instead of
+        # silently truncating the nodeid at the first separator.
+        first_separator = rest.find(" - ")
+        if (
+            "[]" in rest[: first_separator if first_separator >= 0 else len(rest)]
+            and first_separator >= 0
+            and "[" in rest[first_separator + 3 :]
+        ):
+            return status, rest, "", False
         nodeid, message = valid[0]
         return status, nodeid, message, True
     return status, rest, "", False

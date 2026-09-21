@@ -32,6 +32,12 @@ def _expected_fields(plan: dict) -> dict[str, object]:
     for job in plan["jobs"].values():
         for operation in job["observation"]:
             body = operation.get("body")
+            if operation["method"] == "PATCH" and isinstance(body, dict):
+                name = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+                fields = body.get("fields")
+                if isinstance(name, str) and isinstance(fields, dict):
+                    expected.setdefault(name, fields)
+                continue
             if operation["method"] != "POST" or not isinstance(body, dict):
                 continue
             for write in body.get("writes", []):
@@ -39,7 +45,7 @@ def _expected_fields(plan: dict) -> dict[str, object]:
                 name = update.get("name")
                 fields = update.get("fields")
                 if isinstance(name, str) and isinstance(fields, dict):
-                    expected[name] = fields
+                    expected.setdefault(name, fields)
     if len(expected) != 4 or any("_owner" in fields for fields in expected.values()):
         raise ValueError("g0-frozen-fields-invalid")
     return expected

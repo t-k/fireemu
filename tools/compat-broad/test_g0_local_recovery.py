@@ -105,6 +105,16 @@ def test_frozen_projection_derives_exact_four_resources_without_owner_marker():
     assert all("_owner" not in item for item in fields.values())
 
 
+def test_frozen_projection_preserves_conditional_setup_values_over_later_batch_mutations():
+    fields = _expected_fields(plan())
+    partial = plan()["jobs"]["partial"]["resources"]
+    guard = plan()["jobs"]["transaction-field"]["resources"][0]
+    assert fields[partial[0]]["a"]["integerValue"] == "1"
+    assert fields[partial[1]]["a"]["integerValue"] == "7"
+    assert fields[partial[2]]["a"]["integerValue"] == "9"
+    assert fields[guard]["a"]["integerValue"] == "3"
+
+
 def test_real_gate_facade_constructs_from_frozen_plan(tmp_path: Path):
     value = plan()
     gate_path = tmp_path / "gate"

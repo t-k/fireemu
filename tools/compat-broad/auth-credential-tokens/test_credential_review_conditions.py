@@ -33,7 +33,17 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 import credential_shadow as shadow
-from credential_cases import SAME_SECOND_CASE_ID, observation_cases
+from credential_cases import (
+    CASE_COUNT,
+    SAME_SECOND_CASE_ID,
+    control_members,
+    observation_cases,
+)
+
+#: A complete undisturbed run: 34 observation requests over the 19 cases and 8
+#: cleanup requests for the three accounts it creates (delete, UID readback, and an
+#: address readback for the two accounts that have one).
+FULL_RUN_REQUESTS = 42
 from credential_collector import (
     BudgetExceeded,
     build_receipt,
@@ -100,6 +110,14 @@ def _service(clock, *, cookie_subject="same") -> SimpleNamespace:
     sessions: dict[str, tuple] = {}
     sent: list[str] = []
     cookie_pairs: list[dict] = []
+    oob_codes: dict[str, str] = {}
+    issued_count = [0]
+
+    def drop_sessions(uid: str) -> None:
+        """The local strict runtime removes the refresh sessions of a revoked account."""
+        for refresh_token, known in list(sessions.items()):
+            if known[0] == uid:
+                del sessions[refresh_token]
 
     def session(uid: str, claims: dict | None = None, auth_time: int | None = None):
         now = int(clock.time())
@@ -116,7 +134,10 @@ def _service(clock, *, cookie_subject="same") -> SimpleNamespace:
                 **claims,
             }
         )
-        refresh_token = f"fixture-refresh-{len(sessions)}"
+        # A counter, not the live session count: a retired session must never free
+        # its name for a later account.
+        issued_count[0] += 1
+        refresh_token = f"fixture-refresh-{issued_count[0]}"
         sessions[refresh_token] = (uid, now if auth_time is None else auth_time, claims)
         return {"localId": uid, "idToken": token, "refreshToken": refresh_token}
 
@@ -158,13 +179,29 @@ def _service(clock, *, cookie_subject="same") -> SimpleNamespace:
             uid = f"fixture-u{len(accounts)}"
             accounts[uid] = {
                 "email": body["email"],
+                "password": body["password"],
                 "attributes": {},
                 "validSince": "0",
             }
             return 200, session(uid)
         if "accounts:signInWithPassword" in url:
             uid = next(k for k, v in accounts.items() if v["email"] == body["email"])
+            if accounts[uid]["password"] != body["password"]:
+                return _refused("INVALID_PASSWORD")
             return 200, session(uid)
+        if "accounts:sendOobCode" in url:
+            uid = next(k for k, v in accounts.items() if v["email"] == body["email"])
+            code = f"fixture-oob-{len(oob_codes)}"
+            oob_codes[code] = uid
+            return 200, {"email": body["email"], "oobCode": code}
+        if "accounts:resetPassword" in url:
+            uid = oob_codes.pop(body["oobCode"], None)
+            if uid is None:
+                return _refused("INVALID_OOB_CODE")
+            accounts[uid]["password"] = body["newPassword"]
+            accounts[uid]["validSince"] = str(int(clock.time()))
+            drop_sessions(uid)
+            return 200, {"email": accounts[uid]["email"], "requestType": "PASSWORD_RESET"}
         if "accounts:signInWithCustomToken" in url:
             custom = _payload(body["token"])
             if "sub" in custom.get("claims", {}):
@@ -181,6 +218,7 @@ def _service(clock, *, cookie_subject="same") -> SimpleNamespace:
             account = accounts[body["localId"]]
             if "validSince" in body:
                 account["validSince"] = body["validSince"]
+                drop_sessions(body["localId"])
             if "customAttributes" in body:
                 account["attributes"] = json.loads(body["customAttributes"])
             return 200, {"localId": body["localId"]}
@@ -344,6 +382,7 @@ def _review_rows() -> list[dict]:
             "errorCode": case["expectedLocal"]["errorCode"],
             "assertions": {name: True for name in case["expectedLocal"]["assertions"]},
             "trustRoot": "unsigned-emulator",
+            **control_members(case),
             **(
                 {
                     "boundaryPinned": True,
@@ -531,7 +570,7 @@ def test_review_partial_against_complete_is_no_longer_a_row_of_differences() -> 
     """`partial-vs-complete`: sixteen NOT_RUN rows were classified DIFFERENT."""
     partial = _partial_record()["receipt"]
     assert partial["recordingComplete"] is False
-    assert sum(row["errorCode"] == "NOT_RUN" for row in partial["rows"]) == 16
+    assert sum(row["errorCode"] == "NOT_RUN" for row in partial["rows"]) == CASE_COUNT - 1
     report = compare(partial, _receipt("production", _review_rows()))
     assert report["reason"] == "incomplete-recording"
     assert report["summary"]["indeterminate"] == len(observation_cases())
@@ -568,12 +607,12 @@ def test_review_an_unstalled_run_still_records_every_case() -> None:
     assert run.problems == []
     assert run.record["receipt"]["recordingComplete"] is True
     assert run.record["receipt"]["deadlines"]["exceeded"] == {}
-    assert run.record["receipt"]["budget"]["requests"] == 33
+    assert run.record["receipt"]["budget"]["requests"] == FULL_RUN_REQUESTS
     assert run.service.accounts == {}
 
 
 def test_review_a_stall_between_requests_now_stops_the_run() -> None:
-    """`wall-budget-600-second-pause`: 609 s of clock, 0.33 s charged, 33 requests.
+    """`wall-budget-600-second-pause`: 609 s of clock, 0.33 s charged, 42 requests.
 
     The stall is time nobody spent inside a request, so no sum of request durations can
     see it. The absolute deadline does: the wait ends past it, the run opens no further
@@ -587,7 +626,7 @@ def test_review_a_stall_between_requests_now_stops_the_run() -> None:
     assert exceeded["run"]["elapsedSeconds"] > 540
     assert run.record["failure"] is not None
     assert run.record["receipt"]["recordingComplete"] is False
-    assert run.record["receipt"]["budget"]["requests"] < 33
+    assert run.record["receipt"]["budget"]["requests"] < FULL_RUN_REQUESTS
     assert run.exitCode == 1
     # The account created before the stall is never dropped, and the cleanup window the
     # campaign declares is granted whatever the observation phase did with its own.

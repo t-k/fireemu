@@ -12,7 +12,13 @@ import pytest
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
-from credential_cases import SAME_SECOND_CASE_ID, case_by_id, observation_cases
+import credential_comparator as comparator
+from credential_cases import (
+    SAME_SECOND_CASE_ID,
+    case_by_id,
+    control_members,
+    observation_cases,
+)
 from credential_collector import (
     build_receipt,
     mark_deleted,
@@ -34,6 +40,7 @@ def _row(case: dict) -> dict:
         "errorCode": expected["errorCode"],
         "assertions": {name: True for name in expected["assertions"]},
         "trustRoot": "unsigned-emulator",
+        **control_members(case),
     }
     if case["nondeterminism"] == "SAME_SECOND_BOUNDARY":
         row["boundaryPinned"] = False
@@ -339,3 +346,123 @@ def test_a_boundary_second_reported_as_a_whole_number_string_still_pins() -> Non
         boundarySeconds={"authTime": 1_800_000_000, "validSince": "1800000000"},
     )
     assert _classifications(compare(local, production))[SAME_SECOND_CASE_ID] == "MATCH"
+
+
+# --- claim-set hygiene: the local-only session marker is never a difference --------
+
+PRODUCTION_CLAIMS = {
+    "claimNames": ["aud", "auth_time", "exp", "firebase", "iat", "iss", "sub", "user_id"],
+    "claimTypes": {
+        "aud": "string",
+        "auth_time": "int",
+        "exp": "int",
+        "firebase": "object",
+        "iat": "int",
+        "iss": "string",
+        "sub": "string",
+        "user_id": "string",
+    },
+    "firebase": {
+        "claimNames": ["identities", "sign_in_provider"],
+        "claimTypes": {"identities": "object", "sign_in_provider": "string"},
+    },
+}
+
+
+def _local_claims_with_epoch() -> dict:
+    claims = json.loads(json.dumps(PRODUCTION_CLAIMS))
+    claims["firebase"]["claimNames"] = sorted(
+        [*claims["firebase"]["claimNames"], "fireemu_session_epoch"]
+    )
+    claims["firebase"]["claimTypes"]["fireemu_session_epoch"] = "string"
+    return claims
+
+
+def test_a_local_token_with_the_session_epoch_matches_a_production_token_without_it() -> (
+    None
+):
+    local = _local_claims_with_epoch()
+    assert local != PRODUCTION_CLAIMS
+    assert comparator.compare_claim_sets(local, PRODUCTION_CLAIMS) == "MATCH"
+    assert comparator.compare_claim_sets(PRODUCTION_CLAIMS, local) == "MATCH"
+    # Stripping is a projection for comparison; the inputs are left as recorded.
+    assert "fireemu_session_epoch" in local["firebase"]["claimNames"]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda c: c["claimNames"].append("email"),
+        lambda c: c["claimTypes"].update({"auth_time": "string"}),
+        lambda c: c["firebase"]["claimNames"].append("tenant"),
+        lambda c: c["firebase"]["claimTypes"].update({"sign_in_provider": "null"}),
+        lambda c: c.update({"firebase": None}),
+        lambda c: c["claimNames"].remove("user_id"),
+    ],
+)
+def test_any_other_claim_difference_is_a_semantic_mismatch(mutate) -> None:
+    local = _local_claims_with_epoch()
+    mutate(local)
+    assert comparator.compare_claim_sets(local, PRODUCTION_CLAIMS) == "SEMANTIC_MISMATCH"
+
+
+def test_a_top_level_claim_with_the_same_name_is_not_stripped() -> None:
+    # Only `firebase.fireemu_session_epoch` is local-only. A claim of that name at the
+    # top level is not the marker and stays a difference.
+    local = json.loads(json.dumps(PRODUCTION_CLAIMS))
+    local["claimNames"] = sorted([*local["claimNames"], "fireemu_session_epoch"])
+    local["claimTypes"]["fireemu_session_epoch"] = "string"
+    assert comparator.compare_claim_sets(local, PRODUCTION_CLAIMS) == "SEMANTIC_MISMATCH"
+
+
+@pytest.mark.parametrize("bad", [None, [], "claims", {"claimNames": float("nan")}])
+def test_a_malformed_claim_set_never_matches(bad) -> None:
+    assert comparator.compare_claim_sets(bad, PRODUCTION_CLAIMS) == "SEMANTIC_MISMATCH"
+    assert comparator.compare_claim_sets(PRODUCTION_CLAIMS, bad) == "SEMANTIC_MISMATCH"
+
+
+def test_row_claim_sets_are_compared_with_the_epoch_stripped() -> None:
+    local, production = _receipt("local"), _receipt("production")
+    case_id = "refresh-preserves-auth-time"
+    _set_row((local,), case_id, claims=_local_claims_with_epoch())
+    _set_row((production,), case_id, claims=json.loads(json.dumps(PRODUCTION_CLAIMS)))
+    assert _classifications(compare(local, production))[case_id] == "MATCH"
+    # Any other claim difference on the row is still a difference.
+    differing = json.loads(json.dumps(PRODUCTION_CLAIMS))
+    differing["claimNames"] = sorted([*differing["claimNames"], "email"])
+    differing["claimTypes"]["email"] = "string"
+    _set_row((production,), case_id, claims=differing)
+    assert _classifications(compare(local, production))[case_id] == "DIFFERENT"
+
+
+# --- the fresh control on a refusal row must hold on both sides ---------------------
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["refresh-after-password-reset-rejected", "refresh-after-explicit-valid-since-rejected"],
+)
+def test_a_refusal_row_whose_fresh_control_did_not_hold_is_indeterminate(case_id) -> None:
+    local, production = _receipt("local"), _receipt("production")
+    assert _classifications(compare(local, production))[case_id] == "MATCH"
+    for control in (
+        {"status": 400, "errorCode": "TOKEN_EXPIRED"},
+        {"status": 200, "errorCode": "TOKEN_EXPIRED"},
+        {"status": "200", "errorCode": None},
+        None,
+    ):
+        for side in (local, production):
+            weakened = json.loads(json.dumps(side))
+            _set_row((weakened,), case_id, freshSessionRefresh=control)
+            other = production if side is local else local
+            pair = (weakened, other) if side is local else (other, weakened)
+            assert _classifications(compare(*pair))[case_id] == "INDETERMINATE", control
+
+
+def test_the_refusal_code_itself_is_still_compared_when_the_control_holds() -> None:
+    local, production = _receipt("local"), _receipt("production")
+    case_id = "refresh-after-password-reset-rejected"
+    # Production answering TOKEN_EXPIRED where the local runtime answers
+    # INVALID_REFRESH_TOKEN is the finding this row exists to record.
+    _set_row((production,), case_id, errorCode="TOKEN_EXPIRED")
+    assert _classifications(compare(local, production))[case_id] == "DIFFERENT"

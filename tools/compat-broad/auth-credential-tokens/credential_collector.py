@@ -277,6 +277,7 @@ def claim_shape(token: str, reveal: tuple[str, ...] = ()) -> dict[str, Any]:
     # Classification of a declared envelope, not evidence of signature verification.
     trust_root = "unsigned-emulator" if algorithm == "none" else "signed"
     issuer = payload.get("iss")
+    firebase = payload.get("firebase")
     return {
         "trustRoot": trust_root,
         "algorithm": algorithm,
@@ -285,12 +286,38 @@ def claim_shape(token: str, reveal: tuple[str, ...] = ()) -> dict[str, Any]:
         "claimTypes": {
             name: _json_type(value) for name, value in sorted(payload.items())
         },
+        # The nested `firebase` block is where the runtime keeps its provider and
+        # session markers, so its names and types are recorded the same way.
+        "firebase": {
+            "claimNames": sorted(firebase),
+            "claimTypes": {
+                name: _json_type(value) for name, value in sorted(firebase.items())
+            },
+        }
+        if isinstance(firebase, dict)
+        else None,
         "times": {
             name: payload[name]
             for name in TIME_CLAIM_NAMES
             if type(payload.get(name)) is int
         },
         "claimValues": {name: payload[name] for name in reveal if name in payload},
+    }
+
+
+def claim_set(shape: dict[str, Any]) -> dict[str, Any]:
+    """The publishable claim set a row records from a decoded shape: names and types.
+
+    No value and no time is carried here; the comparison contract strips the
+    local-only claims from it before judging equality.
+    """
+    return {
+        "claimNames": list(shape["claimNames"]),
+        "claimTypes": dict(shape["claimTypes"]),
+        "firebase": None if shape.get("firebase") is None else {
+            "claimNames": list(shape["firebase"]["claimNames"]),
+            "claimTypes": dict(shape["firebase"]["claimTypes"]),
+        },
     }
 
 

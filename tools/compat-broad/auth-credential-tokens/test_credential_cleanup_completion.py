@@ -12,7 +12,7 @@ import pytest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import credential_shadow as shadow
-from credential_cases import observation_cases
+from credential_cases import control_members, observation_cases
 from credential_collector import new_tracker, track_account, owned_email, mark_deleted, cleanup_report
 
 
@@ -26,7 +26,8 @@ def rows():
     return {c["id"]: {"caseId":c["id"], "status":c["expectedLocal"]["status"],
                       "errorCode":c["expectedLocal"]["errorCode"],
                       "assertions":{k:True for k in c["expectedLocal"]["assertions"]},
-                      "trustRoot":"unsigned-emulator"} for c in observation_cases()}
+                      "trustRoot":"unsigned-emulator", **control_members(c)}
+            for c in observation_cases()}
 
 
 def stopped():

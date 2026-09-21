@@ -18,7 +18,7 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 import credential_shadow as shadow
-from credential_cases import observation_cases
+from credential_cases import control_members, observation_cases
 from credential_collector import (
     BudgetExceeded,
     build_receipt,
@@ -120,6 +120,7 @@ def test_agreement_requires_every_declared_assertion_to_hold() -> None:
                 "status": expected["status"],
                 "errorCode": expected["errorCode"],
                 "assertions": {name: True for name in expected["assertions"]},
+                **control_members(case),
             }
         )
     assert shadow._agreement(rows)["unexpected"] == []
@@ -146,6 +147,7 @@ def test_an_unset_assertion_is_not_treated_as_held() -> None:
             "status": case["expectedLocal"]["status"],
             "errorCode": case["expectedLocal"]["errorCode"],
             "assertions": {},
+            **control_members(case),
         }
         for case in observation_cases()
     ]
@@ -388,7 +390,8 @@ def _service(*, cookie_subject: str | None = None) -> dict:
         )
 
     def start_session(uid: str, claims: dict | None = None) -> dict:
-        refresh_token = f"refresh-{len(state['sessions'])}"
+        state["issued"] = state.get("issued", 0) + 1
+        refresh_token = f"refresh-{state['issued']}"
         session = {
             "uid": uid,
             "authTime": state["now"],
@@ -454,6 +457,7 @@ def _service(*, cookie_subject: str | None = None) -> dict:
         uid = f"uid-{len(state['accounts']) + 1}"
         state["accounts"][uid] = {
             "email": body["email"],
+            "password": body["password"],
             "validSince": 0,
             "customAttributes": {},
         }
@@ -462,8 +466,38 @@ def _service(*, cookie_subject: str | None = None) -> dict:
     def sign_in(body: dict) -> tuple[int, dict]:
         for uid, account in state["accounts"].items():
             if account["email"] == body["email"]:
+                if account["password"] != body["password"]:
+                    return _refused("INVALID_PASSWORD")
                 return signed_in(start_session(uid))
         return _refused("EMAIL_NOT_FOUND")
+
+    def drop_sessions(uid: str) -> None:
+        """The local strict runtime removes the refresh sessions of a revoked account."""
+        for refresh_token, session in list(state["sessions"].items()):
+            if session["uid"] == uid:
+                del state["sessions"][refresh_token]
+
+    def send_oob_code(body: dict) -> tuple[int, dict]:
+        if body.get("requestType") != "PASSWORD_RESET" or body.get("returnOobLink") is not True:
+            return _refused("MISSING_REQ_TYPE")
+        for uid, account in state["accounts"].items():
+            if account["email"] == body["email"]:
+                code = f"oob-{len(state.setdefault('oob', {}))}"
+                state["oob"][code] = uid
+                return 200, {"kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+                             "email": body["email"], "oobCode": code}
+        return _refused("EMAIL_NOT_FOUND")
+
+    def reset_password(body: dict) -> tuple[int, dict]:
+        uid = state.get("oob", {}).pop(body.get("oobCode"), None)
+        if uid is None:
+            return _refused("INVALID_OOB_CODE")
+        account = state["accounts"][uid]
+        account["password"] = body["newPassword"]
+        account["validSince"] = state["now"]
+        drop_sessions(uid)
+        return 200, {"kind": "identitytoolkit#ResetPasswordResponse",
+                     "email": account["email"], "requestType": "PASSWORD_RESET"}
 
     def refresh(body: dict) -> tuple[int, dict]:
         session = state["sessions"].get(body.get("refresh_token"))
@@ -478,6 +512,8 @@ def _service(*, cookie_subject: str | None = None) -> dict:
         account = state["accounts"][body["localId"]]
         if "validSince" in body:
             account["validSince"] = int(body["validSince"])
+            # An explicit validSince retires the account's refresh sessions locally.
+            drop_sessions(body["localId"])
         if "customAttributes" in body:
             account["customAttributes"] = json.loads(body["customAttributes"])
         return 200, {"localId": body["localId"]}
@@ -511,6 +547,10 @@ def _service(*, cookie_subject: str | None = None) -> dict:
             return user_lookup(body) if "key=" in path else admin_lookup(body)
         if name == "/accounts:update":
             return admin_update(body)
+        if name == "/accounts:sendOobCode":
+            return send_oob_code(body)
+        if name == "/accounts:resetPassword":
+            return reset_password(body)
         if name == "/accounts:delete":
             state["accounts"].pop(body["localId"], None)
             return 200, {}
@@ -740,6 +780,7 @@ def _expected_row(case: dict, *, trust_root: str = "unsigned-emulator") -> dict:
         "errorCode": expected["errorCode"],
         "assertions": {name: True for name in expected["assertions"]},
         "trustRoot": trust_root,
+        **control_members(case),
     }
     if case["nondeterminism"] == "SAME_SECOND_BOUNDARY":
         row["boundaryPinned"] = False

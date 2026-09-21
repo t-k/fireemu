@@ -34,6 +34,7 @@ from credential_collector import (
     charge_elapsed,
     cleanup_report,
     check_deadline,
+    claim_set,
     claim_shape,
     enter_recovery,
     mark_deleted,
@@ -52,6 +53,8 @@ API_KEY = "local-shadow-key"
 OWNER = "Bearer owner"
 PROJECT = "demo-app"
 PASSWORD = "shadow-Passw0rd!"
+RESET_PASSWORD = "shadow-Reset-Passw0rd!"
+CUSTOM_TOKEN_ISSUER = "shadow@example.com"
 CUSTOM_TOKEN_AUDIENCE = "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit"
 REQUEST_TIMEOUT_SECONDS = 5
 
@@ -136,6 +139,46 @@ def error_code(body: dict[str, Any]) -> str | None:
     return message.split(":")[0].strip() if isinstance(message, str) else None
 
 
+# --- environment ---------------------------------------------------------------------
+
+
+def local_environment() -> dict[str, Any]:
+    """What the case runner needs to know about the service it runs against.
+
+    The runner is the same on both sides; only these values differ. The local values
+    are constants of the owned daemon. A production environment supplies the oracle
+    project, its Web API key, per-run passwords and an RS256 signer, and it names its
+    endpoints explicitly because the three services live on separate origins there.
+    The signer is a callable from a custom-token payload to a compact token; the local
+    runtime accepts an unsigned one, production requires a service-account signature.
+    """
+    return {
+        "project": PROJECT,
+        "apiKey": API_KEY,
+        "password": PASSWORD,
+        "resetPassword": RESET_PASSWORD,
+        "customTokenIssuer": CUSTOM_TOKEN_ISSUER,
+        "signer": unsigned_jwt,
+        "trustRoot": "unsigned-emulator",
+        "endpoints": None,
+    }
+
+
+def _endpoints(base: str, environment: dict[str, Any]) -> dict[str, str]:
+    """The identity, secure-token and admin bases; derived from `base` when not named."""
+    declared = environment.get("endpoints")
+    if declared is not None:
+        if set(declared) != {"identity", "secure", "admin"}:
+            raise ShadowError("typed endpoints required")
+        return dict(declared)
+    identity = f"{base}/identitytoolkit.googleapis.com/v1"
+    return {
+        "identity": identity,
+        "secure": f"{base}/securetoken.googleapis.com/v1/token?key={environment['apiKey']}",
+        "admin": f"{identity}/projects/{environment['project']}",
+    }
+
+
 # --- case execution ----------------------------------------------------------------
 
 
@@ -154,6 +197,11 @@ def _row(
         "trustRoot": "unsigned-emulator",
         **extra,
     }
+
+
+def _claims(shape: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The claim set a row records for an issued token, or None when none was issued."""
+    return None if shape is None else claim_set(shape)
 
 
 def _rest(budget: dict[str, Any], seconds: float) -> None:
@@ -176,17 +224,25 @@ def run_cases(
     tracker: dict[str, Any],
     rows: dict[str, dict[str, Any]],
     poster: Any = None,
+    environment: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Run every declared case, filling `rows` as it goes.
 
     The caller owns `rows` so that a stop condition part-way through still leaves every
     row observed so far in the caller's hands, which is what the failure rehearsal
-    promises for an exhausted budget.
+    promises for an exhausted budget. `environment` names the service the run targets;
+    the local daemon's values are the default, and a production run supplies its own.
     """
     send = poster or post
-    identity = f"{base}/identitytoolkit.googleapis.com/v1"
-    secure = f"{base}/securetoken.googleapis.com/v1/token?key={API_KEY}"
-    admin = f"{identity}/projects/{PROJECT}"
+    env = local_environment() if environment is None else dict(environment)
+    endpoints = _endpoints(base, env)
+    identity, secure, admin = endpoints["identity"], endpoints["secure"], endpoints["admin"]
+    key = env["apiKey"]
+    password, trust_root = env["password"], env["trustRoot"]
+    signer, issuer = env["signer"], env["customTokenIssuer"]
+
+    def row(case_id: str, status: int, body: dict[str, Any], assertions: dict[str, bool], **extra: Any) -> dict[str, Any]:
+        return _row(case_id, status, body, assertions, trustRoot=trust_root, **extra)
 
     def signup(index: int) -> dict[str, Any]:
         email = owned_email(tracker, index)
@@ -194,8 +250,8 @@ def run_cases(
         status, body = send(
             budget,
             identity,
-            f"/accounts:signUp?key={API_KEY}",
-            {"email": email, "password": PASSWORD, "returnSecureToken": True},
+            f"/accounts:signUp?key={key}",
+            {"email": email, "password": password, "returnSecureToken": True},
         )
         if status != 200:
             raise ShadowError(f"sign-up failed: {error_code(body)}")
@@ -207,12 +263,12 @@ def run_cases(
         responsibility.resolve(tracker, intent, uid, created=True)
         return body
 
-    def signin(email: str) -> dict[str, Any]:
+    def signin(email: str, secret: str = password) -> dict[str, Any]:
         status, body = send(
             budget,
             identity,
-            f"/accounts:signInWithPassword?key={API_KEY}",
-            {"email": email, "password": PASSWORD, "returnSecureToken": True},
+            f"/accounts:signInWithPassword?key={key}",
+            {"email": email, "password": secret, "returnSecureToken": True},
         )
         if status != 200:
             raise ShadowError(f"sign-in failed: {error_code(body)}")
@@ -220,21 +276,45 @@ def run_cases(
 
     def lookup(id_token: str) -> tuple[int, dict[str, Any]]:
         return send(
-            budget, identity, f"/accounts:lookup?key={API_KEY}", {"idToken": id_token}
+            budget, identity, f"/accounts:lookup?key={key}", {"idToken": id_token}
         )
+
+    def refresh(refresh_token: str) -> tuple[int, dict[str, Any]]:
+        return send(
+            budget,
+            secure,
+            "",
+            {"grant_type": "refresh_token", "refresh_token": refresh_token},
+        )
+
+    def custom_token(claims: dict[str, Any], uid: str, *, age_seconds: int = 0) -> str:
+        now = int(time.time()) - age_seconds
+        return signer(
+            {
+                "aud": CUSTOM_TOKEN_AUDIENCE,
+                "iss": issuer,
+                "sub": issuer,
+                "uid": uid,
+                "claims": claims,
+                "iat": now,
+                "exp": now + 3600,
+            }
+        )
+
+    def fresh_control(email: str, secret: str = password) -> dict[str, Any]:
+        """A fresh sign-in exchanged once more, recorded as the row's control."""
+        fresh = signin(email, secret)
+        status, body = refresh(fresh["refreshToken"])
+        return {"status": status, "errorCode": error_code(body)}
 
     # --- refresh -------------------------------------------------------------
     first = signup(0)
+    first_email = owned_email(tracker, 0)
     base_shape = claim_shape(first["idToken"])
     _rest(budget, 2)
-    status, body = send(
-        budget,
-        secure,
-        "",
-        {"grant_type": "refresh_token", "refresh_token": first["refreshToken"]},
-    )
+    status, body = refresh(first["refreshToken"])
     refreshed = claim_shape(body["id_token"]) if status == 200 else None
-    rows["refresh-preserves-auth-time"] = _row(
+    rows["refresh-preserves-auth-time"] = row(
         "refresh-preserves-auth-time",
         status,
         body,
@@ -254,23 +334,17 @@ def run_cases(
                 and refreshed["times"]["exp"] - refreshed["times"]["iat"] == 3600
             ),
         },
+        claims=_claims(refreshed),
         diagnostics={
             "signIn": base_shape["times"],
             "refreshed": refreshed["times"] if refreshed else None,
         },
     )
+    first_refresh_token = body.get("refresh_token", first["refreshToken"])
     _rest(budget, 1)
-    status, body = send(
-        budget,
-        secure,
-        "",
-        {
-            "grant_type": "refresh_token",
-            "refresh_token": body.get("refresh_token", first["refreshToken"]),
-        },
-    )
+    status, body = refresh(first_refresh_token)
     second = claim_shape(body["id_token"]) if status == 200 else None
-    rows["refresh-repeat-preserves-auth-time"] = _row(
+    rows["refresh-repeat-preserves-auth-time"] = row(
         "refresh-repeat-preserves-auth-time",
         status,
         body,
@@ -288,21 +362,15 @@ def run_cases(
                 and second["times"]["iat"] > refreshed["times"]["iat"]
             ),
         },
+        claims=_claims(second),
         diagnostics={
             "signIn": base_shape["times"],
             "refreshed": second["times"] if second else None,
         },
     )
-    status, body = send(
-        budget,
-        secure,
-        "",
-        {
-            "grant_type": "refresh_token",
-            "refresh_token": "rt1.0.0.demo-app.unissued0000000000000",
-        },
-    )
-    rows["refresh-unknown-token-rejected"] = _row(
+    first_refresh_token = body.get("refresh_token", first_refresh_token)
+    status, body = refresh("rt1.0.0.demo-app.unissued0000000000000")
+    rows["refresh-unknown-token-rejected"] = row(
         "refresh-unknown-token-rejected", status, body, {}
     )
 
@@ -319,7 +387,7 @@ def run_cases(
         owner=True,
     )
     status, body = lookup(revoked["idToken"])
-    rows["revocation-older-session-rejected"] = _row(
+    rows["revocation-older-session-rejected"] = row(
         "revocation-older-session-rejected", status, body, {}
     )
 
@@ -344,7 +412,7 @@ def run_cases(
     stored = read_back.get("users", [{}])[0].get("validSince")
     pinned = str(stored) == str(boundary_second)
     status, body = lookup(boundary["idToken"])
-    rows["revocation-same-second-session"] = _row(
+    rows["revocation-same-second-session"] = row(
         "revocation-same-second-session",
         status,
         body,
@@ -355,8 +423,9 @@ def run_cases(
 
     _rest(budget, 2)
     later = signin(revoked_email)
+    later_shape = claim_shape(later["idToken"])
     status, body = lookup(later["idToken"])
-    rows["revocation-newer-session-accepted"] = _row(
+    rows["revocation-newer-session-accepted"] = row(
         "revocation-newer-session-accepted",
         status,
         body,
@@ -364,27 +433,17 @@ def run_cases(
             "acceptedResponse": status == 200,
             "idTokenReturned": bool(later.get("idToken")),
         },
+        claims=_claims(later_shape),
     )
 
     # --- custom token --------------------------------------------------------
     custom_uid = f"custom-{tracker['nonce']}"
-    now = int(time.time())
-    custom = unsigned_jwt(
-        {
-            "aud": CUSTOM_TOKEN_AUDIENCE,
-            "iss": "shadow@example.com",
-            "sub": "shadow@example.com",
-            "uid": custom_uid,
-            "claims": {"role": "tester"},
-            "iat": now,
-            "exp": now + 3600,
-        }
-    )
+    custom = custom_token({"role": "tester"}, custom_uid)
     intent = responsibility.begin(tracker, "custom-signin", requested_uid=custom_uid)
     status, body = send(
         budget,
         identity,
-        f"/accounts:signInWithCustomToken?key={API_KEY}",
+        f"/accounts:signInWithCustomToken?key={key}",
         {"token": custom, "returnSecureToken": True},
     )
     if status != 200:
@@ -401,7 +460,7 @@ def run_cases(
     responsibility.resolve(tracker, intent, custom_uid, created=True)
     custom_session = body
     custom_shape = claim_shape(body["idToken"], reveal=("role",))
-    rows["custom-token-developer-claims-present"] = _row(
+    rows["custom-token-developer-claims-present"] = row(
         "custom-token-developer-claims-present",
         status,
         body,
@@ -412,45 +471,26 @@ def run_cases(
             "developerClaimPresent": custom_shape["claimValues"].get("role")
             == "tester",
         },
+        claims=_claims(custom_shape),
     )
-    reserved = unsigned_jwt(
-        {
-            "aud": CUSTOM_TOKEN_AUDIENCE,
-            "iss": "shadow@example.com",
-            "sub": "shadow@example.com",
-            "uid": custom_uid,
-            "claims": {"sub": "elevated"},
-            "iat": now,
-            "exp": now + 3600,
-        }
-    )
+    reserved = custom_token({"sub": "elevated"}, custom_uid)
     status, body = send(
         budget,
         identity,
-        f"/accounts:signInWithCustomToken?key={API_KEY}",
+        f"/accounts:signInWithCustomToken?key={key}",
         {"token": reserved, "returnSecureToken": True},
     )
-    rows["custom-token-reserved-claim-rejected"] = _row(
+    rows["custom-token-reserved-claim-rejected"] = row(
         "custom-token-reserved-claim-rejected", status, body, {}
     )
-    expired = unsigned_jwt(
-        {
-            "aud": CUSTOM_TOKEN_AUDIENCE,
-            "iss": "shadow@example.com",
-            "sub": "shadow@example.com",
-            "uid": custom_uid,
-            "claims": {},
-            "iat": now - 7200,
-            "exp": now - 3600,
-        }
-    )
+    expired = custom_token({}, custom_uid, age_seconds=7200)
     status, body = send(
         budget,
         identity,
-        f"/accounts:signInWithCustomToken?key={API_KEY}",
+        f"/accounts:signInWithCustomToken?key={key}",
         {"token": expired, "returnSecureToken": True},
     )
-    rows["custom-token-expired-rejected"] = _row(
+    rows["custom-token-expired-rejected"] = row(
         "custom-token-expired-rejected", status, body, {}
     )
 
@@ -475,7 +515,7 @@ def run_cases(
             else None
         )
         lifetime = cookie["times"]["exp"] - cookie["times"]["iat"] if cookie else None
-        rows[case_id] = _row(
+        rows[case_id] = row(
             case_id,
             status,
             body,
@@ -486,7 +526,7 @@ def run_cases(
                 "cookieIssuerIsSessionIssuer": bool(
                     cookie
                     and cookie["issuer"]
-                    == f"https://session.firebase.google.com/{PROJECT}"
+                    == f"https://session.firebase.google.com/{env['project']}"
                 ),
                 # The subject itself is an account identifier and stays out of the
                 # record; a cookie minted for another account must fail here.
@@ -501,6 +541,7 @@ def run_cases(
                     cookie and cookie["claimValues"].get("role") == "tester"
                 ),
             },
+            claims=_claims(cookie),
         )
         # Only the assertions the case declares are reported.
         declared = set(
@@ -519,7 +560,7 @@ def run_cases(
         {"idToken": revoked["idToken"], "validDuration": "3600"},
         owner=True,
     )
-    rows["session-cookie-revoked-id-token-rejected"] = _row(
+    rows["session-cookie-revoked-id-token-rejected"] = row(
         "session-cookie-revoked-id-token-rejected", status, body, {}
     )
 
@@ -535,21 +576,13 @@ def run_cases(
         owner=True,
     )
     _rest(budget, 1)
-    status, body = send(
-        budget,
-        secure,
-        "",
-        {
-            "grant_type": "refresh_token",
-            "refresh_token": custom_session["refreshToken"],
-        },
-    )
+    status, body = refresh(custom_session["refreshToken"])
     refreshed_custom = (
         claim_shape(body["id_token"], reveal=("role", "tier"))
         if status == 200
         else None
     )
-    rows["claim-precedence-session-over-account"] = _row(
+    rows["claim-precedence-session-over-account"] = row(
         "claim-precedence-session-over-account",
         status,
         body,
@@ -569,10 +602,67 @@ def run_cases(
                 == custom_shape["times"]["auth_time"]
             ),
         },
+        claims=_claims(refreshed_custom),
         diagnostics={
             "signIn": custom_shape["times"],
             "refreshed": refreshed_custom["times"] if refreshed_custom else None,
         },
+    )
+
+    # --- refresh refusal class (TP-AUTH-C-02) --------------------------------
+    # An out-of-band reset on the first account: the code is returned to the
+    # privileged caller rather than mailed, the password is replaced, and the
+    # pre-reset refresh token is exchanged. A fresh sign-in with the new password
+    # is exchanged once more as the row's control.
+    status, body = send(
+        budget,
+        admin,
+        "/accounts:sendOobCode",
+        {"requestType": "PASSWORD_RESET", "email": first_email, "returnOobLink": True},
+        owner=True,
+    )
+    oob_code = body.get("oobCode")
+    if status != 200 or type(oob_code) is not str or not oob_code:
+        raise ShadowError(f"privileged reset code request failed: {error_code(body)}")
+    status, body = send(
+        budget,
+        identity,
+        f"/accounts:resetPassword?key={key}",
+        {"oobCode": oob_code, "newPassword": env["resetPassword"]},
+    )
+    if status != 200:
+        raise ShadowError(f"password reset failed: {error_code(body)}")
+    _rest(budget, 1)
+    status, body = refresh(first_refresh_token)
+    rows["refresh-after-password-reset-rejected"] = row(
+        "refresh-after-password-reset-rejected",
+        status,
+        body,
+        {},
+        freshSessionRefresh=fresh_control(first_email, env["resetPassword"]),
+    )
+
+    # An explicit administrative validSince on the second account, set two whole
+    # seconds after the newest session's own auth_time, then that session's refresh
+    # token is exchanged; a fresh sign-in is exchanged once more as the control.
+    _rest(budget, 2)
+    send(
+        budget,
+        admin,
+        "/accounts:update",
+        {
+            "localId": revoked["localId"],
+            "validSince": str(later_shape["times"]["auth_time"] + 2),
+        },
+        owner=True,
+    )
+    status, body = refresh(later["refreshToken"])
+    rows["refresh-after-explicit-valid-since-rejected"] = row(
+        "refresh-after-explicit-valid-since-rejected",
+        status,
+        body,
+        {},
+        freshSessionRefresh=fresh_control(revoked_email),
     )
     return rows
 
@@ -840,6 +930,16 @@ def _agreement(rows: list[dict[str, Any]]) -> dict[str, Any]:
         for name in expected["assertions"]:
             if row.get("assertions", {}).get(name) is not True:
                 problems.append(f"assertion {name} not held")
+        fresh = case.get("freshControl")
+        if fresh is not None:
+            control = row.get("freshSessionRefresh")
+            held = (
+                isinstance(control, dict)
+                and control.get("status") == 200
+                and control.get("errorCode") is None
+            )
+            if held is not (fresh["requires"] == "accepted"):
+                problems.append("fresh control not held")
         if problems:
             unexpected.append({"caseId": case["id"], "problems": problems})
     return {"cases": len(observation_cases()), "unexpected": unexpected}

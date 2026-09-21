@@ -671,63 +671,63 @@
     "owner": {
       "accounts": [
         {
-          "email": "o2-mfa-enrollment-age-300-2bc226371c844bdab9a271bc2a040cd2@example.com",
+          "email": "o2-mfa-enrollment-age-300-54e53f3561d748e4847d56a13929bed6@example.com",
           "ownership": "created-by-this-run",
           "role": "enrollment-age-300"
         },
         {
-          "email": "o2-mfa-enrollment-age-450-2bc226371c844bdab9a271bc2a040cd2@example.com",
+          "email": "o2-mfa-enrollment-age-450-54e53f3561d748e4847d56a13929bed6@example.com",
           "ownership": "created-by-this-run",
           "role": "enrollment-age-450"
         },
         {
-          "email": "o2-mfa-enrollment-age-600-2bc226371c844bdab9a271bc2a040cd2@example.com",
+          "email": "o2-mfa-enrollment-age-600-54e53f3561d748e4847d56a13929bed6@example.com",
           "ownership": "created-by-this-run",
           "role": "enrollment-age-600"
         },
         {
-          "email": "o2-mfa-interaction-anonymous-2bc226371c844bdab9a271bc2a040cd2@example.com",
+          "email": "o2-mfa-interaction-anonymous-54e53f3561d748e4847d56a13929bed6@example.com",
           "ownership": "created-by-this-run",
           "role": "interaction-anonymous"
         },
         {
-          "email": "o2-mfa-interaction-unverified-2bc226371c844bdab9a271bc2a040cd2@example.com",
+          "email": "o2-mfa-interaction-unverified-54e53f3561d748e4847d56a13929bed6@example.com",
           "ownership": "created-by-this-run",
           "role": "interaction-unverified"
         },
         {
-          "email": "o2-mfa-pending-age-1800-2bc226371c844bdab9a271bc2a040cd2@example.com",
+          "email": "o2-mfa-pending-age-1800-54e53f3561d748e4847d56a13929bed6@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-1800"
         },
         {
-          "email": "o2-mfa-pending-age-300-2bc226371c844bdab9a271bc2a040cd2@example.com",
+          "email": "o2-mfa-pending-age-300-54e53f3561d748e4847d56a13929bed6@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-300"
         },
         {
-          "email": "o2-mfa-pending-age-450-2bc226371c844bdab9a271bc2a040cd2@example.com",
+          "email": "o2-mfa-pending-age-450-54e53f3561d748e4847d56a13929bed6@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-450"
         },
         {
-          "email": "o2-mfa-pending-age-600-2bc226371c844bdab9a271bc2a040cd2@example.com",
+          "email": "o2-mfa-pending-age-600-54e53f3561d748e4847d56a13929bed6@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-600"
         },
         {
-          "email": "o2-mfa-pending-control-2bc226371c844bdab9a271bc2a040cd2@example.com",
+          "email": "o2-mfa-pending-control-54e53f3561d748e4847d56a13929bed6@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-control"
         },
         {
-          "email": "o2-mfa-totp-lifecycle-2bc226371c844bdab9a271bc2a040cd2@example.com",
+          "email": "o2-mfa-totp-lifecycle-54e53f3561d748e4847d56a13929bed6@example.com",
           "ownership": "created-by-this-run",
           "role": "totp-lifecycle"
         }
       ],
-      "namespace": "o2/AUTH-MFA-AGE-TOTP-01/2bc226371c844bdab9a271bc2a040cd2",
-      "nonceDigest": "dadd975ab4b76259331428fa32d6f16e9a69b5419300910477cedc5263ef6473"
+      "namespace": "o2/AUTH-MFA-AGE-TOTP-01/54e53f3561d748e4847d56a13929bed6",
+      "nonceDigest": "e27b3b7fbb04eee135251e7cfd91a8f819f60f143141c9079ba0148d70d72ce4"
     },
     "ownerPreconditions": [
       "Identity Platform (not legacy Firebase Authentication) is enabled on the project, because multi-factor configuration lives there.",
@@ -1237,21 +1237,21 @@
   "maxRequests": 400,
   "productionExecuted": false,
   "provenance": {
-    "digest": "2027c11e6e81df1d900328173abc4f5c769c853f18265a0d60e5f17f2edae14e",
+    "digest": "c0d58a935f110fd6999e065527fcddefb87e80d11c65d59ebb7b7c32a082e55d",
     "evidence": "recomputed-from-worktree",
     "paths": {
-      "tools/compat-broad/auth-totp-enroll/mfa_admission.py": "e93ec93a21bfeacd890fc597b544036992778f7aaa69070192346fbaea17fbfa",
+      "tools/compat-broad/auth-totp-enroll/mfa_admission.py": "be3ec0c95fdc2b7f00c3d5ead21173b2cbfb2b711fa312ef69af4dafd7b7fe31",
       "tools/compat-broad/auth-totp-enroll/mfa_cases.py": "55d5a3a7c140c98eee514bf960db2f0b90701100593c683d4aafcd2a8a58cd9f",
       "tools/compat-broad/auth-totp-enroll/mfa_collector.py": "dbca150727891e3e6341a833afc573693844f2682c2d6068ef52a8c0d8e6b9dd",
       "tools/compat-broad/auth-totp-enroll/mfa_comparator.py": "f1e4bd6143355fc033d11f18d85e84984383ac133f1e73fb47ce3d9017bde494",
       "tools/compat-broad/auth-totp-enroll/mfa_config_lock.py": "b2e14f90a3f97fe59e1dac49e436d2f6f5929cfe6bc5ecbcfbe23074a507d79a",
       "tools/compat-broad/auth-totp-enroll/mfa_descriptor.py": "d6676b7ebb783c488879d1d5aca1f3f1790e07835efc21b5362e922aa8177cc1",
-      "tools/compat-broad/auth-totp-enroll/mfa_gate.py": "60fb364b9278ad30eb1cc2cf506a3fba3cd856db5a89c7509bea2aad188cdb0e",
+      "tools/compat-broad/auth-totp-enroll/mfa_gate.py": "9dc817218bf0df9aa47f1f3dbe2530896d26fd2c347b8446a92e3a52f5b14d8d",
       "tools/compat-broad/auth-totp-enroll/mfa_local_shadow.py": "de84c063fd056051eaec2fcaa8d9eac7ef8ecd65b95e7f2e7de8393a378543e8",
       "tools/compat-broad/auth-totp-enroll/mfa_manifest.py": "e98060ef42b434fb20e5b750cb9737c8d28edcd7c76456b9ed4310888b2625df",
       "tools/compat-broad/auth-totp-enroll/mfa_o8.py": "df6c2d8f3ee1b2f3b48d19dc92fe39e2ae95f8f65df1bee18425a235604a6bf1",
       "tools/compat-broad/auth-totp-enroll/mfa_persistence.py": "a1ec21d846f1410a0d8cc647d3d8901da3eaeec1413cd65ac918f19820140333",
-      "tools/compat-broad/auth-totp-enroll/mfa_production.py": "669c705f58014591d74c22724f7125dec2ea6792a8acc83e76ad77b56466768e",
+      "tools/compat-broad/auth-totp-enroll/mfa_production.py": "fc5a5824f7c2152f881d9e1a1057ca879b32c904d4c39ff72b0c347222ff6dfb",
       "tools/compat-broad/auth-totp-enroll/mfa_production_transport.py": "9a088ff5b0b9307b79098a0f70da0519c1938f1cc1dff02c082408843ec84a4d",
       "tools/compat-broad/auth-totp-enroll/mfa_provenance.py": "6d7f46ec2636999aea5c15fc675a1924df142fbae6c47355e14836912133408e",
       "tools/compat-broad/auth-totp-enroll/mfa_request_budget.py": "c2336054b52aaf0e6167f80be9a22f14a57c8e4532f14e99d558d68090127a55",
@@ -1277,7 +1277,7 @@
       "attemptedAccounts": 11,
       "authorizesCleanup": false,
       "journalComplete": true,
-      "recordSha256": "945691390ccd2b29704aece5c36c20152f47663c21932ae35a0584d9f134685f",
+      "recordSha256": "8bb8daa81e6a0b35e9c54907f5e5aa010218dc5395cf7d0846e67cd7c3f79cf2",
       "remainingKnownAccounts": 0,
       "resourceCleanupComplete": true,
       "schema": "o2-mfa-local-responsibility-v1",
@@ -1296,7 +1296,7 @@
     "observationLimitHit": false,
     "observationRequests": 155,
     "phase": "closed",
-    "planDigest": "e384006262b6bdd86cbc7b20a90f3aee628cfa8e3405c6361f93866d40f7d3c8",
+    "planDigest": "b096d22b0975aab0a636d506027d5d04788cf4eff5843aa5ee93050012aec685",
     "recoveryAccounts": 11,
     "recoveryEntered": true,
     "recoveryRequests": 22,
@@ -1542,7 +1542,7 @@
   "side": "local",
   "worktree": {
     "clean": true,
-    "commit": "999ffac960ae89f2cbc07bb22b0dfd5c9700eca1",
+    "commit": "de49965b2cb97ba507c2e1d87be304c44522db17",
     "resolved": true
   }
 }

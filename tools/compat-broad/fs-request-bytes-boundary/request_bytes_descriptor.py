@@ -121,6 +121,16 @@ SHARED_SOURCES = (
     "tools/compat-broad/batch_wire.py",
     "tools/compat-broad/batch_contract.py",
 )
+# Management dispatch has two real worker paths: tokeninfo uses the private
+# credential worker, while the project/database/Auth reads use batch_adapter's
+# standalone batch_wire worker. Keep this explicit so the reservation
+# generation cannot silently omit either transport implementation.
+TRANSPORT_CLOSURE_SOURCES = (
+    PREFLIGHT_ENTRY,
+    "tools/compat-broad/fs-write-txn/credential_prep.py",
+    "tools/compat-broad/batch_adapter.py",
+    "tools/compat-broad/batch_wire.py",
+)
 # The closure a reservation records, so a later abort proves it runs the same
 # sources the acquisition ran.
 ABORT_CLOSURE_SOURCES = (
@@ -129,7 +139,24 @@ ABORT_CLOSURE_SOURCES = (
     "tools/compat-broad/o8-core/o8_admission.py",
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_admission.py",
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_descriptor.py",
+    *TRANSPORT_CLOSURE_SOURCES,
 )
+LEGACY_CLOSURE_SOURCES = ABORT_CLOSURE_SOURCES[:5]
+# Immutable metadata from the retained 2026-09-21 O8 packet. This is the only
+# historical generation accepted by this descriptor; it is intentionally kept
+# as digests rather than importing or rewriting the private packet.
+HISTORICAL_GENERATIONS = {
+    (
+        "a2d2db49cc097f3313008ef8eeb1b10672107427",
+        "4e363c7276a266070f4aaf1b57ea96cff441b165a15d7ca3de1fa4bfcd433697",
+    ): {
+        "o8_admission.py": "1adf21e8815ff8131377a6d776f56027bb9a24a5201b22dbff98d9fabd70b334",
+        "request_bytes_admission.py": "63e827dfad0af24f88ec35ebdbab1a9b47a4ad0da7c8ec95794b5c022b0e5c79",
+        "request_bytes_descriptor.py": "dfd90f72ecfb6fa385f68c8813c1a1a3f44595fcb296ef73caab5d92157ab195",
+        "reservations.py": "bed7d761805bbc565b09bda630ffef6d6af637fffd46344bb018b3b54abf2c93",
+        "shared_gate.py": "74d0912a6cd1102e3b918511a98e67e01e442415f59a9e9f1e7def630a859045",
+    }
+}
 
 
 def shadow_record() -> dict:
@@ -704,6 +731,45 @@ def source_map() -> dict[str, str]:
     if any(name not in values for name in bound):
         raise ValueError("frozen source map omits a published bound source")
     return values
+
+
+def generation_source_digests(source_inputs: dict[str, str]) -> dict[str, str]:
+    """Project the full closure to the Ledger's legacy basename-key schema."""
+    if not isinstance(source_inputs, dict):
+        raise ValueError("frozen source map required")
+    names = [Path(name).name for name in ABORT_CLOSURE_SOURCES]
+    if len(names) != len(set(names)):
+        raise ValueError("source closure basename collision")
+    if any(name not in source_inputs for name in ABORT_CLOSURE_SOURCES):
+        raise ValueError("frozen acquisition source closure required")
+    return {
+        Path(name).name: source_inputs[name] for name in ABORT_CLOSURE_SOURCES
+    }
+
+
+def validate_generation(generation: dict, inputs: dict) -> None:
+    """Validate current generations and one explicit historical schema."""
+    if not isinstance(generation, dict) or not isinstance(inputs, dict):
+        raise ValueError("saved generation binding required")
+    source_digests = generation.get("sourceDigests")
+    if not isinstance(source_digests, dict):
+        raise ValueError("saved generation source closure required")
+    source_inputs = inputs.get("sourceInputs")
+    identity = (generation.get("sourceCommit"), generation.get("collectorSourceDigest"))
+    if generation.get("sourceCommit") != inputs.get("sourceCommit"):
+        raise ValueError("saved generation commit differs")
+    if generation.get("collectorSourceDigest") != digest(source_inputs):
+        raise ValueError("saved generation source map differs")
+    historical = HISTORICAL_GENERATIONS.get(identity)
+    if historical is not None:
+        if source_digests != historical:
+            raise ValueError("historical generation source closure differs")
+        return
+    # Any non-allowlisted identity is a current-schema packet and must carry
+    # the complete closure, even when its source map is not today's checkout.
+    current = generation_source_digests(source_inputs)
+    if source_digests != current:
+        raise ValueError("saved generation source closure incomplete")
 
 
 def collector(gate, plan, output, *, transmit):

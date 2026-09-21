@@ -383,7 +383,71 @@ def test_frozen_inputs_bind_the_plan_permission_and_source_snapshot(tmp_path):
         "o8_admission.py",
         "request_bytes_admission.py",
         "request_bytes_descriptor.py",
+        "request_bytes_preflight.py",
+        "credential_prep.py",
+        "batch_adapter.py",
+        "batch_wire.py",
     }
+    for path in campaign.TRANSPORT_CLOSURE_SOURCES:
+        assert generation["sourceDigests"][Path(path).name] == inputs["sourceInputs"][path]
+
+
+@pytest.mark.parametrize("path", campaign.TRANSPORT_CLOSURE_SOURCES)
+def test_transport_source_mutation_is_outside_frozen_generation(tmp_path, path):
+    built = Admission(tmp_path)
+    source = built.source / path
+    source.write_bytes(source.read_bytes() + b"\n# mutation")
+    with pytest.raises(ValueError):
+        admission._provenance(
+            built.source, built.commit, built.inputs["sourceInputs"]
+        )
+
+
+def test_noncurrent_source_map_cannot_downgrade_generation_closure(tmp_path):
+    built = Admission(tmp_path)
+    inputs = copy.deepcopy(built.inputs)
+    inputs["sourceInputs"].pop(
+        "tools/compat-broad/fs-request-bytes-boundary/request_bytes_campaign.py"
+    )
+    generation = admission.abort_generation(built.inputs)
+    generation["sourceDigests"].pop("batch_wire.py")
+    with pytest.raises(ValueError, match="source map differs"):
+        campaign.validate_generation(generation, inputs)
+
+
+def test_unallowlisted_legacy_generation_is_rejected(tmp_path):
+    built = Admission(tmp_path)
+    generation = admission.abort_generation(built.inputs)
+    generation["sourceDigests"] = {
+        Path(name).name: built.inputs["sourceInputs"][name]
+        for name in campaign.LEGACY_CLOSURE_SOURCES
+    }
+    with pytest.raises(ValueError, match="source closure incomplete"):
+        campaign.validate_generation(generation, built.inputs)
+
+
+def test_current_generation_cannot_select_legacy_closure(tmp_path):
+    built = Admission(tmp_path)
+    generation = admission.abort_generation(built.inputs)
+    generation["sourceDigests"] = {
+        Path(name).name: built.inputs["sourceInputs"][name]
+        for name in campaign.LEGACY_CLOSURE_SOURCES
+    }
+    with pytest.raises(ValueError, match="source closure incomplete"):
+        campaign.validate_generation(generation, built.inputs)
+
+
+def test_retained_historical_generation_uses_allowlisted_metadata():
+    record = Path("/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-21/reqbytes-o8-run-v1")
+    if not (record / "inputs.json").is_file():
+        pytest.skip("retained request-byte metadata is unavailable")
+    inputs = json.loads((record / "inputs.json").read_bytes())
+    generation = json.loads((record / "receipt.json").read_bytes())["generation"]
+    campaign.validate_generation(generation, inputs)
+    damaged = copy.deepcopy(generation)
+    damaged["sourceCommit"] = "0" * 40
+    with pytest.raises(ValueError):
+        campaign.validate_generation(damaged, inputs)
 
 
 @pytest.mark.parametrize(

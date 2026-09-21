@@ -349,6 +349,7 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
         or release.get("ticket") != receipt.get("ticket")
     ):
         raise ValueError("saved acquisition binding differs")
+    campaign.validate_generation(receipt.get("generation"), inputs)
     preflight.validate_saved_management(receipt, snapshot, inputs["permission"])
     ledger = reservations.Ledger(ledger_root)
     ledger.bound_claim(receipt["ticket"])

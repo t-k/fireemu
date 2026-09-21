@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { publishJson } from "./io.mjs";
 import { requireThat, digestJson, safeCode } from "./core.mjs";
-import { g0SessionPythonSource, validateG0Origins } from "./g0.mjs";
+import { g0SessionPythonSource, readOwnedProcessArgv, validateG0Origins } from "./g0.mjs";
 
 const directory = process.env.PILOT_RUN_DIR;
 requireThat(typeof directory === "string", "missing-run-directory");
@@ -24,6 +24,10 @@ const runInfo = await fs.stat(directory);
 const binaryHash = createHash("sha256").update(await fs.readFile(join(directory, "fireemu"))).digest("hex");
 const configHash = createHash("sha256").update(await fs.readFile(join(directory, "fireemu.json"))).digest("hex");
 const rulesHash = createHash("sha256").update(await fs.readFile(join(directory, "firestore.rules"))).digest("hex");
+function observedArgv(pid) {
+  return readOwnedProcessArgv(pid);
+}
+const launcherArgv = observedArgv(process.ppid);
 requireThat(
   receipt.schema === "fireemu-g0-launch-v1" &&
     receipt.pid === process.ppid &&
@@ -42,6 +46,21 @@ requireThat(
     receipt.exportOnExit === null,
   "g0-launch-receipt-invalid",
 );
+requireThat(
+  Array.isArray(launcherArgv) && JSON.stringify(launcherArgv) === JSON.stringify([receipt.command, ...receipt.args]),
+  "g0-launch-argv-invalid",
+);
+const expectedProvenance = {
+  retainedManifestSha256: process.env.G0_RETAINED_MANIFEST_SHA256,
+  artifactProfile: process.env.G0_ARTIFACT_PROFILE,
+  runtimeSourceCommit: process.env.G0_RUNTIME_SOURCE_COMMIT,
+  sourceInputsDigest: process.env.G0_SOURCE_INPUTS_DIGEST,
+};
+requireThat(
+  Object.values(expectedProvenance).every((value) => typeof value === "string" && value.length > 0) &&
+    Object.entries(expectedProvenance).every(([key, value]) => receipt[key] === value),
+  "g0-build-provenance-invalid",
+);
 const origins = validateG0Origins(process.env);
 const freshness = {
   schema: "fireemu-g0-freshness-v1",
@@ -59,6 +78,7 @@ const freshness = {
   exportOnExit: null,
   origins,
   programDigest: canonicalProgramDigest,
+  ...expectedProvenance,
 };
 await publishJson(join(directory, "freshness-handshake.json"), freshness);
 const python = g0SessionPythonSource();

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { digestJson, requireThat, sha256 } from "./core.mjs";
@@ -17,6 +18,25 @@ export function validateG0Origins(env) {
   for (const value of Object.values(values))
     requireThat(/^127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(value ?? ""), "g0-owned-origin-required");
   return values;
+}
+
+export function readOwnedProcessArgv(pid) {
+  try {
+    if (process.platform === "linux") return readFileSync(`/proc/${pid}/cmdline`).toString("utf8").split("\0").filter(Boolean);
+    if (process.platform === "darwin") {
+      const source = [
+        "import ctypes,json,struct,sys",
+        "pid=int(sys.argv[1]); libc=ctypes.CDLL(None); mib=(ctypes.c_int*3)(1,49,pid); size=ctypes.c_size_t(0)",
+        "if libc.sysctl(mib,3,None,ctypes.byref(size),None,0)!=0: raise OSError()",
+        "buffer=ctypes.create_string_buffer(size.value)",
+        "if libc.sysctl(mib,3,buffer,ctypes.byref(size),None,0)!=0: raise OSError()",
+        "argc=struct.unpack_from('i',buffer.raw)[0]; parts=buffer.raw[4:].split(b'\\0'); first=parts[0]; rest=parts[1:]; start=next(i for i,value in enumerate(rest) if value); start=start+1 if rest[start]==first else start; values=[first]+rest[start:start+argc-1]",
+        "print(json.dumps([value.decode('utf-8') for value in values if value]))",
+      ].join("\n");
+      return JSON.parse(execFileSync("python3", ["-c", source, String(pid)], { encoding: "utf8", maxBuffer: 128 * 1024 }));
+    }
+  } catch {}
+  return null;
 }
 
 export function g0SessionPythonSource() {

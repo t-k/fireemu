@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { compareG0, g0SessionPythonSource, validateG0Origins } from "../g0.mjs";
+import { compareG0, g0SessionPythonSource, readOwnedProcessArgv, validateG0Origins } from "../g0.mjs";
 import { verifyG0ProgramDigest } from "../pilot.mjs";
 import { digestJson } from "../core.mjs";
 import { G0_CASE } from "../registry.mjs";
@@ -95,6 +95,17 @@ test("G0 session rejects stale or substituted launcher receipts before Python di
     "!receipt.args.includes(\"--import\")",
     "receipt.import === null",
   ]) assert.ok(source.includes(token), token);
+});
+
+test("G0 process identity uses the OS-native exact argv of a real owned child", async () => {
+  const child = spawn("/bin/sleep", ["1"]);
+  try {
+    assert.ok(Number.isInteger(child.pid) && child.pid > 0);
+    assert.deepEqual(readOwnedProcessArgv(child.pid), ["/bin/sleep", "1"]);
+  } finally {
+    child.kill("SIGTERM");
+    await new Promise((resolve) => child.once("close", resolve));
+  }
 });
 
 test("G0 session binds validated origins before the real Gate and Adapter are constructed", () => {

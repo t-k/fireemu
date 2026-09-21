@@ -128,6 +128,16 @@ def _validate_launch_receipt(output: Path, handshake: dict) -> None:
         or receipt.get("rulesSha256") != rules_sha
         or receipt.get("environmentSha256") != handshake.get("environmentSha256")
         or receipt.get("sourceCommit") != handshake.get("sourceCommit")
+        or any(
+            not isinstance(handshake.get(key), str)
+            or receipt.get(key) != handshake.get(key)
+            for key in (
+                "retainedManifestSha256",
+                "artifactProfile",
+                "runtimeSourceCommit",
+                "sourceInputsDigest",
+            )
+        )
         or receipt.get("runDirectory")
         != {
             "path": str(output),

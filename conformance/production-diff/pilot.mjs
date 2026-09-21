@@ -187,6 +187,16 @@ export function verifySession(session, prepared, localBytes) {
 
 async function replay(prepared, options, directory) {
   const entry = prepared.entry;
+  const build = prepared.provenance.implementation.build;
+  if (entry.adapter === "g0")
+    requireThat(
+      build &&
+        typeof build.retainedManifestSha256 === "string" &&
+        typeof build.artifactProfile === "string" &&
+        typeof build.runtimeSourceCommit === "string" &&
+        typeof build.sourceInputsDigest === "string",
+      "g0-build-provenance-unavailable",
+    );
   if (entry.adapter === "batch-write") await stageLegacy(prepared, join(directory, "legacy"));
   await publishJson(join(directory, "program.json"), prepared.program);
   await publishJson(join(directory, "programs.json"), [prepared.program]);
@@ -216,7 +226,15 @@ async function replay(prepared, options, directory) {
       PILOT_RUN_DIR: directory,
       PILOT_CASE_ID: entry.id,
       PILOT_REPO: options.repo,
-      ...(entry.adapter === "g0" ? { PILOT_PROGRAM_DIGEST: digestJson(prepared.program) } : {}),
+      ...(entry.adapter === "g0"
+        ? {
+            PILOT_PROGRAM_DIGEST: digestJson(prepared.program),
+            G0_RETAINED_MANIFEST_SHA256: build.retainedManifestSha256,
+            G0_ARTIFACT_PROFILE: build.artifactProfile,
+            G0_RUNTIME_SOURCE_COMMIT: build.runtimeSourceCommit,
+            G0_SOURCE_INPUTS_DIGEST: build.sourceInputsDigest,
+          }
+        : {}),
     },
     timeoutMs: options.timeout * 1000,
     onSpawn:
@@ -234,6 +252,10 @@ async function replay(prepared, options, directory) {
               configSha256: sha256(Buffer.from(JSON.stringify(CONFIG, null, 2) + "\n")),
               rulesSha256: sha256(RULES),
               environmentSha256: digestJson(cleanEnv),
+              retainedManifestSha256: build?.retainedManifestSha256,
+              artifactProfile: build?.artifactProfile,
+              runtimeSourceCommit: build?.runtimeSourceCommit,
+              sourceInputsDigest: build?.sourceInputsDigest,
               runDirectory: { path: directory, dev: info.dev, ino: info.ino, mode: info.mode & 0o777 },
               import: null,
               exportOnExit: null,

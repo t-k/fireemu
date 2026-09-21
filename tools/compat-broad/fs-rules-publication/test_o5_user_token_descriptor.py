@@ -33,11 +33,13 @@ from o5_user_token_campaign import (
 )
 from o5_user_token_case import CAMPAIGN
 from o5_user_token_collector import ROLE_PRODUCTION
+from o5_user_token_comparator_v2 import REFUSED
 from o8_campaign import REQUIRED_MEMBERS, CampaignDescriptor
 from test_o5_user_token_collector import Transport
 from test_o5_user_token_collector_bound import (
     PRODUCTION_ENDPOINT,
     acquisition_for,
+    bound,
 )
 
 NONCE = "a" * 32
@@ -300,6 +302,51 @@ def test_the_collector_member_runs_the_lane_collector_bound() -> None:
         acquisition=acquisition_for(plan, ROLE_PRODUCTION),
     )
     assert refused["abort"] == "unbound-receipt"
+
+
+def test_the_comparator_member_compares_against_the_published_shadow() -> None:
+    """The reference is the checked-in local shadow. A bound production bundle
+    of another nonce is refused against it; one of the shadow's own nonce is
+    compared row by row, and its statuses agree with what the shadow saw."""
+    descriptor = lane.descriptor()
+    record = lane.shadow_record()
+    plan = lane.plan_compiler(NONCE)
+    production, _ = bound(ROLE_PRODUCTION)
+    result = descriptor.comparator(production, plan)
+    assert result["classification"] == REFUSED
+    assert "local:campaign-identity-drift" in result["errors"]
+    shadow_plan = lane.plan_compiler(record["nonce"])
+    production = descriptor.collector(
+        shadow_plan,
+        Transport(shadow_plan, endpoint=PRODUCTION_ENDPOINT),
+        run_id="dry-run",
+        acquisition=acquisition_for(shadow_plan, ROLE_PRODUCTION),
+    )
+    result = descriptor.comparator(production, shadow_plan)
+    assert result["classification"] != REFUSED, result["errors"]
+    assert result["errors"] == []
+    assert len(result["rows"]) == 26
+    assert all(
+        row["production"]["status"] == row["local"]["status"] for row in result["rows"]
+    )
+    # The scripted transport invents field values, so the row comparison names
+    # exactly that and nothing else.
+    assert {reason for row in result["rows"] for reason in row["reasons"]} <= {"fields"}
+
+
+def test_a_local_shadow_bundle_fails_closed_as_production_evidence() -> None:
+    """The saved local record cannot be passed off as the production side."""
+    descriptor = lane.descriptor()
+    record = lane.shadow_record()
+    plan = lane.plan_compiler(record["nonce"])
+    forged = json.loads(json.dumps(record["bundle"]))
+    forged["provenance"]["role"] = ROLE_PRODUCTION
+    forged["provenance"]["runId"] = "relabelled"
+    forged["productionExecuted"] = True
+    result = descriptor.comparator(forged, plan)
+    assert result["classification"] == REFUSED
+    assert result["rows"] == []
+    assert "production:local-mislabelled-as-production" in result["errors"]
 
 
 def test_the_descriptor_module_is_bound_by_the_campaign_manifest() -> None:

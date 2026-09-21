@@ -2,13 +2,33 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
-from o5_user_token_campaign import OWNER_PRECONDITIONS, PERMISSION_ENVELOPE, budget
-from o5_user_token_case import CAMPAIGN, compile_case
+import pytest
+from o5_user_token_campaign import (
+    OWNER_PRECONDITIONS,
+    PERMISSION_ENVELOPE,
+    admitted_manifest_digest,
+    budget,
+    source_digests,
+)
+from o5_user_token_case import CAMPAIGN, compile_case, digest
+from o5_user_token_collector import (
+    COLLECTOR_CONTRACT,
+    ENVIRONMENT_LOCAL,
+    LOOPBACK_HOSTS,
+    ROLE_LOCAL_SHADOW,
+    endpoint_host,
+)
 from o5_user_token_shadow import unredacted_identifiers
 
-SPEC_DIRECTORY = Path(__file__).resolve().parents[3] / "spec" / "compatibility"
+ROOT = Path(__file__).resolve().parents[3]
+SPEC_DIRECTORY = ROOT / "spec" / "compatibility"
+# How far behind HEAD the shadow's source commit may be before the record is
+# stale by construction. The observer digest check below is the strict one;
+# this bounds drift in files it does not cover.
+MAXIMUM_COMMITS_BEHIND_HEAD = 50
 MATRIX = SPEC_DIRECTORY / "fs-rules-user-token-matrix.json"
 SHADOW = SPEC_DIRECTORY / "fs-rules-user-token-local-shadow.json"
 
@@ -65,11 +85,84 @@ def test_the_shadow_record_is_bound_to_this_matrix() -> None:
 
 
 def test_the_shadow_record_binds_its_artifact_and_source() -> None:
-    artifact = shadow()["artifact"]
-    assert len(artifact["artifactSha256"]) == 64
-    assert len(artifact["sourceCommit"]) == 40
+    record = shadow()
+    artifact = record["artifact"]
+    assert re.fullmatch(r"[0-9a-f]{64}", artifact["artifactSha256"])
+    assert re.fullmatch(r"[0-9a-f]{40}", artifact["sourceCommit"])
     assert artifact["rustc"].startswith("rustc ")
     assert "/" not in artifact["worktree"]
+    bound = record["bundle"]["acquisition"]["artifact"]
+    assert bound == {
+        "artifactSha256": artifact["artifactSha256"],
+        "sourceCommit": artifact["sourceCommit"],
+    }
+
+
+def test_the_shadow_record_was_produced_by_the_lane_sources_on_disk() -> None:
+    """The record binds the collector that produced it, by digest.
+
+    A change to any manifest-bound lane module invalidates the record; re-run
+    the shadow on the committed tree and replace it.
+    """
+    observer = shadow()["bundle"]["observer"]
+    assert observer["sourceDigests"] == source_digests()
+    assert observer["observerDigest"] == digest(source_digests())
+
+
+def test_the_shadow_source_commit_is_head_or_a_recent_ancestor() -> None:
+    """A length check accepted any 40 characters. The recorded commit has to
+    exist here, be HEAD or an ancestor of it, and lie within a bounded number
+    of commits behind it, so a stale record is detected rather than carried."""
+    commit = shadow()["artifact"]["sourceCommit"]
+
+    def git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args], cwd=ROOT, capture_output=True, text=True, check=False
+        )
+
+    if git("rev-parse", "--git-dir").returncode != 0:
+        pytest.skip("not a git checkout, so the commit cannot be resolved")
+    if git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
+        pytest.skip("shallow clone: earlier commits are absent by construction")
+    kind = git("cat-file", "-t", commit)
+    assert kind.returncode == 0 and kind.stdout.strip() == "commit", (
+        f"the recorded source commit {commit} is not a commit in this repository"
+    )
+    assert git("merge-base", "--is-ancestor", commit, "HEAD").returncode == 0, (
+        f"the recorded source commit {commit} is not HEAD or an ancestor of it"
+    )
+    behind = git("rev-list", "--count", f"{commit}..HEAD")
+    assert behind.returncode == 0
+    assert int(behind.stdout.strip()) <= MAXIMUM_COMMITS_BEHIND_HEAD, (
+        f"the shadow is {behind.stdout.strip()} commits behind HEAD; re-run it"
+    )
+
+
+def test_the_shadow_record_is_a_bound_local_acquisition() -> None:
+    record = shadow()
+    bundle = record["bundle"]
+    assert bundle["contract"] == COLLECTOR_CONTRACT
+    assert bundle["provenance"]["role"] == ROLE_LOCAL_SHADOW
+    assert bundle["provenance"]["case"]["nonce"] == record["nonce"]
+    assert bundle["provenance"]["case"]["tenant"] == record["tenant"]
+    acquisition = bundle["acquisition"]
+    assert acquisition["environment"] == {"kind": ENVIRONMENT_LOCAL}
+    assert acquisition["nonceReservation"] is None
+    assert acquisition["ownerPermission"] is None
+    assert acquisition["campaignManifestDigest"] == admitted_manifest_digest(
+        "fireemu-35fe6", "(default)", record["nonce"]
+    )
+    assert set(acquisition["principals"]) == {
+        entry["ref"] for entry in matrix()["observationCase"]["ownedAccounts"]
+    }
+    transport = bundle["transport"]
+    assert transport["endpoints"]
+    assert all(endpoint_host(e) in LOOPBACK_HOSTS for e in transport["endpoints"])
+    assert transport["sequenceMonotonic"] is True
+    assert [r["label"] for r in transport["rulesetReleases"]] == ["A", "B"]
+    assert all(row["endpoint"] is not None for row in bundle["rows"])
+    assert bundle["productionExecuted"] is False
+    assert bundle["productionReady"] is False
 
 
 def test_the_shadow_record_is_a_complete_local_run() -> None:

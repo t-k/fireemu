@@ -13,13 +13,19 @@ uvx ruff check tools/compat-broad/fs-rules-publication
 uvx ruff format --check tools/compat-broad/fs-rules-publication
 ```
 
-Re-run the local shadow, which builds `fireemu` and starts one owned instance:
+Re-run the local shadow, which builds `fireemu` and starts one owned instance.
+Run it on a committed tree, because the record binds the source commit and the
+digests of the manifest-bound lane modules; wrapping it in
+`scripts/cargo-session` routes the build to a session target directory:
 
 ```text
-uv run --python 3.12 python \
+scripts/cargo-session --session <name> -- uv run --python 3.12 python \
   tools/compat-broad/fs-rules-publication/o5_user_token_local_run.py \
   --run /absolute/private/o5-user-token-shadow
 ```
+
+The checked-in record is the child's `local-shadow.json` with the parent's
+`artifact`, `exitCode` and `originsClosed` from `parent-result.json` added.
 
 ## Ruleset publication case (`o5_rules_*`)
 

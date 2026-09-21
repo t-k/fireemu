@@ -279,8 +279,34 @@ def run(output: Path, artifact: Path, *, timeout: int = 900) -> dict[str, Any]:
         "sourceInputs": bound_module_digests(),
     }
     broad.supervise(command, output, nonce, report, timeout=timeout, recovery_grace=1)
+    # The shared supervisor verifies the Auth and control listeners of a full run;
+    # this run starts Firestore only, so its listener is verified here and the
+    # supervisor's partial-result and cases bookkeeping is dropped from the record.
+    for key in (
+        "cases",
+        "recordingComplete",
+        "parentManifestSha256",
+        "terminationVerificationFailure",
+        "partialResultFailure",
+        "partialResultSha256",
+    ):
+        report.pop(key, None)
+    owned = report.get("ownedProcess") or {}
+    closed = None
+    try:
+        instance = json.loads((output / "instance.json").read_bytes())
+        if instance["nonce"] != nonce:
+            raise ValueError("owned process identity mismatch")
+        closed = broad.socket_closed(local_origin(instance["firestoreOrigin"]))
+    except Exception as error:  # noqa: BLE001 -- recorded, never hidden
+        report["listenerVerificationFailure"] = type(error).__name__
+    report["ownedProcess"] = {
+        "pid": owned.get("pid"),
+        "stopped": owned.get("stopped"),
+        "firestoreListenerClosed": closed,
+    }
     child_path = output / "child-result.json"
-    if not child_path.is_file():
+    if not child_path.is_file() or not (owned.get("stopped") and closed):
         report["status"] = "incomplete"
         save(output / "local-rehearsal.json", report)
         return report

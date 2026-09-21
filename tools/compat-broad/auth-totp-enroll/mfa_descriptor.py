@@ -105,7 +105,7 @@ CONFIG_RESTORE = mfa_gate.MANAGEMENT_RECOVERY_IDS
 RESUME_ALLOWANCE = 3
 # Each owned account is deleted, then proven absent by UID and, where it has one, by
 # address; the anonymous account has no address.
-RECOVERY_REQUESTS_PER_ACCOUNT = 3
+RECOVERY_REQUESTS_PER_ACCOUNT = 4
 # The service may lag its configuration readback; the earlier production recorder for
 # the same change waited this long before the first request that needed it.
 CONFIG_ENFORCEMENT_LAG_SECONDS = 30
@@ -610,7 +610,7 @@ def descriptor(sleeper=None) -> CampaignDescriptor:
 
 
 def rehearsal_descriptor(
-    sleeper, *, seconds: int = 1200, recovery: int = 240
+    sleeper, *, seconds: int = 1200, recovery: int = 300
 ) -> CampaignDescriptor:
     """A descriptor for an injected-transport rehearsal under a virtual clock.
 

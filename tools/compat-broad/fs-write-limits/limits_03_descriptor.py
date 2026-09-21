@@ -72,6 +72,22 @@ FIXED_COST_MICROUSD = 40_000
 COST_CAP_USD = 1.0
 PLANNING_COST_USD = 0.02
 REQUEST_COST_MICROUSD = 100
+LIFECYCLE_CONTRACT = {
+    "kind": "limits-03-index-lifecycle-production-v1",
+    "project": PROJECT,
+    "database": DATABASE,
+    "fieldName": "projects/fireemu-35fe6/databases/(default)/collectionGroups/nx/fields/*",
+    "pollLimit": 1,
+    "observationSlots": 4,
+    "recoverySlots": 3,
+    "updateMask": "indexConfig",
+    "operationDeadlineSeconds": 12.0,
+    "recoveryDeadlineSeconds": 12.0,
+}
+
+
+def lifecycle_contract() -> dict:
+    return copy.deepcopy(LIFECYCLE_CONTRACT)
 
 LANE_DIRECTORY = "tools/compat-broad/fs-write-limits"
 COLLECTOR_ENTRY = f"{LANE_DIRECTORY}/collector_03.py"
@@ -593,7 +609,10 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
     authorize_transport(capability, binding=binding, binding_digest=binding_digest)
     verify_worker_binding(binding, binding_digest, None)
     if value.get("kind") == "management":
-        if set(value) != {"kind", "phase", "slot", "token", "deadline"}:
+        allowed = {"kind", "phase", "slot", "token", "deadline"}
+        if value.get("slot") in preflight.LIFECYCLE_SLOTS:
+            allowed.add("operation")
+        if set(value) != allowed:
             raise ValueError("closed management wire call required")
         if value["phase"] not in ("observation", "recovery"):
             raise ValueError("closed management phase required")
@@ -604,6 +623,7 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
             capability=capability,
             binding=binding,
             binding_digest=binding_digest,
+            operation=value.get("operation"),
         )
     if set(value) != {"plan", "phase", "index", "operation", "token", "deadline"}:
         raise ValueError("closed limits-03 wire call required")
@@ -694,6 +714,7 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
         },
         "indexExemptionPrecondition": index_exemption_precondition(),
         "indexExemptionProjectionDigest": preflight.expected_index_exemption_digest(),
+        "indexLifecycleContract": lifecycle_contract(),
     }
 
 

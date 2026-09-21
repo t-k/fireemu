@@ -227,7 +227,7 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         result = collect(gate, collector_plan, output / "collection", execute_wire)
         if result.get("collectionComplete") and result.get("cleanupComplete"):
             management.run("recovery")
-            ready = True
+            ready = not management.lifecycle_failed
         else:
             failure = "collection-incomplete"
     except Exception as error:  # noqa: BLE001 -- preserve only a secret-free failure class.

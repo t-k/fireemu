@@ -114,6 +114,14 @@ class Clock:
 @pytest.fixture(autouse=True)
 def offline(monkeypatch):
     clock = Clock()
+    lifecycle_field = "projects/fireemu-35fe6/databases/(default)/collectionGroups/nx/fields/*"
+    lifecycle_before = {
+        "name": lifecycle_field,
+        "indexConfig": {"indexes": [], "usesAncestorConfig": True, "ancestorField": "projects/fireemu-35fe6/databases/(default)/collectionGroups/__default__/fields/*", "reverting": False},
+        "ttlConfig": {"state": "ENABLED"},
+    }
+    lifecycle_after = {**lifecycle_before, "indexConfig": {"indexes": [], "usesAncestorConfig": False, "ancestorField": "projects/fireemu-35fe6/databases/(default)/collectionGroups/__default__/fields/*", "reverting": False}}
+    lifecycle_ops = {"apply": "projects/fireemu-35fe6/databases/(default)/operations/op-apply", "restore": "projects/fireemu-35fe6/databases/(default)/operations/op-restore"}
     monkeypatch.setattr(shared_gate, "time", clock)
     monkeypatch.setattr(preflight, "time", clock)
     monkeypatch.setattr(preflight.shared, "time", clock)
@@ -127,6 +135,20 @@ def offline(monkeypatch):
             "auth": AUTH_BODY,
             "index-exemption": EXEMPT_FIELD_BODY,
         }.get(slot)
+        if slot == "index-lifecycle-before":
+            body = lifecycle_before
+        elif slot == "index-lifecycle-apply":
+            body = {"name": lifecycle_ops["apply"]}
+        elif slot == "index-lifecycle-poll":
+            body = {"name": lifecycle_ops["apply"], "done": True}
+        elif slot == "index-lifecycle-after":
+            body = lifecycle_after
+        elif slot == "index-lifecycle-restore":
+            body = {"name": lifecycle_ops["restore"]}
+        elif slot == "index-lifecycle-poll-restore":
+            body = {"name": lifecycle_ops["restore"], "done": True}
+        elif slot == "index-lifecycle-restored":
+            body = lifecycle_before
         if slot == "oauth-tokeninfo":
             body = {
                 "issued_to": "offline-client",
@@ -405,13 +427,13 @@ def test_the_descriptor_is_complete_and_its_figures_come_from_the_compiler():
     assert descriptor.campaign_seconds == plan["localGatePlan"]["wallSeconds"]
     assert descriptor.recovery_seconds == plan["localGatePlan"]["recoverySeconds"]
     assert descriptor.campaign_seconds <= compiler_03.GATE_WALL_SECONDS_MAX
-    assert figures["requestUpperBound"] == 176 + 9
-    assert figures["managementObservationRequests"] == 5
-    assert figures["managementRecoveryRequests"] == 4
-    assert figures["envelopeCostMicrousd"] == 40_000 + 185 * 100
+    assert figures["requestUpperBound"] == 192
+    assert figures["managementObservationRequests"] == 9
+    assert figures["managementRecoveryRequests"] == 7
+    assert figures["envelopeCostMicrousd"] == 40_000 + 192 * 100
     assert figures["dataCostMicrousd"] == 176 * 100
     assert campaign.ledger_budget() == {
-        "requests": 185,
+        "requests": 192,
         "accounts": 1,
         "resources": 29,
         "costMicrousd": figures["envelopeCostMicrousd"],
@@ -449,7 +471,7 @@ def test_the_gate_charges_management_around_the_schedule():
         job["schedule"], job["recovery"], job["observation"] + job["recovery"]
     )
     gate = campaign.gate_plan(plan, permission_expires_at=time.time() + 4800)
-    assert gate["observationRequests"] == 89 + 5
+    assert gate["observationRequests"] == 89 + 9
     assert gate["management"]["dispatchKind"] == "closed-v1"
     assert [slot["id"] for slot in gate["management"]["observation"]] == [
         "oauth-tokeninfo",
@@ -457,18 +479,25 @@ def test_the_gate_charges_management_around_the_schedule():
         "database",
         "index-exemption",
         "auth",
+        "index-lifecycle-before",
+        "index-lifecycle-apply",
+        "index-lifecycle-poll",
+        "index-lifecycle-after",
     ]
     assert [slot["id"] for slot in gate["management"]["recovery"]] == [
         "project",
         "database",
         "index-exemption",
         "auth",
+        "index-lifecycle-restore",
+        "index-lifecycle-poll-restore",
+        "index-lifecycle-restored",
     ]
     assert gate["recoverySeconds"] >= charge["recoverySeconds"] + 4 * 13.25
     assert gate["wallSeconds"] - gate["recoverySeconds"] >= (
         charge["observationSeconds"] + 5 * 13.25
     )
-    assert gate["costMicrousd"] == 185 * 100
+    assert gate["costMicrousd"] == 192 * 100
     assert "ownershipMarker" not in gate
 
 
@@ -674,11 +703,14 @@ def test_a_full_run_finishes_the_gate_and_releases_the_temporary_ledger(
         "recovery:database",
         "recovery:index-exemption",
         "recovery:auth",
+        "recovery:index-lifecycle-restore",
+        "recovery:index-lifecycle-poll-restore",
+        "recovery:index-lifecycle-restored",
     ]
     assert gate["jobs"]["limits"]["complete"] is True
     # The 16 zero-wire delete skips of the refused sides are not charged.
-    assert gate["total"] == 176 - 16 + 9
-    assert gate["costMicrousd"] == (176 - 16 + 9) * 100
+    assert gate["total"] == 176 - 16 + 16
+    assert gate["costMicrousd"] == (176 - 16 + 16) * 100
     assert len(gate["skips"]) == 16
     shared_gate.validate_absence_proofs(gate, "limits")
     assert release["receiptDigest"] == digest(receipt)

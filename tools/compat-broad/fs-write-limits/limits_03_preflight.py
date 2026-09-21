@@ -61,6 +61,20 @@ PROJECT = shared.PROJECT
 NUMBER = shared.NUMBER
 DATABASE = shared.DATABASE
 INDEX_EXEMPTION_SLOT = "index-exemption"
+LIFECYCLE_OBSERVATION_SLOTS = (
+    "index-lifecycle-before",
+    "index-lifecycle-apply",
+    "index-lifecycle-poll",
+    "index-lifecycle-after",
+)
+LIFECYCLE_RECOVERY_SLOTS = (
+    "index-lifecycle-restore",
+    "index-lifecycle-poll-restore",
+    "index-lifecycle-restored",
+)
+LIFECYCLE_SLOTS = LIFECYCLE_OBSERVATION_SLOTS + LIFECYCLE_RECOVERY_SLOTS
+LIFECYCLE_FIELD = "projects/fireemu-35fe6/databases/(default)/collectionGroups/nx/fields/*"
+LIFECYCLE_ROUTE = "https://firestore.googleapis.com/v1/" + LIFECYCLE_FIELD
 INDEX_FIELD = f"{DATABASE}/collectionGroups/{EXEMPT_COLLECTION}/fields/*"
 INDEX_FIELD_ROUTE = f"https://firestore.googleapis.com/v1/{INDEX_FIELD}"
 # The field every collection group inherits its single-field configuration
@@ -202,8 +216,40 @@ def validate_frozen_baselines(permission):
         raise ValueError("index exemption digest is not the declared after state")
 
 
-def management_transport(slot, token, *, deadline, capability, binding, binding_digest):
+def management_transport(slot, token, *, deadline, capability, binding, binding_digest, operation=None):
     """One charged fixed management operation, with a whole-worker deadline."""
+    if slot in LIFECYCLE_SLOTS:
+        if not isinstance(operation, dict) or set(operation) != {"method", "route", "body"}:
+            raise ValueError("bound lifecycle operation required")
+        from batch_adapter import wire
+        from o8_admission import authorize_transport
+
+        authorize_transport(capability, binding=binding, binding_digest=binding_digest)
+        if not private_string(token, 8192):
+            raise ValueError("bounded credential required")
+        duration = min(12.0, deadline - time.monotonic())
+        if duration <= 0:
+            raise ValueError("management phase deadline")
+        if operation["route"] not in (LIFECYCLE_ROUTE, LIFECYCLE_ROUTE + "?updateMask=indexConfig"):
+            prefix = "https://firestore.googleapis.com/v1/projects/fireemu-35fe6/databases/(default)/operations/"
+            if not operation["route"].startswith(prefix):
+                raise ValueError("lifecycle route differs from bound project")
+        response = wire(
+            operation["route"],
+            operation["method"],
+            operation["body"],
+            {"Authorization": "Bearer " + token, "x-goog-user-project": PROJECT},
+            timeout=duration,
+            receipt=True,
+        )
+        http = response.get("http", {}) if isinstance(response, dict) else {}
+        return {
+            "complete": http.get("complete") is True and http.get("bodyKind") == "json",
+            "workerReaped": True,
+            "status": http.get("status"),
+            "body": response.get("body") if isinstance(response, dict) else None,
+            "bodyKind": http.get("bodyKind"),
+        }
     if slot != INDEX_EXEMPTION_SLOT:
         return shared.management_transport(
             slot,
@@ -324,7 +370,7 @@ def attestation(slot, response, permission):
     return shared.metadata_attestation(slot, response, permission)
 
 
-def management_call(inputs, phase, slot_id, secret, *, deadline):
+def management_call(inputs, phase, slot_id, secret, *, deadline, operation=None):
     """Build one closed management value for a Gate-charged dispatch.
 
     Validation only: it performs no transport, debits nothing and accepts no
@@ -348,13 +394,18 @@ def management_call(inputs, phase, slot_id, secret, *, deadline):
         or not math.isfinite(deadline)
     ):
         raise ValueError("finite management deadline required")
-    return {
+    value = {
         "kind": "management",
         "phase": phase,
         "slot": slot_id,
         "token": secret,
         "deadline": deadline,
     }
+    if slot_id in LIFECYCLE_SLOTS:
+        if not isinstance(operation, dict) or set(operation) != {"method", "route", "body"}:
+            raise ValueError("bound lifecycle operation required")
+        value["operation"] = operation
+    return value
 
 
 class ManagementSession:
@@ -367,6 +418,8 @@ class ManagementSession:
         self.credential = None
         self.evidence = []
         self.credential_evidence = []
+        self._lifecycle = {}
+        self.lifecycle_failed = False
         self.preflight_complete = False
         self.postflight_complete = False
         validate_principal(permission.get("credentialPrincipal"))
@@ -396,8 +449,9 @@ class ManagementSession:
                     else require_usable(self.credential, deadline)
                 )
                 sent = time.monotonic()
+                operation = self._lifecycle_operation(phase, slot)
                 response = self.capability._transmit(
-                    management_call(self.inputs, phase, slot, token, deadline=deadline)
+                    management_call(self.inputs, phase, slot, token, deadline=deadline, operation=operation)
                 )
                 if self.credential is not None:
                     observe_status(self.credential, response.get("status"))
@@ -433,6 +487,8 @@ class ManagementSession:
                     return public
                 # Baseline comparison happens before the Gate records the slot,
                 # so a drift is durable in the Gate state, not only in memory.
+                if slot in LIFECYCLE_SLOTS:
+                    return self._lifecycle_attestation(slot, response)
                 return attestation(slot, response, self.permission)
 
             response = self.gate.management_dispatch(phase, slot, send)
@@ -450,12 +506,74 @@ class ManagementSession:
             if slot == "oauth-tokeninfo":
                 if self.credential is None or response.get("complete") is not True:
                     raise ValueError("credential attestation failed")
+            elif slot in LIFECYCLE_SLOTS:
+                self._accept_lifecycle_response(slot, response)
             else:
                 validate_attestation(slot, response, self.permission)
         if phase == "observation":
             self.preflight_complete = True
         else:
             self.postflight_complete = True
+
+    def _lifecycle_operation(self, phase, slot):
+        state = getattr(self, "_lifecycle", {})
+        if slot == "index-lifecycle-before":
+            return {"method": "GET", "route": LIFECYCLE_ROUTE, "body": None}
+        if slot == "index-lifecycle-apply":
+            return {"method": "PATCH", "route": LIFECYCLE_ROUTE + "?updateMask=indexConfig", "body": {"name": LIFECYCLE_FIELD, "indexConfig": {"indexes": []}}}
+        if slot == "index-lifecycle-poll":
+            return {"method": "GET", "route": state.get("applyOperation"), "body": None}
+        if slot == "index-lifecycle-after":
+            return {"method": "GET", "route": LIFECYCLE_ROUTE, "body": None}
+        if slot == "index-lifecycle-restore":
+            return {"method": "PATCH", "route": LIFECYCLE_ROUTE + "?updateMask=indexConfig", "body": {"name": LIFECYCLE_FIELD}}
+        if slot == "index-lifecycle-poll-restore":
+            return {"method": "GET", "route": state.get("restoreOperation"), "body": None}
+        if slot == "index-lifecycle-restored":
+            return {"method": "GET", "route": LIFECYCLE_ROUTE, "body": None}
+        return None
+
+    def _lifecycle_attestation(self, slot, response):
+        return {key: response.get(key) for key in ("complete", "workerReaped", "status", "bodyKind", "body")}
+
+    def _accept_lifecycle_response(self, slot, response):
+        if response.get("complete") is not True or response.get("workerReaped") is not True or response.get("status") != 200:
+            raise ValueError("lifecycle management response incomplete")
+        body = response.get("body")
+        state = getattr(self, "_lifecycle", {})
+        if slot == "index-lifecycle-before":
+            if not isinstance(body, dict) or body.get("name") != LIFECYCLE_FIELD or not isinstance(body.get("indexConfig"), dict) or body["indexConfig"].get("usesAncestorConfig") is not True:
+                self.lifecycle_failed = True
+            state["before"] = body
+        elif slot == "index-lifecycle-apply":
+            name = body.get("name") if isinstance(body, dict) else None
+            if not isinstance(name, str):
+                self.lifecycle_failed = True
+                self._lifecycle = state
+                return
+            state["applyOperation"] = "https://firestore.googleapis.com/v1/" + name
+        elif slot == "index-lifecycle-poll":
+            if not isinstance(body, dict) or body.get("done") is not True or body.get("error") is not None:
+                self.lifecycle_failed = True
+        elif slot == "index-lifecycle-after":
+            if not isinstance(body, dict) or body.get("name") != LIFECYCLE_FIELD or not isinstance(body.get("indexConfig"), dict) or body["indexConfig"].get("indexes", []) != [] or body["indexConfig"].get("usesAncestorConfig", False) is not False:
+                self.lifecycle_failed = True
+            state["after"] = body
+        elif slot == "index-lifecycle-restore":
+            name = body.get("name") if isinstance(body, dict) else None
+            if not isinstance(name, str):
+                self.lifecycle_failed = True
+                self._lifecycle = state
+                return
+            state["restoreOperation"] = "https://firestore.googleapis.com/v1/" + name
+        elif slot == "index-lifecycle-poll-restore":
+            if not isinstance(body, dict) or body.get("done") is not True or body.get("error") is not None:
+                self.lifecycle_failed = True
+        elif slot == "index-lifecycle-restored":
+            if body != state.get("before"):
+                self.lifecycle_failed = True
+            state["restored"] = body
+        self._lifecycle = state
 
     def data_token(self, deadline):
         if not self.preflight_complete:
@@ -497,6 +615,16 @@ def validate_saved_management(receipt, snapshot, permission):
         ):
             raise ValueError("management response binding differs")
         slot = row["id"].split(":", 1)[1]
+        if slot in LIFECYCLE_SLOTS:
+            if (
+                response.get("status") != 200
+                or response.get("complete") is not True
+                or response.get("workerReaped") is not True
+                or response.get("bodyKind") != "json"
+                or not isinstance(response.get("body"), dict)
+            ):
+                raise ValueError("saved lifecycle response differs")
+            continue
         if slot != "oauth-tokeninfo":
             validate_attestation(slot, response, permission)
             continue

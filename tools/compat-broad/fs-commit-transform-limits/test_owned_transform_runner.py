@@ -9,6 +9,7 @@ import pytest
 from owned_transform_runner import (
     BUILD_COMMAND,
     CURRENT_PROFILE,
+    G0_CURRENT_PROFILE,
     PROFILES,
     REPAIRED_PROFILE,
     validate_copied_manifest,
@@ -34,6 +35,16 @@ def test_current_profile_is_bound_to_the_locked_build_identity():
         "fireemu",
         "--message-format=json",
     ]
+
+
+def test_g0_profile_is_closed_to_the_retained_build_identity():
+    assert G0_CURRENT_PROFILE == {
+        "name": "current-8f129b10",
+        "artifactSha256": "bf713deb0952db610c840d6233b9c343496df5b69b9c4e934a4054c27f765897",
+        "runtimeCommit": "8f129b10aac6cf9a875fbf67fd8775a746daec40",
+        "manifestCommitField": "executionCommit",
+        "requireTopLevelArtifactSha": False,
+    }
 
 
 @pytest.fixture

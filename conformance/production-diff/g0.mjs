@@ -43,7 +43,7 @@ export function validateBuildBinding(repo, artifact) {
   }
 }
 
-export async function prepareG0(repo, entry, artifact = null) {
+export async function prepareG0(repo, entry, artifact = null, requireBuild = false) {
   const state = gitState(repo);
   const productionPath = process.env[entry.productionResultPath];
   requireThat(typeof productionPath === "string" && productionPath.startsWith("/"), "g0-production-input-unavailable");
@@ -54,6 +54,8 @@ export async function prepareG0(repo, entry, artifact = null) {
     Object.values(program.jobs).reduce((total, job) => total + job.observation.length, 0) === 12,
     "g0-observation-shape",
   );
+  const retainedArtifact = artifact ?? process.env.G0_RETAINED_ARTIFACT ?? null;
+  if (requireBuild) requireThat(retainedArtifact, "g0-build-provenance-unavailable");
   return {
     entry,
     state,
@@ -76,7 +78,7 @@ export async function prepareG0(repo, entry, artifact = null) {
         adapterSha256: await sourceDigests(),
         comparator: "tools/compat-broad/shared_production_pair.py:compare_g0_current_runtime_recompare",
         frozenRecipe: "tools/compat-broad/shared_production_pair.py:frozen_g0_manifest",
-        build: artifact ? validateBuildBinding(repo, artifact) : null,
+        build: retainedArtifact ? validateBuildBinding(repo, retainedArtifact) : null,
       },
     },
   };
@@ -108,8 +110,9 @@ function invokeComparator(repo, productionPath, local, runtime) {
   }
 }
 
-export function compareG0({ repo, entry, actual, execution }) {
+export function compareG0({ repo, entry, actual, execution, build }) {
   requireThat(actual && typeof actual === "object", "g0-local-record-shape");
+  requireThat(build?.artifactSha256 === execution?.artifact?.sha256, "g0-artifact-receipt-mismatch");
   const result = invokeComparator(
     repo,
     process.env[entry.productionResultPath],

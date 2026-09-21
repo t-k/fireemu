@@ -62,7 +62,17 @@ CURRENT_PROFILE = {
     "requireTopLevelArtifactSha": False,
     "historicalCompilerSha256": "eab79d565e2ab28c2be0c46d2d3dfcef193aee808bf570a484e9121f3c7c7d53",
 }
-PROFILES = {item["name"]: item for item in (DEFAULT_PROFILE, REPAIRED_PROFILE, CURRENT_PROFILE)}
+G0_CURRENT_PROFILE = {
+    "name": "current-8f129b10",
+    "artifactSha256": "bf713deb0952db610c840d6233b9c343496df5b69b9c4e934a4054c27f765897",
+    "runtimeCommit": "8f129b10aac6cf9a875fbf67fd8775a746daec40",
+    "manifestCommitField": "executionCommit",
+    "requireTopLevelArtifactSha": False,
+}
+PROFILES = {
+    item["name"]: item
+    for item in (DEFAULT_PROFILE, REPAIRED_PROFILE, CURRENT_PROFILE, G0_CURRENT_PROFILE)
+}
 PROJECT = "demo-firestore-probe"
 CONFIGURATION = {
     "schemaVersion": 1,
@@ -237,7 +247,7 @@ def validate_current_g0_artifact(
     *,
     profile: dict | str,
     repo: Path,
-    max_manifest_bytes: int = 4 * 1024 * 1024,
+    max_manifest_bytes: int = 32 * 1024 * 1024,
     max_artifact_bytes: int = 1024 * 1024 * 1024,
 ) -> dict:
     """Validate a retained artifact against an ancestor source and current Rust inputs.

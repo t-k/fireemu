@@ -9,7 +9,7 @@ import { requireThat, digestJson, safeCode } from "./core.mjs";
 
 const directory = process.env.PILOT_RUN_DIR;
 requireThat(typeof directory === "string", "missing-run-directory");
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const root = resolve(process.env.PILOT_REPO ?? resolve(dirname(fileURLToPath(import.meta.url)), "../.."));
 const plan = JSON.parse(await fs.readFile(join(directory, "program.json"), "utf8"));
 const python = [
   "import json, os, pathlib, subprocess, sys",

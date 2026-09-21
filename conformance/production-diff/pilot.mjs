@@ -188,6 +188,11 @@ async function replay(prepared, options, directory) {
   await publish(join(directory, "firestore.rules"), RULES);
   const binaryPath = join(directory, "fireemu");
   const artifact = await snapshotBinary(options.binary, binaryPath);
+  if (entry.adapter === "g0")
+    requireThat(
+      prepared.provenance.implementation.build?.artifactSha256 === artifact.sha256,
+      "g0-artifact-snapshot-mismatch",
+    );
   const startedAt = new Date().toISOString();
   const { command, args } = buildExecArgs(
     binaryPath,
@@ -198,7 +203,12 @@ async function replay(prepared, options, directory) {
   );
   const processResult = await runProcess(command, args, {
     cwd: directory,
-    env: { ...cleanEnvironment(directory), PILOT_RUN_DIR: directory, PILOT_CASE_ID: entry.id },
+    env: {
+      ...cleanEnvironment(directory),
+      PILOT_RUN_DIR: directory,
+      PILOT_CASE_ID: entry.id,
+      PILOT_REPO: options.repo,
+    },
     timeoutMs: options.timeout * 1000,
   });
   await publish(join(directory, "process.log"), processResult.log);
@@ -347,7 +357,12 @@ export async function main(argv = process.argv.slice(2)) {
         ? await prepare(options.repo, entry)
         : entry.adapter === "commit-transform"
           ? await prepareCommitTransform(options.repo, entry)
-          : await prepareG0(options.repo, entry, options.binary ?? null);
+          : await prepareG0(
+              options.repo,
+              entry,
+              options.binary ?? null,
+              options.mode === "replay" || options.mode === "compare",
+            );
     if (options.mode === "plan") {
       console.log(
         JSON.stringify(
@@ -388,7 +403,13 @@ export async function main(argv = process.argv.slice(2)) {
         ? compareRecords({ ...prepared, actual: run.actual })
         : entry.adapter === "commit-transform"
           ? compareCommitTransform({ ...prepared, actual: run.actual })
-          : compareG0({ ...prepared, actual: run.actual, repo: options.repo, execution: run.execution });
+          : compareG0({
+              ...prepared,
+              actual: run.actual,
+              repo: options.repo,
+              execution: run.execution,
+              build: prepared.provenance.implementation.build,
+            });
     const result = resultEnvelope({
       entry,
       comparison,

@@ -265,8 +265,8 @@ has lost the implemented shape.
 
 The recorded run is published as
 `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, at source
-`9a042e561e00fada18adccbbbd146a6cbd609b74`, artifact SHA-256
-`179149d4733c59e0303bc3554fe25f8fa28aa0b53ea4e3878f9926eb6f8a889d`, nonce `d3345891e5a94b42b018401029c6cf86`.
+`e2d0a18e8509644de94be0193290cca5b34081c2`, artifact SHA-256
+`03e2415b5063b9a34c50f77733b73d120bafb8965d541c718559be7d81c8fefe`, nonce `e1edcd640c844a848518c8b05c083411`.
 
 | Property | Value |
 | --- | --- |
@@ -278,8 +278,8 @@ The recorded run is published as
 | Recovery rows | 153 |
 | Requests sent | 241 |
 | Every owned resource absent | true |
-| Small-request median, p99 | 0.0011 s, 0.0118 s |
-| Boundary Commit median | 0.0258 s |
+| Small-request median, p99 | 0.0011 s, 0.0127 s |
+| Boundary Commit median | 0.0248 s |
 
 The timings are a loopback floor, not a production estimate; see the
 section above. This block is generated from the record, so it cannot

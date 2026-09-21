@@ -154,7 +154,7 @@ def _rules_body(route: str, body: Any) -> None:
         files = source.get("files") if isinstance(source, dict) else None
         if not isinstance(files, list) or len(files) != 1 or not isinstance(files[0], dict) or set(files[0]) != {"name", "content"} or files[0]["name"] != "firestore.rules" or not isinstance(files[0]["content"], str):
             raise ValueError("ruleset source body shape refused")
-        if "attachmentPoint" in body and body["attachmentPoint"] != "projects/firemu-35fe6/databases/(default)":
+        if "attachmentPoint" in body and body["attachmentPoint"] != "projects/fireemu-35fe6/databases/(default)":
             raise ValueError("ruleset attachment body shape refused")
     elif route == "release-patch":
         if not isinstance(body, dict) or set(body) != {"release", "updateMask"} or body["updateMask"] != "rulesetName":

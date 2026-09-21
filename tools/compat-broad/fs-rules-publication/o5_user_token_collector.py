@@ -1235,9 +1235,10 @@ def _release_ruleset(
     except BudgetExhausted as error:
         return None, str(error)
     request = {
-        "kind": "ruleset-release",
+        "kind": "rules-lifecycle",
         "phase": "ruleset",
-        "ruleset": label,
+        "action": "create",
+        "label": label,
         "sourceDigest": source_digest,
         "credentialRef": "administrator",
         "credentialClass": "administrator",

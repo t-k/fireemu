@@ -51,7 +51,7 @@ _RULESET_NAME = re.compile(
 _RELEASE_NAME = re.compile(
     r"^projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}$"
 )
-_WORKER_SHA256 = "fd497ecb7527a5a83dba1d2adf46340c6a1570237bce3d95a392b075b4c60514"
+_WORKER_SHA256 = "5b964123a6d311bce8f86906a43b23349a4577c8571865f40aad67a8152e2bb1"
 _OWNED_CHILDREN: set[int] = set()
 
 

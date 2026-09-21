@@ -934,7 +934,11 @@ def collect(
     rules_management: dict[str, Any] | None = None
 
     try:
-        if bindings is not None and management_session is None:
+        if (
+            bindings is not None
+            and role == ROLE_PRODUCTION
+            and management_session is None
+        ):
             raise ValueError("production Rules management session required")
         if management_session is not None:
             if bindings is None or role != ROLE_PRODUCTION:

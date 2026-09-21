@@ -415,17 +415,39 @@ def test_noncurrent_source_map_cannot_downgrade_generation_closure(tmp_path):
         campaign.validate_generation(generation, inputs)
 
 
-def test_historical_generation_requires_exact_legacy_closure(tmp_path):
+def test_unallowlisted_legacy_generation_is_rejected(tmp_path):
     built = Admission(tmp_path)
     generation = admission.abort_generation(built.inputs)
     generation["sourceDigests"] = {
         Path(name).name: built.inputs["sourceInputs"][name]
         for name in campaign.LEGACY_CLOSURE_SOURCES
     }
-    campaign.validate_generation(generation, built.inputs)
-    generation["sourceCommit"] = "0" * 40
-    with pytest.raises(ValueError, match="commit differs"):
+    with pytest.raises(ValueError, match="source closure incomplete"):
         campaign.validate_generation(generation, built.inputs)
+
+
+def test_current_generation_cannot_select_legacy_closure(tmp_path):
+    built = Admission(tmp_path)
+    generation = admission.abort_generation(built.inputs)
+    generation["sourceDigests"] = {
+        Path(name).name: built.inputs["sourceInputs"][name]
+        for name in campaign.LEGACY_CLOSURE_SOURCES
+    }
+    with pytest.raises(ValueError, match="source closure incomplete"):
+        campaign.validate_generation(generation, built.inputs)
+
+
+def test_retained_historical_generation_uses_allowlisted_metadata():
+    record = Path("/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-21/reqbytes-o8-run-v1")
+    if not (record / "inputs.json").is_file():
+        pytest.skip("retained request-byte metadata is unavailable")
+    inputs = json.loads((record / "inputs.json").read_bytes())
+    generation = json.loads((record / "receipt.json").read_bytes())["generation"]
+    campaign.validate_generation(generation, inputs)
+    damaged = copy.deepcopy(generation)
+    damaged["sourceCommit"] = "0" * 40
+    with pytest.raises(ValueError):
+        campaign.validate_generation(damaged, inputs)
 
 
 @pytest.mark.parametrize(

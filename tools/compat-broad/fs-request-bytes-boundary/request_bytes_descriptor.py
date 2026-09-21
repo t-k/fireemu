@@ -142,6 +142,21 @@ ABORT_CLOSURE_SOURCES = (
     *TRANSPORT_CLOSURE_SOURCES,
 )
 LEGACY_CLOSURE_SOURCES = ABORT_CLOSURE_SOURCES[:5]
+# Immutable metadata from the retained 2026-09-21 O8 packet. This is the only
+# historical generation accepted by this descriptor; it is intentionally kept
+# as digests rather than importing or rewriting the private packet.
+HISTORICAL_GENERATIONS = {
+    (
+        "a2d2db49cc097f3313008ef8eeb1b10672107427",
+        "4e363c7276a266070f4aaf1b57ea96cff441b165a15d7ca3de1fa4bfcd433697",
+    ): {
+        "o8_admission.py": "1adf21e8815ff8131377a6d776f56027bb9a24a5201b22dbff98d9fabd70b334",
+        "request_bytes_admission.py": "63e827dfad0af24f88ec35ebdbab1a9b47a4ad0da7c8ec95794b5c022b0e5c79",
+        "request_bytes_descriptor.py": "dfd90f72ecfb6fa385f68c8813c1a1a3f44595fcb296ef73caab5d92157ab195",
+        "reservations.py": "bed7d761805bbc565b09bda630ffef6d6af637fffd46344bb018b3b54abf2c93",
+        "shared_gate.py": "74d0912a6cd1102e3b918511a98e67e01e442415f59a9e9f1e7def630a859045",
+    }
+}
 
 
 def shadow_record() -> dict:
@@ -740,19 +755,21 @@ def validate_generation(generation: dict, inputs: dict) -> None:
     if not isinstance(source_digests, dict):
         raise ValueError("saved generation source closure required")
     source_inputs = inputs.get("sourceInputs")
-    current = generation_source_digests(source_inputs)
-    legacy = {
-        Path(name).name: source_inputs[name] for name in LEGACY_CLOSURE_SOURCES
-    }
+    identity = (generation.get("sourceCommit"), generation.get("collectorSourceDigest"))
     if generation.get("sourceCommit") != inputs.get("sourceCommit"):
         raise ValueError("saved generation commit differs")
     if generation.get("collectorSourceDigest") != digest(source_inputs):
         raise ValueError("saved generation source map differs")
-    if source_digests == current:
+    historical = HISTORICAL_GENERATIONS.get(identity)
+    if historical is not None:
+        if source_digests != historical:
+            raise ValueError("historical generation source closure differs")
         return
-    if source_digests == legacy:
-        return
-    raise ValueError("saved generation source closure incomplete")
+    # Any non-allowlisted identity is a current-schema packet and must carry
+    # the complete closure, even when its source map is not today's checkout.
+    current = generation_source_digests(source_inputs)
+    if source_digests != current:
+        raise ValueError("saved generation source closure incomplete")
 
 
 def collector(gate, plan, output, *, transmit):

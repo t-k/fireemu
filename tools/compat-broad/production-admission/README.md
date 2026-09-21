@@ -12,6 +12,14 @@ The existing campaign Gate remains responsible for per-attempt counting, deadlin
 
 Lock keys are project-qualified, segment-preserving paths, for example `project/fireemu-35fe6/firestore/(default)/documents/oracle/<nonce>/limits-02/*`. Only a terminal `/*` is accepted. Empty segments, dot segments, percent encodings and interior wildcards are rejected. Parent and child scopes overlap; siblings do not. Overlapping READ locks are compatible; any overlapping WRITE or EXCLUSIVE lock conflicts. Conflicts apply across envelopes, not only within one permission.
 
+## Per-task budget
+
+The owner's US$10 authorization is per production observation task, identified by the claim's `campaignId` (`FS-LIMIT-API-REQUEST-BYTES`, for example), and never cumulative across the program. Everything a task ever charges counts against that task's US$10: preparation, failed attempts, retries, re-checks after a fix and recovery. Independent tasks each have their own US$10. The program-wide total is reported by the operator's frame but is never a stop condition in this library.
+
+`task_budget.task_budget_check(ledger_state, campaign_id, new_cost_microusd, cap_microusd=10_000_000)` sums the `costMicrousd` allocation of every reservation whose claim names the task, in every state (`held`, `closing`, `released`, `aborted-no-data`, `closed-after-escalation`, `closed-after-abandon`), adds the new claim and refuses when the sum exceeds the cap. Every state counts because the Ledger never refunds an allocation. `Ledger.reserve` calls it inside the ledger lock, after the per-envelope checks and before anything is persisted, so every O8 lane gets the rule without a lane change; the refusal is `task-budget-exceeded:<campaignId>` and leaves the state file unchanged. The existing per-envelope limits and concurrency are unchanged and still apply on top.
+
+Regression tests in `test_task_budget.py`: independent A at US$8 and B at US$8 are both admitted; A at US$8 followed by a retry of A at US$3 is refused; A at US$8 followed by a recovery-only claim of A at US$1 is admitted (9 <= 10); a task whose earlier row is still held counts exactly as a retired one; exactly the cap is admitted and one micro-USD over is refused.
+
 ## Lifetime and cleanup
 
 A reservation remains held after its deadline or worker exit. Neither a PID sweep nor expiry releases ownership. `validate(ticket)` refuses new work after the deadline or while the reservation is closing/released. Real time is sampled inside the acquired ledger lock, so waiting for admission cannot preserve an expired time check. No plaintext credential is stored in this ledger.

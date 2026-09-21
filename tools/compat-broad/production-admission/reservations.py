@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import os
 import platform
 
@@ -32,6 +33,7 @@ from shared_gate import (
     unconfirmed_creates,
     validate_absence_proofs,
 )
+from task_budget import task_budget_check
 
 DIMENSIONS = {"requests", "accounts", "resources", "costMicrousd"}
 GENERATION_FIELDS = {"sourceCommit", "collectorSourceDigest", "sourceDigests"}
@@ -776,6 +778,11 @@ class Ledger:
                 >= envelope["concurrency"]
             ):
                 raise ValueError("envelope concurrency exhausted")
+            # The owner's US$10 is per observation task, and every earlier
+            # reservation of the task counts whatever state it reached.
+            task_budget_check(
+                state, claim["campaignId"], claim["budget"]["costMicrousd"]
+            )
             allocated = {
                 k: sum(
                     r["claim"]["budget"][k] for r in rows if r["envelopeDigest"] == key

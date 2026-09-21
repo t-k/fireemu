@@ -40,6 +40,7 @@ SHARED_SOURCES = (
     "tools/compat-broad/o8-core/o8_admission.py",
     "tools/compat-broad/o8-core/o8_campaign.py",
     "tools/compat-broad/auth-credential-tokens/credential_https_worker.py",
+    "tools/compat-broad/auth-credential-tokens/credential_remote_transport.py",
 )
 ABORT_CLOSURE_SOURCES = (
     "tools/compat-broad/shared_gate.py",

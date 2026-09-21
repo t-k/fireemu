@@ -56,6 +56,9 @@ def _envelope(permission: dict, claim: dict, now: float) -> dict:
 
 
 def _claim(inputs: dict, plan: dict, gate_plan: dict, output: Path) -> dict:
+    job = gate_plan["jobs"][gate_module.JOB]
+    resources = len(job["resources"])
+    requests = len(job["observation"]) + len(job["recovery"])
     return {
         "campaignId": descriptor.CAMPAIGN,
         "manifestDigest": inputs["planDigest"],
@@ -65,10 +68,10 @@ def _claim(inputs: dict, plan: dict, gate_plan: dict, output: Path) -> dict:
         "gateJob": gate_module.JOB,
         "locks": descriptor.lock_scopes(plan),
         "budget": {
-            "requests": 32,
-            "accounts": 2,
-            "resources": 2,
-            "costMicrousd": 32,
+            "requests": requests,
+            "accounts": resources,
+            "resources": resources,
+            "costMicrousd": gate_plan["costMicrousd"],
         },
         "durationSeconds": 300,
     }
@@ -153,6 +156,7 @@ def execute(
             runtime[account + "Uid"] = runtime[account + ".localId"]
     observations = gate_plan["jobs"][gate_module.JOB]["observation"]
     recovery = gate_plan["jobs"][gate_module.JOB]["recovery"]
+    run_started = time.monotonic()
     try:
         for is_recovery, operations in ((False, observations), (True, recovery)):
             for operation in operations:
@@ -163,7 +167,10 @@ def execute(
                     project=project,
                     nonce=nonce,
                     body=body,
-                    deadline=time.monotonic() + 8,
+                    deadline=min(
+                        time.monotonic() + 8,
+                        run_started + (180 if is_recovery else 300),
+                    ),
                     binding=binding,
                     binding_digest=binding_digest,
                     inputs_digest=inputs["inputsDigest"],

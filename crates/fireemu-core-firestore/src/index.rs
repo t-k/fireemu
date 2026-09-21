@@ -8,6 +8,7 @@
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
 
+use fireemu_core_types::codec::{write_json_string, JsonControlEscape};
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::ids::CollectionId;
 
@@ -32,6 +33,12 @@ pub enum IndexFieldMode {
 }
 
 impl IndexFieldMode {
+    // Only ordered modes provide scalar equality keys. In particular, a vector index
+    // supports FindNearest, not the equality prefix of an ordinary query or index merge.
+    fn is_ordered(self) -> bool {
+        matches!(self, Self::Ascending | Self::Descending)
+    }
+
     fn json(self) -> String {
         match self {
             Self::Ascending => "\"order\": \"ASCENDING\"".to_owned(),
@@ -82,15 +89,15 @@ impl IndexDefinition {
             .iter()
             .map(|f| {
                 format!(
-                    "      {{\"fieldPath\": \"{}\", {}}}",
-                    f.path.canonical(),
+                    "      {{\"fieldPath\": {}, {}}}",
+                    index_json_string(&f.path.canonical()),
                     f.mode.json()
                 )
             })
             .collect();
         format!(
-            "{{\n  \"collectionGroup\": \"{}\",\n  \"queryScope\": \"{}\",\n  \"fields\": [\n{}\n  ]\n}}",
-            self.collection_group.as_str(),
+            "{{\n  \"collectionGroup\": {},\n  \"queryScope\": \"{}\",\n  \"fields\": [\n{}\n  ]\n}}",
+            index_json_string(self.collection_group.as_str()),
             match self.query_scope {
                 IndexQueryScope::Collection => "COLLECTION",
                 IndexQueryScope::CollectionGroup => "COLLECTION_GROUP",
@@ -98,6 +105,14 @@ impl IndexDefinition {
             fields.join(",\n")
         )
     }
+}
+
+// FieldPath's backtick escaping is distinct from JSON escaping. Use the existing
+// RFC 8259 codec for both user-controlled strings, retaining their exact identities.
+fn index_json_string(text: &str) -> String {
+    let mut output = String::with_capacity(text.len() + 2);
+    write_json_string(&mut output, text, JsonControlEscape::Unicode);
+    output
 }
 
 /// A single-field index exemption.
@@ -649,7 +664,7 @@ fn merged_indexes_for(
         let served: Vec<FieldPath> = index
             .fields
             .iter()
-            .take_while(|f| wanted.contains(&f.path) && f.mode != IndexFieldMode::Contains)
+            .take_while(|f| wanted.contains(&f.path) && f.mode.is_ordered())
             .map(|f| f.path.clone())
             .collect();
         if served.is_empty() {
@@ -722,11 +737,7 @@ fn composite_serves(
     }
     let prefix: BTreeSet<&FieldPath> = fields[..n_eq].iter().map(|f| &f.path).collect();
     let wanted: BTreeSet<&FieldPath> = req.equality.iter().collect();
-    if prefix != wanted
-        || fields[..n_eq]
-            .iter()
-            .any(|f| f.mode == IndexFieldMode::Contains)
-    {
+    if prefix != wanted || fields[..n_eq].iter().any(|f| !f.mode.is_ordered()) {
         return false;
     }
     let mut pos = n_eq;

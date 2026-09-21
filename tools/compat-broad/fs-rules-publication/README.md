@@ -54,6 +54,7 @@ for, because an administrator bypasses Rules evaluation.
 | `o5_user_token_comparator_v2.py` | The acquisition comparator: reaches `MATCH`, `SEMANTIC_MISMATCH`, `INDETERMINATE` or `REFUSED`, and reaches a positive classification only when every binding below is present on both sides and verified |
 | `o5_user_token_shadow.py` | Fixes the owned local `fireemu` launch specification and turns local deviations into repair tickets |
 | `o5_user_token_local_run.py` | Executes the shadow: builds `fireemu` from this worktree, creates the accounts and fixtures, publishes each Ruleset, drives the matrix with real ID tokens and recovers everything |
+| `o5_user_token_descriptor.py` | The O8 `CampaignDescriptor` for `FS-RULES-USER-TOKEN-MATRIX-01`: schema kinds, window, source map, plan compiler, budget, Ledger lock scopes, the bound collector and the acquisition comparator; the wire members refuse |
 
 The frozen template of the matrix is
 [`spec/compatibility/fs-rules-user-token-matrix.json`](../../../spec/compatibility/fs-rules-user-token-matrix.json),
@@ -158,6 +159,28 @@ The module is listed in `o5_user_token_campaign._SOURCE_FILES`, so the campaign
 manifest digest binds it and a change to it changes what a run is admitted
 under. The frozen matrix template in `spec/compatibility` carries no source
 digests, so it does not change with the module list.
+
+### O8 descriptor
+
+`o5_user_token_descriptor.py` declares the campaign to the shared O8 core in
+`tools/compat-broad/o8-core`. It freezes the whole lane directory plus the
+shared closure (`broad_contract.py`, `shared_gate.py`, the Ledger
+`reservations.py`, `o8_admission.py`, `o8_campaign.py`), compiles the plan for
+a nonce with the placeholder tenant, states the four Ledger budget dimensions
+and the frozen bounds from the campaign manifest's own budget, holds the
+database's ruleset key `EXCLUSIVE` in the Ledger because a Ruleset publication
+changes the whole database, and wires the bound collector as the production
+side and the acquisition comparator against the published local shadow. The
+window is 600 seconds of observation plus 300 seconds of recovery, which is
+the collector's 900 second recovery deadline.
+
+`transport_bound` and `binding_verifier` refuse: the lane has no reviewed
+production transport and no worker archive, so a descriptor built here can
+freeze inputs and pass `validate_o7_admission` against a synthetic approval
+and can do nothing else. `issue_production_capability` fails on the worker
+binding. The lane's own `admission()` still raises. The artifact profile is
+derived from the published shadow's source commit; it names which build the
+comparison reference came from, not that the build was reviewed.
 
 The local shadow does start a process, create local accounts and publish local
 Rulesets, all against one owned `fireemu` instance on loopback ports. That is

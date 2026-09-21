@@ -24,6 +24,7 @@ _SOURCE_FILES = (
     "o5_user_token_comparator_v2.py",
     "o5_user_token_shadow.py",
     "o5_user_token_local_run.py",
+    "o5_user_token_descriptor.py",
 )
 
 # Unit prices are the public Firestore Standard edition list prices used only to

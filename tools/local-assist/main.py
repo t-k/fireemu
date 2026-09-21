@@ -32,6 +32,7 @@ from packet import PacketError, parse_packet, validate_loopback_url
 from runtime import (
     DEFAULT_STATE_DIR,
     InferenceLock,
+    OutputError,
     cache_get,
     cache_put,
     check_new_output_path,
@@ -126,9 +127,14 @@ def _result_skeleton(packet, inputs, prompt, base_commit_note: str | None) -> di
 
 def _emit(result: dict, output: Path, started: float) -> int:
     result["elapsedSeconds"] = round(time.monotonic() - started, 3)
-    write_new_file(
-        output, json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
-    )
+    try:
+        write_new_file(
+            output,
+            json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8") + b"\n",
+        )
+    except OutputError as error:
+        _stderr(f"result not written: {error}")
+        return EXIT_USAGE
     status = result["finishStatus"]
     cited = (
         ", ".join(
@@ -222,7 +228,8 @@ def run_task(args: argparse.Namespace, transport: Transport) -> int:
             )
     result["runtime"] = runtime.to_dict()
 
-    key = cache_key(packet, inputs, prompt, runtime)
+    response_format = config.get("responseFormat", "json_schema")
+    key = cache_key(packet, inputs, prompt, runtime, response_format)
     result["cache"]["key"] = key
     cached = cache_get(state_dir, key)
     if cached is not None:
@@ -251,8 +258,7 @@ def run_task(args: argparse.Namespace, transport: Transport) -> int:
             messages,
             runtime,
             transport,
-            use_json_schema=config.get("responseFormat", "json_schema")
-            == "json_schema",
+            use_json_schema=response_format == "json_schema",
         )
     finally:
         lock.release()

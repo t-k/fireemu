@@ -363,7 +363,11 @@ def probe_runtime(
 
 
 def cache_key(
-    packet: Packet, inputs: list[ReadInput], prompt: Prompt, runtime: RuntimeIdentity
+    packet: Packet,
+    inputs: list[ReadInput],
+    prompt: Prompt,
+    runtime: RuntimeIdentity,
+    response_format: str,
 ) -> str:
     material = {
         "kind": packet.kind,
@@ -380,6 +384,7 @@ def cache_key(
             for i in inputs
         ],
         "promptVersion": prompt.version,
+        "responseFormat": response_format,
         "runtime": runtime.to_dict(),
     }
     return hashlib.sha256(

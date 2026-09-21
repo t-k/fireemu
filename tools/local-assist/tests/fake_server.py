@@ -20,6 +20,7 @@ class FakeLlamaServer:
         self.model_id = model_id
         self.replies: list[object] = []
         self.requests: list[dict] = []
+        self.abandoned = 0
         self._lock = threading.Lock()
         outer = self
 
@@ -80,6 +81,22 @@ class FakeLlamaServer:
                     delay = raw_spec.get("delay", 0)
                     if delay:
                         time.sleep(delay)
+                    trickle = raw_spec.get("trickle")
+                    if trickle:
+                        # Announce a body and then deliver it one byte at a time.
+                        payload_bytes = trickle["body"]
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(payload_bytes)))
+                        self.end_headers()
+                        try:
+                            for offset in range(len(payload_bytes)):
+                                self.wfile.write(payload_bytes[offset : offset + 1])
+                                self.wfile.flush()
+                                time.sleep(trickle["interval"])
+                        except (BrokenPipeError, ConnectionResetError):
+                            outer.abandoned += 1
+                        return
                     self._send(
                         raw_spec.get("status", 200),
                         raw_spec.get("body", b"{}"),

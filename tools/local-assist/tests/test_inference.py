@@ -241,14 +241,23 @@ def test_cache_key_covers_kind_question_lines_hashes_prompt_and_runtime(repo):
     runtime = RuntimeIdentity(
         "http://127.0.0.1:8011/v1/chat/completions", "a", "m", "Q4"
     )
-    base = cache_key(packet, inputs, prompt, runtime)
-    assert cache_key(_packet(repo, question="other"), inputs, prompt, runtime) != base
-    assert cache_key(_packet(repo, maxFindings=2), inputs, prompt, runtime) != base
+    base = cache_key(packet, inputs, prompt, runtime, "json_schema")
+    assert (
+        cache_key(
+            _packet(repo, question="other"), inputs, prompt, runtime, "json_schema"
+        )
+        != base
+    )
+    assert (
+        cache_key(_packet(repo, maxFindings=2), inputs, prompt, runtime, "json_schema")
+        != base
+    )
     narrower = read_inputs(str(repo), (InputSelection("a.rs", 1, 29),))
-    assert cache_key(packet, narrower, prompt, runtime) != base
+    assert cache_key(packet, narrower, prompt, runtime, "json_schema") != base
     other_runtime = RuntimeIdentity(runtime.endpoint, "a", "m", "Q8")
-    assert cache_key(packet, inputs, prompt, other_runtime) != base
-    assert cache_key(packet, inputs, prompt, runtime) == base
+    assert cache_key(packet, inputs, prompt, other_runtime, "json_schema") != base
+    assert cache_key(packet, inputs, prompt, runtime, "prompt") != base
+    assert cache_key(packet, inputs, prompt, runtime, "json_schema") == base
 
 
 class ScriptedTransport:

@@ -598,3 +598,76 @@ def test_parse_log_refuses_to_overwrite_and_reports_counts(tmp_path, capsys):
     )
     assert main(["parse-log", "--input", str(fixture), "--output", str(output)]) == 1
     assert "already exists" in capsys.readouterr().err
+
+
+def test_a_trickling_server_cannot_hold_the_request_past_the_deadline(
+    tmp_path, server, repo, state_dir
+):
+    import time
+
+    body = json.dumps({"choices": [{"message": {"content": "{}"}}]}).encode()
+    server.replies.append({"__raw__": {"trickle": {"body": body, "interval": 0.2}}})
+    packet = write_packet(tmp_path, server, repo, deadlineSeconds=1)
+    started = time.monotonic()
+    code, result, _ = run(tmp_path, packet, state_dir)
+    elapsed = time.monotonic() - started
+    assert code == 4
+    assert result["finishStatus"] == "timeout"
+    assert elapsed < 3.0, elapsed
+    assert len(server.posts()) == 1
+    # The abandoned connection is closed, so the server sees a broken pipe.
+    deadline = time.monotonic() + 5
+    while server.abandoned == 0 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert server.abandoned == 1
+
+
+def test_an_output_that_appears_mid_run_is_reported_not_raised(
+    tmp_path, server, repo, state_dir, capsys, monkeypatch
+):
+    import main as main_module
+
+    server.replies.append(GOOD_FINDINGS)
+    packet = write_packet(tmp_path, server, repo)
+    output = tmp_path / "late.json"
+    original = main_module.write_new_file
+
+    def racing_write(path, payload):
+        path.write_text("{}")
+        return original(path, payload)
+
+    monkeypatch.setattr(main_module, "write_new_file", racing_write)
+    code = main(
+        [
+            "--packet",
+            str(packet),
+            "--output",
+            str(output),
+            "--state-dir",
+            str(state_dir),
+        ]
+    )
+    assert code == 1
+    assert output.read_text() == "{}"
+    assert "result not written" in capsys.readouterr().err
+
+
+def test_the_cache_key_separates_response_formats(tmp_path, server, repo, state_dir):
+    server.replies.append(GOOD_FINDINGS)
+    packet = write_packet(tmp_path, server, repo)
+    code, first, _ = run(tmp_path, packet, state_dir, name="schema.json")
+    assert code == 0 and first["cache"]["hit"] is False
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"responseFormat": "prompt"}))
+    server.replies.append(GOOD_FINDINGS)
+    code, second, _ = run(
+        tmp_path,
+        packet,
+        state_dir,
+        name="prompt.json",
+        extra_args=("--config", str(config)),
+    )
+    assert code == 0
+    assert second["cache"]["hit"] is False
+    assert second["cache"]["key"] != first["cache"]["key"]
+    assert len(server.posts()) == 2

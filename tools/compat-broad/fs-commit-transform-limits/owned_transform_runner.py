@@ -20,6 +20,8 @@ sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
 
 import broad
+import local_collector as local_collector_module
+import local_transport as local_transport_module
 from broad_contract import digest, local_origin
 from evidence_common import runtime_inputs_at_commit
 from local_collector import collect_local
@@ -93,6 +95,12 @@ def compile_bound_plan(compiler_path: Path | None, project: str, database: str, 
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     return module.compile_plan(project, database, nonce)
+
+
+def validate_bound_plan(plan: dict, compiler_path: Path | None) -> None:
+    expected = compile_bound_plan(compiler_path, plan["project"], plan["database"], plan["nonce"])
+    if not _exact(plan, expected):
+        raise ValueError("compiler plan drift")
 
 
 def compare_bound_rows(
@@ -278,6 +286,9 @@ def child(output: Path, nonce: str, profile_name: str, compiler_path: Path | Non
     inputs = json.loads((output / "run-inputs.json").read_bytes())
     profile = resolve_profile(profile_name)
     compiler_path = compiler_for_profile(compiler_path, profile)
+    if compiler_path is not None:
+        local_transport_module._validate_plan = lambda plan: validate_bound_plan(plan, compiler_path)
+        local_collector_module._validate_plan = lambda plan: validate_bound_plan(plan, compiler_path)
     validate_copied_manifest(output, inputs, profile)
     plan = compile_bound_plan(compiler_path, PROJECT, "(default)", nonce)
     if (

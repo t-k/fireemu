@@ -166,6 +166,31 @@ def management_transport(slot, token, *, deadline, capability, binding, binding_
     # reaped instead of leaving the coordinator in-flight forever.
     if slot == "oauth-tokeninfo":
         result = _private_request("tokeninfo", token, deadline=duration)
+        if result.get("complete") is not True:
+            # `_management_receipt_valid` in shared_gate.py admits exactly
+            # {status, complete, workerReaped, bodyKind, body} for a
+            # management receipt -- body must be null when complete is
+            # False -- so the failure kind and its diagnostics (declared
+            # vs. received bytes, elapsed time, effective socket timeout)
+            # cannot travel inside the receipt the Gate charges without a
+            # Gate schema change (tracked separately; see the transport
+            # diagnosability issue). Until that lands, log them here so a
+            # stopped campaign is diagnosable from process output instead
+            # of only from an opaque {status:200, complete:false, body:null}
+            # receipt. None of these fields carry response or credential
+            # bytes.
+            print(
+                "management_transport oauth-tokeninfo incomplete:"
+                f" failure={result.get('failure')!r}"
+                f" status={result.get('status')!r}"
+                f" workerReaped={result.get('workerReaped')!r}"
+                f" receivedBytes={result.get('receivedBytes')!r}"
+                f" declaredLength={result.get('declaredLength')!r}"
+                f" elapsedSeconds={result.get('elapsedSeconds')!r}"
+                f" socketTimeoutSeconds={result.get('socketTimeoutSeconds')!r}"
+                f" exceptionClass={result.get('exceptionClass')!r}",
+                file=sys.stderr,
+            )
         return {
             "complete": result.get("complete") is True,
             "workerReaped": result.get("workerReaped") is True,
@@ -260,7 +285,9 @@ def metadata_attestation(slot, receipt, permission):
     body = {
         "kind": "request-byte-metadata-attestation-v1",
         "slot": slot,
-        "bodyDigest": digest(receipt.get("body")) if isinstance(receipt, dict) else None,
+        "bodyDigest": digest(receipt.get("body"))
+        if isinstance(receipt, dict)
+        else None,
         "baselineVerified": False,
     }
     try:
@@ -396,7 +423,9 @@ class ManagementSession:
             self.evidence.append(row)
             event = self.gate.snapshot()["managementEvents"][-1]
             if event.get("id") != row["id"] or event.get("completed") is not True:
-                raise ValueError("management slot did not complete inside its reservation")
+                raise ValueError(
+                    "management slot did not complete inside its reservation"
+                )
             if slot == "oauth-tokeninfo":
                 if self.credential is None or response.get("complete") is not True:
                     raise ValueError("credential attestation failed")

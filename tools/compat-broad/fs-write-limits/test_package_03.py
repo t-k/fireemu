@@ -124,6 +124,7 @@ def test_the_package_states_how_an_early_stop_is_handled() -> None:
     assert "verified absent" in allocation["earlyStop"]
     # The one thing still open in the Gate is named rather than glossed.
     assert "absence proof" in allocation["openGateDefect"]
+    assert "unknown create" in allocation["openGateDefect"]
     assert allocation["gateWallCapSeconds"] == 1200
 
 
@@ -253,21 +254,38 @@ def test_binding_and_source_digests_resolve_at_the_declared_commit() -> None:
     )
 
 
-def test_both_recorded_shadows_are_complete_and_reclaimed_everything() -> None:
+def test_the_recorded_shadow_ran_to_the_end_and_reclaimed_everything() -> None:
+    """The schedule and the cleanup completed; only the Gate close was refused.
+
+    HEAD's shared Gate settles the R3 BatchWrite carrying an empty item as an
+    unknown create, so `Gate.finish` refuses the terminal close of a run that
+    has deleted and proven absent every owned document. The record publishes
+    that state rather than a completion it cannot claim. When the proposed
+    accounting rule lands, the shadow must be rerun and this test must expect
+    `completed-local-only` again.
+    """
     shadow = load(SHADOW)
+    assert shadow["status"] == "recorded-local-only-gate-close-refused"
     for part in PARTS:
         execution = shadow["execution"][part]["execution"]
         assert execution["semanticMismatches"] == []
-        assert execution["infrastructureFailures"] == []
+        assert execution["infrastructureFailures"] == [
+            {"phase": "finish", "failure": "ValueError"}
+        ]
         for key in (
             "recordingComplete",
             "stateValidation",
+            "allOwnedResourcesAbsentAfterRecovery",
+            "gateCloseRefused",
+        ):
+            assert execution[key] is True, (part, key)
+        for key in (
             "cleanupComplete",
             "cleanupValidated",
             "receiptValidated",
-            "allOwnedResourcesAbsentAfterRecovery",
+            "completed",
         ):
-            assert execution[key] is True, (part, key)
+            assert execution[key] is False, (part, key)
         assert execution["ownedProcess"]["stopped"] is True
         assert execution["ownedProcess"]["listenersClosed"] is True
         plan = compile_limits_plan("demo-firestore-probe", "(default)", "0" * 32, part)
@@ -395,11 +413,70 @@ def test_collector_and_comparator_bindings_name_the_new_modules() -> None:
         )
     assert manifest["collectorBinding"]["productionCollector"] is None
     assert manifest["comparatorBinding"]["productionComparator"] is None
-    # The limits-02 sources must stay byte-for-byte as they were when that
-    # campaign was frozen, or its receipt's collector source digest stops
-    # resolving.
+    # The limits-02 receipt binds its collector sources at commit 40dfc0da3 and
+    # resolves them with `git show`, so it is unaffected by the working tree.
+    # HEAD's round35 import (271b4c9af) already changed collector.py and
+    # compiler.py, so a byte-for-byte pin of the tree is no longer true; what
+    # must hold is that the bound commit still resolves every module.
     frozen = "40dfc0da3a03968928fa1906cdee409b703a0bb1"
+    review = load(PACKAGE / "fs-write-limits-02-40dfc0da3-review.json")
+    assert review["sourceCommit"] == frozen
     for name in ("collector.py", "comparator.py", "compiler.py"):
         relative = f"tools/compat-broad/fs-write-limits/{name}"
-        current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-        assert current == at_commit(frozen, relative), relative
+        assert len(at_commit(frozen, relative)) == 64, relative
+
+
+def test_the_o8_section_names_the_descriptor_and_its_bindings() -> None:
+    """The published O8 figures are the descriptor's, not restated."""
+    import limits_03_descriptor as campaign
+    from compiler_03 import management_contract
+
+    manifest, binding = load(MANIFEST), load(BINDING)
+    o8 = manifest["o8"]
+    assert o8["launcher"] == "tools/compat-broad/fs-write-limits/limits_03_o8.py"
+    assert (
+        binding["o8"]["launcherSha256"]
+        == hashlib.sha256((ROOT / o8["launcher"]).read_bytes()).hexdigest()
+    )
+    assert (
+        o8["workerSha256"]
+        == hashlib.sha256((ROOT / o8["worker"]).read_bytes()).hexdigest()
+    )
+    assert o8["kinds"] == {
+        "frozenInputs": campaign.FROZEN_INPUTS_KIND,
+        "permission": campaign.PERMISSION_KIND,
+        "approval": campaign.APPROVAL_KIND,
+        "manifest": campaign.MANIFEST_KIND,
+        "receipt": campaign.RECEIPT_KIND,
+    }
+    assert o8["ledgerBudget"] == campaign.ledger_budget()
+    assert o8["managementContract"] == management_contract()
+    assert o8["artifactProfile"] == campaign.artifact_profile()
+    assert len(o8["approvalFields"]) == 17
+    assert manifest["indexConfiguration"]["precondition"] == (
+        campaign.index_exemption_precondition()
+    )
+    assert manifest["indexConfiguration"]["precondition"]["restoreRequiredAfterRun"]
+    assert {lock["key"] for lock in o8["lockScopes"] if lock["mode"] == "WRITE"} == {
+        "project/fireemu-35fe6/firestore/(default)/documents/oracle/{freshNonce}/limits-03/*",
+        "project/fireemu-35fe6/firestore/(default)/indexes",
+    }
+    budgets = manifest["budgets"]
+    assert budgets["managementSlots"]["observation"] == [
+        "oauth-tokeninfo",
+        "project",
+        "database",
+        "index-exemption",
+        "auth",
+    ]
+    assert budgets["managementSlots"]["recovery"] == [
+        "project",
+        "database",
+        "index-exemption",
+        "auth",
+    ]
+    assert budgets["maxWallSeconds"] == campaign.campaign_seconds() <= 1200
+    assert manifest["allocation"]["managementCharged"]
+    assert manifest["schedule"]["declared"] is True
+    assert manifest["partition"]["parts"] == 1
+    assert "scheduleDeclined" not in manifest

@@ -80,9 +80,7 @@ def _stage(plan: dict | MappingProxyType, stage_id: str):
 
 
 def _canonical_plan(project: str, nonce: str) -> dict[str, Any]:
-    plan = campaign_manifest(nonce)
-    plan["ownerInputs"]["projectId"] = project
-    return plan
+    return campaign_manifest(nonce, project=project)
 
 
 def _resource_map(project: str, nonce: str) -> dict[str, dict[str, str]]:

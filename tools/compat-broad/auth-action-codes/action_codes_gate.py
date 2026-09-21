@@ -182,10 +182,14 @@ class ActionGate(shared_gate.Gate):
 
     def _allow_observation_auth_delete(self, state, job, operation, index):
         plan = state["plan"]
+        declared = plan.get("jobs", {}).get(self.job, {}).get("accountBindings", {}).get("accountB", {})
         if (
             not shared_gate._action_observation_delete_plan_allowed(plan, job, operation)
             or operation.get("id") != "account-b-delete"
             or index != 23
+            or not isinstance(declared, dict)
+            or operation.get("resource") != declared.get("resource")
+            or operation.get("uidBinding") != declared.get("uidBinding")
         ):
             return False
         record = job.get("authAccounts", {}).get("accountB")
@@ -195,6 +199,8 @@ class ActionGate(shared_gate.Gate):
         if type(event_index) is not int or not 0 <= event_index < len(state["events"]):
             return False
         event = state["events"][event_index]
+        observation = plan.get("jobs", {}).get(self.job, {}).get("observation", [])
+        expected_signup = observation[event_index] if 0 <= event_index < len(observation) else None
         return (
             record.get("resource") == operation.get("resource")
             and isinstance(record.get("uid"), str)
@@ -204,6 +210,10 @@ class ActionGate(shared_gate.Gate):
             and event.get("authEvidence", {}).get("account") == "accountB"
             and event.get("authEvidence", {}).get("uid") == record["uid"]
             and event.get("authEvidence", {}).get("creationOutcome") == "created"
+            and isinstance(expected_signup, dict)
+            and expected_signup.get("kind") == "sign-up"
+            and event.get("requestDigest") == shared_gate.digest(expected_signup)
+            and record.get("requestDigest") == event.get("requestDigest")
             and operation.get("body") == {"localId": "$binding:accountBUid"}
         )
 
@@ -233,6 +243,7 @@ class ActionGate(shared_gate.Gate):
                 "resource": operation["resource"],
                 "uid": uid,
                 "createEvent": len(state["events"]) - 1,
+                "requestDigest": event["requestDigest"],
             }
             event["creationOutcome"] = "created"
             event["authEvidence"] = {

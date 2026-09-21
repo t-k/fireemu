@@ -72,3 +72,62 @@ def test_gate_rejects_foreign_resource_or_nonce(tmp_path):
     plan["jobs"][gate.JOB]["resources"][0] = "projects/foreign/auth/accounts/" + NONCE + "-a"
     with pytest.raises(ValueError):
         shared_gate.create(tmp_path / "gate", plan)
+
+
+def _dispatch_observation_prefix(handle, plan, stop=23):
+    for operation in plan["jobs"][gate.JOB]["observation"][:stop]:
+        if operation["kind"] == "sign-up":
+            suffix = "a" if operation["account"] == "accountA" else "b"
+            result = (200, {"localId": "uid-" + suffix, "idToken": "token-" + suffix, "refreshToken": "refresh-" + suffix})
+        elif operation["id"] in {"reset-link-generate", "verify-link-generate", "email-link-generate", "email-link-generate-second", "reset-link-generate-second", "deleted-user-link-generate"}:
+            result = (200, {"oobCode": "code-" + operation["id"]})
+        else:
+            result = (200, {})
+        handle.dispatch(operation, False, lambda result=result: result)
+
+
+def test_action_delete_requires_declared_account_binding_and_signup_digest(tmp_path):
+    plan = gate.gate_plan(PROJECT, NONCE)
+    path = tmp_path / "gate"
+    gate.create(path, plan)
+    handle = gate.ActionGate(path, gate.JOB)
+    handle.claim()
+    _dispatch_observation_prefix(handle, plan)
+    state = json.loads((path / "state.json").read_bytes())
+    operation = plan["jobs"][gate.JOB]["observation"][23]
+    forged = dict(operation, resource=plan["jobs"][gate.JOB]["resources"][0])
+    assert not handle._allow_observation_auth_delete(state, state["jobs"][gate.JOB], forged, 23)
+    account = state["jobs"][gate.JOB]["authAccounts"]["accountB"]
+    assert account["requestDigest"] == state["events"][account["createEvent"]]["requestDigest"]
+    assert state["events"][account["createEvent"]]["authEvidence"]["uid"] == account["uid"]
+
+
+def test_action_delete_reordered_or_replayed_is_rejected(tmp_path):
+    plan = gate.gate_plan(PROJECT, NONCE)
+    path = tmp_path / "gate"
+    gate.create(path, plan)
+    handle = gate.ActionGate(path, gate.JOB)
+    handle.claim()
+    with pytest.raises(ValueError, match="closed scenario|execution schedule"):
+        handle.dispatch(plan["jobs"][gate.JOB]["observation"][23], False, lambda: (200, {}))
+
+    _dispatch_observation_prefix(handle, plan)
+    delete = plan["jobs"][gate.JOB]["observation"][23]
+    handle.dispatch(delete, False, lambda: (200, {}))
+    with pytest.raises(ValueError):
+        handle.dispatch(delete, False, lambda: (200, {}))
+
+
+def test_action_delete_400_is_terminal_error_not_absence(tmp_path):
+    plan = gate.gate_plan(PROJECT, NONCE)
+    path = tmp_path / "gate"
+    gate.create(path, plan)
+    handle = gate.ActionGate(path, gate.JOB)
+    handle.claim()
+    _dispatch_observation_prefix(handle, plan)
+    delete = plan["jobs"][gate.JOB]["observation"][23]
+    handle.dispatch(delete, False, lambda: (400, {"error": {"message": "permission denied"}}))
+    state = json.loads((path / "state.json").read_bytes())
+    account = state["jobs"][gate.JOB]["authAccounts"]["accountB"]
+    assert "deletedEvent" not in account
+    assert "absenceProofs" not in state["jobs"][gate.JOB] or account["resource"] not in state["jobs"][gate.JOB]["absenceProofs"]

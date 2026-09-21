@@ -228,9 +228,8 @@ def _collection_errors(collection: Any, side: str, nonce: str | None) -> list[st
     rows = collection.get("rows")
     if type(rows) is not list or len(rows) > MAX_REQUESTS:
         return [*errors, f"{side}-collection-rows"]
-    if (
-        type(collection.get("rowCount")) is not int
-        or collection["rowCount"] != len(rows)
+    if type(collection.get("rowCount")) is not int or collection["rowCount"] != len(
+        rows
     ):
         errors.append(f"{side}-collection-row-count")
     order = {case_id: i for i, case_id in enumerate(EXECUTION_ORDER)}

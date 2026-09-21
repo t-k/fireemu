@@ -3,16 +3,24 @@
 Requires the full repository's existing lifecycle/O8 test dependencies. All
 acquisition objects here are synthetic test registrations, never production.
 """
+
 from __future__ import annotations
 
 import copy
 
 from fs_config_lifecycle.comparator import (
-    INDETERMINATE, LOCAL_KIND, MATCH, PRODUCTION_KIND, compare,
+    INDETERMINATE,
+    LOCAL_KIND,
+    MATCH,
+    PRODUCTION_KIND,
+    compare,
 )
 from fs_config_lifecycle.manifest import compile_manifest
 from fs_config_lifecycle.test_fs_config_comparator import (
-    NONCE, _acquisition, _collection, _record,
+    NONCE,
+    _acquisition,
+    _collection,
+    _record,
 )
 
 
@@ -45,8 +53,11 @@ def test_real_collector_normal_control_is_preserved(tmp_path):
 def test_real_collector_duplicate_observation_is_not_silently_ignored(tmp_path):
     left = _collection(tmp_path, "left")
     right = _collection(tmp_path, "right")
-    index = next(i for i, row in enumerate(left["rows"])
-                 if row["role"] == "case" and row["phase"] == "observation")
+    index = next(
+        i
+        for i, row in enumerate(left["rows"])
+        if row["role"] == "case" and row["phase"] == "observation"
+    )
     duplicate = copy.deepcopy(left["rows"][index])
     duplicate["status"] = 404
     left["rows"].insert(index + 1, duplicate)
@@ -63,8 +74,9 @@ def test_real_collector_recovery_row_cannot_replace_observation(tmp_path):
     row["phase"] = "recovery"
     result = _compare(left, right)
     assert result["classification"] == INDETERMINATE
-    assert any("local:missing-observation" in row.get("errors", [])
-               for row in result["rows"])
+    assert any(
+        "local:missing-observation" in row.get("errors", []) for row in result["rows"]
+    )
 
 
 def test_real_collector_clean_recovery_does_not_erase_abort(tmp_path):

@@ -53,7 +53,7 @@ for, because an administrator bypasses Rules evaluation.
 
 | Module | Responsibility |
 | --- | --- |
-| `o5_user_token_case.py` | Compiles the 30-row matrix, both Ruleset sources, the owned documents and accounts, every frozen payload and the expected result of every row; the four `credential-revocation` rows also carry a stated production hypothesis |
+| `o5_user_token_case.py` | Compiles the 33-row matrix, both Ruleset sources, the owned documents and accounts, every frozen payload and the expected result of every row; the seven `credential-revocation` rows also carry a stated production hypothesis, and three of them name the administrator step the collector performs before them |
 | `o5_user_token_collector.py` | Runs the matrix through an injected transport under an enforced request ceiling, separate observation and recovery deadlines, an fsynced journal and version-bound cleanup of documents and accounts; in a bound run it also releases each Ruleset through a checked step and records the endpoint, wire sequence, clocks, observer digests and launcher bindings the acquisition comparator verifies |
 | `o5_user_token_campaign.py` | Freezes the inputs, the budget estimate, the permission envelope and the owner preconditions; admission always raises |
 | `o5_user_token_comparator.py` | Names why a pair of bundles is not an acquisition; it has no positive classification |
@@ -88,7 +88,12 @@ fingerprints and the approval window; the collector validates their shape,
 scans them for credential-shaped content, refuses an environment that
 contradicts the role, and records a copy. During the run every receipt must
 carry `endpoint` (the host and port the transport connected to) and
-`wireSequence` (the transport's own request counter); a receipt without them,
+`wireSequence` (the transport's own request counter); before a row that
+names a `principalAction` the collector issues an explicit administrator step
+(`phase: principal`) and accepts it only when the transport's readback proves
+the action (`present`, `disabled`, `uidFingerprint` equal to the launcher's
+binding, `authTime`, and `validSince` after `authTime` for a revoke); a
+receipt without the wire facts,
 an endpoint outside the declared environment's allowlist, or a sequence that
 regresses aborts observation and is refused again during recovery, so no
 deletion is authorized on the strength of a foreign endpoint. Before the first
@@ -98,8 +103,8 @@ transport's readback digest equals it. The bundle records `observer` (the lane
 source digests, read from disk), `transport` (endpoints, receipt and sequence
 counts, the releases, the monotonic and wall clocks) and `acquisition`, and
 derives `productionExecuted` from the endpoints reached rather than from any
-label. An unbound run behaves as before: no release step, no acquisition, and
-the wire keys are optional. Structural redaction is unchanged in both modes,
+label. An unbound run behaves as before: no release step, no principal
+action, no acquisition, and the wire keys are optional. Structural redaction is unchanged in both modes,
 and `_scan` also refuses the non-JWT Google credential prefixes `ya29.`,
 `AIza` and `1//`.
 
@@ -142,7 +147,8 @@ compares rows only after both sides are admitted.
 
 `compare(production, local, plan, *, manifest_digest=None)` returns
 `classification` in `MATCH`, `SEMANTIC_MISMATCH`, `INDETERMINATE`, `REFUSED`,
-the 30 per-row decisions, a per-condition summary, and `errors` naming every
+the 33 per-row decisions, a per-condition summary, a per-condition hypothesis
+tally, and `errors` naming every
 binding that failed, prefixed with the side (`production:` or `local:`) or
 unprefixed when it concerns the pair.
 
@@ -151,6 +157,7 @@ unprefixed when it concerns the pair.
 | Collector identity | SHA-256 of every lane module in `_SOURCE_FILES`, recomputed from disk now | `observer-digest-drift` (refused) |
 | Endpoint reached | Per receipt, from the transport: production side only `firestore.googleapis.com`, `identitytoolkit.googleapis.com`, `firebaserules.googleapis.com`; local side only loopback | `local-mislabelled-as-production`, `endpoint-outside-allowlist`, `local-reached-nonloopback` (refused), `missing-binding:endpoint:...` |
 | Ruleset releases | Source digest equals the plan's Ruleset source; readback digest equals it; production readback is a `release-get`, not a publish echo; every row runs under the release most recently active before it | `ruleset-mismatch:<label>:...`, `ruleset-generation-order:<caseId>` |
+| Principal actions | Exactly the plan's administrator steps, each with the action, `auth_time`, a `validSince` after `auth_time` for a revoke and none otherwise, a lookup readback showing what the action did (absent for a delete, present and disabled or not otherwise) whose uid fingerprint equals the launcher's principal binding, an allowlisted endpoint, and a timestamp between the positive-control row and the row that presents the token again | `principal-action:<ref>:...` |
 | Principal provenance | Row fingerprint recomputed from the nonce and reference; per account a uid fingerprint (shape-checked: the comparator holds no uid), provider, tenant and claims digest matching the plan; uid fingerprints differ between sides; no uid-shaped string anywhere in the bundle | `principal-drift`, `principal-fingerprint`, `principal-mismatch:<ref>:...`, `principal-shared-across-sides` (refused), `unredacted-identifier` |
 | Manifest digest | Recomputed from `o5_user_token_campaign.manifest()` for the production identity; equal on both sides; equal to the admitted digest when one is passed | `manifest-mismatch` (refused) |
 | Cleanup proof | Every owned document and account: readback, delete under the observed version or uid, typed absence; no step failure; nothing outstanding | `cleanup-unknown:...` |

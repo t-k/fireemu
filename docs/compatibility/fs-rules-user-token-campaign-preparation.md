@@ -30,7 +30,7 @@ that token as its bearer credential.
 
 ## Prepared conditions
 
-Thirty observation rows cover eleven conditions. Every condition carries at
+Thirty-three observation rows cover eleven conditions. Every condition carries at
 least one control, negative or post-state row.
 
 | Condition | Rows | What the rows separate |
@@ -44,7 +44,7 @@ least one control, negative or post-state row.
 | `getAfter` | 2 | An atomic commit that also writes the partner document satisfies `getAfter()`; a separate control document whose guard is never created is denied |
 | `atomic-multiwrite` | 2 | A commit pairing one allowed and one denied write is refused as a whole, and a post-state read of the pinned field value proves the allowed half was not applied |
 | `credential-refusal` | 3 | An expired token, a malformed bearer and an empty bearer are authentication refusals, not Rules denials |
-| `credential-revocation` | 4 | RULES-REVOKE-005 phase 1: an unexpired ID token whose account had its refresh tokens revoked (`validSince` advanced), was disabled, or was deleted after sign-in, reading a document that any authenticated principal may read; plus an expired token of the revoked account as the control. The compiled status is the current local decision, `UNAUTHENTICATED` for all four (fireemu refuses revoked and disabled accounts on the Rules path). The production expectation for the three within-`exp` rows is carried on the row as a hypothesis, `OK` until `exp`, from the Firebase documentation on detecting ID token revocation; it is not an observation, and a real comparison is expected to name these rows |
+| `credential-revocation` | 7 | RULES-REVOKE-005 phase 1, recorded as accept-then-refuse. For each of three principals: a positive control in which the unexpired ID token is accepted on a document any authenticated principal may read; then an administrator step the collector performs between the rows (refresh tokens revoked with `validSince` placed after the token's `auth_time`, account disabled, or account deleted) with an administrator lookup readback recorded under the collector's receipts as presence, disabled flag and uid fingerprint, plus the token's `auth_time` and the `validSince` set, never a uid or a token; then the same token presented again. An expired token of the revoked account is the seventh row, a control. The compiled status of the three within-`exp` rows is the current local decision, `UNAUTHENTICATED` (fireemu refuses revoked and disabled accounts and unknown users on the Rules path). Their production expectation is carried on the row as a hypothesis, `OK` until `exp`, from the Firebase documentation on detecting ID token revocation; it is not an observation |
 | `ruleset-transition` | 3 | Under Ruleset B the owner is denied on the same resource, while the explicit-null and custom-claim clauses still allow |
 
 The anonymous rows matter because an implementation that treats an
@@ -108,10 +108,10 @@ subject that cannot be read back stays outstanding and is never force deleted.
 
 | Quantity | Value |
 | --- | --- |
-| Observation requests | 30 |
-| Fixture, Auth and Rules requests | 32 |
+| Observation requests | 33 |
+| Fixture, Auth and Rules requests | 35 |
 | Recovery requests | 63 |
-| Request upper bound | 125 |
+| Request upper bound | 131 |
 | Concurrency | 1 |
 | Observation deadline | 600 s |
 | Recovery deadline | 900 s |
@@ -138,11 +138,14 @@ every manifest-bound lane module that produced it, the loopback endpoint and
 wire sequence of every receipt, the two Ruleset releases with their publish
 echo readback, the monotonic and wall clocks, and a fingerprint per principal
 derived from the nonce and the assigned uid. In the current run the local
-runtime produced all thirty expected decisions, including the field values
-of the multiwrite post-state row and the four credential-revocation rows at
-the current local decision, with complete recording, complete document and
-account cleanup of all seven accounts, the tenant deleted and both origins
-closed afterwards. There are no repair tickets from it.
+runtime produced all thirty-three expected decisions, including the field
+values of the multiwrite post-state row and the seven credential-revocation
+rows at the current local decision (each revocation principal accepted before
+the administrator step and refused after it, with the step's lookup readback
+recorded), with complete recording, complete document and account cleanup of
+all seven accounts (the deleted account absent at readback, every other
+account present), the tenant deleted and both origins closed afterwards.
+There are no repair tickets from it.
 
 That is local evidence. The local Auth emulator mints unsigned tokens, so a
 local allow proves a Rules decision and never production token verification.
@@ -185,6 +188,18 @@ an owner permission reference and an approval window; the local side must
 carry its artifact binding and no reservation. Every other field a bundle
 carries is self-reported; `MATCH` means two fully bound, mutually consistent
 bundles agree row by row, and is not production evidence on its own.
+
+A row whose plan entry carries a production hypothesis is reported with that
+hypothesis and with whether the production status read as hypothesized or
+contrary, and the result carries a per-condition tally; neither touches the
+classification. For the 33-row campaign that means: if the hypothesis holds,
+the comparison is expected to classify `SEMANTIC_MISMATCH`, naming exactly the
+three within-`exp` `credential-revocation` rows, with those rows reading
+"as hypothesized". That outcome is the expected one, and the follow-up it calls
+for is a change to the Rules-path token verification in
+`crates/fireemu-core-auth/src/jwt.rs` (lane C), not a change to the
+comparator or to the compiled expectation, which records the local decision
+as it is.
 
 A self-declared role string is still not an acquisition. Collecting the same
 matrix twice locally and labelling one bundle as the production side is

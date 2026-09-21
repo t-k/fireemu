@@ -33,8 +33,8 @@ from test_o5_user_token_collector import Transport
 from test_o5_user_token_collector_bound import (
     LOCAL_ENDPOINT,
     LOCAL_TENANT,
-    PRODUCTION_ENDPOINT,
     acquisition_for,
+    bound_transport,
 )
 
 PROJECT = "fireemu-35fe6"
@@ -53,7 +53,7 @@ def local_plan(nonce: str = NONCE) -> dict:
 def bound_local(plan: dict, run_id: str = "local-1") -> dict:
     return collect(
         plan,
-        Transport(plan, endpoint=LOCAL_ENDPOINT),
+        bound_transport(plan, ROLE_LOCAL_SHADOW),
         role=ROLE_LOCAL_SHADOW,
         run_id=run_id,
         acquisition=acquisition_for(plan, ROLE_LOCAL_SHADOW),
@@ -65,7 +65,7 @@ def bound_pair() -> tuple[dict, dict, dict]:
     plan = production_plan()
     production = collect(
         plan,
-        Transport(plan, endpoint=PRODUCTION_ENDPOINT),
+        bound_transport(plan, ROLE_PRODUCTION),
         role=ROLE_PRODUCTION,
         run_id="production-1",
         acquisition=acquisition_for(plan, ROLE_PRODUCTION),
@@ -95,8 +95,8 @@ def test_two_fully_bound_agreeing_bundles_match_on_every_row() -> None:
     assert result["acquisitionValidated"] is True
     assert result["productionObserved"] is True
     assert result["promotionReady"] is True
-    assert len(result["rows"]) == 30
-    assert [row["index"] for row in result["rows"]] == list(range(30))
+    assert len(result["rows"]) == 33
+    assert [row["index"] for row in result["rows"]] == list(range(33))
     assert all(row["classification"] == MATCH for row in result["rows"])
     assert set(result["conditions"].values()) == {MATCH}
     assert set(result["conditions"]) == set(plan["conditions"])
@@ -211,6 +211,8 @@ def _relabel_endpoints(bundle: dict, endpoint: str) -> None:
         row["endpoint"] = endpoint
     for release in bundle["transport"]["rulesetReleases"]:
         release["endpoint"] = endpoint
+    for action in bundle["transport"]["principalActions"]:
+        action["endpoint"] = endpoint
     for key in ("documentSteps", "accountSteps"):
         for step in bundle["cleanup"][key]:
             step["endpoint"] = endpoint
@@ -349,7 +351,7 @@ def test_a_missing_release_is_named() -> None:
 
 def test_a_row_under_the_wrong_ruleset_label_is_named() -> None:
     production, local, plan = bound_pair()
-    production["rows"][27]["ruleset"] = "A"
+    production["rows"][30]["ruleset"] = "A"
     result = compare(production, local, plan)
     assert result["classification"] != MATCH
     assert any("ruleset-mismatch:row:" in error for error in result["errors"])
@@ -821,6 +823,8 @@ def test_an_unforeseen_exception_becomes_an_indeterminate_error(monkeypatch) -> 
         ("recoveryCeiling", 1000, "count-contradiction:recovery-ceiling"),
         ("observationCeiling", 31, "count-contradiction:observation-ceiling"),
         ("rulesetCeiling", 3, "count-contradiction:ruleset-ceiling"),
+        ("principalActionSpent", 2, "count-contradiction:principal-action-spent"),
+        ("principalActionCeiling", 0, "count-contradiction:principal-action-ceiling"),
     ],
 )
 def test_every_budget_bound_is_mandatory_on_the_match_path(field, value, error) -> None:
@@ -899,3 +903,144 @@ def test_the_first_comparator_module_is_untouched_by_this_one() -> None:
 
     assert not hasattr(first, "MATCH")
     assert first.CLASSIFICATIONS == (first.INDETERMINATE,)
+
+
+# ---------------------------------------------------------------------------
+# Principal actions (RULES-REVOKE-005): accept, act, refuse, all bound
+# ---------------------------------------------------------------------------
+
+
+def test_a_matching_pair_reports_the_revocation_hypothesis_without_classifying_it() -> (
+    None
+):
+    """Both scripted sides return the compiled (local) statuses, so the rows
+    match; the hypothesis says production would accept the three within-exp
+    tokens, so those three read as contrary and the four controls as
+    hypothesized. Classification is untouched."""
+    production, local, plan = bound_pair()
+    result = compare(production, local, plan)
+    assert result["classification"] == MATCH
+    assert result["hypotheses"] == {
+        "credential-revocation": {"rows": 7, "asHypothesized": 4, "contrary": 3}
+    }
+    contrary = [r for r in result["rows"] if r["hypothesisOutcome"] == "contrary"]
+    assert [r["caseId"] for r in contrary] == [
+        "a-revoked-refresh-tokens-within-exp",
+        "a-disabled-account-within-exp",
+        "a-deleted-account-within-exp",
+    ]
+    assert all(r["productionHypothesis"]["status"] == "OK" for r in contrary)
+    assert all(r["classification"] == MATCH for r in contrary)
+    assert all(
+        r["productionHypothesis"] is None and r["hypothesisOutcome"] is None
+        for r in result["rows"]
+        if r["condition"] != "credential-revocation"
+    )
+
+
+def test_a_production_that_behaves_as_hypothesized_is_a_mismatch_that_reads_as_expected() -> (
+    None
+):
+    production, local, plan = bound_pair()
+    for row in production["rows"]:
+        if row["caseId"].endswith("-within-exp"):
+            row["observed"]["status"] = "OK"
+            row["observed"]["documentPresent"] = True
+    result = compare(production, local, plan)
+    assert result["classification"] == SEMANTIC_MISMATCH
+    assert result["conditions"]["credential-revocation"] == SEMANTIC_MISMATCH
+    assert result["hypotheses"]["credential-revocation"] == {
+        "rows": 7,
+        "asHypothesized": 7,
+        "contrary": 0,
+    }
+    mismatched = [r["caseId"] for r in result["rows"] if r["classification"] != MATCH]
+    assert mismatched == [
+        "a-revoked-refresh-tokens-within-exp",
+        "a-disabled-account-within-exp",
+        "a-deleted-account-within-exp",
+    ]
+
+
+@pytest.mark.parametrize(
+    "mutate,error",
+    [
+        (lambda a: a.pop(), "principal-action:count"),
+        (
+            lambda a: a[0].__setitem__("action", "disable"),
+            "principal-action:revoked-e:identity",
+        ),
+        (
+            lambda a: a[0].__setitem__("beforeIndex", 23),
+            "principal-action:revoked-e:identity",
+        ),
+        (
+            lambda a: a[0].__setitem__("validSince", a[0]["authTime"]),
+            "principal-action:revoked-e:validSince",
+        ),
+        (
+            lambda a: a[1].__setitem__("validSince", 5),
+            "principal-action:disabled-f:validSince",
+        ),
+        (
+            lambda a: a[0].__setitem__("authTime", -1),
+            "principal-action:revoked-e:authTime",
+        ),
+        (
+            lambda a: a[1]["readback"].__setitem__("disabled", False),
+            "principal-action:disabled-f:readback",
+        ),
+        (
+            lambda a: a[2]["readback"].__setitem__("present", True),
+            "principal-action:deleted-g:readback",
+        ),
+        (
+            lambda a: a[0]["readback"].__setitem__("uidFingerprint", "0" * 16),
+            "principal-action:revoked-e:principal",
+        ),
+        (lambda a: a[0].__setitem__("at", 0.0), "principal-action:revoked-e:order"),
+        (
+            lambda a: a[0].__setitem__("endpoint", LOCAL_ENDPOINT),
+            "local-mislabelled-as-production",
+        ),
+    ],
+)
+def test_an_unproven_principal_action_is_named(mutate, error) -> None:
+    production, local, plan = bound_pair()
+    mutate(production["transport"]["principalActions"])
+    result = compare(production, local, plan)
+    assert result["classification"] != MATCH
+    assert f"production:{error}" in result["errors"]
+
+
+def test_an_action_that_is_not_between_its_control_and_its_row_is_named() -> None:
+    production, local, plan = bound_pair()
+    action = production["transport"]["principalActions"][0]
+    action["at"] = production["rows"][action["beforeIndex"]]["at"] + 1
+    result = compare(production, local, plan)
+    assert "production:principal-action:revoked-e:order" in result["errors"]
+
+
+def test_account_presence_at_recovery_must_match_what_the_campaign_did() -> None:
+    production, local, plan = bound_pair()
+    steps = production["cleanup"]["accountSteps"]
+    readback = next(
+        s
+        for s in steps
+        if s["kind"] == "account-readback" and s["accountRef"] == "deleted-g"
+    )
+    readback["observed"]["accountPresent"] = True
+    readback["observed"]["uid"] = "principal:deleted-g"
+    result = compare(production, local, plan)
+    assert (
+        "production:cleanup-unknown:present-at-readback:deleted-g" in result["errors"]
+    )
+    production, local, plan = bound_pair()
+    steps = production["cleanup"]["accountSteps"]
+    own = [s for s in steps if s["accountRef"] == "other-b"]
+    own[0]["observed"]["accountPresent"] = False
+    own[0]["observed"]["uid"] = None
+    for step in own[1:]:
+        steps.remove(step)
+    result = compare(production, local, plan)
+    assert "production:cleanup-unknown:absent-at-readback:other-b" in result["errors"]

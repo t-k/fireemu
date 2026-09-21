@@ -37,9 +37,9 @@ from o5_user_token_comparator_v2 import REFUSED
 from o8_campaign import REQUIRED_MEMBERS, CampaignDescriptor
 from test_o5_user_token_collector import Transport
 from test_o5_user_token_collector_bound import (
-    PRODUCTION_ENDPOINT,
     acquisition_for,
     bound,
+    bound_transport,
 )
 
 NONCE = "a" * 32
@@ -149,7 +149,7 @@ def test_the_frozen_inputs_cover_the_lane_and_the_shared_closure(tmp_path) -> No
         assert f"{lane.LANE_DIRECTORY}/{name}" in sources
     for name in (*lane.SHARED_SOURCES, *lane.ABORT_CLOSURE_SOURCES):
         assert sources[name] == hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-    assert inputs["bounds"]["observationRequests"] == 30
+    assert inputs["bounds"]["observationRequests"] == 33
     assert inputs["bounds"]["totalRequests"] == descriptor.budget["requests"]
     o8_admission.validate_frozen_inputs(descriptor, inputs)
     generation = o8_admission.abort_generation(descriptor, inputs)
@@ -309,7 +309,7 @@ def test_the_lane_admission_stays_closed() -> None:
 def test_an_injected_local_transport_is_accepted_and_the_wire_member_is_not() -> None:
     descriptor = lane.descriptor()
     plan = lane.plan_compiler(NONCE)
-    local = Transport(plan, endpoint=PRODUCTION_ENDPOINT)
+    local = bound_transport(plan, ROLE_PRODUCTION)
     assert o8_admission.reject_production_transport(descriptor, local) is local
 
     def reaching(request):
@@ -322,7 +322,7 @@ def test_an_injected_local_transport_is_accepted_and_the_wire_member_is_not() ->
 def test_the_collector_member_runs_the_lane_collector_bound() -> None:
     descriptor = lane.descriptor()
     plan = lane.plan_compiler(NONCE)
-    transport = Transport(plan, endpoint=PRODUCTION_ENDPOINT)
+    transport = bound_transport(plan, ROLE_PRODUCTION)
     bundle = descriptor.collector(
         plan,
         transport,
@@ -358,14 +358,14 @@ def test_the_comparator_member_compares_against_the_published_shadow() -> None:
     shadow_plan = lane.plan_compiler(record["nonce"])
     production = descriptor.collector(
         shadow_plan,
-        Transport(shadow_plan, endpoint=PRODUCTION_ENDPOINT),
+        bound_transport(shadow_plan, ROLE_PRODUCTION),
         run_id="dry-run",
         acquisition=acquisition_for(shadow_plan, ROLE_PRODUCTION),
     )
     result = descriptor.comparator(production, shadow_plan)
     assert result["classification"] != REFUSED, result["errors"]
     assert result["errors"] == []
-    assert len(result["rows"]) == 30
+    assert len(result["rows"]) == 33
     assert all(
         row["production"]["status"] == row["local"]["status"] for row in result["rows"]
     )

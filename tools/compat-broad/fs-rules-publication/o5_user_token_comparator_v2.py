@@ -46,8 +46,12 @@ from o5_user_token_case import (
     ACCOUNT_PRINCIPALS,
     CAMPAIGN,
     CASE_CONTRACT,
+    POST_SIGN_IN_DELETE,
+    POST_SIGN_IN_DISABLE,
+    POST_SIGN_IN_REVOKE,
     compile_case,
     digest,
+    principal_actions,
     validate_case,
 )
 from o5_user_token_collector import (
@@ -215,8 +219,9 @@ def _admit_side(side: _Side, production_plan: dict[str, Any]) -> None:
         side.fail("unredacted-identifier:labels")
     cleanup_steps = _admit_cleanup(side)
     releases = _admit_releases(side, rows)
-    _admit_transport(side, rows, releases, cleanup_steps)
-    _admit_budget(side, rows, releases, cleanup_steps)
+    actions = _admit_actions(side, rows)
+    _admit_transport(side, rows, releases, actions, cleanup_steps)
+    _admit_budget(side, rows, releases, actions, cleanup_steps)
 
 
 def _admit_provenance(side: _Side, production_plan: dict[str, Any]) -> None:
@@ -505,6 +510,10 @@ def _admit_cleanup(side: _Side) -> list[dict[str, Any]]:
         "accountRef",
         "accountPresent",
         "uid",
+        expected_presence={
+            entry["ref"]: entry.get("postSignIn") != POST_SIGN_IN_DELETE
+            for entry in plan["ownedAccounts"]
+        },
     )
     attempted = side.bundle.get("attemptedResources")
     if not isinstance(attempted, list) or any(
@@ -521,7 +530,14 @@ def _admit_subjects(
     subject_key: str,
     presence_key: str,
     identity_key: str,
+    expected_presence: Mapping[str, bool] | None = None,
 ) -> None:
+    """Every subject: readback, then delete under its identity and typed
+    absence when it was present. When ``expected_presence`` is given, the
+    readback must also show what the campaign did to the subject: an account
+    the campaign deleted between rows must be absent, every other account must
+    still be present, so "deleted by our action" and "never created" are two
+    different records."""
     prefix = "account-" if subject_key == "accountRef" else ""
     for subject in subjects:
         own = [step for step in steps if step.get(subject_key) == subject]
@@ -535,6 +551,11 @@ def _admit_subjects(
         if type(present) is not bool:
             side.fail(f"cleanup-unknown:untyped-presence:{subject}")
             continue
+        if expected_presence is not None and present is not expected_presence[subject]:
+            side.fail(
+                f"cleanup-unknown:{'absent' if expected_presence[subject] else 'present'}"
+                f"-at-readback:{subject}"
+            )
         if present is False:
             if kinds != [f"{prefix}readback"]:
                 side.fail(f"cleanup-unknown:steps-after-absence:{subject}")
@@ -625,10 +646,94 @@ def _admit_releases(side: _Side, rows: list[Any] | None) -> list[dict[str, Any]]
     return accepted
 
 
+def _admit_actions(side: _Side, rows: list[Any] | None) -> list[dict[str, Any]]:
+    """The administrator steps between rows must be exactly the plan's, each
+    proven by the transport's readback and placed between the row that accepted
+    the principal and the row that presents its token again."""
+    assert side.plan is not None
+    plan = side.plan
+    expected = principal_actions(plan)
+    transport = side.bundle.get("transport")
+    recorded = (
+        transport.get("principalActions") if isinstance(transport, Mapping) else None
+    )
+    if not isinstance(recorded, list) or len(recorded) != len(expected):
+        side.fail("principal-action:count")
+        return []
+    principals = (side.acquisition or {}).get("principals")
+    accepted: list[dict[str, Any]] = []
+    for action, planned in zip(recorded, expected, strict=True):
+        ref = planned["ref"]
+        if not isinstance(action, Mapping):
+            side.fail(f"principal-action:{ref}:shape")
+            continue
+        if (
+            action.get("ref") != ref
+            or action.get("action") != planned["action"]
+            or action.get("beforeIndex") != planned["beforeIndex"]
+        ):
+            side.fail(f"principal-action:{ref}:identity")
+            continue
+        _admit_endpoint(side, action.get("endpoint"), f"principal-action:{ref}")
+        auth_time = action.get("authTime")
+        valid_since = action.get("validSince")
+        if type(auth_time) is not int or auth_time < 0:
+            side.fail(f"principal-action:{ref}:authTime")
+        if planned["action"] == POST_SIGN_IN_REVOKE:
+            if (
+                type(valid_since) is not int
+                or type(auth_time) is not int
+                or (valid_since <= auth_time)
+            ):
+                side.fail(f"principal-action:{ref}:validSince")
+        elif valid_since is not None:
+            side.fail(f"principal-action:{ref}:validSince")
+        readback = action.get("readback")
+        if not isinstance(readback, Mapping):
+            side.fail(f"principal-action:{ref}:readback")
+        else:
+            present = readback.get("present")
+            disabled = readback.get("disabled")
+            if planned["action"] == POST_SIGN_IN_DELETE:
+                proven = present is False and disabled is None
+            else:
+                proven = present is True and disabled is (
+                    planned["action"] == POST_SIGN_IN_DISABLE
+                )
+            if not proven:
+                side.fail(f"principal-action:{ref}:readback")
+            bound = principals.get(ref) if isinstance(principals, Mapping) else None
+            fingerprint = readback.get("uidFingerprint")
+            if (
+                not _hex(fingerprint, _HEX16)
+                or not isinstance(bound, Mapping)
+                or fingerprint != bound.get("uidFingerprint")
+            ):
+                side.fail(f"principal-action:{ref}:principal")
+        at = action.get("at")
+        index = planned["beforeIndex"]
+        if not _is_number(at):
+            side.fail(f"principal-action:{ref}:timestamp")
+        elif rows is not None and 0 < index < len(rows):
+            before = rows[index - 1] if isinstance(rows[index - 1], Mapping) else {}
+            after = rows[index] if isinstance(rows[index], Mapping) else {}
+            # The preceding row is the positive control for the same
+            # principal; the action must fall strictly between the two.
+            if before.get("credentialRef") != ref or not (
+                _is_number(before.get("at"))
+                and _is_number(after.get("at"))
+                and before["at"] <= at <= after["at"]
+            ):
+                side.fail(f"principal-action:{ref}:order")
+        accepted.append(dict(action))
+    return accepted
+
+
 def _admit_transport(
     side: _Side,
     rows: list[Any] | None,
     releases: list[dict[str, Any]],
+    actions: list[dict[str, Any]],
     cleanup_steps: list[dict[str, Any]],
 ) -> None:
     transport = side.bundle.get("transport")
@@ -646,7 +751,8 @@ def _admit_transport(
     # issued the requests: releases and rows first, recovery steps last.
     sequenced: list[Any] = []
     if rows is not None:
-        events = [(r["beforeIndex"], -1, r) for r in releases]
+        events = [(r["beforeIndex"], -2, r) for r in releases]
+        events.extend((a["beforeIndex"], -1, a) for a in actions)
         events.extend((i, 0, row) for i, row in enumerate(rows))
         events.sort(key=lambda e: (e[0], e[1]))
         sequenced.extend(
@@ -733,6 +839,7 @@ def _admit_budget(
     side: _Side,
     rows: list[Any] | None,
     releases: list[dict[str, Any]],
+    actions: list[dict[str, Any]],
     cleanup_steps: list[dict[str, Any]],
 ) -> None:
     assert side.plan is not None
@@ -745,6 +852,10 @@ def _admit_budget(
         side.fail("count-contradiction:observation-spent")
     if budget.get("rulesetSpent") != len(releases):
         side.fail("count-contradiction:ruleset-spent")
+    if budget.get("principalActionSpent") != len(actions):
+        side.fail("count-contradiction:principal-action-spent")
+    if budget.get("principalActionCeiling") != len(principal_actions(plan)):
+        side.fail("count-contradiction:principal-action-ceiling")
     # The ceilings are what the collector enforces for this plan, not values
     # a bundle may choose; the deadlines are what the clock checks run against.
     if budget.get("observationCeiling") != len(plan["observation"]):
@@ -831,6 +942,8 @@ def _compare_rows(
             "local": _projection(right, operation),
             "classification": MATCH,
             "reasons": [],
+            "productionHypothesis": None,
+            "hypothesisOutcome": None,
         }
         if row["production"] != row["local"]:
             row["classification"] = SEMANTIC_MISMATCH
@@ -839,8 +952,38 @@ def _compare_rows(
                 for key in row["production"]
                 if row["production"][key] != row["local"][key]
             )
+        hypothesis = operation["expect"].get("productionHypothesis")
+        if isinstance(hypothesis, Mapping):
+            # A stated expectation about production, carried on the plan row.
+            # It reads the production status only and never touches the
+            # classification: a mismatch on a row whose hypothesis holds is
+            # the expected outcome, and still a mismatch.
+            row["productionHypothesis"] = dict(hypothesis)
+            row["hypothesisOutcome"] = (
+                "as-hypothesized"
+                if row["production"]["status"] == hypothesis.get("status")
+                else "contrary"
+            )
         rows.append(row)
     return rows
+
+
+def _hypotheses(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    summary: dict[str, dict[str, int]] = {}
+    for row in rows:
+        if row["hypothesisOutcome"] is None:
+            continue
+        entry = summary.setdefault(
+            row["condition"], {"rows": 0, "asHypothesized": 0, "contrary": 0}
+        )
+        entry["rows"] += 1
+        key = (
+            "asHypothesized"
+            if row["hypothesisOutcome"] == "as-hypothesized"
+            else "contrary"
+        )
+        entry[key] += 1
+    return dict(sorted(summary.items()))
 
 
 def _projection(row: Mapping[str, Any], operation: Mapping[str, Any]) -> dict[str, Any]:
@@ -890,6 +1033,7 @@ def compare(
         "classification": INDETERMINATE,
         "rows": [],
         "conditions": {},
+        "hypotheses": {},
         "errors": [],
         "acquisitionValidated": False,
         "productionObserved": False,
@@ -942,6 +1086,7 @@ def compare(
         else:
             conditions[row["condition"]] = MATCH
     result["conditions"] = dict(sorted(conditions.items()))
+    result["hypotheses"] = _hypotheses(rows)
     if all(row["classification"] == MATCH for row in rows):
         result["classification"] = MATCH
         result["promotionReady"] = True

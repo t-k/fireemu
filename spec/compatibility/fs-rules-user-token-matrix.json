@@ -1,18 +1,18 @@
 {
   "budget": {
-    "authRequests": 14,
-    "billedDocumentReads": 51,
+    "authRequests": 17,
+    "billedDocumentReads": 54,
     "billedDocumentWrites": 28,
     "concurrencyUpperBound": 1,
     "costCeilingUsd": 1.0,
     "estimateBasis": "public Firestore Standard list prices; not a quoted tariff",
-    "estimatedCostUsd": 8.1e-05,
+    "estimatedCostUsd": 8.3e-05,
     "fixtureRequests": 10,
-    "observationRequests": 30,
+    "observationRequests": 33,
     "perRequestTimeoutSeconds": 12.0,
     "recoveryDeadlineSeconds": 900.0,
     "recoveryRequests": 63,
-    "requestUpperBound": 125,
+    "requestUpperBound": 131,
     "rulesRequests": 8,
     "wallClockDeadlineSeconds": 600.0
   },
@@ -857,6 +857,40 @@
         "writes": []
       },
       {
+        "caseId": "a-revoked-refresh-tokens-accepted-before-the-action",
+        "condition": "credential-revocation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "revoked-e"
+        },
+        "expect": {
+          "detail": "the-same-token-is-accepted-before-the-administrator-action",
+          "fields": {
+            "document": "exists-guarded",
+            "nonce": "00000000000000000000000000000000"
+          },
+          "productionHypothesis": {
+            "basis": "an unrevoked, unexpired ID token is accepted",
+            "status": "OK"
+          },
+          "status": "OK"
+        },
+        "index": 23,
+        "method": "get",
+        "principal": "revoked-e",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+        ],
+        "role": "control",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
         "caseId": "a-revoked-refresh-tokens-within-exp",
         "condition": "credential-revocation",
         "createdDocuments": [],
@@ -872,13 +906,51 @@
           },
           "status": "UNAUTHENTICATED"
         },
-        "index": 23,
+        "index": 24,
         "method": "get",
         "principal": "revoked-e",
+        "principalAction": {
+          "action": "revoke",
+          "ref": "revoked-e"
+        },
         "resources": [
           "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
         ],
         "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-disabled-account-accepted-before-the-action",
+        "condition": "credential-revocation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "disabled-f"
+        },
+        "expect": {
+          "detail": "the-same-token-is-accepted-before-the-administrator-action",
+          "fields": {
+            "document": "exists-guarded",
+            "nonce": "00000000000000000000000000000000"
+          },
+          "productionHypothesis": {
+            "basis": "an unrevoked, unexpired ID token is accepted",
+            "status": "OK"
+          },
+          "status": "OK"
+        },
+        "index": 25,
+        "method": "get",
+        "principal": "disabled-f",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+        ],
+        "role": "control",
         "ruleset": "A",
         "targets": [
           "exists-guarded"
@@ -902,13 +974,51 @@
           },
           "status": "UNAUTHENTICATED"
         },
-        "index": 24,
+        "index": 26,
         "method": "get",
         "principal": "disabled-f",
+        "principalAction": {
+          "action": "disable",
+          "ref": "disabled-f"
+        },
         "resources": [
           "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
         ],
         "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-deleted-account-accepted-before-the-action",
+        "condition": "credential-revocation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "deleted-g"
+        },
+        "expect": {
+          "detail": "the-same-token-is-accepted-before-the-administrator-action",
+          "fields": {
+            "document": "exists-guarded",
+            "nonce": "00000000000000000000000000000000"
+          },
+          "productionHypothesis": {
+            "basis": "an unrevoked, unexpired ID token is accepted",
+            "status": "OK"
+          },
+          "status": "OK"
+        },
+        "index": 27,
+        "method": "get",
+        "principal": "deleted-g",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+        ],
+        "role": "control",
         "ruleset": "A",
         "targets": [
           "exists-guarded"
@@ -932,9 +1042,13 @@
           },
           "status": "UNAUTHENTICATED"
         },
-        "index": 25,
+        "index": 28,
         "method": "get",
         "principal": "deleted-g",
+        "principalAction": {
+          "action": "delete",
+          "ref": "deleted-g"
+        },
         "resources": [
           "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
         ],
@@ -962,7 +1076,7 @@
           },
           "status": "UNAUTHENTICATED"
         },
-        "index": 26,
+        "index": 29,
         "method": "get",
         "principal": "revoked-expired-token",
         "resources": [
@@ -988,7 +1102,7 @@
           "detail": "same-principal-same-resource-decision-changes-with-the-ruleset",
           "status": "PERMISSION_DENIED"
         },
-        "index": 27,
+        "index": 30,
         "method": "get",
         "principal": "owner-a",
         "resources": [
@@ -1018,7 +1132,7 @@
           },
           "status": "OK"
         },
-        "index": 28,
+        "index": 31,
         "method": "get",
         "principal": "unauthenticated",
         "resources": [
@@ -1048,7 +1162,7 @@
           },
           "status": "OK"
         },
-        "index": 29,
+        "index": 32,
         "method": "get",
         "principal": "owner-a",
         "resources": [
@@ -1158,7 +1272,7 @@
       "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/multiwrite-y"
     ],
     "ownedScope": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases",
-    "planDigest": "57a5b1f8f1661f7a2307c356d7a2b8afd0e3a577bab47c1b8b5575ecf2aadc64",
+    "planDigest": "94b1c949678d1d68805a41b42c2950b746e8c65a77d23eb185953d5d0cfe68a7",
     "principals": [
       {
         "account": true,

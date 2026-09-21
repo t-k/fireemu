@@ -44,7 +44,16 @@ from pathlib import Path
 from typing import Any
 
 from o5_user_token_campaign import source_digests
-from o5_user_token_case import ACCOUNT_PRINCIPALS, CAMPAIGN, digest, validate_case
+from o5_user_token_case import (
+    ACCOUNT_PRINCIPALS,
+    CAMPAIGN,
+    POST_SIGN_IN_DELETE,
+    POST_SIGN_IN_DISABLE,
+    POST_SIGN_IN_REVOKE,
+    digest,
+    principal_actions,
+    validate_case,
+)
 
 COLLECTOR_CONTRACT = "fs-rules-user-token-collector-v3"
 
@@ -145,6 +154,28 @@ RULESET_RECEIPT_KEYS = (
             "releaseName",
             "readbackKind",
             "readbackDigest",
+        }
+    )
+    | WIRE_RECEIPT_KEYS
+)
+
+# A principal action receipt: the administrator action the transport applied
+# to one owned account, the token facts it read (seconds, never the token),
+# and an accounts:lookup readback of the account, fingerprinted.
+PRINCIPAL_ACTION_RECEIPT_KEYS = (
+    frozenset(
+        {
+            "status",
+            "code",
+            "httpStatus",
+            "failure",
+            "complete",
+            "action",
+            "authTime",
+            "validSince",
+            "present",
+            "disabled",
+            "uidFingerprint",
         }
     )
     | WIRE_RECEIPT_KEYS
@@ -326,6 +357,7 @@ class _Budget:
         requests: int,
         recovery: int,
         rulesets: int,
+        actions: int,
         deadline_seconds: float,
         recovery_deadline_seconds: float,
         clock: Callable[[], float],
@@ -333,12 +365,14 @@ class _Budget:
         self._requests = requests
         self._recovery = recovery
         self._rulesets = rulesets
+        self._actions = actions
         self._clock = clock
         self._clock_failure: str | None = None
         self._last_clock: float | int | None = None
         self.spent = 0
         self.recovery_spent = 0
         self.ruleset_spent = 0
+        self.action_spent = 0
         self.started: float | int | None = None
         try:
             started = self._read_clock()
@@ -385,6 +419,16 @@ class _Budget:
         if now >= self._deadline:
             raise BudgetExhausted("deadline-exhausted")
         self.ruleset_spent += 1
+        return now
+
+    def take_action(self) -> float | int:
+        """An administrator step between rows, with its own ceiling."""
+        if self.action_spent >= self._actions:
+            raise BudgetExhausted("principal-action-ceiling")
+        now = self._read_clock()
+        if now >= self._deadline:
+            raise BudgetExhausted("deadline-exhausted")
+        self.action_spent += 1
         return now
 
     def take_recovery(self) -> float | int:
@@ -629,10 +673,12 @@ def collect(
     operations = plan["observation"]
     accounts = plan["ownedAccounts"]
     transitions = ruleset_transitions(operations) if bindings is not None else 0
+    action_count = len(principal_actions(plan)) if bindings is not None else 0
     budget = _Budget(
         requests=len(operations),
         recovery=3 * (len(plan["ownedResources"]) + len(accounts)),
         rulesets=transitions,
+        actions=action_count,
         deadline_seconds=float(deadline_seconds),
         recovery_deadline_seconds=float(recovery_deadline_seconds),
         clock=clock,
@@ -663,6 +709,7 @@ def collect(
 
     rows: list[dict[str, Any]] = []
     releases: list[dict[str, Any]] = []
+    actions: list[dict[str, Any]] = []
     attempted: list[str] = []
     # Every account exists before the first row, so all of them are owned.
     attempted_accounts = [entry["ref"] for entry in accounts]
@@ -686,6 +733,16 @@ def collect(
                     break
                 releases.append(release)
                 active_ruleset = operation["ruleset"]
+            if bindings is not None and operation.get("principalAction"):
+                action, action_failure = _apply_principal_action(
+                    execute, budget, wire, journal, operation, bindings
+                )
+                if action_failure is not None:
+                    ref = operation["principalAction"]["ref"]
+                    failures.append(f"principal-action:{ref}:{action_failure}")
+                    abort = action_failure
+                    break
+                actions.append(action)
             request = _request(operation, nonce)
             try:
                 at = budget.take_observation()
@@ -760,6 +817,7 @@ def collect(
     transport = {
         **wire.record(),
         "rulesetReleases": releases,
+        "principalActions": actions,
         "clock": {
             "started": budget.started,
             "observationFinished": observation_finished,
@@ -813,6 +871,8 @@ def collect(
             "observationSpent": budget.spent,
             "rulesetCeiling": transitions,
             "rulesetSpent": budget.ruleset_spent,
+            "principalActionCeiling": action_count,
+            "principalActionSpent": budget.action_spent,
             "recoveryCeiling": 3 * (len(plan["ownedResources"]) + len(accounts)),
             "recoverySpent": budget.recovery_spent,
             "deadlineSeconds": float(deadline_seconds),
@@ -828,6 +888,101 @@ def collect(
         "productionExecuted": production_executed,
         "productionReady": False,
     }
+
+
+def _apply_principal_action(
+    execute: Callable[[dict[str, Any]], Any],
+    budget: _Budget,
+    wire: _Wire,
+    journal: _Journal,
+    operation: Mapping[str, Any],
+    bindings: Mapping[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Apply one administrator action to an owned account between two rows.
+
+    The transport performs the action (refresh tokens revoked, account
+    disabled, account deleted), then reads the account back with an
+    administrator lookup and reports presence, the disabled flag and the uid
+    fingerprint, which must equal the launcher's binding for that principal.
+    The token facts it reports are seconds, never the token.
+    """
+    ref = operation["principalAction"]["ref"]
+    action = operation["principalAction"]["action"]
+    journal.record(
+        "principal-action-request",
+        {"principal": ref, "action": action, "beforeIndex": operation["index"]},
+    )
+    if journal.failures:
+        return None, "journal-failure"
+    try:
+        at = budget.take_action()
+    except BudgetExhausted as error:
+        return None, str(error)
+    request = {
+        "kind": "principal-action",
+        "phase": "principal",
+        "principalRef": ref,
+        "action": action,
+        "credentialRef": "administrator",
+        "credentialClass": "administrator",
+    }
+    try:
+        raw = execute(dict(request))
+    except Exception as error:  # noqa: BLE001 - type name only, never a message
+        return None, f"transport:{type(error).__name__}"
+    accepted, failure = _accept(raw, PRINCIPAL_ACTION_RECEIPT_KEYS)
+    if failure is not None:
+        return None, failure
+    if accepted.get("complete") is not True:
+        return None, "incomplete-principal-action"
+    facts, failure = wire.note(accepted)
+    if failure is not None:
+        return None, failure
+    if accepted.get("action") != action:
+        return None, "principal-action-mismatch"
+    auth_time = accepted.get("authTime")
+    valid_since = accepted.get("validSince")
+    if type(auth_time) is not int or auth_time < 0:
+        return None, "principal-action-unproven:authTime"
+    if action == POST_SIGN_IN_REVOKE:
+        if type(valid_since) is not int or valid_since <= auth_time:
+            return None, "principal-action-unproven:validSince"
+    elif valid_since is not None:
+        return None, "principal-action-unproven:validSince"
+    present = accepted.get("present")
+    disabled = accepted.get("disabled")
+    if action == POST_SIGN_IN_DELETE:
+        if present is not False or disabled is not None:
+            return None, "principal-action-unproven:readback"
+    elif present is not True or disabled is not (action == POST_SIGN_IN_DISABLE):
+        return None, "principal-action-unproven:readback"
+    bound = bindings["principals"].get(ref)
+    if not isinstance(bound, Mapping) or accepted.get("uidFingerprint") != bound.get(
+        "uidFingerprint"
+    ):
+        return None, "principal-action-unproven:principal"
+    record = {
+        "ref": ref,
+        "action": action,
+        "beforeIndex": operation["index"],
+        "at": at,
+        "authTime": auth_time,
+        "validSince": valid_since,
+        "readback": {
+            "present": present,
+            "disabled": disabled,
+            "uidFingerprint": accepted["uidFingerprint"],
+        },
+        "endpoint": facts["endpoint"],
+        "wireSequence": facts["wireSequence"],
+    }
+    journal.record(
+        "principal-action",
+        {"principal": ref, "action": action, "present": present},
+    )
+    if journal.failures:
+        return None, "journal-failure"
+    return record, None
 
 
 def _read_wall_clock(wall_clock: Callable[[], float]) -> float | None:

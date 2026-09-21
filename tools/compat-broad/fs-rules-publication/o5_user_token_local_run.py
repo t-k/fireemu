@@ -283,39 +283,46 @@ class LocalShadow:
         if status != 200:
             raise Refused(f"claims:{status}:{json.dumps(body)[:200]}")
 
-    def _valid_since(self, issued_at: float, token: str) -> str:
-        """A validSince strictly after the second the token was issued in.
+    def _auth_time(self, token: str) -> int | None:
+        """The auth_time claim of a token this process minted locally, or None.
 
-        The Admin SDK's revokeRefreshTokens sets validSince to now; a token
-        issued in the same second would not be revoked by it. A locally minted
-        token carries its auth_time, so the value is placed after it; a token
-        without that shape is placed after the second the sign-up was sent in.
-        Either way the value is at most one second ahead of the local clock,
-        and the row that depends on it runs only after every account and
-        fixture has been set up.
+        The claim is read so that a revocation can be placed strictly after
+        the second the token was issued in; nothing else of the token is used
+        and nothing of it is recorded.
         """
         import base64
 
         segments = token.split(".")
-        if len(segments) == 3:
-            payload = segments[1] + "=" * (-len(segments[1]) % 4)
-            try:
-                claims = json.loads(base64.urlsafe_b64decode(payload))
-            except (ValueError, json.JSONDecodeError):
-                claims = {}
-            auth_time = claims.get("auth_time", claims.get("iat"))
-            if type(auth_time) is int and auth_time >= 0:
-                return str(max(int(time.time()), auth_time + 1))
-        return str(max(int(time.time()), math.floor(issued_at) + 1))
+        if len(segments) != 3:
+            return None
+        payload = segments[1] + "=" * (-len(segments[1]) % 4)
+        try:
+            claims = json.loads(base64.urlsafe_b64decode(payload))
+        except (ValueError, json.JSONDecodeError):
+            return None
+        auth_time = claims.get("auth_time", claims.get("iat"))
+        return auth_time if type(auth_time) is int and auth_time >= 0 else None
 
-    def apply_post_sign_in(
-        self, entry: dict[str, Any], uid: str, token: str, issued_at: float
-    ) -> None:
-        """The administrator action a revocation principal receives after sign-in."""
-        action = entry.get("postSignIn")
-        if action is None:
-            return
+    def _principal_action(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Apply one administrator action to an owned account, then read it back.
+
+        Revoke is what the Admin SDK's revokeRefreshTokens does, an
+        accounts:update with validSince, placed strictly after the token's
+        auth_time second so the token issued before it is revoked rather than
+        issued in the same second. The readback is an administrator lookup;
+        the receipt carries presence, the disabled flag and the uid
+        fingerprint, never the uid or the token.
+        """
+        ref = request["principalRef"]
+        action = request["action"]
+        entry = next(row for row in self.plan["ownedAccounts"] if row["ref"] == ref)
         prefix = self.account_prefix(entry["tenant"])
+        uid = self.uids.get(ref)
+        token = self.tokens.get(ref)
+        auth_time = self._auth_time(token) if isinstance(token, str) else None
+        if not isinstance(uid, str) or not uid or auth_time is None:
+            return {"complete": False, "failure": "principal-action:identity-unknown"}
+        valid_since: int | None = None
         if action == POST_SIGN_IN_DELETE:
             status, body = _request(
                 "POST",
@@ -326,10 +333,8 @@ class LocalShadow:
         elif action in (POST_SIGN_IN_REVOKE, POST_SIGN_IN_DISABLE):
             payload: dict[str, Any] = {"localId": uid}
             if action == POST_SIGN_IN_REVOKE:
-                # What the Admin SDK's revokeRefreshTokens sets, placed strictly
-                # after the token's auth_time second so the token is revoked
-                # rather than issued in the same second as the revocation.
-                payload["validSince"] = self._valid_since(issued_at, token)
+                valid_since = max(int(time.time()), auth_time + 1)
+                payload["validSince"] = str(valid_since)
             else:
                 payload["disableUser"] = True
             status, body = _request(
@@ -339,10 +344,38 @@ class LocalShadow:
                 OWNER_TOKEN,
             )
         else:
-            raise Refused("post-sign-in:unknown-action")
+            return {"complete": False, "failure": "principal-action:unknown-action"}
         if status != 200 or "error" in body:
-            raise Refused(f"post-sign-in:{action}:{status}")
-        self._record_setup("account-post-sign-in", account=entry["ref"], action=action)
+            return {"complete": False, "failure": f"principal-action:{action}"}
+        self._record_setup("account-post-sign-in", account=ref, action=action)
+        status, body = _request(
+            "POST",
+            self._identity(f"{prefix}/accounts:lookup"),
+            {"localId": [uid]},
+            OWNER_TOKEN,
+        )
+        users = body.get("users") if isinstance(body, dict) else None
+        if (
+            status != 200
+            or "error" in body
+            or not (users is None or isinstance(users, list))
+        ):
+            return {"complete": False, "failure": "principal-action:lookup"}
+        users = users or []
+        if len(users) > 1 or (users and users[0].get("localId") != uid):
+            return {"complete": False, "failure": "principal-action:lookup"}
+        present = bool(users)
+        disabled = bool(users[0].get("disabled", False)) if present else None
+        return {
+            "complete": True,
+            "status": "OK",
+            "action": action,
+            "authTime": auth_time,
+            "validSince": valid_since,
+            "present": present,
+            "disabled": disabled,
+            "uidFingerprint": digest(["uid", self.nonce, uid])[:16],
+        }
 
     def account_prefix(self, tenant: str | None) -> str:
         if tenant is None:
@@ -478,6 +511,8 @@ class LocalShadow:
             return self._recover(request)
         if request.get("phase") == "ruleset":
             return self._release(request)
+        if request.get("phase") == "principal":
+            return self._principal_action(request)
         if request["ruleset"] != self.active_ruleset:
             self.publish(request["ruleset"])
         credential = self.credential_for(request["credentialRef"])
@@ -644,7 +679,6 @@ class LocalShadow:
             tenant = entry["tenant"]
             self._record_setup("account-intent", account=entry["ref"])
             self.setup_accounts.append(entry["ref"])
-            issued_at = time.time()
             uid, token = self.sign_up(entry["email"], tenant)
             if (
                 not isinstance(uid, str)
@@ -659,7 +693,6 @@ class LocalShadow:
                 self.set_claims(uid, entry["claims"], tenant)
                 token = self.sign_in(entry["email"], tenant)
             self.tokens[entry["ref"]] = token
-            self.apply_post_sign_in(entry, uid, token, issued_at)
         for fixture in self.plan["fixtures"]:
             self.create_fixture(fixture["resource"], fixture["fields"])
 

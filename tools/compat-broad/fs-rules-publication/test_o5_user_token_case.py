@@ -9,6 +9,7 @@ from o5_user_token_case import (
     PERMISSION_DENIED,
     UNAUTHENTICATED,
     compile_case,
+    principal_actions,
     validate_case,
 )
 
@@ -285,11 +286,13 @@ def test_validate_rejects_non_mappings() -> None:
 def test_revocation_rows_state_the_local_decision_and_a_production_hypothesis() -> None:
     """RULES-REVOKE-005 phase 1.
 
-    The compiled status is what the local runtime currently decides: a token
-    whose account was revoked, disabled or deleted after sign-in is refused
-    before Rules evaluation. Production is expected to keep accepting the
-    token until it expires; that is a hypothesis carried on the row, never an
-    observation, and a real comparison is expected to name these rows.
+    Each revocation principal is accepted first (the positive control), then
+    the administrator action is performed by the collector as a step, then the
+    same token is presented again. The compiled status of that second row is
+    what the local runtime currently decides: refused before Rules
+    evaluation. Production is expected to keep accepting the token until it
+    expires; that is a hypothesis carried on the row, never an observation,
+    and a real comparison is expected to name these rows.
     """
     plan = case()
     rows = [
@@ -297,21 +300,38 @@ def test_revocation_rows_state_the_local_decision_and_a_production_hypothesis() 
         for row in plan["observation"]
         if row["condition"] == "credential-revocation"
     ]
-    assert [row["principal"] for row in rows] == [
-        "revoked-e",
-        "disabled-f",
-        "deleted-g",
-        "revoked-expired-token",
+    assert [(row["principal"], row["role"]) for row in rows] == [
+        ("revoked-e", "control"),
+        ("revoked-e", "primary"),
+        ("disabled-f", "control"),
+        ("disabled-f", "primary"),
+        ("deleted-g", "control"),
+        ("deleted-g", "primary"),
+        ("revoked-expired-token", "control"),
     ]
     assert all(row["ruleset"] == "A" for row in rows)
     assert all(row["targets"] == ["exists-guarded"] for row in rows)
-    assert all(row["expect"]["status"] == "UNAUTHENTICATED" for row in rows)
-    within_exp, control = rows[:3], rows[3]
-    for row in within_exp:
-        assert row["role"] == "primary"
-        assert row["expect"]["productionHypothesis"]["status"] == "OK"
-        assert "revocation" in row["expect"]["productionHypothesis"]["basis"]
-    assert control["role"] == "control"
+    for accepted, refused in (rows[0:2], rows[2:4], rows[4:6]):
+        assert accepted["expect"]["status"] == "OK"
+        assert "principalAction" not in accepted
+        assert accepted["expect"]["productionHypothesis"]["status"] == "OK"
+        assert refused["expect"]["status"] == "UNAUTHENTICATED"
+        assert refused["expect"]["productionHypothesis"]["status"] == "OK"
+        assert "revocation" in refused["expect"]["productionHypothesis"]["basis"]
+        assert refused["principalAction"]["ref"] == refused["principal"]
+        assert refused["index"] == accepted["index"] + 1
+    assert [a["action"] for a in principal_actions(plan)] == [
+        "revoke",
+        "disable",
+        "delete",
+    ]
+    assert [a["beforeIndex"] for a in principal_actions(plan)] == [
+        rows[1]["index"],
+        rows[3]["index"],
+        rows[5]["index"],
+    ]
+    control = rows[6]
+    assert control["expect"]["status"] == "UNAUTHENTICATED"
     assert control["expect"]["productionHypothesis"]["status"] == "UNAUTHENTICATED"
     assert control["credential"]["class"] == "user-id-token"
 

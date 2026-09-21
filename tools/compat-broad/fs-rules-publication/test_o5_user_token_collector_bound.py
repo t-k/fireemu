@@ -78,12 +78,27 @@ def acquisition_for(plan: dict, role: str) -> dict:
     }
 
 
+def fingerprints_for(plan: dict, role: str) -> dict[str, str]:
+    """The uid fingerprints a bound transport of ``role`` reports on readback."""
+    salt = "production" if role == ROLE_PRODUCTION else "local"
+    return {
+        ref: entry["uidFingerprint"]
+        for ref, entry in principals_for(plan, salt).items()
+    }
+
+
+def bound_transport(plan: dict, role: str, **kwargs) -> Transport:
+    endpoint = PRODUCTION_ENDPOINT if role == ROLE_PRODUCTION else LOCAL_ENDPOINT
+    return Transport(
+        plan, endpoint=endpoint, fingerprints=fingerprints_for(plan, role), **kwargs
+    )
+
+
 def bound(
     role: str, transport: Transport | None = None, **kwargs
 ) -> tuple[dict, Transport]:
     plan = plan_for(role)
-    endpoint = PRODUCTION_ENDPOINT if role == ROLE_PRODUCTION else LOCAL_ENDPOINT
-    transport = transport or Transport(plan, endpoint=endpoint)
+    transport = transport or bound_transport(plan, role)
     bundle = collect(
         plan,
         transport,
@@ -102,7 +117,19 @@ def test_a_bound_run_records_releases_wire_facts_and_observer_identity() -> None
     assert bundle["abort"] is None
     releases = bundle["transport"]["rulesetReleases"]
     assert [release["label"] for release in releases] == ["A", "B"]
-    assert [release["beforeIndex"] for release in releases] == [0, 27]
+    assert [release["beforeIndex"] for release in releases] == [0, 30]
+    actions = bundle["transport"]["principalActions"]
+    assert [(a["ref"], a["action"], a["beforeIndex"]) for a in actions] == [
+        ("revoked-e", "revoke", 24),
+        ("disabled-f", "disable", 26),
+        ("deleted-g", "delete", 28),
+    ]
+    for action in actions:
+        assert bundle["rows"][action["beforeIndex"] - 1]["at"] <= action["at"]
+        assert action["at"] <= bundle["rows"][action["beforeIndex"]]["at"]
+        assert action["endpoint"] == PRODUCTION_ENDPOINT
+    assert bundle["budget"]["principalActionCeiling"] == 3
+    assert bundle["budget"]["principalActionSpent"] == 3
     for release in releases:
         assert release["readback"]["kind"] == READBACK_RELEASE_GET
         assert release["readback"]["digest"] == release["sourceDigest"]
@@ -141,7 +168,10 @@ def test_a_bound_run_is_admitted_by_the_acquisition_comparator() -> None:
     result = compare(production, local, plan_for(ROLE_PRODUCTION))
     assert result["errors"] == []
     assert result["classification"] == MATCH
-    assert len(result["rows"]) == 30
+    assert len(result["rows"]) == 33
+    assert result["hypotheses"] == {
+        "credential-revocation": {"rows": 7, "asHypothesized": 4, "contrary": 3}
+    }
 
 
 def test_the_ruleset_release_is_requested_and_journaled_before_the_first_row(
@@ -151,9 +181,11 @@ def test_the_ruleset_release_is_requested_and_journaled_before_the_first_row(
     bundle, transport = bound(ROLE_LOCAL_SHADOW, journal_path=path)
     kinds = [request.get("phase") for request in transport.requests]
     assert kinds[0] == "ruleset"
-    assert kinds[28] == "ruleset"
+    assert kinds[34] == "ruleset"
+    assert [k for k in kinds if k == "principal"] == ["principal"] * 3
+    assert kinds[25] == "principal"
     assert transport.requests[0]["ruleset"] == "A"
-    assert transport.requests[28]["ruleset"] == "B"
+    assert transport.requests[34]["ruleset"] == "B"
     assert transport.requests[0]["sourceDigest"] == digest(
         plan_for(ROLE_LOCAL_SHADOW)["rulesets"]["A"]["source"]
     )
@@ -162,6 +194,10 @@ def test_the_ruleset_release_is_requested_and_journaled_before_the_first_row(
     assert journaled[:3] == ["run", "acquisition", "accounts"]
     assert journaled.index("ruleset-request") < journaled.index("request")
     assert journaled.index("ruleset-release") < journaled.index("request")
+    assert "principal-action-request" in journaled
+    assert journaled.index("principal-action-request") < journaled.index(
+        "principal-action"
+    )
     acquisition = next(entry for entry in entries if entry["kind"] == "acquisition")
     assert acquisition["environment"] == ENVIRONMENT_LOCAL
     assert acquisition["observerDigest"] == bundle["observer"]["observerDigest"]
@@ -177,6 +213,8 @@ def test_an_unbound_run_issues_no_release_and_records_no_acquisition() -> None:
     assert all(request.get("phase") != "ruleset" for request in transport.requests)
     assert bundle["acquisition"] is None
     assert bundle["transport"]["rulesetReleases"] == []
+    assert bundle["transport"]["principalActions"] == []
+    assert all(request.get("phase") != "principal" for request in transport.requests)
     assert bundle["transport"]["endpoints"] == []
     assert bundle["budget"]["rulesetCeiling"] == 0
     assert bundle["rows"][0]["endpoint"] is None
@@ -194,7 +232,7 @@ def test_production_executed_is_derived_from_the_endpoints_reached() -> None:
 
 def test_a_receipt_without_wire_facts_aborts_a_bound_run() -> None:
     plan = plan_for(ROLE_PRODUCTION)
-    transport = Transport(plan, endpoint=PRODUCTION_ENDPOINT)
+    transport = bound_transport(plan, ROLE_PRODUCTION)
 
     def forgetful(request: dict) -> dict:
         receipt = transport(request)
@@ -230,7 +268,12 @@ def test_an_endpoint_outside_the_environment_is_recorded_and_refused(
     role, endpoint, failure
 ) -> None:
     plan = plan_for(role)
-    transport = Transport(plan, endpoint=endpoint, readback_kind=READBACK_RELEASE_GET)
+    transport = Transport(
+        plan,
+        endpoint=endpoint,
+        readback_kind=READBACK_RELEASE_GET,
+        fingerprints=fingerprints_for(plan, role),
+    )
     bundle = collect(
         plan,
         transport,
@@ -253,7 +296,7 @@ def test_an_endpoint_outside_the_environment_is_recorded_and_refused(
 
 def test_a_wire_sequence_that_regresses_aborts_a_bound_run() -> None:
     plan = plan_for(ROLE_LOCAL_SHADOW)
-    transport = Transport(plan, endpoint=LOCAL_ENDPOINT)
+    transport = bound_transport(plan, ROLE_LOCAL_SHADOW)
 
     def replaying(request: dict) -> dict:
         receipt = transport(request)
@@ -290,7 +333,7 @@ def test_a_release_whose_readback_is_not_the_plan_source_stops_the_run(
     mutation, failure
 ) -> None:
     plan = plan_for(ROLE_LOCAL_SHADOW)
-    transport = Transport(plan, endpoint=LOCAL_ENDPOINT)
+    transport = bound_transport(plan, ROLE_LOCAL_SHADOW)
 
     def drifting(request: dict) -> dict:
         receipt = transport(request)
@@ -306,7 +349,7 @@ def test_a_release_whose_readback_is_not_the_plan_source_stops_the_run(
         acquisition=acquisition_for(plan, ROLE_LOCAL_SHADOW),
     )
     assert bundle["abort"] == failure
-    assert len(bundle["rows"]) == 27
+    assert len(bundle["rows"]) == 30
     assert [r["label"] for r in bundle["transport"]["rulesetReleases"]] == ["A"]
     assert bundle["infrastructureFailures"] == [f"ruleset:B:{failure}"]
     assert bundle["cleanup"]["cleanupComplete"] is True
@@ -314,8 +357,9 @@ def test_a_release_whose_readback_is_not_the_plan_source_stops_the_run(
 
 def test_a_release_step_counts_against_its_own_ceiling_only() -> None:
     bundle, _ = bound(ROLE_LOCAL_SHADOW)
-    assert bundle["budget"]["observationSpent"] == 30
+    assert bundle["budget"]["observationSpent"] == 33
     assert bundle["budget"]["rulesetSpent"] == 2
+    assert bundle["budget"]["principalActionSpent"] == 3
     assert bundle["budget"]["recoverySpent"] == len(
         bundle["cleanup"]["documentSteps"] + bundle["cleanup"]["accountSteps"]
     )
@@ -331,7 +375,7 @@ def test_a_release_step_counts_against_its_own_ceiling_only() -> None:
 )
 def test_structural_redaction_still_aborts_a_bound_run(flag, marker) -> None:
     plan = plan_for(ROLE_PRODUCTION)
-    transport = Transport(plan, endpoint=PRODUCTION_ENDPOINT, **{flag: True})
+    transport = bound_transport(plan, ROLE_PRODUCTION, **{flag: True})
     bundle = collect(
         plan,
         transport,
@@ -351,7 +395,7 @@ def test_structural_redaction_still_aborts_a_bound_run(flag, marker) -> None:
 )
 def test_a_google_credential_prefix_in_any_receipt_aborts_the_run(value) -> None:
     plan = plan_for(ROLE_PRODUCTION)
-    transport = Transport(plan, endpoint=PRODUCTION_ENDPOINT)
+    transport = bound_transport(plan, ROLE_PRODUCTION)
 
     def leaking(request: dict) -> dict:
         receipt = transport(request)
@@ -380,7 +424,7 @@ def test_the_collector_replaces_every_uid_its_readbacks_returned() -> None:
         entry["ref"]: f"L7fNfbBctFzloK39kcvtQpS{i:05d}"
         for i, entry in enumerate(plan["ownedAccounts"])
     }
-    transport = Transport(plan, endpoint=LOCAL_ENDPOINT)
+    transport = bound_transport(plan, ROLE_LOCAL_SHADOW)
 
     def with_uids(request: dict) -> dict:
         receipt = transport(request)
@@ -406,12 +450,22 @@ def test_the_collector_replaces_every_uid_its_readbacks_returned() -> None:
             for step in bundle["cleanup"]["accountSteps"]
             if step["kind"] == "account-readback"
         ]
-        assert {step["observed"]["uid"] for step in readbacks} == {
-            f"principal:{step['accountRef']}" for step in readbacks
+        assert {
+            step["observed"]["uid"]
+            for step in readbacks
+            if step["observed"]["accountPresent"]
+        } == {
+            f"principal:{step['accountRef']}"
+            for step in readbacks
+            if step["observed"]["accountPresent"]
         }
-        assert bundle["redactedPrincipals"] == sorted(
-            f"principal:{ref}" for ref in uids
-        )
+        # A bound run deletes deleted-g between rows, so its recovery
+        # readback returns no uid to redact; an unbound run performs no
+        # action and reads every account back.
+        expected = {f"principal:{ref}" for ref in uids}
+        if acquisition is not None:
+            expected.discard("principal:deleted-g")
+        assert bundle["redactedPrincipals"] == sorted(expected)
         assert not any(uid in repr(bundle) for uid in uids.values())
         # The delete precondition still carried the real identifier to the transport.
         deletes = [r for r in transport.requests if r.get("kind") == "account-delete"]
@@ -423,7 +477,7 @@ def test_the_collector_replaces_every_uid_its_readbacks_returned() -> None:
 
 def test_a_token_shaped_value_in_a_release_receipt_aborts_before_any_row() -> None:
     plan = plan_for(ROLE_PRODUCTION)
-    transport = Transport(plan, endpoint=PRODUCTION_ENDPOINT)
+    transport = bound_transport(plan, ROLE_PRODUCTION)
 
     def leaking(request: dict) -> dict:
         receipt = transport(request)
@@ -473,7 +527,7 @@ def test_malformed_or_contradicting_bindings_are_refused_before_any_request(
     plan = plan_for(ROLE_PRODUCTION)
     acquisition = acquisition_for(plan, ROLE_PRODUCTION)
     mutate(acquisition)
-    transport = Transport(plan, endpoint=PRODUCTION_ENDPOINT)
+    transport = bound_transport(plan, ROLE_PRODUCTION)
     with pytest.raises((TypeError, ValueError)):
         collect(
             plan,
@@ -491,7 +545,7 @@ def test_the_recorded_bindings_are_a_copy_not_the_launcher_object() -> None:
     original = copy.deepcopy(acquisition)
     bundle = collect(
         plan,
-        Transport(plan, endpoint=LOCAL_ENDPOINT),
+        bound_transport(plan, ROLE_LOCAL_SHADOW),
         role=ROLE_LOCAL_SHADOW,
         run_id="copy",
         acquisition=acquisition,
@@ -514,3 +568,57 @@ def test_a_broken_wall_clock_is_recorded_as_absent_not_invented() -> None:
     bundle, _ = bound(ROLE_LOCAL_SHADOW, wall_clock=broken)
     assert bundle["transport"]["wallClock"] == {"startedAt": None, "finishedAt": None}
     assert bundle["recordingComplete"] is True
+
+
+@pytest.mark.parametrize(
+    "mutation,failure",
+    [
+        ({"action": "disable"}, "principal-action-mismatch"),
+        ({"authTime": "soon"}, "principal-action-unproven:authTime"),
+        ({"validSince": 1_700_000_000}, "principal-action-unproven:validSince"),
+        ({"validSince": None}, "principal-action-unproven:validSince"),
+        ({"present": False}, "principal-action-unproven:readback"),
+        ({"disabled": True}, "principal-action-unproven:readback"),
+        ({"uidFingerprint": "0" * 16}, "principal-action-unproven:principal"),
+        ({"complete": False, "failure": "refused"}, "incomplete-principal-action"),
+        ({"localId": "raw-uid"}, "unknown-receipt-key:localId"),
+        ({"idToken": "x"}, "credential-leak:idToken"),
+    ],
+)
+def test_an_unproven_principal_action_stops_the_run_before_its_row(
+    mutation, failure
+) -> None:
+    plan = plan_for(ROLE_PRODUCTION)
+    transport = bound_transport(plan, ROLE_PRODUCTION)
+
+    def drifting(request: dict) -> dict:
+        receipt = transport(request)
+        if request.get("phase") == "principal" and request["action"] == "revoke":
+            receipt.update(mutation)
+        return receipt
+
+    bundle = collect(
+        plan,
+        drifting,
+        role=ROLE_PRODUCTION,
+        run_id="unproven",
+        acquisition=acquisition_for(plan, ROLE_PRODUCTION),
+    )
+    assert bundle["abort"] == failure
+    # The positive control for the revoked principal ran; its refusal row did not.
+    assert len(bundle["rows"]) == 24
+    assert bundle["rows"][23]["credentialRef"] == "revoked-e"
+    assert bundle["transport"]["principalActions"] == []
+    assert bundle["infrastructureFailures"] == [f"principal-action:revoked-e:{failure}"]
+    assert bundle["cleanup"]["cleanupComplete"] is True
+
+
+def test_a_deleted_principal_is_absent_at_recovery_and_the_others_present() -> None:
+    bundle, _ = bound(ROLE_LOCAL_SHADOW)
+    readbacks = {
+        step["accountRef"]: step["observed"]["accountPresent"]
+        for step in bundle["cleanup"]["accountSteps"]
+        if step["kind"] == "account-readback"
+    }
+    assert readbacks["deleted-g"] is False
+    assert all(present for ref, present in readbacks.items() if ref != "deleted-g")

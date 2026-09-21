@@ -91,12 +91,12 @@ def budget(plan: dict[str, Any]) -> dict[str, Any]:
     fixtures = len(plan["fixtures"])
     accounts = plan["ownedAccounts"]
     # Per account: sign-up, plus a claim write and a re-sign-in when it carries
-    # a custom claim, plus one administrator action when the account is
-    # revoked, disabled or deleted after sign-in. Plus one tenant create and
-    # one tenant delete.
+    # a custom claim, plus one administrator action and one lookup readback
+    # when the account is revoked, disabled or deleted between two rows. Plus
+    # one tenant create and one tenant delete.
     auth_requests = (
         sum(3 if entry["claims"] else 1 for entry in accounts)
-        + sum(1 for entry in accounts if entry.get("postSignIn"))
+        + sum(2 for entry in accounts if entry.get("postSignIn"))
         + 2
     )
     # Rules: read the active release, publish two Rulesets, release each, read

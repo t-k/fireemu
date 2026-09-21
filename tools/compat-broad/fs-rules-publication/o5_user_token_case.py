@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from typing import Any
 
 CAMPAIGN = "FS-RULES-USER-TOKEN-MATRIX-01"
@@ -258,13 +259,14 @@ def _operation(
     writes: tuple[dict[str, Any], ...] = (),
     expect_fields: dict[str, Any] | None = None,
     production_hypothesis: dict[str, Any] | None = None,
+    principal_action: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     expect: dict[str, Any] = {"status": status, "detail": detail}
     if expect_fields is not None:
         expect["fields"] = expect_fields
     if production_hypothesis is not None:
         expect["productionHypothesis"] = dict(production_hypothesis)
-    return {
+    operation = {
         "caseId": case_id,
         "role": role,
         "ruleset": ruleset,
@@ -280,6 +282,21 @@ def _operation(
         "condition": condition,
         "expect": expect,
     }
+    if principal_action is not None:
+        # An administrator step the collector performs immediately before
+        # this row, after the row's principal has already been accepted by an
+        # earlier row: the record proves accept-then-refuse, not refuse alone.
+        operation["principalAction"] = dict(principal_action)
+    return operation
+
+
+def principal_actions(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The administrator steps the matrix performs between rows, in order."""
+    return [
+        {"beforeIndex": row["index"], **row["principalAction"]}
+        for row in plan["observation"]
+        if row.get("principalAction")
+    ]
 
 
 def _matrix(nonce: str, tenant: str) -> list[dict[str, Any]]:
@@ -624,28 +641,52 @@ def _matrix(nonce: str, tenant: str) -> list[dict[str, Any]]:
     # Credential revocation within the token lifetime (RULES-REVOKE-005 phase
     # 1). The target clause admits any authenticated principal, so the only
     # variable is whether the runtime still honors a token whose account was
-    # revoked, disabled or deleted after it was minted. The compiled status is
-    # the current local decision; production is a stated hypothesis.
-    for principal, case_id, detail in (
+    # revoked, disabled or deleted after it was minted. Each principal is
+    # first accepted (the positive control), then the administrator action is
+    # performed by the collector as a step, then the same token is presented
+    # again. The compiled status of the second row is the current local
+    # decision; production is a stated hypothesis.
+    for principal, action, slug, detail in (
         (
             PRINCIPAL_REVOKED,
-            "a-revoked-refresh-tokens-within-exp",
+            POST_SIGN_IN_REVOKE,
+            "revoked-refresh-tokens",
             "local-refuses-a-token-issued-before-validSince",
         ),
         (
             PRINCIPAL_DISABLED,
-            "a-disabled-account-within-exp",
+            POST_SIGN_IN_DISABLE,
+            "disabled-account",
             "local-refuses-a-token-of-a-disabled-account",
         ),
         (
             PRINCIPAL_DELETED,
-            "a-deleted-account-within-exp",
+            POST_SIGN_IN_DELETE,
+            "deleted-account",
             "local-refuses-a-token-of-a-deleted-account",
         ),
     ):
         add(
             _operation(
-                case_id,
+                f"a-{slug}-accepted-before-the-action",
+                role="control",
+                ruleset=RULESET_A,
+                principal=principal,
+                method="get",
+                targets=("exists-guarded",),
+                condition="credential-revocation",
+                status=OK,
+                detail="the-same-token-is-accepted-before-the-administrator-action",
+                expect_fields=_fixture_fields(nonce, "exists-guarded"),
+                production_hypothesis={
+                    "status": OK,
+                    "basis": "an unrevoked, unexpired ID token is accepted",
+                },
+            )
+        )
+        add(
+            _operation(
+                f"a-{slug}-within-exp",
                 role="primary",
                 ruleset=RULESET_A,
                 principal=principal,
@@ -655,6 +696,7 @@ def _matrix(nonce: str, tenant: str) -> list[dict[str, Any]]:
                 status=UNAUTHENTICATED,
                 detail=detail,
                 production_hypothesis=PRODUCTION_HYPOTHESIS_ALLOWED_UNTIL_EXP,
+                principal_action={"ref": principal, "action": action},
             )
         )
     add(

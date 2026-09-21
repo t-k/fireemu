@@ -40,6 +40,7 @@ class Transport:
         account_delete_fails: bool = False,
         endpoint: str | None = None,
         readback_kind: str | None = None,
+        fingerprints: dict[str, str] | None = None,
     ):
         self.plan = plan
         self.leak = leak
@@ -53,9 +54,11 @@ class Transport:
             if endpoint and not endpoint.startswith("127.")
             else READBACK_PUBLISH_ECHO
         )
+        self.fingerprints = fingerprints or {}
         self.requests: list[dict] = []
         self.wire = 0
         self.releases = 0
+        self.actions: list[tuple[str, str]] = []
         self.present = {resource: True for resource in plan["ownedResources"]}
         self.accounts = {entry["ref"]: True for entry in plan["ownedAccounts"]}
 
@@ -71,6 +74,21 @@ class Transport:
     def _answer(self, request: dict) -> dict:
         if request.get("phase") == "recovery":
             return self._recovery(request)
+        if request.get("phase") == "principal":
+            ref, action = request["principalRef"], request["action"]
+            self.actions.append((ref, action))
+            if action == "delete":
+                self.accounts[ref] = False
+            return {
+                "complete": True,
+                "status": "OK",
+                "action": action,
+                "authTime": 1_700_000_000,
+                "validSince": 1_700_000_001 if action == "revoke" else None,
+                "present": action != "delete",
+                "disabled": None if action == "delete" else action == "disable",
+                "uidFingerprint": self.fingerprints.get(ref, "0" * 16),
+            }
         if request.get("phase") == "ruleset":
             self.releases += 1
             name = f"scripted-{request['ruleset']}-{self.releases}"

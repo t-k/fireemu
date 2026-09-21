@@ -157,33 +157,45 @@ def execute(
     observations = gate_plan["jobs"][gate_module.JOB]["observation"]
     recovery = gate_plan["jobs"][gate_module.JOB]["recovery"]
     run_started = time.monotonic()
+
+    def dispatch_one(operation, is_recovery):
+        body = _wire_body(plan, operation, runtime)
+        result = remote.send(
+            capability,
+            stage_id=operation["id"],
+            project=project,
+            nonce=nonce,
+            body=body,
+            deadline=min(time.monotonic() + 8, run_started + (180 if is_recovery else 300)),
+            binding=binding,
+            binding_digest=binding_digest,
+            inputs_digest=inputs["inputsDigest"],
+        )
+        handle.dispatch(operation, is_recovery, lambda result=result: result)
+        status, response = result
+        if status == 200 and operation.get("kind") == "sign-up":
+            account = operation["account"]
+            runtime[account + ".localId"] = response["localId"]
+            runtime[account + "Uid"] = response["localId"]
+        for name in operation.get("binds", {}):
+            if isinstance(response, dict) and isinstance(response.get(operation["binds"][name]), str):
+                runtime[name] = response[operation["binds"][name]]
+        return result
+
     try:
-        for is_recovery, operations in ((False, observations), (True, recovery)):
-            for operation in operations:
-                body = _wire_body(plan, operation, runtime)
-                result = remote.send(
-                    capability,
-                    stage_id=operation["id"],
-                    project=project,
-                    nonce=nonce,
-                    body=body,
-                    deadline=min(
-                        time.monotonic() + 8,
-                        run_started + (180 if is_recovery else 300),
-                    ),
-                    binding=binding,
-                    binding_digest=binding_digest,
-                    inputs_digest=inputs["inputsDigest"],
-                )
-                handle.dispatch(operation, is_recovery, lambda result=result: result)
-                status, response = result
-                if status == 200 and operation.get("kind") == "sign-up":
-                    account = operation["account"]
-                    runtime[account + ".localId"] = response["localId"]
-                    runtime[account + "Uid"] = response["localId"]
-                for name in operation.get("binds", {}):
-                    if isinstance(response, dict) and isinstance(response.get(operation["binds"][name]), str):
-                        runtime[name] = response[operation["binds"][name]]
+        for operation in observations:
+            dispatch_one(operation, False)
+    except Exception:
+        handle.abandon_observation("action-observation-failure")
+        for operation in recovery:
+            try:
+                dispatch_one(operation, True)
+            except Exception:
+                continue
+        raise
+    else:
+        for operation in recovery:
+            dispatch_one(operation, True)
         handle.finish()
         ledger.finish(ticket)
         snapshot = handle.snapshot()

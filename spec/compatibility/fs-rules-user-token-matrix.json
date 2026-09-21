@@ -1,4 +1,11 @@
 {
+  "blockers": [
+    "owner-permission",
+    "nonce-reservation",
+    "ruleset-release-authority",
+    "tenant-provisioning",
+    "cost-and-retention"
+  ],
   "budget": {
     "authRequests": 17,
     "billedDocumentReads": 54,
@@ -12,11 +19,31 @@
     "perRequestTimeoutSeconds": 12.0,
     "recoveryDeadlineSeconds": 900.0,
     "recoveryRequests": 63,
-    "requestUpperBound": 131,
-    "rulesRequests": 8,
+    "requestUpperBound": 146,
+    "rulesRequests": 23,
     "wallClockDeadlineSeconds": 600.0
   },
   "campaignId": "FS-RULES-USER-TOKEN-MATRIX-01",
+  "contract": "fs-rules-user-token-campaign-v1",
+  "frozenInputs": {
+    "caseDigest": "94b1c949678d1d68805a41b42c2950b746e8c65a77d23eb185953d5d0cfe68a7",
+    "rulesetDigests": {
+      "A": "c1f662182f56e3476994fd91344d195eae186181fb1b817580087b7f52537d30",
+      "B": "65d6299b939d2a669335b99e732add35f9f3c1bbc9c767431063e4463d11b745"
+    },
+    "sources": {
+      "o5_user_token_campaign.py": "761c73fbbb325f0f3dde2b14cef91586e65e92aefdfd3ad105e5919e4a4ad379",
+      "o5_user_token_case.py": "1524aac3d40f78ba8688ecd574784dd8c0cdf63d26e2ff7289d421825a981a0d",
+      "o5_user_token_collector.py": "30f93b389d03bbffa38744dd73a8bf15e9cbb6e47129bc632974b012bde12583",
+      "o5_user_token_comparator.py": "d17e7c85ec7eb113c724c4d3767dfff63c80dc9fd3ff90c76838531391fc0424",
+      "o5_user_token_comparator_v2.py": "040cf98c4ba23fe9a97c09bbcee842787afca6f17b045fc2bf49c1c5877efcfe",
+      "o5_user_token_descriptor.py": "cb0ce4aea1d38aea8e584fefcb6c64cc6a257cfc087efe824f980955ca5d9fa9",
+      "o5_user_token_local_run.py": "2c8e199a8d0b82737c13301c2bf54304fef06a1c77ec1dd36bd9d7834f0f307c",
+      "o5_user_token_semantics.py": "589b8e995d49ea918bdc8b8d52ff5deaf85a6c05a1571bbd1a86b48936a8d59d",
+      "o5_user_token_shadow.py": "f84ca68a1d954aa5dd14fa8fe1f756f32e4a173ed885e623ef2ccf7ac752ebe4"
+    }
+  },
+  "manifestDigest": "44ec125d631f4d4c41109e5df07e4cd83f128b6e29b791ab630a47a3864cae4a",
   "note": "Frozen template of the FS-RULES user-token observation matrix. The project, database, nonce and tenant are placeholders; a real run recompiles the matrix with owner-confirmed identities, and the tenant identifier in particular is assigned by Identity Platform.",
   "observationCase": {
     "campaignId": "FS-RULES-USER-TOKEN-MATRIX-01",
@@ -1417,5 +1444,6 @@
   },
   "productionExecuted": false,
   "productionReady": false,
+  "schemaVersion": 1,
   "status": "PREPARATION_ONLY"
 }

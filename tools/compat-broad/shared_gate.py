@@ -742,7 +742,7 @@ def _document_read_rpc(operation):
     match = re.fullmatch(
         r"/v1/projects/([^/?#:%]+)/databases/([^/?#:%]+)/documents"
         r"((?:/[^/?#:%]+/[^/?#:%]+)*):"
-        r"(runQuery|runAggregationQuery|listCollectionIds)",
+        r"(runQuery|runAggregationQuery|listCollectionIds|partitionQuery)",
         path,
     )
     if match is None or any(
@@ -758,6 +758,13 @@ def _document_read_rpc(operation):
             "readTime",
         },
         "listCollectionIds": {"pageSize", "pageToken", "readTime"},
+        "partitionQuery": {
+            "structuredQuery",
+            "partitionCount",
+            "pageSize",
+            "pageToken",
+            "readTime",
+        },
     }
     return set(operation["body"]) <= allowed[match.group(4)]
 

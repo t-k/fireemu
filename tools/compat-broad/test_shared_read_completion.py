@@ -22,6 +22,8 @@ READS = [
         "aggregations": [{"count": {}, "alias": "count"}]},
         "explainOptions": {"analyze": True}}),
     ("listCollectionIds", {"pageSize": 1, "pageToken": "fixture-token"}),
+    ("partitionQuery", {"structuredQuery": {"from": [{"collectionId": "items"}]},
+                         "partitionCount": 10, "pageToken": "fixture-token"}),
 ]
 
 

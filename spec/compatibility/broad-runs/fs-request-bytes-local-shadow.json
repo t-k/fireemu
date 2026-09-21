@@ -1,6 +1,6 @@
 {
-  "artifactSha256": "ed2ae4621b38745555cce3270cc7b501cdadbf311607fa05cbb331f9f2794e15",
-  "campaignDigest": "0ab5ca22922c686b7bdd2f07aefba4c7bc5482d197246ad9ae7c7c0bfc5906b4",
+  "artifactSha256": "e064a7722f93f1f182e8de6d592e3f84b4b5bb420a27e3173c7a7418b016c32c",
+  "campaignDigest": "9115aabf2bdf2929e1ff8ef263928793c10bf105c9b7ab8138727e81232f0e0e",
   "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
   "cases": [
     {
@@ -35,7 +35,7 @@
   "database": "(default)",
   "formalCompatibilityClaim": false,
   "kind": "fs-request-bytes-local-shadow-v1",
-  "nonce": "c387072268c544bfae49490132dcf286",
+  "nonce": "b9c13f168a904f4bb7ed8b26d5de0e4d",
   "note": "Owned local artifact shadow. No production request was sent, no credential was used and no parent group is promoted. The raw REST body byte count remains an observation hypothesis about production's enforcement metric.",
   "observation": {
     "canonicalRequestBytesMeasuredLocally": true,
@@ -57,7 +57,7 @@
       "responseBytes": 118,
       "responseSha256": "293bf2902042c662ca5f65c932f4fafcd9596dac70ace5460ccc5e5f015b68b9"
     },
-    "planDigest": "02cbd42fdf30d712875c9266cc2ad334d5a0641061e33f90c375ca7d9aa3aa3a",
+    "planDigest": "9496d09661660d2c670b149f9e0e3a10b56b787d2b6b627b11dbee3673a5a0d1",
     "productionExecuted": false,
     "rawHttpMetricStatus": "observation hypothesis",
     "recoveryRowCount": 153,
@@ -65,7 +65,7 @@
     "resourceAbsence": true,
     "rowCount": 105
   },
-  "planDigest": "02cbd42fdf30d712875c9266cc2ad334d5a0641061e33f90c375ca7d9aa3aa3a",
+  "planDigest": "9496d09661660d2c670b149f9e0e3a10b56b787d2b6b627b11dbee3673a5a0d1",
   "probeOutcomes": [
     {
       "complete": true,
@@ -77,7 +77,7 @@
       "requestBytes": 10485759,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "dfb15596e58e410a0b70cd13ac35eca73d02f368218def1bea9a09f497f8dd91"
+      "responseSha256": "028fecbac85d05af4e8067a34a824070eb4e87f026e9ccef7a4abb1b9a986a11"
     },
     {
       "complete": true,
@@ -89,7 +89,7 @@
       "requestBytes": 10485760,
       "responseBody": null,
       "responseBytes": 826,
-      "responseSha256": "ae5139c6692c62749f914f4041ec916703b2e0d4ac1d5891b4fb33309b96866c"
+      "responseSha256": "7f714a34dd90e39afa0740903b9a2114b95035ceb9367b23f9f2b01d2f64210d"
     },
     {
       "complete": true,
@@ -109,11 +109,11 @@
   "rawHttpMetricStatus": "observation hypothesis",
   "recordingComplete": true,
   "runtime": {
-    "artifactSha256": "ed2ae4621b38745555cce3270cc7b501cdadbf311607fa05cbb331f9f2794e15",
+    "artifactSha256": "e064a7722f93f1f182e8de6d592e3f84b4b5bb420a27e3173c7a7418b016c32c",
     "runtimeInputCount": 427,
     "runtimeInputsClean": true,
-    "runtimeInputsDigest": "3749015f7545e91b371564767ce1dd99d302f596fa32285089b629629594d0ac",
-    "sourceCommit": "7d001e9a25c52d3773219ae63c44fadeccc8274d",
+    "runtimeInputsDigest": "51356e6e058173c11156a7ac86a3be92633a3857f673c34914368247e6c7fb1d",
+    "sourceCommit": "1157aebca3014ed68ab48000a98c1cf59b293f01",
     "sourceRoot": "repository-root"
   },
   "shadow": {
@@ -162,19 +162,19 @@
     "classes": {
       "boundaryCommit": {
         "count": 3,
-        "maxSeconds": 0.028117,
-        "medianSeconds": 0.026481,
-        "p95Seconds": 0.028117,
-        "p99Seconds": 0.028117,
-        "totalSeconds": 0.056831
+        "maxSeconds": 0.042216,
+        "medianSeconds": 0.035036,
+        "p95Seconds": 0.042216,
+        "p99Seconds": 0.042216,
+        "totalSeconds": 0.080063
       },
       "smallRequest": {
         "count": 238,
-        "maxSeconds": 0.011166,
-        "medianSeconds": 0.001048,
-        "p95Seconds": 0.010896,
-        "p99Seconds": 0.011094,
-        "totalSeconds": 0.86616
+        "maxSeconds": 0.019408,
+        "medianSeconds": 0.001609,
+        "p95Seconds": 0.01784,
+        "p99Seconds": 0.018374,
+        "totalSeconds": 1.223435
       }
     },
     "disclaimer": "Loopback service time against an owned local emulator on the same machine. It excludes the network round trip, TLS and production server time, so it is a floor for a production per-slot figure and never an estimate of one. A production reservation needs a production measurement; the production transport now records elapsed time per request so one can be taken.",

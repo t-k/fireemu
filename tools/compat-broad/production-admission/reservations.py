@@ -1042,6 +1042,13 @@ class Ledger:
     def _configuration_gate(self, claim, record, receipt):
         gate_path = Path(claim["gatePath"])
         gate = self._read_bounded_json(gate_path / "state.json")
+        collection = receipt.get("collection")
+        plan_steps = {
+            step.get("id"): step
+            for step in gate.get("plan", {}).get("steps", [])
+            if isinstance(step, dict)
+        }
+        receipt_steps = collection.get("steps") if isinstance(collection, dict) else None
         if (
             gate.get("planDigest") != claim["gatePlanDigest"]
             or digest(gate.get("plan")) != gate.get("planDigest")
@@ -1052,15 +1059,38 @@ class Ledger:
             or gate.get("inflight") is not False
             or not isinstance(gate.get("steps"), dict)
             or not gate["steps"]
+            or set(gate["steps"]) != set(plan_steps)
+            or not isinstance(receipt_steps, dict)
+            or set(receipt_steps) != set(gate["steps"])
             or not isinstance(gate.get("reconciliation"), dict)
             or gate["reconciliation"].get("ok") is not True
+            or collection.get("reconciliation") != gate["reconciliation"]
+            or collection.get("stopPoint") is not None
+            or collection.get("failure") is not None
+            or collection.get("unrecovered") != []
+            or set(collection.get("observedCases", []))
+            != set(gate["plan"].get("executionOrder", []))
             or digest(gate) != record["gateDigest"]
             or receipt.get("gateDigest") != record["gateDigest"]
         ):
             raise ValueError("configuration restoration proof differs")
-        for step in gate["steps"].values():
-            if not isinstance(step, dict) or step.get("restore") not in CONFIGURATION_FINISHED_STATES:
+        for step_id, step in gate["steps"].items():
+            if (
+                not isinstance(step, dict)
+                or step.get("restore") not in CONFIGURATION_FINISHED_STATES
+            ):
                 raise ValueError("configuration restoration incomplete")
+            plan_step = plan_steps[step_id]
+            receipt_step = receipt_steps[step_id]
+            if (
+                step.get("resource") != plan_step.get("resource")
+                or not isinstance(receipt_step, dict)
+                or any(
+                    receipt_step.get(key) != step.get(key)
+                    for key in ("restore", "preDigest", "postDigest", "verifyDigest")
+                )
+            ):
+                raise ValueError("configuration terminal step proof differs")
             if step["restore"] == "restored" and any(
                 not isinstance(step.get(key), str) or not step[key]
                 for key in ("preDigest", "postDigest", "verifyDigest")
@@ -1104,13 +1134,12 @@ class Ledger:
                 claim.get("campaignId") != CONFIGURATION_CAMPAIGN
                 or claim.get("gatePlanDigest") != receipt.get("gatePlanDigest")
                 or row.get("generation") != record["generation"]
+                or row.get("generation") is None
+                or receipt.get("generation") != row["generation"]
                 or receipt.get("ticket") != ticket
                 or receipt.get("claimDigest") != row["claimDigest"]
                 or receipt.get("reservationStateAtPublication") != "held"
-                or receipt.get("releaseEligible") is not True
                 or not isinstance(receipt.get("collection"), dict)
-                or receipt["collection"].get("completed") is not True
-                or receipt["collection"].get("cleanupComplete") is not True
                 or digest(receipt["collection"]) != record["collectionDigest"]
                 or not isinstance(evidence, dict)
                 or evidence.get("receiptSha256") != record["receiptDigest"]

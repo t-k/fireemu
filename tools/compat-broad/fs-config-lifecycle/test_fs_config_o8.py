@@ -51,6 +51,51 @@ def _no_sleep(_seconds: float) -> None:
     return None
 
 
+def test_forged_receipt_generation_stays_held_after_rehashed_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    built = Admission(tmp_path)
+    root = _proof_ledger(tmp_path)
+    receipt_path = tmp_path / "run" / "receipt.json"
+    original_attach = reservations.Ledger.attach_evidence
+
+    def forge_receipt_before_attachment(
+        self, ticket, receipt_sha256, gate_digest, collection_digest
+    ):
+        receipt = json.loads(receipt_path.read_bytes())
+        receipt["generation"] = {
+            **receipt["generation"],
+            "sourceCommit": "1" * 40,
+        }
+        receipt_path.write_text(
+            json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+        )
+        original_attach(
+            self,
+            ticket,
+            hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+            gate_digest,
+            collection_digest,
+        )
+
+    monkeypatch.setattr(
+        reservations.Ledger, "attach_evidence", forge_receipt_before_attachment
+    )
+    result = lifecycle_production.execute_reserved(
+        inputs=built.inputs,
+        permission=built.permission,
+        ledger_root=root,
+        output=tmp_path / "run",
+        transmit=FakeAdmin(poll_rounds=2).transmit,
+        sleeper=_no_sleep,
+    )
+    assert result["releaseFailure"] == "ValueError"
+    assert result["reservationReleased"] is False
+    assert reservations.Ledger(root).snapshot()["reservations"][
+        result["ticket"]["reservation"]
+    ]["state"] == "held"
+
+
 def _permission(plan, inputs, *, commit="0" * 40, artifact="b" * 64) -> dict:
     now = time.time()
     required = campaign.permission_bindings(plan, commit, artifact, inputs, BASELINE)

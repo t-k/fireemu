@@ -1280,21 +1280,41 @@ pub fn runner_candidates() -> Vec<(RunnerSource, PathBuf)> {
     out
 }
 
+/// How many directories above the executable the workspace walk inspects.
+///
+/// The deepest supported layout, `target/agent/<session>/<mode>/<profile>/fireemu` (the
+/// `scripts/cargo-session` wrapper), puts the workspace root six directories up; a couple of
+/// extra levels keep the walk from being one directory short again if a wrapper nests
+/// deeper, while still stopping well before the filesystem root.
+const WORKSPACE_RUNNER_SEARCH_DEPTH: usize = 8;
+
 /// The runner in the source tree, for a binary that runs out of a cargo `target/` directory.
 ///
 /// The workspace is recognised at run time by walking up from the executable to a directory
 /// holding both `Cargo.toml` and `tools/runner-node/index.mjs`; nothing about the build
 /// machine is compiled in. (An `env!("CARGO_MANIFEST_DIR")` string here would survive
 /// `--remap-path-prefix`, which only rewrites debug info and panic locations, and would make
-/// the same commit build to different bytes from different checkouts.) `target/<profile>/`
-/// and `target/<triple>/<profile>/` are both covered by the ancestor walk.
+/// the same commit build to different bytes from different checkouts.) The ancestor walk
+/// covers `target/<profile>/`, `target/<triple>/<profile>/` and the session wrapper's
+/// `target/agent/<session>/<mode>/<profile>/`, and gives up after
+/// [`WORKSPACE_RUNNER_SEARCH_DEPTH`] directories or at the filesystem root, whichever comes
+/// first.
 fn workspace_runner() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
-    exe.ancestors().skip(1).take(5).find_map(|root| {
-        let script = root.join("tools").join("runner-node").join("index.mjs");
-        (root.join("Cargo.toml").is_file() && script.is_file()).then_some(script)
-    })
+    workspace_runner_from(&exe)
+}
+
+/// [`workspace_runner`] for a given executable path, so the search depth can be exercised
+/// against a synthetic tree without building a binary at that depth.
+fn workspace_runner_from(exe: &Path) -> Option<PathBuf> {
+    exe.ancestors()
+        .skip(1)
+        .take(WORKSPACE_RUNNER_SEARCH_DEPTH)
+        .find_map(|root| {
+            let script = root.join("tools").join("runner-node").join("index.mjs");
+            (root.join("Cargo.toml").is_file() && script.is_file()).then_some(script)
+        })
 }
 
 /// Locates the bundled Node runner, or explains every place that was tried.
@@ -6485,5 +6505,72 @@ mod tests {
         )
         .unwrap();
         assert_eq!(*path, expected);
+    }
+
+    /// Builds `<root>/Cargo.toml` and `<root>/tools/runner-node/index.mjs` under a fresh
+    /// temporary directory and returns the root; the caller removes it.
+    fn synthetic_workspace(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-workspace-runner-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("tools/runner-node")).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+        std::fs::write(root.join("tools/runner-node/index.mjs"), "").unwrap();
+        root
+    }
+
+    #[test]
+    fn workspace_runner_is_found_from_every_supported_target_layout() {
+        let root = synthetic_workspace("layouts");
+        let script = root.join("tools/runner-node/index.mjs");
+        for layout in [
+            "target/debug/fireemu",
+            "target/release/fireemu",
+            "target/x86_64-unknown-linux-gnu/debug/fireemu",
+            // `scripts/cargo-session` puts the binary five directories below the root.
+            "target/agent/runner-discovery/normal/debug/fireemu",
+            "target/agent/runner-discovery/loom/release/fireemu",
+        ] {
+            assert_eq!(
+                super::workspace_runner_from(&root.join(layout)).as_deref(),
+                Some(script.as_path()),
+                "layout {layout}"
+            );
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn workspace_runner_walk_is_bounded_and_needs_both_markers() {
+        let root = synthetic_workspace("bounded");
+        let too_deep = (0..super::WORKSPACE_RUNNER_SEARCH_DEPTH)
+            .fold(root.clone(), |dir, level| {
+                dir.join(format!("level-{level}"))
+            })
+            .join("fireemu");
+        assert_eq!(
+            super::workspace_runner_from(&too_deep),
+            None,
+            "a root {} directories above the executable is out of reach",
+            super::WORKSPACE_RUNNER_SEARCH_DEPTH + 1
+        );
+        let at_bound = too_deep.parent().unwrap().with_file_name("fireemu");
+        assert_eq!(
+            super::workspace_runner_from(&at_bound).as_deref(),
+            Some(root.join("tools/runner-node/index.mjs").as_path()),
+            "a root exactly {} directories above the executable is still found",
+            super::WORKSPACE_RUNNER_SEARCH_DEPTH
+        );
+        // A crate directory with its own `Cargo.toml` but no runner is walked past.
+        let crate_dir = root.join("crates/fireemu");
+        std::fs::create_dir_all(&crate_dir).unwrap();
+        std::fs::write(crate_dir.join("Cargo.toml"), "[package]\n").unwrap();
+        assert_eq!(
+            super::workspace_runner_from(&crate_dir.join("target/debug/fireemu")).as_deref(),
+            Some(root.join("tools/runner-node/index.mjs").as_path()),
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -671,63 +671,63 @@
     "owner": {
       "accounts": [
         {
-          "email": "o2-mfa-enrollment-age-300-3c3574fc50a54828a498287827260f3f@example.com",
+          "email": "o2-mfa-enrollment-age-300-f25afd100ebb4ca4bb455a4cc4424f0f@example.com",
           "ownership": "created-by-this-run",
           "role": "enrollment-age-300"
         },
         {
-          "email": "o2-mfa-enrollment-age-450-3c3574fc50a54828a498287827260f3f@example.com",
+          "email": "o2-mfa-enrollment-age-450-f25afd100ebb4ca4bb455a4cc4424f0f@example.com",
           "ownership": "created-by-this-run",
           "role": "enrollment-age-450"
         },
         {
-          "email": "o2-mfa-enrollment-age-600-3c3574fc50a54828a498287827260f3f@example.com",
+          "email": "o2-mfa-enrollment-age-600-f25afd100ebb4ca4bb455a4cc4424f0f@example.com",
           "ownership": "created-by-this-run",
           "role": "enrollment-age-600"
         },
         {
-          "email": "o2-mfa-interaction-anonymous-3c3574fc50a54828a498287827260f3f@example.com",
+          "email": "o2-mfa-interaction-anonymous-f25afd100ebb4ca4bb455a4cc4424f0f@example.com",
           "ownership": "created-by-this-run",
           "role": "interaction-anonymous"
         },
         {
-          "email": "o2-mfa-interaction-unverified-3c3574fc50a54828a498287827260f3f@example.com",
+          "email": "o2-mfa-interaction-unverified-f25afd100ebb4ca4bb455a4cc4424f0f@example.com",
           "ownership": "created-by-this-run",
           "role": "interaction-unverified"
         },
         {
-          "email": "o2-mfa-pending-age-1800-3c3574fc50a54828a498287827260f3f@example.com",
+          "email": "o2-mfa-pending-age-1800-f25afd100ebb4ca4bb455a4cc4424f0f@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-1800"
         },
         {
-          "email": "o2-mfa-pending-age-300-3c3574fc50a54828a498287827260f3f@example.com",
+          "email": "o2-mfa-pending-age-300-f25afd100ebb4ca4bb455a4cc4424f0f@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-300"
         },
         {
-          "email": "o2-mfa-pending-age-450-3c3574fc50a54828a498287827260f3f@example.com",
+          "email": "o2-mfa-pending-age-450-f25afd100ebb4ca4bb455a4cc4424f0f@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-450"
         },
         {
-          "email": "o2-mfa-pending-age-600-3c3574fc50a54828a498287827260f3f@example.com",
+          "email": "o2-mfa-pending-age-600-f25afd100ebb4ca4bb455a4cc4424f0f@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-600"
         },
         {
-          "email": "o2-mfa-pending-control-3c3574fc50a54828a498287827260f3f@example.com",
+          "email": "o2-mfa-pending-control-f25afd100ebb4ca4bb455a4cc4424f0f@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-control"
         },
         {
-          "email": "o2-mfa-totp-lifecycle-3c3574fc50a54828a498287827260f3f@example.com",
+          "email": "o2-mfa-totp-lifecycle-f25afd100ebb4ca4bb455a4cc4424f0f@example.com",
           "ownership": "created-by-this-run",
           "role": "totp-lifecycle"
         }
       ],
-      "namespace": "o2/AUTH-MFA-AGE-TOTP-01/3c3574fc50a54828a498287827260f3f",
-      "nonceDigest": "4a7cd0c96200fa68dae04e2e06d3bf1e250724c405047407694206bcc342ec97"
+      "namespace": "o2/AUTH-MFA-AGE-TOTP-01/f25afd100ebb4ca4bb455a4cc4424f0f",
+      "nonceDigest": "6702a3e65fa1a043f109ff892b9bc53ed17b4d2d06f0c861a32557223f14cb8b"
     },
     "ownerPreconditions": [
       "Identity Platform (not legacy Firebase Authentication) is enabled on the project, because multi-factor configuration lives there.",
@@ -1237,27 +1237,27 @@
   "maxRequests": 400,
   "productionExecuted": false,
   "provenance": {
-    "digest": "15b2051e43b65eb0da91fdb19ab861f03a334a439a5cee250fa6a229678c02c6",
+    "digest": "63eca6033e683eb2e01c1a7c82438ba3b138d17397fecba09cdf858eeb66eb73",
     "evidence": "recomputed-from-worktree",
     "paths": {
-      "tools/compat-broad/auth-totp-enroll/mfa_admission.py": "38bd497fe2f29167853d4805371ba13a900dea5e793ff03789cfcf41fb234f78",
+      "tools/compat-broad/auth-totp-enroll/mfa_admission.py": "816cbf88970bc3f7580aca91f42b8d740553c91e52658df2597cae35480b43b6",
       "tools/compat-broad/auth-totp-enroll/mfa_cases.py": "55d5a3a7c140c98eee514bf960db2f0b90701100593c683d4aafcd2a8a58cd9f",
       "tools/compat-broad/auth-totp-enroll/mfa_collector.py": "dbca150727891e3e6341a833afc573693844f2682c2d6068ef52a8c0d8e6b9dd",
-      "tools/compat-broad/auth-totp-enroll/mfa_comparator.py": "f8d16be8b6c54622570a7cd90c2ddc0b723b6acd143626e42dd7b3babcf0e520",
+      "tools/compat-broad/auth-totp-enroll/mfa_comparator.py": "f1e4bd6143355fc033d11f18d85e84984383ac133f1e73fb47ce3d9017bde494",
       "tools/compat-broad/auth-totp-enroll/mfa_config_lock.py": "4863a128036208d5b1c668c6999178b63f0079d410ae1b38652684049bddf910",
       "tools/compat-broad/auth-totp-enroll/mfa_descriptor.py": "d6676b7ebb783c488879d1d5aca1f3f1790e07835efc21b5362e922aa8177cc1",
       "tools/compat-broad/auth-totp-enroll/mfa_gate.py": "2bd596118c501f22ddd9ce79217cae42484131064b91b6732d9ecab50981117a",
-      "tools/compat-broad/auth-totp-enroll/mfa_local_shadow.py": "82c923f7a641cb7337d38709b6f884e8e9bef5f6fa827a077dcf2b9e45e121b6",
+      "tools/compat-broad/auth-totp-enroll/mfa_local_shadow.py": "de84c063fd056051eaec2fcaa8d9eac7ef8ecd65b95e7f2e7de8393a378543e8",
       "tools/compat-broad/auth-totp-enroll/mfa_manifest.py": "e98060ef42b434fb20e5b750cb9737c8d28edcd7c76456b9ed4310888b2625df",
-      "tools/compat-broad/auth-totp-enroll/mfa_o8.py": "c9ec58a2bbc009454f8adf1abef9ddae42c69c873194d040f41589ee65fd7353",
+      "tools/compat-broad/auth-totp-enroll/mfa_o8.py": "86db2ac88489a0ab281bd4bd92a014064cff4413b6ee23d57ed9f862bf27e690",
       "tools/compat-broad/auth-totp-enroll/mfa_persistence.py": "a1ec21d846f1410a0d8cc647d3d8901da3eaeec1413cd65ac918f19820140333",
-      "tools/compat-broad/auth-totp-enroll/mfa_production.py": "1ad93753643331dca02c9f41b86b9104852b3d2723402882f5752f03aab8c091",
+      "tools/compat-broad/auth-totp-enroll/mfa_production.py": "c0d1db649464055cf60ecdbbd9a339024cd1f3f8ae450c394dc116cd3f2db76d",
       "tools/compat-broad/auth-totp-enroll/mfa_production_transport.py": "9a088ff5b0b9307b79098a0f70da0519c1938f1cc1dff02c082408843ec84a4d",
       "tools/compat-broad/auth-totp-enroll/mfa_provenance.py": "6d7f46ec2636999aea5c15fc675a1924df142fbae6c47355e14836912133408e",
       "tools/compat-broad/auth-totp-enroll/mfa_request_budget.py": "c2336054b52aaf0e6167f80be9a22f14a57c8e4532f14e99d558d68090127a55",
       "tools/compat-broad/auth-totp-enroll/mfa_timing.py": "997b960216dc91ba23cf42a3913795261bffeedb23198d502b99a26e1cb00eae",
       "tools/compat-broad/auth-totp-enroll/mfa_totp.py": "8ad51d3366656acf7ac79bb5fa671028e7bbc023a1c777e8f88ad82b8adabf0f",
-      "tools/compat-broad/auth-totp-enroll/mfa_walk.py": "467e03d9a786bd4d984e939adef23441dfc558a8c8afc5919f15ec9a68aba532",
+      "tools/compat-broad/auth-totp-enroll/mfa_walk.py": "077c5e2aece4cf8fa2bb3562928c4e507caec3b4cb0451072acf99cda7e336c8",
       "tools/compat-broad/auth-totp-enroll/mfa_wire.py": "2d7222b054eab8c0ca1018f69f3aac4da7ba02a2653569694b6f59929b27ef14",
       "tools/compat-broad/batch_adapter.py": "5f42ec0ad88d350aff0925a435049cdb05a67f97bc1825888ccfe0c2ebff0d36",
       "tools/compat-broad/batch_wire.py": "f9d3a579026135fbf7255c79a241fa668d826b07e48c1352630c762b5b8037e4",
@@ -1277,7 +1277,7 @@
       "attemptedAccounts": 11,
       "authorizesCleanup": false,
       "journalComplete": true,
-      "recordSha256": "d770a13a377618ae9c6a4ce889104790b95ac171f54f912f97c6f934bfd12358",
+      "recordSha256": "97587ccaf6cf207349075af7ab5ca6f8a48dad08c5766b8e718986401c338df7",
       "remainingKnownAccounts": 0,
       "resourceCleanupComplete": true,
       "schema": "o2-mfa-local-responsibility-v1",
@@ -1294,17 +1294,17 @@
     "maxRequests": 400,
     "observationLimit": 372,
     "observationLimitHit": false,
-    "observationRequests": 125,
+    "observationRequests": 156,
     "phase": "closed",
-    "planDigest": "f204fadbf6cbf88a75d753a2b3ee3bb6ac7503034d26e6f61c06fc5ce5d7dcf4",
+    "planDigest": "9dfd60de6505c45b11fef8149cb755ebe0801b59d4346efac903dae1878ac245",
     "recoveryAccounts": 11,
     "recoveryEntered": true,
     "recoveryRequests": 22,
-    "requestsCharged": 147,
+    "requestsCharged": 178,
     "reservedRecoveryRequests": 28,
     "schema": "o2-mfa-local-request-budget-v1"
   },
-  "requestsCharged": 147,
+  "requestsCharged": 178,
   "rows": [
     {
       "errorCode": null,
@@ -1315,6 +1315,7 @@
     {
       "errorCode": null,
       "id": "age-300s-start",
+      "observedAgeSeconds": 301.0,
       "outcome": "observed",
       "pendingAgeSeconds": 300.0,
       "status": 200
@@ -1322,6 +1323,7 @@
     {
       "errorCode": null,
       "id": "age-300s-finalize",
+      "observedAgeSeconds": 301.0,
       "outcome": "observed",
       "pendingAgeSeconds": 300.0,
       "status": 200
@@ -1329,6 +1331,7 @@
     {
       "errorCode": null,
       "id": "age-300s-same-account-fresh-control",
+      "observedAgeSeconds": 0.0,
       "outcome": "observed",
       "pendingAgeSeconds": 0.0,
       "status": 200
@@ -1336,6 +1339,7 @@
     {
       "errorCode": "SESSION_EXPIRED",
       "id": "totp-enroll-session-age-300s",
+      "observedAgeSeconds": 301.0,
       "outcome": "observed",
       "sessionAgeSeconds": 300.0,
       "status": 400
@@ -1343,6 +1347,7 @@
     {
       "errorCode": null,
       "id": "age-450s-start",
+      "observedAgeSeconds": 451.0,
       "outcome": "observed",
       "pendingAgeSeconds": 450.0,
       "status": 200
@@ -1350,6 +1355,7 @@
     {
       "errorCode": null,
       "id": "age-450s-finalize",
+      "observedAgeSeconds": 451.0,
       "outcome": "observed",
       "pendingAgeSeconds": 450.0,
       "status": 200
@@ -1357,6 +1363,7 @@
     {
       "errorCode": null,
       "id": "age-450s-same-account-fresh-control",
+      "observedAgeSeconds": 0.0,
       "outcome": "observed",
       "pendingAgeSeconds": 0.0,
       "status": 200
@@ -1364,6 +1371,7 @@
     {
       "errorCode": "SESSION_EXPIRED",
       "id": "totp-enroll-session-age-450s",
+      "observedAgeSeconds": 451.0,
       "outcome": "observed",
       "sessionAgeSeconds": 450.0,
       "status": 400
@@ -1371,6 +1379,7 @@
     {
       "errorCode": null,
       "id": "age-600s-start",
+      "observedAgeSeconds": 601.0,
       "outcome": "observed",
       "pendingAgeSeconds": 600.0,
       "status": 200
@@ -1378,6 +1387,7 @@
     {
       "errorCode": null,
       "id": "age-600s-finalize",
+      "observedAgeSeconds": 601.0,
       "outcome": "observed",
       "pendingAgeSeconds": 600.0,
       "status": 200
@@ -1385,6 +1395,7 @@
     {
       "errorCode": null,
       "id": "age-600s-same-account-fresh-control",
+      "observedAgeSeconds": 0.0,
       "outcome": "observed",
       "pendingAgeSeconds": 0.0,
       "status": 200
@@ -1392,6 +1403,7 @@
     {
       "errorCode": "INVALID_SESSION_INFO",
       "id": "totp-enroll-session-age-600s",
+      "observedAgeSeconds": 601.0,
       "outcome": "observed",
       "sessionAgeSeconds": 600.0,
       "status": 400
@@ -1399,6 +1411,7 @@
     {
       "errorCode": null,
       "id": "age-1800s-start",
+      "observedAgeSeconds": 1801.0,
       "outcome": "observed",
       "pendingAgeSeconds": 1800.0,
       "status": 200
@@ -1406,6 +1419,7 @@
     {
       "errorCode": null,
       "id": "age-1800s-finalize",
+      "observedAgeSeconds": 1801.0,
       "outcome": "observed",
       "pendingAgeSeconds": 1800.0,
       "status": 200
@@ -1413,6 +1427,7 @@
     {
       "errorCode": null,
       "id": "age-1800s-same-account-fresh-control",
+      "observedAgeSeconds": 0.0,
       "outcome": "observed",
       "pendingAgeSeconds": 0.0,
       "status": 200
@@ -1527,7 +1542,7 @@
   "side": "local",
   "worktree": {
     "clean": true,
-    "commit": "f70a20a36c626fd04975e82d69b98ead65637451",
+    "commit": "f88c92baee8d6ada07ea1d731050a36ca3dc92b8",
     "resolved": true
   }
 }

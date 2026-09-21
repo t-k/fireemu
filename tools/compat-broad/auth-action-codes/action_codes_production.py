@@ -129,9 +129,14 @@ def execute(
     gate_module.create(output / "gate", gate_plan)
     handle = gate_module.ActionGate(output / "gate", gate_module.JOB)
     handle.claim()
+    transport_bindings = copy.deepcopy(bindings)
+    for stage_bindings in transport_bindings.values():
+        for name in tuple(stage_bindings):
+            if name in remote.GENERATED_BINDINGS and not name.endswith(".localId"):
+                stage_bindings[name] = "$generated:" + name
     remote.make_transport(
         frozen_inputs=inputs,
-        declared_bindings=bindings,
+        declared_bindings=transport_bindings,
         credential_handoff=credential_handoff,
         verify_handoff=verify_handoff,
         fixture_origin=fixture_origin,

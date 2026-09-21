@@ -125,7 +125,7 @@ def _check_value(expected: Any, actual: Any, bindings: MappingProxyType, nonce: 
                 raise ValueError("observed dynamic binding differs")
             return
         if name in GENERATED_BINDINGS:
-            if not _private(actual):
+            if bindings.get(name) != "$generated:" + name or not _private(actual):
                 raise ValueError("generated dynamic binding required")
             return
         if name not in bindings or actual != bindings[name]:

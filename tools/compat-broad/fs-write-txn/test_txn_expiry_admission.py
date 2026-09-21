@@ -411,6 +411,15 @@ def test_an_approval_binding_that_differs_is_refused(tmp_path, damage):
         )
 
 
+def test_the_current_host_binding_is_accepted(tmp_path):
+    """The positive twin of the wrong-host case above: this runner's own
+    platform/machine pair, whatever it is, passes."""
+    built = Admission(tmp_path)
+    approval = {**built.approval, "executionHost": admission.execution_host()}
+    admitted = admission.validate_o7_admission(**built.bindings(approval=approval))
+    assert admitted["campaignId"] == CAMPAIGN_ID
+
+
 def test_a_drifted_source_is_refused_before_any_wire(tmp_path):
     built = Admission(tmp_path)
     drifted = built.source / campaign.GATE_ENTRY

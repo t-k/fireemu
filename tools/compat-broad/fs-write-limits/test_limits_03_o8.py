@@ -59,9 +59,24 @@ DATABASE_BODY = {
     "locationId": "us-central1",
 }
 AUTH_BODY = {"name": "projects/592603257417/config", "mfa": {"state": "DISABLED"}}
-# Proto3 JSON omits empty and false members, so a deployed exemption reads as
-# an empty index configuration.
-EXEMPT_FIELD_BODY = {"name": preflight.INDEX_FIELD, "indexConfig": {}}
+# The observed production readback of `collectionGroups/pk/fields/*`, which
+# carries the identical `fieldPath: "*"`, `indexes: []` override (read-only GET,
+# HTTP 200, 2026-09-21 07:05 UTC), verbatim: `indexes` and `usesAncestorConfig`
+# are omitted as proto3 defaults and the ancestor is the database's default.
+OBSERVED_PRODUCTION_PK_FIELD_BODY = {
+    "name": "projects/fireemu-35fe6/databases/(default)/collectionGroups/pk/fields/*",
+    "indexConfig": {
+        "ancestorField": (
+            "projects/fireemu-35fe6/databases/(default)/collectionGroups/"
+            "__default__/fields/*"
+        )
+    },
+}
+# The same shape on the exempt group, which is what the preflight must see.
+EXEMPT_FIELD_BODY = {
+    "name": preflight.INDEX_FIELD,
+    "indexConfig": {"ancestorField": preflight.DEFAULT_ANCESTOR_FIELD},
+}
 DEFAULT_FIELD_BODY = {
     "name": preflight.INDEX_FIELD,
     "indexConfig": {
@@ -958,3 +973,502 @@ def test_the_worker_source_is_pinned_and_scoped_to_the_campaign():
         )
         is None
     )
+
+
+def test_the_observed_production_override_body_is_the_expected_shape():
+    """The production readback, verbatim, normalizes to the exempt shape."""
+    body = OBSERVED_PRODUCTION_PK_FIELD_BODY
+    assert set(body) == {"name", "indexConfig"}
+    assert set(body["indexConfig"]) == {"ancestorField"}
+    assert body["indexConfig"]["ancestorField"] == preflight.DEFAULT_ANCESTOR_FIELD
+    normalized = preflight._field_readback(body, field=body["name"])
+    assert normalized == {
+        **preflight.EXPECTED_INDEX_EXEMPTION_PROJECTION,
+        "name": body["name"],
+    }
+    # The exempt group differs from pk only in its name; the same body on the
+    # nx field is the after state the permission binds.
+    nx = {**body, "name": preflight.INDEX_FIELD}
+    assert nx == EXEMPT_FIELD_BODY
+    projection = preflight.index_exemption_projection(nx)
+    assert projection == preflight.EXPECTED_INDEX_EXEMPTION_PROJECTION
+    preflight.verify_index_exemption(
+        nx, {"indexExemptionProjectionDigest": digest(projection)}
+    )
+    # The verbatim body under its own name is refused for the nx slot.
+    with pytest.raises(ValueError, match="typed index field readback"):
+        preflight.verify_index_exemption(
+            body, {"indexExemptionProjectionDigest": digest(projection)}
+        )
+
+
+@pytest.mark.parametrize(
+    ("configuration", "accepted"),
+    [
+        ({"ancestorField": preflight.DEFAULT_ANCESTOR_FIELD}, True),
+        (
+            {
+                "indexes": [],
+                "usesAncestorConfig": False,
+                "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD,
+            },
+            True,
+        ),
+        # The API always names the ancestor; a body without it is not a
+        # readback of a deployed override.
+        ({}, False),
+        ({"indexes": [], "usesAncestorConfig": False}, False),
+        # A partial override: an index of its own is not the exemption.
+        (
+            {
+                "indexes": DEFAULT_FIELD_BODY["indexConfig"]["indexes"][:1],
+                "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD,
+            },
+            False,
+        ),
+        # No override at all: the group still inherits the default.
+        (
+            {
+                "usesAncestorConfig": True,
+                "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD,
+            },
+            False,
+        ),
+        (
+            {
+                "indexes": [],
+                "usesAncestorConfig": True,
+                "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD,
+            },
+            False,
+        ),
+        # An ancestor other than the documented default.
+        ({"ancestorField": preflight.INDEX_FIELD.replace("/nx/", "/pk/")}, False),
+        (
+            {
+                "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD.replace(
+                    "(default)", "other"
+                )
+            },
+            False,
+        ),
+        (
+            {
+                "usesAncestorConfig": "false",
+                "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD,
+            },
+            False,
+        ),
+        ({"indexes": "none", "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD}, False),
+    ],
+    ids=[
+        "ancestor-named",
+        "explicit-false-with-ancestor",
+        "omitted-ancestor",
+        "explicit-false-without-ancestor",
+        "partial-override",
+        "inherits-default",
+        "empty-but-inherits",
+        "other-ancestor",
+        "other-database-ancestor",
+        "string-flag",
+        "string-indexes",
+    ],
+)
+def test_the_exemption_readback_is_judged_member_by_member(configuration, accepted):
+    body = {"name": preflight.INDEX_FIELD, "indexConfig": configuration}
+    permission = {
+        "indexExemptionProjectionDigest": preflight.expected_index_exemption_digest()
+    }
+    if accepted:
+        preflight.verify_index_exemption(body, permission)
+        attestation = preflight.index_exemption_attestation(
+            {
+                "complete": True,
+                "workerReaped": True,
+                "status": 200,
+                "bodyKind": "json",
+                "body": body,
+            },
+            permission,
+        )
+        assert attestation["complete"] is True
+        assert attestation["body"]["baselineVerified"] is True
+        assert attestation["body"]["projection"]["ancestorField"] == (
+            preflight.DEFAULT_ANCESTOR_FIELD
+        )
+        preflight.validate_index_exemption_attestation(attestation, permission)
+    else:
+        with pytest.raises(ValueError):
+            preflight.verify_index_exemption(body, permission)
+
+
+def test_the_exemption_readback_requires_the_field_name_and_a_200():
+    permission = {
+        "indexExemptionProjectionDigest": preflight.expected_index_exemption_digest()
+    }
+    with pytest.raises(ValueError, match="typed index field readback"):
+        preflight.verify_index_exemption(
+            {"name": preflight.DEFAULT_ANCESTOR_FIELD, "indexConfig": {}}, permission
+        )
+    for status, body in (
+        (403, {"error": {"code": 403, "status": "PERMISSION_DENIED"}}),
+        (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+        # A non-2xx answer whose body happens to be the exempt shape is still
+        # not an attestation of the deployed state.
+        (500, EXEMPT_FIELD_BODY),
+        (299, EXEMPT_FIELD_BODY),
+    ):
+        attestation = preflight.index_exemption_attestation(
+            {
+                "complete": True,
+                "workerReaped": True,
+                "status": status,
+                "bodyKind": "json",
+                "body": body,
+            },
+            permission,
+        )
+        assert attestation["complete"] is False
+        assert attestation["body"]["baselineVerified"] is False
+        with pytest.raises(ValueError, match="saved index exemption attestation"):
+            preflight.validate_index_exemption_attestation(attestation, permission)
+
+
+def test_the_restored_readback_is_judged_and_recorded(tmp_path):
+    import limits_03_indexes as indexes
+
+    restored = preflight.verify_index_restored(DEFAULT_FIELD_BODY)
+    assert restored["projection"] == preflight.EXPECTED_INDEX_RESTORED_PROJECTION
+    assert restored["inheritedIndexes"] == DEFAULT_FIELD_BODY["indexConfig"]["indexes"]
+    for body in (
+        EXEMPT_FIELD_BODY,
+        {"name": preflight.INDEX_FIELD, "indexConfig": {"usesAncestorConfig": True}},
+        {
+            "name": preflight.INDEX_FIELD,
+            "indexConfig": {
+                "usesAncestorConfig": True,
+                "ancestorField": preflight.INDEX_FIELD.replace("/nx/", "/pk/"),
+            },
+        },
+    ):
+        with pytest.raises(ValueError):
+            preflight.verify_index_restored(body)
+    readback = tmp_path / "restored.json"
+    readback.write_text(json.dumps(DEFAULT_FIELD_BODY))
+    record_path = tmp_path / "restore.json"
+    assert (
+        indexes.main(["--verify-restored", str(readback), "--record", str(record_path)])
+        == 0
+    )
+    record = json.loads(record_path.read_text())
+    assert record["kind"] == campaign.RESTORE_RECORD_KIND
+    assert record["projectionDigest"] == preflight.expected_index_restored_digest()
+    assert record["conformanceIndexesSha256"] == campaign.INDEXES_SHA256_BEFORE
+    indexes.validate_restore_record(record)
+    for damage in (
+        {"verified": False},
+        {"projection": preflight.EXPECTED_INDEX_EXEMPTION_PROJECTION},
+        {"campaignId": "FS-LIMIT-API-REQUEST-BYTES"},
+        {"conformanceIndexesSha256": campaign.INDEXES_SHA256_AFTER},
+    ):
+        with pytest.raises(ValueError, match="restore record"):
+            indexes.validate_restore_record({**record, **damage})
+    # A record is written once; the exempt readback is refused as restored.
+    assert (
+        indexes.main(["--verify-restored", str(readback), "--record", str(record_path)])
+        == 2
+    )
+    exempt = tmp_path / "exempt.json"
+    exempt.write_text(json.dumps(EXEMPT_FIELD_BODY))
+    assert (
+        indexes.main(
+            ["--verify-restored", str(exempt), "--record", str(tmp_path / "x")]
+        )
+        == 2
+    )
+    assert indexes.main(["--verify-deployed", str(exempt)]) == 0
+    assert indexes.main(["--verify-deployed", str(readback)]) == 2
+
+
+def test_the_package_binds_the_restore_evidence_only_when_verified(tmp_path):
+    import limits_03_indexes as indexes
+    import package_03
+
+    unbound = package_03.restore_binding(None)
+    assert unbound["required"] is True
+    assert unbound["verified"] is False
+    assert unbound["record"] is None
+    readback = tmp_path / "restored.json"
+    readback.write_text(json.dumps(DEFAULT_FIELD_BODY))
+    record_path = ROOT / "spec/compatibility/broad-runs/.limits-03-restore-test.json"
+    assert not record_path.exists()
+    try:
+        assert (
+            indexes.main(
+                ["--verify-restored", str(readback), "--record", str(record_path)]
+            )
+            == 0
+        )
+        bound = package_03.restore_binding(record_path)
+        assert bound["verified"] is True
+        assert (
+            bound["record"]["sha256"]
+            == hashlib.sha256(record_path.read_bytes()).hexdigest()
+        )
+        assert bound["record"]["projectionDigest"] == (
+            preflight.expected_index_restored_digest()
+        )
+    finally:
+        record_path.unlink(missing_ok=True)
+    precondition = campaign.index_exemption_precondition()
+    assert precondition["deploy"][-2].startswith("git checkout -- conformance/")
+    assert "--verify-restored" in " ".join(precondition["restore"])
+    assert precondition["restoreEvidence"]["expectedProjectionDigest"] == (
+        preflight.expected_index_restored_digest()
+    )
+
+
+def test_a_stop_before_any_data_call_classifies_as_no_data(
+    built, tmp_path, monkeypatch
+):
+    """The empty Gate journal proves nothing was written; the receipt says so."""
+    calls, _responder = wire_fixture(monkeypatch)
+    built.handoff_path.write_text("{}")
+    assert launcher.main(built.argv(tmp_path)) == 2
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    assert calls == []
+    verdict = admission.validate_no_data_receipt(receipt)
+    assert verdict["disposition"] == "aborted-no-data"
+    assert receipt["kind"] == admission.NO_DATA_RECEIPT_SHAPE["kind"]
+    expected = admission.NO_DATA_RECEIPT_SHAPE["scheduleNotStarted"]
+    assert {key: receipt[key] for key in expected} == expected
+    # A data row, a create or an uncertain create each withdraw the verdict.
+    for damage in (
+        {"metadata": [{"responseDigest": "0" * 64}]},
+        {"createdResources": ["x"]},
+        {"mayHaveCreated": True},
+        {"productionExecuted": True},
+    ):
+        assert admission.classify_stop({**receipt, **damage})["retirableAsNoData"] is (
+            False
+        )
+
+
+def test_a_missing_exemption_stop_classifies_as_no_data(built, tmp_path, monkeypatch):
+    calls, _responder = wire_fixture(monkeypatch)
+    real = preflight.management_transport
+
+    def without_exemption(slot, token, **kwargs):
+        response = real(slot, token, **kwargs)
+        if slot == "index-exemption":
+            response = {**response, "body": DEFAULT_FIELD_BODY}
+        return response
+
+    monkeypatch.setattr(preflight, "management_transport", without_exemption)
+    assert launcher.main(built.argv(tmp_path)) == 2
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    assert calls == []
+    assert admission.validate_no_data_receipt(receipt)["disposition"] == (
+        "aborted-no-data"
+    )
+
+
+def test_the_launcher_rechecks_the_index_precondition_clause_by_clause(built):
+    """Defense in depth behind the permission binding: each clause on its own."""
+    good = copy.deepcopy(built.permission)
+    admission._validate_index_precondition(good)
+    precondition = good["indexExemptionPrecondition"]
+    for damage, message in (
+        ({"indexExemptionPrecondition": None}, "precondition differs"),
+        (
+            {
+                "indexExemptionPrecondition": {
+                    **precondition,
+                    "conformanceIndexesSha256After": "0" * 64,
+                }
+            },
+            "precondition differs",
+        ),
+        (
+            {
+                "indexExemptionPrecondition": {
+                    **precondition,
+                    "restoreRequiredAfterRun": False,
+                }
+            },
+            "precondition differs",
+        ),
+        ({"indexExemptionProjectionDigest": "0" * 64}, "declared after state"),
+        ({"indexExemptionProjectionDigest": None}, "declared after state"),
+        ({"indexExemptionDeployedBy": " "}, "acknowledgement"),
+        ({"indexExemptionDeployedBy": None}, "acknowledgement"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            admission._validate_index_precondition({**good, **damage})
+    # The restore flag is checked on the declaration the descriptor produces,
+    # so a descriptor that stopped declaring it would be refused here.
+    monkey = {**precondition, "restoreRequiredAfterRun": False}
+    with pytest.raises(ValueError, match="precondition differs"):
+        admission._validate_index_precondition(
+            {**good, "indexExemptionPrecondition": monkey}
+        )
+
+
+def test_the_transport_recompiles_the_plan_from_the_nonce():
+    """A caller's plan is not the authority: the slot is the compiler's."""
+    plan = copy.deepcopy(remote.compiled_plan(NONCE))
+    job = plan["localGatePlan"]["jobs"]["limits"]
+    index = next(i for i, op in enumerate(job["observation"]) if op.get("body"))
+    altered = copy.deepcopy(job["observation"][index])
+    altered["body"] = {"fields": {"forged": {"stringValue": "x"}}}
+    job["observation"][index] = altered
+    plan["requests"][index]["body"] = altered["body"]
+    with pytest.raises(ValueError, match="differs from frozen plan slot"):
+        remote.operation_for_slot(plan, "observation", index, altered)
+    # A referenced body must be handed in as the exact frozen bytes.
+    index = next(i for i, op in enumerate(job["observation"]) if "bodyRef" in op)
+    canonical = compiler_03.dispatched_operations(remote.compiled_plan(NONCE))
+    remote.operation_for_slot(plan, "observation", index, canonical[index])
+    forged = copy.deepcopy(canonical[index])
+    forged["body"]["fields"]["v"] = {"integerValue": "999"}
+    with pytest.raises(ValueError, match="differs from frozen plan slot"):
+        remote.operation_for_slot(plan, "observation", index, forged)
+
+
+def test_the_wire_deadline_is_the_slot_reservation(monkeypatch):
+    plan = remote.compiled_plan(NONCE)
+    operations = compiler_03.dispatched_operations(plan)
+    seen = {}
+
+    def exchange(url, method, body, headers, deadline, response_cap):
+        seen.update(url=url, method=method, deadline=deadline, cap=response_cap)
+        return 200, "application/json", b"{}", None
+
+    class Capability:
+        pass
+
+    monkeypatch.setattr(remote, "_exchange", exchange)
+    monkeypatch.setattr(remote, "authorize_transport", lambda *a, **k: None)
+    clock = {"now": 5000.0}
+    monkeypatch.setattr(remote.time, "monotonic", lambda: clock["now"])
+    for index, operation in enumerate(operations):
+        ceiling = plan["requests"][index]["responseByteLimit"]
+        expected = remote.slot_timeout(operation, ceiling)
+        receipt = remote.request(
+            plan,
+            "observation",
+            index,
+            operation,
+            TOKEN,
+            deadline=clock["now"] + 10_000,
+            capability=Capability(),
+            binding=b"",
+            binding_digest="",
+        )
+        assert receipt["complete"] is True
+        assert seen["deadline"] == clock["now"] + expected
+        assert seen["cap"] == ceiling
+        assert expected in (
+            compiler_03.SMALL_REQUEST_SECONDS,
+            compiler_03.READBACK_SECONDS,
+            compiler_03.TRANSPORT_CEILING_SECONDS,
+        )
+    # An absolute deadline nearer than the reservation wins.
+    remote.request(
+        plan,
+        "observation",
+        0,
+        operations[0],
+        TOKEN,
+        deadline=clock["now"] + 1,
+        capability=Capability(),
+        binding=b"",
+        binding_digest="",
+    )
+    assert seen["deadline"] == clock["now"] + 1
+    monkeypatch.setattr(remote, "slot_timeout", lambda *a: 60.0)
+    with pytest.raises(ValueError, match="slot reservation outside"):
+        remote.request(
+            plan,
+            "observation",
+            0,
+            operations[0],
+            TOKEN,
+            deadline=clock["now"] + 10_000,
+            capability=Capability(),
+            binding=b"",
+            binding_digest="",
+        )
+
+
+def _run_worker(message: dict, body: bytes = b"") -> bytes:
+    """Run the real worker bytes on a message; it must refuse before connecting."""
+    source = campaign.worker_binding()[0].decode()
+    payload = json.dumps(message, separators=(",", ":")).encode() + b"\n" + body
+    completed = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", source],
+        input=payload,
+        capture_output=True,
+        timeout=30,
+        env={"PATH": "/usr/bin:/bin"},
+        check=False,
+    )
+    return completed.stdout
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        {"path": "/v1/projects/fireemu-35fe6/databases/other/documents:batchWrite"},
+        {"path": "/v1/projects/other-project/databases/(default)/documents:batchWrite"},
+        {
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/oracle/"
+            + NONCE
+            + "/request-bytes-01/probe-u01/items/control"
+        },
+        {
+            "method": "PUT",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/oracle/"
+            + NONCE
+            + "/limits-03/x",
+            "bodyBytes": 0,
+        },
+        {"deadline": 60.0},
+        {
+            "method": "GET",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/oracle/"
+            + NONCE
+            + "/limits-03/x",
+            "bodyBytes": 2,
+        },
+        {"authorization": "Basic abc"},
+        {"project": "other-project"},
+    ],
+    ids=[
+        "other-database",
+        "other-project-path",
+        "other-namespace",
+        "put",
+        "sixty-second-deadline",
+        "body-on-get",
+        "not-bearer",
+        "other-project-header",
+    ],
+)
+def test_the_worker_refuses_out_of_scope_messages_before_connecting(damage):
+    import time as real_time
+
+    message = {
+        "method": "POST",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:batchWrite",
+        "authorization": "Bearer " + TOKEN,
+        "project": "fireemu-35fe6",
+        "bodyBytes": 2,
+        "deadline": real_time.monotonic() + 5,
+    }
+    message.update(damage)
+    if "deadline" in damage:
+        message["deadline"] = real_time.monotonic() + damage["deadline"]
+    frames = _run_worker(message, b"{}" if message["bodyBytes"] else b"")
+    assert frames == b"F" + (14).to_bytes(4, "big") + b"worker-failure"

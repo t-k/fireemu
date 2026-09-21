@@ -39,6 +39,7 @@ from compiler_03 import (
     SMALL_REQUEST_SECONDS,
     TRANSPORT_CEILING_SECONDS,
     compile_limits_plan,
+    resolve_body,
     slot_seconds,
 )
 from o8_admission import authorize_transport
@@ -131,7 +132,11 @@ def operation_for_slot(
     operations = job[phase]
     if not 0 <= index < len(operations):
         raise ValueError("request operation outside plan")
-    expected = copy.deepcopy(operations[index])
+    offset = 0 if phase == "observation" else len(job["observation"])
+    row = plan["requests"][offset + index]
+    # A large body is carried in the plan by reference; the frozen bytes are
+    # the request row's, and the operation handed in must carry exactly those.
+    expected = resolve_body(copy.deepcopy(operations[index]), row["body"])
     version_from = expected.pop("versionFrom", None)
     if version_from is not None:
         prefix = expected["path"] + "?currentDocument.updateTime="
@@ -150,8 +155,6 @@ def operation_for_slot(
         expected["path"] = path
     if _compact(operation) != _compact(expected):
         raise ValueError("request operation differs from frozen plan slot")
-    offset = 0 if phase == "observation" else len(job["observation"])
-    row = plan["requests"][offset + index]
     return expected, row["responseByteLimit"]
 
 

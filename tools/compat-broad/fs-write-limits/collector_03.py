@@ -16,6 +16,7 @@ collector source digest still resolves.
 # ruff: noqa: BLE001 -- Preserve acquisition and cleanup failures independently.
 from __future__ import annotations
 
+from compiler_03 import resolve_body
 from expectations_03 import MUTATING, evaluate_rows, preflight_count, writes_safe
 from shadow import digest, resolve_recovery, save, typed_absence
 
@@ -37,6 +38,9 @@ def collect(gate, plan, output, wire, *, before_recovery=None, excused=()):
     observation = declared["observation"]
 
     def dispatch(operation, recovery, index, request_index):
+        # A large body travels in the Gate plan by reference; the request row
+        # carries the bytes, and the Gate checks them against the reference.
+        operation = resolve_body(operation, plan["requests"][request_index]["body"])
         entry = {"index": index, "request": operation}
         phase = "cleanup" if recovery else "observation"
 

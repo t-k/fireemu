@@ -11,6 +11,7 @@ from typing import Any
 
 # `shadow` puts the shared `tools/compat-broad` directory on the path, so it is
 # imported before anything that lives there.
+from compiler_03 import dispatched_operations
 from shadow import digest, resolve_recovery, typed_absence
 
 MUTATING = ("POST", "PATCH", "DELETE")
@@ -98,7 +99,7 @@ def evaluate_rows(rows: list[dict], plan: dict, *, excused=()) -> list[dict]:
     excused = set(excused)
     problems: list[dict] = []
     versions: dict[str, str] = {}
-    operations = plan["localGatePlan"]["jobs"]["limits"]["observation"]
+    operations = dispatched_operations(plan)
     for index, row in enumerate(rows):
         if (
             index >= len(operations)
@@ -106,7 +107,11 @@ def evaluate_rows(rows: list[dict], plan: dict, *, excused=()) -> list[dict]:
             or row.get("request") != operations[index]
         ):
             problems.append(
-                {"index": index, "basis": "request identity/order mismatch"}
+                {
+                    "index": index,
+                    "basis": "request identity/order mismatch",
+                    "pending": False,
+                }
             )
             continue
         request = plan["requests"][index]
@@ -222,7 +227,7 @@ def writes_safe(rows: list[dict], plan: dict, *, excused=()) -> bool:
     preflights = preflight_count(plan)
     if len(rows) < preflights:
         return False
-    operations = plan["localGatePlan"]["jobs"]["limits"]["observation"]
+    operations = dispatched_operations(plan)
     versions: dict[str, str] = {}
     for index, row in enumerate(rows):
         if (

@@ -29,6 +29,7 @@ from compiler_03 import (
     INDEX_ENTRY_SUM_PER_DOCUMENT_MAX,
     SUBCOLLECTION_DEPTH_MAX,
     compile_limits_plan,
+    dispatched_operations,
     document_bytes,
     index_usage,
     largest_index_entry_bytes,
@@ -887,7 +888,9 @@ def test_a_production_collection_excuses_no_row(tmp_path):
     same invariants, which is the one place the campaign must not.
     """
     plan = plan_for("a")
-    observation = plan["localGatePlan"]["jobs"]["limits"]["observation"]
+    # A journal records the operation as dispatched, with a referenced body
+    # put back in place, which is what the expectations compare against.
+    observation = dispatched_operations(plan)
     pending = pending_rows(plan)
     assert pending, "part A declares rows the local side cannot show"
     index = pending[0]

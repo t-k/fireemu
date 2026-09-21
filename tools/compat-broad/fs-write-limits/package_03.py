@@ -35,6 +35,8 @@ sys.path.insert(0, str(HERE))
 import compiler_03
 import limits_03_admission as admission
 import limits_03_descriptor as campaign
+import limits_03_indexes
+import limits_03_preflight as preflight
 from broad_contract import digest
 from compiler_03 import CAMPAIGN, DOCUMENT_NAME_MAX, name_charge_floor
 from shadow_03 import source_inputs
@@ -245,7 +247,40 @@ def shadow_record(run: Path, commit: str) -> dict:
     return record
 
 
-def manifest(previous: dict, shadow: dict, commit: str) -> dict:
+def restore_binding(record_path: Path | None) -> dict:
+    """How the package binds the restore evidence, or says it is still owed.
+
+    The restore is verified by a field readback after the run, never by the
+    deploy's exit status, and the campaign does not close until this member
+    names a verified record.
+    """
+    value = {
+        "required": True,
+        "verified": False,
+        "record": None,
+        "recordKind": campaign.RESTORE_RECORD_KIND,
+        "expectedProjectionDigest": preflight.expected_index_restored_digest(),
+        "closureRequires": "a verified restore record bound here",
+    }
+    if record_path is None:
+        return value
+    record = _load(record_path)
+    limits_03_indexes.validate_restore_record(record)
+    value.update(
+        verified=True,
+        record={
+            "path": str(record_path.resolve().relative_to(ROOT)),
+            "sha256": _sha(record_path),
+            "projectionDigest": record["projectionDigest"],
+            "readbackSha256": record["readbackSha256"],
+        },
+    )
+    return value
+
+
+def manifest(
+    previous: dict, shadow: dict, commit: str, *, restore_record: Path | None = None
+) -> dict:
     """The manifest, with every computed member recomputed over HEAD."""
     value = _rebind_text(copy.deepcopy(previous), commit)
     figures = campaign.budget_figures()
@@ -329,6 +364,12 @@ def manifest(previous: dict, shadow: dict, commit: str) -> dict:
         ],
         "conformanceIndexesSha256After": precondition["conformanceIndexesSha256After"],
         "precondition": precondition,
+        "afterStateNeverCommitted": (
+            "The after state is written to the tracked file only as the deploy "
+            "input and is checked out again before admission; the committed file "
+            "stays at the before digest, which is also what the restore deploys."
+        ),
+        "restore": restore_binding(restore_record),
         "shadowRanUnder": {
             "ALL": shadow["execution"]["ALL"]["execution"]["indexConfiguration"]
         },
@@ -423,6 +464,7 @@ def manifest(previous: dict, shadow: dict, commit: str) -> dict:
         "owner permission envelope, window, nonce reservation and tariff acceptance",
         "no production release artifact SHA-256 is bound",
         "the declared index exemption is not deployed",
+        "the index exemption restore is not verified (no restore record bound)",
         "frozen artifact, collector and comparator bindings through O7",
         OPEN_GATE_DEFECTS[0],
         OPEN_GATE_DEFECTS[1],
@@ -435,7 +477,9 @@ def manifest(previous: dict, shadow: dict, commit: str) -> dict:
             "obtain the owner envelope fields and tariff acceptance",
             "deploy the declared index exemption and verify the field readback",
             "production observation and immutable receipt through limits_03_o8.py",
-            "restore the index configuration and verify the readback",
+            "restore the index configuration, verify the field readback with "
+            "limits_03_indexes.py --verify-restored and bind the record with "
+            "package_03.py freeze --restore-record",
             "comparison against the private shadow journal and mismatch triage",
             "cleanup verification",
             "independent review",
@@ -496,7 +540,7 @@ def binding(previous: dict, manifest_value: dict, shadow: dict, commit: str) -> 
     return value
 
 
-def freeze(shadow_run: Path | None) -> None:
+def freeze(shadow_run: Path | None, restore_record: Path | None = None) -> None:
     commit = head_commit()
     previous_manifest, previous_binding = _load(MANIFEST), _load(BINDING)
     if shadow_run is not None:
@@ -504,7 +548,10 @@ def freeze(shadow_run: Path | None) -> None:
     shadow = _load(SHADOW)
     if shadow["sourceCommit"] != commit:
         raise SystemExit("the shadow record was frozen at another commit; rerun it")
-    _write(MANIFEST, manifest(previous_manifest, shadow, commit))
+    _write(
+        MANIFEST,
+        manifest(previous_manifest, shadow, commit, restore_record=restore_record),
+    )
     _write(BINDING, binding(previous_binding, _load(MANIFEST), shadow, commit))
     for path in (SHADOW, MANIFEST, BINDING):
         print(f"{_sha(path)}  {path.relative_to(ROOT)}")
@@ -517,8 +564,14 @@ def main(argv: list[str] | None = None) -> int:
     source = freeze_parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--shadow-run", type=Path)
     source.add_argument("--keep-shadow-record", action="store_true")
+    freeze_parser.add_argument(
+        "--restore-record",
+        type=Path,
+        help="bind a verified index-exemption restore record written by "
+        "limits_03_indexes.py --verify-restored",
+    )
     args = parser.parse_args(argv)
-    freeze(args.shadow_run)
+    freeze(args.shadow_run, args.restore_record)
     return 0
 
 

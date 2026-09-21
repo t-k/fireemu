@@ -63,15 +63,31 @@ DATABASE = shared.DATABASE
 INDEX_EXEMPTION_SLOT = "index-exemption"
 INDEX_FIELD = f"{DATABASE}/collectionGroups/{EXEMPT_COLLECTION}/fields/*"
 INDEX_FIELD_ROUTE = f"https://firestore.googleapis.com/v1/{INDEX_FIELD}"
+# The field every collection group inherits its single-field configuration
+# from. The Admin API populates `indexConfig.ancestorField` in both cases: the
+# field the group inherits from while `usesAncestorConfig` is true, or the
+# field it would inherit from once the override is removed. The observed
+# production readback of `collectionGroups/pk/fields/*`, which carries the
+# identical override (2026-09-21), is exactly the name and this ancestor, with
+# `indexes` and `usesAncestorConfig` omitted as proto3 defaults.
+DEFAULT_ANCESTOR_FIELD = f"{DATABASE}/collectionGroups/__default__/fields/*"
 # What the single-field configuration of the exempt group must read as while
-# the declared exemption is deployed: no index of its own and no inherited
-# default. Proto3 JSON omits empty and false members, so the projection below
-# normalizes the readback before it is compared or digested.
+# the declared exemption is deployed: no index of its own (absent or empty),
+# not inheriting the default (absent or false), and naming the default as the
+# ancestor it would otherwise inherit from. Anything else is refused.
 EXPECTED_INDEX_EXEMPTION_PROJECTION = {
     "name": INDEX_FIELD,
     "indexes": [],
     "usesAncestorConfig": False,
-    "ancestorField": None,
+    "ancestorField": DEFAULT_ANCESTOR_FIELD,
+}
+# What the same field must read as once the exemption is restored: the
+# inherited default again, named as such. The inherited index list is the
+# project's default and is recorded, not judged.
+EXPECTED_INDEX_RESTORED_PROJECTION = {
+    "name": INDEX_FIELD,
+    "usesAncestorConfig": True,
+    "ancestorField": DEFAULT_ANCESTOR_FIELD,
 }
 INDEX_EXEMPTION_ATTESTATION_KIND = "limits-03-index-exemption-attestation-v1"
 SHARED_SLOTS = ("oauth-tokeninfo", "project", "database", "auth")
@@ -90,9 +106,14 @@ def metadata_url(slot):
     return shared.metadata_url(slot)
 
 
-def index_exemption_projection(body):
-    """Normalize one field readback to the members the exemption is judged on."""
-    if not isinstance(body, dict) or body.get("name") != INDEX_FIELD:
+def _field_readback(body, field=INDEX_FIELD):
+    """The normalized members of one field readback, each checked on its own.
+
+    Proto3 JSON omits an empty `indexes` list and a false `usesAncestorConfig`,
+    so both are normalized from absent; the ancestor must be the database's
+    default wildcard field, which the API names in either state.
+    """
+    if not isinstance(body, dict) or body.get("name") != field:
         raise ValueError("typed index field readback required")
     configuration = body.get("indexConfig", {})
     if not isinstance(configuration, dict):
@@ -100,17 +121,50 @@ def index_exemption_projection(body):
     indexes = configuration.get("indexes", [])
     if not isinstance(indexes, list):
         raise ValueError("typed index field readback required")
+    uses_ancestor = configuration.get("usesAncestorConfig", False)
+    if uses_ancestor is not True and uses_ancestor is not False:
+        raise ValueError("typed index field readback required")
+    ancestor = configuration.get("ancestorField")
+    if ancestor != DEFAULT_ANCESTOR_FIELD:
+        raise ValueError("index field does not name the default ancestor")
     return {
         "name": body["name"],
         "indexes": indexes,
-        "usesAncestorConfig": bool(configuration.get("usesAncestorConfig", False)),
-        "ancestorField": configuration.get("ancestorField"),
+        "usesAncestorConfig": uses_ancestor,
+        "ancestorField": ancestor,
+    }
+
+
+def index_exemption_projection(body):
+    """Normalize one field readback to the members the exemption is judged on.
+
+    The exemption holds when the group has no index of its own, does not
+    inherit the default, and names the default as its ancestor.
+    """
+    return _field_readback(body)
+
+
+def index_restored_projection(body):
+    """Normalize one field readback to the members the restore is judged on.
+
+    Restored means the group inherits the default again and names it. The
+    inherited index list is whatever the project's default is at the time; it
+    is recorded by the restore evidence, not judged here.
+    """
+    readback = _field_readback(body)
+    return {
+        key: readback[key] for key in ("name", "usesAncestorConfig", "ancestorField")
     }
 
 
 def expected_index_exemption_digest() -> str:
     """The digest of the after state the permission binds and the run requires."""
     return digest(EXPECTED_INDEX_EXEMPTION_PROJECTION)
+
+
+def expected_index_restored_digest() -> str:
+    """The digest of the before state the restore evidence must show."""
+    return digest(EXPECTED_INDEX_RESTORED_PROJECTION)
 
 
 def verify_index_exemption(body, permission):
@@ -123,6 +177,19 @@ def verify_index_exemption(body, permission):
     ):
         raise ValueError("index exemption differs from the declared after state")
     return {"slot": INDEX_EXEMPTION_SLOT, "bodyDigest": digest(body), "body": body}
+
+
+def verify_index_restored(body):
+    """The exempt group must inherit the default again, and say so."""
+    projection = index_restored_projection(body)
+    if projection != EXPECTED_INDEX_RESTORED_PROJECTION:
+        raise ValueError("index field is not restored to the inherited default")
+    return {
+        "projection": projection,
+        "projectionDigest": digest(projection),
+        "inheritedIndexes": _field_readback(body)["indexes"],
+        "bodyDigest": digest(body),
+    }
 
 
 def validate_frozen_baselines(permission):

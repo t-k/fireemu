@@ -265,6 +265,20 @@ class RulesManagementSession:
             or [entry.get("id") for entry in management.get("recovery", [])] != list(RULES_MANAGEMENT_RECOVERY)
         ):
             raise ValueError("Rules management Gate plan binding differs")
+        state = ledger.snapshot()
+        reservation = ticket.get("reservation")
+        row = state.get("reservations", {}).get(reservation)
+        claim = row.get("claim") if isinstance(row, dict) else None
+        if (
+            ticket.get("ledgerPath") != str(ledger.path)
+            or not isinstance(claim, dict)
+            or claim.get("campaignId") != CAMPAIGN
+            or claim.get("nonceDigest") != digest(plan.get("nonce"))
+            or claim.get("manifestDigest") != digest(plan)
+            or claim.get("gatePath") != str(gate.path.resolve())
+            or claim.get("gatePlanDigest") != digest(gate_plan)
+        ):
+            raise ValueError("Rules management Ledger claim binding differs")
         self.gate = gate
         self.ledger = ledger
         self.ticket = ticket
@@ -299,11 +313,16 @@ class RulesManagementSession:
         receipt = self.gate.management_dispatch(phase, slot, send)
         if not isinstance(receipt, dict) or receipt.get("complete") is not True or receipt.get("workerReaped") is not True:
             raise ValueError("Rules management slot incomplete")
-        if not isinstance(receipt.get("status"), int) or not (200 <= receipt["status"] < 300 or receipt["status"] in allow_status):
+        status = receipt.get("status")
+        if not isinstance(status, int) or not (200 <= status < 300 or status in allow_status):
             raise ValueError("Rules management HTTP failure")
         body = receipt.get("body")
         if not isinstance(body, dict):
             raise ValueError("Rules management JSON body required")
+        if status in allow_status:
+            error = body.get("error")
+            if status != 404 or not isinstance(error, dict) or error.get("code") != 404:
+                raise ValueError("typed Ruleset absence required")
         return body
 
     @staticmethod

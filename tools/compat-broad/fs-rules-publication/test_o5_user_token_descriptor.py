@@ -8,8 +8,11 @@ the members that would reach a wire are left refusing.
 from __future__ import annotations
 
 import hashlib
+import http.server
 import json
+import socketserver
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -23,6 +26,7 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad/production-admission"))
 sys.path.insert(0, str(HERE))
 
 import o5_user_token_descriptor as lane
+import o5_user_token_remote_transport as remote
 import o8_admission
 from broad_contract import digest
 from o5_user_token_campaign import (
@@ -394,37 +398,72 @@ def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_l
     data = Transport(plan, endpoint="firestore.googleapis.com:443", fingerprints={ref: value["uidFingerprint"] for ref, value in acquisition["principals"].items()})
     names = {"A": "projects/fireemu-35fe6/rulesets/server-a", "B": "projects/fireemu-35fe6/rulesets/server-b"}
     baseline = "projects/fireemu-35fe6/rulesets/pre-existing"
-    active = baseline
-    wire = 0
+    class Handler(http.server.BaseHTTPRequestHandler):
+        active = baseline
+        deleted: set[str] = set()
+        def do_any(self):
+            size = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(size) or b"{}")
+            path = self.path
+            status = 200
+            if path.endswith(":getExecutable"):
+                payload = {"rulesetName": self.__class__.active}
+            elif path.endswith("/releases/cloud.firestore"):
+                if self.command == "PATCH":
+                    self.__class__.active = body["release"]["rulesetName"]
+                payload = {"name": "projects/fireemu-35fe6/releases/cloud.firestore", "rulesetName": self.__class__.active}
+            elif path == "/v1/projects/fireemu-35fe6/rulesets" and self.command == "POST":
+                label = "A" if body["source"]["files"][0]["content"] == plan["rulesets"]["A"]["source"] else "B"
+                payload = {"name": names[label]}
+            elif "/rulesets/" in path:
+                name = "projects/fireemu-35fe6/" + path.split("/v1/projects/fireemu-35fe6/", 1)[1]
+                if name in self.__class__.deleted:
+                    status, payload = 404, {"error": {"code": 404}}
+                elif self.command == "DELETE":
+                    self.__class__.deleted.add(name)
+                    payload = {}
+                else:
+                    label = "A" if name == names["A"] else "B"
+                    payload = {"name": name, "source": {"files": [{"name": "firestore.rules", "content": plan["rulesets"][label]["source"]}]}}
+            else:
+                status, payload = 404, {"error": {"code": 404}}
+            raw = json.dumps(payload, separators=(",", ":")).encode()
+            self.send_response(status); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
+        do_GET = do_any; do_POST = do_any; do_PATCH = do_any; do_DELETE = do_any
+        def log_message(self, *_args):
+            return
 
+    server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    source, source_digest = remote.worker_binding()
+    origin = f"http://127.0.0.1:{server.server_address[1]}"
     def execute(operation, **_kwargs):
-        nonlocal active, wire
         if operation.get("kind") != "rules-lifecycle":
-            wire += 1
             return data(operation)
-        action = operation["action"]
-        if action in {"release-get", "release-get-executable"}:
-            body = {"name": operation["releaseName"], "rulesetName": active} if action == "release-get" else {"rulesetName": active}
-            return {"status": 200, "body": body}
-        if action == "create":
-            return {"status": 200, "body": {"name": names[operation["label"]]}}
-        if action == "get":
-            if operation["rulesetName"] not in names.values():
-                return {"status": 200, "body": {"name": operation["rulesetName"], "source": {"files": [{"name": "firestore.rules", "content": plan["rulesets"]["A"]["source"]}]}}}
-            label = "A" if operation["rulesetName"] == names["A"] else "B"
-            return {"status": 200, "body": {"name": operation["rulesetName"], "source": {"files": [{"name": "firestore.rules", "content": plan["rulesets"][label]["source"]}]}}}
-        if action == "release-patch":
-            active = operation["rulesetName"]
-            return {"status": 200, "body": {"name": operation["releaseName"], "rulesetName": active}}
-        if action == "delete":
-            return {"status": 200, "body": {}}
-        raise AssertionError(action)
+        prepared = remote.prepare_request(plan, operation, credentials={"administrator": "fixture-admin"})
+        envelope = {key: prepared[key] for key in ("service", "route", "method", "path", "headers", "body")}; envelope["seconds"] = 8.0
+        result = remote.run_worker(envelope, binding=source, binding_digest=source_digest, fixture_origin=origin)
+        return {"status": result["status"], "body": result["body"]}
 
+    assert gate.snapshot()["managementUsed"] == []
+    wrong_ticket = dict(ticket)
+    wrong_ticket["reservation"] = "foreign-reservation"
+    with pytest.raises(ValueError, match="Ledger claim binding"):
+        RulesManagementSession(gate=gate, ledger=ledger, ticket=wrong_ticket, execute=execute, plan=plan)
+    wrong_plan = json.loads(json.dumps(plan))
+    wrong_plan["nonce"] = "b" * 32
+    with pytest.raises(ValueError, match="Ledger claim binding"):
+        RulesManagementSession(gate=gate, ledger=ledger, ticket=ticket, execute=execute, plan=wrong_plan)
+    assert gate.snapshot()["managementUsed"] == []
     session = RulesManagementSession(gate=gate, ledger=ledger, ticket=ticket, execute=execute, plan=plan)
-    bundle = lane.collector(plan, execute, run_id="real-o5", acquisition=acquisition, management_session=session)
-    assert bundle["recordingComplete"] is True, (bundle["abort"], bundle["infrastructureFailures"], bundle["transport"].get("rulesManagement"))
-    assert bundle["transport"]["rulesManagement"]["recovery"]["restored"] is True
-    assert len(gate.snapshot()["managementUsed"]) == 23
+    try:
+        bundle = lane.collector(plan, execute, run_id="real-o5", acquisition=acquisition, management_session=session)
+        assert bundle["recordingComplete"] is True, (bundle["abort"], bundle["infrastructureFailures"], bundle["transport"].get("rulesManagement"))
+        assert bundle["transport"]["rulesManagement"]["recovery"]["restored"] is True
+        assert len(gate.snapshot()["managementUsed"]) == 23
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_a_local_shadow_bundle_fails_closed_as_production_evidence() -> None:

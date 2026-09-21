@@ -275,7 +275,7 @@ def _gate_and_ledger(tmp_path, scheduled):
     plan = {"contract": "shared-local-v2", "nonce": NONCE, "wallSeconds": 300,
             "recoverySeconds": 120, "observationRequests": 1, "requestCostMicrousd": 1,
             "costMicrousd": 20, "intervalSeconds": 0.25, "jobs": {"wire": job}}
-    claim = {"campaignId": "wire-local-only", "gateJob": "wire", "manifestDigest": digest("wire-local-only"),
+    claim = {"campaignId": "FS-DATA-WRITE-LIMITS-02", "gateJob": "wire", "manifestDigest": digest("wire-local-only"),
              "nonceDigest": digest(NONCE), "gatePath": str((tmp_path / "gate").resolve()),
              "gatePlanDigest": digest(plan), "locks": [{"key": "project/p/firestore/(default)/documents/campaign", "mode": "WRITE"}],
              "budget": {"requests": 4, "accounts": 0, "resources": 1, "costMicrousd": 20}, "durationSeconds": 300}

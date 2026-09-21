@@ -106,7 +106,7 @@ def reservation(tmp_path, plan, requests=25):
         "scopes": [scope],
     }
     claim = {
-        "campaignId": plan["nonce"],
+        "campaignId": "FS-WRITE-TXN-PRECEDENCE-01",
         "manifestDigest": digest(plan),
         "nonceDigest": digest(plan["nonce"]),
         "gatePath": str((tmp_path / "gate").resolve()),

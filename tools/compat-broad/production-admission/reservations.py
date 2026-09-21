@@ -34,6 +34,38 @@ from shared_gate import (
 )
 
 DIMENSIONS = {"requests", "accounts", "resources", "costMicrousd"}
+# The owner's US$10 is per production observation task, identified by the
+# claim's campaignId, and never cumulative across the program. Every earlier
+# reservation of the task counts whatever state it reached, because an
+# allocation is never refunded.
+TASK_CAP_MICROUSD = 10_000_000
+TASK_BUDGET_REFUSAL = "task-budget-exceeded:"
+# The closed set of production observation tasks that budget is authorized
+# for: the stable campaign id each lane declares, without attempt or version
+# suffixes (the write-txn stream lane's v2..v9 records are re-checks of the
+# one task). A claim naming anything else (a nonce, a fixture label, a
+# versioned id) is refused at reservation time, so an attempt cannot earn
+# itself a fresh US$10 by renaming its task. Rows already in a ledger are
+# not re-validated against this set: a reservation is history once written.
+CATALOGUED_CAMPAIGN_IDS = frozenset(
+    {
+        "AUTH-ACTION-OOB-DELIVERY-BOUNDARY-01",
+        "AUTH-CREDENTIAL-TOKENS-01",
+        "AUTH-MFA-AGE-TOTP-01",
+        "AUTH-MFA-TOTP-ENROLL-RETRY-01",
+        "FS-CONFIG-LIFECYCLE-01",
+        "FS-DATA-QUERY-IN-BOUNDARY-04",
+        "FS-DATA-WRITE-COMMIT-TRANSFORMS-03",
+        "FS-DATA-WRITE-LIMITS-02",
+        "FS-LIMIT-API-REQUEST-BYTES",
+        "FS-QUERY-PARTITION-CURSOR-04",
+        "FS-RULES-PUBLICATION-USER-TOKEN-01",
+        "FS-RULES-USER-TOKEN-MATRIX-01",
+        "FS-TRANSACTION-EXPIRY-RETRY-04",
+        "FS-WRITE-LIMITS-03",
+        "FS-WRITE-TXN-PRECEDENCE-01",
+    }
+)
 GENERATION_FIELDS = {"sourceCommit", "collectorSourceDigest", "sourceDigests"}
 MAX_GENERATION_SOURCES = 64
 # The source closure of the reservations written before a reservation recorded
@@ -110,6 +142,39 @@ ATTESTATION_FIELDS = {
 MAX_ATTESTATION_SECONDS = 86400
 DEFAULT_RECEIPT_KIND = "commit-acquisition-receipt-v2"
 DEFAULT_CREDENTIAL_SLOTS = ("refresh", "tokeninfo")
+# The closed set of no-data receipt shapes. The Gate plan names the receipt
+# kind its campaign publishes (`gatePlanDigest` binds that name to the claim),
+# and the kind selects which evidence contract the receipt is held to. A kind
+# outside this map has no retirement contract and is refused: an unfamiliar
+# shape is never read as "close enough" to one of these.
+COMMIT_NO_DATA_SCHEMA = "commit-credential-slots-v1"
+REQUEST_BYTES_NO_DATA_SCHEMA = "request-bytes-management-attestation-v1"
+REQUEST_BYTES_RECEIPT_KIND = "request-bytes-acquisition-receipt-v1"
+# The transaction-expiry lane projects its receipt onto the Commit vocabulary
+# (credential slot items, management slot ids in `metadata`) under a kind of
+# its own, so it is held to the Commit contract by name, not by resemblance.
+TXN_EXPIRY_RECEIPT_KIND = "txn-expiry-acquisition-receipt-v1"
+NO_DATA_RECEIPT_SCHEMAS = {
+    DEFAULT_RECEIPT_KIND: COMMIT_NO_DATA_SCHEMA,
+    TXN_EXPIRY_RECEIPT_KIND: COMMIT_NO_DATA_SCHEMA,
+    REQUEST_BYTES_RECEIPT_KIND: REQUEST_BYTES_NO_DATA_SCHEMA,
+}
+TOKEN_ATTESTATION_KIND = "request-byte-token-attestation-v1"
+TOKEN_ATTESTATION_FIELDS = {
+    "kind",
+    "principalDigest",
+    "requiredScopeVerified",
+    "identityMode",
+    "identityVerified",
+    "oauthClientVerified",
+    "expiresInSeconds",
+    "remainingSecondsAtVerification",
+    "requiredSeconds",
+    "complete",
+    "workerReaped",
+}
+MANAGEMENT_ROW_FIELDS = {"id", "response", "responseDigest"}
+ROUTE_ROW_FIELDS = {"id", "route", "status", "responseDigest"}
 
 
 def _gate_plan(gate):
@@ -157,6 +222,140 @@ def _credential_slots(gate):
 def _receipt_kind(gate):
     declared = _gate_plan(gate).get("receiptKind")
     return declared if isinstance(declared, str) and declared else DEFAULT_RECEIPT_KIND
+
+
+def _no_data_schema(gate):
+    """The evidence contract the reserving plan's receipt kind selects, or None."""
+    return NO_DATA_RECEIPT_SCHEMAS.get(_receipt_kind(gate))
+
+
+def _commit_no_data_receipt(receipt, gate):
+    """The Commit acquisition shape: credential slot items, management ids in `metadata`.
+
+    Unchanged from the contract the recorded `aborted-no-data` rows validated
+    under: two verified credential slots, then a prefix of the four privileged
+    metadata observations, every one answered 200.
+    """
+    return (
+        receipt.get("productionExecuted") is False
+        and receipt.get("collection", object()) is None
+        and [item.get("slot") for item in receipt.get("credentialEvidence", [])]
+        == _credential_slots(gate)
+        and not any(
+            item.get("workerReaped") is not True
+            or item.get("complete") is not True
+            or item.get("verified") is not True
+            or item.get("status") != 200
+            for item in receipt["credentialEvidence"]
+        )
+        and _preflight_stop(receipt, gate) is not None
+        and not any(item.get("status") != 200 for item in receipt["metadata"])
+    )
+
+
+def _request_bytes_no_data_receipt(receipt, gate):
+    """The request-byte acquisition shape, bound row by row to the Gate journals.
+
+    This campaign publishes no `slot`/`verified` credential items. Its receipt
+    carries the charged management slots as `managementEvidence` rows, one per
+    entry of the Gate's `managementUsed`, each holding the bounded response the
+    Gate charged and digested; `credentialEvidence` holds the token attestation
+    body of every credential slot that completed; and `metadata` is the data
+    route journal, one row per Gate data event. A stop can fall before the
+    first management slot, inside the management sequence, or during the
+    non-creating ownership reads: each leaves a prefix of the declared
+    observation slots, and the receipt must reproduce exactly that prefix.
+
+    Nothing here decides whether data was written; `_no_data_gate` and the
+    Gate's own `abort_no_data` do, from the journal. What this proves is that
+    the receipt presented is the one this Gate produced.
+    """
+    management = _gate_plan(gate).get("management")
+    management = management if isinstance(management, dict) else {}
+    declared = [
+        "observation:" + item["id"]
+        for item in management.get("observation", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    ]
+    credential_ids = management.get("credentialIds")
+    if not isinstance(credential_ids, list) or not all(
+        isinstance(name, str) for name in credential_ids
+    ):
+        return False
+    credentials = ["observation:" + name for name in credential_ids]
+    used = gate.get("managementUsed")
+    events = gate.get("managementEvents")
+    rows = receipt.get("managementEvidence")
+    attestations = receipt.get("credentialEvidence")
+    routes = receipt.get("metadata")
+    if (
+        not isinstance(used, list)
+        or not isinstance(events, list)
+        or not isinstance(rows, list)
+        or not isinstance(attestations, list)
+        or not isinstance(routes, list)
+        or used != declared[: len(used)]
+        or [event.get("id") for event in events] != used
+        or [row.get("id") if isinstance(row, dict) else None for row in rows] != used
+        or receipt.get("mayHaveCreated") is not False
+        or receipt.get("preflightComplete") not in (True, False)
+        or receipt.get("postflightComplete") is not False
+        or receipt.get("routeDigest") != digest(routes)
+    ):
+        return False
+    completed_credentials = []
+    for row, event in zip(rows, events, strict=True):
+        response = row.get("response") if isinstance(row, dict) else None
+        if (
+            set(row) != MANAGEMENT_ROW_FIELDS
+            or not isinstance(response, dict)
+            or row.get("responseDigest") != digest(response)
+            or event.get("responseDigest") != row["responseDigest"]
+            or event.get("bodyDigest") != digest(response.get("body"))
+            or event.get("status") != response.get("status")
+        ):
+            return False
+        if row["id"] in credentials and response.get("complete") is True:
+            body = response.get("body")
+            if (
+                not isinstance(body, dict)
+                or set(body) != TOKEN_ATTESTATION_FIELDS
+                or body["kind"] != TOKEN_ATTESTATION_KIND
+                or event.get("completed") is not True
+            ):
+                return False
+            completed_credentials.append(body)
+    if attestations != completed_credentials:
+        return False
+    # The data route journal must be the Gate's data journal, event for event:
+    # a row per event, in order, on the same route digest and status. The
+    # events themselves are non-creating by `_no_data_gate`; here only their
+    # identity with the receipt is checked.
+    data_events = gate.get("events")
+    if (
+        not isinstance(data_events, list)
+        or len(routes) != len(data_events)
+        or receipt.get("productionExecuted") is not bool(routes)
+        or (receipt.get("collection") is None) is not (routes == [])
+    ):
+        return False
+    for route, event in zip(routes, data_events, strict=True):
+        if (
+            not isinstance(route, dict)
+            or set(route) != ROUTE_ROW_FIELDS
+            or not isinstance(route["id"], str)
+            or re.fullmatch(r"observation:[0-9]{3}", route["id"]) is None
+            or event.get("phase") != "observation"
+        ):
+            return False
+        if event.get("completed") is True and (
+            route["status"] != event.get("status")
+            or route["responseDigest"] != event.get("responseDigest")
+        ):
+            return False
+        if event.get("completed") is not True and route["status"] is not None:
+            return False
+    return True
 
 
 def _preflight_stop(receipt, gate):
@@ -292,6 +491,50 @@ def _generation(value):
         raise ValueError("bounded acquisition source closure required")
     for name in sorted(sources):
         _hash(sources[name])
+
+
+def task_spent_microusd(ledger_state, campaign_id):
+    """Micro-USD already allocated to one task, across every reservation state."""
+    if not isinstance(ledger_state, dict) or not isinstance(campaign_id, str):
+        raise ValueError("ledger state and campaign id required")  # noqa: TRY004 -- refusal class, not a type report
+    total = 0
+    for row in ledger_state.get("reservations", {}).values():
+        claim = row.get("claim") if isinstance(row, dict) else None
+        if not isinstance(claim, dict) or claim.get("campaignId") != campaign_id:
+            continue
+        cost = claim.get("budget", {}).get("costMicrousd")
+        if type(cost) is not int or cost < 0:
+            raise ValueError("closed integer budget required")
+        total += cost
+    return total
+
+
+def task_budget_check(
+    ledger_state, campaign_id, new_cost_microusd, cap_microusd=TASK_CAP_MICROUSD
+):
+    """Refuse a claim that would take one task past its cap.
+
+    Returns the task's projected total when admitted. The sum is over every
+    reservation whose claim names the task, in every state, plus the new
+    claim; the refusal names the task so the operator knows which US$10 is
+    exhausted. Preparation, failed attempts, retries, re-checks after a fix
+    and recovery of one task all land here; independent tasks each have
+    their own cap, and the program-wide total is never a stop condition.
+    """
+    if (
+        type(new_cost_microusd) is not int
+        or new_cost_microusd < 0
+        or type(cap_microusd) is not int
+        or cap_microusd <= 0
+    ):
+        raise ValueError("closed integer task budget required")
+    projected = task_spent_microusd(ledger_state, campaign_id) + new_cost_microusd
+    if projected > cap_microusd:
+        raise ValueError(
+            f"{TASK_BUDGET_REFUSAL}{campaign_id} "
+            f"({projected} > {cap_microusd} micro-USD)"
+        )
+    return projected
 
 
 def _scope(lock):
@@ -527,6 +770,8 @@ class Ledger:
             _number(now)
         _envelope(envelope)
         _claim(claim)
+        if claim["campaignId"] not in CATALOGUED_CAMPAIGN_IDS:
+            raise ValueError(f"uncatalogued campaign id: {claim['campaignId']}")
         if generation is not None:
             _generation(generation)
         if (
@@ -614,6 +859,11 @@ class Ledger:
                 >= envelope["concurrency"]
             ):
                 raise ValueError("envelope concurrency exhausted")
+            # The owner's US$10 is per observation task, and every earlier
+            # reservation of the task counts whatever state it reached.
+            task_budget_check(
+                state, claim["campaignId"], claim["budget"]["costMicrousd"]
+            )
             allocated = {
                 k: sum(
                     r["claim"]["budget"][k] for r in rows if r["envelopeDigest"] == key
@@ -1044,6 +1294,10 @@ class Ledger:
                 # The same check `finish` makes: a claim naming a job the Gate
                 # never hosted is a binding error, not a retirement.
                 raise ValueError("registered Gate job is absent")
+            # The reserving plan's receipt kind selects the evidence contract.
+            # A receipt of another kind, or of a kind with no contract, binds
+            # nothing.
+            schema = _no_data_schema(gate_snapshot)
             if (
                 record["planDigest"] != claim["gatePlanDigest"]
                 or gate_snapshot.get("planDigest") != claim["gatePlanDigest"]
@@ -1053,23 +1307,20 @@ class Ledger:
                 or receipt.get("planDigest") != record["planDigest"]
                 or receipt.get("reservationStateAtPublication") != "held"
                 or receipt.get("executionKind") != "fixed-production-wire"
-                or receipt.get("productionExecuted") is not False
-                or receipt.get("collection", object()) is not None
                 or receipt.get("releaseEligible") is not False
                 or not isinstance(receipt.get("failure"), str)
                 or not receipt["failure"]
                 or receipt.get("chargedCalls") != gate_snapshot.get("total")
-                or [item.get("slot") for item in receipt.get("credentialEvidence", [])]
-                != _credential_slots(gate_snapshot)
-                or any(
-                    item.get("workerReaped") is not True
-                    or item.get("complete") is not True
-                    or item.get("verified") is not True
-                    or item.get("status") != 200
-                    for item in receipt["credentialEvidence"]
+                or (
+                    receipt.get("gateDigest") is not None
+                    and receipt["gateDigest"] != record["gateDigest"]
                 )
-                or _preflight_stop(receipt, gate_snapshot) is None
-                or any(item.get("status") != 200 for item in receipt["metadata"])
+                or schema is None
+                or not (
+                    _commit_no_data_receipt(receipt, gate_snapshot)
+                    if schema == COMMIT_NO_DATA_SCHEMA
+                    else _request_bytes_no_data_receipt(receipt, gate_snapshot)
+                )
                 or not _no_data_gate(gate_snapshot)
                 or gate_snapshot["total"] > claim["budget"]["requests"]
                 or gate_snapshot["costMicrousd"] > claim["budget"]["costMicrousd"]

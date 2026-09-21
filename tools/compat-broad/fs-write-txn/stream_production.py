@@ -1102,7 +1102,7 @@ def reserve_execution(value, output, ledger):
         "scopes": locks,
     }
     claim = {
-        "campaignId": plan["nonce"],
+        "campaignId": "FS-WRITE-TXN-PRECEDENCE-01",
         "manifestDigest": digest(value["manifest"]),
         "nonceDigest": digest(plan["nonce"]),
         "gatePath": str(output / "gate"),

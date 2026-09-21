@@ -36,7 +36,7 @@ def setup(tmp_path, *, ledger=None, nonce="d" * 32):
         "scopes": [{"key": "project/fireemu-35fe6", "mode": "EXCLUSIVE"}],
     }
     claim = {
-        "campaignId": "limits",
+        "campaignId": "FS-DATA-WRITE-LIMITS-02",
         "manifestDigest": digest(plan),
         "nonceDigest": digest(nonce),
         "gatePath": str((tmp_path / "gate").resolve()),

@@ -4,6 +4,7 @@
 import multiprocessing
 import json
 import os
+import re
 from types import SimpleNamespace
 import threading
 import time
@@ -12,6 +13,7 @@ from urllib.parse import quote
 
 import pytest
 from reservations import (
+    CATALOGUED_CAMPAIGN_IDS,
     COMMIT_COLLECTOR_SOURCE_DIGEST,
     COMMIT_SOURCE_COMMIT,
     COMMIT_SOURCE_DIGESTS,
@@ -73,6 +75,14 @@ def plan(label="a"):
     }
 
 
+# Fixture labels stand for catalogued tasks: `reserve` refuses any other id.
+TASKS = {
+    "a": "FS-DATA-WRITE-LIMITS-02",
+    "b": "FS-DATA-WRITE-COMMIT-TRANSFORMS-03",
+    "c": "FS-LIMIT-API-REQUEST-BYTES",
+}
+
+
 def claim(tmp_path, label, locks=None):
     owned = {
         "key": f"project/p/firestore/(default)/documents/owned/{label}",
@@ -82,7 +92,7 @@ def claim(tmp_path, label, locks=None):
     if owned not in locks:
         locks.append(owned)
     return {
-        "campaignId": label,
+        "campaignId": TASKS[label],
         "manifestDigest": digest(label),
         "nonceDigest": digest(plan(label)["nonce"]),
         "gatePath": str((tmp_path / label).resolve()),
@@ -233,7 +243,9 @@ CREDENTIAL_SLOTS = ("oauth-refresh", "oauth-tokeninfo")
 PREFLIGHT = ("project", "database", "auth", "key")
 
 
-def _no_data_attempt(tmp_path, source_generation=None, stop=2, mode="decision"):
+def _no_data_attempt(
+    tmp_path, source_generation=None, stop=2, mode="decision", kind=None
+):
     """One failed attempt that stopped at preflight slot `stop` with no data sent.
 
     `mode` is "decision" when the request was sent and its evidence appended
@@ -257,6 +269,8 @@ def _no_data_attempt(tmp_path, source_generation=None, stop=2, mode="decision"):
         ],
         "recovery": [],
     }
+    if kind is not None:
+        frozen["receiptKind"] = kind
     used = [f"observation:{name}" for name in (*CREDENTIAL_SLOTS, *PREFLIGHT[:stop])]
     observed = PREFLIGHT[: stop if mode == "decision" else stop - 1]
     first["gatePlanDigest"] = digest(frozen)
@@ -280,7 +294,7 @@ def _no_data_attempt(tmp_path, source_generation=None, stop=2, mode="decision"):
         _save(gate.path, state)
     snapshot = gate.snapshot()
     receipt = {
-        "kind": "commit-acquisition-receipt-v2",
+        "kind": "commit-acquisition-receipt-v2" if kind is None else kind,
         "ticket": ticket,
         "planDigest": first["gatePlanDigest"],
         "claimDigest": ticket["claimDigest"],
@@ -1189,6 +1203,129 @@ CAMPAIGN_PROBES = ("p1", "p2", "p3")
 CAMPAIGN_RECEIPT_KIND = "request-bytes-acquisition-receipt-v1"
 
 
+def token_attestation():
+    """The public body the request-byte lane publishes for a verified token."""
+    return {
+        "kind": "request-byte-token-attestation-v1",
+        "principalDigest": digest("principal"),
+        "requiredScopeVerified": True,
+        "identityMode": "subject",
+        "identityVerified": True,
+        "oauthClientVerified": True,
+        "expiresInSeconds": 3600,
+        "remainingSecondsAtVerification": 3599.0,
+        "requiredSeconds": 600,
+        "complete": True,
+        "workerReaped": True,
+    }
+
+
+def management_response(identity, *, complete=True, transport=True):
+    """One bounded management receipt as the Gate charges and digests it."""
+    if not transport:
+        return {
+            "status": None,
+            "complete": False,
+            "workerReaped": True,
+            "bodyKind": None,
+            "body": None,
+        }
+    slot = identity.split(":", 1)[1]
+    if slot in CAMPAIGN_CREDENTIALS:
+        body = token_attestation() if complete else None
+    else:
+        body = {
+            "kind": "request-byte-metadata-attestation-v1",
+            "slot": slot,
+            "bodyDigest": digest(slot),
+            "baselineVerified": complete,
+        }
+    return {
+        "status": 200,
+        "complete": complete,
+        "workerReaped": True,
+        "bodyKind": "json",
+        "body": body,
+    }
+
+
+def charge_management(state, responses):
+    """Record charged management slots on a Gate state the way `management_dispatch` does."""
+    state["managementUsed"] = [identity for identity, _ in responses]
+    state["managementEvents"] = [
+        {
+            "id": identity,
+            "started": index,
+            "durationReserved": 12,
+            "status": response["status"],
+            "complete": response["complete"],
+            "workerReaped": response["workerReaped"],
+            "bodyKind": response["bodyKind"],
+            "responseDigest": digest(response),
+            "bodyDigest": digest(response["body"]),
+            "completed": bool(response["complete"] and response["workerReaped"]),
+        }
+        for index, (identity, response) in enumerate(responses)
+    ]
+    state["total"] += len(responses)
+    state["observation"] += len(responses)
+    state["costMicrousd"] += len(responses)
+
+
+def request_bytes_receipt(snapshot, ticket, plan_digest, responses, **overrides):
+    """A receipt in the shape `request_bytes_production.execute` persists."""
+    rows = [
+        {"id": identity, "response": response, "responseDigest": digest(response)}
+        for identity, response in responses
+    ]
+    credentials = [
+        response["body"]
+        for identity, response in responses
+        if identity.split(":", 1)[1] in CAMPAIGN_CREDENTIALS
+        and response["complete"] is True
+    ]
+    routes = [
+        {
+            "id": f"observation:{index:03d}",
+            "route": "/v1/"
+            + snapshot["plan"]["jobs"][event["job"]]["observation"][event["index"]][
+                "path"
+            ].removeprefix("/v1/"),
+            "status": event.get("status") if event.get("completed") else None,
+            "responseDigest": event.get("responseDigest", digest(None))
+            if event.get("completed")
+            else digest({"failure": event.get("failure")}),
+        }
+        for index, event in enumerate(snapshot["events"])
+    ]
+    receipt = {
+        "kind": CAMPAIGN_RECEIPT_KIND,
+        "ticket": ticket,
+        "planDigest": plan_digest,
+        "claimDigest": ticket["claimDigest"],
+        "gateDigest": digest(snapshot),
+        "chargedCalls": snapshot["total"],
+        "collection": None
+        if not routes
+        else {"rowCount": len(routes), "recoveryRowCount": 0, "completed": False},
+        "productionExecuted": bool(routes),
+        "mayHaveCreated": False,
+        "preflightComplete": len(responses)
+        == len(CAMPAIGN_CREDENTIALS) + len(CAMPAIGN_PREFLIGHT),
+        "postflightComplete": False,
+        "failure": "ValueError",
+        "releaseEligible": False,
+        "reservationStateAtPublication": "held",
+        "executionKind": "fixed-production-wire",
+        "metadata": routes,
+        "routeDigest": digest(routes),
+        "managementEvidence": rows,
+        "credentialEvidence": credentials,
+    }
+    receipt.update(overrides)
+    return receipt
+
+
 def campaign_plan(tmp_path):
     op = lambda key: {
         "service": "firestore",
@@ -1264,19 +1401,25 @@ def _campaign_attempt(tmp_path, *, stop=1, mode="decision", dispatched=False):
         f"observation:{name}"
         for name in (*CAMPAIGN_CREDENTIALS, *CAMPAIGN_PREFLIGHT[:stop])
     ]
-    observed = CAMPAIGN_PREFLIGHT[: stop if mode == "decision" else stop - 1]
+    # A slot is charged before its evidence is appended: a "decision" stop is
+    # a slot whose transport answered and whose baseline comparison failed, a
+    # "transport" stop is a slot the worker never answered.
+    responses = [
+        (
+            identity,
+            management_response(
+                identity,
+                complete=index < len(used) - 1,
+                transport=mode == "decision" or index < len(used) - 1,
+            ),
+        )
+        for index, identity in enumerate(used)
+    ]
     with gate.locked() as state:
         state["coordinatorPid"] = _stopped_pid()
         for probe in CAMPAIGN_PROBES:
             state["jobs"][probe]["pid"] = state["coordinatorPid"]
-        state["total"] = len(used)
-        state["observation"] = len(used)
-        state["costMicrousd"] = len(used)
-        state["managementUsed"] = used
-        state["managementEvents"] = [
-            {"id": item, "started": index, "durationReserved": 12}
-            for index, item in enumerate(used)
-        ]
+        charge_management(state, responses)
         if dispatched:
             # The transport-deadline stop: a probe Commit was sent and its
             # outcome is unknown, so no evidence can prove that no data exists.
@@ -1286,30 +1429,9 @@ def _campaign_attempt(tmp_path, *, stop=1, mode="decision", dispatched=False):
             state["observation"] += 1
         _save(gate.path, state)
     snapshot = gate.snapshot()
-    receipt = {
-        "kind": CAMPAIGN_RECEIPT_KIND,
-        "ticket": ticket,
-        "planDigest": first["gatePlanDigest"],
-        "claimDigest": ticket["claimDigest"],
-        "gate": snapshot,
-        "chargedCalls": snapshot["total"],
-        "collection": None,
-        "productionExecuted": False,
-        "failure": "ValueError",
-        "releaseEligible": False,
-        "reservationStateAtPublication": "held",
-        "executionKind": "fixed-production-wire",
-        "metadata": [{"id": f"observation:{name}", "status": 200} for name in observed],
-        "credentialEvidence": [
-            {
-                "slot": "bearer",
-                "workerReaped": True,
-                "complete": True,
-                "verified": True,
-                "status": 200,
-            }
-        ],
-    }
+    receipt = request_bytes_receipt(
+        snapshot, ticket, first["gatePlanDigest"], responses, gate=snapshot
+    )
     path = tmp_path / "a" / "receipt.json"
     path.write_text(json.dumps(receipt))
     record = {
@@ -1361,11 +1483,18 @@ def test_a_second_campaign_receipt_must_carry_its_own_declared_kind(tmp_path):
 
 
 def test_a_second_campaign_credential_slot_set_is_its_own(tmp_path):
+    """Commit-shaped credential items do not satisfy the request-byte contract."""
     ledger, _gate, ticket, record = _campaign_attempt(tmp_path)
     receipt_path = Path(record["receiptPath"])
     receipt = json.loads(receipt_path.read_text())
     receipt["credentialEvidence"] = [
-        {**receipt["credentialEvidence"][0], "slot": slot}
+        {
+            "slot": slot,
+            "workerReaped": True,
+            "complete": True,
+            "verified": True,
+            "status": 200,
+        }
         for slot in ("refresh", "tokeninfo")
     ]
     receipt_path.write_text(json.dumps(receipt))
@@ -1377,21 +1506,19 @@ def test_a_second_campaign_credential_slot_set_is_its_own(tmp_path):
 def test_management_outside_the_declared_campaign_prefix_is_refused(tmp_path):
     ledger, _gate, ticket, record = _campaign_attempt(tmp_path, stop=2)
     gate = Gate(Path(record["receiptPath"]).parent / "gate", CAMPAIGN_PROBES[0])
+    responses = [
+        (identity, management_response(identity))
+        for identity in ("observation:bearer-issue", "observation:owned-scope")
+    ]
     with gate.locked() as state:
-        state["managementUsed"] = [
-            "observation:bearer-issue",
-            "observation:owned-scope",
-        ]
-        state["managementEvents"] = [
-            {"id": item, "started": index, "durationReserved": 12}
-            for index, item in enumerate(state["managementUsed"])
-        ]
+        state["total"] = state["observation"] = state["costMicrousd"] = 0
+        charge_management(state, responses)
         _save(gate.path, state)
     snapshot = gate.snapshot()
     receipt_path = Path(record["receiptPath"])
-    receipt = json.loads(receipt_path.read_text())
-    receipt["gate"] = snapshot
-    receipt["chargedCalls"] = snapshot["total"]
+    receipt = request_bytes_receipt(
+        snapshot, ticket, record["planDigest"], responses, gate=snapshot
+    )
     receipt_path.write_text(json.dumps(receipt))
     with pytest.raises(ValueError, match="no-data attempt"):
         ledger.abort_no_data(
@@ -1411,7 +1538,7 @@ def test_management_outside_the_declared_campaign_prefix_is_refused(tmp_path):
 READONLY_RECEIPT_KIND = "request-bytes-acquisition-receipt-v1"
 
 
-def readonly_plan(creates=False):
+def readonly_plan(creates=False, kind=READONLY_RECEIPT_KIND):
     owned = "projects/p/databases/(default)/documents/owned/a/probe/u01"
     op = {
         "service": "firestore",
@@ -1432,7 +1559,7 @@ def readonly_plan(creates=False):
         "intervalSeconds": 0.25,
         "requestSeconds": 2,
         "jobSlots": 1,
-        "receiptKind": READONLY_RECEIPT_KIND,
+        "receiptKind": kind,
         "collectorSourceDigest": COMMIT_COLLECTOR_SOURCE_DIGEST,
         "management": {
             "observation": [],
@@ -1456,12 +1583,14 @@ def readonly_plan(creates=False):
     }
 
 
-def _readonly_attempt(tmp_path, *, dispatched=0, creates=False):
+def _readonly_attempt(
+    tmp_path, *, dispatched=0, creates=False, kind=READONLY_RECEIPT_KIND
+):
     ledger = Ledger.create(tmp_path / "ledger")
     first = claim(tmp_path, "a")
     first["gatePath"] = str((tmp_path / "a" / "gate").resolve())
     first["gateJob"] = "probe"
-    frozen = readonly_plan(creates)
+    frozen = readonly_plan(creates, kind)
     first["gatePlanDigest"] = digest(frozen)
     first["budget"] = {
         "requests": 60,
@@ -1485,22 +1614,9 @@ def _readonly_attempt(tmp_path, *, dispatched=0, creates=False):
         state["jobs"]["probe"]["pid"] = state["coordinatorPid"]
         _save(gate.path, state)
     snapshot = gate.snapshot()
-    receipt = {
-        "kind": READONLY_RECEIPT_KIND,
-        "ticket": ticket,
-        "planDigest": first["gatePlanDigest"],
-        "claimDigest": ticket["claimDigest"],
-        "gate": snapshot,
-        "chargedCalls": snapshot["total"],
-        "collection": None,
-        "productionExecuted": False,
-        "failure": "ValueError",
-        "releaseEligible": False,
-        "reservationStateAtPublication": "held",
-        "executionKind": "fixed-production-wire",
-        "metadata": [],
-        "credentialEvidence": [],
-    }
+    receipt = request_bytes_receipt(
+        snapshot, ticket, first["gatePlanDigest"], [], gate=snapshot, kind=kind
+    )
     path = tmp_path / "a" / "receipt.json"
     path.write_text(json.dumps(receipt))
     record = {
@@ -1515,6 +1631,50 @@ def _readonly_attempt(tmp_path, *, dispatched=0, creates=False):
         "sourceDigests": COMMIT_SOURCE_DIGESTS,
     }
     return ledger, gate, ticket, record
+
+
+def test_the_txn_expiry_kind_is_held_to_the_commit_contract_by_name(tmp_path):
+    """A lane that projects onto the Commit vocabulary is mapped, not guessed."""
+    ledger, gate, ticket, record = _no_data_attempt(
+        tmp_path, kind="txn-expiry-acquisition-receipt-v1"
+    )
+    ledger.abort_no_data(ticket, record)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        == "aborted-no-data"
+    )
+    assert gate.snapshot()["stopped"] is True
+
+
+def test_a_receipt_kind_outside_the_closed_schema_map_has_no_retirement(tmp_path):
+    """An unfamiliar receipt shape is refused, never read as a known one."""
+    ledger, gate, ticket, record = _readonly_attempt(tmp_path, kind="other-receipt-v9")
+    with pytest.raises(ValueError, match="no-data attempt"):
+        ledger.abort_no_data(ticket, record)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+    assert gate.snapshot()["stopped"] is False
+
+
+def test_the_commit_shape_is_refused_under_the_request_bytes_kind_and_back(tmp_path):
+    """The reserving plan's receipt kind selects the contract; shapes do not mix."""
+    ledger, _gate, ticket, record = _readonly_attempt(tmp_path)
+    receipt_path = Path(record["receiptPath"])
+    receipt = json.loads(receipt_path.read_text())
+    # The Commit lane's contract would accept this: no management, no routes,
+    # nothing executed. The request-byte contract needs its own fields.
+    for key in ("managementEvidence", "mayHaveCreated", "routeDigest"):
+        receipt.pop(key)
+    receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match="no-data attempt"):
+        ledger.abort_no_data(ticket, {**record, "receiptDigest": digest(receipt)})
+    ledger, _gate, ticket, record = _no_data_attempt(tmp_path / "commit")
+    receipt_path = Path(record["receiptPath"])
+    receipt = json.loads(receipt_path.read_text())
+    # And a request-byte-shaped receipt under the Commit kind is refused too.
+    receipt.update(managementEvidence=[], mayHaveCreated=False, credentialEvidence=[])
+    receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match="no-data attempt"):
+        ledger.abort_no_data(ticket, {**record, "receiptDigest": digest(receipt)})
 
 
 def test_a_stop_before_the_schedule_starts_is_retirable(tmp_path):
@@ -1833,22 +1993,14 @@ def test_a_stop_before_any_create_retires_as_no_data(tmp_path):
         _save(gate.path, state)
     snapshot = gate.snapshot()
     assert snapshot["jobs"]["probe"]["stopReason"] == "transport-deadline"
-    receipt = {
-        "kind": READONLY_RECEIPT_KIND,
-        "ticket": ticket,
-        "planDigest": first["gatePlanDigest"],
-        "claimDigest": ticket["claimDigest"],
-        "gate": snapshot,
-        "chargedCalls": snapshot["total"],
-        "collection": None,
-        "productionExecuted": False,
-        "failure": "TimeoutError",
-        "releaseEligible": False,
-        "reservationStateAtPublication": "held",
-        "executionKind": "fixed-production-wire",
-        "metadata": [],
-        "credentialEvidence": [],
-    }
+    receipt = request_bytes_receipt(
+        snapshot,
+        ticket,
+        first["gatePlanDigest"],
+        [],
+        gate=snapshot,
+        failure="TimeoutError",
+    )
     path = tmp_path / "a" / "receipt.json"
     path.write_text(json.dumps(receipt))
     record = {
@@ -2194,3 +2346,48 @@ def test_a_receipt_need_not_carry_the_gate_it_binds(tmp_path):
         ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
         == "closed-after-abandon"
     )
+
+
+@pytest.mark.parametrize(
+    "campaign_id",
+    ["a", digest("nonce")[:32], "FS-WRITE-TXN-PRECEDENCE-01-V9", "limits"],
+    ids=["label", "nonce-shaped", "versioned", "lane-nickname"],
+)
+def test_reserve_refuses_a_campaign_id_outside_the_catalogue(tmp_path, campaign_id):
+    """A renamed task would earn itself a fresh US$10; only catalogued ids reserve."""
+    ledger = Ledger.create(tmp_path / "ledger")
+    first = claim(tmp_path, "a")
+    first["campaignId"] = campaign_id
+    before = (tmp_path / "ledger" / "state.json").read_bytes()
+    with pytest.raises(ValueError, match="uncatalogued campaign id"):
+        ledger.reserve(envelope(), first, plan("a"), now=1100)
+    assert (tmp_path / "ledger" / "state.json").read_bytes() == before
+
+
+def test_every_lane_descriptor_campaign_id_is_catalogued():
+    """The catalogue is a closed literal; the lanes' declared ids must be in it.
+
+    Read from source text rather than imported, so this module never pulls a
+    lane's import graph into the shared Ledger's own test run.
+    """
+    root = Path(__file__).resolve().parents[1]
+    for relative, name in (
+        ("fs-commit-transform-limits/commit_acquisition.py", "CAMPAIGN_ID"),
+        ("fs-config-lifecycle/surface_matrix.py", "CASE_ID"),
+        ("fs-request-bytes-boundary/request_bytes_compiler.py", "CAMPAIGN"),
+        ("fs-write-limits/compiler.py", "CAMPAIGN"),
+        ("fs-write-limits/compiler_03.py", "CAMPAIGN"),
+        ("fs-query-in-boundary/query_in_compiler.py", "CAMPAIGN"),
+        ("fs-query-partition-cursor/partition_cursor_case.py", "CAMPAIGN"),
+        ("fs-write-txn/txn_expiry_cases.py", "CAMPAIGN"),
+        ("auth-action-codes/action_codes_plan.py", "CAMPAIGN_ID"),
+        ("auth-credential-tokens/credential_cases.py", "CAMPAIGN_ID"),
+        ("auth-totp-enroll/mfa_cases.py", "CAMPAIGN_ID"),
+        ("auth-totp-enroll/totp_plan.py", "CAMPAIGN_ID"),
+        ("fs-rules-publication/o5_rules_case.py", "CAMPAIGN"),
+        ("fs-rules-publication/o5_user_token_case.py", "CAMPAIGN"),
+    ):
+        source = (root / relative).read_text()
+        match = re.search(rf'^{name} = "([^"]+)"$', source, re.MULTILINE)
+        assert match, relative
+        assert match.group(1) in CATALOGUED_CAMPAIGN_IDS, (relative, match.group(1))

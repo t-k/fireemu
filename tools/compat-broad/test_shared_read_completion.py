@@ -212,7 +212,7 @@ def test_read_recipe_can_release_real_ledger_only_after_typed_cleanup(
     request = operation(rpc, body)
     frozen = plan(request, scheduled=scheduled)
     claim = {
-        "campaignId": "read-recipe-local-fixture",
+        "campaignId": "FS-DATA-WRITE-LIMITS-02",
         "gateJob": "read",
         "manifestDigest": digest("offline-read-fixture"),
         "nonceDigest": digest(frozen["nonce"]),

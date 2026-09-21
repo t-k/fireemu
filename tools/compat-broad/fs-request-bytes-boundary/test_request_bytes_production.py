@@ -241,7 +241,9 @@ def test_stopped_runs_persist_evidence_and_retain_reservation(
     built, tmp_path, monkeypatch, fault
 ):
     calls, _live = wire_fixture(monkeypatch, fault=fault)
-    assert launcher.main(built.argv(tmp_path)) == (2 if fault == "preflight" else 1)
+    # Every stop after the reservation exits 1: the row is held either way and
+    # the receipt, not the exit code, says which terminal transition applies.
+    assert launcher.main(built.argv(tmp_path)) == 1
     receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
     assert receipt["failure"]
     assert receipt["releaseEligible"] is False
@@ -308,7 +310,7 @@ def test_auth_baseline_drift_stops_the_gate_before_any_data(
 
 def test_invalid_private_handoff_publishes_held_no_data_receipt(built, tmp_path):
     built.handoff_path.write_text("{}")
-    assert launcher.main(built.argv(tmp_path)) == 2
+    assert launcher.main(built.argv(tmp_path)) == 1
     receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
     assert receipt["productionExecuted"] is False
     assert receipt["collection"] is None
@@ -338,7 +340,7 @@ def test_gate_validation_failure_never_reads_private_handoff(
         raise ValueError("offline Gate admission failure")
 
     monkeypatch.setattr(shared_gate, "create", refuse)
-    assert launcher.main(built.argv(tmp_path)) == 2
+    assert launcher.main(built.argv(tmp_path)) == 1
     assert reads == []
     receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
     assert receipt["productionExecuted"] is False
@@ -600,7 +602,7 @@ def test_release_reconciliation_refuses_unproven_or_occupied_evidence(
         return write(path, value)
 
     monkeypatch.setattr(production, "_write_receipt", fail_release)
-    assert launcher.main(built.argv(tmp_path)) == (2 if damage == "held" else 1)
+    assert launcher.main(built.argv(tmp_path)) == 1
     monkeypatch.setattr(production, "_write_receipt", write)
     output = tmp_path / "output"
     if damage == "gate":
@@ -702,3 +704,327 @@ def test_evidence_publication_never_clobbers_existing_files_or_symlinks(
     assert target.read_bytes() == b"immutable original"
     assert original.read_bytes() == b"immutable original"
     assert not list(tmp_path.glob(".release.json.*"))
+
+
+# Retirement of a real held row. The launcher runs in a forked child so that
+# the coordinator and job PIDs it registers are gone when the Ledger checks
+# them, exactly as after a real run; the child inherits the offline fixtures.
+def run_launcher_in_child(argv):
+    import os
+
+    pid = os.fork()
+    if pid == 0:
+        code = 1
+        try:
+            code = launcher.main(argv)
+        finally:
+            os._exit(code)
+    _, status = os.waitpid(pid, 0)
+    assert os.WIFEXITED(status)
+    return os.WEXITSTATUS(status)
+
+
+def _drifted(monkeypatch, slot, change):
+    real = preflight.management_transport
+
+    def drifted(name, token, **kwargs):
+        response = real(name, token, **kwargs)
+        if name == slot:
+            response = {**response, "body": change(response["body"])}
+        return response
+
+    monkeypatch.setattr(preflight, "management_transport", drifted)
+
+
+NO_DATA_STOPS = {
+    "invalid-handoff": None,
+    "tokeninfo-principal-mismatch": None,
+    "project-drift": None,
+    "database-drift": None,
+    "auth-drift": None,
+    "probe-preflight-transport": None,
+}
+
+
+def arrange_no_data_stop(built, monkeypatch, stop):
+    """Make the launcher stop at one reachable point after the reservation."""
+    if stop == "invalid-handoff":
+        built.handoff_path.write_text("{}")
+    elif stop == "tokeninfo-principal-mismatch":
+        _drifted(
+            monkeypatch, "oauth-tokeninfo", lambda body: {**body, "user_id": "other"}
+        )
+    elif stop == "project-drift":
+        _drifted(monkeypatch, "project", lambda body: {**body, "projectNumber": "1"})
+    elif stop == "database-drift":
+        _drifted(monkeypatch, "database", lambda body: {**body, "locationId": "nam5"})
+    elif stop == "auth-drift":
+        _drifted(monkeypatch, "auth", lambda body: {**body, "drifted": True})
+    elif stop == "probe-preflight-transport":
+        wire_fixture(monkeypatch, fault="preflight")
+    else:
+        raise AssertionError(stop)
+
+
+@pytest.mark.parametrize("stop", sorted(NO_DATA_STOPS))
+def test_every_real_no_data_stop_after_reservation_is_retirable(
+    built, tmp_path, monkeypatch, stop
+):
+    """K.4: a real held row retired through the real Ledger path.
+
+    Each stop is reached by the real launcher against a temporary Ledger, then
+    retired with the record built from the receipt it persisted. The row ends
+    `aborted-no-data` with its allocation still charged, and the Gate is
+    stopped under the abort proof.
+    """
+    arrange_no_data_stop(built, monkeypatch, stop)
+    assert run_launcher_in_child(built.argv(tmp_path)) == 1
+    output = tmp_path / "output"
+    marker = json.loads((output / "reservation.json").read_bytes())
+    receipt = json.loads((output / "receipt.json").read_bytes())
+    assert marker["ticket"] == receipt["ticket"]
+    assert receipt["mayHaveCreated"] is False
+    ledger = reservations.Ledger(built.ledger)
+    ticket = receipt["ticket"]
+    before = ledger.snapshot()
+    row = before["reservations"][ticket["reservation"]]
+    assert row["state"] == "held"
+    verdict = admission.validate_no_data_receipt(receipt)
+    assert verdict["disposition"] == "aborted-no-data"
+    record = admission.build_no_data_abort_record(output / "receipt.json")
+    assert record["gateDigest"] == receipt["gateDigest"]
+    ledger.abort_no_data(ticket, record)
+    after = ledger.snapshot()
+    final = after["reservations"][ticket["reservation"]]
+    assert final["state"] == "aborted-no-data"
+    assert final["abortRecordDigest"] == digest(record)
+    # The allocation is never refunded; only the conflict locks are released.
+    assert (
+        after["envelopes"][ticket["envelopeDigest"]]["allocated"]
+        == before["envelopes"][ticket["envelopeDigest"]]["allocated"]
+        == row["claim"]["budget"]
+    )
+    gate = shared_gate.Gate(output / "gate", row["claim"]["gateJob"]).snapshot()
+    assert gate["stopped"] is True
+    assert all(job["stopped"] for job in gate["jobs"].values())
+    assert gate["noDataAbort"] == {
+        "preGateDigest": record["gateDigest"],
+        "recordDigest": digest(record),
+    }
+    assert final["finalGateDigest"] == digest(gate)
+    # Retiring is idempotent under the same record and refused under another.
+    ledger.abort_no_data(ticket, record)
+    with pytest.raises(ValueError, match="different terminal abort record"):
+        ledger.abort_no_data(ticket, {**record, "planDigest": "0" * 64})
+
+
+def test_the_released_lock_admits_a_later_campaign_on_the_same_scope(
+    built, tmp_path, monkeypatch
+):
+    arrange_no_data_stop(built, monkeypatch, "auth-drift")
+    assert run_launcher_in_child(built.argv(tmp_path)) == 1
+    output = tmp_path / "output"
+    receipt = json.loads((output / "receipt.json").read_bytes())
+    ledger = reservations.Ledger(built.ledger)
+    claim = ledger.bound_claim(receipt["ticket"])
+    envelope = production._envelope(built.permission, claim)
+    other = copy.deepcopy(claim)
+    other["gatePath"] = str((tmp_path / "other-gate").resolve())
+    other["nonceDigest"] = digest("other-nonce")
+    plan = admission.gate_plan_for(built.inputs, built.permission)
+    plan["nonce"] = "other-nonce"
+    other["gatePlanDigest"] = digest(plan)
+    with pytest.raises(ValueError, match="lock conflict"):
+        ledger.reserve(envelope, other, plan)
+    ledger.abort_no_data(
+        receipt["ticket"], admission.build_no_data_abort_record(output / "receipt.json")
+    )
+    # Same permission envelope: the concurrency slot and the scope are free
+    # again, while the first allocation stays charged against its limits.
+    with pytest.raises(ValueError, match="capacity exhausted"):
+        ledger.reserve(envelope, other, plan)
+
+
+def test_a_dispatched_commit_stop_is_refused_by_the_no_data_abort(
+    built, tmp_path, monkeypatch
+):
+    """A Commit whose answer was lost may have applied; only escalation closes it."""
+    import platform
+    import time
+
+    wire_fixture(monkeypatch, fault="commit")
+    assert run_launcher_in_child(built.argv(tmp_path)) == 1
+    output = tmp_path / "output"
+    receipt = json.loads((output / "receipt.json").read_bytes())
+    assert receipt["stopPoint"] == "probe-u01-commit-deadline"
+    assert receipt["mayHaveCreated"] is True
+    assert admission.classify_stop(receipt)["disposition"] == "owner-escalation"
+    with pytest.raises(ValueError, match="not a no-data stop"):
+        admission.build_no_data_abort_record(output / "receipt.json")
+    ledger = reservations.Ledger(built.ledger)
+    ticket = receipt["ticket"]
+    generation = receipt["generation"]
+    forced = {
+        "kind": "shared-no-data-abort-v1",
+        "ticket": ticket,
+        "planDigest": receipt["planDigest"],
+        "gateDigest": receipt["gateDigest"],
+        "receiptPath": str((output / "receipt.json").resolve()),
+        "receiptDigest": digest(receipt),
+        "collectorSourceDigest": generation["collectorSourceDigest"],
+        "sourceCommit": generation["sourceCommit"],
+        "sourceDigests": generation["sourceDigests"],
+    }
+    with pytest.raises(ValueError, match="no-data attempt"):
+        ledger.abort_no_data(ticket, forced)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+    # The abandoned close asks for a complete cleanup, which a lost Commit
+    # answer can never show.
+    with pytest.raises(ValueError, match="complete abandoned cleanup"):
+        ledger.close_after_abandon(
+            ticket,
+            {
+                "kind": reservations.ABANDON_KIND,
+                "ticket": ticket,
+                "gateDigest": receipt["gateDigest"],
+                "receiptPath": forced["receiptPath"],
+                "receiptDigest": forced["receiptDigest"],
+            },
+        )
+    row = ledger.snapshot()["reservations"][ticket["reservation"]]
+    gate = json.loads((output / "gate-snapshot.json").read_bytes())
+    owned = reservations._owned_resources(gate)
+    now = time.time()
+    escalation = {
+        "kind": reservations.ESCALATION_KIND,
+        "ticket": ticket,
+        "gateDigest": receipt["gateDigest"],
+        "receiptPath": forced["receiptPath"],
+        "receiptDigest": forced["receiptDigest"],
+        "attestation": {
+            "kind": reservations.ATTESTATION_KIND,
+            "status": "attested",
+            "campaignId": row["claim"]["campaignId"],
+            "nonceDigest": row["claim"]["nonceDigest"],
+            "claimDigest": ticket["claimDigest"],
+            "ledgerRoot": str(ledger.path),
+            "reservation": ticket["reservation"],
+            "receiptDigest": forced["receiptDigest"],
+            "gateDigest": receipt["gateDigest"],
+            "ownerIdentity": "t-k",
+            "recoveryOwner": "t-k",
+            "residueRemoved": True,
+            "resourceCount": len(owned),
+            "resourcesDigest": digest(owned),
+            "attestedAt": now - 1,
+            "expiresAt": now + 3600,
+            "executionHost": {
+                "platform": platform.system().lower(),
+                "machine": platform.machine(),
+            },
+        },
+        "absence": {
+            name: {
+                "status": 404,
+                "body": {"error": {"code": 404, "status": "NOT_FOUND", "message": "x"}},
+            }
+            for name in owned
+        },
+    }
+    ledger.close_after_escalation(ticket, escalation)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        == "closed-after-escalation"
+    )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ["route-journal-cleared", "management-row-dropped", "creation-claimed"],
+)
+def test_a_receipt_that_disagrees_with_the_gate_is_refused(
+    built, tmp_path, monkeypatch, damage
+):
+    """Nothing in the receipt can claim more or less than the Gate journal shows."""
+    wire_fixture(monkeypatch, fault="preflight")
+    assert run_launcher_in_child(built.argv(tmp_path)) == 1
+    output = tmp_path / "output"
+    path = output / "receipt.json"
+    receipt = json.loads(path.read_bytes())
+    if damage == "route-journal-cleared":
+        receipt["metadata"] = []
+        receipt["routeDigest"] = digest([])
+        receipt["productionExecuted"] = False
+        receipt["collection"] = None
+    elif damage == "management-row-dropped":
+        receipt["managementEvidence"] = receipt["managementEvidence"][:-1]
+    else:
+        receipt["mayHaveCreated"] = True
+    path.unlink()
+    path.write_text(json.dumps(receipt))
+    ledger = reservations.Ledger(built.ledger)
+    ticket = receipt["ticket"]
+    if damage == "creation-claimed":
+        with pytest.raises(ValueError, match="not a no-data stop"):
+            admission.build_no_data_abort_record(path)
+        receipt["mayHaveCreated"] = False
+    generation = receipt["generation"]
+    record = {
+        "kind": "shared-no-data-abort-v1",
+        "ticket": ticket,
+        "planDigest": receipt["planDigest"],
+        "gateDigest": receipt["gateDigest"],
+        "receiptPath": str(path.resolve()),
+        "receiptDigest": digest(json.loads(path.read_bytes())),
+        "collectorSourceDigest": generation["collectorSourceDigest"],
+        "sourceCommit": generation["sourceCommit"],
+        "sourceDigests": generation["sourceDigests"],
+    }
+    with pytest.raises(ValueError, match="no-data attempt"):
+        ledger.abort_no_data(ticket, record)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+def test_a_receipt_of_another_reservation_cannot_retire_this_row(
+    built, tmp_path, monkeypatch
+):
+    built.handoff_path.write_text("{}")
+    assert run_launcher_in_child(built.argv(tmp_path)) == 1
+    first = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    ledger = reservations.Ledger(built.ledger)
+    ledger.abort_no_data(
+        first["ticket"],
+        admission.build_no_data_abort_record(tmp_path / "output/receipt.json"),
+    )
+    # A second campaign of the same lane under a fresh nonce and permission,
+    # reserved in the same shared Ledger.
+    (tmp_path / "second").mkdir()
+    second = Admission(tmp_path / "second", nonce="c" * 32, ledger=built.ledger)
+    second.handoff_path.write_text("{}")
+    assert run_launcher_in_child(second.argv(tmp_path / "second")) == 1
+    receipt = json.loads((tmp_path / "second/output/receipt.json").read_bytes())
+    ticket = receipt["ticket"]
+    assert ticket["reservation"] != first["ticket"]["reservation"]
+    record = admission.build_no_data_abort_record(tmp_path / "output/receipt.json")
+    with pytest.raises(ValueError, match="exact no-data abort record"):
+        ledger.abort_no_data(ticket, record)
+    # Re-addressed to this row, the other run's receipt still names the other
+    # acquisition: its generation, its plan and its Gate are not this row's.
+    with pytest.raises(ValueError, match="closure required|no-data attempt"):
+        ledger.abort_no_data(ticket, {**record, "ticket": ticket})
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+def test_exit_two_means_nothing_was_reserved(built, tmp_path, monkeypatch):
+    """The operator rule: `reservation.json` decides, not the exit code."""
+    (tmp_path / "output").mkdir()
+    assert run_launcher_in_child(built.argv(tmp_path)) == 2
+    assert not (tmp_path / "output/reservation.json").exists()
+    assert reservations.Ledger(built.ledger).snapshot()["reservations"] == {}
+    shutil.rmtree(tmp_path / "output")
+    built.handoff_path.write_text("{}")
+    assert run_launcher_in_child(built.argv(tmp_path)) == 1
+    marker = json.loads((tmp_path / "output/reservation.json").read_bytes())
+    assert marker["kind"] == production.RESERVATION_MARKER_KIND
+    rows = reservations.Ledger(built.ledger).snapshot()["reservations"]
+    assert rows[marker["ticket"]["reservation"]]["state"] == "held"

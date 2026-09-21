@@ -74,7 +74,7 @@ def envelope():
 
 
 def make_claim(path, plan):
-    return {"campaignId": "offline-completion", "manifestDigest": digest("fixture"),
+    return {"campaignId": "FS-DATA-WRITE-LIMITS-02", "manifestDigest": digest("fixture"),
             "nonceDigest": digest(plan["nonce"]), "gatePath": str(path.resolve()),
             "gatePlanDigest": digest(plan),
             "locks": [{"key": "project/p/firestore/(default)/documents/owned", "mode": "WRITE"}],

@@ -25,7 +25,7 @@ def complete(tmp_path, scheduled, annotate_first, annotate_final):
             job["recovery"][index]["versionFrom"] = None
     ledger = reservations.Ledger.create(tmp_path / "ledger")
     claim = {
-        "campaignId": "null-annotation-local-fixture", "gateJob": "read",
+        "campaignId": "FS-DATA-WRITE-LIMITS-02", "gateJob": "read",
         "manifestDigest": digest("local-only"), "nonceDigest": digest(frozen["nonce"]),
         "gatePath": str((tmp_path / "gate").resolve()), "gatePlanDigest": digest(frozen),
         "locks": [{"key": "project/p/firestore/(default)/documents/campaign", "mode": "WRITE"}],

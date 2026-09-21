@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import signal
@@ -61,6 +62,7 @@ CHILD_TIMEOUT_SECONDS = 900
 AGE_SAMPLE_MARGIN_SECONDS = 1
 CONFIG = {"schemaVersion": 1, "profile": "strict", "auth": {"totp": {}}}
 SCHEMA = "o2-mfa-local-shadow-v1"
+RUNTIME_IDENTITY_FILE = "runtime-identity.json"
 
 
 class Refused(RuntimeError):
@@ -375,7 +377,13 @@ def _complete_phone_mfa(
     )
 
 
-def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
+def run_sequence(
+    instance: Instance,
+    output: Path,
+    *,
+    runtime_identity: dict[str, str] | None = None,
+    run_id: str | None = None,
+) -> dict[str, Any]:
     """Record creation intent before dispatch; retain uncertainty after failure."""
     plan = compile_campaign(uuid.uuid4().hex)
     state = initial_state(plan, time.time())
@@ -448,7 +456,7 @@ def run_sequence(instance: Instance, output: Path) -> dict[str, Any]:
             failed(error)
     if primary is not None:
         raise primary
-    report = build_report(rows, state, plan)
+    report = build_report(rows, state, plan, runtime_identity, run_id)
     report["requestBudget"] = request_summary
     report["recovery"]["creationResponsibility"] = responsibility
     report["recovery"]["cleanupVerified"] = (
@@ -846,8 +854,21 @@ def _walk(
     )
 
 
+def build_runtime_identity(binary: Path, config: Path, execution_commit: str) -> dict[str, str]:
+    """Bind the local observation to the exact executable and launch configuration."""
+    return {
+        "artifactSha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+        "executionCommit": execution_commit,
+        "configurationDigest": hashlib.sha256(config.read_bytes()).hexdigest(),
+    }
+
+
 def build_report(
-    rows: dict[str, dict], state: dict[str, Any], plan: dict[str, Any] | None = None
+    rows: dict[str, dict],
+    state: dict[str, Any],
+    plan: dict[str, Any] | None = None,
+    runtime_identity: dict[str, str] | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the shadow ledger, refusing to publish a run with an unrecorded case."""
     missing = [case["id"] for case in observation_cases() if case["id"] not in rows]
@@ -870,7 +891,7 @@ def build_report(
         }
         for case in observation_cases()
     ]
-    return {
+    report = {
         "schema": SCHEMA,
         "campaignId": CAMPAIGN_ID,
         # The comparator recompiles this manifest and refuses a receipt that carries none,
@@ -899,6 +920,10 @@ def build_report(
             "ownedAccounts": len(state["ownedResources"]),
         },
     }
+    if runtime_identity is not None:
+        report["runtimeIdentity"] = copy.deepcopy(runtime_identity)
+        report["recovery"]["runId"] = run_id
+    return report
 
 
 def child(output: Path) -> int:
@@ -910,7 +935,13 @@ def child(output: Path) -> int:
         json.dumps({"childPid": os.getpid(), "parentPid": os.getppid()}),
         encoding="utf-8",
     )
-    report = run_sequence(instance, output)
+    runtime = json.loads((output / RUNTIME_IDENTITY_FILE).read_text(encoding="utf-8"))
+    report = run_sequence(
+        instance,
+        output,
+        runtime_identity=runtime["runtimeIdentity"],
+        run_id=runtime["runId"],
+    )
     (output / "shadow.json").write_text(
         json.dumps(report, indent=2, sort_keys=True), "utf-8"
     )
@@ -1055,6 +1086,23 @@ def parent(output: Path) -> int:
         )
     config = output / "fireemu.json"
     config.write_text(json.dumps(CONFIG), encoding="utf-8")
+    worktree = describe_worktree(root)
+    if worktree.get("resolved") is not True or not isinstance(worktree.get("commit"), str):
+        print("local runtime source commit could not be resolved", file=sys.stderr)
+        return 1
+    run_id = uuid.uuid4().hex
+    (output / RUNTIME_IDENTITY_FILE).write_text(
+        json.dumps(
+            {
+                "runtimeIdentity": build_runtime_identity(
+                    binary, config, worktree["commit"]
+                ),
+                "runId": run_id,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
     environment = {
         key: value
         for key, value in os.environ.items()

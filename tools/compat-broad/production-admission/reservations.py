@@ -122,6 +122,7 @@ RECOVERY_INSPECTION_REQUESTS = 17
 RECOVERY_ABSENCE_REQUESTS = 51
 RECOVERY_DELETE_REQUESTS = 17
 RECOVERY_OPERATION_CLASS = "read-inspect-conditional-delete-v1"
+RECOVERY_GATE_JOB = "request-bytes-recovery-extension"
 RECOVERY_CHILD_FIELDS = {
     "kind", "version", "campaignId", "manifestDigest", "nonceDigest",
     "gatePath", "gatePlanDigest", "locks", "budget", "durationSeconds",
@@ -1385,6 +1386,120 @@ class Ledger:
                     "state": child["state"],
                 }
             )
+
+    def settle_recovery_child(self, child_ticket, *, receipt_digest, now=None):
+        """Settle one persisted child from its completed, registered Gate.
+
+        ``receipt_digest`` is only a bounded correlation value; the terminal
+        Gate journal and its compiler-bound plan are the authority. This
+        transition never checks the wall-clock expiry and never changes the
+        parent reservation.
+        """
+        if not isinstance(receipt_digest, str) or not 1 <= len(receipt_digest) <= 256:
+            raise ValueError("bounded recovery receipt correlation required")
+        if not isinstance(child_ticket, dict) or set(child_ticket) != {
+            "ledgerPath", "ledgerIdentity", "reservation", "claimDigest",
+            "envelopeDigest", "parentReservation",
+        }:
+            raise ValueError("exact recovery child ticket required")
+        if (
+            child_ticket["ledgerPath"] != str(self.path)
+            or child_ticket["ledgerIdentity"] != self.identity
+            or not isinstance(child_ticket["reservation"], str)
+            or not isinstance(child_ticket["parentReservation"], str)
+        ):
+            raise ValueError("recovery child ticket ledger binding changed")
+        if now is not None:
+            _number(now)
+        with self._locked() as state:
+            parent = state["reservations"].get(
+                child_ticket.get("parentReservation")
+                if isinstance(child_ticket, dict)
+                else None
+            )
+            if parent is None:
+                raise ValueError("recovery child parent reservation missing")
+            child = next(
+                (
+                    value
+                    for value in parent.get("recoveryChildren", [])
+                    if value.get("ticket") == child_ticket
+                ),
+                None,
+            )
+            if child is None:
+                raise ValueError("exact persisted recovery child ticket required")
+            if child.get("state") == "settled":
+                if child.get("receiptDigest") != receipt_digest:
+                    raise ValueError("different recovery settlement receipt")
+            elif child.get("state") != "allocated":
+                raise ValueError("recovery child is not allocatable")
+            claim = copy.deepcopy(child["claim"])
+            child_digest = child["claimDigest"]
+            gate_path = claim["gatePath"]
+            expected_gate_digest = claim["gatePlanDigest"]
+            envelope_digest = child["envelopeDigest"]
+            parent_claim_digest = parent["claimDigest"]
+            parent_snapshot = copy.deepcopy(parent["claim"])
+        if str(Path(gate_path).resolve()) != gate_path:
+            raise ValueError("registered recovery Gate path changed")
+        gate = Gate(gate_path, RECOVERY_GATE_JOB).snapshot()
+        if digest(gate.get("plan")) != expected_gate_digest or gate.get("planDigest") != expected_gate_digest:
+            raise ValueError("registered recovery Gate plan differs")
+        jobs = gate.get("jobs")
+        job_name = RECOVERY_GATE_JOB
+        job = jobs.get(job_name) if isinstance(jobs, dict) else None
+        plan_job = gate["plan"].get("jobs", {}).get(job_name)
+        if (
+            not isinstance(job, dict)
+            or not isinstance(plan_job, dict)
+            or gate.get("coordinatorInflight")
+            or gate.get("observation") != 0
+            or gate.get("recovery") != gate.get("total")
+            or type(gate.get("total")) is not int
+            or not 51 <= gate.get("total") <= RECOVERY_CHILD_REQUESTS
+            or gate.get("managementUsed") != []
+            or job.get("complete") is not True
+            or job.get("inflight")
+            or job.get("recovery") != len(plan_job.get("recovery", []))
+            or job.get("recovery") != RECOVERY_CHILD_REQUESTS
+            or set(job.get("absent", [])) != set(job.get("resources", []))
+            or len(job.get("absent", [])) != RECOVERY_ABSENCE_REQUESTS
+            or unconfirmed_creates(gate, job_name)
+        ):
+            raise ValueError("recovery Gate terminal evidence incomplete")
+        try:
+            validate_absence_proofs(gate, job_name)
+        except Exception as error:  # noqa: BLE001 -- validator owns typed absence schema
+            raise ValueError("recovery Gate typed absence evidence incomplete") from error
+        final_gate_digest = digest(gate)
+        with self._locked() as state:
+            parent = state["reservations"].get(child_ticket.get("parentReservation"))
+            child = next(
+                (
+                    value for value in (parent or {}).get("recoveryChildren", [])
+                    if value.get("ticket") == child_ticket
+                ),
+                None,
+            )
+            if (
+                parent is None
+                or child is None
+                or parent.get("claimDigest") != parent_claim_digest
+                or parent.get("claim") != parent_snapshot
+                or child.get("claimDigest") != child_digest
+                or child.get("envelopeDigest") != envelope_digest
+            ):
+                raise ValueError("recovery child changed during Gate settlement")
+            if child.get("state") == "settled":
+                if child.get("receiptDigest") != receipt_digest or child.get("finalGateDigest") != final_gate_digest:
+                    raise ValueError("different recovery settlement proof")
+                return copy.deepcopy(child["ticket"])
+            child["state"] = "settled"
+            child["receiptDigest"] = receipt_digest
+            child["finalGateDigest"] = final_gate_digest
+            self._save(state)
+            return copy.deepcopy(child["ticket"])
 
     def validate(self, ticket, *, now=None, duration=13):
         if now is not None:

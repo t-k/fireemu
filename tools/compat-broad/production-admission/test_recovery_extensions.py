@@ -213,6 +213,21 @@ def test_bound_recovery_claim_rejects_forged_or_parent_ticket(tmp_path, mutation
         ledger.bound_recovery_claim(forged)
 
 
+def test_settle_recovery_child_refuses_incomplete_real_gate_without_mutation(tmp_path):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    child_ticket = ledger.begin_recovery_extension(
+        parent, child, envelope, parent_plan, child_plan, now=1100,
+        canonical_parent_inputs=ACTUAL_INPUTS, parent_permission=ACTUAL_PERMISSION,
+    )
+    create_gate(child["gatePath"], child_plan)
+    gate = Gate(child["gatePath"], reservations.RECOVERY_GATE_JOB)
+    gate.claim()
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="terminal evidence incomplete"):
+        ledger.settle_recovery_child(child_ticket, receipt_digest="receipt-correlation")
+    assert ledger.snapshot() == before
+
+
 def test_recovery_extension_refuses_tariff_or_plan_count_mutation_without_save(tmp_path):
     ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
     before = ledger.snapshot()

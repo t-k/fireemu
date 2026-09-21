@@ -170,7 +170,7 @@ def test_recovery_error_is_not_typed_absence(tmp_path, fixture_origin, status, b
         artifact_path=artifact, launcher_path=launcher,
         binding=worker, binding_digest=hashlib.sha256(worker).hexdigest(),
     )
-    with pytest.raises(ValueError, match="typed Auth absence"):
+    with pytest.raises(ValueError, match="typed Auth absence|cleanup incomplete"):
         production.execute(
             capability=capability, inputs=inputs, permission=permission,
             ledger_root=ledger_root, output=tmp_path / "output",

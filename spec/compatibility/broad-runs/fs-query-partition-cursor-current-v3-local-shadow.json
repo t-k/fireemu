@@ -3,8 +3,8 @@
   "byteCount": 69774024,
   "path": "target/agent/fs-query-001/normal/debug/fireemu",
   "reproducible": false,
-  "sha256": "dce61bf5c75e7618b8a4537824daf294f457ace6273e118e6a9df5a24e4e7b25",
-  "sourceCommit": "429ff0b7a70f2678d41fb5098a9d24add96e944b",
+  "sha256": "d6484c7157a94a02d3e3cb42cecef97a29490ee1f6cee3f4bd4c6db604d60607",
+  "sourceCommit": "75d2aba93400d34c7afce301be90a49c2751e836",
   "sourceTreeClean": true
  },
  "campaignId": "FS-QUERY-PARTITION-CURSOR-04",
@@ -18,7 +18,7 @@
   "observationRows": 31,
   "ownedProcess": {
    "listenersClosed": true,
-   "pid": 58089,
+   "pid": 95876,
    "stopped": true
   },
   "parentStatus": "pass",

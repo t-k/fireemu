@@ -236,9 +236,9 @@ instance rather than the source.
 
 | Binding | Value |
 | --- | --- |
-| Artifact source commit | `429ff0b7a70f2678d41fb5098a9d24add96e944b` |
-| Rust sources | unchanged from base `0cd79d3f48052e5e3fdb3c22ca10656b2951fd2f` |
-| Artifact SHA-256 | `dce61bf5c75e7618b8a4537824daf294f457ace6273e118e6a9df5a24e4e7b25` |
+| Artifact source commit | `75d2aba93400d34c7afce301be90a49c2751e836` |
+| Rust sources | unchanged from the integration head `24b8d0a6e` the branch is rebased onto |
+| Artifact SHA-256 | `d6484c7157a94a02d3e3cb42cecef97a29490ee1f6cee3f4bd4c6db604d60607` |
 | Result | `MATCHED`, 37 of 37 raw sidecars, reconstruction matches, zero residual documents |
 
 The record also carries the SHA-256 of every lane module it was produced by, so

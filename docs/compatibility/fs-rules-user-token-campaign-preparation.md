@@ -189,6 +189,18 @@ carry its artifact binding and no reservation. Every other field a bundle
 carries is self-reported; `MATCH` means two fully bound, mutually consistent
 bundles agree row by row, and is not production evidence on its own.
 
+Row agreement is typed and identity-preserving. Each observed record is
+admitted only with a non-empty string status, a JSON-boolean document
+presence and finite JSON throughout (`row-schema:<caseId>:...` otherwise), and
+values are compared as encoded JSON, so a number never equals a boolean. A
+field the plan resolves to a principal is compared as the logical principal
+reference each side's own binding maps it to: the `principal:<ref>` label the
+collector's account readback recorded and the bundle declares under
+`redactedPrincipals`. The same logical principal behind two different uids is
+agreement; `owner-a` against `other-b` is a `SEMANTIC_MISMATCH` on that row; a
+value neither binding maps is `principal-unmapped:<caseId>:<field>` and the
+result is `INDETERMINATE`. Being a non-empty string is not a mapping.
+
 A row whose plan entry carries a production hypothesis is reported with that
 hypothesis and with whether the production status read as hypothesized or
 contrary, and the result carries a per-condition tally; neither touches the

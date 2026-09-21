@@ -165,18 +165,36 @@ unprefixed when it concerns the pair.
 | Reservation and permission | Production side: reservation id, campaign id and nonce digest; owner permission digest; approval window. Local side: artifact digest and source commit, and no reservation | `missing-binding:...`, `nonce-reservation-mismatch:...`, `local-claims-reservation` (refused) |
 | Environment label | `acquisition.environment.kind` must agree with the role, the endpoints and the artifact binding | `local-mislabelled-as-production`, `local-claims-production` (refused) |
 | Identity | Same run on both sides, a bundle claiming `productionReady` or `acquisitionValidated`, a role that is not the side it was passed as, a plan or case digest that is not the campaign's | `self-comparison`, `bundle-claims-authority`, `role-mismatch`, `case-digest-drift`, `campaign-identity-drift` (refused) |
+| Observed record schema | Per row, `observed.status` is a non-empty string, `observed.documentPresent` is a JSON boolean, `observed.fields` is a mapping or absent, and the record is finite JSON with string keys; a number in a boolean slot is a malformed record, not a value | `row-unobserved:<caseId>`, `row-schema:<caseId>:status`, `row-schema:<caseId>:documentPresent`, `row-schema:<caseId>:fields`, `row-schema:<caseId>:not-json` |
+| Principal identity in fields | A field the plan resolves to `{"$principal": "<ref>"}` is mapped to that logical reference through the side's own binding: the `principal:<ref>` label must be declared in the bundle's `redactedPrincipals`, name an account the plan owns, and be the identifier that account's recovery readback recorded; a string without that binding is unmapped and leaves the row indeterminate, never equal | `principal-unmapped:<caseId>:<field>` |
 
 An error in the refusal set makes the result `REFUSED`; any other error makes
 it `INDETERMINATE`; neither carries rows. Only two admitted bundles are
-compared, row by row, on status, document presence and field values, with a
-field that resolves to a principal compared by presence rather than by uid,
-because the two runs mint different accounts by construction. `observed.code`
+compared, row by row, on status, document presence and field values, by
+type-preserving JSON equality (`1` and `true`, `1` and `1.0`, `0` and `false`
+are different values at every depth). A field that resolves to a principal is
+compared as the logical principal each side's binding maps it to
+(`{"$principal": "owner-a"}` on both sides is a match, `owner-a` against
+`other-b` is a `SEMANTIC_MISMATCH` on that row), because the two runs mint
+different accounts by construction; a value neither binding maps is
+`principal-unmapped` and the result is `INDETERMINATE` with the row marked
+`INDETERMINATE` and the condition summary following the weakest row. `observed.code`
 is recorded but not compared: the local transport never sets it and a
 production transport's code vocabulary is unobserved. A production release
 must be named by its Rules API resource (`projects/<p>/releases/<n>` or
 `projects/<p>/rulesets/<id>`). `compare()` never raises on a malformed bundle:
 a shape it did not anticipate is named `comparator-exception:<Type>` and left
 `INDETERMINATE`.
+
+Review record (2026-09-21, owner review d7f7ce184 findings 1 and 3): the
+earlier projection replaced every non-empty string in a principal slot with a
+placeholder, so a different owner, or an unrelated string, compared equal, and
+rows were compared with Python equality, so `documentPresent: 1` matched
+`true`. Both are closed by the two table rows above, with the tests in
+`test_o5_user_token_comparator_v2.py` under "Principal identity in observed
+fields" and "Typed JSON comparison of observed rows". The comparator contract
+string moved to `fs-rules-user-token-comparator-v4` because the meaning of
+`MATCH` changed.
 
 Mutation record (2026-09-21): the three `local-mislabelled-as-production`
 signals are each covered by one test that changes exactly one binding of the

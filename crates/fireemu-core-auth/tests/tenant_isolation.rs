@@ -132,6 +132,7 @@ fn tenant_credentials_are_refused_by_the_sibling_and_the_parent_without_mutation
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn project_config_follows_into_tenants_unless_overridden_and_password_policy_never_follows() {
     let (registry, default) = registry();
     let (overridden, untouched) = two_tenants(&registry);

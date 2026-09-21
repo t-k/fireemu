@@ -1108,10 +1108,12 @@ fn unknown_email_sign_in_class(state: &AuthState, tenant: Option<&str>) -> Strin
     class(&refused)
 }
 
-/// An explicitly created tenant carries the Identity Platform `Tenant` proto defaults for
-/// its sign-in methods (`false` when omitted, as the Admin SDK's `createTenant` documents),
-/// and the client is refused until a PATCH enables them. Only implicit (config-declared)
-/// tenants default every method to enabled.
+/// Local default model, recorded for the bounded production observation: an explicitly
+/// created tenant carries the Identity Platform `Tenant` proto defaults for its sign-in
+/// methods (`false` when omitted, as the Admin SDK's `createTenant` documents), and the
+/// client is refused until a PATCH enables them. Only implicit (config-declared) tenants
+/// default every method to enabled. The false-by-default behaviour is a spec-derived
+/// hypothesis until observed.
 #[test]
 fn explicit_tenant_creation_defaults_sign_in_methods_off_until_patched() {
     for (profile, state, _registry) in profiles() {

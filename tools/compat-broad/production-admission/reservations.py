@@ -1470,7 +1470,7 @@ class Ledger:
             raise ValueError("recovery Gate terminal evidence incomplete")
         try:
             validate_absence_proofs(gate, job_name)
-        except Exception as error:  # noqa: BLE001 -- validator owns typed absence schema
+        except Exception as error:
             raise ValueError("recovery Gate typed absence evidence incomplete") from error
         final_gate_digest = digest(gate)
         with self._locked() as state:

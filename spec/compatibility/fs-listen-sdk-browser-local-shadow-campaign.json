@@ -1,13 +1,13 @@
 {
   "campaign": {
     "budget": {
-      "cleanupReserveDeletes": 100,
-      "cleanupReserveReads": 200,
+      "cleanupReserveDeletes": 150,
+      "cleanupReserveReads": 300,
       "cleanupReserveSeconds": 180,
       "estimatedCostUsd": 0.01,
       "hardCostCeilingUsd": 0.5,
-      "maxAccounts": 1,
-      "maxClients": 2,
+      "maxAccounts": 2,
+      "maxClients": 3,
       "maxConcurrency": 1,
       "maxConcurrentListeners": 3,
       "maxDeletes": 80,
@@ -34,20 +34,25 @@
       "FS-LISTEN-SDK-106",
       "FS-LISTEN-SDK-106N",
       "FS-LISTEN-SDK-107",
-      "FS-LISTEN-SDK-107C"
+      "FS-LISTEN-SDK-107C",
+      "FS-LISTEN-SDK-108",
+      "FS-LISTEN-SDK-108C",
+      "FS-LISTEN-SDK-109",
+      "FS-LISTEN-SDK-109C"
     ],
     "database": "(default)",
-    "estimatedCostUsd": 0.000165,
+    "estimatedCostUsd": 0.000235,
     "owner": {
-      "namespace": "o6/FS-LISTEN-SDK/7d26fc16922824c9b668e3da6257e46d",
-      "nonceDigest": "37b5ab108caacac29eef9f673aa95cb91944384b3356c787f0bf8a831e86db56",
+      "namespace": "o6/FS-LISTEN-SDK/1473a02140f2c1dec70aed83dc1f3211",
+      "nonceDigest": "4ceac18341d6d73306b5842fee0d3d34fadeacd6bbde7d2c0bc76b1e49f438fe",
       "paths": {
-        "absent": "o6_listen/{uid}/runs/7d26fc16922824c9b668e3da6257e46d/docs/absent",
-        "alpha": "o6_listen/{uid}/runs/7d26fc16922824c9b668e3da6257e46d/docs/alpha",
-        "beta": "o6_listen/{uid}/runs/7d26fc16922824c9b668e3da6257e46d/docs/beta",
-        "gamma": "o6_listen/{uid}/runs/7d26fc16922824c9b668e3da6257e46d/docs/gamma",
+        "absent": "o6_listen/{uid}/runs/1473a02140f2c1dec70aed83dc1f3211/docs/absent",
+        "alpha": "o6_listen/{uid}/runs/1473a02140f2c1dec70aed83dc1f3211/docs/alpha",
+        "beta": "o6_listen/{uid}/runs/1473a02140f2c1dec70aed83dc1f3211/docs/beta",
+        "gamma": "o6_listen/{uid}/runs/1473a02140f2c1dec70aed83dc1f3211/docs/gamma",
         "private": "o6_listen_private/{uid}",
-        "run": "o6_listen/{uid}/runs/7d26fc16922824c9b668e3da6257e46d"
+        "privateB": "o6_listen_private/{uidB}",
+        "run": "o6_listen/{uid}/runs/1473a02140f2c1dec70aed83dc1f3211"
       }
     },
     "ownerPreconditions": [
@@ -58,8 +63,8 @@
       },
       {
         "id": "throwaway-account",
-        "requirement": "Create one throwaway email/password account owned by the campaign operator in the oracle project. Its password is supplied to the collector through a private file descriptor, never through argv or the environment.",
-        "verifiable": "exactly one account identifier appears in the receipt"
+        "requirement": "Create two throwaway email/password accounts owned by the campaign operator in the oracle project: the principal every case signs in as, and the second principal of the cross-identity and revocation cases. Each password is supplied to the collector through its own private file descriptor, never through argv or the environment.",
+        "verifiable": "exactly two account identifiers appear in the receipt"
       },
       {
         "id": "single-field-index",
@@ -76,12 +81,12 @@
     "permissionEnvelope": {
       "allows": [
         "one run of the declared case catalog against the oracle project",
-        "at most one throwaway account sign-in and sign-out",
+        "sign-in, sign-out and session revocation of at most two throwaway accounts",
         "creation and conditional deletion of the declared owned documents"
       ],
       "forbids": [
         "reuse of any earlier compat-broad permission",
-        "any write outside the nonce-scoped run document and the private document",
+        "any write outside the nonce-scoped run document and the two private documents",
         "any retry after the deadline or the hard cost ceiling",
         "recording an identity token, refresh token or password in any output"
       ],
@@ -89,14 +94,14 @@
       "scope": "fs-listen-sdk-campaign"
     },
     "plannedCounts": {
-      "cleanupDeletes": 75,
-      "cleanupReads": 150,
+      "cleanupDeletes": 114,
+      "cleanupReads": 228,
       "deletes": 1,
-      "listenerRegistrations": 17,
-      "rawSnapshotAllowance": 76,
-      "reads": 25,
-      "snapshots": 19,
-      "writes": 25
+      "listenerRegistrations": 21,
+      "rawSnapshotAllowance": 92,
+      "reads": 29,
+      "snapshots": 23,
+      "writes": 32
     },
     "productionExecuted": false,
     "project": "fireemu-35fe6",
@@ -116,7 +121,7 @@
       "firebase": "sha512-XaL6tlE5Xd20ZDhckqOMIw+JJTET+wTdeZPxQ7ihc42oxRb7kWUyn/j1LO5V9dH1xq8Rv5R71Pv1fBCdIkt9Rw=="
     },
     "sourceBinding": {
-      "catalogDigest": "7326915491f0d03e5b6e58ee3bdacce966a1f4829e714677ee491b0e779508f6",
+      "catalogDigest": "a91a671ae9e65518d11fa0ab1e442492eeebb06ca9baaced76289f377f07713f",
       "evidence": "declaration-only",
       "kind": "resolved-lockfile-pin",
       "lockfile": "tools/sdk-smoke/package-lock.json",
@@ -132,8 +137,8 @@
     "unobservedPaths": [
       {
         "path": "browser-webchannel",
-        "plan": "A separate browser campaign driving the same case catalog through a headless Chromium page against the same oracle project, with the WebChannel request log captured from the page rather than from Node.",
-        "reason": "The Node SDK build selects the gRPC transport; WebChannel framing, long-poll fallback and browser tab lifecycle are not exercised."
+        "plan": "A separate browser campaign driving the same case catalog through the existing headless Chromium adapter against the same oracle project, with the WebChannel request log captured from the page rather than from Node.",
+        "reason": "The Node SDK build selects the gRPC transport; this campaign does not exercise WebChannel framing, long polling, the streamed backchannel or browser tab lifecycle in production. A local browser shadow (listen_browser_adapter.mjs) runs the same catalog through headless Chromium, but that is local evidence only."
       },
       {
         "path": "android-sdk",
@@ -146,9 +151,9 @@
         "reason": "No iOS or macOS SDK harness exists in this repository."
       },
       {
-        "path": "cross-identity-isolation",
-        "plan": "A second throwaway account and a case in which A opens a listener on B's o6_listen_private document and on B's run prefix, expecting permission-denied in both, with a control proving B's own listener succeeds. It needs maxAccounts raised to two and a second sign-in in the adapter.",
-        "reason": "The campaign budget allows one account, and both auth cases sign the same principal out and back in. No case has user A listen to user B's document, so tenant and principal isolation under Rules is not observed and a MATCH must not be read as covering it."
+        "path": "tenant-isolation",
+        "plan": "A tenant-scoped throwaway account and a listener case whose principal carries a tenant claim, expecting permission-denied across the tenant boundary, once the oracle project has a second tenant.",
+        "reason": "Cases 108/108C observe one principal being refused another principal's private document within one project. Identity Platform tenants are not exercised: both accounts live in the default tenant, so a MATCH says nothing about cross-tenant isolation under Rules."
       },
       {
         "path": "raw-resume-token",
@@ -157,7 +162,7 @@
       }
     ]
   },
-  "campaignDigest": "34945173480fa4e36b06732ac288f68658dc2541e7a4c08084e45e3d20656c2a",
-  "nonce": "7d26fc16922824c9b668e3da6257e46d",
+  "campaignDigest": "7c43eaad9fbcd6bd574f471ac4caad0f69414a8b0aae39053060ddb3a0bb93fd",
+  "nonce": "1473a02140f2c1dec70aed83dc1f3211",
   "schema": "o6-listen-sdk-shadow-campaign-v1"
 }

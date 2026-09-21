@@ -209,9 +209,10 @@ the permission and transport bindings.
 
 ## Local shadow
 
-The current shadow receipt was regenerated from commit `4130d105b0e157f6a807594c761a3fac84a19819`
-with the pinned Firebase SDK `12.18.0`. All fourteen cases agreed with their
-expected local result. The collector ran
+The current shadow receipt was regenerated from commit `b691969d997a34319f5b6fa87c01eea6a498cb05`
+with the pinned Firebase SDK `12.18.0`. All eighteen cases agreed with their
+expected local result, both throwaway accounts were deleted and proved absent,
+and the revocation case ended the listener with `unauthenticated` as recorded. The collector ran
 the full catalog against an owned local `fireemu` instance
 started by `fireemu exec` with the Firestore and Auth emulators on OS-assigned
 ports. The runtime was built from this worktree with `cargo build -p fireemu`,
@@ -266,7 +267,7 @@ purpose.
 ## Browser WebChannel local shadow
 
 The Node build of the firebase JS SDK speaks gRPC, so the receipt above says
-nothing about WebChannel. A second shadow runs the same fourteen cases through
+nothing about WebChannel. A second shadow runs the same eighteen cases through
 the browser build of release `12.18.0` in a headless Chromium that
 `tools/compat-broad/fs-listen-resume/listen_browser_adapter.mjs` owns, against
 an owned `fireemu exec` child on OS-assigned loopback ports. The page loads
@@ -293,10 +294,11 @@ also passes `local_shadow_check.mjs` unchanged. The two hand-written smoke pages
 `tools/sdk-smoke-browser/run-browser.mjs`; their result is
 `spec/compatibility/fs-listen-sdk-browser-smoke-pages.json`.
 
-All fourteen cases agreed with their expected local result in both modes. This
-removes "browser WebChannel path not executed" from the local side of the
-`FS-LISTEN-SDK` closure condition; production remains unobserved for every
-transport.
+All eighteen cases agreed with their expected local result in both modes,
+including the cross-identity denial and the revocation outcome, which the
+WebChannel transport reproduces exactly as gRPC does. This removes "browser
+WebChannel path not executed" from the local side of the `FS-LISTEN-SDK`
+closure condition; production remains unobserved for every transport.
 
 ## What this preparation established about the SDK
 

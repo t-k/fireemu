@@ -30,13 +30,12 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad"))
 sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 sys.path.insert(0, str(HERE))
 
-from batch_contract import PROJECT
-from batch_wire import _decode_json_response
-from o8_admission import authorize_transport
-
 import txn_expiry_cases as cases
 import txn_expiry_collector as collector
 import txn_expiry_plan as plan_module
+from batch_contract import PROJECT
+from batch_wire import _decode_json_response
+from o8_admission import authorize_transport
 
 ORIGIN = "https://firestore.googleapis.com"
 WORKER_ENTRY = "tools/compat-broad/fs-write-txn/txn_expiry_https_worker.py"

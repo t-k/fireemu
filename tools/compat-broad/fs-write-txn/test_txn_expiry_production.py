@@ -24,8 +24,6 @@ sys.path.insert(0, str(HERE))
 
 import reservations
 import shared_gate
-from broad_contract import digest
-
 import txn_expiry_admission as admission
 import txn_expiry_cases as cases
 import txn_expiry_comparison as comparison
@@ -36,6 +34,7 @@ import txn_expiry_offline_backend as offline
 import txn_expiry_preflight
 import txn_expiry_production as production
 import txn_expiry_remote_transport as remote
+from broad_contract import digest
 from test_txn_expiry_admission import Admission
 
 
@@ -394,3 +393,143 @@ def test_a_rehearsal_receipt_is_never_production_evidence(built, tmp_path):
             expected_inputs_digest=built.inputs["inputsDigest"],
             ledger_root=built.ledger,
         )
+
+
+def test_a_typed_503_on_a_begin_still_recovers_every_document(built, tmp_path):
+    """Should Fix 1: one unconfirmed transaction start must not strand the cleanup.
+
+    The begin answered 503 may have started a transaction the run cannot name;
+    it holds no document, expires on its own, and the receipt records it as an
+    unconfirmed start. The five documents are recovered and the row closes
+    through the abandoned-cleanup exit.
+    """
+    result = _run_launcher_in_subprocess(built, tmp_path, "begin-503")
+    assert result.returncode == 1, result.stderr
+    assert "retirement path closed-after-abandon" in result.stderr
+    output = tmp_path / "output"
+    receipt = json.loads((output / "receipt.json").read_bytes())
+    collection = receipt["collection"]
+    assert collection["failure"] == "precondition-not-established"
+    assert collection["unconfirmedTransactionStarts"] == ["b"]
+    assert collection["unrecovered"] == [] and collection["openTransactions"] == []
+    assert sorted(
+        entry["transaction"] for entry in collection["transactionReleases"]
+    ) == ["a"]
+    gate = json.loads((output / "gate-snapshot.json").read_bytes())
+    assert shared_gate.unconfirmed_creates(gate, gate_module.JOB) == 0
+    assert shared_gate.abandoned_cleanup_complete(gate) == sorted(
+        gate["jobs"][gate_module.JOB]["resources"]
+    )
+    assert receipt["retirement"]["disposition"] == "closed-after-abandon"
+    assert "expires on its own" in receipt["retirement"]["reason"]
+    ledger = reservations.Ledger(built.ledger)
+    ledger.close_after_abandon(
+        receipt["ticket"], admission.build_abandon_record(output)
+    )
+    assert (
+        ledger.snapshot()["reservations"][receipt["ticket"]["reservation"]]["state"]
+        == "closed-after-abandon"
+    )
+
+
+def test_classify_stop_names_every_disposition():
+    base = {"stopPoint": admission.ABANDONED_STOP_POINT, "productionExecuted": True}
+    assert (
+        admission.classify_stop({**base, "collection": None})["disposition"]
+        == "owner-escalation"
+    )
+    recovered = {
+        "unrecovered": [],
+        "openTransactions": [],
+        "unconfirmedTransactionStarts": [],
+    }
+    assert (
+        admission.classify_stop({**base, "collection": recovered})["disposition"]
+        == "closed-after-abandon"
+    )
+    assert (
+        admission.classify_stop(
+            {**base, "collection": {**recovered, "openTransactions": ["a"]}}
+        )["disposition"]
+        == "owner-escalation"
+    )
+    # The Gate snapshot, when present, must agree: no proofs means no abandoned close.
+    empty_gate = {
+        "jobs": {
+            gate_module.JOB: {
+                "observation": 1,
+                "recovery": 0,
+                "creationProofs": {},
+                "complete": False,
+                "stopReason": "x",
+            }
+        },
+        "plan": {
+            "jobs": {
+                gate_module.JOB: {"schedule": [], "observation": [], "recovery": []}
+            }
+        },
+        "events": [],
+    }
+    assert (
+        admission.classify_stop({**base, "collection": recovered, "gate": empty_gate})[
+            "disposition"
+        ]
+        == "owner-escalation"
+    )
+    assert (
+        admission.classify_stop({"stopPoint": None, "releaseEligible": True})[
+            "disposition"
+        ]
+        == "released"
+    )
+    assert (
+        admission.classify_stop({"stopPoint": admission.UNCERTAIN_STOP_POINT})[
+            "disposition"
+        ]
+        == "owner-escalation"
+    )
+    assert (
+        admission.classify_stop(
+            {
+                "stopPoint": "ownership-preflight",
+                "productionExecuted": False,
+                "collection": None,
+            }
+        )["retirableAsNoData"]
+        is True
+    )
+    with pytest.raises(ValueError):
+        admission.classify_stop({"stopPoint": "elsewhere"})
+
+
+def test_the_adapter_returns_an_incomplete_answer_for_a_gate_side_skip(built):
+    """A shared-Gate zero-wire skip (no `send`) is never turned into an answer."""
+    gate_plan = admission.gate_plan_for(built.inputs, built.permission)
+    job = gate_plan["jobs"][gate_module.JOB]
+
+    class SkippingGate:
+        def snapshot(self):
+            return {
+                "plan": gate_plan,
+                "jobs": {gate_module.JOB: {"observation": 0, "recovery": 0}},
+                "events": [],
+            }
+
+        def dispatch(self, operation, recovery, send):
+            return (None, {"skipped": "fixture"})
+
+    rows = []
+    adapter = production.GateAdapter(
+        SkippingGate(), gate_plan, lambda request, deadline: None, rows=rows
+    )
+    response = adapter(
+        {
+            "rpc": "GetDocument",
+            "site": job["observation"][0]["site"],
+            "name": job["observation"][0]["resource"],
+            "query": None,
+        }
+    )
+    assert response["complete"] is False and response["blocked"] == "gate-skipped"
+    assert rows == []

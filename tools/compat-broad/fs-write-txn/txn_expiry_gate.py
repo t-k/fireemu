@@ -39,12 +39,11 @@ sys.path.insert(0, str(HERE.parents[0]))
 sys.path.insert(0, str(HERE))
 
 import shared_gate
-from broad_contract import digest
-from shared_gate import ZERO_WIRE_REASON, _save, job_schedule, unconfirmed_creates
-
 import txn_expiry_cases as cases
 import txn_expiry_collector as collector
 import txn_expiry_plan as plan_module
+from broad_contract import digest
+from shared_gate import ZERO_WIRE_REASON, _save, job_schedule, unconfirmed_creates
 
 JOB = "txn-expiry-04"
 PLACEHOLDER = "$binding:"
@@ -136,7 +135,42 @@ def validate_plan(plan):
             binds = operation.get("binds")
             if binds is not None and _BINDING_NAME.match(binds) is None:
                 raise ValueError("closed transaction expiry Gate plan required")
+    for operation in job["recovery"]:
+        _validate_recovery_shape(operation, job["resources"])
     return plan
+
+
+def _delete_body(resource, version):
+    return {
+        "writes": [{"delete": resource, "currentDocument": {"updateTime": version}}]
+    }
+
+
+def _validate_recovery_shape(operation, resources):
+    """A recovery slot names an assigned document in its request, not only in
+    its annotation: a delete body must delete exactly its resource, and a
+    document read must read exactly its resource."""
+    kind = operation["kind"]
+    resource = operation.get("resource")
+    if kind == "release":
+        if operation.get("method") != "POST" or set(operation.get("body", {})) != {
+            "transaction"
+        }:
+            raise ValueError("closed transaction expiry Gate plan required")
+        return
+    if resource not in resources:
+        raise ValueError("recovery slot names an unassigned resource")
+    if kind == "conditional-delete":
+        binds_from = operation.get("bindsFrom")
+        if (
+            operation.get("method") != "POST"
+            or not isinstance(binds_from, str)
+            or _BINDING_NAME.match(binds_from) is None
+            or operation.get("body") != _delete_body(resource, PLACEHOLDER + binds_from)
+        ):
+            raise ValueError("conditional delete must delete exactly its resource")
+    elif operation.get("method") != "GET" or operation.get("path") != "/v1/" + resource:
+        raise ValueError("recovery read must read exactly its resource")
 
 
 def owned_document(body, plan, resource):
@@ -229,7 +263,7 @@ class TxnGate(shared_gate.Gate):
         normalized = self._template(operation, declared)
         if recovery and declared["kind"] in RPC_RECOVERY_KINDS:
             if declared["kind"] == "conditional-delete":
-                self._admit_delete(declared)
+                self._admit_delete(declared, normalized)
             return self._dispatch_rpc_recovery(normalized, send)
         # The base class rechecks the slot, PID, stop state and budgets under
         # its lock. Recording below runs inside that same lock.
@@ -360,6 +394,10 @@ class TxnGate(shared_gate.Gate):
                 if type(status) is not int:
                     job["stopped"] = True
                     raise ValueError("typed HTTP status required")
+                # The shared path clears `absent`/`absenceProofs` for the
+                # resource before a recovery request; a delete here can only
+                # follow an owned 200 read, which already cleared them, and the
+                # final typed-absence read re-records the proof afterwards.
                 self._record_response(state, operation, True, event, status, body)
                 job["captures"][str(index)] = self._recovery_capture(
                     operation, status, body
@@ -374,18 +412,23 @@ class TxnGate(shared_gate.Gate):
                 state["lastSent"] = event["ended"]
                 _save(self.path, state)
 
-    def _admit_delete(self, declared):
+    def _admit_delete(self, declared, normalized):
         """A conditional delete binds the version an owned read of this run observed.
 
         The template has already required the request to carry the bound
-        version. What remains is that the document was created by this run
-        and that the binding was installed from an owned readback, which is
-        the only path that records it.
+        version. What remains is that the request itself deletes exactly the
+        assigned document, that the document was created by this run, and
+        that the binding was installed from an owned readback, which is the
+        only path that records it.
         """
         state = self.snapshot()
         job = state["jobs"][self.job]
         resource = declared.get("resource")
         binding = declared.get("bindsFrom") or ""
+        if resource not in job["resources"] or normalized.get("body") != _delete_body(
+            resource, PLACEHOLDER + binding
+        ):
+            raise ValueError("conditional delete must delete exactly its resource")
         if (
             resource not in job.get("creationProofs", {})
             or not binding
@@ -418,15 +461,22 @@ class TxnGate(shared_gate.Gate):
             job, plan = state["jobs"][self.job], state["plan"]
             schedule = job_schedule(plan["jobs"][self.job])
             if (
-                job["pid"] is None
+                job["pid"] != os.getpid()
                 or job["complete"]
                 or job["inflight"]
                 or state.get("noDataAbort") is not None
             ):
                 raise ValueError("job or environment stopped/uncertain")
-            if unconfirmed_creates(state, self.job):
-                raise ValueError("an unconfirmed write is outstanding")
             index = job["recovery"]
+            operations = plan["jobs"][self.job]["recovery"]
+            next_kind = (
+                operations[index].get("kind") if index < len(operations) else None
+            )
+            # Skipping a rollback passes over no document, so an unconfirmed
+            # write elsewhere does not block it; skipping a cleanup slot while
+            # a write is unconfirmed would hide a document, and is refused.
+            if next_kind != "release" and unconfirmed_creates(state, self.job):
+                raise ValueError("an unconfirmed write is outstanding")
             cursor = job["scheduleDone"]
             if job.get("stopReason") is not None:
                 while (
@@ -437,7 +487,6 @@ class TxnGate(shared_gate.Gate):
                     job["skippedByStop"] += 1
                 job["scheduleDone"] = cursor
             slot = schedule[cursor] if cursor < len(schedule) else None
-            operations = plan["jobs"][self.job]["recovery"]
             if (
                 slot is None
                 or slot["phase"] != "recovery"
@@ -502,22 +551,16 @@ class TxnGate(shared_gate.Gate):
         update of a document this run created is `created`: a write was
         applied to a document the run already owns and will delete.
         """
+        if kind in ("begin", "rollback"):
+            # Neither RPC can bring a document into existence under any answer,
+            # so any completed typed answer, a 5xx envelope included, settles
+            # the slot; only a lost answer stays unknown. The collector tracks
+            # the transaction that such an answer may have started separately.
+            return "refused" if type(status) is int and isinstance(body, dict) else None
         if _error_envelope(status, body):
-            return (
-                "refused"
-                if kind in ("begin", "rollback", "commit-update", "create")
-                else None
-            )
+            return "refused" if kind in ("commit-update", "create") else None
         if status != 200 or not isinstance(body, dict) or "error" in body:
             return None
-        if kind == "begin":
-            return (
-                "refused"
-                if canonical_token(body.get("transaction")) is not None
-                else None
-            )
-        if kind == "rollback":
-            return "refused" if body == {} else None
         if kind == "commit-update":
             request = operation.get("body")
             writes = request.get("writes") if isinstance(request, dict) else None

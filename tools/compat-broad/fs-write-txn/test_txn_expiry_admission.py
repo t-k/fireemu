@@ -23,14 +23,13 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad/production-admission"))
 sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 sys.path.insert(0, str(HERE))
 
-from batch_contract import database_evidence
-from broad_contract import digest
-from o8_campaign import CAMPAIGN_APPROVAL_FIELDS
-
 import txn_expiry_admission as admission
 import txn_expiry_descriptor as campaign
 import txn_expiry_o8
 import txn_expiry_plan as plan_module
+from batch_contract import database_evidence
+from broad_contract import digest
+from o8_campaign import CAMPAIGN_APPROVAL_FIELDS
 
 commit_baseline = campaign.commit_baseline
 

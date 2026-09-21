@@ -512,8 +512,9 @@ refuses the documented sleeper-shortening rehearsal switch on the production
 wire, and a rehearsal receipt is rejected by the comparator on its short waits.
 The launcher reads the bearer token on a private descriptor only after the
 Ledger reservation and the Gate claim; exit 0 is complete and released, exit 1
-is a held reservation with a receipt naming the retirement path, exit 2 is a
-refusal before any reservation. The lane README carries the exact command line.
+is a held reservation with a receipt carrying the stop point and the retirement
+disposition (`aborted-no-data`, `closed-after-abandon` or `owner-escalation`),
+exit 2 is a refusal before any reservation. The lane README carries the exact command line.
 
 The credential-free integration proof runs the real Ledger, Gate and receipt
 path against an offline backend: all 13 cases, a no-data stop retired through

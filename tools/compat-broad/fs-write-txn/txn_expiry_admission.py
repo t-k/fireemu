@@ -32,6 +32,8 @@ sys.path.insert(0, str(HERE))
 
 import o8_admission
 import shared_gate
+import txn_expiry_descriptor as campaign
+import txn_expiry_preflight as preflight
 from broad_contract import digest
 from o8_admission import (
     ProductionWireCapability,
@@ -40,9 +42,6 @@ from o8_admission import (
     revoke_production_capability,
     validate_owner_identity,
 )
-
-import txn_expiry_descriptor as campaign
-import txn_expiry_preflight as preflight
 from txn_expiry_descriptor import commit_baseline
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
@@ -330,6 +329,18 @@ def classify_stop(receipt) -> dict:
     if not isinstance(receipt, dict):
         raise ValueError("bounded receipt required")  # noqa: TRY004 -- refusal class, not a type report
     stop = receipt.get("stopPoint")
+    if stop is None:
+        released = receipt.get("releaseEligible") is True
+        return {
+            "stopPoint": None,
+            "disposition": "released" if released else "owner-escalation",
+            "retirableAsNoData": False,
+            "reason": (
+                "the run completed and its reservation is released by Ledger.finish"
+                if released
+                else "the run names no stop point and is not release-eligible"
+            ),
+        }
     if (
         stop == UNCERTAIN_STOP_POINT
         or receipt.get("mayHaveCreated")
@@ -359,19 +370,40 @@ def classify_stop(receipt) -> dict:
             "reason": "no creating request was dispatched",
         }
     if stop == ABANDONED_STOP_POINT:
-        collection = receipt.get("collection") or {}
-        recovered = not collection.get("unrecovered") and not collection.get(
-            "openTransactions"
+        collection = receipt.get("collection")
+        gate = receipt.get("gate")
+        if not isinstance(collection, dict):
+            # A run that stopped in Python after a create, before the collector
+            # produced a receipt, has no cleanup record at all; the Ledger will
+            # refuse the abandoned close and so does this classification.
+            return {
+                "stopPoint": stop,
+                "disposition": "owner-escalation",
+                "retirableAsNoData": False,
+                "reason": "the run created documents and recorded no cleanup",
+            }
+        recovered = (
+            collection.get("unrecovered") == []
+            and collection.get("openTransactions") == []
+            and (
+                gate is None or shared_gate.abandoned_cleanup_complete(gate) is not None
+            )
         )
+        reason = (
+            "the run created documents and proved every one absent again"
+            if recovered
+            else "a created document or an open transaction remains"
+        )
+        if recovered and collection.get("unconfirmedTransactionStarts"):
+            reason += (
+                "; a transaction whose start was never confirmed holds no document "
+                "and expires on its own"
+            )
         return {
             "stopPoint": stop,
             "disposition": "closed-after-abandon" if recovered else "owner-escalation",
             "retirableAsNoData": False,
-            "reason": (
-                "the run created documents and proved every one absent again"
-                if recovered
-                else "a created document or an open transaction remains"
-            ),
+            "reason": reason,
         }
     raise ValueError("unknown transaction expiry stop point")
 

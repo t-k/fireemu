@@ -39,11 +39,6 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad"))
 sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 sys.path.insert(0, str(HERE))
 
-from batch_contract import NUMBER, PROJECT
-from broad_contract import digest
-from o8_admission import authorize_transport
-from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
-
 import txn_expiry_cases as cases
 import txn_expiry_collector as collector
 import txn_expiry_comparison as comparison
@@ -51,6 +46,10 @@ import txn_expiry_gate as gate_module
 import txn_expiry_plan as plan_module
 import txn_expiry_preflight as preflight
 import txn_expiry_remote_transport as remote
+from batch_contract import NUMBER, PROJECT
+from broad_contract import digest
+from o8_admission import authorize_transport
+from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
 
 
 def _load(name: str, path: Path):

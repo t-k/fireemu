@@ -27,9 +27,8 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT / "tools/compat-broad"))
 sys.path.insert(0, str(HERE))
 
-from broad_contract import digest
-
 import txn_expiry_cases as cases
+from broad_contract import digest
 from txn_expiry_remote_transport import normalize
 
 TOKEN = "offline-fixture-token"
@@ -47,7 +46,13 @@ DATABASE_BODY = {
 AUTH_BODY = {"name": "projects/592603257417/config", "mfa": {"state": "DISABLED"}}
 VERSION = "2026-09-21T00:00:00.000001Z"
 HTTP = {0: 200, 3: 400, 5: 404, 10: 409}
-MODES = ("complete", "preflight-failure", "stop-after-first-case", "tokeninfo-401")
+MODES = (
+    "complete",
+    "preflight-failure",
+    "stop-after-first-case",
+    "tokeninfo-401",
+    "begin-503",
+)
 
 CASE_BY_SLOT = {
     "idle/lock-held": "idle-expiry/lock-held-before-idle",
@@ -99,6 +104,14 @@ class Backend:
             if expected["code"] != 0:
                 return self._error(expected["code"], expected["message"])
         if rpc == "BeginTransaction":
+            if self.mode == "begin-503" and site == "idle/begin/b":
+                return 503, {
+                    "error": {
+                        "code": 503,
+                        "status": "UNAVAILABLE",
+                        "message": "try later",
+                    }
+                }
             self.issued += 1
             token = base64.b64encode(f"token-{self.issued}".encode()).decode()
             return 200, {"transaction": token}

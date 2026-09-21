@@ -17,13 +17,12 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad"))
 sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 sys.path.insert(0, str(HERE))
 
-from broad_contract import digest
-
 import txn_expiry_collector as collector
 import txn_expiry_descriptor as campaign
 import txn_expiry_o8 as launcher
 import txn_expiry_plan as plan_module
 import txn_expiry_remote_transport as remote
+from broad_contract import digest
 
 NONCE = "d" * 32
 PROJECT = "fireemu-35fe6"

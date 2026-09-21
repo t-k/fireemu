@@ -46,14 +46,13 @@ sys.path.insert(0, str(HERE))
 
 import reservations
 import shared_gate
-from broad_contract import digest
-from o8_admission import reject_production_transport
-
 import txn_expiry_admission as admission
 import txn_expiry_collector as collector
 import txn_expiry_descriptor as campaign
 import txn_expiry_gate as gate_module
 import txn_expiry_preflight as preflight
+from broad_contract import digest
+from o8_admission import reject_production_transport
 
 PRODUCTION_EXECUTION = "fixed-production-wire"
 INJECTED_EXECUTION = "injected-transport"
@@ -270,6 +269,12 @@ class GateAdapter:
 
         try:
             status, body = self.gate.dispatch(operation, recovery, send)
+            if "response" not in answer:
+                # The shared dispatch consumed the slot without calling the
+                # wire (its own zero-wire skip). Nothing was sent, so the
+                # collector gets an incomplete answer, not a fabricated one.
+                self.rows.pop()
+                return self._incomplete("gate-skipped")
         except Exception as error:  # noqa: BLE001 -- retained as an incomplete answer, never reinterpreted
             response = answer.get("response")
             if response is None:
@@ -478,6 +483,10 @@ def _run(
         collectorReceiptFile="collection/result.json" if result is not None else None,
         mayHaveCreated=creating,
     )
+    # The retirement path, named in the receipt so an operator reads it there
+    # rather than recomputing it: classified on the receipt and the Gate
+    # snapshot, which the Ledger's abandoned close consults as well.
+    receipt["retirement"] = admission.classify_stop({**receipt, "gate": snapshot})
     _write_receipt(output / "receipt.json", receipt)
     released = False
     release = None

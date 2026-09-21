@@ -169,9 +169,15 @@ uv run --python 3.12 python tools/compat-broad/fs-write-txn/txn_expiry_o8.py \
   --output <fresh directory> --credential-fd 3  3< <private handoff>
 ```
 
-Exit 0: complete and released. Exit 1: a reservation is held and
-`<output>/receipt.json` names the stop point and the retirement path. Exit 2:
-refused before any reservation existed. The handoff on the descriptor is
+Exit 0: complete and released. Exit 1: a reservation is held;
+`<output>/receipt.json` carries `stopPoint` and `retirement.disposition`, one
+of `aborted-no-data` (retire with `txn_expiry_admission.build_abort_record` and
+`Ledger.abort_no_data` once the launcher process is gone), `closed-after-abandon`
+(`build_abandon_record` and `Ledger.close_after_abandon`) or `owner-escalation`
+(the owner removes any residue, collects typed absence for all five documents
+and calls `Ledger.close_after_escalation`); the same classification is
+`txn_expiry_admission.classify_stop(receipt)`. Exit 2: refused before any
+reservation existed. The handoff on the descriptor is
 `{"kind": "txn-expiry-bearer-token-v1", "permissionDigest": ..., "token": ...}`.
 
 The credential-free integration proof (`test_txn_expiry_production.py`) drives

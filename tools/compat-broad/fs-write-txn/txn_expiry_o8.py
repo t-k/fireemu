@@ -34,10 +34,9 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad/production-admission"))
 sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 sys.path.insert(0, str(HERE))
 
-from broad_contract import digest
-
 import txn_expiry_admission as admission
 import txn_expiry_descriptor as campaign
+from broad_contract import digest
 
 MAX_HANDOFF_BYTES = 16 * 1024
 HANDOFF_KIND = campaign.HANDOFF_KIND
@@ -209,8 +208,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     # A receipt exists and a reservation is held: exit 1 whether the stop is a
     # retirable no-data stop or an uncertain one; the receipt says which.
+    retirement = result.get("retirement") or {}
     print(
-        f"Transaction expiry O8 stopped at {result.get('stopPoint')}; reservation held.",
+        f"Transaction expiry O8 stopped at {result.get('stopPoint')}; reservation "
+        f"held; retirement path {retirement.get('disposition')}.",
         file=sys.stderr,
     )
     return 1

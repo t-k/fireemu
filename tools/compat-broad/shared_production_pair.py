@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -218,7 +219,14 @@ def _validate_v2_creation_proofs(job, state, declared):
     return proofs
 
 
-def validate_record(record, *, local=False, historical_observer=False):
+def validate_record(
+    record,
+    *,
+    local=False,
+    historical_observer=False,
+    current_observer=None,
+    current_source=None,
+):
     """Validate current v2, or the explicitly selected frozen G0 v1 contract."""
     batch = record.get("batch", record)
     plan = batch["gate"]["plan"]
@@ -230,10 +238,14 @@ def validate_record(record, *, local=False, historical_observer=False):
             else batch.get("permission", {}).get("frozenCommit")
         )
         expected_observer = (
-            G0_LOCAL_OBSERVERS.get(source)
+            current_observer
+            if local and current_observer is not None
+            else G0_LOCAL_OBSERVERS.get(source)
             if local
             else G0_LOCAL_OBSERVERS[G0_FROZEN_SOURCE]
         )
+        if current_source is not None and (not local or source != current_source):
+            raise ValueError("G0 current source mismatch")
         if expected_observer is None or (not local and source != G0_FROZEN_SOURCE):
             raise ValueError("G0 frozen collector source mismatch")
         if not local and batch.get("observerDigest") != expected_observer:
@@ -421,7 +433,14 @@ def validate_record(record, *, local=False, historical_observer=False):
     return batch
 
 
-def _compare(production, local, *, g0_recompare=False):
+def _compare(
+    production,
+    local,
+    *,
+    g0_recompare=False,
+    current_observer=None,
+    current_source=None,
+):
     from shared_production import binding
     from shared_production import manifest as production_manifest
 
@@ -434,7 +453,13 @@ def _compare(production, local, *, g0_recompare=False):
     }
     try:
         left = validate_record(production, historical_observer=g0_recompare)
-        right = validate_record(local, local=True, historical_observer=g0_recompare)
+        right = validate_record(
+            local,
+            local=True,
+            historical_observer=g0_recompare,
+            current_observer=current_observer,
+            current_source=current_source,
+        )
         production_contract = (
             G0_ORIGINAL_COMPARISON_CONTRACT_DIGEST
             if g0_recompare
@@ -816,6 +841,8 @@ def _campaign_evidence_binding(evidence):
 def compare_g0_runtime_recompare(production_path, local):
     """Recompare a pinned G0 production receipt against a new local runtime receipt."""
     production_path = Path(production_path)
+    if not production_path.is_file() or production_path.is_symlink():
+        raise ValueError("G0 production result is not a regular file")
     raw = production_path.read_bytes()
     if hashlib.sha256(raw).hexdigest() != G0_PRODUCTION_RESULT_SHA256:
         raise ValueError("G0 production result hash mismatch")
@@ -836,6 +863,71 @@ def compare_g0_runtime_recompare(production_path, local):
             "The immutable production receipt's old localRecordSha256 is retained "
             "as provenance and is not used to approve this new runtime receipt."
         ),
+    }
+    return result
+
+
+def current_g0_source_binding(repo):
+    """Derive the current observer/source binding from a clean checkout."""
+    root = Path(repo).resolve()
+    if subprocess.check_output(
+        ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=normal"],
+        text=True,
+    ):
+        raise ValueError("current source checkout is dirty")
+    commit = subprocess.check_output(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+    ).strip()
+    return {"sourceCommit": commit, "observerSha256": observer_digest()}
+
+
+def compare_g0_current_runtime_recompare(production_path, local, repo, runtime):
+    """Compare a current runtime using the frozen G0 recipe and sealed source/runtime inputs.
+
+    This is deliberately separate from the historical observer allowlist. The recipe and
+    normalization remain frozen, while source and artifact provenance are independently derived
+    from the clean checkout and the caller's sealed runtime record.
+    """
+    binding = current_g0_source_binding(repo)
+    if not isinstance(runtime, dict):
+        raise ValueError("current runtime binding unavailable")
+    if not isinstance(runtime.get("artifactSha256"), str) or not re.fullmatch(
+        r"[0-9a-f]{64}", runtime["artifactSha256"]
+    ):
+        raise ValueError("current artifact binding unavailable")
+    if local.get("runtimeArtifactSha256") != runtime["artifactSha256"]:
+        raise ValueError("runtime artifact binding differs")
+    batch = local.get("batch", {})
+    plan = batch.get("gate", {}).get("plan", {})
+    expected = frozen_g0_manifest(plan.get("nonce"))
+    expected["observerSha256"] = binding["observerSha256"]
+    if (
+        plan.get("contract") != expected["contract"]
+        or plan.get("collector") != expected["collector"]
+        or digest(plan.get("jobs")) != digest(expected["jobs"])
+        or plan.get("transport") != "local-only"
+    ):
+        raise ValueError("frozen G0 recipe differs")
+    production_path = Path(production_path)
+    raw = production_path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != G0_PRODUCTION_RESULT_SHA256:
+        raise ValueError("G0 production result hash mismatch")
+    production = json.loads(raw)
+    result = _compare(
+        production,
+        local,
+        g0_recompare=True,
+        current_observer=binding["observerSha256"],
+        current_source=binding["sourceCommit"],
+    )
+    result["mode"] = "g0-current-runtime-recomparison"
+    result["source"] = {
+        "productionResultSha256": G0_PRODUCTION_RESULT_SHA256,
+        "frozenSource": G0_FROZEN_SOURCE,
+        "currentSourceCommit": binding["sourceCommit"],
+        "currentObserverSha256": binding["observerSha256"],
+        "runtimeArtifactSha256": runtime["artifactSha256"],
+        "normalizationVersion": G0_NORMALIZATION_VERSION,
     }
     return result
 

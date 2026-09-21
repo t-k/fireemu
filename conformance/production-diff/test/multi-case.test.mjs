@@ -2,8 +2,9 @@
 // exercise that dispatch through the public CLI entrypoints (list/plan), which need no native
 // binary, plus buildExecArgs's per-case project wiring.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
-import { CASE, CASES, COMMIT_TRANSFORM_CASE, selectCase } from "../registry.mjs";
+import { CASE, CASES, COMMIT_TRANSFORM_CASE, G0_CASE, selectCase } from "../registry.mjs";
 import { buildExecArgs, main } from "../pilot.mjs";
 import { resultEnvelope } from "../core.mjs";
 
@@ -23,9 +24,10 @@ async function captureStdout(run) {
 test("registry exposes both cases and rejects an unknown id", () => {
   assert.deepEqual(
     CASES.map((c) => c.id),
-    [CASE.id, COMMIT_TRANSFORM_CASE.id],
+    [CASE.id, COMMIT_TRANSFORM_CASE.id, G0_CASE.id],
   );
   assert.equal(selectCase(COMMIT_TRANSFORM_CASE.id).adapter, "commit-transform");
+  assert.equal(selectCase(G0_CASE.id).adapter, "g0");
   assert.throws(() => selectCase("not-a-case"), /unknown-case/);
 });
 
@@ -35,8 +37,19 @@ test("pilot.mjs list reports both cases", async () => {
   const parsed = JSON.parse(lines[0]);
   assert.deepEqual(
     parsed.cases.map((c) => c.id),
-    [CASE.id, COMMIT_TRANSFORM_CASE.id],
+    [CASE.id, COMMIT_TRANSFORM_CASE.id, G0_CASE.id],
   );
+});
+
+test("pilot.mjs refuses G0 planning when the private input binding is absent", async () => {
+  const [lines, code] = await captureStdout(() => main(["plan", "--case", G0_CASE.id]));
+  if (process.env.G0_PRIVATE_PRODUCTION_RESULT) {
+    assert.equal(code, 0);
+    assert.equal(JSON.parse(lines[0]).operations, 12);
+    return;
+  }
+  assert.equal(code, 2);
+  assert.equal(lines.length, 0);
 });
 
 test("pilot.mjs plan works for the commit-transform case without a binary", async () => {
@@ -115,4 +128,31 @@ test("buildExecArgs defaults to the batch-write project and accepts an override"
     withProject.args[withProject.args.indexOf("--project") + 1],
     COMMIT_TRANSFORM_CASE.project,
   );
+});
+
+test("buildExecArgs selects auth and firestore only for G0", () => {
+  const args = buildExecArgs("/binary", "/dir", "/entry.mjs", "/node", G0_CASE.project, "auth,firestore").args;
+  assert.equal(args[args.indexOf("--only") + 1], "auth,firestore");
+  assert.equal(args.includes("--auth-port"), false);
+  assert.equal(args[args.indexOf("--firestore-port") + 1], "0");
+});
+
+test("buildExecArgs uses only options supported by the fireemu exec interface", async (t) => {
+  const binary = process.env.G0_RETAINED_ARTIFACT;
+  if (!binary) {
+    t.skip("set G0_RETAINED_ARTIFACT to validate the retained native CLI help");
+    return;
+  }
+  let help;
+  try {
+    help = execFileSync(binary, ["--help"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (error) {
+    assert.equal(error.status, 2);
+    help = error.stderr;
+  }
+  assert.match(help, /exec\|emulators:exec/);
+  assert.match(help, /--firestore-port <n>/);
+  assert.doesNotMatch(help, /--auth-port/);
+  const args = buildExecArgs(binary, "/dir", "/entry.mjs", "/node", G0_CASE.project, "auth,firestore").args;
+  assert.equal(args.some((arg) => arg === "--auth-port"), false);
 });

@@ -456,6 +456,7 @@ CONFIG_CHANGED_STOP_POINTS = (
     "cleanup",
     "restore",
     "resume-prior-state",
+    "recover-unsettled",
 )
 
 

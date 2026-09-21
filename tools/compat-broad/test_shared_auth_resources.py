@@ -26,6 +26,7 @@ def _auth_plan(resource: str = "projects/demo/auth/accounts/acct-0") -> dict:
         "kind": "uid-absence",
         "account": "acct0",
         "resource": resource,
+        "uidBinding": "acct0Uid",
     }
     return {
         "contract": "shared-local-v1",
@@ -45,6 +46,9 @@ def _auth_plan(resource: str = "projects/demo/auth/accounts/acct-0") -> dict:
                 "observation": [],
                 "recovery": [operation],
                 "resources": [resource],
+                "accountBindings": {
+                    "acct0": {"resource": resource, "uidBinding": "acct0Uid"}
+                },
             }
         },
     }
@@ -110,9 +114,114 @@ def test_auth_cleanup_route_without_declared_account_resource_is_refused_without
     path = tmp_path / "gate"
     plan = _auth_plan()
     plan["jobs"]["auth-credential"]["recovery"][0]["resource"] = "projects/other/auth/accounts/acct-0"
-    with pytest.raises(ValueError, match="outside assigned resources|canonical Auth account"):
+    with pytest.raises(
+        ValueError, match="outside assigned resources|canonical Auth account|binding differs"
+    ):
         create(path, plan)
     assert not path.exists()
+
+
+def test_auth_account_binding_map_accepts_the_frozen_resource_and_uid_binding(tmp_path: Path) -> None:
+    plan = _auth_plan()
+    create(tmp_path / "gate", plan)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (
+            lambda plan: plan["jobs"]["auth-credential"]["accountBindings"]["acct0"].update(
+                resource="projects/demo/auth/accounts/other"
+            ),
+            "resource",
+        ),
+        (
+            lambda plan: plan["jobs"]["auth-credential"]["recovery"][0].update(
+                uidBinding="otherUid"
+            ),
+            "binding",
+        ),
+        (
+            lambda plan: plan["jobs"]["auth-credential"]["recovery"][0].update(
+                resource="projects/demo/auth/accounts/other"
+            ),
+            "resource",
+        ),
+    ],
+)
+def test_auth_account_binding_mutations_are_refused_before_creation(
+    tmp_path: Path, mutation, message: str
+) -> None:
+    plan = _auth_plan()
+    mutation(plan)
+    with pytest.raises(ValueError, match=message):
+        create(tmp_path / "gate", plan)
+
+
+def test_auth_account_binding_alias_collision_is_refused(tmp_path: Path) -> None:
+    plan = _auth_plan()
+    plan["jobs"]["auth-credential"]["accountBindings"]["other"] = {
+        "resource": "projects/demo/auth/accounts/other",
+        "uidBinding": "acct0Uid",
+    }
+    with pytest.raises(ValueError, match="injective|binding"):
+        create(tmp_path / "gate", plan)
+
+
+def test_auth_legacy_plan_without_binding_map_keeps_the_derived_binding_contract(
+    tmp_path: Path,
+) -> None:
+    plan = _auth_plan()
+    plan["jobs"]["auth-credential"].pop("accountBindings")
+    plan["jobs"]["auth-credential"]["recovery"][0].pop("uidBinding")
+    create(tmp_path / "gate", plan)
+
+
+def test_auth_legacy_plan_cannot_override_its_derived_uid_binding(tmp_path: Path) -> None:
+    plan = _auth_plan()
+    plan["jobs"]["auth-credential"].pop("accountBindings")
+    with pytest.raises(ValueError, match="requires account map"):
+        create(tmp_path / "gate", plan)
+
+
+def test_auth_digest_only_adoption_cannot_authorize_a_delete(tmp_path: Path) -> None:
+    path = tmp_path / "gate"
+    plan = _auth_plan()
+    plan["costMicrousd"] = 3
+    lookup = plan["jobs"]["auth-credential"]["recovery"][0]
+    delete = dict(
+        lookup,
+        kind="delete",
+        path="identitytoolkit.googleapis.com/v1/projects/demo/accounts:delete",
+        body={"localId": "$binding:acct0Uid"},
+    )
+    plan["jobs"]["auth-credential"]["recovery"] = [delete, lookup]
+    create(path, plan)
+    gate = Gate(path, "auth-credential")
+    gate.claim()
+    state = gate.snapshot()
+    state["events"] = [
+        {
+            "job": "auth-credential",
+            "phase": "observation",
+            "completed": False,
+            "creationOutcome": "created",
+            "settledBy": {
+                "kind": "address-readback-present",
+                "responseDigest": "a" * 64,
+            },
+        }
+    ]
+    state["jobs"]["auth-credential"]["authAccounts"] = {
+        "acct0": {
+            "uid": "uid-0",
+            "resource": "projects/demo/auth/accounts/acct-0",
+            "createEvent": 0,
+        }
+    }
+    reservations._save(path, state)
+    with pytest.raises(ValueError, match="creation ownership"):
+        gate.dispatch(delete, True, lambda: pytest.fail("forged delete was sent"))
 
 
 def test_auth_plan_cannot_bind_absence_to_a_literal_or_foreign_uid(tmp_path: Path) -> None:

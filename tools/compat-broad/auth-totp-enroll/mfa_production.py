@@ -338,51 +338,23 @@ def remaining_seconds(prior: dict, now: float, *, manifest: dict, recovery: int)
     return int(critical) + int(recovery) + 1
 
 
-def discover_unsettled(walk, gate, inner, journal: list) -> dict:
-    """Settle every signup whose answer was lost, by an owner readback of its address.
-
-    The readback is sent through the inner session outside the Gate, because no
-    frozen slot exists for it, and is journaled as not charged by the Gate. An
-    address that reads back present becomes an owned, adopted account; one that
-    reads back absent settles the signup as never applied. The anonymous role has
-    no address and stays unsettled: it is reported as untracked.
-    """
+def discover_unsettled(walk, gate, session, journal: list) -> dict:
+    """Settle lost signups through their frozen, typed reconciliation slots."""
     untracked = []
     for role in gate.unsettled_accounts():
         email = walk._email(role)
         if email is None:
             untracked.append(role)
             continue
-        status, body = inner.admin(
+        status, body = session.admin(
             f"/v1/projects/{PROJECT}/accounts:lookup",
             {"email": [email]},
-            deadline=time.monotonic() + mfa_gate.DATA_SLOT_SECONDS,
         )
-        journal.append(
-            {
-                "id": "recover:address-lookup",
-                "account": role,
-                "status": status,
-                "chargedByGate": False,
-            }
-        )
-        users = body.get("users") if status == 200 and isinstance(body, dict) else None
-        if status != 200 or not isinstance(body, dict):
-            raise ValueError("address readback for an unsettled signup failed")
-        evidence = {"status": status, "responseDigest": digest(body)}
-        found = next(
-            (
-                user.get("localId")
-                for user in users or []
-                if isinstance(user, dict) and user.get("email") == email
-            ),
-            None,
-        )
+        settled = gate.settle_reconciled_creation(role)
+        found = settled["uid"]
         if found is None:
-            gate.settle_creation(role, None, evidence=evidence)
             walk.settle_intent(role)
         else:
-            gate.settle_creation(role, found, evidence=evidence)
             walk.adopt_account(role, found)
     return {"untracked": untracked}
 
@@ -691,7 +663,7 @@ def execute(
                 stop_point = "recover-unsettled"
                 reconcile_gate_accounts(walk, gate)
                 untracked = discover_unsettled(
-                    walk, gate, inner, session.management_receipts
+                    walk, gate, session, session.management_receipts
                 )["untracked"]
             elif not abandon:
                 raise ValueError("no checkpoint to resume; abandon the run instead")
@@ -815,7 +787,7 @@ def execute(
                     reconcile_gate_accounts(walk, gate)
                 if walk is not None and gate.unsettled_accounts():
                     untracked = discover_unsettled(
-                        walk, gate, inner, session.management_receipts
+                        walk, gate, session, session.management_receipts
                     )["untracked"]
                 if walk is not None:
                     walk.cleanup()

@@ -144,7 +144,40 @@ export const COMMIT_TRANSFORM_CASE = Object.freeze({
   ]),
 });
 
-export const CASES = Object.freeze([CASE, COMMIT_TRANSFORM_CASE]);
+export const G0_CASE = Object.freeze({
+  id: "fs.g0.saved-68012694.v1",
+  adapter: "g0",
+  evidenceKind: "saved-production-reference",
+  oracleKind: "normalized-g0-runtime-recomparison",
+  programId: "shared-g0-v1",
+  programDigest: null,
+  parent: "FS-DATA-WRITE",
+  title: "Shared G0 BatchWrite runtime recomparison",
+  referenceCommit: "a35f85b464743d62344a3a58763d382b5b3838ce",
+  productionResultPath: "G0_PRIVATE_PRODUCTION_RESULT",
+  productionResultSha256:
+    "47672f4e3162b4a0ddfb7baaab622007602aeed6c1fa3d6e5e84034bcbb87772",
+  nonce: "68012694f81df504600f8e67301410c6",
+  project: "fireemu-35fe6",
+  profile: "strict",
+  transport: "local-only",
+  sessionScript: "g0-session.mjs",
+  sessionSetupPhases: Object.freeze([]),
+  cleanupResetRequests: 0,
+  stepIds: Object.freeze([]),
+  ownedDocuments: Object.freeze([]),
+  compared: Object.freeze([
+    "12 normalized status/resource rows from the existing G0 comparator",
+    "typed values, refusal state, missing rows and extra rows",
+  ]),
+  notEstablished: Object.freeze([
+    "Byte-exact parity with the private production journal",
+    "Exact timestamps, token bytes or unnormalized resource names",
+    "A fresh production observation or parent promotion",
+  ]),
+});
+
+export const CASES = Object.freeze([CASE, COMMIT_TRANSFORM_CASE, G0_CASE]);
 
 export function selectCase(id = CASE.id) {
   const entry = CASES.find((c) => c.id === id);

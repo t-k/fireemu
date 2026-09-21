@@ -491,13 +491,15 @@ impl RestState {
     /// `DELETE .../databases/{database}/documents` drops every document of the project, which
     /// is what `@firebase/rules-unit-testing`'s `clearFirestore()` and the Emulator UI's
     /// "clear data" button call between tests. It takes no credential, exactly as the official
-    /// emulator's route does not -- `clearFirestore` sends no headers at all -- and is
-    /// reachable only from the loopback listener. Being loopback-only is not by itself enough:
+    /// emulator's route does not -- and is reachable only from the loopback listener.
+    /// `clearFirestore()` goes through Node's built-in fetch, which attaches
+    /// `sec-fetch-mode: cors` and nothing else a browser would, so it carries no browser
+    /// evidence. Being loopback-only is not by itself enough:
     /// this surface answers a CORS preflight for any loopback origin, `PUT` and `DELETE`
     /// included, so a page on another loopback port could drive it. Wiping a session's data is
     /// as privileged as replacing its ruleset, so the route takes the same admission: a request
     /// that carries browser metadata needs a loopback origin and the run's control token, while
-    /// the process-issued request `clearFirestore()` makes carries none of that metadata and is
+    /// the process-issued request `clearFirestore()` makes carries no browser evidence and is
     /// unaffected. The Emulator UI reaches it through its own front, which has already required
     /// the control token.
     ///

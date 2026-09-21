@@ -235,6 +235,32 @@ def ruleset_request(plan, label):
     }
 
 
+@pytest.mark.parametrize(
+    ("action", "extra", "route", "method"),
+    [
+        ("create", {"label": "A", "sourceDigest": digest("rules-a")}, "ruleset-create", "POST"),
+        ("get", {"rulesetName": "projects/fireemu-35fe6/rulesets/ruleset-a"}, "ruleset-get", "GET"),
+        ("delete", {"rulesetName": "projects/fireemu-35fe6/rulesets/ruleset-a"}, "ruleset-delete", "DELETE"),
+        ("release-get", {"releaseName": "projects/fireemu-35fe6/releases/cloud.firestore"}, "release-get", "GET"),
+        ("release-patch", {"releaseName": "projects/fireemu-35fe6/releases/cloud.firestore", "rulesetName": "projects/fireemu-35fe6/rulesets/ruleset-a"}, "release-patch", "PATCH"),
+        ("release-get-executable", {"releaseName": "projects/fireemu-35fe6/releases/cloud.firestore"}, "release-get-executable", "GET"),
+    ],
+)
+def test_rules_lifecycle_routes_are_closed(plan, action, extra, route, method):
+    plan = dict(plan, rulesets={"A": {"source": "rules-a"}, "B": {"source": "rules-b"}})
+    operation = {"kind": "rules-lifecycle", "phase": "ruleset", "action": action, **extra}
+    request = remote.prepare_request(plan, operation, credentials={"administrator": "fixture-admin"})
+    assert request["route"] == route
+    assert request["method"] == method
+    assert request["origin"] == remote.RULES_ORIGIN
+
+
+def test_rules_lifecycle_rejects_arbitrary_project_and_release_path(plan):
+    operation = {"kind": "rules-lifecycle", "phase": "ruleset", "action": "release-get", "releaseName": "projects/other/releases/x"}
+    with pytest.raises(ValueError, match="release resource shape refused"):
+        remote.prepare_request(plan, operation, credentials={"administrator": "fixture-admin"})
+
+
 def test_prepare_accepts_every_actual_collector_observation(plan):
     credentials = {
         "owner-a": "fixture-a",
@@ -388,7 +414,7 @@ def test_prepare_covers_absent_malformed_and_empty_credential_classes(plan):
 def test_prepare_rejects_wrong_phase_and_prepares_recovery_preconditions(plan):
     release = ruleset_request(plan, "A")
     release["phase"] = "arbitrary"
-    with pytest.raises(ValueError, match="phase"):
+    with pytest.raises(ValueError, match="alias"):
         remote.prepare_request(plan, release, credentials={"administrator": "fixture"})
 
     resource = plan["ownedResources"][0]

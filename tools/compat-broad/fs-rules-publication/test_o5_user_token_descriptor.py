@@ -8,8 +8,13 @@ the members that would reach a wire are left refusing.
 from __future__ import annotations
 
 import hashlib
+import http.server
 import json
+import os
+import socketserver
+import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -23,6 +28,7 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad/production-admission"))
 sys.path.insert(0, str(HERE))
 
 import o5_user_token_descriptor as lane
+import o5_user_token_remote_transport as remote
 import o8_admission
 from broad_contract import digest
 from o5_user_token_campaign import (
@@ -33,6 +39,9 @@ from o5_user_token_campaign import (
 )
 from o5_user_token_case import CAMPAIGN
 from o5_user_token_collector import ROLE_PRODUCTION
+from o5_user_token_collector import RulesManagementSession
+from reservations import Ledger
+import shared_gate
 from o5_user_token_comparator_v2 import REFUSED
 from o8_campaign import REQUIRED_MEMBERS, CampaignDescriptor
 from test_o5_user_token_collector import Transport
@@ -160,6 +169,8 @@ def test_the_frozen_inputs_cover_the_lane_and_the_shared_closure(tmp_path) -> No
         "o5_user_token_collector.py",
         "o5_user_token_comparator_v2.py",
         "o5_user_token_descriptor.py",
+        "o5_user_token_remote_transport.py",
+        "o5_user_token_https_worker.py",
     }
 
 
@@ -330,7 +341,11 @@ def test_the_collector_member_runs_the_lane_collector_bound() -> None:
         acquisition=acquisition_for(plan, ROLE_PRODUCTION),
     )
     assert bundle["provenance"]["role"] == ROLE_PRODUCTION
-    assert bundle["recordingComplete"] is True
+    # A bound run without the production Rules management session is held
+    # before mutation; this prevents the legacy receipt contract from being
+    # mistaken for production lifecycle evidence.
+    assert bundle["recordingComplete"] is False
+    assert bundle["abort"] == "collector:ValueError"
     assert bundle["budget"]["deadlineSeconds"] == 600.0
     assert bundle["budget"]["recoveryDeadlineSeconds"] == 900.0
     assert bundle["productionReady"] is False
@@ -341,7 +356,7 @@ def test_the_collector_member_runs_the_lane_collector_bound() -> None:
         run_id="unbound",
         acquisition=acquisition_for(plan, ROLE_PRODUCTION),
     )
-    assert refused["abort"] == "unbound-receipt"
+    assert refused["abort"] == "collector:ValueError"
 
 
 def test_the_comparator_member_compares_against_the_published_shadow() -> None:
@@ -363,15 +378,133 @@ def test_the_comparator_member_compares_against_the_published_shadow() -> None:
         acquisition=acquisition_for(shadow_plan, ROLE_PRODUCTION),
     )
     result = descriptor.comparator(production, shadow_plan)
-    assert result["classification"] != REFUSED, result["errors"]
-    assert result["errors"] == []
-    assert len(result["rows"]) == 33
-    assert all(
-        row["production"]["status"] == row["local"]["status"] for row in result["rows"]
-    )
-    # The scripted transport invents field values, so the row comparison names
-    # exactly that and nothing else.
-    assert {reason for row in result["rows"] for reason in row["reasons"]} <= {"fields"}
+    # The checked-in shadow predates the production management closure. It is
+    # intentionally stale and must remain refused until refreshed separately.
+    assert result["classification"] == REFUSED
+    assert "production:recording-incomplete" in result["errors"]
+
+
+def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_ledger(tmp_path) -> None:
+    plan = lane.plan_compiler(NONCE)
+    gate_plan = lane.gate_plan(plan, permission_expires_at=time.time() + 3600)
+    gate_path = tmp_path / "gate"
+    ledger = Ledger.create(tmp_path / "ledger")
+    now = time.time()
+    permission = {"kind": "o5-test"}
+    envelope = {"permissionDigest": digest(permission), "issuedAt": now - 1, "expiresAt": now + 3600, "limits": {"requests": 56, "accounts": 0, "resources": 1, "costMicrousd": 23}, "concurrency": 1, "scopes": [{"key": "project/fireemu-35fe6", "mode": "EXCLUSIVE"}]}
+    claim = {"campaignId": CAMPAIGN, "manifestDigest": digest(plan), "nonceDigest": digest(plan["nonce"]), "gatePath": str(gate_path.resolve()), "gatePlanDigest": digest(gate_plan), "locks": [{"key": "project/fireemu-35fe6", "mode": "EXCLUSIVE"}], "budget": dict(envelope["limits"]), "durationSeconds": 600}
+    ticket = ledger.reserve(envelope, claim, gate_plan)
+    shared_gate.create(gate_path, gate_plan)
+    gate = shared_gate.Gate(gate_path, CAMPAIGN)
+    acquisition = acquisition_for(plan, ROLE_PRODUCTION)
+    data = Transport(plan, endpoint="firestore.googleapis.com:443", fingerprints={ref: value["uidFingerprint"] for ref, value in acquisition["principals"].items()})
+    names = {"A": "projects/fireemu-35fe6/rulesets/server-a", "B": "projects/fireemu-35fe6/rulesets/server-b"}
+    baseline = "projects/fireemu-35fe6/rulesets/pre-existing"
+    class Handler(http.server.BaseHTTPRequestHandler):
+        active = baseline
+        deleted: set[str] = set()
+        requests: list[tuple[str, str, dict]] = []
+        def do_any(self):
+            size = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(size) or b"{}")
+            path = self.path
+            self.__class__.requests.append((self.command, path, body))
+            status = 200
+            if path.endswith(":getExecutable"):
+                payload = {"rulesetName": self.__class__.active}
+            elif path.endswith("/releases/cloud.firestore"):
+                if self.command == "PATCH":
+                    self.__class__.active = body["release"]["rulesetName"]
+                payload = {"name": "projects/fireemu-35fe6/releases/cloud.firestore", "rulesetName": self.__class__.active}
+            elif path == "/v1/projects/fireemu-35fe6/rulesets" and self.command == "POST":
+                label = "A" if body["source"]["files"][0]["content"] == plan["rulesets"]["A"]["source"] else "B"
+                payload = {"name": names[label]}
+            elif "/rulesets/" in path:
+                name = "projects/fireemu-35fe6/" + path.split("/v1/projects/fireemu-35fe6/", 1)[1]
+                if name in self.__class__.deleted:
+                    status, payload = 404, {"error": {"code": 404}}
+                elif self.command == "DELETE":
+                    self.__class__.deleted.add(name)
+                    payload = {}
+                else:
+                    label = "A" if name == names["A"] else "B"
+                    payload = {"name": name, "source": {"files": [{"name": "firestore.rules", "content": plan["rulesets"][label]["source"]}]}}
+            else:
+                status, payload = 404, {"error": {"code": 404}}
+            raw = json.dumps(payload, separators=(",", ":")).encode()
+            self.send_response(status); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
+        do_GET = do_any; do_POST = do_any; do_PATCH = do_any; do_DELETE = do_any
+        def log_message(self, *_args):
+            return
+
+    reservation = None
+    portctl = os.environ.get("FIREEMU_PORTCTL")
+    if portctl:
+        claim = subprocess.run([sys.executable, portctl, "claim", "--service", "o5-user-token-rules-management", "--preferred", "10000", "--range", "10000-19999", "--ttl", "10m", "--format", "json"], check=True, capture_output=True, text=True)
+        reservation = json.loads(claim.stdout)
+        server = socketserver.TCPServer(("127.0.0.1", int(reservation["port"])), Handler)
+    else:
+        server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    source, source_digest = remote.worker_binding()
+    origin = f"http://127.0.0.1:{server.server_address[1]}"
+    def execute(operation, **_kwargs):
+        if operation.get("kind") != "rules-lifecycle":
+            return data(operation)
+        prepared = remote.prepare_request(plan, operation, credentials={"administrator": "fixture-admin"})
+        envelope = {key: prepared[key] for key in ("service", "route", "method", "path", "headers", "body")}; envelope["seconds"] = 8.0
+        result = remote.run_worker(envelope, binding=source, binding_digest=source_digest, fixture_origin=origin)
+        return {"status": result["status"], "body": result["body"]}
+
+    assert gate.snapshot()["managementUsed"] == []
+    wrong_ticket = dict(ticket)
+    wrong_ticket["reservation"] = "foreign-reservation"
+    with pytest.raises(ValueError, match="Ledger claim binding"):
+        RulesManagementSession(gate=gate, ledger=ledger, ticket=wrong_ticket, execute=execute, plan=plan)
+    wrong_plan = json.loads(json.dumps(plan))
+    wrong_plan["nonce"] = "b" * 32
+    with pytest.raises(ValueError, match="Ledger claim binding"):
+        RulesManagementSession(gate=gate, ledger=ledger, ticket=ticket, execute=execute, plan=wrong_plan)
+    assert gate.snapshot()["managementUsed"] == []
+    assert Handler.requests == []
+    session = RulesManagementSession(gate=gate, ledger=ledger, ticket=ticket, execute=execute, plan=plan)
+    try:
+        bundle = lane.collector(plan, execute, run_id="real-o5", acquisition=acquisition, management_session=session)
+        assert bundle["recordingComplete"] is True, (bundle["abort"], bundle["infrastructureFailures"], bundle["transport"].get("rulesManagement"))
+        assert bundle["transport"]["rulesManagement"]["recovery"]["restored"] is True
+        assert len(gate.snapshot()["managementUsed"]) == 23
+        release = "projects/fireemu-35fe6/releases/cloud.firestore"
+        expected = [
+            ("GET", f"/v1/{release}", {}),
+            ("GET", "/v1/projects/fireemu-35fe6/rulesets/pre-existing", {}),
+            ("GET", f"/v1/{release}:getExecutable", {}),
+            ("POST", "/v1/projects/fireemu-35fe6/rulesets", {"source": {"files": [{"name": "firestore.rules", "content": plan["rulesets"]["A"]["source"]}]}}),
+            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-a", {}),
+            ("PATCH", f"/v1/{release}", {"release": {"name": release, "rulesetName": names["A"]}, "updateMask": "rulesetName"}),
+            ("GET", f"/v1/{release}", {}),
+            ("GET", f"/v1/{release}:getExecutable", {}),
+            ("POST", "/v1/projects/fireemu-35fe6/rulesets", {"source": {"files": [{"name": "firestore.rules", "content": plan["rulesets"]["B"]["source"]}]}}),
+            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-b", {}),
+            ("PATCH", f"/v1/{release}", {"release": {"name": release, "rulesetName": names["B"]}, "updateMask": "rulesetName"}),
+            ("GET", f"/v1/{release}", {}),
+            ("GET", f"/v1/{release}:getExecutable", {}),
+            ("GET", f"/v1/{release}", {}),
+            ("PATCH", f"/v1/{release}", {"release": {"name": release, "rulesetName": baseline}, "updateMask": "rulesetName"}),
+            ("GET", f"/v1/{release}", {}),
+            ("GET", f"/v1/{release}:getExecutable", {}),
+            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-a", {}),
+            ("DELETE", "/v1/projects/fireemu-35fe6/rulesets/server-a", {}),
+            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-a", {}),
+            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-b", {}),
+            ("DELETE", "/v1/projects/fireemu-35fe6/rulesets/server-b", {}),
+            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-b", {}),
+        ]
+        assert Handler.requests == expected
+    finally:
+        server.shutdown()
+        server.server_close()
+        if reservation is not None:
+            subprocess.run([sys.executable, portctl, "release", "--token", reservation["token"]], check=True)
 
 
 def test_a_local_shadow_bundle_fails_closed_as_production_evidence() -> None:

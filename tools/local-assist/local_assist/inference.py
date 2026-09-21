@@ -45,6 +45,10 @@ MAX_UNKNOWNS = 50
 QUANT_PATTERN = re.compile(
     r"(IQ\d_[A-Z0-9_]+|Q\d_K_[SML]|Q\d_K|Q\d_\d|PQ\d_\d|PTQ\d_\d|BF16|F16|F32)"
 )
+# llama-server's /props spells the file type "Q4_K - Medium"; the model
+# name spells the same quant "Q4_K_M".
+FTYPE_SUFFIXES = {" - Small": "_S", " - Medium": "_M", " - Large": "_L"}
+PROPS_KEYS = ("model_alias", "total_slots", "build_info", "model_ftype")
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,9 @@ class RuntimeIdentity:
     modelId: str | None
     quant: str | None
     extra: dict = field(default_factory=dict)
+    # True only when the server was probed and /v1/models (and /props, when
+    # the server exposes it) reported exactly the alias pinned in the config.
+    verified: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -70,6 +77,11 @@ class RuntimeIdentity:
             "quant": self.quant,
             **({"meta": self.extra} if self.extra else {}),
         }
+
+    @property
+    def expected_model(self) -> str | None:
+        """The `model` a completion must report, or None when nothing is pinned."""
+        return self.alias or self.modelId
 
 
 @dataclass
@@ -81,6 +93,19 @@ class Outcome:
     usage: dict = field(default_factory=dict)
     modelReported: str | None = None
     repairAttempted: bool = False
+    # The request was sent and never fully answered: the server may still be
+    # busy with it, so the caller must keep the in-flight marker.
+    serverStateUnknown: bool = False
+
+
+@dataclass(frozen=True)
+class Reply:
+    content: str
+    finish: str | None
+    usage: dict
+    model: str | None
+    truncated: bool
+    toolCalls: bool
 
 
 def load_prompt(kind: str) -> Prompt:
@@ -297,7 +322,7 @@ def _extract_json(content: str) -> object:
     return json.loads(text)
 
 
-def _reply_content(reply: dict) -> tuple[str, str | None, dict, str | None]:
+def _reply_content(reply: dict) -> Reply:
     choices = reply.get("choices")
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         raise TransportError("server-error", "reply has no choices")
@@ -329,13 +354,50 @@ def _reply_content(reply: dict) -> tuple[str, str | None, dict, str | None]:
         if isinstance(choice.get("finish_reason"), str)
         else None
     )
-    return content, finish, usage_out, model
+    return Reply(
+        content=content,
+        finish=finish,
+        usage=usage_out,
+        model=model,
+        truncated=reply.get("truncated") is True,
+        toolCalls=bool(message.get("tool_calls") or message.get("function_call")),
+    )
+
+
+def quant_from_ftype(ftype: object) -> str | None:
+    if not isinstance(ftype, str):
+        return None
+    text = ftype.strip()
+    for suffix, short in FTYPE_SUFFIXES.items():
+        if text.endswith(suffix):
+            text = text[: -len(suffix)] + short
+            break
+    match = QUANT_PATTERN.fullmatch(text)
+    return match.group(1) if match else None
+
+
+def _probe_props(base: str, transport: Transport, timeout: float) -> dict | None:
+    """Read /props when the server exposes it; None when it does not."""
+    try:
+        reply = transport("GET", base + "/props", None, timeout)
+    except TransportError:
+        return None
+    picked = {key: reply[key] for key in PROPS_KEYS if key in reply}
+    settings = reply.get("default_generation_settings")
+    if isinstance(settings, dict) and "n_ctx" in settings:
+        picked["n_ctx"] = settings["n_ctx"]
+    return picked
 
 
 def probe_runtime(
     endpoint: str, transport: Transport, timeout: float, alias: str | None
 ) -> RuntimeIdentity:
-    """Ask the server which model it serves. The identity is part of the cache key."""
+    """Ask the server which model it serves. The identity is part of the cache key.
+
+    With `alias` pinned, /v1/models must list exactly that id and /props (when
+    the server exposes it) must report it as `model_alias`; any other answer
+    is a runtime mismatch and nothing is sent to the model.
+    """
     base = endpoint.split("/v1/", 1)[0]
     reply = transport("GET", base + "/v1/models", None, timeout)
     data = reply.get("data")
@@ -343,7 +405,19 @@ def probe_runtime(
         raise TransportError("server-error", "/v1/models did not list a model")
     entry = data[0]
     model_id = entry.get("id") if isinstance(entry.get("id"), str) else None
+    if alias is not None and model_id != alias:
+        raise TransportError(
+            "runtime-mismatch",
+            f"/v1/models lists {model_id!r}, config alias is {alias!r}",
+        )
     meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+    props = _probe_props(base, transport, timeout)
+    if alias is not None and props is not None and props.get("model_alias") != alias:
+        raise TransportError(
+            "runtime-mismatch",
+            f"/props reports model_alias {props.get('model_alias')!r}, "
+            f"config alias is {alias!r}",
+        )
     quant = None
     for candidate in (
         model_id or "",
@@ -354,11 +428,20 @@ def probe_runtime(
         if match:
             quant = match.group(1)
             break
+    if quant is None and props is not None:
+        quant = quant_from_ftype(props.get("model_ftype"))
     picked = {
         key: meta[key] for key in ("n_params", "size", "n_ctx_train") if key in meta
     }
+    if props is not None:
+        picked["props"] = props
     return RuntimeIdentity(
-        endpoint=endpoint, alias=alias, modelId=model_id, quant=quant, extra=picked
+        endpoint=endpoint,
+        alias=alias,
+        modelId=model_id,
+        quant=quant,
+        extra=picked,
+        verified=alias is not None,
     )
 
 
@@ -392,23 +475,24 @@ def cache_key(
     ).hexdigest()
 
 
-def run_inference(
+def build_request_body(
     packet: Packet,
-    inputs: list[ReadInput],
-    prompt: Prompt,
     messages: list[dict],
     runtime: RuntimeIdentity,
-    transport: Transport,
     use_json_schema: bool,
-) -> Outcome:
-    """One chat completion, one optional repair for schema-invalid output."""
+) -> dict:
+    """The exact chat-completions body a run sends (before any repair turn)."""
     schema = response_schema(packet.kind, packet.maxFindings)
     body = {
-        "model": runtime.alias or runtime.modelId or "default",
+        "model": runtime.expected_model or "default",
         "messages": messages,
         "max_tokens": packet.maxOutputTokens,
         "temperature": 0,
         "stream": False,
+        # Both spellings llama-server understands; harmless when the model or
+        # the server has reasoning off already.
+        "enable_thinking": False,
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     if use_json_schema:
         body["response_format"] = {
@@ -428,6 +512,46 @@ def run_inference(
                 + json.dumps(schema),
             }
         ]
+    return body
+
+
+def describe_request(body: dict) -> dict:
+    """Request metadata for a dry run: sizes and digests, never the prompt text."""
+    encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    response_format = body.get("response_format")
+    return {
+        "model": body["model"],
+        "maxTokens": body["max_tokens"],
+        "temperature": body["temperature"],
+        "stream": body["stream"],
+        "enableThinking": body["enable_thinking"],
+        "responseFormat": response_format["type"] if response_format else "prompt",
+        "messages": [
+            {
+                "role": message["role"],
+                "chars": len(message["content"]),
+                "sha256": hashlib.sha256(
+                    message["content"].encode("utf-8")
+                ).hexdigest(),
+            }
+            for message in body["messages"]
+        ],
+        "bodyBytes": len(encoded),
+        "bodySha256": hashlib.sha256(encoded).hexdigest(),
+    }
+
+
+def run_inference(
+    packet: Packet,
+    inputs: list[ReadInput],
+    prompt: Prompt,
+    messages: list[dict],
+    runtime: RuntimeIdentity,
+    transport: Transport,
+    use_json_schema: bool,
+) -> Outcome:
+    """One chat completion, one optional repair for schema-invalid output."""
+    body = build_request_body(packet, messages, runtime, use_json_schema)
     deadline = time.monotonic() + packet.deadlineSeconds
     outcome = Outcome(finishStatus="ok")
     attempt_messages = body["messages"]
@@ -440,26 +564,45 @@ def run_inference(
                 repairAttempted=attempt == 1,
             )
         try:
-            reply = transport(
+            raw = transport(
                 "POST",
                 runtime.endpoint,
                 {**body, "messages": attempt_messages},
                 remaining,
             )
-            content, finish, usage, model = _reply_content(reply)
+            reply = _reply_content(raw)
         except TransportError as error:
             return Outcome(
                 finishStatus=error.status,
                 reason=error.reason,
                 repairAttempted=attempt == 1,
+                serverStateUnknown=error.inflight,
             )
-        outcome.usage = _merge_usage(outcome.usage, usage)
-        outcome.modelReported = model
-        if finish == "length":
+        outcome.usage = _merge_usage(outcome.usage, reply.usage)
+        outcome.modelReported = reply.model
+        outcome.repairAttempted = attempt == 1
+        if reply.truncated:
+            outcome.finishStatus = "needs-narrower-input"
+            outcome.reason = (
+                "server reported truncated: true (context overflow); narrow the inputs"
+            )
+            return outcome
+        expected = runtime.expected_model
+        if expected is not None and reply.model != expected:
+            outcome.finishStatus = "runtime-mismatch"
+            outcome.reason = (
+                f"completion reports model {reply.model!r}, expected {expected!r}"
+            )
+            return outcome
+        if reply.toolCalls:
+            outcome.finishStatus = "schema-invalid"
+            outcome.reason = "reply carried tool_calls although no tools were offered"
+            return outcome
+        if reply.finish == "length":
             outcome.finishStatus = "schema-invalid"
             outcome.reason = "output truncated by max_tokens (finish_reason=length)"
-            outcome.repairAttempted = attempt == 1
             return outcome
+        content = reply.content
         try:
             parsed = _extract_json(content)
             errors = validate_response(packet.kind, parsed, packet.maxFindings)
@@ -472,12 +615,10 @@ def run_inference(
             outcome.unknowns = [str(item) for item in parsed["unknowns"]] + dropped
             outcome.finishStatus = "ok"
             outcome.reason = ""
-            outcome.repairAttempted = attempt == 1
             return outcome
         outcome.finishStatus = "schema-invalid"
         outcome.reason = "; ".join(errors)[:500]
         if attempt == 1:
-            outcome.repairAttempted = True
             return outcome
         attempt_messages = body["messages"] + [
             {"role": "assistant", "content": content},

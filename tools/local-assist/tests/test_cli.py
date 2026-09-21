@@ -158,6 +158,11 @@ def test_find_test_candidates_returns_validated_findings(
     assert post["body"]["response_format"]["type"] == "json_schema"
     assert post["body"]["max_tokens"] == 600
     assert post["body"]["stream"] is False
+    assert post["body"]["enable_thinking"] is False
+    assert post["body"]["chat_template_kwargs"] == {"enable_thinking": False}
+    # No alias pinned: the identity was read from the server, not verified.
+    assert result["runtimeIdentityVerified"] is False
+    assert result["runtime"]["meta"]["props"]["model_alias"] == server.model_id
     assert (
         "     4| fn refresh_within_the_tenant_succeeds() {"
         in post["body"]["messages"][1]["content"]
@@ -345,14 +350,123 @@ def test_truncated_output_is_schema_invalid_without_repair(
     assert len(server.posts()) == 1
 
 
-def test_timeout_is_reported_without_retry(tmp_path, server, repo, state_dir):
+def test_a_zero_byte_timeout_keeps_the_lock_state_and_the_partial_record(
+    tmp_path, server, repo, state_dir, capsys
+):
+    # The server accepts the request and sends nothing before the deadline.
     server.replies.append({"__raw__": {"delay": 3, "body": b"{}"}})
     packet = write_packet(tmp_path, server, repo, deadlineSeconds=0.5)
     code, result, _ = run(tmp_path, packet, state_dir)
     assert code == 4
     assert result["finishStatus"] == "timeout"
     assert result["findings"] == []
+    assert result["serverStateUnknown"] is True
+    assert result["inflightMarker"] == str(state_dir / "inflight.json")
+    assert "--reset-lock" in result["reason"]
     assert len(server.posts()) == 1
+    marker = json.loads((state_dir / "inflight.json").read_text())
+    assert marker["taskId"] == "LOCAL-TEST-001"
+    assert marker["endpoint"] == server.endpoint
+    assert marker["pid"] == os.getpid()
+    assert oct((state_dir / "inflight.json").stat().st_mode & 0o777) == "0o600"
+    # The flock itself is free again: only the marker says "unknown".
+    holder = open(state_dir / "inference.lock", "a+")  # noqa: SIM115
+    fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+    holder.close()
+    assert "--reset-lock" in capsys.readouterr().err
+
+
+def test_after_an_unanswered_request_every_run_is_refused_until_reset(
+    tmp_path, server, repo, state_dir, capsys
+):
+    server.replies.append({"__raw__": {"delay": 3, "body": b"{}"}})
+    packet = write_packet(tmp_path, server, repo, deadlineSeconds=0.5)
+    code, _, _ = run(tmp_path, packet, state_dir, name="first.json")
+    assert code == 4
+    requests_before = len(server.requests)
+    server.replies.append(GOOD_FINDINGS)
+    code, result, _ = run(tmp_path, packet, state_dir, name="second.json")
+    assert code == 8
+    assert result["finishStatus"] == "server-state-unknown"
+    assert result["serverStateUnknown"] is True
+    assert result["inflight"]["taskId"] == "LOCAL-TEST-001"
+    assert "LOCAL-TEST-001" in result["reason"]
+    assert result["findings"] == []
+    # Not even the model probe went out: the server may still be generating.
+    assert len(server.requests) == requests_before
+    assert (state_dir / "inflight.json").exists()
+    # The reset is an explicit operator step with the same state dir.
+    assert main(["--reset-lock", "--state-dir", str(state_dir)]) == 0
+    out = capsys.readouterr().out
+    assert "removed marker for LOCAL-TEST-001" in out
+    assert "did not check the server" in out
+    assert not (state_dir / "inflight.json").exists()
+    code, result, _ = run(tmp_path, packet, state_dir, name="third.json")
+    assert code == 0
+    assert result["finishStatus"] == "ok"
+    assert not (state_dir / "inflight.json").exists()
+
+
+def test_reset_lock_refuses_while_a_run_holds_the_lock(tmp_path, state_dir, capsys):
+    state_dir.mkdir()
+    (state_dir / "inflight.json").write_text('{"taskId": "X"}')
+    holder = open(state_dir / "inference.lock", "a+")  # noqa: SIM115
+    fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        assert main(["reset-lock", "--state-dir", str(state_dir)]) == 3
+    finally:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+        holder.close()
+    assert "status=busy" in capsys.readouterr().err
+    assert (state_dir / "inflight.json").exists()
+    assert main(["reset-lock", "--state-dir", str(state_dir)]) == 0
+    assert main(["reset-lock", "--state-dir", str(state_dir)]) == 0
+    assert "nothing to do" in capsys.readouterr().out
+
+
+def test_reset_lock_takes_the_state_dir_from_the_config(tmp_path, state_dir):
+    state_dir.mkdir()
+    (state_dir / "inflight.json").write_text("{")  # torn marker
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"stateDir": str(state_dir)}))
+    assert main(["--reset-lock", "--config", str(config)]) == 0
+    assert not (state_dir / "inflight.json").exists()
+
+
+def test_an_unreadable_marker_is_still_an_unknown_server_state(
+    tmp_path, server, repo, state_dir
+):
+    state_dir.mkdir()
+    (state_dir / "inflight.json").write_text("{not json")
+    server.replies.append(GOOD_FINDINGS)
+    packet = write_packet(tmp_path, server, repo)
+    code, result, _ = run(tmp_path, packet, state_dir)
+    assert code == 8
+    assert result["inflight"] == {"unreadable": True}
+    assert server.requests == []
+
+
+def test_a_complete_error_response_clears_the_marker(tmp_path, server, repo, state_dir):
+    server.replies.append({"__raw__": {"status": 500, "body": b"{}"}})
+    packet = write_packet(tmp_path, server, repo)
+    code, result, _ = run(tmp_path, packet, state_dir)
+    assert code == 6
+    assert "serverStateUnknown" not in result
+    assert not (state_dir / "inflight.json").exists()
+
+
+def test_a_refused_connection_leaves_no_marker(tmp_path, repo, state_dir):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"modelId": "pinned.gguf"}))
+    packet = write_packet(tmp_path, None, repo)
+    code, result, _ = run(
+        tmp_path, packet, state_dir, extra_args=("--config", str(config))
+    )
+    assert code == 6
+    assert result["reason"].startswith("connection failed")
+    assert "serverStateUnknown" not in result
+    assert not (state_dir / "inflight.json").exists()
 
 
 def test_server_errors_are_reported_by_status_only(
@@ -548,6 +662,7 @@ def test_prompt_mode_config_sends_the_schema_in_the_prompt(
     config.write_text(
         json.dumps({"responseFormat": "prompt", "alias": "fireemu-local"})
     )
+    server.model_id = "fireemu-local"
     server.replies.append(GOOD_FINDINGS)
     packet = write_packet(tmp_path, server, repo)
     code, result, _ = run(
@@ -563,7 +678,7 @@ def test_prompt_mode_config_sends_the_schema_in_the_prompt(
 
 def test_a_pinned_model_id_skips_the_probe(tmp_path, server, repo, state_dir):
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"modelId": "pinned.gguf", "quant": "Q4_K_M"}))
+    config.write_text(json.dumps({"modelId": server.model_id, "quant": "Q4_K_M"}))
     server.replies.append(GOOD_FINDINGS)
     packet = write_packet(tmp_path, server, repo)
     code, result, _ = run(
@@ -573,11 +688,205 @@ def test_a_pinned_model_id_skips_the_probe(tmp_path, server, repo, state_dir):
     assert result["runtime"] == {
         "endpoint": server.endpoint,
         "alias": None,
-        "modelId": "pinned.gguf",
+        "modelId": server.model_id,
         "quant": "Q4_K_M",
-        "modelReportedByCompletion": "fireemu-local-Q4_K_M.gguf",
     }
+    # Pinning skips the probe, so nothing was verified against the server.
+    assert result["runtimeIdentityVerified"] is False
     assert [r["method"] for r in server.requests] == ["POST"]
+
+
+def test_a_completion_from_another_model_than_pinned_is_refused(
+    tmp_path, server, repo, state_dir, capsys
+):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"modelId": "pinned.gguf"}))
+    server.replies.append(GOOD_FINDINGS)
+    packet = write_packet(tmp_path, server, repo)
+    code, result, _ = run(
+        tmp_path, packet, state_dir, extra_args=("--config", str(config))
+    )
+    assert code == 7
+    assert result["finishStatus"] == "runtime-mismatch"
+    assert result["reason"] == (
+        "completion reports model 'fireemu-local-Q4_K_M.gguf', expected 'pinned.gguf'"
+    )
+    assert result["findings"] == []
+    assert result["runtime"]["modelReportedByCompletion"] == "fireemu-local-Q4_K_M.gguf"
+    assert len(server.posts()) == 1
+    assert "status=runtime-mismatch" in capsys.readouterr().err
+    # A refused reply is never cached.
+    assert not (state_dir / "cache").exists()
+
+
+def _alias_config(tmp_path, **extra) -> str:
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"alias": "fireemu-local", **extra}))
+    return str(config)
+
+
+def test_a_pinned_alias_is_verified_against_models_and_props(
+    tmp_path, server, repo, state_dir
+):
+    server.model_id = "fireemu-local"
+    server.replies.append(GOOD_FINDINGS)
+    packet = write_packet(tmp_path, server, repo)
+    code, result, _ = run(
+        tmp_path, packet, state_dir, extra_args=("--config", _alias_config(tmp_path))
+    )
+    assert code == 0
+    assert result["runtimeIdentityVerified"] is True
+    assert result["runtime"]["alias"] == "fireemu-local"
+    assert result["runtime"]["modelId"] == "fireemu-local"
+    assert result["runtime"]["quant"] == "Q4_K_M"  # from /props model_ftype
+    assert result["runtime"]["meta"]["props"]["n_ctx"] == 16384
+    assert [r["path"] for r in server.requests] == [
+        "/v1/models",
+        "/props",
+        "/v1/chat/completions",
+    ]
+    [post] = server.posts()
+    assert post["body"]["model"] == "fireemu-local"
+
+
+def test_a_pinned_alias_is_verified_when_the_server_has_no_props(
+    tmp_path, server, repo, state_dir
+):
+    server.model_id = "fireemu-local"
+    server.props = None
+    server.replies.append(GOOD_FINDINGS)
+    packet = write_packet(tmp_path, server, repo)
+    code, result, _ = run(
+        tmp_path, packet, state_dir, extra_args=("--config", _alias_config(tmp_path))
+    )
+    assert code == 0
+    assert result["runtimeIdentityVerified"] is True
+    assert result["runtime"]["quant"] is None
+    assert "props" not in result["runtime"].get("meta", {})
+
+
+def test_a_models_alias_mismatch_sends_nothing_to_the_model(
+    tmp_path, server, repo, state_dir, capsys
+):
+    # The fake serves fireemu-local-Q4_K_M.gguf; the config pins fireemu-local.
+    server.replies.append(GOOD_FINDINGS)
+    packet = write_packet(tmp_path, server, repo)
+    code, result, _ = run(
+        tmp_path, packet, state_dir, extra_args=("--config", _alias_config(tmp_path))
+    )
+    assert code == 7
+    assert result["finishStatus"] == "runtime-mismatch"
+    assert result["runtimeIdentityVerified"] is False
+    assert result["runtime"] is None
+    assert "config alias is 'fireemu-local'" in result["reason"]
+    assert server.posts() == []
+    assert "status=runtime-mismatch" in capsys.readouterr().err
+
+
+def test_a_props_alias_mismatch_sends_nothing_to_the_model(
+    tmp_path, server, repo, state_dir
+):
+    server.model_id = "fireemu-local"
+    server.props["model_alias"] = "swapped-model"
+    server.replies.append(GOOD_FINDINGS)
+    packet = write_packet(tmp_path, server, repo)
+    code, result, _ = run(
+        tmp_path, packet, state_dir, extra_args=("--config", _alias_config(tmp_path))
+    )
+    assert code == 7
+    assert "swapped-model" in result["reason"]
+    assert server.posts() == []
+
+
+def test_a_completion_naming_another_model_than_the_alias_is_refused(
+    tmp_path, server, repo, state_dir
+):
+    server.model_id = "fireemu-local"
+    server.reply_model = "fireemu-local-b"
+    server.replies.append(GOOD_FINDINGS)
+    packet = write_packet(tmp_path, server, repo)
+    code, result, _ = run(
+        tmp_path, packet, state_dir, extra_args=("--config", _alias_config(tmp_path))
+    )
+    assert code == 7
+    assert result["finishStatus"] == "runtime-mismatch"
+    assert result["runtimeIdentityVerified"] is True  # the probe did match
+    assert result["runtime"]["modelReportedByCompletion"] == "fireemu-local-b"
+    assert result["findings"] == []
+    assert len(server.posts()) == 1
+
+
+def test_an_explicitly_truncated_reply_is_needs_narrower_input(
+    tmp_path, server, repo, state_dir
+):
+    server.reply_extra = {"truncated": True}
+    server.replies.append(GOOD_FINDINGS)
+    packet = write_packet(tmp_path, server, repo)
+    code, result, _ = run(tmp_path, packet, state_dir)
+    assert code == 2
+    assert result["finishStatus"] == "needs-narrower-input"
+    assert "truncated: true" in result["reason"]
+    assert result["findings"] == []
+    assert len(server.posts()) == 1
+    assert not (state_dir / "cache").exists()
+
+
+def test_dry_run_prepares_the_request_without_contacting_anything(
+    tmp_path, server, repo, state_dir, capsys
+):
+    packet = write_packet(tmp_path, server, repo)
+    code, result, output = run(
+        tmp_path,
+        packet,
+        state_dir,
+        extra_args=("--config", _alias_config(tmp_path), "--dry-run"),
+    )
+    assert code == 0
+    assert result["finishStatus"] == "dry-run"
+    assert result["reason"] == "prepared, not sent"
+    assert server.requests == []
+    assert not state_dir.exists()
+    assert result["cache"] == {"hit": False, "key": None}
+    assert result["runtimeIdentityVerified"] is False
+    assert result["runtime"]["alias"] == "fireemu-local"
+    assert result["budget"]["estimatedPromptTokens"] > 0
+    [hashes] = result["inputHashes"]
+    assert len(hashes["rangeSha256"]) == 64
+    request = result["request"]
+    assert request["endpoint"] == server.endpoint
+    assert request["model"] == "fireemu-local"
+    assert request["responseFormat"] == "json_schema"
+    assert request["enableThinking"] is False
+    assert request["maxTokens"] == 600
+    assert [m["role"] for m in request["messages"]] == ["system", "user"]
+    assert request["bodyBytes"] > 0 and len(request["bodySha256"]) == 64
+    # Neither the excerpt nor the question text reaches the result or stdout.
+    text = output.read_text()
+    out = capsys.readouterr().out
+    assert "refresh_within_the_tenant_succeeds" not in text
+    assert "refresh_within_the_tenant_succeeds" not in out
+    assert "finishStatus=dry-run" in out
+    assert oct(output.stat().st_mode & 0o777) == "0o600"
+
+
+def test_dry_run_still_refuses_over_budget_input(tmp_path, server, repo, state_dir):
+    big = repo / "crates" / "auth" / "tests" / "big.rs"
+    big.write_text("\n".join("x" * 120 for _ in range(500)) + "\n")
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"contextTokens": 2048}))
+    packet = write_packet(
+        tmp_path,
+        server,
+        repo,
+        inputs=[{"path": "crates/auth/tests/big.rs", "startLine": 1, "endLine": 500}],
+    )
+    code, result, _ = run(
+        tmp_path, packet, state_dir, extra_args=("--config", str(config), "--dry-run")
+    )
+    assert code == 2
+    assert result["finishStatus"] == "needs-narrower-input"
+    assert "request" not in result
+    assert server.requests == []
 
 
 def test_an_unreachable_server_is_a_server_error(tmp_path, repo, state_dir):
@@ -615,6 +924,9 @@ def test_a_trickling_server_cannot_hold_the_request_past_the_deadline(
     assert result["finishStatus"] == "timeout"
     assert elapsed < 3.0, elapsed
     assert len(server.posts()) == 1
+    # Bytes did arrive, but no complete answer: the slot stays quarantined.
+    assert result["serverStateUnknown"] is True
+    assert (state_dir / "inflight.json").exists()
     # The abandoned connection is closed, so the server sees a broken pipe.
     deadline = time.monotonic() + 5
     while server.abandoned == 0 and time.monotonic() < deadline:
@@ -689,6 +1001,33 @@ def test_a_key_protected_server_needs_the_configured_key_file(
         key_file.write_text("local-secret-key-123\n")
         config = tmp_path / "config.json"
         config.write_text(json.dumps({"apiKeyFile": str(key_file)}))
+        # A key file other users can read is refused before any request.
+        key_file.chmod(0o644)
+        code, result, _ = run(
+            tmp_path,
+            packet,
+            state_dir,
+            name="loosekey.json",
+            extra_args=("--config", str(config)),
+        )
+        assert code == 1 and result is None
+        assert "readable by group or others" in capsys.readouterr().err
+        key_file.chmod(0o600)
+        # So is a symlink, whatever the target's mode.
+        link = tmp_path / "api-key.link"
+        link.symlink_to(key_file)
+        config.write_text(json.dumps({"apiKeyFile": str(link)}))
+        code, result, _ = run(
+            tmp_path,
+            packet,
+            state_dir,
+            name="linkkey.json",
+            extra_args=("--config", str(config)),
+        )
+        assert code == 1 and result is None
+        assert "must not be a symlink" in capsys.readouterr().err
+        config.write_text(json.dumps({"apiKeyFile": str(key_file)}))
+        requests_before = len(protected.requests)
         protected.replies.append(GOOD_FINDINGS)
         code, result, output = run(
             tmp_path,
@@ -699,6 +1038,8 @@ def test_a_key_protected_server_needs_the_configured_key_file(
         )
         assert code == 0
         assert len(result["findings"]) == 2
+        # The two refusals sent nothing: only the successful run's requests.
+        assert len(protected.requests) - requests_before == 3
         captured = capsys.readouterr()
         assert "local-secret-key-123" not in captured.out + captured.err
         assert "local-secret-key-123" not in output.read_text()

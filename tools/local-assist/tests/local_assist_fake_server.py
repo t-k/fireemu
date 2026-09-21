@@ -21,6 +21,18 @@ class FakeLlamaServer:
     ):
         self.model_id = model_id
         self.api_key = api_key
+        # `model` reported by completions; None mirrors model_id like llama-server.
+        self.reply_model: str | None = None
+        # Extra top-level keys merged into every scripted completion reply.
+        self.reply_extra: dict = {}
+        # /props payload; None makes the endpoint answer 404. `model_alias`
+        # defaults to model_id, as llama-server reports the alias in both places.
+        self.props: dict | None = {
+            "total_slots": 1,
+            "model_ftype": "Q4_K - Medium",
+            "default_generation_settings": {"n_ctx": 16384},
+            "build_info": "fake",
+        }
         self.replies: list[object] = []
         self.requests: list[dict] = []
         self.abandoned = 0
@@ -66,6 +78,9 @@ class FakeLlamaServer:
                             }
                         ]
                     }
+                    self._send(200, json.dumps(body).encode())
+                elif self.path == "/props" and outer.props is not None:
+                    body = {"model_alias": outer.model_id, **outer.props}
                     self._send(200, json.dumps(body).encode())
                 else:
                     self._send(404, b"{}")
@@ -128,7 +143,7 @@ class FakeLlamaServer:
                 body = {
                     "id": "chatcmpl-fake",
                     "object": "chat.completion",
-                    "model": outer.model_id,
+                    "model": outer.reply_model or outer.model_id,
                     "choices": [
                         {
                             "index": 0,
@@ -145,6 +160,7 @@ class FakeLlamaServer:
                         "predicted_ms": 40.0,
                         "predicted_per_second": 50.0,
                     },
+                    **outer.reply_extra,
                 }
                 self._send(200, json.dumps(body).encode())
 

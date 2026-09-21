@@ -198,6 +198,20 @@ fields" and "Typed JSON comparison of observed rows". The comparator contract
 string moved to `fs-rules-user-token-comparator-v4` because the meaning of
 `MATCH` changed.
 
+Review record (2026-09-21, external RULES-SEMANTIC-REPAIR-006): the label-only
+mapping accepted a field that carried the literal `principal:owner-a` before
+redaction as the principal. The collector now records `principalFieldBindings`
+per row before redaction, from the field value's equality with the uid a
+successful account readback returned (`o5_user_token_semantics.py`,
+`capture_principal_fields`); the comparator refuses a binding the readbacks do
+not show (`principal-binding:<caseId>:<field>:...`) and maps a principal slot
+only when the label and the binding agree. Typed JSON comparison lives in the
+same module with bounded depth, node count, string length and integer size.
+Collector contract `fs-rules-user-token-collector-v4`, comparator contract
+`fs-rules-user-token-comparator-v5`; the local shadow was regenerated at
+5f9b39710. Tests: `test_o5_user_token_semantics.py` (pure) and
+`test_o5_user_token_semantic_admission.py` (collector to comparator).
+
 Mutation record (2026-09-21): the three `local-mislabelled-as-production`
 signals are each covered by one test that changes exactly one binding of the
 real bound production bundle. Deleting the loopback refusal in

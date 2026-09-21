@@ -194,12 +194,18 @@ admitted only with a non-empty string status, a JSON-boolean document
 presence and finite JSON throughout (`row-schema:<caseId>:...` otherwise), and
 values are compared as encoded JSON, so a number never equals a boolean. A
 field the plan resolves to a principal is compared as the logical principal
-reference each side's own binding maps it to: the `principal:<ref>` label the
-collector's account readback recorded and the bundle declares under
-`redactedPrincipals`. The same logical principal behind two different uids is
+reference each side's own binding maps it to, through two witnesses that must
+agree: the `principal:<ref>` label the collector's account readback recorded
+and the bundle declares under `redactedPrincipals`, and the row's own
+`principalFieldBindings` entry, recorded by the collector before redaction
+from the field value's equality with the uid that readback returned (refs and
+readback indexes only; no uid is retained). A binding that the readbacks do not
+show is `principal-binding:<caseId>:<field>:...` and the bundle is
+`INDETERMINATE`. The same logical principal behind two different uids is
 agreement; `owner-a` against `other-b` is a `SEMANTIC_MISMATCH` on that row; a
-value neither binding maps is `principal-unmapped:<caseId>:<field>` and the
-result is `INDETERMINATE`. Being a non-empty string is not a mapping.
+value without both witnesses is `principal-unmapped:<caseId>:<field>` and the
+result is `INDETERMINATE`. Being a non-empty string is not a mapping, and
+neither is a literal that merely looks like a label.
 
 A row whose plan entry carries a production hypothesis is reported with that
 hypothesis and with whether the production status read as hypothesized or

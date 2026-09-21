@@ -36,6 +36,10 @@ def ownership_response(plan, resource, *, nonce=None, name=None, fields=None, up
     return {"complete": True, "status": 200, "body": body}
 
 
+def fixture_body(operation):
+    return {"name": operation["resource"], "fields": {"_owner": {"stringValue": "fixture"}}}
+
+
 def test_recovery_plan_has_distinct_identity_and_exact_85_slot_shape():
     plan = recovery.compile_recovery_plan(
         parent_plan(), selected_probe="under", recovery_nonce="fedcba9876543210fedcba9876543210"
@@ -49,7 +53,7 @@ def test_recovery_plan_has_distinct_identity_and_exact_85_slot_shape():
         "conditionalDeletes": 17,
         "absenceReads": 51,
         "maximumRequests": 85,
-        "tariffCostMicrousd": 45,
+        "tariffEstimateMicrousd": 45,
     }
     assert len(plan["operations"]) == 85
     assert sum(op["kind"] == "recovery-inspection-read" for op in plan["operations"]) == 17
@@ -72,6 +76,25 @@ def test_recovery_plan_rejects_parent_nonce_reuse_and_unknown_probe():
         recovery.compile_recovery_plan(
             parent_plan(), selected_probe="unknown", recovery_nonce="fedcba9876543210fedcba9876543210"
         )
+    with pytest.raises(ValueError, match="32 characters"):
+        recovery.compile_recovery_plan(
+            parent_plan(), selected_probe="under", recovery_nonce="not-hex-recovery-nonce-000000"
+        )
+
+
+@pytest.mark.parametrize("mutation", ["resource", "duplicate", "foreign"])
+def test_recovery_plan_rejects_mutated_parent_operations(mutation):
+    parent = parent_plan()
+    if mutation == "resource":
+        parent["probes"][0]["resources"][0] += "/foreign"
+    elif mutation == "duplicate":
+        parent["recovery"].append(dict(parent["recovery"][0]))
+    else:
+        parent["recovery"][0] = {**parent["recovery"][0], "resource": "projects/foreign"}
+    with pytest.raises((ValueError, KeyError)):
+        recovery.compile_recovery_plan(
+            parent, selected_probe="under", recovery_nonce="fedcba9876543210fedcba9876543210"
+        )
 
 
 def test_gate_plan_is_compiled_from_recovery_operations():
@@ -82,15 +105,28 @@ def test_gate_plan_is_compiled_from_recovery_operations():
     assert gate_plan["contract"] == "shared-local-v2"
     assert gate_plan["recoveryRequests"] == 85
     assert gate_plan["costMicrousd"] >= 85
+    assert gate_plan["tariffEstimateMicrousd"] == 45
     assert len(gate_plan["jobs"][recovery.RECOVERY_JOB]["recovery"]) == 85
     assert len(gate_plan["jobs"][recovery.RECOVERY_JOB]["schedule"]) == 85
+
+
+def test_gate_cost_cannot_be_underfunded_by_tariff_estimate():
+    gate_plan = recovery.compile_gate_plan(
+        recovery.compile_recovery_plan(
+            parent_plan(), selected_probe="under", recovery_nonce="fedcba9876543210fedcba9876543210"
+        )
+    )
+    assert gate_plan["costMicrousd"] == 85
+    assert gate_plan["tariffEstimateMicrousd"] == 45
+    assert gate_plan["costMicrousd"] > gate_plan["tariffEstimateMicrousd"]
 
 
 def test_ownership_validation_preserves_wrong_nonce_fields_name_version_and_absence():
     plan = parent_plan()
     resource = plan["probes"][0]["resources"][0]
     valid = ownership_response(plan, resource)
-    assert recovery.validate_ownership_response(plan, resource, valid)["owned"] is True
+    operation = {"method": "GET", "path": "/v1/" + resource, "resource": resource}
+    assert recovery.validate_ownership_response(plan, operation, valid)["owned"] is True
     for altered in (
         ownership_response(plan, resource, nonce="wrong"),
         ownership_response(plan, resource, fields={"blob": {"stringValue": "wrong"}}),
@@ -98,12 +134,18 @@ def test_ownership_validation_preserves_wrong_nonce_fields_name_version_and_abse
         ownership_response(plan, resource, update_time="not-a-timestamp"),
     ):
         with pytest.raises(ValueError, match="ownership"):
-            recovery.validate_ownership_response(plan, resource, altered)
+            recovery.validate_ownership_response(plan, operation, altered)
     absent = {"complete": True, "status": 404, "body": {"error": {"code": 404, "status": "NOT_FOUND"}}}
-    assert recovery.validate_ownership_response(plan, resource, absent) == {
+    assert recovery.validate_ownership_response(plan, operation, absent) == {
         "owned": False,
         "updateTime": None,
     }
+    with pytest.raises(ValueError, match="canonical requested resource"):
+        recovery.validate_ownership_response(
+            plan,
+            {"method": "GET", "path": "/v1/projects/foreign", "resource": "projects/foreign"},
+            absent,
+        )
 
 
 def test_real_gate_refuses_delete_without_trusted_creation_proof(tmp_path):
@@ -117,7 +159,7 @@ def test_real_gate_refuses_delete_without_trusted_creation_proof(tmp_path):
     gate.claim()
 
     inspection = gate_plan["jobs"][recovery.RECOVERY_JOB]["recovery"][0]
-    gate.dispatch(inspection, True, lambda: (200, recovery.owned_document_body(inspection)))
+    gate.dispatch(inspection, True, lambda: (200, fixture_body(inspection)))
     delete = gate_plan["jobs"][recovery.RECOVERY_JOB]["recovery"][1]
     with pytest.raises(ValueError, match="request outside closed scenario|creation ownership"):
         gate.dispatch(delete, True, lambda: (200, {}))

@@ -10,17 +10,20 @@ is approved.
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 import math
+import re
 from typing import Any
 
 import shared_gate
+import request_bytes_campaign as parent_campaign
+import request_bytes_compiler as parent_compiler
+import request_bytes_descriptor as parent_descriptor
 from request_bytes_collector import owned_document, typed_not_found
+from broad_contract import digest as canonical_digest
 
 RECOVERY_JOB = "request-bytes-recovery-extension"
-PROJECT = "fireemu-35fe6"
-DATABASE = "(default)"
+PROJECT = parent_descriptor.PROJECT
+DATABASE = parent_descriptor.DATABASE
 PROBES = ("under", "exact", "over")
 DOCUMENTS_PER_PROBE = 17
 ALL_RESOURCES = DOCUMENTS_PER_PROBE * len(PROBES)
@@ -28,18 +31,17 @@ INSPECTION_READS = DOCUMENTS_PER_PROBE
 CONDITIONAL_DELETES = DOCUMENTS_PER_PROBE
 ABSENCE_READS = ALL_RESOURCES
 MAXIMUM_REQUESTS = INSPECTION_READS + CONDITIONAL_DELETES + ABSENCE_READS
-READ_MICROUSD = 0.6
-DELETE_MICROUSD = 0.2
-TARIFF_COST_MICROUSD = math.ceil(
-    (INSPECTION_READS + ABSENCE_READS) * READ_MICROUSD
-    + CONDITIONAL_DELETES * DELETE_MICROUSD
-)
+
+
+def tariff_cost_microusd() -> int:
+    prices = parent_descriptor.budget_document()["cost"]["unitPricesUsd"]
+    read = prices["documentRead"] * 1_000_000
+    delete = prices["documentDelete"] * 1_000_000
+    return math.ceil((INSPECTION_READS + ABSENCE_READS) * read + CONDITIONAL_DELETES * delete)
 
 
 def _sha(value: object) -> str:
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return canonical_digest(value)
 
 
 def _operation(source: dict[str, Any], *, kind: str, version_from: str | None = None) -> dict[str, Any]:
@@ -55,12 +57,19 @@ def compile_recovery_plan(
     parent_plan: dict[str, Any], *, selected_probe: str, recovery_nonce: str
 ) -> dict[str, Any]:
     """Compile 17 selected ownership/delete pairs plus all 51 absence reads."""
+    parent_compiler.validate_request_bytes_plan(parent_plan)
+    if (
+        parent_plan.get("campaignId") != parent_compiler.CAMPAIGN
+        or parent_plan.get("project") != PROJECT
+        or parent_plan.get("database") != DATABASE
+    ):
+        raise ValueError("canonical parent campaign required")
     if selected_probe not in PROBES:
         raise ValueError("unknown recovery probe")
     parent_nonce = parent_plan.get("nonce")
     if not isinstance(parent_nonce, str) or not parent_nonce:
         raise ValueError("parent nonce required")
-    if not isinstance(recovery_nonce, str) or len(recovery_nonce) != 32:
+    if not isinstance(recovery_nonce, str) or re.fullmatch(r"[0-9a-f]{32}", recovery_nonce) is None:
         raise ValueError("recovery nonce must be 32 characters")
     if recovery_nonce == parent_nonce:
         raise ValueError("recovery nonce must be distinct")
@@ -86,7 +95,8 @@ def compile_recovery_plan(
             operations.append(_operation(source, kind="recovery-absence-read"))
     return {
         "schemaVersion": 1,
-        "campaignId": "FS-LIMIT-API-REQUEST-BYTES-RECOVERY",
+        "campaignId": parent_compiler.CAMPAIGN,
+        "taskCampaignId": parent_compiler.CAMPAIGN,
         "project": parent_plan.get("project", PROJECT),
         "database": parent_plan.get("database", DATABASE),
         "parentNonce": parent_nonce,
@@ -99,7 +109,7 @@ def compile_recovery_plan(
             "conditionalDeletes": CONDITIONAL_DELETES,
             "absenceReads": ABSENCE_READS,
             "maximumRequests": MAXIMUM_REQUESTS,
-            "tariffCostMicrousd": TARIFF_COST_MICROUSD,
+            "tariffEstimateMicrousd": tariff_cost_microusd(),
         },
         "operations": operations,
     }
@@ -114,7 +124,7 @@ def compile_gate_plan(recovery_plan: dict[str, Any]) -> dict[str, Any]:
     if len(resources) != ALL_RESOURCES:
         raise ValueError("full parent resource scope required")
     schedule = [
-        {"phase": "recovery", "index": index, "seconds": 2.5, "creates": False}
+        {"phase": "recovery", "index": index, "seconds": 3.0, "creates": False}
         for index in range(len(operations))
     ]
     return {
@@ -124,15 +134,15 @@ def compile_gate_plan(recovery_plan: dict[str, Any]) -> dict[str, Any]:
         "recoveryNonce": recovery_plan["recoveryNonce"],
         "jobSlots": 1,
         "ownershipMarker": {"field": "_owner", "binding": "nonce"},
-        "requestSeconds": 2.5,
+        "requestSeconds": parent_campaign.SMALL_REQUEST_TIMEOUT,
         "wallSeconds": 1200,
         "recoverySeconds": 1190,
         "intervalSeconds": shared_gate.INTERVAL_FLOOR_SECONDS,
         "observationRequests": 0,
         "recoveryRequests": MAXIMUM_REQUESTS,
-        "requestCostMicrousd": 1,
-        "costMicrousd": MAXIMUM_REQUESTS,
-        "tariffCostMicrousd": TARIFF_COST_MICROUSD,
+        "requestCostMicrousd": parent_descriptor.GATE_REQUEST_COST_MICROUSD,
+        "costMicrousd": MAXIMUM_REQUESTS * parent_descriptor.GATE_REQUEST_COST_MICROUSD,
+        "tariffEstimateMicrousd": recovery_plan["bounds"]["tariffEstimateMicrousd"],
         "jobs": {
             RECOVERY_JOB: {
                 "resources": resources,
@@ -145,9 +155,16 @@ def compile_gate_plan(recovery_plan: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_ownership_response(
-    parent_plan: dict[str, Any], resource: str, response: dict[str, Any]
+    parent_plan: dict[str, Any], operation: dict[str, Any], response: dict[str, Any]
 ) -> dict[str, Any]:
     """Accept only frozen-content ownership or a typed absence response."""
+    resource = operation.get("resource")
+    if (
+        operation.get("method") != "GET"
+        or operation.get("path") != "/v1/" + resource
+        or resource not in parent_plan.get("documents", {})
+    ):
+        raise ValueError("canonical requested resource required")
     if typed_not_found(response):
         return {"owned": False, "updateTime": None}
     expected = parent_plan.get("documents", {}).get(resource)
@@ -156,8 +173,3 @@ def validate_ownership_response(
     ):
         raise ValueError("frozen ownership proof required")
     return {"owned": True, "updateTime": response["body"]["updateTime"]}
-
-
-def owned_document_body(operation: dict[str, Any]) -> dict[str, Any]:
-    """Fixture-only body shape; production callers must validate real content."""
-    return {"name": operation["resource"], "fields": {"_owner": {"stringValue": "fixture"}}}

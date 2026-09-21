@@ -455,14 +455,8 @@ def test_batch_write_is_gated_by_the_same_predicate_as_patch(tmp_path):
     assert not [method for method, _ in responder.sent if method in ("POST", "PATCH")]
 
 
-def test_head_gate_settles_the_malformed_item_batch_as_unknown(tmp_path):
-    """Pinned: without the proposed rule the R3 batch leaves a create unconfirmed.
-
-    Every owned document is still deleted and proven absent; only the terminal
-    close is refused. The rule the lane needs is applied by the
-    `gate_accounts_the_empty_batch_item` fixture in the tests that model a
-    complete run, and its exact form is in the campaign preparation document.
-    """
+def test_head_gate_settles_the_malformed_item_batch(tmp_path):
+    """A typed refusal for an empty BatchWrite item settles the request."""
     from shared_gate import unconfirmed_creates
 
     plan = plan_for("e")
@@ -471,15 +465,25 @@ def test_head_gate_settles_the_malformed_item_batch_as_unknown(tmp_path):
     assert result["recordingComplete"] is True
     assert responder.documents == {}
     assert all(result["resourceAbsence"].values())
-    assert result["cleanupComplete"] is False
-    assert result["infrastructureFailures"] == [
-        {"phase": "finish", "failure": "ValueError"}
-    ]
+    assert result["cleanupComplete"] is True
+    assert result["infrastructureFailures"] == []
     gate = result["gate"]
-    assert unconfirmed_creates(gate, "limits") == 1
-    unsettled = [e for e in gate["events"] if e.get("creationOutcome") == "unknown"]
-    assert len(unsettled) == 1
-    operation = gate["plan"]["jobs"]["limits"]["observation"][unsettled[0]["index"]]
+    assert unconfirmed_creates(gate, "limits") == 0
+    malformed = [
+        index
+        for index, operation in enumerate(
+            gate["plan"]["jobs"]["limits"]["observation"]
+        )
+        if operation["path"].endswith(":batchWrite")
+        and {}
+        in operation["body"]["writes"]
+    ]
+    assert len(malformed) == 1
+    event = next(
+        event for event in gate["events"] if event.get("index") == malformed[0]
+    )
+    assert event["creationOutcome"] == "created"
+    operation = gate["plan"]["jobs"]["limits"]["observation"][malformed[0]]
     assert operation["path"].endswith(":batchWrite")
     assert {} in operation["body"]["writes"]
 
@@ -606,14 +610,10 @@ def test_accepted_boundary_that_is_refused_is_a_mismatch(tmp_path):
     }
     assert created, "the stop has to happen past a creating slot to be this test"
     assert all(result["resourceAbsence"][name] for name in created)
-    # The terminal close is a separate matter and is blocked in the Gate today:
-    # a slot skipped because its resource was never created records no absence
-    # proof, so `finish` and `abandoned_cleanup_complete` cannot see the set they
-    # require. Nothing is orphaned by it; only the bookkeeping is unfinished.
-    assert result["cleanupComplete"] is False
-    assert [failure["phase"] for failure in result["infrastructureFailures"]] == [
-        "finish"
-    ]
+    # The abandoned close only requires creation proofs for resources actually
+    # created; assigned-but-refused resources are covered by typed absence.
+    assert result["cleanupComplete"] is True
+    assert result["infrastructureFailures"] == []
 
 
 def _journal(plan, tmp_path, name):

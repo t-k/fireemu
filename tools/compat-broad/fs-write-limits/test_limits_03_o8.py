@@ -700,37 +700,25 @@ def test_a_full_run_finishes_the_gate_and_releases_the_temporary_ledger(
         )
 
 
-def test_head_gate_leaves_the_malformed_item_batch_unconfirmed(
+def test_head_gate_settles_the_malformed_item_batch(
     built, tmp_path, monkeypatch
 ):
-    """Pinned: on HEAD the run cleans everything but cannot close.
-
-    The malformed-item BatchWrite is the R3 condition the campaign exists to
-    observe, and HEAD's shared Gate settles it as an unknown create. Every
-    owned document is still deleted and proven absent; only the terminal
-    bookkeeping is refused, and the Ledger row stays held.
-    """
+    """A typed empty BatchWrite item settles without fabricating ownership."""
     result, receipt, output = _run_full(built, tmp_path, monkeypatch)
     gate = shared_gate.Gate(output / "gate", "limits").snapshot()
-    assert result["reservationReleased"] is False
-    assert shared_gate.unconfirmed_creates(gate, "limits") == 1
-    unsettled = [
+    assert result["reservationReleased"] is True
+    assert shared_gate.unconfirmed_creates(gate, "limits") == 0
+    assert not [
         event for event in gate["events"] if event.get("creationOutcome") == "unknown"
     ]
-    assert len(unsettled) == 1
-    operation = gate["plan"]["jobs"]["limits"]["observation"][unsettled[0]["index"]]
-    assert operation["path"].endswith(":batchWrite")
-    assert {} in operation["body"]["writes"]
-    assert receipt["collection"]["cleanupComplete"] is False
-    assert receipt["collection"]["infrastructureFailures"] == [
-        {"phase": "finish", "failure": "ValueError"}
-    ]
-    assert receipt["stopPoint"] == "create-deadline"
+    assert receipt["collection"]["cleanupComplete"] is True
+    assert receipt["collection"]["infrastructureFailures"] == []
+    assert receipt["postflightComplete"] is True
     assert (
         reservations.Ledger(built.ledger).snapshot()["reservations"][
             receipt["ticket"]["reservation"]
         ]["state"]
-        == "held"
+        == "released"
     )
 
 
@@ -810,15 +798,10 @@ def test_a_stop_after_a_create_recovers_exactly_the_created_documents(
         gate["jobs"]["limits"]["resources"]
     )
     assert receipt["collection"]["cleanupComplete"] is True
-    # The abandoned close itself is still out of reach: the shared Gate
-    # compares the creation proofs, not only the absence proofs, against every
-    # declared resource, and this campaign declares resources it expects
-    # production to refuse. Pinned so the Gate change is visible when it lands.
-    assert shared_gate.abandoned_cleanup_complete(gate) is None
-    assert receipt["abandonedCleanupComplete"] is False
+    assert shared_gate.abandoned_cleanup_complete(gate) == sorted(created)
+    assert receipt["abandonedCleanupComplete"] is True
     verdict = admission.classify_stop(receipt)
-    assert verdict["disposition"] == "owner-escalation"
-    assert "every declared resource" in verdict["reason"]
+    assert verdict["disposition"] == "abandoned-cleanup-close"
     row = reservations.Ledger(built.ledger).snapshot()["reservations"][
         receipt["ticket"]["reservation"]
     ]

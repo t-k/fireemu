@@ -136,15 +136,19 @@ def _actual_child(tmp_path):
             for operation in child_gate_plan["jobs"][recovery_campaign.RECOVERY_JOB]["recovery"]
         }
     )
-    child_permission = {
-        "kind": recovery.descriptor().permission_kind,
-        "wallSeconds": recovery.descriptor().campaign_seconds,
-        "recoverySeconds": recovery.descriptor().recovery_seconds,
-        "ownerIdentity": "offline-child-owner",
-        "recoveryOwner": "offline-recovery-owner",
-    }
+    child_permission = recovery._permission_bindings(
+        recovery_plan,
+        o7.inputs["sourceCommit"],
+        o7.inputs["artifactSha256"],
+        recovery.descriptor().source_map(),
+    )
     child_generation = parent_admission.abort_generation(o7.inputs)
-    child_generation["sourceCommit"] = "c320ceeb3b18488e5f5bfc12aae45430de2cf58e"
+    child_generation["sourceCommit"] = o7.inputs["sourceCommit"]
+    recovery_sources = recovery.descriptor().source_map()
+    child_generation["collectorSourceDigest"] = digest(recovery_sources)
+    child_generation["sourceDigests"][
+        Path(recovery._RECOVERY_SOURCE).name
+    ] = recovery_sources[recovery._RECOVERY_SOURCE]
     child_claim = {
         "kind": reservations.RECOVERY_CHILD_KIND,
         "version": 2,
@@ -283,3 +287,64 @@ def test_real_ledger_getter_and_o7_issuer_re_read_persisted_child(tmp_path):
             ledger_root=o7.ledger,
             **files,
         )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["deadline", "envelope", "parent", "source", "host", "gate", "permission", "plan"],
+)
+def test_persisted_child_mutations_fail_before_capability_or_ledger_write(
+    tmp_path, mutation
+):
+    o7, ledger, child_ticket, parent_plan, child_gate_plan, permission = _actual_child(
+        tmp_path
+    )
+    inputs = recovery.freeze_inputs(
+        ledger,
+        child_ticket,
+        parent_plan,
+        permission,
+        selected_probe="under",
+        source_commit=o7.commit,
+        artifact_sha256=o7.inputs["artifactSha256"],
+    )
+    files = _o7_files(tmp_path, o7, inputs)
+    issue_permission = permission
+    issue_parent_plan = parent_plan
+    bound = ledger.bound_recovery_claim(child_ticket)
+    mutated = copy.deepcopy(bound)
+    if mutation == "deadline":
+        mutated["deadline"] = time.time() - 1
+    elif mutation == "envelope":
+        mutated["newEnvelope"]["permissionDigest"] = "0" * 64
+    elif mutation == "parent":
+        mutated["parentIdentity"]["claimDigest"] = "0" * 64
+    elif mutation == "source":
+        mutated["childClaim"]["generation"]["sourceCommit"] = "0" * 40
+    elif mutation == "host":
+        mutated["childClaim"]["executionHost"] = {"platform": "other", "machine": "other"}
+    elif mutation == "gate":
+        mutated["childClaim"]["gatePlanDigest"] = "0" * 64
+    elif mutation == "permission":
+        issue_permission = {**permission, "nonce": "0" * 32}
+    elif mutation == "plan":
+        issue_parent_plan = {**parent_plan, "nonce": "0" * 32}
+    before = ledger.snapshot()
+    original_reader = ledger.bound_recovery_claim
+    ledger.bound_recovery_claim = lambda _ticket: copy.deepcopy(mutated)
+    try:
+        with pytest.raises(ValueError):
+            recovery.issue_production_capability(
+                ledger=ledger,
+                child_ticket=child_ticket,
+                parent_plan=issue_parent_plan,
+                child_gate_plan=child_gate_plan,
+                selected_probe="under",
+                inputs=inputs,
+                permission=issue_permission,
+                ledger_root=o7.ledger,
+                **files,
+            )
+    finally:
+        ledger.bound_recovery_claim = original_reader
+    assert ledger.snapshot() == before

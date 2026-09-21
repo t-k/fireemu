@@ -6,6 +6,7 @@ import copy
 import hashlib
 import math
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -59,20 +60,23 @@ def _plan_compiler(nonce: str) -> dict[str, Any]:
 
 
 def _permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
-    if plan.get("campaignId") != CAMPAIGN or plan.get("recoveryRequests") != 85:
+    if plan.get("campaignId") != CAMPAIGN:
         raise ValueError("recovery plan binding required")
+    stable_plan = copy.deepcopy(plan)
+    stable_plan.pop("childClaimDigest", None)
+    stable_plan.pop("childTicketDigest", None)
     return {
         "kind": parent_descriptor.PERMISSION_KIND,
         "campaignId": CAMPAIGN,
         "nonce": plan["nonce"],
-        "planDigest": digest(plan),
+        "planDigest": digest(stable_plan),
         "sourceCommit": source_commit,
         "sourceInputs": inputs,
         "collectorSourceDigest": digest(inputs),
         "artifactSha256": artifact_digest,
-        "childClaimDigest": plan.get("childClaimDigest"),
-        "childTicketDigest": plan.get("childTicketDigest"),
         "budget": copy.deepcopy(CHILD_BUDGET),
+        "wallSeconds": parent_descriptor.descriptor().campaign_seconds,
+        "recoverySeconds": parent_descriptor.descriptor().recovery_seconds,
     }
 
 
@@ -132,6 +136,17 @@ def validate_bound_child(bound: dict[str, Any]) -> dict[str, Any]:
         or not math.isfinite(bound["deadline"])
     ):
         raise ValueError("recovery child deadline changed")
+    now = time.time()
+    if (
+        bound["deadline"] <= now
+        or type(claim.get("durationSeconds")) is not int
+        or type(claim.get("expiresAt")) not in (int, float)
+        or type(envelope.get("expiresAt")) not in (int, float)
+        or bound["deadline"] - now > claim["durationSeconds"]
+        or bound["deadline"] > claim["expiresAt"]
+        or bound["deadline"] > envelope["expiresAt"]
+    ):
+        raise ValueError("recovery child deadline expired or changed")
     if digest(claim) != ticket.get("claimDigest"):
         raise ValueError("recovery child claim digest changed")
     if digest(envelope) != ticket.get("envelopeDigest"):
@@ -148,7 +163,44 @@ def validate_bound_child(bound: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("recovery permission binding changed")
     if not isinstance(parent_claim, dict) or not parent_claim:
         raise ValueError("parent claim required")
+    if (
+        ticket.get("ledgerPath") != parent_identity.get("ledgerPath")
+        or ticket.get("ledgerIdentity") != parent_identity.get("ledgerIdentity")
+        or ticket.get("parentReservation") != parent_identity.get("reservation")
+        or digest(parent_claim) != parent_identity.get("claimDigest")
+    ):
+        raise ValueError("exact persisted parent identity required")
+    generation = claim.get("generation")
+    if not isinstance(generation, dict) or not isinstance(claim.get("executionHost"), dict):
+        raise ValueError("recovery generation binding required")  # noqa: TRY004 -- admission collapses malformed persisted bindings
     return copy.deepcopy(bound)
+
+
+def _validate_current_binding(bound, inputs, permission, plan):
+    claim = bound["childClaim"]
+    generation = claim["generation"]
+    if generation.get("sourceCommit") != inputs.get("sourceCommit"):
+        raise ValueError("recovery source commit differs")
+    source_inputs = inputs.get("sourceInputs")
+    if generation.get("collectorSourceDigest") != digest(source_inputs):
+        raise ValueError("recovery source closure differs")
+    expected_sources = parent_descriptor.generation_source_digests(source_inputs)
+    expected_sources[Path(_RECOVERY_SOURCE).name] = source_inputs[_RECOVERY_SOURCE]
+    if generation.get("sourceDigests") != expected_sources:
+        raise ValueError("recovery source digests differ")
+    if claim.get("executionHost") != o8_admission.execution_host():
+        raise ValueError("recovery execution host differs")
+    expected_permission = descriptor().permission_bindings(
+        plan,
+        inputs["sourceCommit"],
+        inputs["artifactSha256"],
+        source_inputs,
+    )
+    stable_permission = copy.deepcopy(expected_permission)
+    if permission != stable_permission:
+        raise ValueError("recovery permission semantics differ")
+    if claim.get("permissionDigest") != digest(permission):
+        raise ValueError("recovery permission digest differs")
 
 
 def _canonical_plans(parent_plan, *, selected_probe: str, recovery_nonce: str):
@@ -231,6 +283,7 @@ def issue_production_capability(
         raise ValueError("frozen authoritative recovery plan differs")
     if inputs.get("permissionDigest") != claim.get("permissionDigest"):
         raise ValueError("frozen child permission binding differs")
+    _validate_current_binding(validated, inputs, bindings["permission"], recovery_plan)
     return o8_admission.issue_production_capability(descriptor(), **bindings)
 
 

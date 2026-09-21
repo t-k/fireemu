@@ -20,6 +20,10 @@ export function validateG0Origins(env) {
   return values;
 }
 
+export function canonicalG0Origins(env) {
+  return Object.fromEntries(Object.entries(validateG0Origins(env)).map(([service, host]) => [service, `http://${host}`]));
+}
+
 export function readOwnedProcessArgv(pid) {
   try {
     if (process.platform === "linux") return readFileSync(`/proc/${pid}/cmdline`).toString("utf8").split("\0").filter(Boolean);
@@ -39,6 +43,12 @@ export function readOwnedProcessArgv(pid) {
   return null;
 }
 
+export function resolveLockedUvCommand() {
+  const command = execFileSync("which", ["uv"], { encoding: "utf8" }).trim();
+  requireThat(command.startsWith("/"), "g0-uv-command-unavailable");
+  return command;
+}
+
 export function g0SessionPythonSource() {
   return [
     "import json, os, pathlib, subprocess, sys",
@@ -51,7 +61,7 @@ export function g0SessionPythonSource() {
     "firestore=os.environ.get('FIRESTORE_EMULATOR_HOST'); auth=os.environ.get('FIREBASE_AUTH_EMULATOR_HOST')",
     "if not firestore or not auth: raise ValueError('g0-owned-origins-missing')",
     "origins={'firestore': local_origin('http://' + firestore), 'auth': local_origin('http://' + auth)}",
-    "plan=json.loads((out/'program.json').read_bytes()); canonical_program_digest=digest(plan); plan['observerSha256']=observer_digest(); plan['localOrigins']=origins",
+    "plan=json.loads((out/'program.json').read_bytes()); canonical_program_digest=digest(plan); plan['observerSha256']=observer_digest(); plan['localOrigins']=origins; plan['transport']='local-only'",
     "create(out/'gate', plan)",
     "if not execute(out, origins): raise SystemExit(3)",
   ].join("\n");

@@ -35,7 +35,7 @@ from mfa_cases import TOTP_STEP_ROLLOVER_SECONDS
 from mfa_config_lock import VERIFIED_RESTORE_STATUSES, ConfigLock, ConfigLockError
 from mfa_provenance import compute_provenance, describe_worktree
 from mfa_timing import timing_mode
-from mfa_walk import BudgetError, Refused, StopRequested
+from mfa_walk import PROJECT, BudgetError, Refused, StopRequested
 
 RUN_STATE_FILE = "run-state.json"
 INJECTED_EXECUTION = "injected-transport"
@@ -94,6 +94,10 @@ def _read_private(path: Path) -> dict:
     if not isinstance(value, dict):
         raise ValueError("private run record malformed")  # noqa: TRY004 -- refusal class
     return value
+
+
+class GateAdoptionRefused(ValueError):
+    """The shared Gate could not be adopted by this process; nothing was sent."""
 
 
 class GateSession:
@@ -306,6 +310,96 @@ def remaining_seconds(prior: dict, now: float, *, manifest: dict, recovery: int)
     return int(critical) + int(recovery) + 1
 
 
+def discover_unsettled(walk, gate, inner, journal: list) -> dict:
+    """Settle every signup whose answer was lost, by an owner readback of its address.
+
+    The readback is sent through the inner session outside the Gate, because no
+    frozen slot exists for it, and is journaled as not charged by the Gate. An
+    address that reads back present becomes an owned, adopted account; one that
+    reads back absent settles the signup as never applied. The anonymous role has
+    no address and stays unsettled: it is reported as untracked.
+    """
+    untracked = []
+    for role in gate.unsettled_accounts():
+        email = walk._email(role)
+        if email is None:
+            untracked.append(role)
+            continue
+        status, body = inner.admin(
+            f"/v1/projects/{PROJECT}/accounts:lookup",
+            {"email": [email]},
+            deadline=time.monotonic() + mfa_gate.DATA_SLOT_SECONDS,
+        )
+        journal.append(
+            {
+                "id": "recover:address-lookup",
+                "account": role,
+                "status": status,
+                "chargedByGate": False,
+            }
+        )
+        users = body.get("users") if status == 200 and isinstance(body, dict) else None
+        if status != 200 or not isinstance(body, dict):
+            raise ValueError("address readback for an unsettled signup failed")
+        evidence = {"status": status, "responseDigest": digest(body)}
+        found = next(
+            (
+                user.get("localId")
+                for user in users or []
+                if isinstance(user, dict) and user.get("email") == email
+            ),
+            None,
+        )
+        if found is None:
+            gate.settle_creation(role, None, evidence=evidence)
+            walk.settle_intent(role)
+        else:
+            gate.settle_creation(role, found, evidence=evidence)
+            walk.adopt_account(role, found)
+    return {"untracked": untracked}
+
+
+def ungated_restore(output, inner, lock_arguments, journal: list, *, attempts: int = 2):
+    """Restore the configuration outside the Gate, after the gated restore failed.
+
+    The Gate's restore slot is one-shot and phase-ordered, so a transient failure
+    of the restore PATCH or a death between the apply and its readback would leave
+    the configuration applied with no path back. This retries the restore through
+    the inner session, journaled as not charged by the Gate, and returns the lock
+    whose record now says what happened.
+    """
+    lock = ConfigLock.resume(
+        output,
+        read=lambda: inner.read_config(deadline=time.monotonic() + 12.0),
+        patch=lambda body, mask: inner.patch_config(
+            body, mask, deadline=time.monotonic() + 12.0
+        ),
+        frozen_baseline_digest=lock_arguments["frozen_baseline_digest"],
+    )
+    for attempt in range(1, attempts + 1):
+        try:
+            lock.restore()
+            journal.append(
+                {
+                    "id": "recover:auth-config-restore",
+                    "attempt": attempt,
+                    "status": lock.record["restoreStatus"],
+                    "chargedByGate": False,
+                }
+            )
+            return lock
+        except ConfigLockError:
+            journal.append(
+                {
+                    "id": "recover:auth-config-restore",
+                    "attempt": attempt,
+                    "status": lock.record["restoreStatus"],
+                    "chargedByGate": False,
+                }
+            )
+    return lock
+
+
 def _check(stop_requested) -> None:
     if stop_requested is not None and stop_requested():
         raise StopRequested("stop requested")
@@ -442,7 +536,17 @@ def execute(
     output = output.resolve()
     _write_private(output / RUN_STATE_FILE, run_state)
     gate = mfa_gate.MfaGate(output / "gate")
-    if not (resume or abandon):
+    if resume or abandon:
+        # Before the credential is read: the shared Gate refuses every dispatch
+        # from a process other than the one that claimed it, so a resume or an
+        # abandon adopts it first or is refused here by name.
+        try:
+            adoption = gate.adopt()
+        except ValueError as error:
+            raise GateAdoptionRefused(str(error)) from error
+        run_state.setdefault("adoptions", []).append(adoption)
+        _write_private(output / RUN_STATE_FILE, run_state)
+    else:
         gate.claim()
     started_wall = sleeper.now()
     wall_seconds = manifest["limits"]["maxWallSeconds"]
@@ -457,6 +561,8 @@ def execute(
     lock = None
     credential_evidence = None
     session = None
+    inner = None
+    untracked: list = []
     try:
         credentials = _validate_credentials(credential_reader())
         if session_factory is None:
@@ -519,7 +625,10 @@ def execute(
                     resume=True,
                     stop_requested=stop_requested,
                 )
-                walk.reconcile_intents()
+                stop_point = "recover-unsettled"
+                untracked = discover_unsettled(
+                    walk, gate, inner, session.management_receipts
+                )["untracked"]
             elif not abandon:
                 raise ValueError("no checkpoint to resume; abandon the run instead")
             if abandon:
@@ -568,6 +677,9 @@ def execute(
         TypeError,
     ) as error:
         failure = type(error).__name__
+        # A wire failure mid-cases stays terminal: the shared Gate consumed the
+        # slot the failed request occupied, so the case cannot be sent again and a
+        # resume would meet every later slot out of order.
     except Exception as error:  # noqa: BLE001 -- after the credential was read a receipt is always written; only the class is kept
         failure = type(error).__name__
     finally:
@@ -614,6 +726,10 @@ def execute(
                     gate_refusal = type(error).__name__
             session.phase = "recovery"
             try:
+                if walk is not None and gate.unsettled_accounts():
+                    untracked = discover_unsettled(
+                        walk, gate, inner, session.management_receipts
+                    )["untracked"]
                 if walk is not None:
                     walk.cleanup()
             except Exception as error:  # noqa: BLE001 -- the restore behind cleanup must never be skipped
@@ -640,10 +756,16 @@ def execute(
                 session.phase = "recovery"
             try:
                 lock.restore()
-            except ConfigLockError as error:
-                failure = failure or type(error).__name__
-                if stop_point != "cleanup":
-                    stop_point = "restore"
+            except ConfigLockError:
+                # The gated restore is one-shot and phase-ordered; what it could
+                # not do, the un-gated retry does, journaled as such.
+                lock = ungated_restore(
+                    output, inner, lock_arguments, session.management_receipts
+                )
+                if lock.record["restoreStatus"] not in VERIFIED_RESTORE_STATUSES:
+                    failure = failure or "ConfigLockError"
+                    if stop_point != "cleanup":
+                        stop_point = "restore"
         if session is not None and not resumable and cleanup["complete"]:
             try:
                 gate.finish()
@@ -651,6 +773,8 @@ def execute(
             except ValueError as error:
                 gate_refusal = type(error).__name__
         admission.revoke_production_capability(capability)
+    if untracked and failure is None:
+        failure = "UntrackedAccount"
     walk_state = copy.deepcopy(walk.state) if walk is not None else None
     rows = walk.ordered_rows() if walk is not None else []
     complete = bool(
@@ -696,6 +820,13 @@ def execute(
         hostingRefusals=hosting,
         resumeCount=run_state["resumeCount"],
         abandonCount=run_state.get("abandonCount", 0),
+        adoptions=run_state.get("adoptions", []),
+        untrackedIntents=list(untracked),
+        configurationStillApplied=bool(
+            lock is not None
+            and lock.record["changeAttempted"]
+            and lock.record["restoreStatus"] not in VERIFIED_RESTORE_STATUSES
+        ),
         wallElapsedSeconds=sleeper.now() - started_wall,
         wallBudgetSeconds=wall_seconds,
         reservationStateAtPublication="held" if ticket is not None else "unreserved",

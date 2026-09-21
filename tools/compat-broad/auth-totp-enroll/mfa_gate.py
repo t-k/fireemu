@@ -34,6 +34,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -54,7 +55,7 @@ from mfa_cases import (
     owned_accounts,
 )
 from mfa_config_lock import CONFIG_PATH, TEST_CODE, TEST_PHONE
-from mfa_walk import RECAPTCHA_PLACEHOLDER
+from mfa_walk import CLEANUP_ORDER, RECAPTCHA_PLACEHOLDER
 
 JOB = "mfa-accounts"
 CONTRACT = "shared-local-v1"
@@ -91,14 +92,8 @@ IMMUTABLE_SUFFIXES = ("Uid",)
 CREATING_KINDS = ("sign-up",)
 #: Slot kinds a refused start makes unsendable; the facade may skip exactly these.
 SKIPPABLE_KINDS = ("mfa-signin-finalize",)
-ROLE_ORDER = (
-    "pending-control",
-    *[f"pending-age-{age}" for age in AGED_PENDING_SAMPLES],
-    *[f"enrollment-age-{age}" for age in SAMPLED_AGES_SECONDS],
-    "totp-lifecycle",
-    "interaction-unverified",
-    "interaction-anonymous",
-)
+#: The recovery slots run in the walk's cleanup order, which is its creation order.
+ROLE_ORDER = CLEANUP_ORDER
 ANONYMOUS_ROLES = ("interaction-anonymous",)
 UNVERIFIED_ROLES = ("interaction-unverified", "interaction-anonymous")
 
@@ -618,6 +613,17 @@ def _known_noncreating(operation: dict[str, Any]) -> bool:
 # --- typed responses ------------------------------------------------------------------
 
 
+def _process_alive(pid: int) -> bool:
+    """Whether a recorded process still exists; the base Gate's own liveness test."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _text(value: Any) -> bool:
     return (
         isinstance(value, str) and bool(value) and not value.startswith(BINDING_PREFIX)
@@ -727,6 +733,105 @@ class MfaGate(FrozenGate):
             stream.flush()
             os.fsync(stream.fileno())
 
+    # --- adoption across processes ---
+
+    def adopt(self) -> dict[str, Any]:
+        """Re-pin the Gate's coordinator and job to this process.
+
+        The shared Gate pins the coordinator and job process ids at `claim()` and
+        refuses every later dispatch from another process. Adoption is admitted
+        only when the recorded processes are gone (the liveness test the base
+        Gate's no-data abort makes), nothing is in flight, and the Gate's monotonic
+        clock still runs forward from the recorded start, which holds on the same
+        boot and not after one. Every adoption is journaled in the Gate state.
+        """
+        with self.locked() as state:
+            job = state["jobs"][self.job]
+            recorded = [state["coordinatorPid"], job["pid"]]
+            if state.get("noDataAbort") is not None:
+                raise ValueError("terminal Gate abort")
+            if state["coordinatorInflight"] or job["inflight"]:
+                raise ValueError("adoption refused: a request is in flight")
+            if any(pid is None for pid in recorded):
+                raise ValueError("adoption refused: the job was never claimed")
+            now = time.monotonic()
+            if state["started"] > now or state["lastSent"] > now:
+                raise ValueError("adoption refused: the Gate clock predates this boot")
+            me = os.getpid()
+            for pid in recorded:
+                if pid != me and _process_alive(pid):
+                    raise ValueError(f"adoption refused: process {pid} is still alive")
+            state["coordinatorPid"] = me
+            job["pid"] = me
+            record = {"from": recorded, "to": me, "at": time.time()}
+            state.setdefault("adoptions", []).append(record)
+            _save(self.path, state)
+            return record
+
+    def unsettled_accounts(self) -> list[str]:
+        """Roles whose signup was sent and whose answer never settled it."""
+        state = self.snapshot()
+        recipe = state["plan"]["jobs"][self.job]["observation"]
+        return [
+            recipe[event["index"]]["account"]
+            for event in state["events"]
+            if event.get("job") == self.job
+            and event.get("phase") == "observation"
+            and recipe[event["index"]]["kind"] in CREATING_KINDS
+            and event.get("creationOutcome") in ("pending", "unknown")
+        ]
+
+    def settle_creation(self, role: str, uid: str | None, *, evidence: dict) -> None:
+        """Settle a signup whose answer was lost, from a later owner readback.
+
+        `uid` is the account the readback found under the role's nonce-derived
+        address, or None when it found nothing. Found means created and owned;
+        not found means the request never took effect. The readback body is kept
+        as the evidence of the settlement, and the role's UID binding is recorded
+        so its cleanup slots resolve.
+        """
+        with self.locked() as state:
+            job = state["jobs"][self.job]
+            recipe = state["plan"]["jobs"][self.job]["observation"]
+            events = [
+                event
+                for event in state["events"]
+                if event.get("job") == self.job
+                and event.get("phase") == "observation"
+                and recipe[event["index"]]["kind"] in CREATING_KINDS
+                and recipe[event["index"]]["account"] == role
+            ]
+            if len(events) != 1 or events[0].get("creationOutcome") not in (
+                "pending",
+                "unknown",
+            ):
+                raise ValueError("no unsettled signup for this account")
+            event = events[0]
+            accounts = job.setdefault("authAccounts", {})
+            if role in accounts:
+                raise ValueError("an owned account was created twice")
+            if uid is None:
+                event["creationOutcome"] = "refused"
+                event["settledBy"] = {"kind": "address-readback-absent", **evidence}
+            else:
+                if not _text(uid) or len(uid) > 128:
+                    raise ValueError("typed account identity required")
+                position = state["events"].index(event)
+                accounts[role] = {
+                    "uid": uid,
+                    "createEvent": position,
+                    "adopted": True,
+                }
+                event["creationOutcome"] = "created"
+                event["settledBy"] = {"kind": "address-readback-present", **evidence}
+                name = _camel(role) + "Uid"
+                if name in self._observed and self._observed[name] != uid:
+                    raise ValueError("account identity binding is immutable")
+                self._observed[name] = uid
+                self.bindings[name] = uid
+                self._save_bindings()
+            _save(self.path, state)
+
     # --- slot resolution ---
 
     def next_operation(self, recovery: bool) -> dict[str, Any] | None:
@@ -808,6 +913,7 @@ class MfaGate(FrozenGate):
         return self._skip_slot(recovery, declared, reason)
 
     def _skip_uncreated_recovery(self) -> None:
+        unsettled = set(self.unsettled_accounts())
         while True:
             declared = self.next_operation(True)
             if declared is None:
@@ -815,17 +921,23 @@ class MfaGate(FrozenGate):
             accounts = self.snapshot()["jobs"][self.job].get("authAccounts", {})
             if declared["account"] in accounts:
                 return
+            if declared["account"] in unsettled:
+                # A signup whose answer was lost may have created the account;
+                # its cleanup is neither sendable nor skippable until a readback
+                # settles it.
+                raise ValueError("unsettled signup must be discovered before cleanup")
             self._skip_slot(True, declared, "account never created")
 
     def drain_recovery(self) -> int:
         """Skip every remaining recovery slot of an account this run never created."""
         skipped = 0
+        unsettled = set(self.unsettled_accounts())
         while True:
             declared = self.next_operation(True)
             if declared is None:
                 return skipped
             accounts = self.snapshot()["jobs"][self.job].get("authAccounts", {})
-            if declared["account"] in accounts:
+            if declared["account"] in accounts or declared["account"] in unsettled:
                 return skipped
             self._skip_slot(True, declared, "account never created")
             skipped += 1
@@ -1000,7 +1112,19 @@ class MfaGate(FrozenGate):
                 order.append(record["addressAbsenceEvent"])
             if order != sorted(order) or len(set(order)) != len(order):
                 raise ValueError("account cleanup event order differs")
-            for position in order:
+            create_event = state["events"][record["createEvent"]]
+            cleanup_events = order[1:]
+            if record.get("adopted"):
+                # The signup's answer was lost; the settlement readback stands in
+                # for the missing acknowledgement and the event says so.
+                if create_event.get("job") != self.job or not isinstance(
+                    create_event.get("settledBy"), dict
+                ):
+                    raise ValueError("adopted account evidence binding differs")
+                checked = cleanup_events
+            else:
+                checked = order
+            for position in checked:
                 event = state["events"][position]
                 if (
                     event.get("job") != self.job
@@ -1010,12 +1134,9 @@ class MfaGate(FrozenGate):
                     or event["authEvidence"].get("account") != name
                 ):
                     raise ValueError("account evidence binding differs")
-            if (
-                state["events"][record["createEvent"]].get("creationOutcome")
-                != "created"
-            ):
+            if create_event.get("creationOutcome") != "created":
                 raise ValueError("account creation event differs")
-            for position in order[1:]:
+            for position in cleanup_events:
                 event = state["events"][position]
                 if (
                     event.get("phase") != "recovery"

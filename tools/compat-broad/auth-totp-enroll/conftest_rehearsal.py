@@ -398,9 +398,12 @@ class FakeIdentityToolkit:
 class FakeSession:
     """The walk's session over the fake, with an optional fault injector."""
 
-    def __init__(self, fake: FakeIdentityToolkit, *, fault=None) -> None:
+    def __init__(self, fake: FakeIdentityToolkit, *, fault=None, after=None) -> None:
         self.fake = fake
         self.fault = fault
+        # `after(kind, path, count, fake, status, body)` runs once the fake has
+        # answered; raising there loses the answer after the service applied it.
+        self.after = after
         self._requests = 0
         self.calls: list[tuple[str, str]] = []
 
@@ -413,7 +416,10 @@ class FakeSession:
         self.calls.append((kind, path))
         if self.fault is not None:
             self.fault(kind, path, self._requests, self.fake)
-        return self.fake.handle(kind, path, body, mask)
+        status, answer = self.fake.handle(kind, path, body, mask)
+        if self.after is not None:
+            self.after(kind, path, self._requests, self.fake, status, answer)
+        return status, answer
 
     def public(self, path, body, **_kwargs):
         return self._call("auth-public", path, body)
@@ -583,20 +589,29 @@ class RehearsalAdmission:
     def credentials(self):
         return {"token": "offline-fixture-token", "apiKey": "offline-fixture-key"}
 
-    def session_factory(self, fault=None):
+    def session_factory(self, fault=None, after=None):
         def factory(_capability, _credentials, _deadline_for):
-            return FakeSession(self.fake, fault=fault)
+            return FakeSession(self.fake, fault=fault, after=after)
 
         return factory
 
-    def run(self, *, fault=None, stop_requested=None, resume=False, abandon=False):
+    def run(
+        self,
+        *,
+        fault=None,
+        after=None,
+        stop_requested=None,
+        resume=False,
+        abandon=False,
+        credential_reader=None,
+    ):
         from mfa_production import execute
 
         return execute(
             capability=self.capability(),
             inputs=self.inputs,
             permission=self.permission,
-            credential_reader=self.credentials,
+            credential_reader=credential_reader or self.credentials,
             ledger_root=self.ledger,
             output=self.output,
             sleeper=self.sleeper,
@@ -605,7 +620,7 @@ class RehearsalAdmission:
             resume=resume,
             abandon=abandon,
             stop_requested=stop_requested,
-            session_factory=self.session_factory(fault),
+            session_factory=self.session_factory(fault, after),
         )
 
     def ledger_row(self):

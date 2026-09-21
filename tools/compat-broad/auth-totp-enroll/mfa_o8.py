@@ -256,7 +256,19 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "MFA O8 did not complete; reservation held"
             + (", resumable" if result.get("resumable") else "")
-            + f" (stop point {result.get('stopPoint')}).",
+            + f" (stop point {result.get('stopPoint')})."
+            + (
+                " The project Auth configuration is STILL CHANGED under the held "
+                "lock: resume or abandon this run."
+                if result.get("configurationStillApplied")
+                else ""
+            )
+            + (
+                f" Untracked signups: {result['untrackedIntents']}; the owner must "
+                "find and delete them."
+                if result.get("untrackedIntents")
+                else ""
+            ),
             file=sys.stderr,
         )
         return 1

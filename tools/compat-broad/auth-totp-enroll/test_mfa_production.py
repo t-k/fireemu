@@ -294,19 +294,26 @@ def test_a_failed_restore_is_reported_and_never_verified(tmp_path):
     assert result["failure"] == "ConfigLockError"
     assert result["stopPoint"] == "restore"
     assert result["configuration"]["restoreStatus"] == "restore-failed"
-    assert result["configuration"]["restoreAttempts"] == 1
+    # One gated attempt and two un-gated retries, all refused by the fault.
+    assert result["configuration"]["restoreAttempts"] == 3
+    assert result["configurationStillApplied"] is True
     assert result["releaseEligible"] is False
     assert applied(built.fake.config)
     verdict = admission.classify_stop(result)
     assert verdict["disposition"] == "owner-escalation"
-    # A second attempt through the abandon path is refused by the shared Gate: its
-    # management slots are one-shot, so a failed restore cannot be retried inside
-    # the envelope. The receipt keeps saying so; the owner restores by hand.
+    # The abandon restores through the un-gated retry: the Gate's restore slot is
+    # spent, so the retry is journaled as not charged by the Gate.
     abandoned = built.run(abandon=True)
-    assert abandoned["configuration"]["restoreStatus"] == "restore-failed"
-    assert abandoned["configuration"]["restoreAttempts"] == 2
-    assert applied(built.fake.config)
-    assert admission.classify_stop(abandoned)["disposition"] == "owner-escalation"
+    assert abandoned["configuration"]["restoreStatus"] in (
+        "restored-verified",
+        "restored-verified-normalized",
+    )
+    assert not applied(built.fake.config)
+    assert abandoned["configurationStillApplied"] is False
+    assert any(
+        item["id"] == "recover:auth-config-restore" and item["chargedByGate"] is False
+        for item in abandoned["managementEvidence"]
+    )
 
 
 def test_a_restore_that_reads_back_an_exact_baseline_is_exact(tmp_path):
@@ -534,19 +541,26 @@ def test_an_abandon_after_a_death_between_apply_and_readback_restores_and_receip
     assert (built.output / "receipt.json").is_file()
 
 
-def test_an_abandon_after_a_death_before_the_apply_readback_is_receipted_not_raised(
-    tmp_path,
-):
+def test_an_abandon_after_a_death_before_the_apply_readback_restores_ungated(tmp_path):
     built = _dead_during_apply(tmp_path, after_readback=False)
     result = built.run(abandon=True)
     # The Gate admits its management slots once and in order: the apply readback
-    # was never taken, so the restore slot behind it cannot be charged. The run
-    # says so instead of raising, and the owner restores by hand.
+    # was never taken, so the restore slot behind it cannot be charged. The
+    # un-gated retry restores anyway, journaled as such, and the receipt says so.
     assert result["failure"] == "StopRequested"
-    assert result["configuration"]["restoreStatus"] == "restore-failed"
-    assert applied(built.fake.config)
+    assert result["configuration"]["restoreStatus"] in (
+        "restored-verified",
+        "restored-verified-normalized",
+    )
+    assert not applied(built.fake.config)
     assert (built.output / "receipt.json").is_file()
-    assert admission.classify_stop(result)["disposition"] == "owner-escalation"
+    assert any(
+        item["id"] == "recover:auth-config-restore" and item["chargedByGate"] is False
+        for item in result["managementEvidence"]
+    )
+    assert (
+        admission.classify_stop(result)["disposition"] == "abandoned-cleanup-complete"
+    )
 
 
 def test_production_execution_refuses_a_virtual_clock_directly(tmp_path):
@@ -599,3 +613,147 @@ def test_rows_carry_the_observed_age_anchored_to_each_resource(completed):
         row = rows[f"totp-enroll-session-age-{age}s"]
         assert row["sessionAgeSeconds"] == float(age)
         assert row["observedAgeSeconds"] == float(age) + 1.0
+
+
+# --- re-review: cross-process adoption, un-gated restore, lost signups ------------
+
+
+def _elsewhere(monkeypatch):
+    """Make every Gate check see another process, whose predecessor is gone."""
+    import os
+
+    import mfa_gate
+
+    real = os.getpid()
+    monkeypatch.setattr(os, "getpid", lambda: real + 100_000)
+    monkeypatch.setattr(mfa_gate, "_process_alive", lambda pid: pid != real)
+
+
+@pytest.mark.parametrize("mode", ["resume", "abandon"])
+def test_a_new_process_adopts_the_gate_and_finishes_or_abandons(
+    tmp_path, monkeypatch, mode
+):
+    built = RehearsalAdmission(tmp_path)
+    first = built.run(stop_requested=_stop_after(built, 4))
+    assert first["resumable"] is True and built.fake.accounts
+    _elsewhere(monkeypatch)
+    result = built.run(resume=mode == "resume", abandon=mode == "abandon")
+    assert (
+        result["adoptions"]
+        and result["adoptions"][0]["to"] != result["adoptions"][0]["from"][0]
+    )
+    assert result["cleanup"]["complete"] is True
+    assert built.fake.accounts == {}
+    assert result["configuration"]["restoreStatus"] in (
+        "restored-verified",
+        "restored-verified-normalized",
+    )
+    assert not applied(built.fake.config)
+    assert result["gateComplete"] is True
+    if mode == "resume":
+        assert result["failure"] is None
+        assert [row["id"] for row in result["rows"]] == list(CASE_IDS)
+
+
+def test_adoption_is_refused_before_any_credential_while_the_owner_is_alive(
+    tmp_path, monkeypatch
+):
+    import os
+
+    from mfa_production import GateAdoptionRefused
+
+    built = RehearsalAdmission(tmp_path)
+    first = built.run(stop_requested=_stop_after(built, 4))
+    assert first["resumable"] is True
+    real = os.getpid()
+    monkeypatch.setattr(os, "getpid", lambda: real + 100_000)
+    # The recorded process is this one and it is alive.
+
+    def never():
+        raise AssertionError("the credential must not be read")
+
+    with pytest.raises(GateAdoptionRefused, match="still alive"):
+        built.run(resume=True, credential_reader=never)
+    assert built.fake.accounts
+
+
+def test_a_lost_signup_answer_is_discovered_and_the_account_deleted(tmp_path):
+    built = RehearsalAdmission(tmp_path)
+    counters = {"signups": 0}
+
+    def after(kind, path, count, fake, status, body):
+        if path.endswith("accounts:signUp"):
+            counters["signups"] += 1
+            if counters["signups"] == 3:
+                raise ValueError("answer lost after the service applied it")
+
+    result = built.run(after=after)
+    assert result["failure"] == "ValueError"
+    assert result["stopPoint"] == "acquisition"
+    # The third signup created an account this process never saw; the address
+    # readback settled it as created and owned, and it was deleted with the rest.
+    assert result["cleanup"]["ownedAccounts"] == 3
+    assert result["cleanup"]["complete"] is True
+    assert built.fake.accounts == {}
+    assert result["accountEvidence"]["createdAccounts"] == 3
+    assert any(
+        item["id"] == "recover:address-lookup" and item["chargedByGate"] is False
+        for item in result["managementEvidence"]
+    )
+    assert result["gateComplete"] is True
+    assert result["untrackedIntents"] == []
+
+
+def test_a_lost_signup_in_a_dead_process_is_recovered_by_abandon(tmp_path):
+    built = RehearsalAdmission(tmp_path)
+    counters = {"signups": 0}
+    dead = {"now": False}
+
+    def after(kind, path, count, fake, status, body):
+        if path.endswith("accounts:signUp"):
+            counters["signups"] += 1
+            if counters["signups"] == 3:
+                dead["now"] = True
+                raise ValueError("answer lost, then the process dies")
+
+    def fault(kind, path, count, fake):
+        if dead["now"]:
+            raise ValueError("the process is dead: nothing more is sent")
+
+    first = built.run(fault=fault, after=after)
+    assert first["cleanup"]["complete"] is False
+    assert first["configuration"]["restoreStatus"] == "restore-failed"
+    assert len(built.fake.accounts) == 3
+    recovered = built.run(abandon=True)
+    assert recovered["cleanup"]["ownedAccounts"] == 3
+    assert recovered["cleanup"]["complete"] is True
+    assert built.fake.accounts == {}
+    assert recovered["configuration"]["restoreStatus"] in (
+        "restored-verified",
+        "restored-verified-normalized",
+    )
+    assert not applied(built.fake.config)
+    assert (
+        admission.classify_stop(recovered)["disposition"]
+        == "abandoned-cleanup-complete"
+    )
+
+
+def test_an_anonymous_signup_whose_answer_was_lost_is_reported_untracked(tmp_path):
+    built = RehearsalAdmission(tmp_path)
+
+    def after(kind, path, count, fake, status, body):
+        if (
+            path.endswith("accounts:signUp")
+            and body.get("localId")
+            and "email" not in body
+        ):
+            raise ValueError("anonymous answer lost")
+
+    result = built.run(after=after)
+    assert result["untrackedIntents"] == ["interaction-anonymous"]
+    assert result["failure"] in ("ValueError", "UntrackedAccount")
+    assert result["gateComplete"] is False
+    # The anonymous account is the one residue the cleanup contract cannot find.
+    assert len(built.fake.accounts) == 1
+    assert admission.classify_stop(result)["disposition"] == "owner-escalation"

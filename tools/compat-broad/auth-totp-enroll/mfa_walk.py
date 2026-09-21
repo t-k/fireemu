@@ -58,6 +58,15 @@ RECAPTCHA_PLACEHOLDER = "fireemu-test-phone-number"
 # and as the local shadow does by advancing one millisecond beyond it; a refusal is
 # then attributed to the interval's upper endpoint rather than to the target itself.
 AGE_SAMPLE_MARGIN_SECONDS = 1.0
+#: The roles in the order the walk creates them, which is the order it cleans them.
+CLEANUP_ORDER = (
+    "pending-control",
+    *[f"pending-age-{age}" for age in AGED_PENDING_SAMPLES],
+    *[f"enrollment-age-{age}" for age in SAMPLED_AGES_SECONDS],
+    "totp-lifecycle",
+    "interaction-unverified",
+    "interaction-anonymous",
+)
 ACCOUNT_ROLES_ANONYMOUS = ("interaction-anonymous",)
 ACCOUNT_ROLES_UNVERIFIED = ("interaction-unverified", "interaction-anonymous")
 
@@ -305,10 +314,16 @@ class Walk:
 
     def _account(self, role: str) -> dict:
         accounts = self.material.value["accounts"]
-        if role in accounts:
-            return accounts[role]
         email = self._email(role)
         verified = role not in ACCOUNT_ROLES_UNVERIFIED
+        if role in accounts:
+            account = accounts[role]
+            if account.get("idToken") is None and verified and email is not None:
+                # Adopted after a lost signup answer: the verification and the
+                # sign-in that follow a signup in the frozen plan have not been
+                # sent yet, so send them now and continue as after a signup.
+                self._verify_and_sign_in(account)
+            return account
         password = self.material.password()
         self._intent("create-intent", {"role": role, "email": email})
         payload = _require(
@@ -341,15 +356,18 @@ class Walk:
         if not isinstance(account["idToken"], str) or not account["idToken"]:
             raise ValueError("signup token is missing or malformed")
         if verified:
-            _require(
-                *self.session.admin(
-                    f"/v1/projects/{PROJECT}/accounts:update",
-                    {"localId": uid, "emailVerified": True},
-                )
-            )
-            account["idToken"] = self._sign_in(account)["idToken"]
-            self.material.save()
+            self._verify_and_sign_in(account)
         return account
+
+    def _verify_and_sign_in(self, account: dict) -> None:
+        _require(
+            *self.session.admin(
+                f"/v1/projects/{PROJECT}/accounts:update",
+                {"localId": account["localId"], "emailVerified": True},
+            )
+        )
+        account["idToken"] = self._sign_in(account)["idToken"]
+        self.material.save()
 
     def _sign_in(self, account: dict) -> dict:
         signed = _require(
@@ -847,16 +865,21 @@ class Walk:
         collector's abort state: cleanup runs on every path.
         """
         accounts = self.material.value["accounts"]
-        for resource in self.state["ownedResources"]:
-            if resource["kind"] != "account":
+        owned = {
+            r["id"]: r for r in self.state["ownedResources"] if r["kind"] == "account"
+        }
+        # Cleanup runs in creation order whatever order the accounts were
+        # registered in, because the frozen recovery slots are in that order and
+        # an adopted account is registered late.
+        for role in CLEANUP_ORDER:
+            account = accounts.get(role)
+            if account is None or account["localId"] not in owned:
                 continue
-            uid = resource["id"]
+            uid = account["localId"]
+            resource = owned[uid]
             if resource["deleted"] and resource["absenceVerified"]:
                 continue
-            email = next(
-                (item["email"] for item in accounts.values() if item["localId"] == uid),
-                None,
-            )
+            email = account["email"]
             # Every readback is sent whatever the delete answered: absence is what
             # they prove, and a delete that failed makes the readbacks the evidence
             # that the account is still there. Each call is guarded on its own so a
@@ -905,12 +928,8 @@ class Walk:
             if c["id"] in self.rows
         ]
 
-    def reconcile_intents(self) -> list[str]:
-        """After a resume, adopt an account whose signup was sent but never acknowledged.
-
-        The email carries the nonce, so a lookup by email is unambiguous ownership.
-        An adopted account is registered as owned and deleted with the others.
-        """
+    def unacknowledged_intents(self) -> list[dict]:
+        """Signups an earlier process sent without recording an answer."""
         path = self.directory / INTENT_FILE
         if not path.exists():
             return []
@@ -922,34 +941,37 @@ class Walk:
                 intents[entry["role"]] = entry
             elif entry["kind"] == "create-ack":
                 acknowledged.add(entry["role"])
-        adopted = []
-        for role, entry in intents.items():
-            if role in acknowledged or entry["email"] is None:
-                continue
-            status, body = self.session.admin(
-                f"/v1/projects/{PROJECT}/accounts:lookup", {"email": [entry["email"]]}
-            )
-            users = (
-                body.get("users") if status == 200 and isinstance(body, dict) else None
-            )
-            for user in users or []:
-                uid = user.get("localId")
-                if isinstance(uid, str) and uid and user.get("email") == entry["email"]:
-                    register_owned(self.state, "account", uid, self.sleeper.now())
-                    self.material.value["accounts"][role] = {
-                        "localId": uid,
-                        "email": entry["email"],
-                        "idToken": None,
-                        "phoneEnrolled": False,
-                    }
-                    adopted.append(uid)
-                    self._intent(
-                        "create-ack", {"role": role, "uid": uid, "adopted": True}
-                    )
-        if adopted:
-            self.material.save()
-            self._save_checkpoint()
-        return adopted
+        return [entry for role, entry in intents.items() if role not in acknowledged]
+
+    def adopt_account(self, role: str, uid: str) -> None:
+        """Own an account an earlier process created and never acknowledged.
+
+        The account has no ID token; the verification and sign-in the plan places
+        after its signup are sent when the walk next needs it, and it is deleted
+        with the others in cleanup order.
+        """
+        if (
+            not isinstance(uid, str)
+            or not uid
+            or any(ord(c) < 32 or ord(c) == 127 for c in uid)
+        ):
+            raise ValueError("typed account identity required")
+        if role in self.material.value["accounts"]:
+            raise ValueError("account role already owned")
+        register_owned(self.state, "account", uid, self.sleeper.now())
+        self.material.value["accounts"][role] = {
+            "localId": uid,
+            "email": self._email(role),
+            "idToken": None,
+            "phoneEnrolled": False,
+        }
+        self.material.save()
+        self._intent("create-ack", {"role": role, "uid": uid, "adopted": True})
+        self._save_checkpoint()
+
+    def settle_intent(self, role: str) -> None:
+        """Record that a readback found no account for an unacknowledged signup."""
+        self._intent("create-absent", {"role": role})
 
 
 __all__ = [

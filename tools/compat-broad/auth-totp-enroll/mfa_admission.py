@@ -508,7 +508,7 @@ def classify_stop(receipt) -> dict:
             or configuration.get("restoreStatus") == "not-attempted"
         )
     )
-    absent = cleanup.get("complete") is True
+    absent = cleanup.get("complete") is True and not receipt.get("untrackedIntents")
     if restored and absent:
         return {
             "stopPoint": stop,
@@ -520,7 +520,12 @@ def classify_stop(receipt) -> dict:
         "stopPoint": stop,
         "disposition": "owner-escalation",
         "retirableAsNoData": False,
-        "reason": "configuration restore or account absence is unproven",
+        "reason": (
+            "a signup without an address was sent and never answered; the owner "
+            "must find and delete the account"
+            if receipt.get("untrackedIntents")
+            else "configuration restore or account absence is unproven"
+        ),
     }
 
 

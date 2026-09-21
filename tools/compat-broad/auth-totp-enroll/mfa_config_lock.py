@@ -406,9 +406,15 @@ def validate_evidence(value: Any, *, frozen_baseline_digest: str) -> bool:
             or reference.get("valuesRetained") is not False
             or value["preflightReadbackDigest"] != frozen_baseline_digest
             and value["restoreStatus"] != "restored-verified-normalized"
-            or value["applied"] is not True
-            or not isinstance(value["appliedReadbackDigest"], str)
-            or _HEX64.fullmatch(value["appliedReadbackDigest"]) is None
+            # A change whose readback was lost (applied false) still counts once
+            # its restore verified; an applied change must carry its readback.
+            or (
+                value["applied"] is True
+                and (
+                    not isinstance(value["appliedReadbackDigest"], str)
+                    or _HEX64.fullmatch(value["appliedReadbackDigest"]) is None
+                )
+            )
             or value["restoreStatus"] not in VERIFIED_RESTORE_STATUSES
             or not isinstance(value["restoreReadbackDigest"], str)
             or _HEX64.fullmatch(value["restoreReadbackDigest"]) is None

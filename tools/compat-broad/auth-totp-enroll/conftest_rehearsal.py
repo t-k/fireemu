@@ -34,7 +34,7 @@ from broad_contract import digest
 
 import mfa_admission as admission
 import mfa_descriptor as campaign
-from mfa_config_lock import PROJECT_NUMBER, TEST_CODE
+from mfa_config_lock import PROJECT, PROJECT_NUMBER, TEST_CODE
 from mfa_timing import VirtualClockSleeper
 from mfa_totp import TotpParameters, totp_code
 
@@ -66,6 +66,9 @@ class FakeIdentityToolkit:
     def __init__(self, clock: VirtualClockSleeper, *, config=None) -> None:
         self.clock = clock
         self.config = copy.deepcopy(BASELINE_CONFIG if config is None else config)
+        # What `GET /v1/projects?key=` answers with; a test simulating a key
+        # minted for another project overrides this before the run.
+        self.project_id = PROJECT
         self.accounts: dict[str, dict] = {}
         self.tokens: dict[str, str] = {}
         self.pendings: dict[str, dict] = {}
@@ -116,6 +119,8 @@ class FakeIdentityToolkit:
             }
         if kind == "auth-config-patch":
             return self._patch_config(body, mask)
+        if kind == "auth-key-project":
+            return 200, {"projectId": self.project_id}
         if path.endswith("/config"):
             return 200, copy.deepcopy(self.config)
         action = path.rsplit(":", 1)[-1]
@@ -429,6 +434,9 @@ class FakeSession:
 
     def read_config(self, **_kwargs):
         return self._call("auth-admin", "/admin/v2/projects/fireemu-35fe6/config", None)
+
+    def project_config(self, **_kwargs):
+        return self._call("auth-key-project", "/v1/projects", None)
 
     def patch_config(self, body, mask, **_kwargs):
         return self._call(

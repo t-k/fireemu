@@ -446,6 +446,7 @@ def screen_receipt(receipt) -> None:
 NO_DATA_STOP_POINTS = (
     "schedule-not-started",
     "preflight-tokeninfo",
+    "preflight-key-project",
     "preflight-config-readback",
 )
 CONFIG_CHANGED_STOP_POINTS = (

@@ -8,6 +8,7 @@ evidence; the driver labels them `injected-transport` and the comparator refuses
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -101,6 +102,7 @@ def test_the_full_walk_completes_cleans_up_and_restores(completed):
     assert evidence["skips"] == 1 and evidence["complete"] is True
     assert [item["id"] for item in result["managementEvidence"]] == [
         "observation:oauth-tokeninfo",
+        "preflight:auth-key-project",
         "observation:auth-config-readback",
         "observation:auth-config-apply",
         "observation:auth-config-apply-readback",
@@ -206,6 +208,27 @@ def test_an_abandon_after_a_stop_deletes_every_account_and_restores(tmp_path):
     assert not applied(built.fake.config)
     verdict = admission.classify_stop(abandoned)
     assert verdict["disposition"] == "abandoned-cleanup-complete"
+
+
+def test_a_key_of_another_project_refuses_before_any_patch_or_signup(tmp_path):
+    # Owner review a2d2db49c item 1: the public routes (signUp first of all) are
+    # selected by the Web API key alone, with nothing binding it to the approved
+    # project the way the admin routes are pinned by their literal path. A key
+    # minted for another project must be refused by the read-only preflight
+    # before it ever reaches a config PATCH or a signUp.
+    built = RehearsalAdmission(tmp_path)
+    built.fake.project_id = "some-other-project"
+    result = built.run()
+    assert result["failure"] == "ValueError"
+    assert result["stopPoint"] == "preflight-key-project"
+    assert result["configuration"] is None
+    assert built.fake.accounts == {}
+    assert not any(kind == "auth-config-patch" for kind, _ in built.fake.log)
+    assert not any(path.endswith("accounts:signUp") for _, path in built.fake.log)
+    assert not (built.output / LOCK_FILE).exists()
+    verdict = admission.classify_stop(result)
+    assert verdict["disposition"] == "aborted-no-data"
+    assert verdict["retirableAsNoData"] is True
 
 
 def test_configuration_drift_at_preflight_refuses_before_any_change(tmp_path):
@@ -362,7 +385,7 @@ def _stop_after(built, done_cases):
     return stop_requested
 
 
-@pytest.mark.parametrize("outage", ["oauth-tokeninfo", "lock-record"])
+@pytest.mark.parametrize("outage", ["oauth-tokeninfo", "lock-record", "api-key-swap"])
 def test_a_resume_that_fails_before_acting_still_owns_the_earlier_accounts(
     tmp_path, outage
 ):
@@ -380,7 +403,16 @@ def test_a_resume_that_fails_before_acting_still_owns_the_earlier_accounts(
         if outage == "oauth-tokeninfo" and kind == "oauth-tokeninfo":
             raise ValueError("injected tokeninfo outage")
 
-    second = built.run(resume=True, fault=fault)
+    credential_reader = None
+    if outage == "api-key-swap":
+        # A resume handed a different physical key than the one the fresh run
+        # bound (owner review a2d2db49c item 1): refused by digest before any
+        # network call, let alone a signUp or a configuration patch.
+        def credential_reader():
+            return {"token": "offline-fixture-token", "apiKey": "swapped-key"}
+
+    before_log = len(built.fake.log)
+    second = built.run(resume=True, fault=fault, credential_reader=credential_reader)
     assert second["failure"] in ("ValueError", "ConfigLockError")
     assert second["resumable"] is False
     cleanup = second["cleanup"]
@@ -391,6 +423,10 @@ def test_a_resume_that_fails_before_acting_still_owns_the_earlier_accounts(
     assert verdict["disposition"] == "owner-escalation"
     assert verdict["retirableAsNoData"] is False
     assert second["resumeCount"] == 1
+    if outage == "api-key-swap":
+        assert second["stopPoint"] == "preflight-key-project"
+        # The digest check is purely local: not one extra wire call was made.
+        assert len(built.fake.log) == before_log
 
 
 def test_an_abandon_does_not_consult_the_reservation_deadline_but_a_resume_does(
@@ -477,6 +513,11 @@ def _dead_during_apply(tmp_path, *, after_readback):
             "gatePlanDigest": admission.digest(gate_plan),
             "resumeCount": 0,
             "receipts": [],
+            # A real process binds this at its key-project preflight, before it
+            # can ever reach the configuration apply this fixture starts from.
+            "apiKeyDigest": hashlib.sha256(
+                built.credentials()["apiKey"].encode()
+            ).hexdigest(),
         },
     )
     mfa_gate.create(output / "gate", gate_plan)

@@ -339,6 +339,23 @@ def _configuration(status, *, attempted=True):
         ),
         (
             {
+                "stopPoint": "preflight-key-project",
+                "configuration": None,
+                "cleanup": None,
+            },
+            "aborted-no-data",
+        ),
+        (
+            {
+                "stopPoint": "preflight-key-project",
+                "configuration": None,
+                "cleanup": {"ownedAccounts": 8, "complete": False},
+                "resumeCount": 1,
+            },
+            "owner-escalation",
+        ),
+        (
+            {
                 "stopPoint": "preflight-config-readback",
                 "configuration": _configuration("not-attempted", attempted=False),
                 "cleanup": {"ownedAccounts": 0},

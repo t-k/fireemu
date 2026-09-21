@@ -79,7 +79,20 @@ ADMIN_PATHS = frozenset(
         CONFIG_PATH,
     }
 )
-CALL_KINDS = ("auth-public", "auth-admin", "auth-config-patch", "oauth-tokeninfo")
+# `GET /v1/projects?key=` is the same public, key-only endpoint the client SDKs call
+# on startup; it answers with the project the key was minted for. Every other public
+# path is selected by the key alone with no project binding at all (the admin paths
+# above are pinned to PROJECT by their literal path instead), so this is the one
+# read-only call that can prove the key belongs to the approved project before it is
+# ever used for a signUp or handed to a configuration patch.
+PROJECT_CONFIG_PATH = "/v1/projects"
+CALL_KINDS = (
+    "auth-public",
+    "auth-admin",
+    "auth-config-patch",
+    "oauth-tokeninfo",
+    "auth-key-project",
+)
 _MASK = re.compile(r"^[A-Za-z0-9_.,]{1,128}$")
 
 
@@ -147,6 +160,13 @@ def validate_call(value: Any) -> None:
             raise ValueError("allowlisted public Auth endpoint and API key required")
         if not isinstance(value["body"], dict):
             raise ValueError("public Auth call carries a JSON object")
+    elif kind == "auth-key-project":
+        if value["path"] != PROJECT_CONFIG_PATH or not private_string(
+            value["key"], 512
+        ):
+            raise ValueError("project-config endpoint and API key required")
+        if value["body"] is not None:
+            raise ValueError("project-config call carries no body")
     elif kind == "auth-admin":
         if value["path"] not in ADMIN_PATHS or value["key"] is not None:
             raise ValueError("allowlisted admin Auth endpoint required")
@@ -193,14 +213,14 @@ def send(value: dict) -> tuple[int, dict]:
             raise ValueError("tokeninfo response malformed")
         return status, body
     headers = {"Accept": "application/json"}
-    if kind == "auth-public":
+    if kind in ("auth-public", "auth-key-project"):
         url = (
             IDENTITY_HOST
             + value["path"]
             + "?key="
             + urllib.parse.quote(value["key"], safe="")
         )
-        method = "POST"
+        method = "POST" if kind == "auth-public" else "GET"
     else:
         headers["Authorization"] = "Bearer " + value["secret"]
         headers["X-Goog-User-Project"] = PROJECT
@@ -282,6 +302,32 @@ def verify_tokeninfo(body: Any, principal: dict, *, required_seconds: float) -> 
     }
 
 
+def verify_key_project(body: Any, expected_project: str) -> dict:
+    """The Web API key belongs to the approved project, or the run refuses.
+
+    The public routes (`signUp` first of all) select the project by the key
+    alone; nothing else binds them to `expected_project` the way the admin
+    routes are pinned by their literal `/v1/projects/{PROJECT}/...` path. This
+    read-only, key-only call is the one place that binding is checked, and it
+    must be checked before the key is ever used for a signUp or a configuration
+    patch.
+    """
+    if not isinstance(body, dict):
+        raise ValueError("project-config body required")  # noqa: TRY004 -- refusal class
+    project_id = body.get("projectId")
+    if (
+        not isinstance(project_id, str)
+        or not project_id
+        or project_id != expected_project
+    ):
+        raise ValueError("Web API key does not belong to the approved project")
+    return {
+        "kind": "auth-key-project-attestation-v1",
+        "projectId": project_id,
+        "verified": True,
+    }
+
+
 class ProductionSession:
     """The walk's session over the admitted capability. Charges every attempt."""
 
@@ -305,7 +351,10 @@ class ProductionSession:
         self._requests += 1
         status, body = self._capability._transmit(value)
         self.last_status = status
-        if status in (401, 403) and value["kind"] != "auth-public":
+        if status in (401, 403) and value["kind"] not in (
+            "auth-public",
+            "auth-key-project",
+        ):
             self.credential_rejected = True
         return status, body
 
@@ -356,6 +405,19 @@ class ProductionSession:
     def read_config(self, *, deadline: float | None = None) -> tuple[int, dict]:
         return self.admin(CONFIG_PATH, None, deadline=deadline)
 
+    def project_config(self, *, deadline: float | None = None) -> tuple[int, dict]:
+        """The read-only `GET /v1/projects?key=` the key-project preflight sends."""
+        return self._transmit(
+            closed_call(
+                "auth-key-project",
+                path=PROJECT_CONFIG_PATH,
+                body=None,
+                secret=self._token,
+                key=self._key,
+                deadline=self._deadline(deadline),
+            )
+        )
+
     def tokeninfo(self, *, deadline: float | None = None) -> tuple[int, dict]:
         return self._transmit(
             closed_call(
@@ -380,6 +442,7 @@ def transport_source() -> tuple[bytes, str]:
 __all__ = [
     "ADMIN_PATHS",
     "CALL_KINDS",
+    "PROJECT_CONFIG_PATH",
     "PUBLIC_PATHS",
     "ProductionSession",
     "closed_call",
@@ -387,5 +450,6 @@ __all__ = [
     "send",
     "transport_source",
     "validate_call",
+    "verify_key_project",
     "verify_tokeninfo",
 ]

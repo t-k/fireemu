@@ -2,16 +2,18 @@
 
 Order of operations, fresh run: consume the capability, reserve the shared Ledger,
 read the private credential handoff, verify the bearer against the frozen principal,
-read the Auth configuration and refuse unless its digest is the frozen baseline, save
-the pre-value, apply the campaign configuration, verify it by readback, walk the
+verify the Web API key belongs to the approved project and bind its digest, read the
+Auth configuration and refuse unless its digest is the frozen baseline, save the
+pre-value, apply the campaign configuration, verify it by readback, walk the
 thirty-three cases with real waits, delete every owned account and prove absence,
 restore the configuration and verify it, write the receipt, release the reservation.
 
 A resumed run holds the same reservation and the same run directory: it re-verifies
-the credential, re-reads the configuration against the same frozen baseline (the
-previous stop restored it), re-applies, and continues from the checkpoint. A stop
-that is not an abandonment keeps the owned accounts, because the aged credentials
-they hold are the campaign; the configuration is restored regardless.
+the credential, re-checks the Web API key against the digest the fresh run bound,
+re-reads the configuration against the same frozen baseline (the previous stop
+restored it), re-applies, and continues from the checkpoint. A stop that is not an
+abandonment keeps the owned accounts, because the aged credentials they hold are the
+campaign; the configuration is restored regardless.
 """
 
 from __future__ import annotations
@@ -586,6 +588,9 @@ def execute(
     untracked: list = []
     try:
         credentials = _validate_credentials(credential_reader())
+        # Bound before the raw value is discarded, so a resume can re-check the
+        # same physical key without holding it any longer than the fresh run does.
+        api_key_digest = hashlib.sha256(credentials["apiKey"].encode()).hexdigest()
         if session_factory is None:
             inner = transport.ProductionSession(
                 capability=capability,
@@ -603,6 +608,17 @@ def execute(
             "frozen_baseline_digest": permission["authConfigBaselineDigest"],
         }
         if resume or abandon:
+            # The key was bound to the approved project once, at the fresh run's
+            # preflight; a resume or an abandon re-checks the same physical key by
+            # digest before anything else, so a swapped key for another project
+            # cannot reach a signUp or a configuration patch through this path
+            # either. A missing digest means the run predates this check or never
+            # got past its own preflight, and refuses the same way.
+            stop_point = "preflight-key-project"
+            if run_state.get("apiKeyDigest") != api_key_digest:
+                raise ValueError(
+                    "Web API key differs from the key verified for this run"
+                )
             # The bearer is verified against the frozen principal again. The Gate's
             # tokeninfo slot was spent by the first process and the shared Gate has
             # no slot for a second one, so this call is counted by the session and
@@ -666,6 +682,27 @@ def execute(
                     permission["credentialPrincipal"],
                     required_seconds=descriptor_.window_seconds,
                 )
+            )
+            # The Web API key selects the project for every public call (signUp
+            # first of all); nothing else binds it to the approved project the way
+            # the admin routes are pinned by their literal path. This read-only,
+            # key-only call is the one place that binding is checked, before the
+            # key is used for the configuration patch or any signUp. The verified
+            # digest is bound into the private run record so a resume re-checks
+            # the same physical key.
+            stop_point = "preflight-key-project"
+            status, body = inner.project_config(deadline=time.monotonic() + 12.0)
+            if status != 200:
+                raise ValueError(f"project-config preflight answered {status}")
+            transport.verify_key_project(body, PROJECT)
+            run_state["apiKeyDigest"] = api_key_digest
+            _write_private(output / RUN_STATE_FILE, run_state)
+            session.management_receipts.append(
+                {
+                    "id": "preflight:auth-key-project",
+                    "status": status,
+                    "chargedByGate": False,
+                }
             )
             stop_point = "preflight-config-readback"
             lock = ConfigLock(output, **lock_arguments)

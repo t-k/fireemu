@@ -873,9 +873,8 @@ def _validate_recovery_terminal_slots(gate, job_name):
                     or capture.get("fieldsDigest") != digest(None)
                 ):
                     raise ValueError("recovery inspection absence proof differs")
-                if "responseDigest" in capture:
-                    if re.fullmatch(r"[a-f0-9]{64}", capture["responseDigest"]) is None or event.get("responseDigest") != capture["responseDigest"]:
-                        raise ValueError("recovery inspection response binding differs")
+                if re.fullmatch(r"[a-f0-9]{64}", capture.get("responseDigest", "")) is None or event.get("responseDigest") != capture["responseDigest"]:
+                    raise ValueError("recovery inspection response binding differs")
             elif status == 200:
                 if (
                     capture.get("status") != 200
@@ -886,9 +885,11 @@ def _validate_recovery_terminal_slots(gate, job_name):
                     or not capture["updateTime"]
                 ):
                     raise ValueError("recovery inspection capture differs")
-                if "responseDigest" in capture:
-                    if re.fullmatch(r"[a-f0-9]{64}", capture["responseDigest"]) is None or event.get("responseDigest") != capture["responseDigest"]:
-                        raise ValueError("recovery inspection response binding differs")
+                proof = job.get("creationProofs", {}).get(operation["resource"])
+                if not isinstance(proof, dict) or capture["fieldsDigest"] != proof.get("fieldsDigest"):
+                    raise ValueError("recovery inspection fields binding differs")
+                if re.fullmatch(r"[a-f0-9]{64}", capture.get("responseDigest", "")) is None or event.get("responseDigest") != capture["responseDigest"]:
+                    raise ValueError("recovery inspection response binding differs")
             else:
                 raise ValueError("recovery inspection status differs")
         elif operation["kind"] == "recovery-conditional-delete":

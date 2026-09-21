@@ -28,6 +28,15 @@ ACTUAL_INPUTS = None
 ACTUAL_PERMISSION = None
 
 
+class EnrichedRecoveryGate(Gate):
+    """Test facade for the future recovery transport's response-bound capture."""
+
+    def _recovery_capture(self, operation, status, body):
+        capture = super()._recovery_capture(operation, status, body)
+        capture["responseDigest"] = digest(body)
+        return capture
+
+
 def _exit_immediately():
     return None
 
@@ -229,7 +238,7 @@ def test_settle_recovery_child_uses_completed_real_gate_and_is_idempotent(tmp_pa
         canonical_parent_inputs=ACTUAL_INPUTS, parent_permission=ACTUAL_PERMISSION,
     )
     create_gate(child["gatePath"], child_plan)
-    gate = Gate(child["gatePath"], reservations.RECOVERY_GATE_JOB)
+    gate = EnrichedRecoveryGate(child["gatePath"], reservations.RECOVERY_GATE_JOB)
     gate.claim()
     operations = child_plan["jobs"][reservations.RECOVERY_GATE_JOB]["recovery"]
     for operation in operations:

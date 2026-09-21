@@ -162,8 +162,10 @@ collected pair of bundles is not evidence about production until each bundle
 binds the facts that make it an acquisition rather than a recording: the
 endpoint each request reached, the observer identity, the campaign manifest the
 run was admitted under, the Ruleset releases with their readback, an exclusive
-nonce reservation, sequential wire and cost counts, and version-bound cleanup
-with final absence. The first module names each missing binding and refuses.
+nonce reservation, sequential wire and request counts, and version-bound
+cleanup with final absence. The first module names each missing binding and
+refuses. (Its own vocabulary says "cost counts"; no comparator checks cost,
+which stays with the Ledger allocation and the owner.)
 
 The second, `o5_user_token_comparator_v2.py`, is the separately reviewed
 acquisition comparator. It can reach `MATCH`, `SEMANTIC_MISMATCH`,
@@ -172,12 +174,17 @@ when both bundles carry every binding above and each one verifies against
 something the bundle cannot fabricate: the lane source digests recomputed from
 disk, a production host allowlist on one side and loopback on the other, the
 Ruleset source digests from the plan and the activation order relative to the
-rows, principal fingerprints recomputed from the nonce, the admitted manifest
-digest recomputed from the campaign module, typed cleanup steps for every owned
+rows, the per-row credential fingerprint recomputed from the nonce and the
+reference (the per-account uid fingerprint is checked by shape, against the
+plan's provider, tenant and claims, and for difference between the two sides,
+since the comparator never holds a uid), the admitted manifest digest
+recomputed from the campaign module, typed cleanup steps for every owned
 document and account, and monotonic time and wire-sequence consistency against
 the enforced budget. The production side must also carry a nonce reservation,
 an owner permission reference and an approval window; the local side must
-carry its artifact binding and no reservation.
+carry its artifact binding and no reservation. Every other field a bundle
+carries is self-reported; `MATCH` means two fully bound, mutually consistent
+bundles agree row by row, and is not production evidence on its own.
 
 A self-declared role string is still not an acquisition. Collecting the same
 matrix twice locally and labelling one bundle as the production side is

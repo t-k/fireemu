@@ -13,6 +13,7 @@ import pytest
 from o5_user_token_case import compile_case, digest
 from o5_user_token_collector import (
     COLLECTOR_CONTRACT,
+    ENVIRONMENT_LOCAL,
     ENVIRONMENT_PRODUCTION,
     READBACK_PUBLISH_ECHO,
     ROLE_LOCAL_SHADOW,
@@ -154,9 +155,13 @@ def test_a_local_run_relabelled_as_production_is_refused() -> None:
     assert result["rows"] == []
 
 
-def test_a_relabelled_environment_is_still_refused_by_its_endpoints_and_artifact() -> (
+def test_a_relabelled_environment_is_still_refused_by_its_artifact_and_principals() -> (
     None
 ):
+    """A local bundle relabelled as production, with its environment label,
+    reservation, permission and window copied from a production bundle, is
+    still refused by the artifact it carries and the principals it shares.
+    (Its loopback endpoints refuse it too; that signal is isolated below.)"""
     production, local, plan = bound_pair()
     forged = copy.deepcopy(local)
     forged["provenance"]["role"] = ROLE_PRODUCTION
@@ -187,6 +192,81 @@ def test_a_production_bundle_relabelled_as_local_is_refused() -> None:
     result = compare(production, forged, plan)
     assert result["classification"] == REFUSED
     assert "local:local-claims-production" in result["errors"]
+
+
+# Each of the three local-mislabelled-as-production signals, isolated. Every
+# test below starts from the real bound production bundle and changes exactly
+# one binding, so that deleting that one check in the comparator fails
+# exactly one test. Mutants verified on 2026-09-21 against this file: (a)
+# replacing `side.fail("local-mislabelled-as-production")` under `if loopback`
+# in _admit_endpoint with `pass` fails the loopback signal test and the
+# short-a-row test below, nothing else; (b) the same replacement under
+# `kind == ENVIRONMENT_LOCAL` in _admit_acquisition fails only the environment
+# signal test; (c) the same replacement under `artifact is not None` fails
+# only the artifact signal test.
+
+
+def _relabel_endpoints(bundle: dict, endpoint: str) -> None:
+    for row in bundle["rows"]:
+        row["endpoint"] = endpoint
+    for release in bundle["transport"]["rulesetReleases"]:
+        release["endpoint"] = endpoint
+    for key in ("documentSteps", "accountSteps"):
+        for step in bundle["cleanup"][key]:
+            step["endpoint"] = endpoint
+    bundle["transport"]["endpoints"] = [endpoint]
+    bundle["acquisition"]["endpoint"] = [endpoint]
+    bundle["acquisition"]["rulesetReleases"] = bundle["transport"]["rulesetReleases"]
+
+
+def test_signal_loopback_endpoints_alone_refuse_a_production_bundle() -> None:
+    production, local, plan = bound_pair()
+    _relabel_endpoints(production, LOCAL_ENDPOINT)
+    result = compare(production, local, plan)
+    assert result["classification"] == REFUSED
+    assert result["errors"] == ["production:local-mislabelled-as-production"]
+
+
+def test_signal_local_environment_kind_alone_refuses_a_production_bundle() -> None:
+    production, local, plan = bound_pair()
+    production["acquisition"]["environment"] = {"kind": ENVIRONMENT_LOCAL}
+    result = compare(production, local, plan)
+    assert result["classification"] == REFUSED
+    assert result["errors"] == ["production:local-mislabelled-as-production"]
+
+
+def test_signal_an_artifact_binding_alone_refuses_a_production_bundle() -> None:
+    production, local, plan = bound_pair()
+    production["acquisition"]["artifact"] = copy.deepcopy(
+        local["acquisition"]["artifact"]
+    )
+    result = compare(production, local, plan)
+    assert result["classification"] == REFUSED
+    assert result["errors"] == ["production:local-mislabelled-as-production"]
+
+
+def test_a_production_bundle_short_a_row_is_still_refused_for_its_endpoints() -> None:
+    """A row-count mismatch does not hide where the requests went."""
+    production, local, plan = bound_pair()
+    _relabel_endpoints(production, LOCAL_ENDPOINT)
+    production["rows"].pop()
+    result = compare(production, local, plan)
+    assert result["classification"] == REFUSED
+    assert "production:local-mislabelled-as-production" in result["errors"]
+    assert "production:row-count" in result["errors"]
+
+
+def test_a_production_identity_drift_is_refused_even_with_a_copied_plan_digest() -> (
+    None
+):
+    """The production identity check is not isolated from case-digest-drift:
+    a bundle that declares another tenant and copies the production plan
+    digest is refused by both, by design (the recompiled plan differs)."""
+    production, local, plan = bound_pair()
+    production["provenance"]["case"]["tenant"] = LOCAL_TENANT
+    result = compare(production, local, plan)
+    assert result["classification"] == REFUSED
+    assert "production:case-identity-drift" in result["errors"]
 
 
 # ---------------------------------------------------------------------------
@@ -688,6 +768,124 @@ def test_a_malformed_plan_is_refused_before_any_binding_check() -> None:
     assert result["classification"] == REFUSED
     assert len(result["errors"]) == 1
     assert result["errors"][0].startswith("plan-invalid:")
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda b: b["rows"].__setitem__(3, "not-a-row"),
+        lambda b: b["rows"].__setitem__(3, None),
+        lambda b: b["cleanup"]["documentSteps"][0].__setitem__("observed", "str"),
+        lambda b: b["cleanup"]["accountSteps"][0].__setitem__("observed", 7),
+        lambda b: b["transport"]["rulesetReleases"][0].__setitem__("label", ["A"]),
+        lambda b: b["transport"]["rulesetReleases"][0].__setitem__("label", {"A": 1}),
+        lambda b: b["transport"].__setitem__("rulesetReleases", [None]),
+        lambda b: b["transport"].__setitem__("clock", "soon"),
+        lambda b: b["budget"].__setitem__("deadlineSeconds", "JUNK"),
+        lambda b: b["acquisition"].__setitem__("principals", ["owner-a"]),
+        lambda b: b.__setitem__(
+            "cleanup", {"documentSteps": "x", "accountSteps": None}
+        ),
+    ],
+)
+@pytest.mark.parametrize("side", ["production", "local"])
+def test_malformed_shapes_are_named_and_never_raise(mutate, side) -> None:
+    production, local, plan = bound_pair()
+    mutate(production if side == "production" else local)
+    result = compare(production, local, plan)
+    assert result["classification"] in (INDETERMINATE, REFUSED)
+    assert result["errors"]
+    assert not any(e.startswith("comparator-exception") for e in result["errors"])
+
+
+def test_an_unforeseen_exception_becomes_an_indeterminate_error(monkeypatch) -> None:
+    import o5_user_token_comparator_v2 as module
+
+    def explode(*args, **kwargs):
+        raise KeyError("unexpected")
+
+    monkeypatch.setattr(module, "_admit_transport", explode)
+    production, local, plan = bound_pair()
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert "comparator-exception:KeyError" in result["errors"]
+    assert result["rows"] == []
+
+
+@pytest.mark.parametrize(
+    "field,value,error",
+    [
+        ("deadlineSeconds", "JUNK", "count-contradiction:deadlineSeconds"),
+        ("deadlineSeconds", None, "count-contradiction:deadlineSeconds"),
+        ("recoveryDeadlineSeconds", -1, "count-contradiction:recoveryDeadlineSeconds"),
+        ("recoveryCeiling", 1000, "count-contradiction:recovery-ceiling"),
+        ("observationCeiling", 31, "count-contradiction:observation-ceiling"),
+        ("rulesetCeiling", 3, "count-contradiction:ruleset-ceiling"),
+    ],
+)
+def test_every_budget_bound_is_mandatory_on_the_match_path(field, value, error) -> None:
+    production, local, plan = bound_pair()
+    production["budget"][field] = value
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert f"production:{error}" in result["errors"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["scripted-A-1", "ya29.a0AfH6SMB", "AIzaSyD-example", "projects/other/x/y", ""],
+)
+def test_a_production_release_must_be_named_by_a_rules_api_resource(name) -> None:
+    production, local, plan = bound_pair()
+    production["transport"]["rulesetReleases"][0]["releaseName"] = name
+    production["acquisition"]["rulesetReleases"] = production["transport"][
+        "rulesetReleases"
+    ]
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert "production:ruleset-mismatch:A:release-name" in result["errors"]
+
+
+@pytest.mark.parametrize(
+    "name", ["endpoint", "observerDigest", "rulesetReleases", "wireCounts"]
+)
+def test_an_acquisition_mirror_that_contradicts_its_canonical_field_is_named(
+    name,
+) -> None:
+    production, local, plan = bound_pair()
+    production["acquisition"][name] = "drifted"
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert f"production:acquisition-mirror-drift:{name}" in result["errors"]
+
+
+def test_a_raw_account_identifier_in_a_bundle_is_named() -> None:
+    production, local, plan = bound_pair()
+    production["cleanup"]["accountSteps"][0]["observed"]["uid"] = (
+        "L7fNfbBctFzloK39kcvtQpSrtUFx"
+    )
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert "production:unredacted-identifier:1" in result["errors"]
+
+
+def test_row_method_and_credential_class_are_bound_to_the_plan() -> None:
+    production, local, plan = bound_pair()
+    production["rows"][16]["method"] = "get"
+    local["rows"][4]["credentialClass"] = "user-id-token"
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert any(e.startswith("production:method-drift:") for e in result["errors"])
+    assert any(e.startswith("local:credential-class-drift:") for e in result["errors"])
+
+
+def test_cleanup_steps_must_be_timestamped_monotonically() -> None:
+    production, local, plan = bound_pair()
+    steps = production["cleanup"]["documentSteps"]
+    steps[1]["at"] = steps[0]["at"] - 1
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert "production:time-contradiction:cleanup-not-monotonic" in result["errors"]
 
 
 def test_every_result_classification_is_in_the_vocabulary() -> None:

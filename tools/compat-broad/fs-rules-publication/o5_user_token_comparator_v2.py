@@ -12,8 +12,10 @@ and verified here against something the bundle itself cannot fabricate:
   with a production host allowlist on one side and loopback on the other;
 * the Ruleset releases, with their source digest, readback and activation order
   relative to the rows that depend on them;
-* the principal provenance per credential reference, as fingerprints derived
-  from the campaign nonce and the account identity, never a token or a uid;
+* the principal provenance per credential reference: the row fingerprint is
+  recomputed from the nonce and the reference; the per-account uid fingerprint
+  is checked by shape, against the plan's provider, tenant and claims, and for
+  difference between the two sides, never a token or a uid;
 * the campaign manifest digest the run was admitted under, recomputed from the
   checked-in campaign module with the placeholder tenant, because the tenant
   identifier is assigned only once a run has started;
@@ -43,6 +45,7 @@ from o5_user_token_campaign import admitted_manifest_digest, source_digests
 from o5_user_token_case import (
     ACCOUNT_PRINCIPALS,
     CAMPAIGN,
+    CASE_CONTRACT,
     compile_case,
     digest,
     validate_case,
@@ -53,12 +56,15 @@ from o5_user_token_collector import (
     ENVIRONMENT_PRODUCTION,
     LOOPBACK_HOSTS,
     PRODUCTION_HOSTS,
+    READBACK_KINDS,
     READBACK_RELEASE_GET,
     ROLE_LOCAL_SHADOW,
     ROLE_PRODUCTION,
     credential_fingerprint,
     endpoint_host,
+    ruleset_transitions,
 )
+from o5_user_token_shadow import unredacted_identifiers
 
 COMPARATOR_CONTRACT = "fs-rules-user-token-comparator-v3"
 
@@ -108,6 +114,14 @@ REFUSAL_ERRORS = frozenset(
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
 _HEX16 = re.compile(r"^[0-9a-f]{16}$")
+# A production release is named by the Rules API resource it created or read
+# back; anything else in that slot is not a release name.
+_PRODUCTION_RELEASE_NAME = re.compile(
+    r"^projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/(releases|rulesets)/[A-Za-z0-9_.-]{1,128}$"
+)
+# The v1-shaped duplicates the collector writes under acquisition, each of
+# which must equal the canonical field it mirrors.
+_ACQUISITION_MIRRORS = ("endpoint", "observerDigest", "rulesetReleases", "wireCounts")
 # Wall and monotonic clocks drift; more than this between their spans is a
 # contradiction, not drift.
 _CLOCK_TOLERANCE_SECONDS = 60.0
@@ -150,8 +164,9 @@ def _admit_side(side: _Side, production_plan: dict[str, Any]) -> None:
     if bundle.get("contract") != COLLECTOR_CONTRACT:
         side.fail("collector-contract-drift")
     if (
-        bundle.get("productionReady") is True
+        bundle.get("productionReady") is not False
         or bundle.get("acquisitionValidated") is True
+        or bundle.get("status") != "PREPARATION_ONLY"
     ):
         side.fail("bundle-claims-authority")
     if side.side == SIDE_LOCAL and bundle.get("productionExecuted") is not False:
@@ -167,17 +182,37 @@ def _admit_side(side: _Side, production_plan: dict[str, Any]) -> None:
     _admit_acquisition(side)
     _admit_observer(side)
     rows = bundle.get("rows")
-    if not isinstance(rows, list) or len(rows) != len(plan["observation"]):
+    if not isinstance(rows, list):
         side.fail("row-count")
+        rows = None
+    elif len(rows) != len(plan["observation"]):
+        # Whatever rows are present are still scanned, so a visibly relabelled
+        # bundle is refused for what it is and not left indeterminate because
+        # it is also short a row.
+        side.fail("row-count")
+        _admit_rows(side, rows)
         rows = None
     else:
         _admit_rows(side, rows)
+    leaked = unredacted_identifiers(bundle)
+    if leaked:
+        side.fail(f"unredacted-identifier:{len(leaked)}")
     if bundle.get("recordingComplete") is not True:
         side.fail("recording-incomplete")
     if bundle.get("abort") is not None:
         side.fail("recording-aborted")
-    if bundle.get("infrastructureFailures") not in ([], None):
+    if bundle.get("infrastructureFailures") != []:
         side.fail("recording-incomplete:infrastructure")
+    if bundle.get("attemptedAccounts") != [
+        entry["ref"] for entry in plan["ownedAccounts"]
+    ]:
+        side.fail("cleanup-unknown:attempted-accounts")
+    redacted = bundle.get("redactedPrincipals")
+    if not isinstance(redacted, list) or any(
+        not isinstance(label, str) or not label.startswith("principal:")
+        for label in redacted
+    ):
+        side.fail("unredacted-identifier:labels")
     cleanup_steps = _admit_cleanup(side)
     releases = _admit_releases(side, rows)
     _admit_transport(side, rows, releases, cleanup_steps)
@@ -191,6 +226,10 @@ def _admit_provenance(side: _Side, production_plan: dict[str, Any]) -> None:
         return
     if provenance.get("role") != side.role:
         side.fail("role-mismatch")
+    if provenance.get("collectorContract") != COLLECTOR_CONTRACT:
+        side.fail("collector-contract-drift")
+    if provenance.get("caseContract") != CASE_CONTRACT:
+        side.fail("case-contract-drift")
     run_id = provenance.get("runId")
     if not isinstance(run_id, str) or not run_id:
         side.fail("missing-run-identity")
@@ -249,8 +288,11 @@ def _admit_acquisition(side: _Side) -> None:
         if artifact is not None:
             side.fail("local-mislabelled-as-production")
         _admit_reservation(side, reservation)
-        if not isinstance(permission, Mapping) or not _hex(
-            permission.get("permissionDigest"), _HEX64
+        if (
+            not isinstance(permission, Mapping)
+            or not _hex(permission.get("permissionDigest"), _HEX64)
+            or not isinstance(permission.get("kind"), str)
+            or not permission["kind"]
         ):
             side.fail("missing-binding:ownerPermission")
         window = acquisition.get("window")
@@ -271,6 +313,28 @@ def _admit_acquisition(side: _Side) -> None:
         if reservation is not None:
             side.fail("local-claims-reservation")
     _admit_principals(side, acquisition.get("principals"))
+    _admit_mirrors(side, acquisition)
+
+
+def _admit_mirrors(side: _Side, acquisition: Mapping[str, Any]) -> None:
+    """The v1-shaped duplicates must equal the canonical fields they mirror."""
+    bundle = side.bundle
+    transport = bundle.get("transport")
+    observer = bundle.get("observer")
+    if not isinstance(transport, Mapping) or not isinstance(observer, Mapping):
+        return
+    canonical = {
+        "endpoint": transport.get("endpoints"),
+        "observerDigest": observer.get("observerDigest"),
+        "rulesetReleases": transport.get("rulesetReleases"),
+        "wireCounts": {
+            "receipts": transport.get("receipts"),
+            "sequencedReceipts": transport.get("sequencedReceipts"),
+        },
+    }
+    for name in _ACQUISITION_MIRRORS:
+        if acquisition.get(name) != canonical[name]:
+            side.fail(f"acquisition-mirror-drift:{name}")
 
 
 def _admit_reservation(side: _Side, reservation: Any) -> None:
@@ -323,6 +387,8 @@ def _admit_observer(side: _Side) -> None:
         return
     if observer.get("observerDigest") != digest(expected):
         side.fail("observer-digest-drift")
+    if observer.get("contract") != COLLECTOR_CONTRACT:
+        side.fail("collector-contract-drift")
 
 
 def _admit_rows(side: _Side, rows: list[Any]) -> None:
@@ -330,7 +396,13 @@ def _admit_rows(side: _Side, rows: list[Any]) -> None:
     plan = side.plan
     nonce = plan["nonce"]
     previous_at: float | None = None
-    for row, operation in zip(rows, plan["observation"], strict=True):
+    # Endpoints are scanned on every row that is a mapping, before any
+    # identity check can stop the loop: where a request went is a fact that
+    # does not depend on the row being the right one.
+    for index, row in enumerate(rows):
+        if isinstance(row, Mapping):
+            _admit_endpoint(side, row.get("endpoint"), f"row:{index}")
+    for row, operation in zip(rows, plan["observation"], strict=False):
         if not isinstance(row, Mapping):
             side.fail("row-shape")
             return
@@ -340,6 +412,10 @@ def _admit_rows(side: _Side, rows: list[Any]) -> None:
             return
         if row.get("credentialRef") != operation["credential"]["ref"]:
             side.fail(f"principal-drift:{case_id}")
+        if row.get("method") != operation["method"]:
+            side.fail(f"method-drift:{case_id}")
+        if row.get("credentialClass") != operation["credential"]["class"]:
+            side.fail(f"credential-class-drift:{case_id}")
         if row.get("credentialFingerprint") != credential_fingerprint(
             nonce, operation["credential"]["ref"]
         ):
@@ -362,7 +438,6 @@ def _admit_rows(side: _Side, rows: list[Any]) -> None:
             side.fail("time-contradiction:rows-not-monotonic")
         else:
             previous_at = at
-        _admit_endpoint(side, row.get("endpoint"), f"row:{case_id}")
 
 
 def _admit_endpoint(side: _Side, endpoint: Any, where: str) -> None:
@@ -405,10 +480,21 @@ def _admit_cleanup(side: _Side) -> list[dict[str, Any]]:
             side.fail(f"cleanup-unknown:{key}")
             continue
         steps.extend(dict(step) for step in value)
+    previous_at: float | None = None
     for step in steps:
         if step.get("failure") is not None:
             side.fail(f"cleanup-unknown:{step.get('kind')}")
         _admit_endpoint(side, step.get("endpoint"), f"cleanup:{step.get('kind')}")
+        if not isinstance(step.get("observed"), Mapping | type(None)):
+            side.fail(f"cleanup-unknown:observed-shape:{step.get('kind')}")
+            step["observed"] = None
+        at = step.get("at")
+        if not _is_number(at):
+            side.fail("time-contradiction:cleanup-timestamp")
+        elif previous_at is not None and at < previous_at:
+            side.fail("time-contradiction:cleanup-not-monotonic")
+        else:
+            previous_at = at
     _admit_subjects(
         side, steps, plan["ownedResources"], "resource", "documentPresent", "version"
     )
@@ -481,8 +567,9 @@ def _admit_releases(side: _Side, rows: list[Any] | None) -> list[dict[str, Any]]
         if not isinstance(release, Mapping):
             side.fail("ruleset-mismatch:shape")
             return []
+        _admit_endpoint(side, release.get("endpoint"), "ruleset")
         label = release.get("label")
-        if label not in plan["rulesets"]:
+        if not isinstance(label, str) or label not in plan["rulesets"]:
             side.fail("ruleset-mismatch:unknown-label")
             continue
         expected = digest(plan["rulesets"][label]["source"])
@@ -491,13 +578,20 @@ def _admit_releases(side: _Side, rows: list[Any] | None) -> list[dict[str, Any]]
         readback = release.get("readback")
         if not isinstance(readback, Mapping) or readback.get("digest") != expected:
             side.fail(f"ruleset-mismatch:{label}:readback")
-        elif (
+        elif readback.get("kind") not in READBACK_KINDS or (
             side.side == SIDE_PRODUCTION
             and readback.get("kind") != READBACK_RELEASE_GET
         ):
             side.fail(f"ruleset-mismatch:{label}:readback-kind")
         name = release.get("releaseName")
-        if not isinstance(name, str) or not name:
+        if (
+            not isinstance(name, str)
+            or not name
+            or (
+                side.side == SIDE_PRODUCTION
+                and _PRODUCTION_RELEASE_NAME.fullmatch(name) is None
+            )
+        ):
             side.fail(f"ruleset-mismatch:{label}:release-name")
         if (
             not _is_number(release.get("activeFrom"))
@@ -505,7 +599,6 @@ def _admit_releases(side: _Side, rows: list[Any] | None) -> list[dict[str, Any]]
         ):
             side.fail(f"ruleset-generation-order:{label}:unbound")
             continue
-        _admit_endpoint(side, release.get("endpoint"), f"ruleset:{label}")
         accepted.append(dict(release))
     if rows is None or len(accepted) != len(releases):
         return accepted
@@ -517,6 +610,8 @@ def _admit_releases(side: _Side, rows: list[Any] | None) -> list[dict[str, Any]]
     active: dict[str, Any] | None = None
     pending = list(accepted)
     for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            break
         while pending and pending[0]["beforeIndex"] <= index:
             active = pending.pop(0)
         if active is None or active["label"] != row.get("ruleset"):
@@ -554,7 +649,10 @@ def _admit_transport(
         events = [(r["beforeIndex"], -1, r) for r in releases]
         events.extend((i, 0, row) for i, row in enumerate(rows))
         events.sort(key=lambda e: (e[0], e[1]))
-        sequenced.extend(entry[2].get("wireSequence") for entry in events)
+        sequenced.extend(
+            entry[2].get("wireSequence") if isinstance(entry[2], Mapping) else None
+            for entry in events
+        )
     sequenced.extend(step.get("wireSequence") for step in cleanup_steps)
     if any(type(value) is not int for value in sequenced):
         side.fail("missing-binding:wireCounts")
@@ -563,6 +661,12 @@ def _admit_transport(
     receipts = transport.get("receipts")
     if type(receipts) is not int or receipts != len(sequenced):
         side.fail("count-contradiction:wire-receipts")
+    if sequenced and (
+        transport.get("firstSequence") != sequenced[0]
+        or transport.get("lastSequence") != sequenced[-1]
+        or transport.get("sequencedReceipts") != len(sequenced)
+    ):
+        side.fail("count-contradiction:wire-summary")
     if transport.get("sequenceMonotonic") is not True:
         side.fail("count-contradiction:wire-sequence")
     _admit_clocks(side, transport, rows)
@@ -631,6 +735,8 @@ def _admit_budget(
     releases: list[dict[str, Any]],
     cleanup_steps: list[dict[str, Any]],
 ) -> None:
+    assert side.plan is not None
+    plan = side.plan
     budget = side.bundle.get("budget")
     if not isinstance(budget, Mapping):
         side.fail("count-contradiction:budget")
@@ -639,12 +745,23 @@ def _admit_budget(
         side.fail("count-contradiction:observation-spent")
     if budget.get("rulesetSpent") != len(releases):
         side.fail("count-contradiction:ruleset-spent")
+    # The ceilings are what the collector enforces for this plan, not values
+    # a bundle may choose; the deadlines are what the clock checks run against.
+    if budget.get("observationCeiling") != len(plan["observation"]):
+        side.fail("count-contradiction:observation-ceiling")
+    if budget.get("rulesetCeiling") != ruleset_transitions(plan["observation"]):
+        side.fail("count-contradiction:ruleset-ceiling")
+    expected_recovery = 3 * (len(plan["ownedResources"]) + len(plan["ownedAccounts"]))
     recovery = budget.get("recoverySpent")
     ceiling = budget.get("recoveryCeiling")
-    if type(recovery) is not int or type(ceiling) is not int or recovery > ceiling:
+    if ceiling != expected_recovery or type(recovery) is not int or recovery > ceiling:
         side.fail("count-contradiction:recovery-ceiling")
     elif recovery != len(cleanup_steps):
         side.fail("count-contradiction:recovery-spent")
+    for key in ("deadlineSeconds", "recoveryDeadlineSeconds"):
+        value = budget.get(key)
+        if not _is_number(value) or value <= 0:
+            side.fail(f"count-contradiction:{key}")
 
 
 def _cross_errors(
@@ -786,10 +903,21 @@ def compare(
         return result
     production_side = _Side(production, SIDE_PRODUCTION)
     local_side = _Side(local, SIDE_LOCAL)
-    _admit_side(production_side, plan)
-    _admit_side(local_side, plan)
+    try:
+        _admit_side(production_side, plan)
+        _admit_side(local_side, plan)
+        cross = _cross_errors(production_side, local_side, plan, manifest_digest)
+    except Exception as error:  # noqa: BLE001 -- an unforeseen shape is named, never raised
+        # Admission runs inside the O8 execution. A bundle shape this module
+        # did not anticipate must be named as indeterminate there, not
+        # propagate as an exception that the launcher has to interpret.
+        result["errors"] = [
+            *production_side.errors,
+            *local_side.errors,
+            f"comparator-exception:{type(error).__name__}",
+        ]
+        return result
     errors = [*production_side.errors, *local_side.errors]
-    cross = _cross_errors(production_side, local_side, plan, manifest_digest)
     errors.extend(cross)
     result["errors"] = errors
     refused = (

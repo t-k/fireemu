@@ -346,6 +346,81 @@ def test_structural_redaction_still_aborts_a_bound_run(flag, marker) -> None:
     assert "secret" not in repr(bundle)
 
 
+@pytest.mark.parametrize(
+    "value", ["ya29.a0AfH6SMBexample", "AIzaSyDexampleexample", "1//0gexample-refresh"]
+)
+def test_a_google_credential_prefix_in_any_receipt_aborts_the_run(value) -> None:
+    plan = plan_for(ROLE_PRODUCTION)
+    transport = Transport(plan, endpoint=PRODUCTION_ENDPOINT)
+
+    def leaking(request: dict) -> dict:
+        receipt = transport(request)
+        if request.get("phase") == "ruleset":
+            receipt["releaseName"] = value
+        return receipt
+
+    bundle = collect(
+        plan,
+        leaking,
+        role=ROLE_PRODUCTION,
+        run_id="leaky-prefix",
+        acquisition=acquisition_for(plan, ROLE_PRODUCTION),
+    )
+    assert bundle["abort"] == "credential-leak:token-shaped-value"
+    assert bundle["rows"] == []
+    assert value[4:] not in repr(bundle)
+
+
+def test_the_collector_replaces_every_uid_its_readbacks_returned() -> None:
+    """Redaction is the collector's, not the publishing runner's: a bundle
+    carries principal labels wherever a readback uid appeared, in rows and
+    in recovery steps, in bound and unbound runs alike."""
+    plan = plan_for(ROLE_LOCAL_SHADOW)
+    uids = {
+        entry["ref"]: f"L7fNfbBctFzloK39kcvtQpS{i:05d}"
+        for i, entry in enumerate(plan["ownedAccounts"])
+    }
+    transport = Transport(plan, endpoint=LOCAL_ENDPOINT)
+
+    def with_uids(request: dict) -> dict:
+        receipt = transport(request)
+        if request.get("kind") == "account-readback" and receipt.get("uid"):
+            receipt["uid"] = uids[request["accountRef"]]
+        if request.get("phase") != "recovery" and request.get("index") == 0:
+            receipt["fields"] = {"ownerUid": uids["owner-a"], "document": "owned-a"}
+        return receipt
+
+    for acquisition in (acquisition_for(plan, ROLE_LOCAL_SHADOW), None):
+        bundle = collect(
+            plan,
+            with_uids,
+            role=ROLE_LOCAL_SHADOW,
+            run_id="redact",
+            acquisition=acquisition,
+        )
+        assert (
+            bundle["rows"][0]["observed"]["fields"]["ownerUid"] == "principal:owner-a"
+        )
+        readbacks = [
+            step
+            for step in bundle["cleanup"]["accountSteps"]
+            if step["kind"] == "account-readback"
+        ]
+        assert {step["observed"]["uid"] for step in readbacks} == {
+            f"principal:{step['accountRef']}" for step in readbacks
+        }
+        assert bundle["redactedPrincipals"] == sorted(
+            f"principal:{ref}" for ref in uids
+        )
+        assert not any(uid in repr(bundle) for uid in uids.values())
+        # The delete precondition still carried the real identifier to the transport.
+        deletes = [r for r in transport.requests if r.get("kind") == "account-delete"]
+        assert all(r["precondition"]["uid"] in uids.values() for r in deletes)
+        transport.requests.clear()
+        transport.present = {resource: True for resource in plan["ownedResources"]}
+        transport.accounts = {entry["ref"]: True for entry in plan["ownedAccounts"]}
+
+
 def test_a_token_shaped_value_in_a_release_receipt_aborts_before_any_row() -> None:
     plan = plan_for(ROLE_PRODUCTION)
     transport = Transport(plan, endpoint=PRODUCTION_ENDPOINT)

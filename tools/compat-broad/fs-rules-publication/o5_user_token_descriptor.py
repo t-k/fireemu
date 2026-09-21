@@ -46,7 +46,7 @@ from o5_user_token_campaign import (
 )
 from o5_user_token_case import CAMPAIGN, compile_case, validate_case
 from o5_user_token_collector import ROLE_PRODUCTION, collect
-from o5_user_token_comparator_v2 import compare
+from o5_user_token_comparator_v2 import COMPARATOR_CONTRACT, REFUSED, compare
 from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
 
 PROJECT = "fireemu-35fe6"
@@ -289,7 +289,28 @@ def comparator(
     that is not a complete local run of this campaign yields no reference, and
     the acquisition comparator then refuses rather than compares.
     """
-    reference = local if local is not None else shadow_record().get("bundle")
+    record = shadow_record()
+    reference = local if local is not None else record.get("bundle")
+    # The reference must be the build the record names. A bundle whose
+    # artifact binding differs from the record's is another run, whatever
+    # else it carries, and is refused before any row is read.
+    expected_artifact = {
+        "artifactSha256": record["artifact"]["artifactSha256"],
+        "sourceCommit": record["artifact"]["sourceCommit"],
+    }
+    acquisition = reference.get("acquisition") if isinstance(reference, dict) else None
+    bound = acquisition.get("artifact") if isinstance(acquisition, dict) else None
+    if bound != expected_artifact:
+        return {
+            "contract": COMPARATOR_CONTRACT,
+            "classification": REFUSED,
+            "rows": [],
+            "conditions": {},
+            "errors": ["local:reference-artifact-mismatch"],
+            "acquisitionValidated": False,
+            "productionObserved": False,
+            "promotionReady": False,
+        }
     return compare(production, reference, plan, manifest_digest=manifest_digest)
 
 
@@ -311,9 +332,11 @@ def retained_artifact_validator(
 ) -> dict[str, str]:
     """Bind the retained artifact and manifest by digest.
 
-    The profile is a label derived from the shadow's commit: the digests prove
-    which bytes the owner retained, not that the build behind them was
-    reviewed.
+    The profile is a label derived from the shadow's commit, and the retained
+    artifact must be the very build the shadow ran: its digest must equal the
+    record's `artifact.artifactSha256`. The digests prove which bytes the
+    owner retained and that they are the comparison reference's build, not
+    that the build was reviewed.
     """
     if profile != artifact_profile():
         raise ValueError("retained artifact profile differs")
@@ -326,6 +349,8 @@ def retained_artifact_validator(
         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
             raise ValueError("retained regular artifact required")
         values[key] = hashlib.sha256(path.read_bytes()).hexdigest()
+    if values["artifactSha256"] != shadow_record()["artifact"]["artifactSha256"]:
+        raise ValueError("retained artifact is not the shadow's build")
     return values
 
 

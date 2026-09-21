@@ -175,6 +175,10 @@ _MAX_DEPTH = 6
 _MAX_NODES = 256
 _MAX_STRING = 4096
 _JWT_SHAPE = re.compile(r"^[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*$")
+# Google credential shapes that are not JWTs: OAuth access tokens, API keys and
+# refresh tokens. A value with one of these prefixes is refused wherever a
+# token-shaped value is.
+_SECRET_PREFIXES = ("ya29.", "AIza", "1//")
 
 
 class BudgetExhausted(RuntimeError):
@@ -239,7 +243,7 @@ def _scan(value: Any, depth: int, budget: list[int]) -> str | None:
             return "receipt-string-too-long"
         if any(character < " " or character == "\x7f" for character in value):
             return "control-character-in-receipt"
-        if _JWT_SHAPE.fullmatch(value):
+        if _JWT_SHAPE.fullmatch(value) or value.startswith(_SECRET_PREFIXES):
             return "credential-leak:token-shaped-value"
         return None
     if isinstance(value, float) and not math.isfinite(value):
@@ -553,7 +557,7 @@ def _finite(value: Any) -> bool:
     return type(value) in (int, float) and math.isfinite(value)
 
 
-def _ruleset_transitions(operations: list[Mapping[str, Any]]) -> int:
+def ruleset_transitions(operations: list[Mapping[str, Any]]) -> int:
     """How many releases the matrix needs: one per change of Ruleset label."""
     count = 0
     active = None
@@ -624,7 +628,7 @@ def collect(
     nonce = plan["nonce"]
     operations = plan["observation"]
     accounts = plan["ownedAccounts"]
-    transitions = _ruleset_transitions(operations) if bindings is not None else 0
+    transitions = ruleset_transitions(operations) if bindings is not None else 0
     budget = _Budget(
         requests=len(operations),
         recovery=3 * (len(plan["ownedResources"]) + len(accounts)),
@@ -742,6 +746,11 @@ def collect(
     if journal.failures:
         failures.extend(journal.failures)
         abort = abort or "journal-failure"
+    # A bundle is publishable material, so it carries principal labels, not
+    # the account identifiers the recovery readbacks returned. Every uid the
+    # collector saw is replaced here, in both rows and recovery steps; the
+    # raw value was needed only for the version-bound delete precondition.
+    redacted_principals = _redact_principals(rows, cleanup)
     complete = (
         abort is None
         and len(rows) == len(operations)
@@ -797,6 +806,7 @@ def collect(
         "rows": rows,
         "attemptedResources": attempted,
         "attemptedAccounts": attempted_accounts,
+        "redactedPrincipals": redacted_principals,
         "cleanup": cleanup,
         "budget": {
             "observationCeiling": len(operations),
@@ -901,6 +911,42 @@ def _release_ruleset(
     if journal.failures:
         return None, "journal-failure"
     return release, None
+
+
+def _redact_principals(
+    rows: list[dict[str, Any]], cleanup: dict[str, Any]
+) -> list[str]:
+    """Replace every account identifier the recovery readbacks returned.
+
+    The map is built from the account readback steps, which are the only place
+    the collector learns a uid, and applied to every string in the rows and
+    the recovery steps. The replacement is the principal reference, which is
+    what the compiled matrix speaks in anyway.
+    """
+    labels: dict[str, str] = {}
+    for step in cleanup.get("accountSteps", []):
+        observed = step.get("observed") or {}
+        uid = observed.get("uid")
+        ref = step.get("accountRef")
+        if isinstance(uid, str) and uid and isinstance(ref, str):
+            labels[uid] = f"principal:{ref}"
+    if not labels:
+        return []
+
+    def redact(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: redact(nested) for key, nested in value.items()}
+        if isinstance(value, list):
+            return [redact(nested) for nested in value]
+        if isinstance(value, str):
+            return labels.get(value, value)
+        return value
+
+    for index, row in enumerate(rows):
+        rows[index] = redact(row)
+    for key in ("documentSteps", "accountSteps"):
+        cleanup[key] = redact(cleanup[key])
+    return sorted(set(labels.values()))
 
 
 def _resource_for(plan: Mapping[str, Any], document: str) -> str:

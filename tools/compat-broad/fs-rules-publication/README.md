@@ -99,7 +99,16 @@ source digests, read from disk), `transport` (endpoints, receipt and sequence
 counts, the releases, the monotonic and wall clocks) and `acquisition`, and
 derives `productionExecuted` from the endpoints reached rather than from any
 label. An unbound run behaves as before: no release step, no acquisition, and
-the wire keys are optional. Structural redaction is unchanged in both modes.
+the wire keys are optional. Structural redaction is unchanged in both modes,
+and `_scan` also refuses the non-JWT Google credential prefixes `ya29.`,
+`AIza` and `1//`.
+
+In both modes the collector replaces every account identifier its recovery
+readbacks returned with the principal label `principal:<ref>`, in rows and in
+recovery steps, and lists the labels under `redactedPrincipals`; the raw uid
+is used only for the delete precondition and never reaches the bundle. The
+local runner's own redaction after collection remains as a second pass, and
+its frozen-field check resolves `$principal` to the label.
 
 The local runner is the lane's only bound transport. Its `_request` records
 the loopback host and port and the process-wide request counter after its
@@ -142,10 +151,10 @@ unprefixed when it concerns the pair.
 | Collector identity | SHA-256 of every lane module in `_SOURCE_FILES`, recomputed from disk now | `observer-digest-drift` (refused) |
 | Endpoint reached | Per receipt, from the transport: production side only `firestore.googleapis.com`, `identitytoolkit.googleapis.com`, `firebaserules.googleapis.com`; local side only loopback | `local-mislabelled-as-production`, `endpoint-outside-allowlist`, `local-reached-nonloopback` (refused), `missing-binding:endpoint:...` |
 | Ruleset releases | Source digest equals the plan's Ruleset source; readback digest equals it; production readback is a `release-get`, not a publish echo; every row runs under the release most recently active before it | `ruleset-mismatch:<label>:...`, `ruleset-generation-order:<caseId>` |
-| Principal provenance | Row fingerprint recomputed from the nonce and reference; per account a uid fingerprint, provider, tenant and claims digest matching the plan; fingerprints differ between sides | `principal-drift`, `principal-fingerprint`, `principal-mismatch:<ref>:...`, `principal-shared-across-sides` (refused) |
+| Principal provenance | Row fingerprint recomputed from the nonce and reference; per account a uid fingerprint (shape-checked: the comparator holds no uid), provider, tenant and claims digest matching the plan; uid fingerprints differ between sides; no uid-shaped string anywhere in the bundle | `principal-drift`, `principal-fingerprint`, `principal-mismatch:<ref>:...`, `principal-shared-across-sides` (refused), `unredacted-identifier` |
 | Manifest digest | Recomputed from `o5_user_token_campaign.manifest()` for the production identity; equal on both sides; equal to the admitted digest when one is passed | `manifest-mismatch` (refused) |
 | Cleanup proof | Every owned document and account: readback, delete under the observed version or uid, typed absence; no step failure; nothing outstanding | `cleanup-unknown:...` |
-| Time and counts | Rows strictly monotonic and inside the observation span and deadline; wire sequence strictly increasing across releases, rows and recovery steps; receipt count equals the steps; `observationSpent`, `rulesetSpent`, `recoverySpent` equal the recorded steps; wall clock agrees with the monotonic span and lies inside the approval window | `time-contradiction:...`, `count-contradiction:...` |
+| Time and counts | Rows strictly monotonic and inside the observation span and deadline; recovery steps monotonic; wire sequence strictly increasing across releases, rows and recovery steps; receipt count and sequence summary equal the steps; `observationSpent`, `rulesetSpent`, `recoverySpent` equal the recorded steps and every ceiling and deadline is the collector's for this plan; wall clock agrees with the monotonic span and lies inside the approval window. No cost is checked | `time-contradiction:...`, `count-contradiction:...` |
 | Reservation and permission | Production side: reservation id, campaign id and nonce digest; owner permission digest; approval window. Local side: artifact digest and source commit, and no reservation | `missing-binding:...`, `nonce-reservation-mismatch:...`, `local-claims-reservation` (refused) |
 | Environment label | `acquisition.environment.kind` must agree with the role, the endpoints and the artifact binding | `local-mislabelled-as-production`, `local-claims-production` (refused) |
 | Identity | Same run on both sides, a bundle claiming `productionReady` or `acquisitionValidated`, a role that is not the side it was passed as, a plan or case digest that is not the campaign's | `self-comparison`, `bundle-claims-authority`, `role-mismatch`, `case-digest-drift`, `campaign-identity-drift` (refused) |
@@ -154,7 +163,23 @@ An error in the refusal set makes the result `REFUSED`; any other error makes
 it `INDETERMINATE`; neither carries rows. Only two admitted bundles are
 compared, row by row, on status, document presence and field values, with a
 field that resolves to a principal compared by presence rather than by uid,
-because the two runs mint different accounts by construction.
+because the two runs mint different accounts by construction. `observed.code`
+is recorded but not compared: the local transport never sets it and a
+production transport's code vocabulary is unobserved. A production release
+must be named by its Rules API resource (`projects/<p>/releases/<n>` or
+`projects/<p>/rulesets/<id>`). `compare()` never raises on a malformed bundle:
+a shape it did not anticipate is named `comparator-exception:<Type>` and left
+`INDETERMINATE`.
+
+Mutation record (2026-09-21): the three `local-mislabelled-as-production`
+signals are each covered by one test that changes exactly one binding of the
+real bound production bundle. Deleting the loopback refusal in
+`_admit_endpoint` fails `test_signal_loopback_endpoints_alone_refuse_a_production_bundle`
+(and the short-a-row test); deleting the environment-kind refusal in
+`_admit_acquisition` fails `test_signal_local_environment_kind_alone_refuses_a_production_bundle`;
+deleting the artifact refusal fails `test_signal_an_artifact_binding_alone_refuses_a_production_bundle`.
+A 4000-mutation single- and multi-field fuzz of `compare()` over a bound pair
+raised nothing and hit the exception backstop nothing.
 
 The local shadow is compiled with the tenant identifier the local Auth
 emulator assigned, so the local plan is recompiled from the bundle's own case

@@ -73,10 +73,13 @@ class Transport:
             return self._recovery(request)
         if request.get("phase") == "ruleset":
             self.releases += 1
+            name = f"scripted-{request['ruleset']}-{self.releases}"
+            if self.readback_kind == READBACK_RELEASE_GET:
+                name = f"projects/{self.plan['project']}/releases/{name}"
             return {
                 "complete": True,
                 "status": "OK",
-                "releaseName": f"scripted-{request['ruleset']}-{self.releases}",
+                "releaseName": name,
                 "readbackKind": self.readback_kind,
                 "readbackDigest": request["sourceDigest"],
             }

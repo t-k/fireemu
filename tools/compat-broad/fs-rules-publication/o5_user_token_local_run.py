@@ -885,10 +885,13 @@ def run_child(output: Path, nonce: str) -> int:
             journal_path=output / "journal.jsonl",
             acquisition=_local_acquisition(output, shadow),
         )
-        # Deviations are computed against the real uids, then everything that
-        # gets written out is reduced to principal labels. The raw uids stay in
-        # this process.
-        deviations = local_deviations(bundle, shadow.plan, shadow.uids)
+        # The collector has already replaced every uid its recovery readbacks
+        # returned with the principal label, so the frozen-field check resolves
+        # `$principal` to that label: a field equals the label exactly when it
+        # equalled the uid the administrator lookup returned for that account.
+        # The raw uids stay in this process.
+        labels = {ref: f"principal:{ref}" for ref in shadow.uids}
+        deviations = local_deviations(bundle, shadow.plan, labels)
         bundle["journal"] = Path(bundle["journal"]).name
         record["bundle"] = redact_principals(bundle, shadow.uids)
         record["deviations"] = redact_principals(deviations, shadow.uids)

@@ -45,6 +45,22 @@ from test_o5_user_token_collector_bound import (
 NONCE = "a" * 32
 
 
+def with_synthetic_build(monkeypatch, artifact_sha256: str) -> dict:
+    """Point the lane's shadow record at a synthetic build for a dry run.
+
+    The retained artifact validator pins the retained bytes to the shadow's
+    build, which no test can reproduce, so a dry run substitutes a record that
+    names the synthetic artifact instead. Everything else in the record is the
+    real one.
+    """
+    real = lane.shadow_record()
+    record = json.loads(json.dumps(real))
+    record["artifact"]["artifactSha256"] = artifact_sha256
+    record["bundle"]["acquisition"]["artifact"]["artifactSha256"] = artifact_sha256
+    monkeypatch.setattr(lane, "shadow_record", lambda: record)
+    return record
+
+
 def synthetic(tmp_path, descriptor):
     """A complete O7 artifact set for the dry run, built from local files only."""
     plan = descriptor.plan_compiler(NONCE)
@@ -156,7 +172,10 @@ def test_the_frozen_plan_is_the_lane_compiled_case_for_the_nonce(tmp_path) -> No
     assert o8_admission.campaign_identity(descriptor, inputs) == CAMPAIGN
 
 
-def test_a_synthetic_approval_passes_the_shared_o7_check_set(tmp_path) -> None:
+def test_a_synthetic_approval_passes_the_shared_o7_check_set(
+    tmp_path, monkeypatch
+) -> None:
+    with_synthetic_build(monkeypatch, hashlib.sha256(b"synthetic artifact").hexdigest())
     descriptor = lane.descriptor()
     bindings = synthetic(tmp_path, descriptor)
     admitted = o8_admission.validate_o7_admission(descriptor, **bindings)
@@ -250,7 +269,28 @@ def test_every_unwired_member_refuses() -> None:
     assert descriptor.forbidden_transports() == (lane.transport_bound,)
 
 
-def test_a_capability_cannot_be_issued_without_a_worker_binding(tmp_path) -> None:
+def test_a_retained_artifact_that_is_not_the_shadow_build_is_refused(
+    tmp_path,
+) -> None:
+    """Without the synthetic-build substitution, the real record pins the
+    retained bytes to the fireemu build the shadow ran, which a synthetic
+    artifact is not."""
+    descriptor = lane.descriptor()
+    bindings = synthetic(tmp_path, descriptor)
+    with pytest.raises(ValueError, match="not the shadow's build"):
+        o8_admission.validate_o7_admission(descriptor, **bindings)
+    with pytest.raises(ValueError, match="not the shadow's build"):
+        descriptor.retained_artifact_validator(
+            bindings["artifact_path"],
+            bindings["manifest_path"],
+            descriptor.artifact_profile,
+        )
+
+
+def test_a_capability_cannot_be_issued_without_a_worker_binding(
+    tmp_path, monkeypatch
+) -> None:
+    with_synthetic_build(monkeypatch, hashlib.sha256(b"synthetic artifact").hexdigest())
     descriptor = lane.descriptor()
     bindings = synthetic(tmp_path, descriptor)
     with pytest.raises(PermissionError, match="worker archive closure"):
@@ -347,6 +387,25 @@ def test_a_local_shadow_bundle_fails_closed_as_production_evidence() -> None:
     assert result["classification"] == REFUSED
     assert result["rows"] == []
     assert "production:local-mislabelled-as-production" in result["errors"]
+
+
+def test_a_reference_bundle_of_another_build_is_refused() -> None:
+    """The comparator member compares only against the build the record names."""
+    descriptor = lane.descriptor()
+    record = lane.shadow_record()
+    plan = lane.plan_compiler(record["nonce"])
+    production, _ = bound(ROLE_PRODUCTION)
+    other = json.loads(json.dumps(record["bundle"]))
+    other["acquisition"]["artifact"]["artifactSha256"] = "0" * 64
+    result = descriptor.comparator(production, plan, other)
+    assert result["classification"] == REFUSED
+    assert result["errors"] == ["local:reference-artifact-mismatch"]
+    assert result["rows"] == []
+    stripped = json.loads(json.dumps(record["bundle"]))
+    stripped["acquisition"]["artifact"] = None
+    assert (
+        descriptor.comparator(production, plan, stripped)["classification"] == REFUSED
+    )
 
 
 def test_the_descriptor_module_is_bound_by_the_campaign_manifest() -> None:

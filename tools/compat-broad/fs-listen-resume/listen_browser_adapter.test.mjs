@@ -4,9 +4,14 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   BROWSER_BOUND_SOURCES,
+  LANE_DIR,
   MODES,
   SCHEMA,
   TRANSPORT,
@@ -280,4 +285,28 @@ test('a revocation whose uid does not resolve to the run\'s account is refused a
   assert.equal(log.filter(row => row.operation === 'update').length, 0);
   assert.equal(receipt.lifecycle.localAdminRequests, 9);
   assert.equal(receipt.complete, true);
+});
+
+test('the lane directory is derived from the module path even with a space, a Japanese character and a percent sign', async () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  assert.equal(LANE_DIR, here);
+  assert.ok(existsSync(path.join(LANE_DIR, 'listen_collector.mjs')));
+  // Node resolves module paths through realpath, so compare with the real temporary directory.
+  const base = realpathSync(mkdtempSync(path.join(tmpdir(), 'fireemu-awkward-')));
+  const tools = path.join(base, 'x y', '日本語%20', 'tools');
+  const lane = path.join(tools, 'compat-broad', 'fs-listen-resume');
+  const harness = path.join(tools, 'sdk-smoke-browser');
+  try {
+    mkdirSync(lane, { recursive: true });
+    mkdirSync(harness, { recursive: true });
+    for (const file of readdirSync(here).filter(name => name.endsWith('.mjs') && !name.endsWith('.test.mjs'))) {
+      cpSync(path.join(here, file), path.join(lane, file));
+    }
+    cpSync(path.join(here, '..', '..', 'sdk-smoke-browser', 'browser_harness.mjs'), path.join(harness, 'browser_harness.mjs'));
+    const copied = await import(pathToFileURL(path.join(lane, 'listen_browser_adapter.mjs')).href);
+    assert.equal(copied.LANE_DIR, lane);
+    assert.ok(existsSync(path.join(copied.LANE_DIR, 'listen_collector.mjs')));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });

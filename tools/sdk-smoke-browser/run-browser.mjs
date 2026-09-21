@@ -12,7 +12,7 @@
 
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { redact } from "../compat-broad/fs-listen-resume/listen_collector.mjs";
 import {
   REQUEST_ROW_COLUMNS,
@@ -41,7 +41,8 @@ export const PAGES = Object.freeze({
 });
 const DEFAULT_ORDER = ["listener-lifecycle", "listen-reconnect"];
 
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+// Decoded from the module URL so spaces, `%` and non-ASCII in the checkout path survive.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 export const parseArgs = (argv, env) => {
   const options = { pages: DEFAULT_ORDER, output: null };

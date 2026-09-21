@@ -4,13 +4,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, promises as fs, rmSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, promises as fs, rmSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { createHash as browserCreateHash } from "../sdk-smoke/web/listen-catalog-sha256.js";
 import {
@@ -27,8 +28,11 @@ import {
 } from "./browser_harness.mjs";
 import { PAGES, parseArgs } from "./run-browser.mjs";
 
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.join(HERE, "..", "sdk-smoke", "web");
+// A checkout path with a space, a non-ASCII character and a percent sign: a
+// module directory derived from `import.meta.url` without decoding breaks here.
+const AWKWARD_SEGMENTS = ["x y", "日本語%20"];
 
 test("the browser SHA-256 shim matches node:crypto across block boundaries and UTF-8", () => {
   const samples = ["", "abc", "x".repeat(55), "y".repeat(56), "z".repeat(63), "w".repeat(64),
@@ -273,6 +277,39 @@ test("runner arguments require loopback endpoints, a demo project and known page
   for (const spec of Object.values(PAGES)) assert.ok(existsSync(path.join(WEB, spec.file)), spec.file);
   // The control token is page input, never part of the runner's own output shape.
   assert.ok(!Object.keys(PAGES["listener-lifecycle"].query(options)).includes("token"));
+});
+
+test("the runner derives its directories from a checkout path with a space, a Japanese character and a percent sign", async () => {
+  // Node resolves module paths through realpath, so compare with the real temporary directory.
+  const base = await fs.realpath(mkdtempSync(path.join(tmpdir(), "fireemu-awkward-")));
+  const tools = path.join(base, ...AWKWARD_SEGMENTS, "tools");
+  try {
+    mkdirSync(path.join(tools, "sdk-smoke-browser"), { recursive: true });
+    for (const file of ["run-browser.mjs", "browser_harness.mjs"]) {
+      cpSync(path.join(HERE, file), path.join(tools, "sdk-smoke-browser", file));
+    }
+    cpSync(WEB, path.join(tools, "sdk-smoke", "web"), { recursive: true });
+    mkdirSync(path.join(tools, "compat-broad", "fs-listen-resume"), { recursive: true });
+    cpSync(path.join(HERE, "..", "compat-broad", "fs-listen-resume", "listen_collector.mjs"),
+      path.join(tools, "compat-broad", "fs-listen-resume", "listen_collector.mjs"));
+    const copied = path.join(tools, "sdk-smoke-browser", "run-browser.mjs");
+    const runner = await import(pathToFileURL(copied).href);
+    const options = runner.parseArgs([], { FIRESTORE_EMULATOR_HOST: "127.0.0.1:8080",
+      FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:9099", GOOGLE_CLOUD_PROJECT: "demo-app" });
+    assert.equal(options.playwrightDir, path.join(tools, "sdk-smoke-browser"));
+    assert.equal(options.webDir, path.join(tools, "sdk-smoke", "web"));
+    assert.ok(existsSync(options.playwrightDir));
+    assert.ok(existsSync(options.webDir));
+    // The runner's own static server starts from the derived directory.
+    const server = await serveStatic({ "/": options.webDir });
+    try {
+      assert.equal((await fetch(`${server.origin}/listen-reconnect.html`)).status, 200);
+    } finally {
+      await server.close();
+    }
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });
 
 test("closeAll closes every resource and reports the first failure", async () => {

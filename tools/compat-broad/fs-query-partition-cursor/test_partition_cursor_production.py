@@ -8,7 +8,7 @@ credential is read, no production origin is contacted.
 import copy
 import hashlib
 import json
-import multiprocessing
+import os
 import shutil
 import socket
 import subprocess
@@ -449,24 +449,27 @@ def run(built, tmp_path):
     return launcher.execute(launcher.build_parser().parse_args(built.argv(tmp_path)))
 
 
-def _stopped_pid():
-    child = multiprocessing.get_context("spawn").Process(target=time.sleep, args=(0,))
-    child.start()
-    pid = child.pid
-    child.join(timeout=10)
-    assert child.exitcode == 0
-    return pid
+def _prove_workers_exited(gate_path, monkeypatch):
+    """Test scaffolding: the in-process coordinator is alive, a real run's is not.
 
+    The Gate state is left untouched, so the receipt's Gate digest and the
+    terminal record's agree exactly as they do after a real process exit; only
+    the liveness probe is answered as the kernel would for an exited worker.
+    """
+    snapshot = shared_gate.Gate(gate_path, gate_projection.JOB).snapshot()
+    recorded = {
+        snapshot["coordinatorPid"],
+        snapshot["jobs"][gate_projection.JOB]["pid"],
+    }
+    real_kill = os.kill
 
-def _prove_workers_exited(gate_path):
-    """Test scaffolding: the in-process coordinator is alive, a real run's is not."""
-    gate = shared_gate.Gate(gate_path, gate_projection.JOB)
-    with gate.locked() as state:
-        pid = _stopped_pid()
-        state["coordinatorPid"] = pid
-        state["jobs"][gate_projection.JOB]["pid"] = pid
-        shared_gate._save(gate.path, state)
-    return gate.snapshot()
+    def exited(pid, signal):
+        if pid in recorded and signal == 0:
+            raise ProcessLookupError(pid)
+        return real_kill(pid, signal)
+
+    monkeypatch.setattr(os, "kill", exited)
+    return snapshot
 
 
 def local_bundle(tmp_path):
@@ -659,7 +662,7 @@ def test_an_early_stop_before_any_create_retires_as_no_data(
     ledger = reservations.Ledger(built.ledger)
     row = ledger.snapshot()["reservations"][receipt["ticket"]["reservation"]]
     assert row["state"] == "held"
-    snapshot = _prove_workers_exited(output / "gate")
+    snapshot = _prove_workers_exited(output / "gate", monkeypatch)
     record = admission.no_data_abort_record(receipt, output / "receipt.json", snapshot)
     ledger.abort_no_data(receipt["ticket"], record)
     row = ledger.snapshot()["reservations"][receipt["ticket"]["reservation"]]
@@ -723,7 +726,7 @@ def test_a_later_stop_recovers_every_created_document(built, tmp_path, monkeypat
         built.plan["ownedResources"]
     )
     ledger = reservations.Ledger(built.ledger)
-    snapshot = _prove_workers_exited(output / "gate")
+    snapshot = _prove_workers_exited(output / "gate", monkeypatch)
     ledger.close_after_abandon(
         receipt["ticket"],
         {
@@ -897,7 +900,7 @@ def test_the_slot_eight_early_end_is_recorded_incomplete_and_recovered(
     assert comparison["classification"] == "INDETERMINATE"
     assert admission.classify_stop(receipt)["disposition"] == "abandoned-cleanup-close"
     ledger = reservations.Ledger(built.ledger)
-    snapshot = _prove_workers_exited(output / "gate")
+    snapshot = _prove_workers_exited(output / "gate", monkeypatch)
     ledger.close_after_abandon(
         receipt["ticket"],
         {
@@ -942,7 +945,7 @@ def test_a_partial_creation_is_the_owners_and_the_abandoned_close_refuses_it(
     assert "partially created" in verdict["reason"]
     assert not oracle.live
     ledger = reservations.Ledger(built.ledger)
-    snapshot = _prove_workers_exited(output / "gate")
+    snapshot = _prove_workers_exited(output / "gate", monkeypatch)
     with pytest.raises(ValueError, match="complete abandoned cleanup"):
         ledger.close_after_abandon(
             receipt["ticket"],

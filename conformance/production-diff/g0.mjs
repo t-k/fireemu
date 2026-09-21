@@ -20,6 +20,10 @@ export function validateG0Origins(env) {
   return values;
 }
 
+export function canonicalG0Origins(env) {
+  return Object.fromEntries(Object.entries(validateG0Origins(env)).map(([service, host]) => [service, `http://${host}`]));
+}
+
 export function readOwnedProcessArgv(pid) {
   try {
     if (process.platform === "linux") return readFileSync(`/proc/${pid}/cmdline`).toString("utf8").split("\0").filter(Boolean);

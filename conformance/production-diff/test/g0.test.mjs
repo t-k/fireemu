@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { compareG0, g0SessionPythonSource, readOwnedProcessArgv, resolveLockedUvCommand, validateG0Origins } from "../g0.mjs";
+import { canonicalG0Origins, compareG0, g0SessionPythonSource, readOwnedProcessArgv, resolveLockedUvCommand, validateG0Origins } from "../g0.mjs";
 import { verifyG0ProgramDigest } from "../pilot.mjs";
 import { digestJson } from "../core.mjs";
 import { G0_CASE } from "../registry.mjs";
@@ -49,6 +49,10 @@ test("G0 origin binding requires both real loopback services", () => {
     { FIRESTORE_EMULATOR_HOST: "127.0.0.1:18080" },
     { FIRESTORE_EMULATOR_HOST: "example.invalid:18080", FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:19090" },
   ]) assert.throws(() => validateG0Origins(env), /g0-owned-origin-required/);
+  assert.deepEqual(
+    canonicalG0Origins({ FIRESTORE_EMULATOR_HOST: "127.0.0.1:18080", FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:19090" }),
+    { firestore: "http://127.0.0.1:18080", auth: "http://127.0.0.1:19090" },
+  );
 });
 
 test("G0 session bridge compiles as the exact Python source it will execute", () => {

@@ -257,7 +257,7 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
 
         def transmit(declared, body, timeout):
             deadline = time.monotonic() + timeout
-            return capability._transmit(
+            status, response = capability._transmit(
                 {
                     "kind": "data",
                     "declared": declared,
@@ -267,6 +267,12 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
                     "deadline": deadline,
                 }
             )
+            # A 401 or 403 latches the credential as refused: no further call, not
+            # even a cleanup delete, is attempted with it, and the receipt records
+            # the accounts that remain. This is the lane's privileged-call-refused
+            # rehearsal, not a retry.
+            management.observe_status(status)
+            return status, response
 
         environment = production_environment(management, signing=plan["signing"])
         secrets_held += [environment["password"], environment["resetPassword"]]

@@ -245,6 +245,11 @@ class ManagementSession:
         else:
             self.postflight_complete = True
 
+    def observe_status(self, status: Any) -> None:
+        """Latch a refused bearer so no later slot, data or cleanup, is sent with it."""
+        if self.credential is not None:
+            shared_preflight.observe_status(self.credential, status)
+
     def data_token(self, deadline: float) -> str:
         if not self.preflight_complete:
             raise ValueError("preflight must precede data")

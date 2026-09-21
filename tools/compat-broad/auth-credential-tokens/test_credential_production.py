@@ -235,6 +235,32 @@ def test_a_refused_bearer_stops_the_run_before_any_data_call(tmp_path, monkeypat
     assert reservations.Ledger(built.ledger).snapshot()["reservations"][result["ticket"]["reservation"]]["state"] == "held"
 
 
+def test_a_privileged_call_refused_with_403_stops_every_later_bearer_use(tmp_path, monkeypatch) -> None:
+    proposed_shared_extension(monkeypatch)
+    built = Admission(tmp_path)
+    calls, service = wire_fixture(monkeypatch)
+    real_transmit = remote.transmit
+
+    def refusing(declared, body, **kwargs):
+        if declared["owner"]:
+            calls["data"].append("refused-" + declared["kind"])
+            return 403, {"error": {"code": 403, "message": "PERMISSION_DENIED", "status": "PERMISSION_DENIED"}}
+        return real_transmit(declared, body, **kwargs)
+
+    monkeypatch.setattr(remote, "transmit", refusing)
+    result = run(built, tmp_path)
+    assert result["failure"] == "collection-incomplete"
+    assert result["reservationReleased"] is False
+    # Exactly one privileged call went out; the latch stopped the next data call and
+    # every cleanup delete, so the accounts the run created are recorded as remaining.
+    assert calls["data"].count("refused-update") == 1
+    assert not any(kind.startswith("refused-") and kind != "refused-update" for kind in calls["data"])
+    assert result["collection"]["cleanup"]["remainingAccounts"] == 2
+    assert result["collection"]["cleanup"]["cleanupComplete"] is False
+    assert len(service["accounts"]) == 2
+    assert reservations.Ledger(built.ledger).snapshot()["reservations"][result["ticket"]["reservation"]]["state"] == "held"
+
+
 def test_a_secret_shaped_value_in_the_receipt_is_refused_not_redacted(tmp_path, monkeypatch) -> None:
     proposed_shared_extension(monkeypatch)
     built = Admission(tmp_path)

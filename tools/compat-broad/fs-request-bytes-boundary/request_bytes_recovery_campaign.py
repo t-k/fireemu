@@ -115,8 +115,20 @@ def compile_recovery_plan(
     }
 
 
-def compile_gate_plan(recovery_plan: dict[str, Any]) -> dict[str, Any]:
+def compile_gate_plan(
+    parent_plan: dict[str, Any],
+    *,
+    selected_probe: str,
+    recovery_nonce: str,
+    recovery_plan: dict[str, Any],
+) -> dict[str, Any]:
     """Compile the actual Shared Gate plan consumed by ``shared_gate.create``."""
+    canonical_plan = compile_recovery_plan(
+        parent_plan, selected_probe=selected_probe, recovery_nonce=recovery_nonce
+    )
+    if _sha(recovery_plan) != _sha(canonical_plan):
+        raise ValueError("canonical recovery provenance required")
+    recovery_plan = canonical_plan
     operations = recovery_plan.get("operations")
     if not isinstance(operations, list) or len(operations) != MAXIMUM_REQUESTS:
         raise ValueError("recovery operation count drifted")

@@ -98,10 +98,16 @@ def test_recovery_plan_rejects_mutated_parent_operations(mutation):
 
 
 def test_gate_plan_is_compiled_from_recovery_operations():
-    plan = recovery.compile_recovery_plan(
-        parent_plan(), selected_probe="under", recovery_nonce="fedcba9876543210fedcba9876543210"
+    parent = parent_plan()
+    recovery_plan = recovery.compile_recovery_plan(
+        parent, selected_probe="under", recovery_nonce="fedcba9876543210fedcba9876543210"
     )
-    gate_plan = recovery.compile_gate_plan(plan)
+    gate_plan = recovery.compile_gate_plan(
+        parent,
+        selected_probe="under",
+        recovery_nonce="fedcba9876543210fedcba9876543210",
+        recovery_plan=recovery_plan,
+    )
     assert gate_plan["contract"] == "shared-local-v2"
     assert gate_plan["recoveryRequests"] == 85
     assert gate_plan["costMicrousd"] >= 85
@@ -111,10 +117,15 @@ def test_gate_plan_is_compiled_from_recovery_operations():
 
 
 def test_gate_cost_cannot_be_underfunded_by_tariff_estimate():
+    parent = parent_plan()
+    recovery_plan = recovery.compile_recovery_plan(
+        parent, selected_probe="under", recovery_nonce="fedcba9876543210fedcba9876543210"
+    )
     gate_plan = recovery.compile_gate_plan(
-        recovery.compile_recovery_plan(
-            parent_plan(), selected_probe="under", recovery_nonce="fedcba9876543210fedcba9876543210"
-        )
+        parent,
+        selected_probe="under",
+        recovery_nonce="fedcba9876543210fedcba9876543210",
+        recovery_plan=recovery_plan,
     )
     assert gate_plan["costMicrousd"] == 85
     assert gate_plan["tariffEstimateMicrousd"] == 45
@@ -148,11 +159,39 @@ def test_ownership_validation_preserves_wrong_nonce_fields_name_version_and_abse
         )
 
 
+@pytest.mark.parametrize("mutation", ["operation", "binding", "bounds", "tariff"])
+def test_gate_compiler_rejects_mutated_recovery_provenance(mutation):
+    parent = parent_plan()
+    nonce = "fedcba9876543210fedcba9876543210"
+    recovery_plan = recovery.compile_recovery_plan(parent, selected_probe="under", recovery_nonce=nonce)
+    if mutation == "operation":
+        recovery_plan["operations"][0]["path"] += "/foreign"
+    elif mutation == "binding":
+        recovery_plan["operations"][1]["versionFrom"] = "foreign"
+    elif mutation == "bounds":
+        recovery_plan["bounds"]["maximumRequests"] = 84
+    else:
+        recovery_plan["bounds"]["tariffEstimateMicrousd"] = 44
+    with pytest.raises(ValueError, match="canonical recovery provenance"):
+        recovery.compile_gate_plan(
+            parent,
+            selected_probe="under",
+            recovery_nonce=nonce,
+            recovery_plan=recovery_plan,
+        )
+
+
 def test_real_gate_refuses_delete_without_trusted_creation_proof(tmp_path):
+    parent = parent_plan()
     recovery_plan = recovery.compile_recovery_plan(
-        parent_plan(), selected_probe="under", recovery_nonce="fedcba9876543210fedcba9876543210"
+        parent, selected_probe="under", recovery_nonce="fedcba9876543210fedcba9876543210"
     )
-    gate_plan = recovery.compile_gate_plan(recovery_plan)
+    gate_plan = recovery.compile_gate_plan(
+        parent,
+        selected_probe="under",
+        recovery_nonce="fedcba9876543210fedcba9876543210",
+        recovery_plan=recovery_plan,
+    )
     gate_path = tmp_path / "gate"
     shared_gate.create(gate_path, gate_plan)
     gate = shared_gate.Gate(gate_path, recovery.RECOVERY_JOB)

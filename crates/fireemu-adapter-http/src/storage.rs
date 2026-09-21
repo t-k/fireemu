@@ -2310,11 +2310,11 @@ fn admin_storage_authenticated(state: &StorageState, req: &StorageRequest) -> bo
     ) else {
         return false;
     };
-    if req.header("origin").is_some()
-        || req.header("sec-fetch-site").is_some()
-        || req.header("sec-fetch-mode").is_some()
-        || req.header("sec-fetch-dest").is_some()
-    {
+    // Same evidence rule as `set_rules_browser_guard`: `Sec-Fetch-Mode` alone is not browser
+    // evidence (Node's built-in `fetch` always sends it), so it must not fall out of this
+    // capability's reach the way it did before this guard shared
+    // [`fireemu_core_session::loopback::BROWSER_METADATA_HEADERS`] with the privileged route.
+    if fireemu_core_session::loopback::carries_browser_metadata(|name| req.header(name)) {
         return false;
     }
     let expected = format!(

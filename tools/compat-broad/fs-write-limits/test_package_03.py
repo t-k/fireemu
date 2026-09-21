@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import copy
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -313,6 +316,43 @@ def test_pending_rows_are_recorded_with_their_reasons() -> None:
     }
     assert len(reasons) == 1
     assert "index configuration" in next(iter(reasons))
+
+
+def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap() -> None:
+    import package_03
+
+    shadow = load(SHADOW)
+    execution = shadow["execution"]["ALL"]["execution"]
+    execution["indexConfiguration"] = {
+        "profile": "nx-local",
+        "sha256": package_03.campaign.INDEXES_SHA256_AFTER,
+        "sourceCommit": None,
+    }
+    execution.update(
+        semanticMismatches=[],
+        pendingDifferences=[],
+        pendingRows=[],
+        recordingComplete=True,
+        stateValidation=True,
+        cleanupComplete=True,
+        cleanupValidated=True,
+        receiptValidated=True,
+        completed=True,
+        allOwnedResourcesAbsentAfterRecovery=True,
+        supervisorStatus="completed",
+        configurationDigest="a" * 64,
+    )
+    execution["ownedProcess"] = {"stopped": True, "listenersClosed": True}
+    shadow["execution"]["ALL"]["artifact"] = {
+        "sha256": "b" * 64,
+        "runtimeInputsDigest": "c" * 64,
+    }
+    package_03.validate_nx_local_shadow(shadow)
+    for key, value in (("pendingDifferences", [{"pending": True}]), ("completed", False)):
+        mutated = copy.deepcopy(shadow)
+        mutated["execution"]["ALL"]["execution"][key] = value
+        with pytest.raises(ValueError, match="nx-local shadow"):
+            package_03.validate_nx_local_shadow(mutated)
 
 
 def test_the_document_name_figures_are_computed_not_written_by_hand() -> None:

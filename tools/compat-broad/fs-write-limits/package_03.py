@@ -83,6 +83,39 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def validate_nx_local_shadow(shadow: dict) -> None:
+    """Require complete, source-bound runtime evidence before clearing G1."""
+    execution = shadow["execution"]["ALL"]["execution"]
+    index = execution.get("indexConfiguration", {})
+    if index.get("profile", "historical") != "nx-local":
+        return
+    if index.get("sha256") != campaign.INDEXES_SHA256_AFTER:
+        raise ValueError("nx-local shadow index digest is not the declared after state")
+    if (
+        execution.get("semanticMismatches")
+        or execution.get("pendingDifferences")
+        or execution.get("pendingRows")
+        or execution.get("recordingComplete") is not True
+        or execution.get("stateValidation") is not True
+        or execution.get("cleanupComplete") is not True
+        or execution.get("cleanupValidated") is not True
+        or execution.get("receiptValidated") is not True
+        or execution.get("completed") is not True
+        or execution.get("allOwnedResourcesAbsentAfterRecovery") is not True
+        or execution.get("supervisorStatus") != "completed"
+        or not isinstance(execution.get("configurationDigest"), str)
+    ):
+        raise ValueError("nx-local shadow is incomplete or mismatched")
+    if len(execution["configurationDigest"]) != 64:
+        raise ValueError("nx-local shadow configuration identity is missing")
+    process = execution.get("ownedProcess", {})
+    artifact = shadow["execution"]["ALL"].get("artifact", {})
+    if process.get("stopped") is not True or process.get("listenersClosed") is not True:
+        raise ValueError("nx-local shadow process cleanup is unverified")
+    if len(artifact.get("sha256", "")) != 64 or len(artifact.get("runtimeInputsDigest", "")) != 64:
+        raise ValueError("nx-local shadow artifact identity is missing")
+
+
 def head_commit() -> str:
     if subprocess.run(
         ["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=all"],
@@ -297,6 +330,7 @@ def manifest(
     production_receipt: Path | None = None,
 ) -> dict:
     """The manifest, with every computed member recomputed over HEAD."""
+    validate_nx_local_shadow(shadow)
     value = _rebind_text(copy.deepcopy(previous), commit)
     figures = campaign.budget_figures()
     plan = campaign.figure_plan()

@@ -10,7 +10,9 @@ from __future__ import annotations
 import hashlib
 import http.server
 import json
+import os
 import socketserver
+import subprocess
 import sys
 import threading
 import time
@@ -401,10 +403,12 @@ def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_l
     class Handler(http.server.BaseHTTPRequestHandler):
         active = baseline
         deleted: set[str] = set()
+        requests: list[tuple[str, str, dict]] = []
         def do_any(self):
             size = int(self.headers.get("Content-Length", "0"))
             body = json.loads(self.rfile.read(size) or b"{}")
             path = self.path
+            self.__class__.requests.append((self.command, path, body))
             status = 200
             if path.endswith(":getExecutable"):
                 payload = {"rulesetName": self.__class__.active}
@@ -433,7 +437,14 @@ def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_l
         def log_message(self, *_args):
             return
 
-    server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+    reservation = None
+    portctl = os.environ.get("FIREEMU_PORTCTL")
+    if portctl:
+        claim = subprocess.run([sys.executable, portctl, "claim", "--service", "o5-user-token-rules-management", "--preferred", "10000", "--range", "10000-19999", "--ttl", "10m", "--format", "json"], check=True, capture_output=True, text=True)
+        reservation = json.loads(claim.stdout)
+        server = socketserver.TCPServer(("127.0.0.1", int(reservation["port"])), Handler)
+    else:
+        server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
     source, source_digest = remote.worker_binding()
     origin = f"http://127.0.0.1:{server.server_address[1]}"
@@ -455,15 +466,45 @@ def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_l
     with pytest.raises(ValueError, match="Ledger claim binding"):
         RulesManagementSession(gate=gate, ledger=ledger, ticket=ticket, execute=execute, plan=wrong_plan)
     assert gate.snapshot()["managementUsed"] == []
+    assert Handler.requests == []
     session = RulesManagementSession(gate=gate, ledger=ledger, ticket=ticket, execute=execute, plan=plan)
     try:
         bundle = lane.collector(plan, execute, run_id="real-o5", acquisition=acquisition, management_session=session)
         assert bundle["recordingComplete"] is True, (bundle["abort"], bundle["infrastructureFailures"], bundle["transport"].get("rulesManagement"))
         assert bundle["transport"]["rulesManagement"]["recovery"]["restored"] is True
         assert len(gate.snapshot()["managementUsed"]) == 23
+        release = "projects/fireemu-35fe6/releases/cloud.firestore"
+        expected = [
+            ("GET", f"/v1/{release}", {}),
+            ("GET", "/v1/projects/fireemu-35fe6/rulesets/pre-existing", {}),
+            ("GET", f"/v1/{release}:getExecutable", {}),
+            ("POST", "/v1/projects/fireemu-35fe6/rulesets", {"source": {"files": [{"name": "firestore.rules", "content": plan["rulesets"]["A"]["source"]}]}}),
+            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-a", {}),
+            ("PATCH", f"/v1/{release}", {"release": {"name": release, "rulesetName": names["A"]}, "updateMask": "rulesetName"}),
+            ("GET", f"/v1/{release}", {}),
+            ("GET", f"/v1/{release}:getExecutable", {}),
+            ("POST", "/v1/projects/fireemu-35fe6/rulesets", {"source": {"files": [{"name": "firestore.rules", "content": plan["rulesets"]["B"]["source"]}]}}),
+            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-b", {}),
+            ("PATCH", f"/v1/{release}", {"release": {"name": release, "rulesetName": names["B"]}, "updateMask": "rulesetName"}),
+            ("GET", f"/v1/{release}", {}),
+            ("GET", f"/v1/{release}:getExecutable", {}),
+            ("GET", f"/v1/{release}", {}),
+            ("PATCH", f"/v1/{release}", {"release": {"name": release, "rulesetName": baseline}, "updateMask": "rulesetName"}),
+            ("GET", f"/v1/{release}", {}),
+            ("GET", f"/v1/{release}:getExecutable", {}),
+            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-a", {}),
+            ("DELETE", "/v1/projects/fireemu-35fe6/rulesets/server-a", {}),
+            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-a", {}),
+            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-b", {}),
+            ("DELETE", "/v1/projects/fireemu-35fe6/rulesets/server-b", {}),
+            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-b", {}),
+        ]
+        assert Handler.requests == expected
     finally:
         server.shutdown()
         server.server_close()
+        if reservation is not None:
+            subprocess.run([sys.executable, portctl, "release", "--token", reservation["token"]], check=True)
 
 
 def test_a_local_shadow_bundle_fails_closed_as_production_evidence() -> None:

@@ -26,7 +26,9 @@ from typing import Any
 from credential_cases import CAMPAIGN_ID, observation_cases
 from credential_process import start_daemon, stop_daemon
 import credential_wire
+import credential_responsibility as responsibility
 from credential_collector import (
+    collector_binding,
     BudgetExceeded,
     build_receipt,
     charge_elapsed,
@@ -188,6 +190,7 @@ def run_cases(
 
     def signup(index: int) -> dict[str, Any]:
         email = owned_email(tracker, index)
+        intent = responsibility.begin(tracker, "signup", email=email)
         status, body = send(
             budget,
             identity,
@@ -196,7 +199,12 @@ def run_cases(
         )
         if status != 200:
             raise ShadowError(f"sign-up failed: {error_code(body)}")
-        track_account(tracker, body["localId"], email)
+        uid = body.get("localId")
+        if ("error" in body or type(uid) is not str or not uid or len(uid) > 128
+                or body.get("email", email) != email):
+            raise ShadowError("sign-up acknowledgement did not identify the intended account")
+        track_account(tracker, uid, email)
+        responsibility.resolve(tracker, intent, uid, created=True)
         return body
 
     def signin(email: str) -> dict[str, Any]:
@@ -359,7 +367,7 @@ def run_cases(
     )
 
     # --- custom token --------------------------------------------------------
-    custom_uid = f"custom-{tracker['nonce'][:8]}"
+    custom_uid = f"custom-{tracker['nonce']}"
     now = int(time.time())
     custom = unsigned_jwt(
         {
@@ -372,6 +380,7 @@ def run_cases(
             "exp": now + 3600,
         }
     )
+    intent = responsibility.begin(tracker, "custom-signin", requested_uid=custom_uid)
     status, body = send(
         budget,
         identity,
@@ -380,9 +389,16 @@ def run_cases(
     )
     if status != 200:
         raise ShadowError(f"custom-token sign-in failed: {error_code(body)}")
-    # A custom-token sign-in creates an account with no address; recording one would
-    # imply an address readback that cannot happen.
-    track_account(tracker, body["localId"], None)
+    # Signing in may REUSE an existing account. That ACK grants no deletion
+    # ownership, and must not progress to later developer-claim mutations.
+    if ("error" in body or body.get("localId") != custom_uid
+            or type(body.get("isNewUser")) is not bool):
+        raise ShadowError("custom sign-in creation status unconfirmed")
+    if body["isNewUser"] is False:
+        responsibility.resolve(tracker, intent, custom_uid, created=False)
+        raise ShadowError("custom sign-in reused an account not owned by this run")
+    track_account(tracker, custom_uid, None)
+    responsibility.resolve(tracker, intent, custom_uid, created=True)
     custom_session = body
     custom_shape = claim_shape(body["idToken"], reveal=("role",))
     rows["custom-token-developer-claims-present"] = _row(
@@ -750,6 +766,12 @@ def main(argv: list[str] | None = None) -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         workdir = args.output.with_name(args.output.name + ".work")
         workdir.mkdir(mode=0o700, exist_ok=False)
+        responsibility.attach(tracker, workdir / "responsibility", {
+            "artifactSha256": artifact_sha256,
+            "collectorBinding": collector_binding(),
+            "commit": args.commit,
+            "commitStatus": "operator-asserted; not verified by this run",
+        })
     except (OSError, ValueError):
         print("credential shadow: input or output unavailable", file=sys.stderr)
         return 2
@@ -764,15 +786,18 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as error:
         failure = type(error).__name__ + ": local execution failed"
     finally:
-        if process is not None:
-            try:
-                enter_recovery(budget, time.monotonic())
-                problems = cleanup(base, budget, tracker)
-            except Exception as error:
-                problems = ["cleanup: " + type(error).__name__]
-            finally:
-                # Even unexpected cleanup errors/interrupts must reach daemon stop.
-                shutdown = stop_daemon(process)
+        try:
+            if process is not None:
+                try:
+                    enter_recovery(budget, time.monotonic())
+                    problems = cleanup(base, budget, tracker)
+                except Exception as error:
+                    problems = ["cleanup: " + type(error).__name__]
+                finally:
+                    # Even unexpected cleanup errors/interrupts must reach daemon stop.
+                    shutdown = stop_daemon(process)
+        finally:
+            responsibility.close(tracker)
     if problems:
         failure = failure or "cleanup: " + "; ".join(problems)
     record, exit_code = finish_record(

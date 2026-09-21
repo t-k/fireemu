@@ -110,10 +110,10 @@ The old local-shadow record above is **historical**, not execution evidence for
 this revision. It is left byte-for-byte unchanged. The fresh native run is
 published at
 `spec/compatibility/broad-runs/fs-query-partition-cursor-current-v2-local-shadow.json`.
-It was generated from source commit `4130d105b0e157f6a807594c761a3fac84a19819`
+It was generated from source commit `905ede564c6d40498b615183db9f4103756585ba`
 using `target/debug/fireemu`, retained all 37 raw sidecars, completed cleanup,
 proved zero residual documents and returned `MATCHED`. Its artifact SHA-256 is
-`bccacc0a7d3f8a42dba9b4c6b6a0c693082f600690dd5d337a02f56287fd42b1`.
+`3c486cee6cd842039f114bc5d154d71e2b242b18381960716f4e1433e134a9e5`.
 Current preparation also lives in
 `spec/compatibility/broad-runs/fs-query-partition-cursor-preparation-v2.json`;
 preparation is non-authorizing. Its source closure includes the fixed HTTP

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from credential_cases import observation_cases
+import credential_responsibility as responsibility
 
 #: This module never performs a request. The shadow and any future production collector
 #: own their transport separately, so a leak here cannot become a live call.
@@ -80,6 +81,7 @@ BOUND_MODULES = (
     "credential_shadow.py",
     "credential_wire.py",
     "credential_process.py",
+    "credential_responsibility.py",
     "../batch_wire.py",
 )
 
@@ -363,6 +365,8 @@ def mark_deleted(
     account = tracker["accounts"][uid]
     account["uidAbsent"] = uid_absent
     account["emailAbsent"] = email_absent
+    if uid_absent is True and (email_absent is True or account["addressReadback"] is False):
+        responsibility.note_recovery(tracker, uid)
 
 
 def cleanup_report(tracker: dict[str, Any]) -> dict[str, Any]:
@@ -386,7 +390,9 @@ def cleanup_report(tracker: dict[str, Any]) -> dict[str, Any]:
         "addressReadbacks": sum(
             1 for a in accounts if a["addressReadback"] is True and a["emailAbsent"] is True
         ),
-        "cleanupComplete": not remaining,
+        "cleanupComplete": not remaining and not any(
+            intent["state"] == "unknown" for intent in tracker.get("creationIntents", {}).values()
+        ),
     }
 
 
@@ -731,6 +737,7 @@ def build_receipt(
         all(unobserved_reason(row) is None for row in rows)
         and cleanup["ownedAccounts"] > 0
         and budget.get("integrityFailure") is None
+        and tracker.get("responsibilityRecordingComplete") is not False
     )
     return {
         "side": side,
@@ -745,4 +752,6 @@ def build_receipt(
         "deadlines": deadline_record(budget),
         "cleanup": cleanup,
         "rows": publishable(rows),
+        **({"creationResponsibility": responsibility.summary(tracker)}
+           if responsibility.summary(tracker) is not None else {}),
     }

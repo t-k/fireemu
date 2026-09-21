@@ -13,10 +13,14 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
+import os
+import stat
 from pathlib import Path
 from typing import Any
 
 from partition_cursor_case import CAMPAIGN, compile_plan
+from partition_cursor_wire import MAX_RAW_BYTES, decode_response, same_json
 
 TIMESTAMP_KEYS = frozenset({"createTime", "updateTime", "readTime", "commitTime"})
 TOKEN_KEYS = frozenset({"pageToken", "nextPageToken"})
@@ -32,6 +36,32 @@ RESPONSE_DERIVED_SKIPS = frozenset(
 _DISPATCHED = frozenset({"pass", "mismatch"})
 
 
+def _json_tree(value: Any, active: set[int] | None = None, depth: int = 0) -> bool:
+    """Reject non-JSON and cyclic caller input before canonicalization."""
+    kind = type(value)
+    if depth > 128:
+        return False
+    if kind is int:
+        return value.bit_length() <= 4096
+    if kind in (str, bool) or value is None:
+        return True
+    if kind is float:
+        return math.isfinite(value)
+    if kind not in (dict, list):
+        return False
+    active = set() if active is None else active
+    if id(value) in active:
+        return False
+    active.add(id(value))
+    try:
+        if kind is dict and any(type(key) is not str for key in value):
+            return False
+        return all(_json_tree(item, active, depth + 1)
+                   for item in (value.values() if kind is dict else value))
+    finally:
+        active.remove(id(value))
+
+
 def _retention_fault(bundle: dict[str, Any]) -> str | None:
     """Refuse a side whose rows are not covered by retained wire bytes."""
     raw = bundle.get("raw")
@@ -42,15 +72,18 @@ def _retention_fault(bundle: dict[str, Any]) -> str | None:
     ]
     if not isinstance(raw, dict) or not dispatched:
         return "unbound-retention"
-    if raw.get("complete") is not True or raw.get("bindings") != len(dispatched):
+    if (raw.get("complete") is not True or type(raw.get("bindings")) is not int
+            or raw.get("bindings") != len(dispatched)):
         return "raw-bindings-below-dispatched-rows"
-    if any((row.get("raw") or {}).get("present") is not True for row in dispatched):
+    if any(type(row.get("raw")) is not dict or row["raw"].get("present") is not True for row in dispatched):
         return "unretained-dispatched-row"
     return None
 
 
 def _production_claim_fault(bundle: dict[str, Any]) -> str | None:
     """A bundle collected from the local artifact can never claim production."""
+    if type(bundle.get("productionExecuted")) is not bool:
+        return "invalid-production-flag"
     if (
         bundle.get("productionExecuted") is True
         and bundle.get("target") == "owned-local-artifact"
@@ -59,39 +92,100 @@ def _production_claim_fault(bundle: dict[str, Any]) -> str | None:
     return None
 
 
-def verify_retained_bytes(bundle: dict[str, Any], directory: str | Path) -> list[str]:
-    """Re-read each sidecar and bind it to the decoded body it stands for.
+def _private_directory(path: str | Path, *, dir_fd: int | None = None) -> int:
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+    info = os.fstat(fd)
+    if info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        os.close(fd)
+        raise ValueError("private evidence directory required")
+    return fd
 
-    The original response bytes are the comparison authority, so a decoded body
-    that the retained bytes do not reproduce disqualifies its row.
+
+def _signature(info: os.stat_result) -> tuple:
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+            info.st_ctime_ns, info.st_nlink, info.st_mode, info.st_uid)
+
+
+def _read_sidecar(raw_fd: int, name: str, count: int) -> bytes:
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=raw_fd)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
+                or before.st_nlink != 1 or before.st_mode & 0o077
+                or not 0 < count <= MAX_RAW_BYTES or before.st_size != count):
+            raise ValueError("invalid evidence file")
+        data = bytearray()
+        while len(data) <= MAX_RAW_BYTES:
+            chunk = os.read(fd, min(8192, MAX_RAW_BYTES + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+        after = os.fstat(fd)
+        named = os.stat(name, dir_fd=raw_fd, follow_symlinks=False)
+        if (_signature(before) != _signature(after)
+                or _signature(after) != _signature(named) or len(data) != count):
+            raise ValueError("evidence changed while reading")
+        return bytes(data)
+    finally:
+        os.close(fd)
+
+
+def verify_retained_bytes(bundle: dict[str, Any], directory: str | Path) -> list[str]:
+    """Rebind bounded, private regular sidecars to exact slots and typed JSON.
+
+    No absolute paths, parent traversal, links, FIFO reads or lenient JSON.
+    Holding directory descriptors prevents a later pathname swap redirecting reads.
+    This is a read-only integrity check, never cleanup authority.
     """
-    faults = []
-    root = Path(directory) / "raw"
-    for row in bundle["rows"] + bundle["cleanup"]["rows"]:
-        binding = row.get("raw") or {}
-        if row.get("status") == "skipped" or binding.get("present") is not True:
-            continue
-        path = root / str(binding.get("path"))
-        try:
-            payload = path.read_bytes()
-        except OSError:
-            faults.append(f"{row['phase']}-{row['index']}:unreadable")
-            continue
-        if hashlib.sha256(payload).hexdigest() != binding.get("sha256"):
-            faults.append(f"{row['phase']}-{row['index']}:digest")
-            continue
-        try:
-            decoded = json.loads(payload)
-        except json.JSONDecodeError:
-            faults.append(f"{row['phase']}-{row['index']}:undecodable")
-            continue
-        if decoded != (row.get("receipt") or {}).get("body"):
-            faults.append(f"{row['phase']}-{row['index']}:body-differs-from-bytes")
+    plan = _plan_for(bundle)
+    if plan is None:
+        return ["invalid-bundle"]
+    faults: list[str] = []
+    root_fd = raw_fd = None
+    try:
+        root_fd = _private_directory(directory)
+        raw_fd = _private_directory("raw", dir_fd=root_fd)
+        for row in bundle["rows"] + bundle["cleanup"]["rows"]:
+            binding = row.get("raw")
+            if row.get("status") == "skipped":
+                continue
+            label = f"{row['phase']}-{row['index']}"
+            expected_name = f"{row['phase']}-{row['index']:02d}.raw"
+            receipt = row.get("receipt")
+            if (type(binding) is not dict or binding.get("present") is not True
+                    or binding.get("path") != expected_name
+                    or type(binding.get("byteCount")) is not int
+                    or type(receipt) is not dict
+                    or type(receipt.get("byteCount")) is not int
+                    or binding["byteCount"] != receipt["byteCount"]):
+                faults.append(label + ":invalid-binding")
+                continue
+            try:
+                payload = _read_sidecar(raw_fd, expected_name, binding["byteCount"])
+                if hashlib.sha256(payload).hexdigest() != binding.get("sha256"):
+                    faults.append(label + ":digest")
+                    continue
+                decoded = decode_response(payload)
+                if not same_json(decoded, receipt.get("body")):
+                    faults.append(label + ":body-differs-from-bytes")
+            except OSError:
+                faults.append(label + ":unreadable")
+            except (ValueError, TypeError, UnicodeError, RecursionError):
+                faults.append(label + ":unusable-sidecar")
+        if _signature(os.fstat(raw_fd)) != _signature(os.stat("raw", dir_fd=root_fd, follow_symlinks=False)):
+            faults.append("raw-directory-replaced")
+    except (OSError, ValueError, TypeError):
+        faults.append("unavailable-private-evidence-directory")
+    finally:
+        if raw_fd is not None:
+            os.close(raw_fd)
+        if root_fd is not None:
+            os.close(root_fd)
     return faults
 
 
 def _plan_for(bundle: Any) -> dict[str, Any] | None:
-    if not isinstance(bundle, dict) or bundle.get("campaignId") != CAMPAIGN:
+    if type(bundle) is not dict or not _json_tree(bundle) or bundle.get("campaignId") != CAMPAIGN:
         return None
     try:
         plan = compile_plan(
@@ -114,6 +208,15 @@ def _plan_for(bundle: Any) -> dict[str, Any] | None:
         or len(cleanup["rows"]) != len(plan["recovery"])
     ):
         return None
+    for phase, rows in (("observation", bundle["rows"]), ("recovery", cleanup["rows"])):
+        for index, (row, slot) in enumerate(zip(rows, plan[phase])):
+            if (type(row) is not dict or row.get("phase") != phase
+                    or type(row.get("index")) is not int or row["index"] != index
+                    or row.get("kind") != slot["kind"]
+                    or type(row.get("status")) is not str
+                    or ("skipReason" in row and row["skipReason"] is not None
+                        and type(row["skipReason"]) is not str)):
+                return None
     return plan
 
 
@@ -185,11 +288,11 @@ def _row_pair(
             "SEMANTIC_MISMATCH" if reason in RESPONSE_DERIVED_SKIPS else "INDETERMINATE"
         ), False
     comparable_left, comparable_right = _comparable(left), _comparable(right)
-    if _canonical(comparable_left, left_plan) != _canonical(
+    if not same_json(_canonical(comparable_left, left_plan), _canonical(
         comparable_right, right_plan
-    ):
+    )):
         return "SEMANTIC_MISMATCH", False
-    return "EQUIVALENT", comparable_left != comparable_right
+    return "EQUIVALENT", not same_json(comparable_left, comparable_right)
 
 
 def _indeterminate(reason: str) -> dict[str, Any]:
@@ -204,6 +307,7 @@ def _indeterminate(reason: str) -> dict[str, Any]:
         "acquisitionValidated": False,
         "promotionReady": False,
         "productionExecuted": False,
+        "retainedBytesVerified": False,
     }
 
 
@@ -274,4 +378,5 @@ def compare_evidence(
         "acquisitionValidated": False,
         "promotionReady": False,
         "productionExecuted": executed,
+        "retainedBytesVerified": production_directory is not None and local_directory is not None,
     }

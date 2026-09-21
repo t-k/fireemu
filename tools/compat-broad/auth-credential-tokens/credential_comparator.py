@@ -24,6 +24,8 @@ Three rules carry most of the weight:
 from __future__ import annotations
 
 import copy
+import json
+import math
 import re
 from typing import Any
 
@@ -53,6 +55,41 @@ TRUST_MEMBERS = ("trustRoot", "algorithm")
 DIAGNOSTIC_MEMBERS = ("diagnostics", "boundarySeconds")
 
 
+def _json_value(value: Any, depth: int = 0, active: set[int] | None = None) -> bool:
+    """Receipts are finite JSON, not arbitrary Python object graphs."""
+    if depth > 128:
+        return False
+    kind = type(value)
+    if kind is int:
+        return value.bit_length() <= 4096
+    if kind in (str, bool) or value is None:
+        return True
+    if kind is float:
+        return math.isfinite(value)
+    if kind not in (dict, list):
+        return False
+    active = set() if active is None else active
+    identity = id(value)
+    if identity in active:
+        return False
+    active.add(identity)
+    try:
+        if kind is dict and any(type(key) is not str for key in value):
+            return False
+        members = value.values() if kind is dict else value
+        return all(_json_value(member, depth + 1, active) for member in members)
+    finally:
+        active.remove(identity)
+
+
+def _same_json(left: Any, right: Any) -> bool:
+    # The receipt validator already excludes non-JSON graphs and nonfinite numbers.
+    # Encoded equality preserves bool/int/float distinctions at every depth.
+    return json.dumps(left, sort_keys=True, allow_nan=False) == json.dumps(
+        right, sort_keys=True, allow_nan=False
+    )
+
+
 def _carries_credential_material(node: Any, key: str = "") -> bool:
     if key and is_secret_key(key) and isinstance(node, str):
         return not is_module_digest(key, node)
@@ -65,7 +102,7 @@ def _carries_credential_material(node: Any, key: str = "") -> bool:
 
 def _receipt_reason(receipt: Any, side: str) -> str | None:
     """Return why this receipt cannot be compared, or None when it can."""
-    if not isinstance(receipt, dict):
+    if type(receipt) is not dict or not _json_value(receipt):
         return "malformed-receipt"
     if receipt.get("side") != side:
         return "side-mismatch"
@@ -80,9 +117,29 @@ def _receipt_reason(receipt: Any, side: str) -> str | None:
     if (
         not isinstance(cleanup, dict)
         or cleanup.get("cleanupComplete") is not True
-        or cleanup.get("remainingAccounts") != 0
+        or type(cleanup.get("remainingAccounts")) is not int
+        or cleanup["remainingAccounts"] != 0
+        or type(cleanup.get("ownedAccounts")) is not int
+        or cleanup["ownedAccounts"] < 0
+        or type(cleanup.get("addressReadbacks")) is not int
+        or not 0 <= cleanup["addressReadbacks"] <= cleanup["ownedAccounts"]
     ):
         return "incomplete-cleanup"
+    responsibility = receipt.get("creationResponsibility")
+    if responsibility is not None:
+        counts = ("intentCount", "unknownCreates", "confirmedCreates", "existingAccounts")
+        if (
+            type(responsibility) is not dict
+            or any(type(responsibility.get(key)) is not int
+                   or not 0 <= responsibility[key] <= 4 for key in counts)
+            or responsibility["intentCount"] != sum(responsibility[key] for key in counts[1:])
+            or responsibility["unknownCreates"] != 0
+            or responsibility["confirmedCreates"] > cleanup["ownedAccounts"]
+            or responsibility.get("recordingComplete") is not True
+            or type(responsibility.get("durable")) is not bool
+            or responsibility.get("authorizesCleanup") is not False
+        ):
+            return "incomplete-creation-responsibility"
     rows = receipt.get("rows")
     expected = [case["id"] for case in observation_cases()]
     if (
@@ -102,12 +159,12 @@ def _pair_reason(local: Any, production: Any) -> str | None:
     if (
         not isinstance(binding, dict)
         or not binding
-        or binding != production.get("collectorBinding")
+        or not _same_json(binding, production.get("collectorBinding"))
     ):
         return "collector-binding-mismatch"
     if production.get("productionExecuted") is not True:
         return "production-unobserved"
-    if local.get("productionExecuted") is True:
+    if local.get("productionExecuted") is not False:
         return "local-side-claims-production"
     return None
 
@@ -118,7 +175,7 @@ def _whole_second(value: Any) -> int | None:
         return None
     if isinstance(value, int):
         return value
-    if isinstance(value, str) and re.fullmatch(r"-?[0-9]+", value):
+    if isinstance(value, str) and len(value) <= 32 and re.fullmatch(r"-?[0-9]+", value):
         return int(value)
     return None
 
@@ -213,10 +270,16 @@ def compare(local: Any, production: Any) -> dict[str, Any]:
         case = case_by_id(case_id)
         # A row nobody ran is not a row that agreed. This is re-derived from the row
         # itself, because `recordingComplete` is written by the collector under review.
-        if any(unobserved_reason(side[case_id]) is not None for side in (left, right)):
+        if any(
+            unobserved_reason(side[case_id]) is not None
+            or any(type(value) is not bool for value in side[case_id]["assertions"].values())
+            or (side[case_id].get("errorCode") is not None
+                and type(side[case_id]["errorCode"]) is not str)
+            for side in (left, right)
+        ):
             classes[case_id] = "INDETERMINATE"
             continue
-        agree = _semantic(left[case_id]) == _semantic(right[case_id])
+        agree = _same_json(_semantic(left[case_id]), _semantic(right[case_id]))
         if case["nondeterminism"] == "SAME_SECOND_BOUNDARY":
             if not _boundary_is_placed(case, left, right):
                 classes[case_id] = "INDETERMINATE"

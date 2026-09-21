@@ -172,10 +172,11 @@ def _service(clock, *, cookie_subject="same") -> SimpleNamespace:
             if custom["exp"] <= clock.time():
                 return _refused("TOKEN_EXPIRED")
             uid = custom["uid"]
+            is_new = uid not in accounts
             accounts.setdefault(
                 uid, {"email": None, "attributes": {}, "validSince": "0"}
             )
-            return 200, session(uid, custom.get("claims"))
+            return 200, {**session(uid, custom.get("claims")), "isNewUser": is_new}
         if "accounts:update" in url:
             account = accounts[body["localId"]]
             if "validSince" in body:

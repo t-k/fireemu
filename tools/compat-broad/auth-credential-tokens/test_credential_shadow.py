@@ -443,10 +443,12 @@ def _service(*, cookie_subject: str | None = None) -> dict:
         if any(name in RESERVED_COOKIE_CLAIMS for name in claims):
             return _refused("INVALID_CUSTOM_TOKEN")
         uid = token["uid"]
+        is_new = uid not in state["accounts"]
         state["accounts"].setdefault(
             uid, {"email": None, "validSince": 0, "customAttributes": {}}
         )
-        return signed_in(start_session(uid, claims))
+        status, result = signed_in(start_session(uid, claims))
+        return status, {**result, "isNewUser": is_new}
 
     def sign_up(body: dict) -> tuple[int, dict]:
         uid = f"uid-{len(state['accounts']) + 1}"

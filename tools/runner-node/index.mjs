@@ -255,14 +255,27 @@ async function loadCodebase() {
 // Unsupported async options may already be rejected. Observe that rejection
 // before isolating the export so it cannot terminate discovery of siblings.
 function observeAsyncValue(value) {
-  if (value instanceof Promise) {
-    void Promise.prototype.then.call(value, undefined, () => {});
-    return true;
-  }
-  if ((typeof value === "object" && value !== null || typeof value === "function") &&
-      typeof value.then === "function") {
-    void Promise.resolve(value).catch(() => {});
-    return true;
+  try {
+    if (value instanceof Promise) {
+      void Promise.prototype.then.call(value, undefined, () => {});
+      return true;
+    }
+    if ((typeof value === "object" && value !== null) || typeof value === "function") {
+      // Obtain a thenable's accessor once; Promise.resolve(value) would read it
+      // again. The fixed wrapper preserves asynchronous assimilation and the
+      // original receiver without consulting the user object's getter twice.
+      const then = value.then;
+      if (typeof then === "function") {
+        void Promise.resolve({
+          then(resolve, reject) { Reflect.apply(then, value, [resolve, reject]); },
+        }).catch(() => {});
+        return true;
+      }
+    }
+  } catch {
+    // Even instanceof/getPrototypeOf or a then getter may throw (e.g. a
+    // revoked Proxy). Error reporting must not throw a second time and kill
+    // healthy sibling discovery. This is not an arbitrary-code sandbox.
   }
   return false;
 }

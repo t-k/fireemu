@@ -149,7 +149,7 @@ if (result.code !== 0) {
     requestCount: 0,
     authRequests: 0,
     productionRequests: 0,
-    endpoint: null,
+    endpoint: canonicalOrigins.firestore,
   });
   process.exitCode = 2;
   process.exit();
@@ -180,6 +180,6 @@ await publishJson(join(directory, "session-result.json"), {
   requestCount: 0,
   authRequests: 0,
   productionRequests: 0,
-  endpoint: null,
+  endpoint: canonicalOrigins.firestore,
 });
 if (result.code !== 0 || !batch.completed) process.exitCode = 2;

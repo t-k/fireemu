@@ -118,6 +118,12 @@ test("G0 session startup resolves the locked uv executable through its real laun
   assert.match(source, /resolveLockedUvCommand\(\)/);
 });
 
+test("G0 session results retain the validated owned Firestore endpoint for closure checks", () => {
+  const source = readFileSync(new URL("../g0-session.mjs", import.meta.url), "utf8");
+  assert.equal((source.match(/endpoint: canonicalOrigins\.firestore/g) ?? []).length, 2);
+  assert.throws(() => canonicalG0Origins({ FIRESTORE_EMULATOR_HOST: "example.invalid:8080", FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:19090" }), /g0-owned-origin-required/);
+});
+
 test("locked uv Python startup failure is retained as bounded private diagnostics before Gate or wire startup", async () => {
   const directory = mkdtempSync(join(tmpdir(), "g0-startup-diagnostic-"));
   const child = spawn(

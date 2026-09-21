@@ -71,6 +71,14 @@ or authorize production. See the supervised execution section of
 `docs/compatibility/fs-listen-sdk-campaign-preparation.md` for prerequisites and
 limits.
 
+Node resolution: `FIREEMU_NODE` (an executable file) wins. Otherwise the first
+`node` on `PATH` is used, resolved through symlinks; when that resolves to a
+`volta-shim` the launcher substitutes the pinned image from
+`$VOLTA_HOME/tools/image/node/<version>/bin/node` (`tools/user/platform.json`
+first, then the newest image) and refuses with `volta-shim-refused` when none
+exists. The shim is never executed: with the private empty `HOME` the child
+gets, it would try to install a default Node and can spawn itself recursively.
+
 The private pre-spawn launch record and synchronous adapter checkpoints retain
 recovery responsibility if a Promise stalls or the process is killed. Process
 termination is not resource cleanup. The wrapper does not retry, refresh budgets,

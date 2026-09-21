@@ -10,6 +10,13 @@ proof against a temporary Ledger and refuses any Ledger that is not marked as on
 Neither path releases the reservation today: `lifecycle_admission.release_supported`
 says the shared core cannot retire a configuration-only reservation, and the receipt
 carries the typed release-blocked record instead of a release record.
+
+`verify_saved` is the verified-input boundary for the comparator: it re-reads a saved
+receipt directory, checks every binding the receipt names (frozen inputs, gate
+snapshot, evidence digests, reviewed worker, credential preflight, the shared Ledger
+row the ticket points at and the gate path that row claims) and only then returns
+the production record with the `VerifiedAcquisition` the comparator requires. A
+collection that merely carries the production label never gets one.
 """
 
 from __future__ import annotations
@@ -20,6 +27,7 @@ import json
 import os
 import sys
 import tempfile
+import weakref
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -39,10 +47,17 @@ from broad_contract import digest
 from fs_config_lifecycle import lifecycle_admission as admission
 from fs_config_lifecycle import lifecycle_descriptor as campaign
 from fs_config_lifecycle import lifecycle_preflight as preflight
-from fs_config_lifecycle.lifecycle_collector import collect
+from fs_config_lifecycle import lifecycle_remote_transport
+from fs_config_lifecycle.comparator import PRODUCTION_KIND, VerifiedAcquisition
+from fs_config_lifecycle.lifecycle_collector import RESULT_KIND, collect
 from fs_config_lifecycle.lifecycle_gate import ConfigurationGate, create
+from fs_config_lifecycle.surface_matrix import digest as canonical_digest
 
 PROOF_MARKER = "PROOF-LEDGER"
+REQUIRED_EVIDENCE = ("inputs.json", "gate-snapshot.json", "collection/result.json")
+# Identity registry of the acquisition objects verify_saved built, the way o8-core
+# keeps its live capabilities: membership, never shape, is what the comparator asks.
+_VERIFIED: weakref.WeakSet = weakref.WeakSet()
 
 
 def _write_receipt(path: Path, receipt: dict) -> None:
@@ -67,14 +82,28 @@ def _write_receipt(path: Path, receipt: dict) -> None:
         os.close(directory)
 
 
-def _proof_ledger(ledger_root) -> None:
-    """An injected transport may reserve only in a Ledger created for a proof."""
+def _is_proof_ledger(ledger_root) -> bool:
     root = Path(ledger_root)
     marker = root / PROOF_MARKER
-    if root.is_symlink() or marker.is_symlink() or not marker.is_file():
+    return not root.is_symlink() and not marker.is_symlink() and marker.is_file()
+
+
+def _proof_ledger(ledger_root) -> None:
+    """An injected transport may reserve only in a Ledger created for a proof."""
+    if not _is_proof_ledger(ledger_root):
         raise ValueError(
             "injected transport requires a proof Ledger, never the canonical one"
         )
+
+
+def verified(acquisition) -> bool:
+    """Whether this exact object is one verify_saved built and registered."""
+    return type(acquisition) is VerifiedAcquisition and acquisition in _VERIFIED
+
+
+def _register(acquisition: VerifiedAcquisition) -> VerifiedAcquisition:
+    _VERIFIED.add(acquisition)
+    return acquisition
 
 
 def execute_reserved(
@@ -225,3 +254,142 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         capability=capability,
         credential_reader=credential_reader,
     )
+
+
+def _read_evidence(root: Path, name: str) -> tuple[dict, bytes]:
+    """One bounded, regular, non-symlinked evidence file inside the receipt directory."""
+    if not name or name.startswith("/") or ".." in Path(name).parts:
+        raise ValueError("evidence path inside the receipt directory required")
+    path = root / name
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"regular evidence file required: {name}")
+    if path.stat().st_size > reservations.MAX_BYTES:
+        raise ValueError("bounded immutable production evidence required")
+    raw = path.read_bytes()
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError(f"evidence object required: {name}")  # noqa: TRY004 -- refusal class, not a type report
+    return value, raw
+
+
+def verify_saved(
+    output, *, ledger_root, synthetic: bool = False
+) -> tuple[dict, VerifiedAcquisition]:
+    """Verify one saved O8 acquisition and return the comparator's production input.
+
+    Returns `(record, acquisition)`: the `{executionKind, collection}` record the
+    comparator takes and the `VerifiedAcquisition` bound to that collection,
+    registered so `verified()` answers for it. Raises `ValueError` naming the first
+    binding that does not hold. Nothing is sent and nothing in the directory or the
+    Ledger is changed.
+
+    A proof Ledger (the temporary one the integration tests create) is refused as
+    the anchor unless `synthetic=True` is passed explicitly, and the object then
+    carries `synthetic=True` so the comparison can never read as production;
+    `synthetic=True` against a Ledger without the proof marker is refused too.
+
+    The Ledger row anchors the reservation (claim digest, gate plan digest,
+    generation, nonce digest, gate path), not the bytes observed after it: the
+    receipt, gate snapshot and collection digests are checked against each other
+    inside the directory. A shared `attach_evidence` Ledger transition is the
+    missing piece for anchoring those.
+    """
+    if type(synthetic) is not bool:
+        raise ValueError("synthetic must be an explicit boolean")
+    if _is_proof_ledger(ledger_root) != synthetic:
+        raise ValueError(
+            "proof Ledger anchors require synthetic=True and a canonical Ledger "
+            "refuses it"
+        )
+    output = Path(output)
+    if output.is_symlink() or not output.is_dir():
+        raise ValueError("saved receipt directory required")
+    output = output.resolve()
+    receipt, receipt_bytes = _read_evidence(output, "receipt.json")
+    if (
+        receipt.get("kind") != campaign.RECEIPT_KIND
+        or receipt.get("campaignId") != campaign.CAMPAIGN
+    ):
+        raise ValueError("acquisition receipt of this campaign required")
+    if (
+        receipt.get("executionKind") != PRODUCTION_KIND
+        or receipt.get("productionExecuted") is not True
+    ):
+        raise ValueError("not a production acquisition")
+    if receipt.get("workerSha256") != lifecycle_remote_transport._WORKER_SHA256:
+        raise ValueError("receipt names no reviewed worker")
+    evidence = receipt.get("evidenceFiles")
+    if not isinstance(evidence, dict) or any(
+        name not in evidence for name in REQUIRED_EVIDENCE
+    ):
+        raise ValueError("required evidence files missing from the receipt")
+    files = {}
+    for name, expected in evidence.items():
+        value, raw = _read_evidence(output, name)
+        if hashlib.sha256(raw).hexdigest() != expected:
+            raise ValueError(f"evidence digest differs: {name}")
+        files[name] = value
+    inputs = files["inputs.json"]
+    admission.validate_frozen_inputs(inputs)
+    if (
+        inputs["inputsDigest"] != receipt.get("inputsDigest")
+        or inputs["planDigest"] != receipt.get("planDigest")
+        or inputs["planDigest"] != receipt.get("campaignPlanDigest")
+        or inputs["permissionDigest"] != receipt.get("permissionDigest")
+    ):
+        raise ValueError("receipt does not bind its frozen inputs")
+    snapshot = files["gate-snapshot.json"]
+    if (
+        digest(snapshot) != receipt.get("gateDigest")
+        or snapshot.get("total") != receipt.get("chargedCalls")
+        or snapshot.get("costMicrousd") != receipt.get("chargedMicrousd")
+    ):
+        raise ValueError("receipt does not bind its gate digest")
+    collection = files["collection/result.json"]
+    if json.loads(json.dumps(receipt.get("collection"))) != collection:
+        raise ValueError("receipt collection differs from the saved result")
+    preflight_row = collection.get("credentialPreflight")
+    if (
+        collection.get("kind") != RESULT_KIND
+        or collection.get("campaignId") != campaign.CAMPAIGN
+        or collection.get("nonceDigest") != digest(inputs["plan"]["nonce"])
+        or type(collection.get("rowCount")) is not int
+        or collection["rowCount"] < 1
+        or not isinstance(preflight_row, dict)
+        or preflight_row.get("complete") is not True
+    ):
+        raise ValueError("saved result carries no attested credential preflight")
+    ticket = receipt.get("ticket")
+    if not isinstance(ticket, dict):
+        raise ValueError("shared reservation ticket required")  # noqa: TRY004 -- refusal class, not a type report
+    ledger = reservations.Ledger(ledger_root)
+    try:
+        claim = ledger.bound_claim(ticket)
+    except (KeyError, ValueError) as error:
+        raise ValueError("receipt ticket names no held reservation") from error
+    row = ledger.snapshot()["reservations"][ticket["reservation"]]
+    if (
+        digest(claim) != receipt.get("claimDigest")
+        or claim.get("campaignId") != campaign.CAMPAIGN
+        or claim.get("gatePlanDigest") != receipt.get("gatePlanDigest")
+        or claim.get("nonceDigest") != collection["nonceDigest"]
+        or row.get("generation") != receipt.get("generation")
+    ):
+        raise ValueError("receipt does not bind its reservation claim")
+    if claim.get("gatePath") != str(output / "gate"):
+        raise ValueError("receipt directory is not at the claimed gate path")
+    record = {"executionKind": PRODUCTION_KIND, "collection": collection}
+    acquisition = VerifiedAcquisition(
+        campaign_id=campaign.CAMPAIGN,
+        execution_kind=PRODUCTION_KIND,
+        endpoint=lifecycle_remote_transport.ORIGIN,
+        reservation=ticket["reservation"],
+        ledger_identity=ticket["ledgerIdentity"],
+        receipt_digest=hashlib.sha256(receipt_bytes).hexdigest(),
+        gate_digest=receipt["gateDigest"],
+        artifact_sha256=inputs["artifactSha256"],
+        worker_sha256=receipt["workerSha256"],
+        collection_digest=canonical_digest(collection),
+        synthetic=synthetic,
+    )
+    return record, _register(acquisition)

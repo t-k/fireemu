@@ -812,3 +812,286 @@ def test_an_injected_tokeninfo_exchange_is_refused_against_a_ledger_without_the_
     finally:
         o8_admission.revoke_production_capability(capability)
     assert not (tmp_path / "run").exists()
+
+
+# -- verified acquisition (owner review d7f7ce184 finding 2) ---------------------
+
+
+def _proof_run(tmp_path: Path, **admin) -> tuple[Admission, Path, dict]:
+    tmp_path.mkdir(exist_ok=True)
+    built = Admission(tmp_path)
+    root = _proof_ledger(tmp_path)
+    result = lifecycle_production.execute_reserved(
+        inputs=built.inputs,
+        permission=built.permission,
+        ledger_root=root,
+        output=tmp_path / "run",
+        transmit=FakeAdmin(**admin).transmit,
+        sleeper=_no_sleep,
+    )
+    return built, root, result
+
+
+def _rewrite(path: Path, value: dict) -> None:
+    path.unlink()
+    lifecycle_production._write_receipt(path, value)
+
+
+def _as_production_receipt(run: Path) -> None:
+    """Rewrite a proof run's receipt as the production path would have written it.
+
+    Synthetic: no production run happened. The Ledger row, the ticket, the gate
+    snapshot and the evidence files are the proof run's own; only the fields the
+    capability path sets differently (execution kind, worker digest, preflight row,
+    productionExecuted) are rewritten, and the evidence digests are recomputed the
+    way execute_reserved computes them. This is the positive control for
+    verify_saved's binding checks; every tamper test below starts from it.
+    """
+    receipt = json.loads((run / "receipt.json").read_bytes())
+    collection = json.loads((run / "collection" / "result.json").read_bytes())
+    collection["credentialPreflight"] = {
+        "status": 200,
+        "complete": True,
+        "attestationDigest": "a" * 64,
+    }
+    (run / "collection" / "result.json").write_bytes(
+        json.dumps(collection, sort_keys=True, indent=1).encode()
+    )
+    receipt["collection"] = collection
+    receipt["executionKind"] = "fixed-production-wire"
+    receipt["productionExecuted"] = True
+    receipt["workerSha256"] = lifecycle_remote_transport._WORKER_SHA256
+    receipt["evidenceFiles"] = {
+        name: hashlib.sha256((run / name).read_bytes()).hexdigest()
+        for name in receipt["evidenceFiles"]
+    }
+    _rewrite(run / "receipt.json", receipt)
+
+
+def _receipt(run: Path) -> dict:
+    return json.loads((run / "receipt.json").read_bytes())
+
+
+def test_a_proof_run_with_an_injected_transport_is_never_a_verified_acquisition(
+    tmp_path: Path,
+) -> None:
+    _built, root, result = _proof_run(tmp_path)
+    assert result["executionKind"] == "injected-transport"
+    with pytest.raises(ValueError, match="not a production acquisition"):
+        lifecycle_production.verify_saved(
+            tmp_path / "run", ledger_root=root, synthetic=True
+        )
+
+
+def test_a_proof_ledger_anchor_requires_the_explicit_synthetic_flag_and_says_so(
+    tmp_path: Path,
+) -> None:
+    """Reviewer Should Fix 2, both directions: a proof Ledger is refused as the
+    anchor without synthetic=True, a Ledger without the proof marker refuses
+    synthetic=True, and a synthetic anchor is carried on the object."""
+    _built, root, _result = _proof_run(tmp_path)
+    run = tmp_path / "run"
+    _as_production_receipt(run)
+    with pytest.raises(ValueError, match="proof Ledger anchors require synthetic"):
+        lifecycle_production.verify_saved(run, ledger_root=root)
+    with pytest.raises(ValueError, match="proof Ledger anchors require synthetic"):
+        lifecycle_production.verify_saved(run, ledger_root=root, synthetic=False)
+    with pytest.raises(ValueError, match="explicit boolean"):
+        lifecycle_production.verify_saved(run, ledger_root=root, synthetic=1)
+    canonical_shaped = tmp_path / "canonical-shaped"
+    reservations.Ledger.create(canonical_shaped)
+    with pytest.raises(ValueError, match="canonical Ledger refuses"):
+        lifecycle_production.verify_saved(
+            run, ledger_root=canonical_shaped, synthetic=True
+        )
+    _record, acquisition = lifecycle_production.verify_saved(
+        run, ledger_root=root, synthetic=True
+    )
+    assert acquisition.synthetic is True
+    assert acquisition.summary()["synthetic"] is True
+    assert lifecycle_production.verified(acquisition) is True
+
+
+def test_verify_saved_binds_the_receipt_directory_to_its_ledger_row(
+    tmp_path: Path,
+) -> None:
+    """Positive control on a synthetic production receipt (see _as_production_receipt)."""
+    from fs_config_lifecycle.comparator import PRODUCTION_KIND, VerifiedAcquisition
+    from fs_config_lifecycle.surface_matrix import digest as canonical
+
+    built, root, _result = _proof_run(tmp_path, poll_rounds=2)
+    run = tmp_path / "run"
+    _as_production_receipt(run)
+    record, acquisition = lifecycle_production.verify_saved(
+        run, ledger_root=root, synthetic=True
+    )
+    receipt = _receipt(run)
+    assert type(acquisition) is VerifiedAcquisition
+    assert lifecycle_production.verified(acquisition) is True
+    assert acquisition.synthetic is True
+    assert record == {
+        "executionKind": PRODUCTION_KIND,
+        "collection": receipt["collection"],
+    }
+    assert acquisition.campaign_id == campaign.CAMPAIGN
+    assert acquisition.execution_kind == PRODUCTION_KIND
+    assert acquisition.endpoint == lifecycle_remote_transport.ORIGIN
+    assert acquisition.reservation == receipt["ticket"]["reservation"]
+    assert acquisition.ledger_identity == receipt["ticket"]["ledgerIdentity"]
+    assert (
+        acquisition.receipt_digest
+        == hashlib.sha256((run / "receipt.json").read_bytes()).hexdigest()
+    )
+    assert acquisition.gate_digest == receipt["gateDigest"]
+    assert acquisition.artifact_sha256 == built.inputs["artifactSha256"]
+    assert acquisition.worker_sha256 == lifecycle_remote_transport._WORKER_SHA256
+    assert acquisition.collection_digest == canonical(receipt["collection"])
+    assert NONCE not in json.dumps(acquisition.summary())
+
+
+def test_verify_saved_refuses_every_broken_binding(tmp_path: Path) -> None:
+    import os
+    import shutil
+
+    def tampered(name: str, mutate) -> tuple[Path, Path]:
+        # Each tamper starts from its own proof run, so the receipt directory is
+        # still the one the Ledger claim names and only the named binding breaks.
+        _built, root, _result = _proof_run(tmp_path / name, poll_rounds=2)
+        run = tmp_path / name / "run"
+        _as_production_receipt(run)
+        lifecycle_production.verify_saved(run, ledger_root=root, synthetic=True)
+        mutate(run)
+        return run, root
+
+    def edit_receipt(**fields):
+        def mutate(directory: Path) -> None:
+            _rewrite(directory / "receipt.json", {**_receipt(directory), **fields})
+
+        return mutate
+
+    def edit_result(directory: Path) -> None:
+        # The evidence file no longer hashes to what the receipt names.
+        path = directory / "collection" / "result.json"
+        value = json.loads(path.read_bytes())
+        value["rows"][0]["status"] = 418
+        path.write_bytes(json.dumps(value, sort_keys=True, indent=1).encode())
+
+    def edit_collection_in_receipt(directory: Path) -> None:
+        # The receipt's collection no longer equals result.json, digests intact.
+        receipt = _receipt(directory)
+        receipt["collection"]["rows"][0]["status"] = 418
+        _rewrite(directory / "receipt.json", receipt)
+
+    def edit_snapshot(directory: Path) -> None:
+        path = directory / "gate-snapshot.json"
+        value = json.loads(path.read_bytes())
+        value["total"] += 1
+        path.write_bytes(json.dumps(value, sort_keys=True).encode())
+        receipt = _receipt(directory)
+        receipt["evidenceFiles"]["gate-snapshot.json"] = hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
+        _rewrite(directory / "receipt.json", receipt)
+
+    def symlink_receipt(directory: Path) -> None:
+        real = directory / "receipt.json"
+        real.rename(directory / "receipt.real.json")
+        os.symlink(directory / "receipt.real.json", real)
+
+    def drop_preflight(directory: Path) -> None:
+        receipt = _receipt(directory)
+        receipt["collection"]["credentialPreflight"] = None
+        path = directory / "collection" / "result.json"
+        path.write_bytes(
+            json.dumps(receipt["collection"], sort_keys=True, indent=1).encode()
+        )
+        receipt["evidenceFiles"]["collection/result.json"] = hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
+        _rewrite(directory / "receipt.json", receipt)
+
+    cases = [
+        ("kind", edit_receipt(kind="other-receipt-v1"), "acquisition receipt"),
+        ("campaign", edit_receipt(campaignId="OTHER-01"), "acquisition receipt"),
+        (
+            "not-executed",
+            edit_receipt(productionExecuted=False),
+            "not a production acquisition",
+        ),
+        (
+            "worker",
+            edit_receipt(workerSha256="0" * 64),
+            "reviewed worker",
+        ),
+        ("evidence", edit_result, "evidence digest"),
+        ("collection", edit_collection_in_receipt, "collection differs"),
+        ("gate", edit_snapshot, "gate digest"),
+        ("inputs", edit_receipt(inputsDigest="0" * 64), "frozen inputs"),
+        ("claim", edit_receipt(claimDigest="0" * 64), "reservation"),
+        ("symlink", symlink_receipt, "regular"),
+        ("preflight", drop_preflight, "credential preflight"),
+    ]
+    for name, mutate, reason in cases:
+        directory, root = tampered(name, mutate)
+        with pytest.raises(ValueError, match=reason):
+            lifecycle_production.verify_saved(
+                directory, ledger_root=root, synthetic=True
+            )
+    # The right receipt against a Ledger that never held its reservation.
+    intact, _root = tampered("intact", lambda _directory: None)
+    (tmp_path / "other").mkdir()
+    other_root = _proof_ledger(tmp_path / "other")
+    with pytest.raises(ValueError, match="reservation"):
+        lifecycle_production.verify_saved(
+            intact, ledger_root=other_root, synthetic=True
+        )
+    # A receipt directory copied elsewhere no longer sits at the gate path the
+    # Ledger claim names.
+    good, root = tampered("good", lambda _directory: None)
+    moved = tmp_path / "moved"
+    shutil.copytree(good, moved, symlinks=True)
+    with pytest.raises(ValueError, match="gate path"):
+        lifecycle_production.verify_saved(moved, ledger_root=root, synthetic=True)
+
+
+def test_the_verified_acquisition_yields_the_semantic_result_and_a_relabelled_copy_does_not(
+    tmp_path: Path,
+) -> None:
+    """End to end: verify_saved's object is what makes compare() a production comparison."""
+    from fs_config_lifecycle.comparator import LOCAL_KIND, MATCH, REFUSED, compare
+    from fs_config_lifecycle.manifest import compile_manifest
+    from fs_config_lifecycle.test_fs_config_comparator import _collection
+
+    # Default FakeAdmin on both sides: a second poll round would change the shape of
+    # the first operation row and this test is about the acquisition, not a mismatch.
+    _built, root, _result = _proof_run(tmp_path)
+    run = tmp_path / "run"
+    _as_production_receipt(run)
+    record, acquisition = lifecycle_production.verify_saved(
+        run, ledger_root=root, synthetic=True
+    )
+    local = {"executionKind": LOCAL_KIND, "collection": _collection(tmp_path, "local")}
+    manifest = compile_manifest(NONCE)
+    verified = compare(manifest, local, record, NONCE, acquisition=acquisition)
+    assert verified["classification"] == MATCH
+    # The anchor is a proof Ledger, so the semantic rows are there but the run
+    # is marked synthetic and never a validated production acquisition.
+    assert verified["syntheticAnchor"] is True
+    assert verified["acquisitionValidated"] is False
+    assert verified["acquisition"] == acquisition.summary()
+    assert verified["acquisition"]["synthetic"] is True
+    assert verified["promotionReady"] is False
+    # The same collection bytes, handed over without the boundary's object.
+    relabelled = compare(manifest, local, copy.deepcopy(record), NONCE)
+    assert relabelled["classification"] == REFUSED
+    assert relabelled["acquisitionValidated"] is False
+    # The local collection itself, relabelled as the production side.
+    forged = compare(
+        manifest,
+        local,
+        {"executionKind": "fixed-production-wire", "collection": local["collection"]},
+        NONCE,
+        acquisition=acquisition,
+    )
+    assert forged["classification"] == REFUSED
+    assert forged["errors"] == ["production-acquisition-binding"]

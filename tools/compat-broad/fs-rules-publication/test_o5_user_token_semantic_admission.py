@@ -81,6 +81,30 @@ def test_valid_distinct_uid_pair_passes_full_admission():
     assert len(result["rows"]) == 33
 
 
+def test_a_uid_in_a_non_principal_field_binds_without_failing_admission():
+    """Capture is field-agnostic: a readback uid that shows up in a field the
+    plan does not treat as a principal slot is bound too (and redacted, so the
+    binding and the label still agree). Such a binding must never turn into a
+    `principal-binding` admission failure, and the field is still compared
+    literally, label against label."""
+    production, local, plan = pair()
+    row = local["rows"][0]
+    assert "note" not in plan["observation"][0]["expect"].get("fields", {})
+    assert row["principalFieldBindings"] == {
+        "ownerUid": {"ref": "owner-a", "readbackIndex": 0}
+    }
+    for bundle in (production, local):
+        bundle["rows"][0]["observed"]["fields"]["note"] = "principal:owner-a"
+        bundle["rows"][0]["principalFieldBindings"]["note"] = {
+            "ref": "owner-a",
+            "readbackIndex": 0,
+        }
+    result = compare(production, local, plan)
+    assert result["errors"] == []
+    assert result["classification"] == MATCH
+    assert result["rows"][0]["local"]["fields"]["note"] == "principal:owner-a"
+
+
 def test_raw_wrong_owner_is_not_erased_by_the_collector_or_comparator():
     production, local, plan = pair(wrong_owner=True)
     assert local["rows"][0]["principalFieldBindings"]["ownerUid"]["ref"] == "other-b"

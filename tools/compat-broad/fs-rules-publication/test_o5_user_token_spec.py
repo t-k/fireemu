@@ -142,6 +142,8 @@ def test_the_shadow_source_commit_is_head_or_a_recent_ancestor() -> None:
         "rust-toolchain.toml",
         ".cargo",
         "tools/compat-broad/fs-rules-publication",
+        # Prose is not an input of the record; the modules and tests are.
+        ":(exclude)tools/compat-broad/fs-rules-publication/README.md",
     )
     assert changed.returncode == 0
     assert changed.stdout.strip() == "", (

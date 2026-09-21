@@ -37,7 +37,7 @@ import partition_cursor_wire as wire
 import reservations
 import shared_gate
 from broad_contract import digest
-from partition_cursor_collector import _documents, _row, publish_row
+from partition_cursor_collector import _documents, _row, _verify_raw, publish_row
 from partition_cursor_gate import JOB, PartitionCursorGate
 from partition_cursor_wire import validate_production_origin
 
@@ -148,6 +148,31 @@ class _Journal:
             },
             "publication": copy.deepcopy(self.publication),
         }
+
+    def evidence_complete(self) -> bool:
+        """Mirror the collector's `_result()` raw/publication evidence checks.
+
+        A dispatched row (one the Gate actually sent, not one it consumed
+        without a send) must have retained its raw sidecar, that sidecar must
+        re-read and hash to what was recorded, and every row/manifest write
+        must have durably published. Must be called once, before the
+        journal's file descriptors close: it re-reads the retained sidecars.
+        """
+        dispatched = [row for row in self.rows if row["status"] != "skipped"]
+        try:
+            verified = bool(dispatched) and _verify_raw(self.raw_fd, self.bindings)
+        except Exception as error:
+            verified = False
+            self.publication["complete"] = False
+            self.publication["failures"].append(
+                {"file": "raw", "error": type(error).__name__}
+            )
+        return (
+            verified
+            and len(self.bindings) == len(dispatched)
+            and all(row["raw"]["present"] for row in dispatched)
+            and self.publication["complete"]
+        )
 
     def close(self) -> None:
         os.close(self.raw_fd)
@@ -283,6 +308,8 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         "failed": 0,
     }
     residual_summary = {"complete": False, "documents": None}
+    ladder_evidence_complete = False
+    residual_evidence_complete = False
     try:
         gate_projection.create(output / "gate", gate_plan)
         gate = PartitionCursorGate(output / "gate")
@@ -574,14 +601,20 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         # ranges rebuilt the baseline; the ladder is judged by the Gate's own
         # typed-absence journal and by its own publication; the residual scans
         # must have run and found nothing.
+        # Computed once, here, while the journals' file descriptors are still
+        # open -- `evidence_complete()` re-reads the retained raw sidecars.
+        ladder_evidence_complete = ladder.evidence_complete()
+        residual_evidence_complete = residual.evidence_complete()
         collection_clean = result.get("status") == "pass"
         ladder_clean = (
             ladder_summary["failed"] == 0
-            and ladder.publication["complete"]
+            and ladder_evidence_complete
             and ladder_absence_complete(snapshot)
         )
         residual_clean = (
-            residual_summary["complete"] and residual_summary["documents"] == 0
+            residual_summary["complete"]
+            and residual_summary["documents"] == 0
+            and residual_evidence_complete
         )
         if collection_clean and ladder_clean and residual_clean:
             management.run("recovery")
@@ -632,6 +665,7 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         ladder=ladder.summary() if ladder is not None else None,
         ladderSummary=ladder_summary,
         ladderAbsenceComplete=ladder_absence_complete(snapshot),
+        ladderEvidenceComplete=ladder_evidence_complete,
         creationProofCount=len(snapshot["jobs"][JOB].get("creationProofs", {}))
         if snapshot
         else 0,
@@ -639,6 +673,7 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         scheduleStall=stall_record["first"],
         residual=residual.summary() if residual is not None else None,
         residualSummary=residual_summary,
+        residualEvidenceComplete=residual_evidence_complete,
         reconstruction=result["reconstruction"] if result is not None else None,
         reservationStateAtPublication="held",
         releaseEligible=ready,
@@ -779,7 +814,9 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
         or receipt.get("routes") != routes
         or receipt.get("routeDigest") != digest(routes)
         or receipt.get("ladderAbsenceComplete") is not True
+        or receipt.get("ladderEvidenceComplete") is not True
         or receipt.get("residualSummary") != {"complete": True, "documents": 0}
+        or receipt.get("residualEvidenceComplete") is not True
     ):
         raise ValueError("saved route journal differs")
     for route, event in zip(sent, snapshot["events"], strict=True):

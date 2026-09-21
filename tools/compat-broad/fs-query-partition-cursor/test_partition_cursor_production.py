@@ -33,6 +33,7 @@ import partition_cursor_preflight as preflight
 import partition_cursor_production as production
 import partition_cursor_wire as wire
 import reservations
+import partition_cursor_collector as collector
 import shared_gate
 from broad_contract import digest
 from partition_cursor_collector import collect_local
@@ -526,7 +527,9 @@ def test_the_complete_run_reaches_every_slot_and_releases_the_temporary_ledger(
         "failed": 0,
     }
     assert receipt["ladderAbsenceComplete"] is True
+    assert receipt["ladderEvidenceComplete"] is True
     assert receipt["residualSummary"] == {"complete": True, "documents": 0}
+    assert receipt["residualEvidenceComplete"] is True
     assert not oracle.live
     assert (
         len(oracle.calls)
@@ -1123,8 +1126,15 @@ def test_a_broken_reconstruction_refuses_release(built, tmp_path, monkeypatch):
     [
         ("ladderAbsenceComplete", False),
         ("residualSummary", {"complete": True, "documents": 1}),
+        ("ladderEvidenceComplete", False),
+        ("residualEvidenceComplete", False),
     ],
-    ids=["P06-ladder-absence", "P07-residual"],
+    ids=[
+        "P06-ladder-absence",
+        "P07-residual",
+        "P06b-ladder-evidence",
+        "P07b-residual-evidence",
+    ],
 )
 def test_the_saved_chain_refuses_a_receipt_that_withdraws_a_release_predicate(
     built, tmp_path, monkeypatch, field, value
@@ -1231,3 +1241,140 @@ def test_a_request_outside_the_frozen_slot_map_is_refused_by_name(
     assert "outside the frozen slot map" in str(seen["error"])
     assert not any(call["kind"] == "residual-scan" for call in oracle.calls)
     assert result["reservationReleased"] is True
+
+
+def _ladder_row_zero_index(built):
+    """The Gate's own recovery-schedule index for the ladder's first slot.
+
+    `dispatch_native` names each row and its raw sidecar by this native Gate
+    index, not by a ladder-local counter, so the target filename for the
+    ladder's first dispatched slot must come from the same frozen slot map
+    `execute()` itself builds from the plan.
+    """
+    return gate_projection.slot_map(built.plan)[("ladder", 0)][1]
+
+
+def _break_raw_write(monkeypatch, target_filename):
+    """Fail exactly one raw sidecar write, by its published filename."""
+    original = collector._publish_bytes
+
+    def failing(directory_fd, filename, payload):
+        if filename == target_filename:
+            raise OSError("injected raw sidecar write failure")
+        return original(directory_fd, filename, payload)
+
+    monkeypatch.setattr(collector, "_publish_bytes", failing)
+
+
+def _break_row_write(monkeypatch, target_filename):
+    """Fail exactly one JSON row write, by its published filename."""
+    original = collector._publish
+
+    def failing(directory_fd, filename, value):
+        if filename == target_filename:
+            raise OSError("injected row write failure")
+        return original(directory_fd, filename, value)
+
+    monkeypatch.setattr(collector, "_publish", failing)
+
+
+def test_a_ladder_raw_write_failure_blocks_readiness_but_cleanup_continues(
+    built, tmp_path, monkeypatch
+):
+    """P13: the ladder journal's raw sidecar write fails on one dispatched
+    row; the recovery ladder still proves every seeded document absent, but
+    the run must not be released as ready with that evidence missing."""
+    oracle = oracle_wire(monkeypatch, built.plan)
+    _break_raw_write(monkeypatch, f"ladder-{_ladder_row_zero_index(built):02d}.raw")
+    result = run(built, tmp_path)
+    assert result["failure"] == "collection-incomplete"
+    assert result["reservationReleased"] is False
+    output = tmp_path / "output"
+    receipt = json.loads((output / "receipt.json").read_bytes())
+    assert receipt["ladderSummary"]["failed"] == 0
+    assert receipt["ladderAbsenceComplete"] is True
+    assert receipt["ladderEvidenceComplete"] is False
+    assert not (output / "release.json").exists()
+    assert not oracle.live
+    with pytest.raises(ValueError):
+        production.verify_saved(
+            output,
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
+        )
+
+
+def test_a_ladder_row_write_failure_blocks_readiness_but_cleanup_continues(
+    built, tmp_path, monkeypatch
+):
+    """P14: the ladder journal's JSON row write fails on one dispatched row;
+    cleanup still runs to completion, but the run must not be released."""
+    oracle = oracle_wire(monkeypatch, built.plan)
+    _break_row_write(
+        monkeypatch, f"row-ladder-{_ladder_row_zero_index(built):02d}.json"
+    )
+    result = run(built, tmp_path)
+    assert result["failure"] == "collection-incomplete"
+    assert result["reservationReleased"] is False
+    output = tmp_path / "output"
+    receipt = json.loads((output / "receipt.json").read_bytes())
+    assert receipt["ladderSummary"]["failed"] == 0
+    assert receipt["ladderAbsenceComplete"] is True
+    assert receipt["ladderEvidenceComplete"] is False
+    assert not (output / "release.json").exists()
+    assert not oracle.live
+    with pytest.raises(ValueError):
+        production.verify_saved(
+            output,
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
+        )
+
+
+def test_a_residual_raw_write_failure_blocks_readiness_but_cleanup_continues(
+    built, tmp_path, monkeypatch
+):
+    """P15: the residual journal's raw sidecar write fails; the residual
+    scans still ran and found nothing, but the run must not be released as
+    ready with that evidence missing."""
+    oracle = oracle_wire(monkeypatch, built.plan)
+    _break_raw_write(monkeypatch, "residual-00.raw")
+    result = run(built, tmp_path)
+    assert result["failure"] == "collection-incomplete"
+    assert result["reservationReleased"] is False
+    output = tmp_path / "output"
+    receipt = json.loads((output / "receipt.json").read_bytes())
+    assert receipt["residualSummary"] == {"complete": True, "documents": 0}
+    assert receipt["residualEvidenceComplete"] is False
+    assert not (output / "release.json").exists()
+    assert not oracle.live
+    with pytest.raises(ValueError):
+        production.verify_saved(
+            output,
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
+        )
+
+
+def test_a_residual_row_write_failure_blocks_readiness_but_cleanup_continues(
+    built, tmp_path, monkeypatch
+):
+    """P16: the residual journal's JSON row write fails; the residual scans
+    still ran and found nothing, but the run must not be released."""
+    oracle = oracle_wire(monkeypatch, built.plan)
+    _break_row_write(monkeypatch, "row-residual-00.json")
+    result = run(built, tmp_path)
+    assert result["failure"] == "collection-incomplete"
+    assert result["reservationReleased"] is False
+    output = tmp_path / "output"
+    receipt = json.loads((output / "receipt.json").read_bytes())
+    assert receipt["residualSummary"] == {"complete": True, "documents": 0}
+    assert receipt["residualEvidenceComplete"] is False
+    assert not (output / "release.json").exists()
+    assert not oracle.live
+    with pytest.raises(ValueError):
+        production.verify_saved(
+            output,
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
+        )

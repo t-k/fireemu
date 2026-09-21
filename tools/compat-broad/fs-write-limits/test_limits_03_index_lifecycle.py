@@ -189,8 +189,8 @@ def test_lifecycle_holds_on_bounded_poll_timeout_and_has_no_production_escape() 
     assert receipt["heldOnFailure"] is True
     assert receipt["restored"] is False
     assert receipt["budget"]["requests"] == 7
-    with pytest.raises(RuntimeError, match="O8/Ledger"):
-        execute_production(plan)
+    with pytest.raises(TypeError, match="ManagementSession"):
+        execute_production(management_session=plan, phase="observation")
 
 
 @pytest.mark.parametrize(

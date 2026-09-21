@@ -1,0 +1,337 @@
+"""The Gate facade: the frozen plan is what the shared Gate creates and the walk sends."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[2]
+for entry in (
+    ROOT / "tools/compat-broad",
+    ROOT / "tools/compat-broad/production-admission",
+    ROOT / "tools/compat-broad/o8-core",
+    HERE,
+):
+    if str(entry) not in sys.path:
+        sys.path.insert(0, str(entry))
+
+import reservations
+import shared_gate
+
+import mfa_gate
+from mfa_cases import owned_accounts
+
+NONCE = "e" * 32
+
+
+def plan(wall=1200, recovery=240):
+    import time
+
+    value = mfa_gate.gate_plan(
+        NONCE, wall_seconds=wall, recovery_seconds=recovery, cost_microusd=100_006
+    )
+    value["permissionExpiresAt"] = time.time() + 7200
+    return value
+
+
+def test_the_frozen_plan_is_created_by_the_shared_gate_at_its_wall_cap(tmp_path):
+    value = plan()
+    mfa_gate.create(tmp_path / "gate", value)
+    gate = mfa_gate.MfaGate(tmp_path / "gate")
+    snapshot = gate.snapshot()
+    job = snapshot["plan"]["jobs"][mfa_gate.JOB]
+    assert len(job["observation"]) == 93
+    assert len(job["recovery"]) == 32
+    assert job["resources"] == mfa_gate.route_resources("fireemu-35fe6")
+    assert snapshot["plan"]["accountResources"] == [
+        f"projects/fireemu-35fe6/auth/accounts/o2-mfa-{role}-{NONCE}"
+        for role in mfa_gate.ROLE_ORDER
+    ]
+    assert set(mfa_gate.ROLE_ORDER) == set(owned_accounts())
+    assert snapshot["plan"]["configResource"] == "projects/fireemu-35fe6/auth/config"
+    # Only the base Gate's own non-creating recipes are declared non-creating.
+    declared = [entry for entry in job["schedule"] if entry.get("creates") is False]
+    assert all(
+        job["observation"][entry["index"]]["kind"] in ("sign-in", "lookup")
+        for entry in declared
+    )
+    assert declared
+
+
+def test_the_plan_above_the_wall_cap_is_refused_by_the_shared_gate(tmp_path):
+    with pytest.raises(ValueError, match="invalid shared allocation"):
+        mfa_gate.create(tmp_path / "gate", plan(wall=2700, recovery=300))
+
+
+def test_the_ledger_refuses_the_auth_resources_by_name():
+    for name in (
+        *mfa_gate.route_resources("fireemu-35fe6"),
+        mfa_gate.account_resource("fireemu-35fe6", NONCE, "pending-control"),
+        mfa_gate.config_resource("fireemu-35fe6"),
+    ):
+        with pytest.raises(ValueError, match="canonical Firestore resource required"):
+            reservations._firestore_resource_scope(name)
+    assert shared_gate.typed_absence(200, {"users": []}) is False
+
+
+def test_no_binding_value_is_in_the_plan_and_every_placeholder_is_declared():
+    value = plan()
+    names = set()
+    for phase in ("observation", "recovery"):
+        for operation in value["jobs"][mfa_gate.JOB][phase]:
+            stack = [operation["body"]]
+            while stack:
+                item = stack.pop()
+                if isinstance(item, dict):
+                    stack.extend(item.values())
+                elif isinstance(item, list):
+                    stack.extend(item)
+                elif isinstance(item, str) and item.startswith("$binding:"):
+                    names.add(item.removeprefix("$binding:"))
+    observed = {
+        name
+        for phase in ("observation", "recovery")
+        for operation in value["jobs"][mfa_gate.JOB][phase]
+        for name in operation["binds"]
+    }
+    unbound = names - observed - set(mfa_gate.MINTED_BINDINGS)
+    assert unbound == set()
+    assert "password" in names and "totpSignIn" in names
+
+
+def test_the_facade_refuses_a_request_outside_its_slot_and_a_skip_of_a_creating_slot(
+    tmp_path,
+):
+    mfa_gate.create(tmp_path / "gate", plan())
+    gate = mfa_gate.MfaGate(tmp_path / "gate")
+    gate.claim()
+    with pytest.raises(ValueError, match="outside closed scenario"):
+        gate.dispatch_runtime(
+            "/v1/accounts:lookup",
+            {"idToken": "x"},
+            owner=False,
+            recovery=False,
+            send=lambda: (200, {}),
+        )
+    with pytest.raises(ValueError, match="can be skipped"):
+        gate.skip_planned("not a finalize")
+
+
+# --- admission properties, each with a test that fails if the check is removed -------
+
+
+def _claimed_gate(tmp_path):
+    mfa_gate.create(tmp_path / "gate", plan())
+    gate = mfa_gate.MfaGate(tmp_path / "gate")
+    gate.claim()
+    return gate
+
+
+def _preflight(gate):
+    """Charge the four observation management slots so data dispatch is admitted."""
+    attestation = {
+        "kind": "request-byte-token-attestation-v1",
+        "principalDigest": "a" * 64,
+        "requiredScopeVerified": True,
+        "identityMode": "subject",
+        "identityVerified": True,
+        "oauthClientVerified": True,
+        "expiresInSeconds": 3599,
+        "remainingSecondsAtVerification": 3599.0,
+        "requiredSeconds": 240.0,
+        "complete": True,
+        "workerReaped": True,
+    }
+    for slot in mfa_gate.MANAGEMENT_OBSERVATION_IDS:
+        body = attestation if slot == "oauth-tokeninfo" else {"name": "x"}
+        gate.management_dispatch(
+            "observation",
+            slot,
+            lambda _deadline, body=body: {
+                "status": 200,
+                "complete": True,
+                "workerReaped": True,
+                "bodyKind": "json",
+                "body": body,
+            },
+        )
+
+
+def _sign_up(gate, uid="uid-1"):
+    return gate.dispatch_runtime(
+        "/v1/accounts:signUp",
+        {
+            "email": f"o2-mfa-pending-control-{NONCE}@example.com",
+            "password": "Aa9!x" * 4,
+            "returnSecureToken": True,
+        },
+        owner=False,
+        recovery=False,
+        send=lambda: (
+            200,
+            {
+                "localId": uid,
+                "idToken": "idt-" + uid,
+                "email": f"o2-mfa-pending-control-{NONCE}@example.com",
+            },
+        ),
+    )
+
+
+def test_a_value_the_run_did_not_observe_is_refused_at_dispatch(tmp_path):
+    gate = _claimed_gate(tmp_path)
+    _preflight(gate)
+    _sign_up(gate)
+    # The next slot is the admin update carrying `$binding:pendingControlUid`.
+    with pytest.raises(ValueError, match="runtime binding differs"):
+        gate.dispatch_runtime(
+            "/v1/projects/fireemu-35fe6/accounts:update",
+            {"localId": "some-other-uid", "emailVerified": True},
+            owner=True,
+            recovery=False,
+            send=lambda: (200, {}),
+        )
+    snapshot = gate.snapshot()
+    assert snapshot["jobs"][mfa_gate.JOB]["observation"] == 1
+    gate.dispatch_runtime(
+        "/v1/projects/fireemu-35fe6/accounts:update",
+        {"localId": "uid-1", "emailVerified": True},
+        owner=True,
+        recovery=False,
+        send=lambda: (200, {"localId": "uid-1"}),
+    )
+
+
+def test_a_minted_value_is_pinned_on_first_use(tmp_path):
+    gate = _claimed_gate(tmp_path)
+    _preflight(gate)
+    _sign_up(gate)
+    gate.dispatch_runtime(
+        "/v1/projects/fireemu-35fe6/accounts:update",
+        {"localId": "uid-1", "emailVerified": True},
+        owner=True,
+        recovery=False,
+        send=lambda: (200, {}),
+    )
+    # The sign-in carries the minted password, which must equal the signup's.
+    with pytest.raises(ValueError, match="runtime binding differs"):
+        gate.dispatch_runtime(
+            "/v1/accounts:signInWithPassword",
+            {
+                "email": f"o2-mfa-pending-control-{NONCE}@example.com",
+                "password": "other",
+                "returnSecureToken": True,
+            },
+            owner=False,
+            recovery=False,
+            send=lambda: (200, {}),
+        )
+
+
+def test_a_changed_account_identity_is_refused(tmp_path):
+    gate = _claimed_gate(tmp_path)
+    operation = mfa_gate.observation_operations(NONCE)[0]
+    state = {"jobs": {mfa_gate.JOB: {"authAccounts": {}}}, "events": [{}]}
+    gate._record_auth_response(
+        state,
+        operation,
+        False,
+        state["events"][0],
+        200,
+        {"localId": "uid-1", "idToken": "t1"},
+    )
+    assert (
+        state["jobs"][mfa_gate.JOB]["authAccounts"]["pending-control"]["uid"] == "uid-1"
+    )
+    state["events"].append({})
+    with pytest.raises(ValueError, match="identity binding is immutable"):
+        gate._record_auth_response(
+            state,
+            operation,
+            False,
+            state["events"][1],
+            200,
+            {"localId": "uid-2", "idToken": "t2"},
+        )
+
+
+def test_cleanup_of_an_account_the_run_never_created_is_refused(tmp_path):
+    gate = _claimed_gate(tmp_path)
+    delete = mfa_gate.recovery_operations(NONCE)[0]
+    state = {
+        "jobs": {mfa_gate.JOB: {"authAccounts": {}, "resources": [], "absent": []}},
+        "events": [{}],
+    }
+    with pytest.raises(ValueError, match="never created"):
+        gate._record_auth_response(
+            state,
+            delete,
+            True,
+            {"responseDigest": "x"},
+            200,
+            {"kind": "identitytoolkit#DeleteAccountResponse"},
+        )
+
+
+def test_an_unsettled_signup_is_neither_skipped_nor_settled_twice(tmp_path):
+    gate = _claimed_gate(tmp_path)
+    _preflight(gate)
+
+    def lost():
+        raise ValueError("answer lost")
+
+    with pytest.raises(ValueError, match="answer lost"):
+        gate.dispatch_runtime(
+            "/v1/accounts:signUp",
+            {
+                "email": f"o2-mfa-pending-control-{NONCE}@example.com",
+                "password": "Aa9!x" * 4,
+                "returnSecureToken": True,
+            },
+            owner=False,
+            recovery=False,
+            send=lost,
+        )
+    assert gate.unsettled_accounts() == ["pending-control"]
+    gate.abandon_observation("test")
+    # Its cleanup slots are neither sent nor skipped until a readback settles it.
+    assert gate.drain_recovery() == 0
+    assert gate.snapshot()["jobs"][mfa_gate.JOB]["recovery"] == 0
+    with pytest.raises(ValueError, match="unsettled signup"):
+        gate.dispatch_runtime(
+            "/v1/projects/fireemu-35fe6/accounts:delete",
+            {"localId": "uid-9"},
+            owner=True,
+            recovery=True,
+            send=lambda: (200, {}),
+        )
+    gate.settle_creation(
+        "pending-control", "uid-9", evidence={"status": 200, "responseDigest": "d" * 64}
+    )
+    assert gate.unsettled_accounts() == []
+    assert gate.bindings["pendingControlUid"] == "uid-9"
+    with pytest.raises(ValueError, match="no unsettled signup"):
+        gate.settle_creation("pending-control", "uid-9", evidence={})
+
+
+def test_adoption_requires_the_recorded_processes_to_be_gone(tmp_path, monkeypatch):
+    import os
+
+    gate = _claimed_gate(tmp_path)
+    real = os.getpid()
+    monkeypatch.setattr(os, "getpid", lambda: real + 100_000)
+    with pytest.raises(ValueError, match="still alive"):
+        gate.adopt()
+    monkeypatch.setattr(mfa_gate, "_process_alive", lambda pid: False)
+    record = gate.adopt()
+    assert record["from"] == [real, real] and record["to"] == real + 100_000
+    snapshot = gate.snapshot()
+    assert (
+        snapshot["coordinatorPid"]
+        == snapshot["jobs"][mfa_gate.JOB]["pid"]
+        == real + 100_000
+    )
+    assert snapshot["adoptions"] == [record]

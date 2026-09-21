@@ -57,6 +57,8 @@ TEST_PHONE = "+15555550100"
 PHONE_SIGN_IN_INFO = {"recaptchaToken": "fireemu-local-shadow"}
 # The owned instance is reaped rather than abandoned when this deadline passes.
 CHILD_TIMEOUT_SECONDS = 900
+# Each aged sample is taken this long past its target age (see `_walk`).
+AGE_SAMPLE_MARGIN_SECONDS = 1
 CONFIG = {"schemaVersion": 1, "profile": "strict", "auth": {"totp": {}}}
 SCHEMA = "o2-mfa-local-shadow-v1"
 
@@ -328,14 +330,19 @@ def _acquire_aged_resources(
     sum. Acquiring each resource immediately before its own wait is the obvious reading
     and costs the serial total, which does not fit the wall budget.
     """
-    pendings = {
-        age: phone_pending(instance, account_for(f"pending-age-{age}"))
-        for age in AGED_PENDING_SAMPLES
-    }
-    sessions = {
-        age: enroll_totp(instance, account_for(f"enrollment-age-{age}"))
-        for age in SAMPLED_AGES_SECONDS
-    }
+    pendings = {}
+    sessions = {}
+    acquired: dict[str, int] = {}
+    for age in AGED_PENDING_SAMPLES:
+        pendings[age] = phone_pending(instance, account_for(f"pending-age-{age}"))
+        acquired[f"pending-{age}"] = instance.now()
+    for age in SAMPLED_AGES_SECONDS:
+        sessions[age] = enroll_totp(instance, account_for(f"enrollment-age-{age}"))
+        acquired[f"session-{age}"] = instance.now()
+    # Each resource remembers its own acquisition instant: the resources are
+    # acquired one after another, so a row aged from a common origin would sample
+    # every resource but the last one late by the acquisition tail.
+    pendings["acquiredAt"] = acquired
     return pendings, sessions
 
 
@@ -559,7 +566,17 @@ def _walk(
 
     control = account_for("pending-control")
     pendings, sessions = _acquire_aged_resources(instance, account_for)
-    origin = instance.now()
+    acquired = pendings.pop("acquiredAt")
+
+    def sample(key: str, age: int) -> None:
+        """Advance the owned clock to just past the resource's own target age."""
+        target = acquired[key] + age + AGE_SAMPLE_MARGIN_SECONDS
+        now = instance.now()
+        if target > now:
+            instance.advance(target - now)
+
+    def observed(key: str) -> float:
+        return float(instance.now() - acquired[key])
 
     status, _, code = _complete_phone_mfa(instance, phone_pending(instance, control))
     finish("baseline-fresh-finalize", status, code)
@@ -568,9 +585,14 @@ def _walk(
         # A production run waits here; the owned local instance advances its own clock.
         # Either way the checkpoint written by the previous `finish` is what a resumed
         # process reloads, and every aged resource already exists.
-        elapsed = instance.now() - origin
-        if age > elapsed:
-            instance.advance(age - elapsed)
+        #
+        # `now()` reads the instance clock truncated to whole seconds, so a resource's
+        # recorded acquisition instant can sit up to a second before the instant it
+        # was created; advancing by exactly the remaining age would then sample it
+        # short of its target. One whole second of margin puts every sample just past
+        # its target and still short of the next boundary, as the campaign document
+        # says a sample is taken.
+        sample(f"pending-{age}", age)
         aged = pendings[age]
         status, payload, code = _observe(
             instance,
@@ -581,7 +603,13 @@ def _walk(
                 "phoneSignInInfo": PHONE_SIGN_IN_INFO,
             },
         )
-        finish(f"age-{age}s-start", status, code, pendingAgeSeconds=float(age))
+        finish(
+            f"age-{age}s-start",
+            status,
+            code,
+            pendingAgeSeconds=float(age),
+            observedAgeSeconds=observed(f"pending-{age}"),
+        )
         if status == 200:
             session = payload["phoneResponseInfo"]["sessionInfo"]
             final_status, _, final_code = _observe(
@@ -600,6 +628,7 @@ def _walk(
                 final_status,
                 final_code,
                 pendingAgeSeconds=float(age),
+                observedAgeSeconds=observed(f"pending-{age}"),
             )
         else:
             skip_step(
@@ -612,16 +641,18 @@ def _walk(
                 "outcome": "skipped",
             }
         aged_account = accounts[f"pending-age-{age}"]
-        status, _, code = _complete_phone_mfa(
-            instance, fresh_pending(instance, aged_account)
-        )
+        fresh = fresh_pending(instance, aged_account)
+        fresh_at = instance.now()
+        status, _, code = _complete_phone_mfa(instance, fresh)
         finish(
             f"age-{age}s-same-account-fresh-control",
             status,
             code,
             pendingAgeSeconds=0.0,
+            observedAgeSeconds=float(instance.now() - fresh_at),
         )
         if age in SAMPLED_AGES_SECONDS:
+            sample(f"session-{age}", age)
             secret, parameters, session_info = sessions[age]
             aged_subject = accounts[f"enrollment-age-{age}"]
             status, _, code = _observe(
@@ -643,6 +674,7 @@ def _walk(
                 status,
                 code,
                 sessionAgeSeconds=float(age),
+                observedAgeSeconds=observed(f"session-{age}"),
             )
 
     status, _, code = _complete_phone_mfa(instance, phone_pending(instance, control))

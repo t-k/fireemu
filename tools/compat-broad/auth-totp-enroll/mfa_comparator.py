@@ -47,6 +47,7 @@ _NONDETERMINISTIC = frozenset(
         "elapsedseconds",
         "pendingageseconds",
         "sessionageseconds",
+        "observedageseconds",
         "requestedat",
     }
 )

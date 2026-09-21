@@ -28,7 +28,7 @@
 import { readFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { createLifecycleJournal } from './listen_journal.mjs';
 import {
@@ -65,6 +65,8 @@ export const BROWSER_BOUND_SOURCES = Object.freeze([
   'tools/sdk-smoke/web/listen-catalog-sha256.js',
 ]);
 const MAX_REQUEST_ROWS = 4000;
+/** The lane directory, decoded from the module URL so spaces, `%` and non-ASCII in the checkout path survive. */
+export const LANE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 const plainObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const lifecycleFailure = error =>
@@ -345,7 +347,7 @@ export const main = async ({ env = process.env, argv = process.argv,
   const repoRoot = env.O6_REPO_ROOT ?? process.cwd();
   const playwrightDir = env.O6_PLAYWRIGHT_MODULE_DIR ?? path.join(repoRoot, 'tools/sdk-smoke-browser');
   const webDir = path.join(repoRoot, 'tools/sdk-smoke/web');
-  const laneDir = path.dirname(new URL(import.meta.url).pathname);
+  const laneDir = LANE_DIR;
   const modes = parseModes(env.O6_LISTEN_BROWSER_MODES);
   const projectId = env.GOOGLE_CLOUD_PROJECT ?? 'demo-app';
 

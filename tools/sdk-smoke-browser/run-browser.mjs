@@ -8,11 +8,18 @@
 // the emulator; the listen-reconnect page installs its own rules through the
 // control route with the child-scoped token, so it runs last.
 //
+// The control token never enters a page URL: the runner exposes a one-shot
+// `__fireemuInstallRules(source)` binding to the listen-reconnect page and
+// performs the PUT itself, so the page only ever sees `{ ok, status }`. Every
+// error that could reach stderr, `pageErrors` or the receipt is reduced to a
+// message with the token and any URL query string redacted, because Playwright
+// quotes the navigation URL in its failure diagnostics.
+//
 // Chromium and the static server are closed on every exit path.
 
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { redact } from "../compat-broad/fs-listen-resume/listen_collector.mjs";
 import {
   REQUEST_ROW_COLUMNS,
@@ -33,15 +40,74 @@ export const PAGES = Object.freeze({
   }),
   "listen-reconnect": Object.freeze({
     file: "listen-reconnect.html",
-    query: ({ firestorePort, authPort, projectId, controlToken }) => ({
-      fs: firestorePort, auth: authPort, project: projectId, token: controlToken,
-    }),
+    query: ({ firestorePort, authPort, projectId }) => ({ fs: firestorePort, auth: authPort, project: projectId }),
+    // The page hands its rules text to the runner; the token stays in this process.
+    installsRules: true,
     timeoutMs: 90_000,
   }),
 });
 const DEFAULT_ORDER = ["listener-lifecycle", "listen-reconnect"];
+const REDACTED = "[redacted]";
+const MAX_RULES_SOURCE = 64 * 1024;
 
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+/**
+ * Reduce free text to something safe for stderr and the receipt: every
+ * occurrence of a secret and every URL query string is replaced.
+ */
+export const safeText = (value, secrets = []) => {
+  let text = typeof value === "string" ? value : String(value);
+  for (const secret of secrets) {
+    if (typeof secret === "string" && secret.length > 0) text = text.split(secret).join(REDACTED);
+  }
+  return text.replace(/(https?:\/\/[^\s?#"'<>)]*)\?[^\s#"'<>)]*/g, `$1?${REDACTED}`);
+};
+
+/** A new error carrying only the safe message (never the original stack or URL). */
+export const safeError = (error, secrets = []) => {
+  const message = safeText(error?.message ?? error, secrets);
+  return Object.assign(new Error(message), typeof error?.code === "string" ? { code: error.code } : {});
+};
+
+/** Apply `safeText` to every string inside a plain JSON value. */
+export const scrubStrings = (value, secrets) => {
+  if (Array.isArray(value)) return value.map((item) => scrubStrings(item, secrets));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scrubStrings(item, secrets)]));
+  }
+  return typeof value === "string" ? safeText(value, secrets) : value;
+};
+
+/**
+ * The one operation the listen-reconnect page needs from the control route:
+ * install a ruleset. The token is attached here, in Node, and the page gets
+ * back only the status. One call per page; anything but a bounded string is
+ * refused before a request is made; a transport failure is reported as
+ * `unreachable` without the underlying message.
+ */
+export const createInstallRulesBinding = ({ authPort, controlToken, fetchImpl = fetch }) => {
+  let used = false;
+  return async (source) => {
+    if (used) return { ok: false, status: 0, error: "rules binding already used" };
+    used = true;
+    if (typeof source !== "string" || source.length === 0 || source.length > MAX_RULES_SOURCE) {
+      return { ok: false, status: 0, error: "rules source must be a non-empty bounded string" };
+    }
+    try {
+      const response = await fetchImpl(`http://127.0.0.1:${authPort}/v1/rules`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", authorization: `Bearer ${controlToken}` },
+        body: JSON.stringify({ source }),
+      });
+      await response.arrayBuffer().catch(() => {});
+      return { ok: response.ok, status: response.status };
+    } catch {
+      return { ok: false, status: 0, error: "unreachable" };
+    }
+  };
+};
+
+// Decoded from the module URL so spaces, `%` and non-ASCII in the checkout path survive.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 export const parseArgs = (argv, env) => {
   const options = { pages: DEFAULT_ORDER, output: null };
@@ -76,16 +142,23 @@ export const parseArgs = (argv, env) => {
   return options;
 };
 
+const secretsOf = (options) => [options.controlToken].filter((value) => typeof value === "string" && value.length > 0);
+
 /** Drive one smoke page to its verdict; always closes the page. */
 export const runPage = async (chromium, serverOrigin, name, options) => {
   const spec = PAGES[name];
+  const secrets = secretsOf(options);
   const context = await chromium.browser.newContext();
   const page = await context.newPage();
   const webchannel = captureWebChannel(page, options.firestorePort);
   const pageErrors = [];
-  page.on("pageerror", (error) => pageErrors.push(error?.message ?? String(error)));
+  page.on("pageerror", (error) => pageErrors.push(safeText(error?.message ?? error, secrets)));
   const startedAt = performance.now();
   try {
+    if (spec.installsRules) {
+      await page.exposeFunction("__fireemuInstallRules",
+        createInstallRulesBinding({ authPort: options.authPort, controlToken: options.controlToken }));
+    }
     const url = new URL(`${serverOrigin}/${spec.file}`);
     for (const [key, value] of Object.entries(spec.query(options))) url.searchParams.set(key, String(value));
     await page.goto(url.href, { waitUntil: "load" });
@@ -103,7 +176,7 @@ export const runPage = async (chromium, serverOrigin, name, options) => {
       passed: status === "passed" && result?.passed === true && pageErrors.length === 0,
       status,
       elapsedMs: Math.trunc(performance.now() - startedAt),
-      result: redact(result),
+      result: scrubStrings(redact(result), secrets),
       pageErrors,
       webchannel: {
         summary: webchannel.summary(),
@@ -111,6 +184,9 @@ export const runPage = async (chromium, serverOrigin, name, options) => {
         rows: compactWebChannelRows(webchannel.rows),
       },
     };
+  } catch (error) {
+    // Playwright quotes the navigation URL and page text in its messages.
+    throw safeError(error, secrets);
   } finally {
     await page.close().catch(() => {});
     await context.close().catch(() => {});
@@ -118,16 +194,20 @@ export const runPage = async (chromium, serverOrigin, name, options) => {
 };
 
 export const main = async ({ argv = process.argv.slice(2), env = process.env,
-  emit = (value) => process.stdout.write(`${JSON.stringify(value, null, 2)}\n`) } = {}) => {
+  emit = (value) => process.stdout.write(`${JSON.stringify(value, null, 2)}\n`),
+  launch = launchChromium } = {}) => {
   const options = parseArgs(argv, env);
+  const secrets = secretsOf(options);
   const server = await serveStatic({ "/": options.webDir });
   let chromium = null;
   const pages = {};
   try {
-    chromium = await launchChromium(options.playwrightDir);
+    chromium = await launch(options.playwrightDir);
     for (const name of options.pages) {
       pages[name] = await runPage(chromium, server.origin, name, options);
     }
+  } catch (error) {
+    throw safeError(error, secrets);
   } finally {
     await closeAll([server.close, ...(chromium ? [chromium.close] : [])]);
   }
@@ -148,7 +228,7 @@ export const main = async ({ argv = process.argv.slice(2), env = process.env,
 const invokedDirectly = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
 if (invokedDirectly) {
   main().catch((error) => {
-    process.stderr.write(`${error?.message ?? error}\n`);
+    process.stderr.write(`${safeText(error?.message ?? error, [process.env.FIREEMU_CONTROL_TOKEN])}\n`);
     process.exitCode = 1;
   });
 }

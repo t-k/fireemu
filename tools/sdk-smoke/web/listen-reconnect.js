@@ -28,7 +28,6 @@ const params = new URLSearchParams(location.search);
 const project = params.get("project") || "demo-app";
 const firestorePort = Number(params.get("fs"));
 const authPort = Number(params.get("auth"));
-const token = params.get("token") || "";
 const resultNode = document.getElementById("result");
 const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const email = `webchannel-listen-${suffix}@example.test`;
@@ -72,6 +71,26 @@ const waitFor = (predicate, label) =>
     label,
   );
 
+// Under the automated runner the control token never reaches this page: the
+// runner exposes `__fireemuInstallRules(source)` and performs the PUT itself.
+// Opened by hand, the page falls back to the `token` query parameter.
+const installRules = async (source) => {
+  if (typeof window.__fireemuInstallRules === "function") {
+    const outcome = await window.__fireemuInstallRules(source);
+    if (!outcome || outcome.ok !== true) {
+      throw new Error(`rules load failed: ${outcome?.error ?? outcome?.status ?? "unknown"}`);
+    }
+    return;
+  }
+  const token = params.get("token") || "";
+  const rulesResponse = await fetch(`http://127.0.0.1:${authPort}/v1/rules`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ source }),
+  });
+  if (!rulesResponse.ok) throw new Error(`rules load failed: ${rulesResponse.status}`);
+};
+
 const run = async () => {
   if (!Number.isInteger(firestorePort) || !Number.isInteger(authPort)) {
     throw new Error("fs and auth query parameters must be integer emulator ports");
@@ -85,12 +104,7 @@ const run = async () => {
 
   const rules =
     "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /webchannel-listen/{uid} { allow read, write: if request.auth != null && request.auth.uid == uid; } } }";
-  const rulesResponse = await fetch(`http://127.0.0.1:${authPort}/v1/rules`, {
-    method: "PUT",
-    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-    body: JSON.stringify({ source: rules }),
-  });
-  if (!rulesResponse.ok) throw new Error(`rules load failed: ${rulesResponse.status}`);
+  await installRules(rules);
 
   const credential = await createUserWithEmailAndPassword(auth, email, password);
   const reference = doc(firestore, "webchannel-listen", credential.user.uid);

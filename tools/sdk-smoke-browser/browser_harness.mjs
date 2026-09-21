@@ -3,12 +3,14 @@
 // WebChannel request log taken from the page's own network view.
 //
 // Nothing here talks to production. The server binds 127.0.0.1 on an
-// OS-assigned port, serves only files under the mounted directories and never
-// follows a `..` segment. The browser is launched with a throwaway profile and
-// closed on every exit path through `closeAll`; the runner's tests check with
-// `pgrep` that no Chromium survives it.
+// OS-assigned port, serves only files under the mounted directories, never
+// follows a `..` segment and never follows a symlink out of a mount: the real
+// path of every target is checked against the real path of its mount root and
+// the file is opened by that checked real path. The browser is launched with a
+// throwaway profile and closed on every exit path through `closeAll`; the
+// runner's tests check with `pgrep` that no Chromium survives it.
 
-import { createReadStream, promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -22,8 +24,16 @@ const CONTENT_TYPES = Object.freeze({
   ".map": "application/json; charset=utf-8",
 });
 
-/** Map a request path onto one of the mounted directories, or null. */
-export const resolveMounted = (mounts, urlPath) => {
+/** True when `candidate` is `root` itself or lies below it (both already normalised). */
+const isWithin = (root, candidate) => candidate === root || candidate.startsWith(root + path.sep);
+
+/**
+ * Map a request path onto one of the mounted directories lexically: the
+ * decoded path, the mount it belongs to and the target path under that
+ * mount's root, or null. This is only the first gate; `openMounted` checks the
+ * real path once the file system is consulted.
+ */
+export const resolveMountedEntry = (mounts, urlPath) => {
   if (typeof urlPath !== "string" || !urlPath.startsWith("/") || urlPath.includes("\0")) return null;
   let decoded;
   try {
@@ -41,10 +51,44 @@ export const resolveMounted = (mounts, urlPath) => {
     const relative = decoded.slice(prefix.length);
     const absoluteRoot = path.resolve(root);
     const target = path.resolve(absoluteRoot, relative);
-    if (target !== absoluteRoot && !target.startsWith(absoluteRoot + path.sep)) return null;
-    return target;
+    if (!isWithin(absoluteRoot, target)) return null;
+    return { prefix, root: absoluteRoot, target };
   }
   return null;
+};
+
+/** Map a request path onto one of the mounted directories, or null. */
+export const resolveMounted = (mounts, urlPath) => resolveMountedEntry(mounts, urlPath)?.target ?? null;
+
+/**
+ * Open a lexically resolved target for reading only if its real path (every
+ * symlink on the way followed) stays under the mount's real root. The handle
+ * is opened by that real path with `O_NOFOLLOW`, so the path that was checked
+ * is the path that is read. Returns null for anything that is not a regular
+ * file inside the mount.
+ */
+export const openMounted = async (realRoot, target) => {
+  let real;
+  try {
+    real = await fs.realpath(target);
+  } catch {
+    return null;
+  }
+  if (!isWithin(realRoot, real)) return null;
+  let handle;
+  try {
+    handle = await fs.open(real, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  } catch {
+    return null;
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw new Error("not a regular file");
+    return { handle, size: info.size };
+  } catch {
+    await handle.close().catch(() => {});
+    return null;
+  }
 };
 
 /**
@@ -52,9 +96,13 @@ export const resolveMounted = (mounts, urlPath) => {
  * port. `mounts` maps URL prefixes (ending in `/`) to directories.
  */
 export const serveStatic = async (mounts) => {
+  // The real root is fixed at start so a later symlink swap under the mount
+  // cannot widen what is served.
+  const realRoots = {};
   for (const [prefix, root] of Object.entries(mounts)) {
     if (!prefix.startsWith("/") || !prefix.endsWith("/")) throw new Error(`mount prefix must be /.../: ${prefix}`);
     if (!(await fs.stat(root)).isDirectory()) throw new Error(`mount root is not a directory: ${prefix}`);
+    realRoots[prefix] = await fs.realpath(root);
   }
   const sockets = new Set();
   const server = createServer(async (request, response) => {
@@ -64,30 +112,26 @@ export const serveStatic = async (mounts) => {
       response.end();
       return;
     }
-    const target = resolveMounted(mounts, url.pathname);
-    const extension = target ? path.extname(target) : "";
-    const contentType = CONTENT_TYPES[extension];
-    let info = null;
-    try {
-      if (target && contentType) info = await fs.stat(target);
-    } catch {
-      info = null;
-    }
-    if (!info || !info.isFile()) {
+    const entry = resolveMountedEntry(mounts, url.pathname);
+    const contentType = entry ? CONTENT_TYPES[path.extname(entry.target)] : undefined;
+    const opened = entry && contentType ? await openMounted(realRoots[entry.prefix], entry.target) : null;
+    if (!opened) {
       response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
       response.end("not found");
       return;
     }
     response.writeHead(200, {
       "content-type": contentType,
-      "content-length": String(info.size),
+      "content-length": String(opened.size),
       "cache-control": "no-store",
     });
     if (request.method === "HEAD") {
       response.end();
+      await opened.handle.close().catch(() => {});
       return;
     }
-    createReadStream(target).pipe(response);
+    // The stream owns the handle and closes it when the response ends.
+    opened.handle.createReadStream().pipe(response);
   });
   server.on("connection", (socket) => {
     sockets.add(socket);

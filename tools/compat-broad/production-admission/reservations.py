@@ -17,6 +17,7 @@ import secrets
 import sys
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import os

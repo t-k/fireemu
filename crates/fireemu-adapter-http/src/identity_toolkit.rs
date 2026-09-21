@@ -5933,6 +5933,23 @@ fn select_store(
             };
             return Ok(store);
         }
+        if exchanges_refresh_token {
+            // The Web SDK renews a tenant session on securetoken with the API key alone
+            // (`requestStsToken` never sends `tenantId`; the securetoken API has no such
+            // parameter). The refresh token encodes its issuing namespace, so a token minted
+            // by a tenant of the key's project selects that tenant store. A token of another
+            // project, a legacy or unowned token, and a deleted tenant's token keep falling
+            // through to the project store, where the existing refusal applies.
+            if let Some(store) = tenant_store_issuing_refresh_token(
+                registry,
+                selected_project
+                    .as_deref()
+                    .unwrap_or_else(|| registry.default_project()),
+                body,
+            )? {
+                return Ok(store);
+            }
+        }
         let Some(project) = selected_project else {
             // With no registered tenancy sessions, preserve the historical fake-key behavior for
             // the default namespace. An explicit tenant above still had to resolve through the
@@ -5995,6 +6012,30 @@ fn select_store(
         return Ok(store);
     }
     Ok(state.store.clone())
+}
+
+/// The tenant store of `project` that issued the request's `refresh_token`, when the token
+/// names one; `None` for project-scoped, foreign-project, legacy and unowned tokens.
+fn tenant_store_issuing_refresh_token(
+    registry: &fireemu_core_auth::store::AuthRegistry,
+    project: &str,
+    body: &Value,
+) -> Result<Option<Arc<Mutex<AuthStore>>>, JsonResponse> {
+    use fireemu_core_auth::store::RefreshTokenStoreMatch;
+
+    let Some(token) = str_field(body, "refresh_token") else {
+        return Ok(None);
+    };
+    let store = match registry.store_for_refresh_token(token) {
+        RefreshTokenStoreMatch::Unique(store) => store,
+        RefreshTokenStoreMatch::Unavailable => return Err(error(500, "INTERNAL")),
+        RefreshTokenStoreMatch::Ambiguous | RefreshTokenStoreMatch::NotFound => return Ok(None),
+    };
+    let issued_by_tenant_of_project = match store.lock() {
+        Ok(issuer) => issuer.tenant_id().is_some() && issuer.project_id() == project,
+        Err(_) => return Err(error(500, "INTERNAL")),
+    };
+    Ok(issued_by_tenant_of_project.then_some(store))
 }
 
 /// The API key (`key`, or the action link's `apiKey`) and the action link's `tenantId` a

@@ -63,15 +63,31 @@ DATABASE = shared.DATABASE
 INDEX_EXEMPTION_SLOT = "index-exemption"
 INDEX_FIELD = f"{DATABASE}/collectionGroups/{EXEMPT_COLLECTION}/fields/*"
 INDEX_FIELD_ROUTE = f"https://firestore.googleapis.com/v1/{INDEX_FIELD}"
+# The field every collection group inherits its single-field configuration
+# from. The Admin API documents `indexConfig.ancestorField` as output only and
+# populated in both cases: the field the group inherits from while
+# `usesAncestorConfig` is true, or the field it would inherit from once the
+# override is removed. A deployed override may therefore read back with the
+# ancestor named or omitted, and the projection records it without judging on
+# it.
+DEFAULT_ANCESTOR_FIELD = f"{DATABASE}/collectionGroups/__default__/fields/*"
 # What the single-field configuration of the exempt group must read as while
 # the declared exemption is deployed: no index of its own and no inherited
 # default. Proto3 JSON omits empty and false members, so the projection below
-# normalizes the readback before it is compared or digested.
+# normalizes the readback before it is compared or digested. The ancestor field
+# is not part of the judged projection; it is recorded beside it.
 EXPECTED_INDEX_EXEMPTION_PROJECTION = {
     "name": INDEX_FIELD,
     "indexes": [],
     "usesAncestorConfig": False,
-    "ancestorField": None,
+}
+# What the same field must read as once the exemption is restored: the
+# inherited default again, named as such. The inherited index list is the
+# project's default and is recorded, not judged.
+EXPECTED_INDEX_RESTORED_PROJECTION = {
+    "name": INDEX_FIELD,
+    "usesAncestorConfig": True,
+    "ancestorField": DEFAULT_ANCESTOR_FIELD,
 }
 INDEX_EXEMPTION_ATTESTATION_KIND = "limits-03-index-exemption-attestation-v1"
 SHARED_SLOTS = ("oauth-tokeninfo", "project", "database", "auth")
@@ -90,8 +106,8 @@ def metadata_url(slot):
     return shared.metadata_url(slot)
 
 
-def index_exemption_projection(body):
-    """Normalize one field readback to the members the exemption is judged on."""
+def _field_readback(body):
+    """The normalized members of one field readback, each checked on its own."""
     if not isinstance(body, dict) or body.get("name") != INDEX_FIELD:
         raise ValueError("typed index field readback required")
     configuration = body.get("indexConfig", {})
@@ -100,17 +116,52 @@ def index_exemption_projection(body):
     indexes = configuration.get("indexes", [])
     if not isinstance(indexes, list):
         raise ValueError("typed index field readback required")
+    uses_ancestor = configuration.get("usesAncestorConfig", False)
+    if uses_ancestor is not True and uses_ancestor is not False:
+        raise ValueError("typed index field readback required")
+    ancestor = configuration.get("ancestorField")
+    if ancestor is not None and ancestor != DEFAULT_ANCESTOR_FIELD:
+        raise ValueError("index field names an unexpected ancestor")
     return {
         "name": body["name"],
         "indexes": indexes,
-        "usesAncestorConfig": bool(configuration.get("usesAncestorConfig", False)),
-        "ancestorField": configuration.get("ancestorField"),
+        "usesAncestorConfig": uses_ancestor,
+        "ancestorField": ancestor,
+    }
+
+
+def index_exemption_projection(body):
+    """Normalize one field readback to the members the exemption is judged on.
+
+    The exemption holds when the group has no index of its own and does not
+    inherit the default. Whether the API names the ancestor it would inherit
+    from is not part of the judgement, so it is left out of the projection.
+    """
+    readback = _field_readback(body)
+    return {key: readback[key] for key in ("name", "indexes", "usesAncestorConfig")}
+
+
+def index_restored_projection(body):
+    """Normalize one field readback to the members the restore is judged on.
+
+    Restored means the group inherits the default again and names it. The
+    inherited index list is whatever the project's default is at the time; it
+    is recorded by the restore evidence, not judged here.
+    """
+    readback = _field_readback(body)
+    return {
+        key: readback[key] for key in ("name", "usesAncestorConfig", "ancestorField")
     }
 
 
 def expected_index_exemption_digest() -> str:
     """The digest of the after state the permission binds and the run requires."""
     return digest(EXPECTED_INDEX_EXEMPTION_PROJECTION)
+
+
+def expected_index_restored_digest() -> str:
+    """The digest of the before state the restore evidence must show."""
+    return digest(EXPECTED_INDEX_RESTORED_PROJECTION)
 
 
 def verify_index_exemption(body, permission):
@@ -123,6 +174,19 @@ def verify_index_exemption(body, permission):
     ):
         raise ValueError("index exemption differs from the declared after state")
     return {"slot": INDEX_EXEMPTION_SLOT, "bodyDigest": digest(body), "body": body}
+
+
+def verify_index_restored(body):
+    """The exempt group must inherit the default again, and say so."""
+    projection = index_restored_projection(body)
+    if projection != EXPECTED_INDEX_RESTORED_PROJECTION:
+        raise ValueError("index field is not restored to the inherited default")
+    return {
+        "projection": projection,
+        "projectionDigest": digest(projection),
+        "inheritedIndexes": _field_readback(body)["indexes"],
+        "bodyDigest": digest(body),
+    }
 
 
 def validate_frozen_baselines(permission):
@@ -219,6 +283,7 @@ def index_exemption_attestation(receipt, permission):
     else:
         body["baselineVerified"] = True
         body["projection"] = index_exemption_projection(receipt["body"])
+        body["ancestorField"] = _field_readback(receipt["body"])["ancestorField"]
     public["body"] = body
     return public
 
@@ -240,6 +305,7 @@ def validate_index_exemption_attestation(response, permission):
         or body.get("projection") != EXPECTED_INDEX_EXEMPTION_PROJECTION
         or digest(body.get("projection"))
         != permission.get("indexExemptionProjectionDigest")
+        or body.get("ancestorField") not in (None, DEFAULT_ANCESTOR_FIELD)
     ):
         raise ValueError("saved index exemption attestation differs")
 

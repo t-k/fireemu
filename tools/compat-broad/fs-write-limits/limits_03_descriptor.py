@@ -63,6 +63,8 @@ PRINCIPAL_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 SHADOW_RECORD = "spec/compatibility/broad-runs/fs-write-limits-03-local-shadow.json"
 MANIFEST_RECORD = "spec/compatibility/broad-runs/fs-write-limits-03.json"
 INDEXES_FILE = "conformance/firestore.indexes.json"
+RESTORE_RECORD = "spec/compatibility/broad-runs/fs-write-limits-03-index-restore.json"
+RESTORE_RECORD_KIND = "limits-03-index-exemption-restore-v1"
 # Owner planning figures the compiler does not decide: the fixed reserve the
 # envelope carries above the per-request tariff, and the cap the whole run must
 # stay under. Both are ceilings, never quoted tariffs.
@@ -360,25 +362,54 @@ def index_exemption_precondition() -> dict:
             f"{LANE_DIRECTORY}/limits_03_indexes.py --verify after  # {after}",
             "cd conformance && firebase deploy --only firestore:indexes "
             f"--project {PROJECT} --non-interactive",
+            f"gcloud firestore operations list --project {PROJECT} --format=json"
+            "  # wait until no operation on the field is pending",
             f"curl -sS -H 'Authorization: Bearer $(gcloud auth print-access-token)' "
             f"-H 'x-goog-user-project: {PROJECT}' '{preflight.INDEX_FIELD_ROUTE}'"
-            "  # must show no indexes and no ancestor config before admission",
-        ],
-        "restore": [
-            f"git checkout -- {INDEXES_FILE}",
+            " > <private>/nx-field-deployed.json",
+            "uv run --project tools/compat-inventory --locked --python 3.12 python "
+            f"{LANE_DIRECTORY}/limits_03_indexes.py --verify-deployed "
+            "<private>/nx-field-deployed.json  # exit 0 before admission",
+            f"git checkout -- {INDEXES_FILE}  # the after state is the deploy input, "
+            "never committed; the tree must be clean for freeze and provenance",
             "uv run --project tools/compat-inventory --locked --python 3.12 python "
             f"{LANE_DIRECTORY}/limits_03_indexes.py --verify before  # {before}",
+        ],
+        "restore": [
+            "uv run --project tools/compat-inventory --locked --python 3.12 python "
+            f"{LANE_DIRECTORY}/limits_03_indexes.py --verify before  # {before}",
+            f"gcloud firestore indexes composite list --project {PROJECT} "
+            "--format=json  # every listed index must be in the file: a forced "
+            "deploy removes what the file does not list",
             "cd conformance && firebase deploy --only firestore:indexes "
             f"--project {PROJECT} --non-interactive --force",
+            f"gcloud firestore operations list --project {PROJECT} --format=json"
+            "  # wait until no operation on the field is pending",
             f"curl -sS -H 'Authorization: Bearer $(gcloud auth print-access-token)' "
             f"-H 'x-goog-user-project: {PROJECT}' '{preflight.INDEX_FIELD_ROUTE}'"
-            "  # must show usesAncestorConfig: true again",
+            " > <private>/nx-field-restored.json",
+            "uv run --project tools/compat-inventory --locked --python 3.12 python "
+            f"{LANE_DIRECTORY}/limits_03_indexes.py --verify-restored "
+            "<private>/nx-field-restored.json --record "
+            f"{RESTORE_RECORD}",
+            "uv run --project tools/compat-inventory --locked --python 3.12 python "
+            f"{LANE_DIRECTORY}/package_03.py freeze --keep-shadow-record "
+            f"--restore-record {RESTORE_RECORD}",
         ],
         "restoreNote": (
             "Without --force the deploy never removes an exemption the file no "
-            "longer lists, so the restore must pass --force and the commander must "
-            "confirm the field readback returns to usesAncestorConfig: true."
+            "longer lists, so the restore must pass --force; --force also removes "
+            "every composite index and override the file does not list, so the "
+            "listing must be checked against the file first. The restore is "
+            "verified by the field readback, not by the deploy's exit status, and "
+            "the campaign does not close until the restore record is bound."
         ),
+        "restoreEvidence": {
+            "recordKind": RESTORE_RECORD_KIND,
+            "record": RESTORE_RECORD,
+            "expectedProjection": preflight.EXPECTED_INDEX_RESTORED_PROJECTION,
+            "expectedProjectionDigest": preflight.expected_index_restored_digest(),
+        },
         "restoreRequiredAfterRun": True,
     }
 

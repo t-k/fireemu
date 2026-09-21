@@ -46,6 +46,7 @@ MISSING_APPROVAL = "a fresh owner approval for an unreserved nonce is required"
 
 __all__ = [
     "MISSING_APPROVAL",
+    "NO_DATA_RECEIPT_SHAPE",
     "NO_DATA_STOP_POINTS",
     "UNCERTAIN_STOP_POINTS",
     "ProductionWireCapability",
@@ -311,6 +312,37 @@ def transport_call(plan, phase, index, operation, token, *, deadline) -> dict:
 NO_DATA_STOP_POINTS = ("schedule-not-started", "namespace-preflight")
 UNCERTAIN_STOP_POINTS = ("create-deadline",)
 ABANDONED_STOP_POINTS = ("observation-incomplete", "recovery-incomplete")
+# The shape of this lane's receipt for a no-data stop, stated once so the
+# shared Ledger's receipt-kind map can carry it. `metadata` is the data journal
+# (one row per charged data request), `managementEvidence` the charged
+# management journal, and `credentialEvidence` the token attestation bodies the
+# shared Gate admits. A stop before the schedule started has an empty data
+# journal and no collection at all; a stop inside the typed-absence preflight
+# has data rows that could not create, which the Gate journal proves through
+# its `creates: false` schedule declarations.
+NO_DATA_RECEIPT_SHAPE = {
+    "kind": campaign.RECEIPT_KIND,
+    "dataJournal": "metadata",
+    "managementJournal": "managementEvidence",
+    "credentialEvidence": "credentialEvidence",
+    "credentialAttestationKind": "request-byte-token-attestation-v1",
+    "credentialSlots": ["tokeninfo"],
+    "stopPointField": "stopPoint",
+    "noDataStopPoints": list(NO_DATA_STOP_POINTS),
+    "scheduleNotStarted": {
+        "metadata": [],
+        "collection": None,
+        "productionExecuted": False,
+        "createdResources": [],
+        "mayHaveCreated": False,
+    },
+    "namespacePreflight": {
+        "productionExecuted": True,
+        "createdResources": [],
+        "mayHaveCreated": False,
+        "gate": "every consumed slot declared creates: false, no recovery wire event",
+    },
+}
 
 
 def stop_points() -> dict[str, tuple[str, ...]]:
@@ -361,11 +393,18 @@ def classify_stop(receipt) -> dict:
         }
     if stop not in NO_DATA_STOP_POINTS:
         raise ValueError("unknown limits-03 stop point")
-    if (
-        created
-        or receipt.get("productionExecuted") is not True
-        or receipt.get("mayHaveCreated")
-    ):
+    if stop == "schedule-not-started":
+        # No data request was ever sent: the data journal is empty and there
+        # is no collection. The Gate journal behind such a receipt has no
+        # events at all, which is what exit 2 already states.
+        proven = (
+            receipt.get("metadata") == []
+            and receipt.get("collection") is None
+            and receipt.get("productionExecuted") is False
+        )
+    else:
+        proven = receipt.get("productionExecuted") is True
+    if created or receipt.get("mayHaveCreated") or not proven:
         return {
             "stopPoint": stop,
             "disposition": "owner-escalation",

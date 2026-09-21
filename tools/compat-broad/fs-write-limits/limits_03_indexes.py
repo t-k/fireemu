@@ -22,6 +22,7 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
 
 import limits_03_descriptor as campaign
+import limits_03_preflight as preflight
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,8 +43,90 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the declared precondition, digests and commands",
     )
+    mode.add_argument(
+        "--verify-deployed",
+        type=Path,
+        metavar="READBACK",
+        help="check a saved field readback against the declared exemption",
+    )
+    mode.add_argument(
+        "--verify-restored",
+        type=Path,
+        metavar="READBACK",
+        help="check a saved field readback against the restored default and "
+        "write the restore record",
+    )
     parser.add_argument("--file", type=Path, default=ROOT / campaign.INDEXES_FILE)
+    parser.add_argument(
+        "--record",
+        type=Path,
+        default=ROOT / campaign.RESTORE_RECORD,
+        help="where --verify-restored writes the restore record",
+    )
     return parser
+
+
+MAX_READBACK_BYTES = 256 * 1024
+
+
+def _readback(path: Path) -> tuple[dict, bytes]:
+    """One saved JSON body of the field resource, bounded and regular."""
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or path.stat().st_size > MAX_READBACK_BYTES
+    ):
+        raise SystemExit("bounded regular readback file required")
+    raw = path.read_bytes()
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise SystemExit("JSON object readback required")
+    return value, raw
+
+
+def restore_record(readback: dict, raw: bytes, *, indexes_path: Path) -> dict:
+    """The evidence that the exempt group inherits the default again.
+
+    Judged on the readback alone: the deploy's exit status proves nothing about
+    the field. The record also binds the index file on disk, which must be the
+    committed before state, so a restore run against an edited file is refused.
+    """
+    verified = preflight.verify_index_restored(readback)
+    file_digest = hashlib.sha256(indexes_path.read_bytes()).hexdigest()
+    if file_digest != campaign.INDEXES_SHA256_BEFORE:
+        raise SystemExit("index configuration file is not the declared before state")
+    return {
+        "kind": campaign.RESTORE_RECORD_KIND,
+        "campaignId": campaign.CAMPAIGN,
+        "field": preflight.INDEX_FIELD,
+        "readbackSha256": hashlib.sha256(raw).hexdigest(),
+        "bodyDigest": verified["bodyDigest"],
+        "projection": verified["projection"],
+        "projectionDigest": verified["projectionDigest"],
+        "inheritedIndexes": verified["inheritedIndexes"],
+        "conformanceIndexesSha256": file_digest,
+        "verified": True,
+    }
+
+
+def validate_restore_record(record: dict) -> None:
+    """A restore record must be this campaign's, judged on the restored state."""
+    if (
+        not isinstance(record, dict)
+        or record.get("kind") != campaign.RESTORE_RECORD_KIND
+        or record.get("campaignId") != campaign.CAMPAIGN
+        or record.get("field") != preflight.INDEX_FIELD
+        or record.get("verified") is not True
+        or record.get("projection") != preflight.EXPECTED_INDEX_RESTORED_PROJECTION
+        or record.get("projectionDigest") != preflight.expected_index_restored_digest()
+        or record.get("conformanceIndexesSha256") != campaign.INDEXES_SHA256_BEFORE
+        or not isinstance(record.get("inheritedIndexes"), list)
+        or any(
+            not isinstance(record.get(key), str) or len(record[key]) != 64
+            for key in ("readbackSha256", "bodyDigest")
+        )
+    ):
+        raise ValueError("restore record does not prove the restored default")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -51,6 +134,39 @@ def main(argv: list[str] | None = None) -> int:
     precondition = campaign.index_exemption_precondition()
     if args.precondition:
         print(json.dumps(precondition, indent=2, sort_keys=True))
+        return 0
+    if args.verify_deployed is not None:
+        readback, _raw = _readback(args.verify_deployed)
+        try:
+            preflight.verify_index_exemption(
+                readback,
+                {
+                    "indexExemptionProjectionDigest": precondition["readback"][
+                        "projectionDigest"
+                    ]
+                },
+            )
+        except ValueError as error:
+            print(f"deployed: refused ({error})", file=sys.stderr)
+            return 2
+        ancestor = preflight._field_readback(readback)["ancestorField"]
+        print(f"deployed: exemption in force; ancestorField {ancestor!r}")
+        return 0
+    if args.verify_restored is not None:
+        readback, raw = _readback(args.verify_restored)
+        try:
+            record = restore_record(readback, raw, indexes_path=args.file)
+        except ValueError as error:
+            print(f"restored: refused ({error})", file=sys.stderr)
+            return 2
+        if args.record.exists() or args.record.is_symlink():
+            print(
+                "restored: a restore record already exists; not replaced",
+                file=sys.stderr,
+            )
+            return 2
+        args.record.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+        print(f"restored: {record['projectionDigest']}  {args.record}")
         return 0
     if args.write_after is not None:
         target = args.write_after

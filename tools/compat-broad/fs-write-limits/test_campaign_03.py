@@ -454,7 +454,38 @@ def test_batch_write_is_gated_by_the_same_predicate_as_patch(tmp_path):
     assert not [method for method, _ in responder.sent if method in ("POST", "PATCH")]
 
 
-def test_expected_local_journal_completes_and_validates(tmp_path):
+def test_head_gate_settles_the_malformed_item_batch_as_unknown(tmp_path):
+    """Pinned: without the proposed rule the R3 batch leaves a create unconfirmed.
+
+    Every owned document is still deleted and proven absent; only the terminal
+    close is refused. The rule the lane needs is applied by the
+    `gate_accounts_the_empty_batch_item` fixture in the tests that model a
+    complete run, and its exact form is in the campaign preparation document.
+    """
+    from shared_gate import unconfirmed_creates
+
+    plan = plan_for("e")
+    result, responder = run_campaign(tmp_path, plan)
+    assert result["expectationMismatches"] == []
+    assert result["recordingComplete"] is True
+    assert responder.documents == {}
+    assert all(result["resourceAbsence"].values())
+    assert result["cleanupComplete"] is False
+    assert result["infrastructureFailures"] == [
+        {"phase": "finish", "failure": "ValueError"}
+    ]
+    gate = result["gate"]
+    assert unconfirmed_creates(gate, "limits") == 1
+    unsettled = [e for e in gate["events"] if e.get("creationOutcome") == "unknown"]
+    assert len(unsettled) == 1
+    operation = gate["plan"]["jobs"]["limits"]["observation"][unsettled[0]["index"]]
+    assert operation["path"].endswith(":batchWrite")
+    assert {} in operation["body"]["writes"]
+
+
+def test_expected_local_journal_completes_and_validates(
+    tmp_path, gate_accounts_the_empty_batch_item
+):
     plan = plan_for("e")
     result, responder = run_campaign(tmp_path, plan)
     assert result["expectationMismatches"] == []
@@ -480,7 +511,9 @@ def test_expected_local_journal_completes_and_validates(tmp_path):
     assert validate_local_receipt(receipt, plan) is False
 
 
-def test_suffix_that_does_not_land_is_an_expectation_mismatch(tmp_path):
+def test_suffix_that_does_not_land_is_an_expectation_mismatch(
+    tmp_path, gate_accounts_the_empty_batch_item
+):
     plan = plan_for("f")
 
     class NoSuffix(Responder):
@@ -904,7 +937,9 @@ def test_a_production_collection_excuses_no_row(tmp_path):
     assert writes_safe(absent, plan, excused=range(preflights)) is False
 
 
-def test_a_pending_difference_is_recorded_but_does_not_fail_the_campaign(tmp_path):
+def test_a_pending_difference_is_recorded_but_does_not_fail_the_campaign(
+    tmp_path, gate_accounts_the_empty_batch_item
+):
     plan = plan_for("c")
 
     class PerItemFieldPath(Responder):
@@ -976,6 +1011,8 @@ def test_the_campaign_is_one_allocation_and_the_gate_charges_it():
         assert entry["seconds"] == (
             compiler_03.TRANSPORT_CEILING_SECONDS
             if request["body"] is not None
+            else compiler_03.READBACK_SECONDS
+            if request["responseByteLimit"] > compiler_03.DEFAULT_RESPONSE_BYTES
             else compiler_03.SMALL_REQUEST_SECONDS
         )
         assert entry["creates"] is (

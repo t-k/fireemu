@@ -680,9 +680,13 @@ def compile_limits_plan(
         "wallSeconds": _wall_seconds(schedule, recovery_operations, operations),
         "recoverySeconds": _recovery_seconds(schedule, recovery_operations, operations),
         "observationRequests": observation_count,
-        "intervalSeconds": 0.25,
+        "intervalSeconds": GATE_INTERVAL_SECONDS,
         "requestCostMicrousd": 100,
-        "costMicrousd": len(requests) * 100,
+        # The management slots are charged against this allocation too. The
+        # local plan declares none, because a loopback run holds no credential
+        # and reads no production metadata; the production projection adds
+        # them, and both are charged from the same envelope.
+        "costMicrousd": (len(requests) + management_contract()["totalRequests"]) * 100,
         "fixedCostMicrousd": 0,
         "coordinatorRequests": 0,
         "transport": "local-only",
@@ -704,6 +708,8 @@ def compile_limits_plan(
             "requestUpperBound": len(requests),
             "observationRequests": observation_count,
             "recoveryRequests": len(recovery_operations),
+            "managementObservationRequests": len(MANAGEMENT_OBSERVATION_IDS),
+            "managementRecoveryRequests": len(MANAGEMENT_RECOVERY_IDS),
             "ownedDocuments": len(owned),
             "probedNames": len(documents) - len(owned),
             "requestBodyUpperBoundBytes": max(request_sizes),
@@ -1384,13 +1390,37 @@ PHASE_SLACK_SECONDS = 30
 # payload at a deliberately pessimistic rate. One plan-wide value cannot be
 # honest for a campaign that mixes a megabyte upload with a cleanup read; it
 # would either under-reserve the upload or refuse the plan outright.
-# A small read or delete carries no body, so it cannot spend the wire deadline.
-# This is also the per-request timeout such a slot is given, so a slot cannot
-# outrun its own reservation.
-SMALL_REQUEST_SECONDS = 5.0
+# A small read or delete carries no body and expects at most the default
+# response ceiling, so it cannot spend the wire deadline. This is also the
+# per-request timeout such a slot is given, so a slot cannot outrun its own
+# reservation. Three seconds is the same floor the request-byte lane reserves
+# for its bodyless slots.
+SMALL_REQUEST_SECONDS = 3.0
+# A bodyless read whose declared response ceiling exceeds the default may have
+# to download a document near the megabyte limit, so it reserves more.
+DEFAULT_RESPONSE_BYTES = 65536
+READBACK_SECONDS = 5.0
 # A slot whose request carries a body may spend the whole transport deadline,
 # and the Gate's ceiling check requires it to reserve exactly that.
 TRANSPORT_CEILING_SECONDS = 12.0
+# Closed management slots the shared Gate charges around the data schedule:
+# the bearer-token attestation, then the project, database, index-exemption and
+# Auth readbacks before any data request, and the same four readbacks after the
+# last cleanup. The index-exemption slot is this campaign's own: it reads the
+# single-field configuration of the exempt collection group and refuses to
+# start unless the declared exemption is in force. Each slot reserves the same
+# 13 seconds the request-byte lane reserves and is charged one request.
+MANAGEMENT_SLOT_SECONDS = 13.0
+MANAGEMENT_INTERVAL_SECONDS = GATE_INTERVAL_SECONDS
+MANAGEMENT_OBSERVATION_IDS = (
+    "oauth-tokeninfo",
+    "project",
+    "database",
+    "index-exemption",
+    "auth",
+)
+MANAGEMENT_RECOVERY_IDS = ("project", "database", "index-exemption", "auth")
+MANAGEMENT_REQUEST_COST_MICROUSD = 100
 
 
 def slot_seconds(row: dict[str, Any]) -> float:
@@ -1398,12 +1428,61 @@ def slot_seconds(row: dict[str, Any]) -> float:
 
     A request carrying a body may spend the transport deadline and must reserve
     it, which the Gate's own ceiling check enforces. A read or a delete carries
-    no body and is given the small bound as its timeout too, so it cannot
-    outrun what it reserved.
+    no body and is given its reservation as its timeout too, so it cannot
+    outrun what it reserved: the small bound when it expects at most the
+    default response ceiling, the readback bound when its declared ceiling says
+    a large document may come back.
     """
-    return (
-        TRANSPORT_CEILING_SECONDS if row["body"] is not None else SMALL_REQUEST_SECONDS
+    if row["body"] is not None:
+        return TRANSPORT_CEILING_SECONDS
+    if row["responseByteLimit"] > DEFAULT_RESPONSE_BYTES:
+        return READBACK_SECONDS
+    return SMALL_REQUEST_SECONDS
+
+
+def management_seconds(phase: str) -> float:
+    """Time the Gate charges for this phase's closed management slots.
+
+    Charged the way `shared_gate.create` and `management_dispatch` charge them:
+    every slot's timeout plus the rate interval, in sequence.
+    """
+    identities = (
+        MANAGEMENT_OBSERVATION_IDS
+        if phase == "observation"
+        else MANAGEMENT_RECOVERY_IDS
     )
+    return len(identities) * (MANAGEMENT_SLOT_SECONDS + MANAGEMENT_INTERVAL_SECONDS)
+
+
+def management_contract() -> dict[str, Any]:
+    """The closed management slots, in the shape the Gate plan declares them.
+
+    Declarative only: sending belongs to the Gate's charged
+    `management_dispatch` path and to the lane's preflight session.
+    """
+
+    def slot(identity: str) -> dict[str, Any]:
+        return {
+            "id": identity,
+            "seconds": MANAGEMENT_SLOT_SECONDS,
+            "duration": 12.0,
+            "timeout": MANAGEMENT_SLOT_SECONDS,
+        }
+
+    return {
+        "dispatchKind": "closed-v1",
+        "observation": [slot(identity) for identity in MANAGEMENT_OBSERVATION_IDS],
+        "recovery": [slot(identity) for identity in MANAGEMENT_RECOVERY_IDS],
+        "credentialIds": ["oauth-tokeninfo"],
+        "credentialSlots": ["tokeninfo"],
+        "slotSeconds": MANAGEMENT_SLOT_SECONDS,
+        "intervalSeconds": MANAGEMENT_INTERVAL_SECONDS,
+        "totalRequests": len(MANAGEMENT_OBSERVATION_IDS) + len(MANAGEMENT_RECOVERY_IDS),
+        "phaseSeconds": {
+            "observation": management_seconds("observation"),
+            "recovery": management_seconds("recovery"),
+        },
+    }
 
 
 def slot_creates(row: dict[str, Any]) -> bool:
@@ -1448,16 +1527,22 @@ def gate_charge(schedule, recovery, observation) -> dict[str, float]:
 
 
 def _recovery_seconds(schedule, recovery, observation) -> int:
-    """The reserve the Gate demands for this schedule's recovery, plus headroom."""
+    """The reserve the Gate demands for this schedule's recovery, plus headroom.
+
+    The management readbacks after the last cleanup are charged against the same
+    reserve, so they are inside it.
+    """
     charge = gate_charge(schedule, recovery, observation)
-    return -(-int(charge["recoverySeconds"] * 100) // 100) + PHASE_SLACK_SECONDS
+    seconds = charge["recoverySeconds"] + management_seconds("recovery")
+    return -(-int(seconds * 100) // 100) + PHASE_SLACK_SECONDS
 
 
 def _wall_seconds(schedule, recovery, observation) -> int:
     charge = gate_charge(schedule, recovery, observation)
+    seconds = charge["observationSeconds"] + management_seconds("observation")
     total = (
         _recovery_seconds(schedule, recovery, observation)
-        + -(-int(charge["observationSeconds"] * 100) // 100)
+        + -(-int(seconds * 100) // 100)
         + PHASE_SLACK_SECONDS
     )
     if total > GATE_WALL_SECONDS_MAX:

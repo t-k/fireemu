@@ -112,6 +112,26 @@ CONFIGURATION_GATE_PLAN_KIND = "fs-config-lifecycle-gate-plan-v1"
 CONFIGURATION_CAMPAIGN = "FS-CONFIG-LIFECYCLE-01"
 CONFIGURATION_FINISHED_STATES = frozenset({"not-applied", "apply-refused", "restored"})
 
+# The recovery compiler reserves the complete bounded Gate plan.  Its separate
+# tariff estimate is descriptive only; it is never substituted for Gate cost.
+RECOVERY_CHILD_KIND = "shared-recovery-child-claim-v2"
+RECOVERY_CHILD_REQUESTS = 85
+RECOVERY_CHILD_COST_MICROUSD = 85
+RECOVERY_TARIFF_ESTIMATE_MICROUSD = 45
+RECOVERY_INSPECTION_REQUESTS = 17
+RECOVERY_ABSENCE_REQUESTS = 51
+RECOVERY_DELETE_REQUESTS = 17
+RECOVERY_OPERATION_CLASS = "read-inspect-conditional-delete-v1"
+RECOVERY_CHILD_FIELDS = {
+    "kind", "version", "campaignId", "manifestDigest", "nonceDigest",
+    "gatePath", "gatePlanDigest", "locks", "budget", "durationSeconds",
+    "generation", "parentClaimDigest", "parentPlanDigest", "recoveryNonce",
+    "selectedProbe", "resourceDigest", "ownedResources", "ownerIdentity",
+    "recoveryOwner", "operationClass", "readCount", "inspectionCount",
+    "absenceCount", "deleteCount", "tariffEstimateMicrousd", "expiresAt",
+    "executionHost", "permissionDigest",
+}
+
 
 ABANDON_KIND = "shared-abandoned-cleanup-close-v1"
 ABANDON_FIELDS = {"kind", "ticket", "gateDigest", "receiptPath", "receiptDigest"}
@@ -531,6 +551,13 @@ def task_spent_microusd(ledger_state, campaign_id):
         if type(cost) is not int or cost < 0:
             raise ValueError("closed integer budget required")
         total += cost
+        for child in row.get("recoveryChildren", []):
+            child_claim = child.get("claim") if isinstance(child, dict) else None
+            if isinstance(child_claim, dict) and child_claim.get("campaignId") == campaign_id:
+                child_cost = child_claim.get("budget", {}).get("costMicrousd")
+                if type(child_cost) is not int or child_cost < 0:
+                    raise ValueError("closed integer recovery budget required")
+                total += child_cost
     return total
 
 
@@ -720,6 +747,88 @@ def _claim(value):
         raise ValueError("absolute canonical Gate path required")
 
 
+def _recovery_child_claim(value):
+    if not isinstance(value, dict) or set(value) != RECOVERY_CHILD_FIELDS:
+        raise ValueError("exact recovery child claim required")
+    if value["kind"] != RECOVERY_CHILD_KIND or type(value["version"]) is not int or not 1 <= value["version"] <= 100:
+        raise ValueError("versioned recovery child claim required")
+    for key in ("manifestDigest", "nonceDigest", "gatePlanDigest", "parentClaimDigest", "parentPlanDigest", "resourceDigest", "permissionDigest"):
+        _hash(value[key])
+    _generation(value["generation"])
+    _budget(value["budget"])
+    _locks(value["locks"])
+    if value["campaignId"] not in CATALOGUED_CAMPAIGN_IDS:
+        raise ValueError("uncatalogued recovery campaign")
+    if value["operationClass"] != RECOVERY_OPERATION_CLASS:
+        raise ValueError("recovery operation class changed")
+    if (
+        value["readCount"] != RECOVERY_INSPECTION_REQUESTS + RECOVERY_ABSENCE_REQUESTS
+        or value["inspectionCount"] != RECOVERY_INSPECTION_REQUESTS
+        or value["absenceCount"] != RECOVERY_ABSENCE_REQUESTS
+        or value["deleteCount"] != RECOVERY_DELETE_REQUESTS
+        or value["tariffEstimateMicrousd"] != RECOVERY_TARIFF_ESTIMATE_MICROUSD
+        or value["budget"]["resources"] != len(value["ownedResources"])
+        or value["budget"] != {"requests": RECOVERY_CHILD_REQUESTS, "accounts": 0, "resources": value["budget"]["resources"], "costMicrousd": RECOVERY_CHILD_COST_MICROUSD}
+    ):
+        raise ValueError("recovery allocation counts changed")
+    if not isinstance(value["ownedResources"], list) or not value["ownedResources"] or len(set(value["ownedResources"])) != len(value["ownedResources"]):
+        raise ValueError("exact owned recovery resources required")
+    if digest(value["ownedResources"]) != value["resourceDigest"]:
+        raise ValueError("recovery resource digest changed")
+    if not isinstance(value["recoveryNonce"], str) or re.fullmatch(r"[0-9a-f]{32}", value["recoveryNonce"]) is None:
+        raise ValueError("fresh recovery nonce required")
+    if value["nonceDigest"] != digest(value["recoveryNonce"]):
+        raise ValueError("recovery nonce digest binding changed")
+    for key in ("campaignId", "ownerIdentity", "recoveryOwner", "selectedProbe"):
+        if not _owner_value(value[key]):
+            raise ValueError("recovery authority binding required")
+    _number(value["expiresAt"])
+    if type(value["durationSeconds"]) is not int or not 1 <= value["durationSeconds"] <= 1200:
+        raise ValueError("bounded recovery duration required")
+    if not isinstance(value["executionHost"], dict) or set(value["executionHost"]) != {"platform", "machine"} or not all(_owner_value(value["executionHost"][k]) for k in value["executionHost"]) or value["executionHost"] != {"platform": platform.system().lower(), "machine": platform.machine()}:
+        raise ValueError("exact recovery execution host required")
+    if not isinstance(value["gatePath"], str) or str(Path(value["gatePath"]).resolve()) != value["gatePath"]:
+        raise ValueError("absolute recovery Gate path required")
+
+
+def _validate_recovery_gate_plan(parent_plan, child_plan, child):
+    if not isinstance(parent_plan, dict) or digest(parent_plan) != child["parentPlanDigest"]:
+        raise ValueError("canonical parent plan binding changed")
+    lane = Path(__file__).resolve().parent.parent / "fs-request-bytes-boundary"
+    sys.path.insert(0, str(lane))
+    try:
+        import request_bytes_recovery_campaign as recovery_campaign
+        recovery = recovery_campaign.compile_recovery_plan(
+            parent_plan,
+            selected_probe=child["selectedProbe"],
+            recovery_nonce=child["recoveryNonce"],
+        )
+        expected = recovery_campaign.compile_gate_plan(
+            parent_plan,
+            selected_probe=child["selectedProbe"],
+            recovery_nonce=child["recoveryNonce"],
+            recovery_plan=recovery,
+        )
+    except (ImportError, KeyError, TypeError, ValueError) as error:
+        raise ValueError("authoritative recovery compiler refused plan") from error
+    if not isinstance(child_plan, dict) or child_plan != expected or digest(expected) != child["gatePlanDigest"]:
+        raise ValueError("authoritative recovery Gate plan differs")
+    jobs = child_plan.get("jobs")
+    if not isinstance(jobs, dict) or len(jobs) != 1:
+        raise ValueError("one recovery Gate job required")
+    operations = next(iter(jobs.values())).get("recovery")
+    if not isinstance(operations, list) or len(operations) != RECOVERY_CHILD_REQUESTS:
+        raise ValueError("recovery operation count changed")
+    kinds = [operation.get("kind") for operation in operations]
+    if kinds.count("recovery-inspection-read") != RECOVERY_INSPECTION_REQUESTS or kinds.count("recovery-conditional-delete") != RECOVERY_DELETE_REQUESTS or kinds.count("recovery-absence-read") != RECOVERY_ABSENCE_REQUESTS:
+        raise ValueError("recovery operation classes changed")
+    if any(operation.get("versionFrom") != "recovery-inspection-read" for operation in operations if operation.get("kind") == "recovery-conditional-delete"):
+        raise ValueError("version-bound delete inspection required")
+    resources = sorted({operation.get("resource") for operation in operations})
+    if digest(resources) != child["resourceDigest"] or set(resources) != set(child["ownedResources"]):
+        raise ValueError("recovery resources differ from canonical plan")
+
+
 class Ledger:
     def __init__(self, path):
         if Path(path).is_symlink():
@@ -739,6 +848,7 @@ class Ledger:
                 "kind": "shared-reservations-v1",
                 "identity": secrets.token_hex(32),
                 "envelopes": {},
+                "recoveryEnvelopes": {},
                 "reservations": {},
             },
         )
@@ -788,6 +898,20 @@ class Ledger:
                     total[k] > entry["envelope"]["limits"][k] for k in DIMENSIONS
                 ):
                     raise ValueError("shared budget accounting changed")
+            for key, entry in state.get("recoveryEnvelopes", {}).items():
+                _envelope(entry["envelope"])
+                _budget(entry["allocated"])
+                if digest(entry["envelope"]) != key:
+                    raise ValueError("recovery envelope binding changed")
+                children = [
+                    child
+                    for row in state["reservations"].values()
+                    for child in row.get("recoveryChildren", [])
+                    if child.get("envelopeDigest") == key
+                ]
+                total = {k: sum(child["claim"]["budget"][k] for child in children) for k in DIMENSIONS}
+                if total != entry["allocated"] or any(total[k] > entry["envelope"]["limits"][k] for k in DIMENSIONS):
+                    raise ValueError("recovery envelope accounting changed")
             for row in state["reservations"].values():
                 _claim(row["claim"])
                 _number(row["deadline"])
@@ -808,6 +932,15 @@ class Ledger:
                     "closed-after-abandon",
                 }:
                     raise ValueError("reservation binding changed")
+                children = row.get("recoveryChildren", [])
+                if children and row["state"] != "held":
+                    raise ValueError("recovery child parent is not held")
+                for child in children:
+                    _recovery_child_claim(child["claim"])
+                    if child.get("parentClaimDigest") != row["claimDigest"] or child.get("claimDigest") != digest(child["claim"]):
+                        raise ValueError("recovery child parent binding changed")
+                    if child.get("state") != "allocated" or child.get("envelopeDigest") not in state.get("recoveryEnvelopes", {}):
+                        raise ValueError("recovery child state changed")
             yield state
 
     def _save(self, state):
@@ -952,6 +1085,128 @@ class Ledger:
             self._save(state)
             return ticket
 
+    def begin_recovery_extension(
+        self,
+        parent_ticket,
+        child_claim,
+        new_envelope,
+        canonical_parent_plan,
+        canonical_child_gate_plan,
+        *,
+        now=None,
+    ):
+        """Persist one recovery child before an issuer or any wire activity.
+
+        This is deliberately a Ledger-only transition.  It does not accept an
+        O8 capability and therefore cannot consume one before a durable save.
+        A later issuer must bind its capability to the returned child ticket.
+        """
+        _recovery_child_claim(child_claim)
+        _envelope(new_envelope)
+        if now is not None:
+            _number(now)
+        _validate_recovery_gate_plan(
+            canonical_parent_plan, canonical_child_gate_plan, child_claim
+        )
+        child_envelope_digest = digest(new_envelope)
+        child_digest = digest(child_claim)
+        with self._locked() as state:
+            initial_parent = self._row(state, parent_ticket)
+            initial_claim_digest = initial_parent["claimDigest"]
+            initial_claim = copy.deepcopy(initial_parent["claim"])
+            initial_gate_path = initial_claim["gatePath"]
+            initial_gate_job = _gate_job(initial_claim)
+        parent_gate = Gate(initial_gate_path, initial_gate_job).snapshot()
+        if (
+            digest(parent_gate.get("plan")) != initial_claim["gatePlanDigest"]
+            or parent_gate.get("coordinatorInflight")
+            or not parent_gate.get("events")
+            or any(job.get("inflight") for job in parent_gate.get("jobs", {}).values())
+        ):
+            raise ValueError("parent Gate predecessor is not settled")
+        for pid in [parent_gate.get("coordinatorPid")] + [job.get("pid") for job in parent_gate.get("jobs", {}).values()]:
+            if pid is None:
+                continue
+            if type(pid) is not int or pid <= 0:
+                raise ValueError("parent worker identity required")
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise ValueError("parent worker is still alive")
+        with self._locked() as state:
+            parent = self._row(state, parent_ticket)
+            if parent["state"] != "held" or parent.get("inflight") is True:
+                raise ValueError("held parent without in-flight work required")
+            claim = parent["claim"]
+            if (
+                parent_ticket.get("claimDigest") != parent["claimDigest"]
+                or child_claim["parentClaimDigest"] != parent["claimDigest"]
+                or child_claim["campaignId"] != claim["campaignId"]
+                or child_claim["manifestDigest"] != claim["manifestDigest"]
+                or child_claim["nonceDigest"] == claim["nonceDigest"]
+                or child_claim["gatePlanDigest"] == claim["gatePlanDigest"]
+                or child_claim["permissionDigest"] == state["envelopes"][parent["envelopeDigest"]]["envelope"]["permissionDigest"]
+                or child_claim["generation"] == parent.get("generation")
+            ):
+                raise ValueError("recovery child is not bound to held parent")
+            if child_claim["budget"]["requests"] != RECOVERY_CHILD_REQUESTS or child_claim["budget"]["costMicrousd"] != RECOVERY_CHILD_COST_MICROUSD:
+                raise ValueError("recovery child must reserve all 85 requests")
+            if new_envelope["permissionDigest"] != child_claim["permissionDigest"] or new_envelope["limits"]["requests"] < RECOVERY_CHILD_REQUESTS or new_envelope["limits"]["costMicrousd"] < RECOVERY_CHILD_COST_MICROUSD:
+                raise ValueError("recovery envelope does not fund canonical child")
+            if any(
+                not any(
+                    _ancestor(_scope(scope), _scope(lock))
+                    and MODES[scope["mode"]] >= MODES[lock["mode"]]
+                    for scope in new_envelope["scopes"]
+                )
+                for lock in child_claim["locks"]
+            ):
+                raise ValueError("recovery lock exceeds new permission scope")
+            decision_now = time.time() if now is None else now
+            if not new_envelope["issuedAt"] <= decision_now < new_envelope["expiresAt"] or decision_now + child_claim["durationSeconds"] > new_envelope["expiresAt"] or child_claim["expiresAt"] > new_envelope["expiresAt"]:
+                raise ValueError("recovery child outside permission window")
+            if parent["claimDigest"] != initial_claim_digest or parent["claim"] != initial_claim:
+                raise ValueError("parent reservation changed during Gate inspection")
+            existing = parent.get("recoveryChildren", [])
+            if existing:
+                if len(existing) == 1 and existing[0].get("claimDigest") == child_digest and existing[0].get("envelopeDigest") == child_envelope_digest:
+                    return copy.deepcopy(existing[0]["ticket"])
+                raise ValueError("one recovery child only")
+            if Path(child_claim["gatePath"]).exists():
+                raise ValueError("fresh child Gate required")
+            if any(child_claim["nonceDigest"] == row.get("claim", {}).get("nonceDigest") for row in state["reservations"].values()):
+                raise ValueError("recovery nonce already reserved")
+            if any(entry["envelope"].get("permissionDigest") == new_envelope["permissionDigest"] for entry in state["envelopes"].values()) or any(entry["envelope"].get("permissionDigest") == new_envelope["permissionDigest"] for entry in state.get("recoveryEnvelopes", {}).values()):
+                raise ValueError("recovery permission already spent")
+            task_budget_check(state, claim["campaignId"], RECOVERY_CHILD_COST_MICROUSD)
+            child_reservation = secrets.token_hex(32)
+            child_ticket = {
+                "ledgerPath": str(self.path),
+                "ledgerIdentity": self.identity,
+                "reservation": child_reservation,
+                "claimDigest": child_digest,
+                "envelopeDigest": child_envelope_digest,
+                "parentReservation": parent_ticket["reservation"],
+            }
+            state.setdefault("recoveryEnvelopes", {})[child_envelope_digest] = {
+                "envelope": copy.deepcopy(new_envelope),
+                "allocated": copy.deepcopy(child_claim["budget"]),
+            }
+            child = {
+                "reservation": child_reservation,
+                "ticket": child_ticket,
+                "claim": copy.deepcopy(child_claim),
+                "claimDigest": child_digest,
+                "parentClaimDigest": parent["claimDigest"],
+                "envelopeDigest": child_envelope_digest,
+                "state": "allocated",
+            }
+            parent.setdefault("recoveryChildren", []).append(child)
+            self._save(state)
+            return copy.deepcopy(child_ticket)
+
     def _row(self, state, ticket):
         row = state["reservations"].get(ticket.get("reservation"))
         if row is None or ticket != {
@@ -985,6 +1240,8 @@ class Ledger:
         # Close admission first; never hold ledger lock while waiting for Gate.
         with self._locked() as state:
             row = self._row(state, ticket)
+            if row.get("recoveryChildren"):
+                raise ValueError("recovery child must settle before parent close")
             if row["state"] != "held":
                 raise ValueError("reservation is not held")
             row["state"] = "closing"
@@ -1144,6 +1401,8 @@ class Ledger:
             raise ValueError("configuration receipt digest changed")
         with self._locked() as state:
             row = self._row(state, ticket)
+            if row.get("recoveryChildren"):
+                raise ValueError("recovery child must settle before parent close")
             if row["state"] == "released":
                 if row.get("releaseRecordDigest") != digest(record):
                     raise ValueError("different configuration release record")
@@ -1326,6 +1585,8 @@ class Ledger:
     def _terminal_row(self, state, ticket, record, *, digest_key, final):
         """Shared checks for a terminal close: job, state, receipt and workers."""
         row = self._row(state, ticket)
+        if row.get("recoveryChildren"):
+            raise ValueError("recovery child must settle before parent close")
         if row["state"] == final:
             if row.get(digest_key) != digest(record):
                 raise ValueError(f"different terminal {final} record")
@@ -1509,6 +1770,8 @@ class Ledger:
             raise ValueError("receipt digest changed")
         with self._locked() as state:
             row = self._row(state, ticket)
+            if row.get("recoveryChildren"):
+                raise ValueError("recovery child must settle before parent close")
             # A reservation is retirable only by proving a source closure
             # identical to the one it was acquired under. Rows written before
             # the generation binding existed carry none and remain bound to the

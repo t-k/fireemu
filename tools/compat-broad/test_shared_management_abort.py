@@ -39,6 +39,21 @@ def make_gate(tmp_path):
     return Gate(path, "a")
 
 
+def cancellation_gate(tmp_path):
+    value = management_abort_plan()
+    value["management"]["observation"] = [
+        {"id": "credential", "lifecycle": "preflight", "timeout": 13},
+        {"id": "apply-slot", "lifecycle": "apply", "timeout": 13},
+        {"id": "poll-slot", "lifecycle": "poll", "timeout": 13},
+        {"id": "readback-slot", "lifecycle": "readback", "timeout": 13},
+        {"id": "after-slot", "lifecycle": "after", "timeout": 11},
+    ]
+    value["observationRequests"] = len(value["management"]["observation"])
+    path = tmp_path / "cancellation-gate"
+    create(path, value)
+    return Gate(path, "a")
+
+
 def reaped_unknown():
     return {
         "status": None,
@@ -226,13 +241,19 @@ def test_restarted_coordinator_cannot_apply_transition(tmp_path):
 def test_coordinator_cancel_preserves_completed_apply_and_skips_remaining_observation(
     tmp_path,
 ):
-    gate = make_gate(tmp_path)
+    gate = cancellation_gate(tmp_path)
     gate.claim()
+    gate.management_dispatch(
+        "observation", "credential", lambda _deadline: receipt()
+    )
     first = gate.management_dispatch(
-        "observation", "first", lambda _deadline: receipt()
+        "observation", "apply-slot", lambda _deadline: receipt()
     )
     second = gate.management_dispatch(
-        "observation", "uncertain", lambda _deadline: receipt()
+        "observation", "poll-slot", lambda _deadline: receipt()
+    )
+    gate.management_dispatch(
+        "observation", "readback-slot", lambda _deadline: receipt()
     )
 
     after = gate.cancel_management_observation()
@@ -240,21 +261,23 @@ def test_coordinator_cancel_preserves_completed_apply_and_skips_remaining_observ
     assert first["complete"] is True
     assert second["complete"] is True
     assert after["managementUsed"] == [
-        "observation:first",
-        "observation:uncertain",
+        "observation:credential",
+        "observation:apply-slot",
+        "observation:poll-slot",
+        "observation:readback-slot",
     ]
     assert after["managementSkipped"] == [
         {
-            "id": "observation:last",
+            "id": "observation:after-slot",
             "phase": "observation",
-            "index": 2,
+            "index": 4,
             "reason": "management-not-run",
         }
     ]
     assert after["managementAbort"]["applyOutcome"] == "coordinator-cancelled"
     assert after["managementAbort"]["recoveryPrerequisite"] is True
-    assert after["managementEvents"][0]["status"] == first["status"]
-    assert after["managementEvents"][1]["responseDigest"]
+    assert after["managementEvents"][1]["status"] == first["status"]
+    assert after["managementEvents"][2]["responseDigest"]
     assert after["jobs"]["a"]["complete"] is False
     assert gate.cancel_management_observation() == after
 
@@ -264,13 +287,29 @@ def test_coordinator_cancel_preserves_completed_apply_and_skips_remaining_observ
     assert restored["complete"] is True
 
 
+def test_coordinator_cancel_before_declared_apply_is_unchanged(tmp_path):
+    gate = cancellation_gate(tmp_path)
+    gate.management_dispatch(
+        "observation", "credential", lambda _deadline: receipt()
+    )
+    before = gate.snapshot()
+    with pytest.raises(ValueError, match="declared apply"):
+        gate.cancel_management_observation()
+    assert gate.snapshot() == before
+
+
 def test_coordinator_cancel_rejects_unreaped_or_foreign_data_state_unchanged(tmp_path):
-    gate = make_gate(tmp_path)
+    gate = cancellation_gate(tmp_path)
     gate.claim()
-    gate.management_dispatch("observation", "first", lambda _deadline: receipt())
+    gate.management_dispatch(
+        "observation", "credential", lambda _deadline: receipt()
+    )
+    gate.management_dispatch(
+        "observation", "apply-slot", lambda _deadline: receipt()
+    )
     before = gate.snapshot()
     with gate.locked() as state:
-        state["managementEvents"][0]["workerReaped"] = False
+        state["managementEvents"][1]["workerReaped"] = False
         shared_gate._save(gate.path, state)
     forged = gate.snapshot()
     with pytest.raises(ValueError, match="admissible"):
@@ -278,7 +317,7 @@ def test_coordinator_cancel_rejects_unreaped_or_foreign_data_state_unchanged(tmp
     assert gate.snapshot() == forged
 
     with gate.locked() as state:
-        state["managementEvents"][0]["workerReaped"] = True
+        state["managementEvents"][1]["workerReaped"] = True
         state["jobs"]["a"]["pid"] = os.getpid() + 100000
         shared_gate._save(gate.path, state)
     foreign = gate.snapshot()
@@ -291,19 +330,27 @@ def test_coordinator_cancel_rejects_unreaped_or_foreign_data_state_unchanged(tmp
 def test_coordinator_cancel_accepts_reaped_semantic_error_and_preserves_receipt(
     tmp_path,
 ):
-    gate = make_gate(tmp_path)
+    gate = cancellation_gate(tmp_path)
     gate.claim()
     response = gate.management_dispatch(
-        "observation", "first", lambda _deadline: receipt(400)
+        "observation", "credential", lambda _deadline: receipt()
     )
-    gate.management_dispatch("observation", "uncertain", lambda _deadline: receipt())
+    gate.management_dispatch(
+        "observation", "apply-slot", lambda _deadline: receipt(400)
+    )
+    gate.management_dispatch(
+        "observation", "poll-slot", lambda _deadline: receipt()
+    )
+    gate.management_dispatch(
+        "observation", "readback-slot", lambda _deadline: receipt()
+    )
 
     state = gate.cancel_management_observation()
 
-    assert response["status"] == 400
-    assert state["managementEvents"][0]["status"] == 400
-    assert state["managementEvents"][0]["completed"] is True
-    assert state["managementEvents"][0]["workerReaped"] is True
+    assert response["status"] == 200
+    assert state["managementEvents"][1]["status"] == 400
+    assert state["managementEvents"][1]["completed"] is True
+    assert state["managementEvents"][1]["workerReaped"] is True
 
 
 def test_coordinator_cancel_rejects_foreign_coordinator_without_state_change(tmp_path):

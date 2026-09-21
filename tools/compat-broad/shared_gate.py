@@ -1563,6 +1563,26 @@ def _management_abort_projection(state, marker, *, skipped):
     return projection
 
 
+def _management_cancel_prefix_valid(state):
+    """Require a registered apply and only registered post-apply lifecycle slots."""
+    observation = state["plan"].get("management", {}).get("observation", [])
+    apply_indexes = [
+        index
+        for index, entry in enumerate(observation)
+        if entry.get("lifecycle") == "apply"
+    ]
+    used = state.get("managementUsed", [])
+    if len(apply_indexes) != 1:
+        return False
+    apply_index = apply_indexes[0]
+    if len(used) <= apply_index:
+        return False
+    return all(
+        entry.get("lifecycle") in {"apply", "poll", "readback", "after"}
+        for entry in observation[apply_index : len(used)]
+    )
+
+
 def _validate_management_abort_marker(state):
     marker = state.get("managementAbort")
     if marker is None:
@@ -1665,6 +1685,10 @@ def _validate_management_abort_marker(state):
             for event in state.get("managementEvents", [])[
                 0 if marker["applyOutcome"] == "coordinator-cancelled" else prefix_len :
             ]
+        )
+        or (
+            marker["applyOutcome"] == "coordinator-cancelled"
+            and not _management_cancel_prefix_valid(state)
         )
     ):
         raise ValueError("forged management abort marker")
@@ -2004,6 +2028,12 @@ class Gate:
             ):
                 raise ValueError("management abort binding mismatch")
 
+            if mode == "coordinator-cancelled" and not _management_cancel_prefix_valid(
+                state
+            ):
+                raise ValueError(
+                    "management cancellation requires declared apply lifecycle"
+                )
             completed_prefix = all(
                 event.get("completed") is True
                 and event.get("workerReaped") is True
@@ -2050,6 +2080,10 @@ class Gate:
                     )
                 )
                 or (mode == "coordinator-cancelled" and not completed_prefix)
+                or (
+                    mode == "coordinator-cancelled"
+                    and not _management_cancel_prefix_valid(state)
+                )
             ):
                 if mode == "may-have-landed":
                     raise ValueError(

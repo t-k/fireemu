@@ -30,6 +30,7 @@ MAX_JOB_SLOTS = 8
 INTERVAL_FLOOR_SECONDS = 0.25
 WALL_CAP_SECONDS = 1200
 PHASES = ("observation", "recovery")
+MANAGEMENT_SKIP_REASON = "management-not-run"
 
 
 def request_seconds(plan, policy=None):
@@ -857,6 +858,8 @@ def create(path, plan):
         "coordinatorDone": 0,
         "managementUsed": [],
         "managementEvents": [],
+        "managementSkipped": [],
+        "managementAbort": None,
         "coordinatorInflight": False,
         "events": [],
         "jobs": {},
@@ -1618,14 +1621,27 @@ class Gate:
             declared = [(p, entry) for p in PHASES for entry in management.get(p, [])]
             identities = [p + ":" + entry["id"] for p, entry in declared]
             used = state["managementUsed"]
+            skipped = state.get("managementSkipped", [])
+            if skipped:
+                observation_count = sum(
+                    identity.startswith("observation:") for identity in used
+                )
+                consumed = (
+                    used[:observation_count]
+                    + [entry.get("id") for entry in skipped]
+                    + used[observation_count:]
+                )
+            else:
+                consumed = used
             if (
                 len(set(identities)) != len(identities)
-                or used != identities[: len(used)]
-                or len(used) >= len(declared)
+                or consumed != identities[: len(consumed)]
+                or len(consumed) >= len(declared)
                 or (phase, slot_id)
-                != (declared[len(used)][0], declared[len(used)][1]["id"])
+                != (declared[len(consumed)][0], declared[len(consumed)][1]["id"])
                 or (
                     phase == "recovery"
+                    and state.get("managementAbort") is None
                     and any(
                         job["recovery"] != len(plan["jobs"][key]["recovery"])
                         for key, job in state["jobs"].items()
@@ -1633,7 +1649,7 @@ class Gate:
                 )
             ):
                 raise ValueError("closed management sequence")
-            entry = declared[len(used)][1]
+            entry = declared[len(consumed)][1]
             seconds = entry.get("timeout")
             if (
                 type(seconds) not in (int, float)
@@ -1733,6 +1749,159 @@ class Gate:
                 raise ValueError("job already claimed; ownership retained")
             job["pid"] = os.getpid()
             _save(self.path, state)
+
+    def abort_management_observation(
+        self,
+        *,
+        expected_plan_digest=None,
+        expected_nonce_digest=None,
+        expected_management_prefix_digest=None,
+        expected_journal_digest=None,
+    ):
+        """Close an OBS management suffix after a reaped, unknown outcome.
+
+        All authority is derived from the locked Gate journal. Optional expected
+        digests are consistency checks only; they cannot assert worker exit,
+        cursor state, or a no-data result.
+        """
+        with self.locked() as state:
+            existing = state.get("managementAbort")
+            if existing is not None:
+                journal_digest = digest(
+                    {
+                        "events": state.get("events", []),
+                        "jobs": state.get("jobs", {}),
+                        "coordinatorDone": state.get("coordinatorDone"),
+                    }
+                )
+                nonce_digest = digest(state["plan"].get("nonce"))
+                prefix_digest = digest(state.get("managementUsed", []))
+                projection = dict(state)
+                projection["managementAbort"] = None
+                if (
+                    not isinstance(existing, dict)
+                    or existing.get("version") != 1
+                    or existing.get("planDigest") != state["planDigest"]
+                    or existing.get("nonceDigest") != nonce_digest
+                    or existing.get("prefixDigest") != prefix_digest
+                    or existing.get("journalDigest") != journal_digest
+                    or existing.get("applyOutcome") != "may-have-landed"
+                    or existing.get("recoveryPrerequisite") is not True
+                    or existing.get("postGateDigest") != digest(projection)
+                ):
+                    raise ValueError("forged management abort marker")
+                if any(
+                    value is not None
+                    and value != existing[key]
+                    for value, key in (
+                        (expected_plan_digest, "planDigest"),
+                        (expected_nonce_digest, "nonceDigest"),
+                        (expected_management_prefix_digest, "prefixDigest"),
+                        (expected_journal_digest, "journalDigest"),
+                    )
+                ):
+                    raise ValueError("management abort binding mismatch")
+                return state
+
+            plan = state["plan"]
+            management = plan.get("management", {})
+            declared = [
+                (phase, entry)
+                for phase in PHASES
+                for entry in management.get(phase, [])
+            ]
+            observation_declared = [
+                entry for phase, entry in declared if phase == "observation"
+            ]
+            identities = [phase + ":" + entry["id"] for phase, entry in declared]
+            used = state.get("managementUsed", [])
+            events = state.get("managementEvents", [])
+            prefix_digest = digest(used)
+            nonce_digest = digest(plan.get("nonce"))
+            journal_projection = {
+                "events": state.get("events", []),
+                "jobs": state.get("jobs", {}),
+                "coordinatorDone": state.get("coordinatorDone"),
+            }
+            journal_digest = digest(journal_projection)
+            if any(
+                value is not None and value != expected
+                for value, expected in (
+                    (expected_plan_digest, state["planDigest"]),
+                    (expected_nonce_digest, nonce_digest),
+                    (expected_management_prefix_digest, prefix_digest),
+                    (expected_journal_digest, journal_digest),
+                )
+            ):
+                raise ValueError("management abort binding mismatch")
+
+            if (
+                management.get("dispatchKind") != "closed-v1"
+                or not used
+                or used != identities[: len(used)]
+                or len(used) >= len(observation_declared)
+                or any(not identity.startswith("observation:") for identity in used)
+                or state.get("managementSkipped")
+                or [event.get("id") for event in events] != used
+                or state.get("coordinatorInflight") is not False
+                or state.get("stopped") is not True
+                or state.get("events")
+                or state.get("coordinatorDone") != 0
+                or state.get("observation") != len(used)
+                or state.get("recovery") != 0
+                or any(
+                    job.get(key) not in (0, None, False, {}, [])
+                    for job in state["jobs"].values()
+                    for key in (
+                        "observation",
+                        "recovery",
+                        "pid",
+                        "inflight",
+                        "owned",
+                        "creationProofs",
+                        "absent",
+                        "captures",
+                        "complete",
+                        "stopped",
+                        "scheduleDone",
+                    )
+                )
+                or not events[-1].get("workerReaped")
+                or events[-1].get("completed") is not False
+            ):
+                raise ValueError(
+                    "management abort requires reaped uncertain pre-data state"
+                )
+
+            suffix = [
+                {
+                    "id": identities[index],
+                    "phase": "observation",
+                    "index": index,
+                    "reason": MANAGEMENT_SKIP_REASON,
+                }
+                for index in range(len(used), len(observation_declared))
+            ]
+            if len(suffix) != len(observation_declared) - len(used):
+                raise ValueError("management abort requires an observation suffix")
+            pre_gate_digest = digest(state)
+            state["managementSkipped"] = suffix
+            marker = {
+                "version": 1,
+                "planDigest": state["planDigest"],
+                "nonceDigest": nonce_digest,
+                "prefixDigest": prefix_digest,
+                "journalDigest": journal_digest,
+                "preGateDigest": pre_gate_digest,
+                "applyOutcome": "may-have-landed",
+                "recoveryPrerequisite": True,
+            }
+            state["managementAbort"] = marker
+            post_projection = dict(state)
+            post_projection["managementAbort"] = None
+            marker["postGateDigest"] = digest(post_projection)
+            _save(self.path, state)
+            return state
 
     def skip_scheduled_slot(self, operation, recovery, reason):
         """Consume the next scheduled slot without a wire send.
@@ -2233,6 +2402,7 @@ class Gate:
             job = state["jobs"][self.job]
             if (
                 state.get("noDataAbort") is not None
+                or state.get("managementAbort") is not None
                 or job["pid"] != os.getpid()
                 or job["inflight"]
                 or unconfirmed_creates(state, self.job)

@@ -2,6 +2,7 @@
 // exercise that dispatch through the public CLI entrypoints (list/plan), which need no native
 // binary, plus buildExecArgs's per-case project wiring.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import { CASE, CASES, COMMIT_TRANSFORM_CASE, G0_CASE, selectCase } from "../registry.mjs";
 import { buildExecArgs, main } from "../pilot.mjs";
@@ -132,6 +133,26 @@ test("buildExecArgs defaults to the batch-write project and accepts an override"
 test("buildExecArgs selects auth and firestore only for G0", () => {
   const args = buildExecArgs("/binary", "/dir", "/entry.mjs", "/node", G0_CASE.project, "auth,firestore").args;
   assert.equal(args[args.indexOf("--only") + 1], "auth,firestore");
-  assert.equal(args[args.indexOf("--auth-port") + 1], "0");
+  assert.equal(args.includes("--auth-port"), false);
   assert.equal(args[args.indexOf("--firestore-port") + 1], "0");
+});
+
+test("buildExecArgs uses only options supported by the fireemu exec interface", async (t) => {
+  const binary = process.env.G0_RETAINED_ARTIFACT;
+  if (!binary) {
+    t.skip("set G0_RETAINED_ARTIFACT to validate the retained native CLI help");
+    return;
+  }
+  let help;
+  try {
+    help = execFileSync(binary, ["--help"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (error) {
+    assert.equal(error.status, 2);
+    help = error.stderr;
+  }
+  assert.match(help, /exec\|emulators:exec/);
+  assert.match(help, /--firestore-port <n>/);
+  assert.doesNotMatch(help, /--auth-port/);
+  const args = buildExecArgs(binary, "/dir", "/entry.mjs", "/node", G0_CASE.project, "auth,firestore").args;
+  assert.equal(args.some((arg) => arg === "--auth-port"), false);
 });

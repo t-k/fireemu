@@ -1109,6 +1109,19 @@ class Ledger:
         """
         if not isinstance(canonical_parent_inputs, dict) or not isinstance(parent_permission, dict):
             raise ValueError("canonical parent producer inputs and permission required")
+        try:
+            lane = Path(__file__).resolve().parent.parent / "fs-request-bytes-boundary"
+            sys.path.insert(0, str(lane))
+            import request_bytes_compiler as request_compiler
+            actual_parent_plan = request_compiler.compile_request_bytes_plan(
+                canonical_parent_inputs["plan"]["project"],
+                canonical_parent_inputs["plan"]["database"],
+                canonical_parent_inputs["plan"]["nonce"],
+            )
+        except (ImportError, KeyError, TypeError, ValueError) as error:
+            raise ValueError("canonical parent compiler refused inputs") from error
+        if digest(actual_parent_plan) != digest(canonical_parent_plan):
+            raise ValueError("canonical parent compiler plan differs")
         _recovery_child_claim(child_claim)
         _envelope(new_envelope)
         if now is not None:
@@ -1228,6 +1241,15 @@ class Ledger:
                 for lock in child_claim["locks"]
             ):
                 raise ValueError("recovery lock exceeds new permission scope")
+            if any(
+                not any(
+                    _ancestor(_scope(parent_lock), _scope(child_lock))
+                    and MODES[parent_lock["mode"]] >= MODES[child_lock["mode"]]
+                    for parent_lock in claim["locks"]
+                )
+                for child_lock in child_claim["locks"]
+            ):
+                raise ValueError("recovery lock exceeds parent lock boundary")
             if any(
                 not any(
                     _ancestor(_scope(lock), _resource_scope(resource))

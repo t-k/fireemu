@@ -295,6 +295,53 @@ def test_recovery_extension_requires_full_registered_parent_gate_digest(tmp_path
     assert ledger.snapshot() == before
 
 
+def test_recovery_extension_rejects_mutated_caller_parent_payload(tmp_path):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    mutated_parent = json.loads(json.dumps(parent_plan))
+    operation = next(
+        operation
+        for operation in mutated_parent["observation"] + mutated_parent["recovery"]
+        if operation.get("body") is not None
+    )
+    operation["body"] = json.loads(json.dumps(operation["body"]))
+    operation["body"]["writes"][0]["update"]["fields"]["_owner"]["stringValue"] = "foreign"
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="canonical parent compiler plan differs"):
+        ledger.begin_recovery_extension(
+            parent,
+            child,
+            envelope,
+            mutated_parent,
+            child_plan,
+            now=1100,
+            canonical_parent_inputs=ACTUAL_INPUTS,
+            parent_permission=ACTUAL_PERMISSION,
+        )
+    assert ledger.snapshot() == before
+
+
+def test_recovery_extension_rejects_child_lock_outside_persisted_parent_boundary(tmp_path):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    altered = dict(child, locks=[{"key": "project/fireemu-35fe6", "mode": "EXCLUSIVE"}])
+    altered_envelope = dict(
+        envelope,
+        scopes=[{"key": "project/fireemu-35fe6", "mode": "EXCLUSIVE"}],
+    )
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="parent lock boundary"):
+        ledger.begin_recovery_extension(
+            parent,
+            altered,
+            altered_envelope,
+            parent_plan,
+            child_plan,
+            now=1100,
+            canonical_parent_inputs=ACTUAL_INPUTS,
+            parent_permission=ACTUAL_PERMISSION,
+        )
+    assert ledger.snapshot() == before
+
+
 @pytest.mark.parametrize("outcome", ["created", "refused", None])
 def test_recovery_extension_requires_uncertain_selected_create_event(tmp_path, outcome):
     ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)

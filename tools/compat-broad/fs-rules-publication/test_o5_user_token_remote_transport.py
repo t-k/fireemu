@@ -9,10 +9,12 @@ import sys
 import threading
 from pathlib import Path
 from typing import ClassVar
+from urllib.parse import quote
 
 import o5_user_token_remote_transport as remote
 import pytest
 from o5_user_token_case import compile_case
+from o5_user_token_collector import _request
 
 ROOT = Path(__file__).resolve().parents[3]
 PORTCTL = Path("/Users/tk/.agents/skills/port-registry/scripts/portctl.py")
@@ -46,6 +48,9 @@ class _FixtureHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    do_GET = do_POST
+    do_DELETE = do_POST
 
     def log_message(self, *_args: object) -> None:
         return
@@ -102,6 +107,50 @@ def plan():
     return compile_case("fireemu-35fe6", "(default)", "a" * 32, "tenant1234")
 
 
+def collector_request(plan, index):
+    return _request(plan["observation"][index], plan["nonce"])
+
+
+def ruleset_request(plan, label):
+    from o5_user_token_collector import digest as collector_digest
+
+    return {
+        "kind": "ruleset-release",
+        "phase": "ruleset",
+        "ruleset": label,
+        "sourceDigest": collector_digest(plan["rulesets"][label]["source"]),
+        "credentialRef": "administrator",
+        "credentialClass": "administrator",
+    }
+
+
+def test_prepare_accepts_every_actual_collector_observation(plan):
+    credentials = {
+        "owner-a": "fixture-a",
+        "owner-b": "fixture-b",
+        "owner-c": "fixture-c",
+        "owner-d": "fixture-d",
+        "owner-e": "fixture-e",
+        "owner-f": "fixture-f",
+        "owner-g": "fixture-g",
+        "malformed-bearer": "malformed",
+        "empty-bearer": "",
+    }
+    credentials.update(
+        {
+            operation["credential"]["ref"]: "fixture-token"
+            for operation in plan["observation"]
+            if operation["credential"]["class"] == "user-id-token"
+        }
+    )
+    for index in range(33):
+        prepared = remote.prepare_request(
+            plan, collector_request(plan, index), credentials=credentials
+        )
+        assert prepared["service"] == "firestore"
+        assert prepared["route"] in {"observation-get", "observation-commit"}
+
+
 def test_prepare_observation_binds_project_nonce_and_principal(plan):
     operation = plan["observation"][0]
     prepared = remote.prepare_request(
@@ -145,6 +194,99 @@ def test_prepare_rejects_unbound_principal_and_unknown_shape(plan):
         remote.prepare_request(plan, operation, credentials={"owner-a": "fixture"})
 
 
+def test_prepare_accepts_actual_multi_resource_commit_rows(plan):
+    for index, count in ((16, 2), (17, 1), (18, 2)):
+        prepared = remote.prepare_request(
+            plan,
+            collector_request(plan, index),
+            credentials={"owner-a": "fixture"},
+        )
+        assert prepared["method"] == "POST"
+        assert prepared["path"].endswith("/documents:commit")
+        assert len(prepared["body"]["writes"]) == count
+
+
+def test_prepare_checks_credential_class_and_fingerprint(plan):
+    operation = collector_request(plan, 0)
+    operation["credentialClass"] = "anonymous"
+    with pytest.raises(ValueError, match="credential class"):
+        remote.prepare_request(plan, operation, credentials={"owner-a": "fixture"})
+    operation = collector_request(plan, 0)
+    operation["credentialFingerprint"] = "0" * 16
+    with pytest.raises(ValueError, match="credential fingerprint"):
+        remote.prepare_request(plan, operation, credentials={"owner-a": "fixture"})
+
+
+def test_prepare_covers_absent_malformed_and_empty_credential_classes(plan):
+    for index, ref, credential_class in (
+        (4, "unauthenticated", "absent"),
+        (21, "malformed-bearer", "malformed"),
+        (22, "empty-bearer", "empty"),
+    ):
+        operation = collector_request(plan, index)
+        assert operation["credentialRef"] == ref
+        assert operation["credentialClass"] == credential_class
+        prepared = remote.prepare_request(
+            plan,
+            operation,
+            credentials={ref: "" if credential_class == "empty" else "malformed"},
+        )
+        assert prepared["method"] == "GET"
+
+
+def test_prepare_rejects_wrong_phase_and_prepares_recovery_preconditions(plan):
+    release = ruleset_request(plan, "A")
+    release["phase"] = "arbitrary"
+    with pytest.raises(ValueError, match="phase"):
+        remote.prepare_request(plan, release, credentials={"administrator": "fixture"})
+
+    resource = plan["ownedResources"][0]
+    readback = {
+        "kind": "readback",
+        "phase": "recovery",
+        "resource": resource,
+        "accountRef": None,
+        "credentialRef": "administrator",
+        "credentialClass": "administrator",
+        "precondition": None,
+    }
+    prepared = remote.prepare_request(
+        plan,
+        readback,
+        credentials={"administrator": "fixture"},
+    )
+    assert prepared["method"] == "GET"
+    version = "2026-09-22T00:00:00.000000Z"
+    delete = {**readback, "kind": "delete", "precondition": {"updateTime": version}}
+    prepared = remote.prepare_request(
+        plan, delete, credentials={"administrator": "fixture"}
+    )
+    assert prepared["method"] == "DELETE"
+    assert "currentDocument.updateTime=" + quote(version, safe="") in prepared["path"]
+
+
+def test_prepare_requires_bound_uid_for_account_recovery(plan):
+    request = {
+        "kind": "account-delete",
+        "phase": "recovery",
+        "resource": None,
+        "accountRef": "owner-a",
+        "credentialRef": "administrator",
+        "credentialClass": "administrator",
+        "precondition": {"uid": "uid-a"},
+    }
+    with pytest.raises(ValueError, match="account binding"):
+        remote.prepare_request(plan, request, credentials={"administrator": "fixture"})
+    prepared = remote.prepare_request(
+        plan,
+        request,
+        credentials={"administrator": "fixture"},
+        account_bindings={"owner-a": {"uid": "uid-a", "tenant": plan["tenant"]}},
+    )
+    assert prepared["method"] == "POST"
+    assert prepared["body"] == {"localId": "uid-a"}
+
+
 def test_plan_shape_keeps_o5_accounts_rows_and_rulesets(plan):
     assert len(plan["observation"]) == 33
     assert len(plan["ownedAccounts"]) == 7
@@ -157,7 +299,9 @@ def test_worker_uses_fixture_origin_and_never_redirects(fixture_origin):
     _FixtureHandler.requests.clear()
     source = (ROOT / remote.WORKER_ENTRY).read_bytes()
     envelope = {
-        "url": fixture_origin + "/v1/test",
+        "service": "firestore",
+        "route": "observation-commit",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
         "method": "POST",
         "headers": {
             "Content-Type": "application/json",
@@ -174,7 +318,10 @@ def test_worker_uses_fixture_origin_and_never_redirects(fixture_origin):
     )
     assert result["status"] == 200
     assert result["body"]["complete"] is True
-    assert _FixtureHandler.requests[0]["path"] == "/v1/test"
+    assert (
+        _FixtureHandler.requests[0]["path"]
+        == "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit"
+    )
 
 
 def test_worker_rejects_oversized_body_before_wire():
@@ -182,7 +329,9 @@ def test_worker_rejects_oversized_body_before_wire():
     with pytest.raises(ValueError, match="worker envelope exceeds bound"):
         remote.run_worker(
             {
-                "url": "https://firestore.googleapis.com/v1/test",
+                "service": "firestore",
+                "route": "observation-commit",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
                 "method": "POST",
                 "headers": {"Authorization": "Bearer fixture"},
                 "body": {"oversized": "x" * (2 * 1024 * 1024)},
@@ -193,12 +342,32 @@ def test_worker_rejects_oversized_body_before_wire():
         )
 
 
-def test_worker_rejects_production_origin_when_fixture_is_not_declared():
+def test_worker_rejects_arbitrary_fixed_host_route_and_method():
     source = (ROOT / remote.WORKER_ENTRY).read_bytes()
-    with pytest.raises(ValueError, match="fixed service origin"):
+    with pytest.raises(ValueError):
         remote.run_worker(
             {
-                "url": "http://127.0.0.1:12345/v1/test",
+                "service": "firestore",
+                "route": "arbitrary",
+                "method": "PATCH",
+                "path": "/v1/test",
+                "headers": {"Authorization": "Bearer fixture"},
+                "body": {"ok": True},
+                "seconds": 5.0,
+            },
+            binding=source,
+            binding_digest=hashlib.sha256(source).hexdigest(),
+        )
+
+
+def test_worker_rejects_unbound_route_before_any_network():
+    source = (ROOT / remote.WORKER_ENTRY).read_bytes()
+    with pytest.raises(ValueError, match="worker exchange refused"):
+        remote.run_worker(
+            {
+                "service": "firestore",
+                "route": "observation-commit",
+                "path": "/v1/test",
                 "method": "POST",
                 "headers": {},
                 "body": {},

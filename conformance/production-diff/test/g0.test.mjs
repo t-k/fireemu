@@ -114,6 +114,37 @@ test("G0 session startup resolves the locked uv executable through its real laun
   assert.match(source, /resolveLockedUvCommand\(\)/);
 });
 
+test("locked uv Python startup failure is retained as bounded private diagnostics before Gate or wire startup", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "g0-startup-diagnostic-"));
+  const child = spawn(
+    resolveLockedUvCommand(),
+    [
+      "run",
+      "--project",
+      resolve(process.cwd(), "tools/compat-inventory"),
+      "--locked",
+      "--python",
+      "3.12",
+      "python",
+      "-c",
+      "raise RuntimeError('bounded-startup-fixture')",
+    ],
+    { cwd: process.cwd(), stdio: ["ignore", "ignore", "pipe"] },
+  );
+  let stderrBytes = 0;
+  child.stderr.on("data", (chunk) => {
+    stderrBytes += chunk.length;
+  });
+  const exitCode = await new Promise((resolveExit) => child.once("close", resolveExit));
+  try {
+    assert.notEqual(exitCode, 0);
+    assert.ok(stderrBytes > 0);
+    assert.equal(existsSync(join(directory, "gate")), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 const nativeG0PathEnvironment = [
   "G0_RETAINED_ARTIFACT",
   "G0_BUILD_MANIFEST",

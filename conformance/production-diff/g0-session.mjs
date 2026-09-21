@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { publishJson } from "./io.mjs";
+import { publish, publishJson } from "./io.mjs";
 import { requireThat, digestJson, safeCode } from "./core.mjs";
 import { g0SessionPythonSource, readOwnedProcessArgv, resolveLockedUvCommand, validateG0Origins } from "./g0.mjs";
 
@@ -97,20 +97,39 @@ const result = await new Promise((done) => {
   );
   let stderrBytes = 0;
   let stderrTruncated = false;
+  const stderrChunks = [];
+  let stderrCaptured = 0;
+  let settled = false;
   child.stderr.on("data", (chunk) => {
     stderrBytes += chunk.length;
+    if (stderrCaptured < 64 * 1024) {
+      const remaining = 64 * 1024 - stderrCaptured;
+      const bounded = chunk.subarray(0, remaining);
+      stderrChunks.push(bounded);
+      stderrCaptured += bounded.length;
+    }
     if (stderrBytes > 64 * 1024) stderrTruncated = true;
   });
-  child.once("error", () => done({ code: null, error: "python-start-failed", stderrBytes, stderrTruncated }));
-  child.once("close", (code) =>
-    done({
-      code,
-      stage: "python-g0-execute",
-      error: code === 0 ? null : "shared-g0-execution-failed",
-      stderrBytes,
-      stderrTruncated,
-    }),
-  );
+  const complete = async (code, error, stage) => {
+    if (settled) return;
+    settled = true;
+    const stderr = Buffer.concat(stderrChunks);
+    let stderrArtifact = null;
+    try {
+      await publish(join(directory, "python-stderr.log"), stderr);
+      stderrArtifact = {
+        path: "python-stderr.log",
+        bytes: stderr.length,
+        sha256: createHash("sha256").update(stderr).digest("hex"),
+        truncated: stderrTruncated,
+      };
+    } catch {
+      stderrArtifact = { path: "python-stderr.log", bytes: 0, sha256: null, truncated: stderrTruncated };
+    }
+    done({ code, error, stage, stderrBytes, stderrTruncated, stderrArtifact });
+  };
+  child.once("error", () => complete(null, "python-start-failed", "python-start"));
+  child.once("close", (code) => complete(code, code === 0 ? null : "shared-g0-execution-failed", "python-g0-execute"));
 });
 if (result.code !== 0) {
   await publishJson(join(directory, "session-result.json"), {
@@ -124,6 +143,7 @@ if (result.code !== 0) {
     failureCode: result.code === null ? "spawn-failed" : `exit-${result.code}`,
     stderrBytes: result.stderrBytes ?? 0,
     stderrTruncated: result.stderrTruncated === true,
+    stderrArtifact: result.stderrArtifact,
     cleanup: { state: "unconfirmed", absent: [], requests: 0 },
     requests: [],
     requestCount: 0,

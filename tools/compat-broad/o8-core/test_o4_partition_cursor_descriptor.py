@@ -4,6 +4,7 @@ Nothing here reaches production: no credential, no origin, no Ledger and no
 collector run. The synthetic approval is built from local files in tmp_path.
 """
 
+import copy
 import hashlib
 import json
 import sys
@@ -23,6 +24,7 @@ import o8_admission
 import partition_cursor_gate as gate_projection
 import partition_cursor_manifest
 import partition_cursor_wire as wire
+import shared_gate
 from broad_contract import digest
 from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, REQUIRED_MEMBERS, CampaignDescriptor
 
@@ -272,12 +274,54 @@ def test_the_gate_projection_fits_the_campaign_wall():
         )
 
 
-def test_the_creating_declaration_gap_names_only_partition_queries():
+def test_the_creating_declaration_gap_is_empty_for_partition_queries():
     plan = o4.plan_compiler(NONCE)
     gap = gate_projection.creating_declaration_gap(plan)
-    assert gap
-    assert all(":partition-" in entry for entry in gap)
-    assert "observation:8:partition-page-token-continuation" in gap
+    # Shared Gate recognizes partitionQuery as a non-creating read, so no
+    # partition slot remains in the declaration gap.
+    assert gap == []
+
+
+def test_partition_schedule_declarations_remain_fail_closed_for_mutations():
+    plan = o4.plan_compiler(NONCE)
+    projection = gate_projection.gate_operations(plan)
+    coordinate = next(
+        (phase, index)
+        for phase, index in projection["order"]
+        if projection[phase][index]["kind"] == "partition-page-token-continuation"
+    )
+    phase, index = coordinate
+    schedule = gate_projection._schedule(projection, slot_seconds=6.0)
+    by_coordinate = {(entry["phase"], entry["index"]): entry for entry in schedule}
+    assert by_coordinate[coordinate]["creates"] is False
+
+    mutations = (
+        (
+            "unknown RPC",
+            {
+                "path": projection[phase][index]["path"].replace(
+                    ":partitionQuery", ":unknownRpc"
+                )
+            },
+        ),
+        (
+            "unknown body key",
+            {"body": {**projection[phase][index]["body"], "unknown": True}},
+        ),
+        ("creating body", {"body": {"writes": []}}),
+    )
+    for _label, mutation in mutations:
+        mutated = copy.deepcopy(projection)
+        mutated[phase][index].update(mutation)
+        operation = mutated[phase][index]
+        assert shared_gate.can_create(operation) is True
+        mutated_schedule = gate_projection._schedule(mutated, slot_seconds=6.0)
+        mutated_entry = next(
+            entry
+            for entry in mutated_schedule
+            if (entry["phase"], entry["index"]) == coordinate
+        )
+        assert "creates" not in mutated_entry
 
 
 def test_the_permission_bindings_carry_the_projection_and_index_facts():
@@ -285,7 +329,7 @@ def test_the_permission_bindings_carry_the_projection_and_index_facts():
     inputs = o4.source_map()
     bindings = o4.permission_bindings(plan, "0" * 40, "b" * 64, inputs)
     assert bindings["gateProjection"]["totalRequests"] == 109
-    assert bindings["gateProjection"]["creatingDeclarationGap"]
+    assert bindings["gateProjection"]["creatingDeclarationGap"] == []
     assert bindings["indexPrerequisites"]["requiredCompositeIndexes"] == []
     assert bindings["productionOrigin"] == "https://firestore.googleapis.com"
     assert bindings["tariffsConfirmedBelowPlanningCeilings"] is False

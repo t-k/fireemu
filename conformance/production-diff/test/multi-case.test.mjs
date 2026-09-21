@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CASE, CASES, COMMIT_TRANSFORM_CASE, selectCase } from "../registry.mjs";
 import { buildExecArgs, main } from "../pilot.mjs";
+import { resultEnvelope } from "../core.mjs";
 
 async function captureStdout(run) {
   const original = console.log;
@@ -47,6 +48,57 @@ test("pilot.mjs plan works for the commit-transform case without a binary", asyn
   assert.equal(parsed.case, COMMIT_TRANSFORM_CASE.id);
   assert.equal(parsed.operations, 17);
   assert.equal(parsed.evidenceKind, "documented-production-outcome-reference");
+  assert.equal(parsed.oracleKind, "documented-outcome-contract");
+});
+
+test("pilot.mjs plan reports the batch-write case's own evidence kind, not the commit-transform one", async () => {
+  const [lines, code] = await captureStdout(() => main(["plan", "--case", CASE.id]));
+  assert.equal(code, 0);
+  const parsed = JSON.parse(lines[0]);
+  assert.equal(parsed.evidenceKind, "saved-production-reference");
+  assert.equal(parsed.oracleKind, "legacy-normalized-production-observation");
+});
+
+// Regression for the owner review finding (2026-09-21, item 2 of the 95c5b994a review): before
+// the fix, resultEnvelope() hard-coded evidenceKind/oracleKind for every case, so a Commit-case
+// replay/compare result and its report.md disagreed with what `plan` correctly reported. Each
+// case's own evidenceKind/oracleKind (registry.mjs) must reach resultEnvelope() unchanged, so plan
+// and the post-replay/compare result always agree.
+for (const entry of [CASE, COMMIT_TRANSFORM_CASE])
+  test(`resultEnvelope reports ${entry.id}'s own evidence and oracle kind, matching plan`, async () => {
+    const [lines] = await captureStdout(() => main(["plan", "--case", entry.id]));
+    const planned = JSON.parse(lines[0]);
+    const result = resultEnvelope({
+      entry,
+      comparison: { verdict: "MATCH", counts: { match: 1, mismatch: 0, indeterminate: 0 } },
+      execution: {
+        state: "completed",
+        cleanup: { state: "confirmed" },
+        process: { state: "stopped" },
+      },
+      provenance: { testOnly: true },
+    });
+    assert.equal(result.evidenceKind, planned.evidenceKind);
+    assert.equal(result.oracleKind, planned.oracleKind);
+    assert.equal(result.evidenceKind, entry.evidenceKind);
+    assert.equal(result.oracleKind, entry.oracleKind);
+  });
+
+test("resultEnvelope refuses a case definition missing its evidence kind", () => {
+  assert.throws(
+    () =>
+      resultEnvelope({
+        entry: { ...CASE, evidenceKind: undefined },
+        comparison: { verdict: "MATCH", counts: { match: 1, mismatch: 0, indeterminate: 0 } },
+        execution: {
+          state: "completed",
+          cleanup: { state: "confirmed" },
+          process: { state: "stopped" },
+        },
+        provenance: {},
+      }),
+    /case-missing-evidence-kind/,
+  );
 });
 
 test("buildExecArgs defaults to the batch-write project and accepts an override", () => {

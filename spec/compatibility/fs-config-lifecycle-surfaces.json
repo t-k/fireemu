@@ -34,7 +34,7 @@
     },
     {
       "class": "data-plane-contract",
-      "dataPlaneConsequence": "The projection hardcodes STANDARD and does not reflect the configured edition enum, so an Enterprise run reports the wrong edition.",
+      "dataPlaneConsequence": "The projection reports the configured edition in the API's upper-case spelling; only Standard reaches the route because every other edition is refused above it (fixed at 62d8a1d22).",
       "field": "databaseEdition",
       "local": {
         "citations": [
@@ -42,7 +42,7 @@
           "crates/fireemu-adapter-grpc/src/rest/mod.rs:707",
           "crates/fireemu-core-types/src/edition.rs:12"
         ],
-        "status": "partial"
+        "status": "implemented"
       },
       "presentInPinnedDiscovery": true,
       "rationale": "Edition decides which methods are served at all; the local inventory route already refuses non-Standard Native combinations."
@@ -75,11 +75,13 @@
     },
     {
       "class": "data-plane-contract",
-      "dataPlaneConsequence": "It is excluded from settings equality by the database projection because it moves on its own, but the data-plane bound it expresses is still a contract. The local projection omits the field entirely.",
+      "dataPlaneConsequence": "It is excluded from settings equality by the database projection because it moves on its own, but the data-plane bound it expresses is still a contract. The local projection derives it from the retention window floored at the database's creation, the bound read_time is checked against (62d8a1d22).",
       "field": "earliestVersionTime",
       "local": {
-        "citations": [],
-        "status": "not-implemented"
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:299"
+        ],
+        "status": "implemented"
       },
       "presentInPinnedDiscovery": true,
       "rationale": "The earliest addressable version time is the concrete lower bound a read_time request is checked against, and it advances continuously."
@@ -173,55 +175,65 @@
     },
     {
       "class": "managed-infrastructure",
-      "dataPlaneConsequence": "None, but it is an identity field the database projection requires, so a change must stop a campaign rather than be normalized away.",
+      "dataPlaneConsequence": "None, but it is an identity field the database projection requires, so a change must stop a campaign rather than be normalized away. The local value is derived deterministically from the project and database ids (62d8a1d22).",
       "field": "uid",
       "local": {
-        "citations": [],
-        "status": "not-implemented"
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:292"
+        ],
+        "status": "implemented"
       },
       "presentInPinnedDiscovery": true,
       "rationale": "The server-assigned unique id identifies one provisioning instance."
     },
     {
       "class": "managed-infrastructure",
-      "dataPlaneConsequence": "None; it is excluded from settings equality by the database projection.",
+      "dataPlaneConsequence": "None; it is excluded from settings equality by the database projection. The local value is a digest of the projected resource (62d8a1d22).",
       "field": "etag",
       "local": {
-        "citations": [],
-        "status": "not-implemented"
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:317"
+        ],
+        "status": "implemented"
       },
       "presentInPinnedDiscovery": true,
       "rationale": "The etag supports optimistic concurrency on managed patch calls."
     },
     {
       "class": "managed-infrastructure",
-      "dataPlaneConsequence": "None, but it is the precondition that decides whether a second named database costs anything, so a campaign must read it before creating one.",
+      "dataPlaneConsequence": "None, but it is the precondition that decides whether a second named database costs anything. The local projection reports true for the default database and omits the field for any other, as production does (62d8a1d22).",
       "field": "freeTier",
       "local": {
-        "citations": [],
-        "status": "not-implemented"
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:314"
+        ],
+        "status": "implemented"
       },
       "presentInPinnedDiscovery": true,
       "rationale": "Free tier eligibility is a billing attribute of the managed resource."
     },
     {
       "class": "managed-infrastructure",
-      "dataPlaneConsequence": "None; no data-plane result depends on it.",
+      "dataPlaneConsequence": "None; no data-plane result depends on it. The local value is the database's creation instant on the logical clock (62d8a1d22).",
       "field": "createTime",
       "local": {
-        "citations": [],
-        "status": "not-implemented"
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:293"
+        ],
+        "status": "implemented"
       },
       "presentInPinnedDiscovery": true,
       "rationale": "Provisioning timestamps describe the managed resource lifecycle."
     },
     {
       "class": "managed-infrastructure",
-      "dataPlaneConsequence": "None; no data-plane result depends on it.",
+      "dataPlaneConsequence": "None; no data-plane result depends on it. The local value equals createTime because no local call updates the resource (62d8a1d22).",
       "field": "updateTime",
       "local": {
-        "citations": [],
-        "status": "not-implemented"
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:294"
+        ],
+        "status": "implemented"
       },
       "presentInPinnedDiscovery": true,
       "rationale": "Provisioning timestamps describe the managed resource lifecycle."
@@ -904,14 +916,17 @@
   "repairTickets": [
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/local.rs:2629",
+        "crates/fireemu-adapter-grpc/src/local.rs:1630",
+        "crates/fireemu-adapter-grpc/src/local.rs:1398",
         "crates/fireemu-core-types/src/ids.rs:183"
       ],
       "class": "local-safety-extension",
-      "fixApplied": false,
+      "fixApplied": true,
+      "fixedAt": "cb429f2c4d4ad4065c37c68b5e4f4dcb37679ff7",
       "id": "FS-CONFIG-RT-001",
       "reproduction": "Start fireemu with only the default database configured, then issue any Firestore REST read against projects/{project}/databases/never-created/documents/c/d. The local runtime creates the database and answers NOT_FOUND for the document; production answers NOT_FOUND for the database before the document is considered.",
-      "status": "OPEN",
+      "resolution": "The strict profile answers NOT_FOUND for a database nothing created and does not materialize it on the refusal; the emulator profile keeps materializing any database on first touch, as the official emulator does. Fixed for the strict profile only, by design.",
+      "status": "FIXED",
       "summary": "Any syntactically valid database id becomes usable without a create call, so a request that production refuses with NOT_FOUND succeeds locally.",
       "title": "A named database is materialized on first touch instead of returning NOT_FOUND"
     },
@@ -923,9 +938,11 @@
       ],
       "class": "data-plane-contract",
       "fixApplied": false,
+      "fixedAt": "62d8a1d22deedd33b793fa5a160f8bc5fcac4c83",
       "id": "FS-CONFIG-RT-002",
       "reproduction": "Start fireemu configured for the Enterprise edition and read projects/{project}/databases/(default) on the Firestore REST port. The response still reports STANDARD while the same route refuses non-Standard Native traffic a few lines earlier.",
-      "status": "OPEN",
+      "resolution": "databaseEdition now comes from the configuration; locationId is still the constant us-central1. The remaining half is FS-LIFE-003 (database projection completeness).",
+      "status": "PARTIALLY_FIXED",
       "summary": "databaseEdition is hardcoded to STANDARD and locationId to us-central1, so the projection reflects neither the configured edition enum nor any configured location.",
       "title": "The database projection reports a constant edition and location"
     },
@@ -936,10 +953,12 @@
         "tools/compat-broad/fixtures/database-settings-7be6cf08.json:1"
       ],
       "class": "data-plane-contract",
-      "fixApplied": false,
+      "fixApplied": true,
+      "fixedAt": "62d8a1d22deedd33b793fa5a160f8bc5fcac4c83",
       "id": "FS-CONFIG-RT-003",
       "reproduction": "Compare the local response of projects/{project}/databases/(default) with the saved offline fixture at tools/compat-broad/fixtures/database-settings-7be6cf08.json. The local body is a strict subset and would fail the identity check the batch contract applies.",
-      "status": "OPEN",
+      "resolution": "uid, createTime, updateTime, earliestVersionTime, freeTier and etag are emitted; the local rehearsal record of 2026-09-21 shows the local projection carrying the same field set as the saved production response, with local values for uid and the timestamps.",
+      "status": "FIXED",
       "summary": "uid, freeTier, etag, createTime, updateTime and earliestVersionTime are absent from the local projection although the saved production response contains them and the database projection contract requires uid as an identity field.",
       "title": "The database projection omits fields the saved production response carries"
     },
@@ -951,8 +970,10 @@
       ],
       "class": "data-plane-contract",
       "fixApplied": false,
+      "fixedAt": null,
       "id": "FS-CONFIG-RT-004",
       "reproduction": "Issue PATCH on projects/{project}/databases/(default)/collectionGroups/{group}/fields/{field} with updateMask=indexConfig and observe UNIMPLEMENTED, while production applies the exemption and reports usesAncestorConfig false on the next get.",
+      "resolution": null,
       "status": "OPEN",
       "summary": "The field configuration surface is served and the ttlConfig half is complete: the policy is stored per database, read back as ACTIVE, and an expiry sweep on the virtual clock deletes documents whose TTL field has elapsed. Patching indexConfig is refused with UNIMPLEMENTED, because single-field exemptions are still taken from the project's index configuration at startup and there is no runtime path that changes them.",
       "title": "The indexConfig half of fields.patch has no runtime transition"
@@ -964,8 +985,10 @@
       ],
       "class": "data-plane-contract",
       "fixApplied": false,
+      "fixedAt": null,
       "id": "FS-CONFIG-RT-005",
       "reproduction": "Issue a Firestore REST read against projects/{project}/databases/Invalid_Id/documents/c/d and observe NOT_FOUND with the message naming the database.",
+      "resolution": null,
       "status": "OPEN",
       "summary": "A syntactically invalid database id is deliberately mapped to NOT_FOUND on the data plane. Whether production agrees is exactly one of the error shapes this lane's campaign is prepared to compare.",
       "title": "An invalid database id is answered NOT_FOUND rather than INVALID_ARGUMENT"
@@ -988,6 +1011,7 @@
       "data-plane-contract": 9,
       "managed-infrastructure": 33
     },
+    "openRepairTickets": 2,
     "productionUnobservedConditionsReduced": 0,
     "repairTickets": 5
   }

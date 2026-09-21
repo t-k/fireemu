@@ -117,8 +117,9 @@ _BOUNDARY = _doc(
         ),
         "",
         (
-            "The repair tickets above are reproductions, not fixes. No runtime file was "
-            "changed by the work that produced this page."
+            "The repair tickets above are reproductions. Where one is marked fixed, the "
+            "fix landed in the cited commit; no runtime file was changed by the work "
+            "that produced this page."
         ),
         "",
         (
@@ -189,8 +190,10 @@ def _field_table(rows: list[dict[str, Any]]) -> str:
 def _ticket_section(tickets: list[dict[str, Any]]) -> str:
     parts = ["## Repair tickets", ""]
     parts.append(
-        "Each ticket is an open local runtime gap found while building the matrix. None "
-        "was fixed here; a fix is separate work with its own review."
+        "Each ticket was an open local runtime gap when the matrix was first built. "
+        "None was fixed by the work that renders this page; a ticket marked FIXED or "
+        "PARTIALLY_FIXED cites the commit that changed the runtime, and its summary and "
+        "reproduction are kept as the historical statement of the gap."
     )
     for ticket in tickets:
         citations = " ".join(f"`{c}`" for c in ticket["citations"])
@@ -209,6 +212,10 @@ def _ticket_section(tickets: list[dict[str, Any]]) -> str:
                 ),
             ]
         )
+        if ticket["fixedAt"] is not None:
+            parts.extend(
+                ["", f"Resolution (`{ticket['fixedAt'][:9]}`): {ticket['resolution']}"]
+            )
     return "\n".join(parts)
 
 

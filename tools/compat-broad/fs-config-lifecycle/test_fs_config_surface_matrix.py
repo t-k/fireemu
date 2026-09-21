@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 from fs_config_lifecycle.surface_matrix import (
@@ -190,14 +191,31 @@ def test_the_matrix_claims_no_production_observation() -> None:
     }
 
 
-def test_repair_tickets_are_reproducible_and_never_presented_as_fixes() -> None:
+def test_repair_tickets_are_reproducible_and_a_fixed_one_cites_its_commit() -> None:
     matrix = build_matrix()
     assert matrix["repairTickets"]
+    states = {ticket["id"]: ticket["status"] for ticket in matrix["repairTickets"]}
+    assert states == {
+        "FS-CONFIG-RT-001": "FIXED",
+        "FS-CONFIG-RT-002": "PARTIALLY_FIXED",
+        "FS-CONFIG-RT-003": "FIXED",
+        "FS-CONFIG-RT-004": "OPEN",
+        "FS-CONFIG-RT-005": "OPEN",
+    }
+    assert matrix["summary"]["openRepairTickets"] == 2
     for ticket in matrix["repairTickets"]:
         assert ticket["id"].startswith("FS-CONFIG-RT-")
         assert ticket["reproduction"]
-        assert ticket["status"] == "OPEN"
-        assert ticket["fixApplied"] is False
+        if ticket["status"] == "OPEN":
+            assert ticket["fixApplied"] is False
+            assert ticket["fixedAt"] is None and ticket["resolution"] is None
+        else:
+            assert re.fullmatch(r"[0-9a-f]{40}", ticket["fixedAt"])
+            assert ticket["resolution"]
+            assert ticket["fixApplied"] is (ticket["status"] == "FIXED")
+            subprocess.check_call(
+                ["git", "-C", str(repo_root()), "cat-file", "-e", ticket["fixedAt"]]
+            )
         for citation in ticket["citations"]:
             path_text, _, line_text = citation.rpartition(":")
             assert (repo_root() / Path(path_text)).is_file(), citation

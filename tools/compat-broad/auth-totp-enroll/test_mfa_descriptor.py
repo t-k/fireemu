@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -26,9 +27,9 @@ from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, REQUIRED_MEMBERS, CampaignDesc
 import mfa_admission as admission
 import mfa_descriptor as campaign
 import mfa_production_transport as transport
-from mfa_cases import CASE_IDS, critical_path_seconds, owned_accounts
+from mfa_cases import CAMPAIGN_ID, CASE_IDS, critical_path_seconds, owned_accounts
 from mfa_manifest import LIMITS, compile_campaign
-from mfa_provenance import BOUND_PATHS
+from mfa_provenance import BOUND_PATHS, compute_provenance, repository_root
 from mfa_timing import VirtualClockSleeper, WallClockSleeper
 
 NONCE = "d" * 32
@@ -250,6 +251,119 @@ def test_an_injected_transport_that_reaches_the_production_wire_is_refused():
 
     with pytest.raises(ValueError, match="must not reach the production wire"):
         reject_production_transport(descriptor, through_the_adapter)
+
+
+def _runtime_receipt(side: str, runtime: dict[str, str]) -> dict:
+    campaign_manifest = compile_campaign(NONCE)
+    return {
+        "campaignId": CAMPAIGN_ID,
+        "campaign": campaign_manifest,
+        "side": side,
+        "recordingComplete": True,
+        "productionExecuted": side == "production",
+        "provenance": compute_provenance(repository_root()),
+        "worktree": {
+            "commit": runtime["executionCommit"],
+            "clean": True,
+            "resolved": True,
+        },
+        "runtimeIdentity": dict(runtime),
+        "rows": [
+            {"id": identifier, "status": 200, "errorCode": None, "outcome": "observed"}
+            for identifier in CASE_IDS
+        ],
+        "recovery": {
+            "cleanupVerified": True,
+            "remainingOwnedResources": 0,
+            "configurationRestored": True,
+            "runId": runtime["runId"],
+        },
+    }
+
+
+def _approved(record: dict) -> dict:
+    record["ownerApproval"] = {
+        "approvedBy": "project owner",
+        "manifestDigest": digest(record["campaign"]),
+        "nonceDigest": record["campaign"]["owner"]["nonceDigest"],
+        "grant": "one-run",
+    }
+    return record
+
+
+def test_descriptor_comparator_forwards_independently_constructed_runtime_anchor(
+    tmp_path: Path,
+):
+    binary = tmp_path / "fireemu"
+    config = tmp_path / "config.json"
+    binary.write_bytes(b"retained executable bytes")
+    config.write_bytes(b"exact local configuration bytes")
+    runtime = {
+        "artifactSha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+        "executionCommit": "b" * 40,
+        "configurationDigest": hashlib.sha256(config.read_bytes()).hexdigest(),
+        "runId": "run-1",
+    }
+    local = _runtime_receipt("local", runtime)
+    production = _approved(_runtime_receipt("production", runtime))
+
+    verdict = campaign.comparator(
+        production,
+        shadow=local,
+        root=repository_root(),
+        runtime_anchor=dict(runtime),
+    )
+
+    assert verdict["comparison"]["classification"] == "MATCH"
+    assert "runtimeProblems" not in verdict["comparison"]
+    assert verdict["formalCompatibilityClaim"] is False
+
+
+def test_descriptor_comparator_rejects_a_mismatched_runtime_anchor(tmp_path: Path):
+    binary = tmp_path / "fireemu"
+    config = tmp_path / "config.json"
+    binary.write_bytes(b"retained executable bytes")
+    config.write_bytes(b"exact local configuration bytes")
+    runtime = {
+        "artifactSha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+        "executionCommit": "b" * 40,
+        "configurationDigest": hashlib.sha256(config.read_bytes()).hexdigest(),
+        "runId": "run-1",
+    }
+    local = _runtime_receipt("local", runtime)
+    production = _approved(_runtime_receipt("production", runtime))
+    wrong = dict(runtime, runId="run-2")
+
+    verdict = campaign.comparator(
+        production,
+        shadow=local,
+        root=repository_root(),
+        runtime_anchor=wrong,
+    )
+
+    assert verdict["comparison"]["classification"] == "INDETERMINATE"
+    assert verdict["comparison"]["runtimeProblems"] == [
+        "local runtime identity differs from independent anchor"
+    ]
+
+
+def test_descriptor_comparator_keeps_downgraded_final_record_fail_closed():
+    runtime = {
+        "artifactSha256": "a" * 64,
+        "executionCommit": "b" * 40,
+        "configurationDigest": "c" * 64,
+        "runId": "run-1",
+    }
+    local = _runtime_receipt("local", runtime)
+    production = _approved(_runtime_receipt("production", runtime))
+    local.pop("runtimeIdentity")
+    local["recovery"].pop("runId")
+    local["productionExecuted"] = True
+    local["ownerApproval"] = production["ownerApproval"]
+
+    verdict = campaign.comparator(production, shadow=local, root=repository_root())
+
+    assert verdict["comparison"]["classification"] == "INDETERMINATE"
 
 
 def test_closed_calls_are_allowlisted_by_endpoint():

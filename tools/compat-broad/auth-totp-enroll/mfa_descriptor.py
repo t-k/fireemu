@@ -407,14 +407,19 @@ def collector(session, plan, output, *, sleeper, resume=False, stop_requested=No
     )
 
 
-def comparator(production_record, shadow=None, root=None):
+def comparator(production_record, shadow=None, root=None, *, runtime_anchor=None):
     """Compare a production record with the published versioned shadow.
 
     The comparator establishes agreement under the lane's projection, never a
     compatibility claim; that remains an owner decision on the evidence.
     """
     published = shadow_record() if shadow is None else shadow
-    result = compare(published, production_record, root)
+    result = compare(
+        published,
+        production_record,
+        root,
+        runtime_anchor=runtime_anchor,
+    )
     return {
         "campaignId": CAMPAIGN,
         "comparison": result,

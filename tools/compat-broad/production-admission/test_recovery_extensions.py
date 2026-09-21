@@ -1,10 +1,10 @@
 """Read-only evidence and recovery-allocation contract tests."""
 
-import os
-import multiprocessing
 import json
-import time
+import multiprocessing
+import os
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,16 +13,15 @@ import pytest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "fs-request-bytes-boundary"))
-import reservations
-from broad_contract import digest
-from shared_gate import Gate
-from shared_gate import _save
-from shared_gate import create as create_gate
-import request_bytes_compiler
 import request_bytes_admission
+import request_bytes_compiler
 import request_bytes_descriptor
 import request_bytes_production
 import request_bytes_recovery_campaign
+import reservations
+from broad_contract import digest
+from shared_gate import Gate, _save
+from shared_gate import create as create_gate
 from test_request_bytes_admission import Admission
 
 ACTUAL_INPUTS = None

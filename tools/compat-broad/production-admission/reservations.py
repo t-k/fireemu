@@ -1108,7 +1108,8 @@ class Ledger:
         A later issuer must bind its capability to the returned child ticket.
         """
         if not isinstance(canonical_parent_inputs, dict) or not isinstance(parent_permission, dict):
-            raise ValueError("canonical parent producer inputs and permission required")
+            # The public admission API reports all malformed producer bindings as ValueError.
+            raise ValueError("canonical parent producer inputs and permission required")  # noqa: TRY004
         try:
             lane = Path(__file__).resolve().parent.parent / "fs-request-bytes-boundary"
             sys.path.insert(0, str(lane))

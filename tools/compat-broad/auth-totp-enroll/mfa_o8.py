@@ -12,6 +12,12 @@ run started and did not complete: the reservation is still held, a receipt was
 written, and `--resume` or `--abandon` is the next step. Exit 2 means admission or
 the hosting check refused before anything was reserved or read.
 
+`--resume` is admitted only while the original reservation still holds the critical
+path that is left plus the recovery reserve. `--abandon` is recovery only: it does
+not consult the reservation deadline or the hosting check, restores the
+configuration and deletes the owned accounts, and needs an approval whose window is
+still open (the owner re-mints one for a recovery after the original expired).
+
     mfa_o8.py --inputs ... --approval ... --manifest ... --permission ...
               --source <frozen checkout> --artifact <retained fireemu>
               --ledger <shared root> --output <fresh private dir>
@@ -175,7 +181,12 @@ def execute(args: argparse.Namespace) -> dict:
         gate_plan=gate_plan,
         descriptor_=descriptor,
     )
-    admission.require_hosted(claim, gate_plan)
+    if not args.abandon:
+        admission.require_hosted(claim, gate_plan)
+    # An abandon reserves nothing and hosts nothing new: it restores the project
+    # configuration and deletes what the run owns under the recovery reserve, so the
+    # hosting check and the reservation deadline are not consulted. What it still
+    # needs is this approval's window, which the owner re-mints for a late recovery.
     binding, binding_digest = campaign.worker_binding()
     capability = admission.issue_production_capability(
         descriptor,

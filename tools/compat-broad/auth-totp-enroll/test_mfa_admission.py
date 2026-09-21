@@ -298,6 +298,34 @@ def test_a_receipt_with_a_sensitive_field_name_is_refused():
         admission.screen_receipt({"nested": {"sharedSecretKey": None}})
 
 
+def _configuration(status, *, attempted=True):
+    """A complete lock evidence record in one restore status."""
+    verified = status in ("restored-verified", "restored-verified-normalized")
+    return {
+        "frozenBaselineDigest": "a" * 64,
+        "preflightReadbackDigest": "a" * 64,
+        "baselineReference": {
+            "sha256": "a" * 64,
+            "bytes": 1,
+            "topLevelFields": [],
+            "valuesRetained": False,
+        },
+        "changeAttempted": attempted,
+        "appliedReadbackDigest": "b" * 64 if attempted else None,
+        "applied": attempted,
+        "restoreAttempts": 1 if attempted else 0,
+        "restoreReadbackDigest": (
+            "a" * 64 if status == "restored-verified" else "c" * 64
+        )
+        if verified
+        else None,
+        "restoreStatus": status,
+        "restoreDifferingFields": []
+        if status == "restored-verified"
+        else (["signIn"] if verified else None),
+    }
+
+
 @pytest.mark.parametrize(
     ("receipt", "disposition"),
     [
@@ -312,7 +340,7 @@ def test_a_receipt_with_a_sensitive_field_name_is_refused():
         (
             {
                 "stopPoint": "preflight-config-readback",
-                "configuration": {"changeAttempted": False},
+                "configuration": _configuration("not-attempted", attempted=False),
                 "cleanup": {"ownedAccounts": 0},
             },
             "aborted-no-data",
@@ -320,15 +348,25 @@ def test_a_receipt_with_a_sensitive_field_name_is_refused():
         (
             {
                 "stopPoint": "preflight-config-readback",
-                "configuration": {"changeAttempted": True},
+                "configuration": _configuration("restored-verified"),
                 "cleanup": {},
+            },
+            "owner-escalation",
+        ),
+        # A resumed run can never be no-data: an earlier process owned accounts.
+        (
+            {
+                "stopPoint": "preflight-tokeninfo",
+                "configuration": None,
+                "cleanup": {"ownedAccounts": 8, "complete": False},
+                "resumeCount": 1,
             },
             "owner-escalation",
         ),
         (
             {
                 "stopPoint": "cases",
-                "configuration": {"restoreStatus": "restored-verified"},
+                "configuration": _configuration("restored-verified"),
                 "cleanup": {"complete": True},
             },
             "abandoned-cleanup-complete",
@@ -336,15 +374,27 @@ def test_a_receipt_with_a_sensitive_field_name_is_refused():
         (
             {
                 "stopPoint": "cases",
-                "configuration": {"restoreStatus": "restored-verified-normalized"},
+                "configuration": _configuration("restored-verified-normalized"),
                 "cleanup": {"complete": True},
             },
             "abandoned-cleanup-complete",
         ),
+        # A verified status alone is not enough: the evidence has to validate.
+        (
+            {
+                "stopPoint": "cases",
+                "configuration": {
+                    **_configuration("restored-verified"),
+                    "restoreReadbackDigest": "d" * 64,
+                },
+                "cleanup": {"complete": True},
+            },
+            "owner-escalation",
+        ),
         (
             {
                 "stopPoint": "cleanup",
-                "configuration": {"restoreStatus": "restored-verified"},
+                "configuration": _configuration("restored-verified"),
                 "cleanup": {"complete": False},
             },
             "owner-escalation",
@@ -352,7 +402,7 @@ def test_a_receipt_with_a_sensitive_field_name_is_refused():
         (
             {
                 "stopPoint": "restore",
-                "configuration": {"restoreStatus": "restore-failed"},
+                "configuration": _configuration("restore-failed"),
                 "cleanup": {"complete": True},
             },
             "owner-escalation",

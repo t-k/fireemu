@@ -338,3 +338,264 @@ def test_the_receipt_and_the_run_directory_carry_no_secret_shaped_value(complete
     # The private material file does hold secrets, by design, and is mode 0600.
     assert (built.output / MATERIAL_FILE).stat().st_mode & 0o077 == 0
     del result
+
+
+# --- review follow-ups: honest receipts on every resume and abandon path -----------
+
+
+def _stop_after(built, done_cases):
+    checkpoint = built.output / CHECKPOINT_FILE
+
+    def stop_requested():
+        if not checkpoint.exists():
+            return False
+        state = json.loads(checkpoint.read_bytes())["state"]
+        return sum(step["status"] != "pending" for step in state["steps"]) >= done_cases
+
+    return stop_requested
+
+
+@pytest.mark.parametrize("outage", ["oauth-tokeninfo", "lock-record"])
+def test_a_resume_that_fails_before_acting_still_owns_the_earlier_accounts(
+    tmp_path, outage
+):
+    built = RehearsalAdmission(tmp_path)
+    first = built.run(stop_requested=_stop_after(built, 4))
+    assert first["resumable"] is True
+    live = len(built.fake.accounts)
+    assert live == first["cleanup"]["ownedAccounts"] > 0
+    if outage == "lock-record":
+        # The lock record an earlier process wrote is unreadable: no request may
+        # be made on its behalf, and the receipt still says what is owned.
+        (built.output / LOCK_FILE).write_text("{}")
+
+    def fault(kind, path, count, fake):
+        if outage == "oauth-tokeninfo" and kind == "oauth-tokeninfo":
+            raise ValueError("injected tokeninfo outage")
+
+    second = built.run(resume=True, fault=fault)
+    assert second["failure"] in ("ValueError", "ConfigLockError")
+    assert second["resumable"] is False
+    cleanup = second["cleanup"]
+    assert cleanup["ownedAccounts"] == live
+    assert cleanup["attempted"] is False and cleanup["complete"] is False
+    assert len(built.fake.accounts) == live
+    verdict = admission.classify_stop(second)
+    assert verdict["disposition"] == "owner-escalation"
+    assert verdict["retirableAsNoData"] is False
+    assert second["resumeCount"] == 1
+
+
+def test_an_abandon_does_not_consult_the_reservation_deadline_but_a_resume_does(
+    tmp_path,
+):
+    built = RehearsalAdmission(tmp_path)
+    first = built.run(stop_requested=_stop_after(built, 4))
+    assert first["resumable"] is True
+    # A ticket the temporary Ledger does not know stands in for a reservation whose
+    # deadline has passed: `Ledger.validate` refuses it, so a resume is refused
+    # before anything is read, while an abandon never asks.
+    run_state = json.loads((built.output / "run-state.json").read_bytes())
+    run_state["ticket"] = {
+        "ledgerPath": str(built.ledger.resolve()),
+        "ledgerIdentity": "0" * 64,
+        "reservation": "0" * 64,
+        "claimDigest": "0" * 64,
+        "envelopeDigest": "0" * 64,
+    }
+    (built.output / "run-state.json").write_text(json.dumps(run_state))
+    with pytest.raises(ValueError, match="exact shared reservation ticket required"):
+        built.run(resume=True)
+    assert built.fake.accounts
+    abandoned = built.run(abandon=True)
+    assert abandoned["failure"] == "StopRequested"
+    assert abandoned["cleanup"]["complete"] is True
+    assert built.fake.accounts == {}
+    assert abandoned["configuration"]["restoreStatus"] in (
+        "restored-verified",
+        "restored-verified-normalized",
+    )
+    assert not applied(built.fake.config)
+    assert abandoned["abandonCount"] == 1
+    assert (
+        admission.classify_stop(abandoned)["disposition"]
+        == "abandoned-cleanup-complete"
+    )
+
+
+def test_remaining_seconds_covers_the_critical_path_left_and_the_recovery_reserve():
+    from mfa_production import remaining_seconds
+
+    manifest = {"limits": {"criticalPathSeconds": 1830}}
+    fresh = {"pendingDueAt": []}
+    assert (
+        remaining_seconds(fresh, 0.0, manifest=manifest, recovery=300) == 1830 + 300 + 1
+    )
+    paused = {"pendingDueAt": [1000.0, 1500.0]}
+    assert (
+        remaining_seconds(paused, 1000.0, manifest=manifest, recovery=300)
+        == 500 + 30 + 300 + 1
+    )
+    late = {"pendingDueAt": [1000.0]}
+    assert (
+        remaining_seconds(late, 5000.0, manifest=manifest, recovery=300) == 30 + 300 + 1
+    )
+
+
+def _dead_during_apply(tmp_path, *, after_readback):
+    """The on-disk state of a process that died during the configuration change."""
+    import mfa_gate
+    import mfa_production
+    from conftest_rehearsal import FakeSession
+    from mfa_config_lock import ConfigLock
+
+    built = RehearsalAdmission(tmp_path)
+    inputs, permission = built.inputs, built.permission
+    gate_plan = admission.gate_plan_for(inputs, permission, built.descriptor)
+    generation = admission.abort_generation(inputs, built.descriptor)
+    gate_plan.update(
+        permissionDigest=admission.digest(permission),
+        collectorSourceDigest=generation["collectorSourceDigest"],
+    )
+    output = built.output
+    output.mkdir(mode=0o700)
+    mfa_production._write_immutable(output / "inputs.json", inputs)
+    mfa_production._write_private(
+        output / "run-state.json",
+        {
+            "inputsDigest": inputs["inputsDigest"],
+            "ticket": None,
+            "reservationRefusal": "canonical Firestore resource required",
+            "claimDigest": "0" * 64,
+            "gatePlanDigest": admission.digest(gate_plan),
+            "resumeCount": 0,
+            "receipts": [],
+        },
+    )
+    mfa_gate.create(output / "gate", gate_plan)
+    gate = mfa_gate.MfaGate(output / "gate")
+    gate.claim()
+    session = mfa_production.GateSession(FakeSession(built.fake), gate)
+    session.tokeninfo(
+        lambda body: {
+            "kind": "request-byte-token-attestation-v1",
+            "principalDigest": "a" * 64,
+            "requiredScopeVerified": True,
+            "identityMode": "subject",
+            "identityVerified": True,
+            "oauthClientVerified": True,
+            "expiresInSeconds": 3599,
+            "remainingSecondsAtVerification": 3599.0,
+            "requiredSeconds": 240.0,
+            "complete": True,
+            "workerReaped": True,
+        }
+    )
+    lock = ConfigLock(
+        output,
+        read=session.read_config,
+        patch=session.patch_config,
+        frozen_baseline_digest=permission["authConfigBaselineDigest"],
+    )
+    lock.preflight()
+    if after_readback:
+        lock.apply()
+    else:
+        lock.record["changeAttempted"] = True
+        lock.save()
+        session.patch_config(
+            __import__("mfa_config_lock").campaign_patch(),
+            "mfa,signIn.phoneNumber,smsRegionConfig",
+        )
+    assert applied(built.fake.config)
+    assert not (output / CHECKPOINT_FILE).exists()
+    return built
+
+
+def test_an_abandon_after_a_death_between_apply_and_readback_restores_and_receipts(
+    tmp_path,
+):
+    built = _dead_during_apply(tmp_path, after_readback=True)
+    result = built.run(abandon=True)
+    assert result["failure"] == "StopRequested"
+    assert result["stopPoint"] == "cleanup"
+    assert result["cleanup"] == {
+        "ownedAccounts": 0,
+        "deleted": 0,
+        "absent": 0,
+        "complete": True,
+        "attempted": True,
+    }
+    assert result["configuration"]["restoreStatus"] in (
+        "restored-verified",
+        "restored-verified-normalized",
+    )
+    assert not applied(built.fake.config)
+    assert (built.output / "receipt.json").is_file()
+
+
+def test_an_abandon_after_a_death_before_the_apply_readback_is_receipted_not_raised(
+    tmp_path,
+):
+    built = _dead_during_apply(tmp_path, after_readback=False)
+    result = built.run(abandon=True)
+    # The Gate admits its management slots once and in order: the apply readback
+    # was never taken, so the restore slot behind it cannot be charged. The run
+    # says so instead of raising, and the owner restores by hand.
+    assert result["failure"] == "StopRequested"
+    assert result["configuration"]["restoreStatus"] == "restore-failed"
+    assert applied(built.fake.config)
+    assert (built.output / "receipt.json").is_file()
+    assert admission.classify_stop(result)["disposition"] == "owner-escalation"
+
+
+def test_production_execution_refuses_a_virtual_clock_directly(tmp_path):
+    from mfa_production import execute
+
+    built = RehearsalAdmission(tmp_path)
+    with pytest.raises(ValueError, match="wall-clock timing"):
+        execute(
+            capability=built.capability(),
+            inputs=built.inputs,
+            permission=built.permission,
+            credential_reader=built.credentials,
+            ledger_root=built.ledger,
+            output=built.output,
+            sleeper=built.sleeper,
+            descriptor_=built.descriptor,
+            source_root=built.source,
+            session_factory=None,
+        )
+
+
+def test_a_stop_requested_during_a_wait_is_honoured_before_the_next_case(tmp_path):
+    built = RehearsalAdmission(tmp_path)
+    # Ask to stop as soon as the baseline row is recorded: the next step is a wait
+    # for the 300 s rows, and the wait's tick is where the stop is honoured.
+    first = built.run(stop_requested=_stop_after(built, 1))
+    assert first["resumable"] is True
+    state = json.loads((built.output / CHECKPOINT_FILE).read_bytes())["state"]
+    steps = {step["id"]: step for step in state["steps"]}
+    assert steps["baseline-fresh-finalize"]["status"] == "done"
+    assert steps["age-300s-start"]["status"] == "pending"
+    assert steps["age-300s-start"]["dueAt"] is not None
+    second = built.run(resume=True)
+    assert second["failure"] is None and second["gateComplete"] is True
+
+
+def test_rows_carry_the_observed_age_anchored_to_each_resource(completed):
+    _built, result = completed
+    rows = _rows(result)
+    for age in (300, 450, 600, 1800):
+        row = rows[f"age-{age}s-start"]
+        assert row["pendingAgeSeconds"] == float(age)
+        # Under the virtual clock nothing elapses between acquisitions, so the
+        # observed age is exactly the target plus the sampling margin.
+        assert row["observedAgeSeconds"] == float(age) + 1.0
+        assert (
+            rows[f"age-{age}s-same-account-fresh-control"]["observedAgeSeconds"] == 0.0
+        )
+    for age in (300, 450, 600):
+        row = rows[f"totp-enroll-session-age-{age}s"]
+        assert row["sessionAgeSeconds"] == float(age)
+        assert row["observedAgeSeconds"] == float(age) + 1.0

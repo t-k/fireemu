@@ -49,7 +49,7 @@ from o8_admission import (
 import mfa_descriptor as campaign
 import mfa_gate
 from mfa_collector import assert_no_sensitive_material
-from mfa_config_lock import VERIFIED_RESTORE_STATUSES
+from mfa_config_lock import validate_evidence
 from mfa_timing import WALL_CLOCK
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
@@ -454,6 +454,7 @@ CONFIG_CHANGED_STOP_POINTS = (
     "cases",
     "cleanup",
     "restore",
+    "resume-prior-state",
 )
 
 
@@ -477,7 +478,8 @@ def classify_stop(receipt) -> dict:
     stop = receipt.get("stopPoint")
     configuration = receipt.get("configuration") or {}
     cleanup = receipt.get("cleanup") or {}
-    if stop in NO_DATA_STOP_POINTS:
+    resumed = bool(receipt.get("resumeCount") or receipt.get("abandonCount"))
+    if stop in NO_DATA_STOP_POINTS and not resumed:
         if configuration.get("changeAttempted") or cleanup.get("ownedAccounts"):
             return {
                 "stopPoint": stop,
@@ -491,9 +493,21 @@ def classify_stop(receipt) -> dict:
             "retirableAsNoData": True,
             "reason": "no configuration change and no signup was dispatched",
         }
-    if stop not in CONFIG_CHANGED_STOP_POINTS and stop is not None:
+    if (
+        stop not in CONFIG_CHANGED_STOP_POINTS
+        and stop not in NO_DATA_STOP_POINTS
+        and stop is not None
+    ):
         raise ValueError("unknown MFA stop point")
-    restored = configuration.get("restoreStatus") in VERIFIED_RESTORE_STATUSES
+    baseline = configuration.get("frozenBaselineDigest")
+    restored = (
+        isinstance(baseline, str)
+        and validate_evidence(configuration, frozen_baseline_digest=baseline)
+        and (
+            configuration.get("changeAttempted") is True
+            or configuration.get("restoreStatus") == "not-attempted"
+        )
+    )
     absent = cleanup.get("complete") is True
     if restored and absent:
         return {

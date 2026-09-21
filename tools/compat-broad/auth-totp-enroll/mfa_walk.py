@@ -163,6 +163,7 @@ class MaterialStore:
             "startSessions": {},
             "totp": {},
             "origin": None,
+            "acquiredAt": {},
         }
 
     @classmethod
@@ -471,10 +472,17 @@ class Walk:
 
     # -- acquisition ---------------------------------------------------------------
     def _ensure_acquired(self) -> None:
-        """Acquire every aged resource at one common origin, exactly once."""
+        """Acquire every aged resource at one common origin, exactly once.
+
+        Each resource records the instant it was acquired, and each aged row is
+        scheduled from its own resource's instant plus its age: the resources are
+        acquired one after another, so a row anchored to a common origin would
+        sample every resource but the last one late by the acquisition tail.
+        """
         material = self.material.value
         if material["origin"] is not None:
             return
+        acquired = material["acquiredAt"]
         self._account("pending-control")
         for age in AGED_PENDING_SAMPLES:
             key = str(age)
@@ -482,6 +490,7 @@ class Walk:
                 material["pendings"][key] = self._phone_pending(
                     self._account(f"pending-age-{age}")
                 )
+                acquired[f"pending-{key}"] = self.sleeper.now()
                 self.material.save()
         for age in SAMPLED_AGES_SECONDS:
             key = str(age)
@@ -489,21 +498,36 @@ class Walk:
                 material["sessions"][key] = self._enroll_totp(
                     self._account(f"enrollment-age-{age}")
                 )
+                acquired[f"session-{key}"] = self.sleeper.now()
                 self.material.save()
         material["origin"] = self.sleeper.now()
         self.material.save()
-        # Every aged row becomes due at the origin plus its own age. Recording the
-        # schedule in the collector makes the checkpoint self-describing: a resumed
-        # process waits for the recorded instant, not for an instant it recomputes.
+        # Recording the schedule in the collector makes the checkpoint
+        # self-describing: a resumed process waits for the recorded instant, not
+        # for an instant it recomputes.
         for case in observation_cases():
             offset = case["dueOffsetSeconds"]
-            if offset:
-                step = next(s for s in self.state["steps"] if s["id"] == case["id"])
-                if step["dueAt"] is None:
-                    step["dueAt"] = (
-                        material["origin"] + offset + AGE_SAMPLE_MARGIN_SECONDS
-                    )
+            if not offset:
+                continue
+            step = next(s for s in self.state["steps"] if s["id"] == case["id"])
+            if step["dueAt"] is None:
+                step["dueAt"] = (
+                    acquired[self._resource_key(case)]
+                    + offset
+                    + AGE_SAMPLE_MARGIN_SECONDS
+                )
         self._save_checkpoint()
+
+    @staticmethod
+    def _resource_key(case: dict) -> str:
+        """The aged resource a case samples: the enrollment session or the pending."""
+        if case["id"].startswith("totp-enroll-session-age-"):
+            return f"session-{case['ageSeconds']}"
+        return f"pending-{case['dueOffsetSeconds']}"
+
+    def _observed_age(self, key: str) -> float:
+        """How old the resource actually is at this instant, in seconds."""
+        return float(self.sleeper.now() - self.material.value["acquiredAt"][key])
 
     # -- the cases -----------------------------------------------------------------
     def _run_case(self, case: dict) -> None:
@@ -528,7 +552,13 @@ class Walk:
                 )
                 material["startSessions"][f"{age}-status"] = [status, code]
                 self.material.save()
-                self._finish(case_id, status, code, pendingAgeSeconds=float(age))
+                self._finish(
+                    case_id,
+                    status,
+                    code,
+                    pendingAgeSeconds=float(age),
+                    observedAgeSeconds=self._observed_age(f"pending-{age}"),
+                )
                 return
             if case_id.endswith("-finalize"):
                 start_status, start_code = material["startSessions"][f"{age}-status"]
@@ -549,12 +579,26 @@ class Walk:
                         },
                     },
                 )
-                self._finish(case_id, status, code, pendingAgeSeconds=float(age))
+                self._finish(
+                    case_id,
+                    status,
+                    code,
+                    pendingAgeSeconds=float(age),
+                    observedAgeSeconds=self._observed_age(f"pending-{age}"),
+                )
                 return
             if case_id.endswith("-same-account-fresh-control"):
                 account = self._account(f"pending-age-{age}")
-                status, _, code = self._complete_phone_mfa(self._fresh_pending(account))
-                self._finish(case_id, status, code, pendingAgeSeconds=0.0)
+                fresh = self._fresh_pending(account)
+                acquired = self.sleeper.now()
+                status, _, code = self._complete_phone_mfa(fresh)
+                self._finish(
+                    case_id,
+                    status,
+                    code,
+                    pendingAgeSeconds=0.0,
+                    observedAgeSeconds=float(self.sleeper.now() - acquired),
+                )
                 return
         if case_id.startswith("totp-enroll-session-age-"):
             age = int(case_id.rsplit("-", 1)[1].rstrip("s"))
@@ -575,7 +619,13 @@ class Walk:
                     "displayName": "aged totp",
                 },
             )
-            self._finish(case_id, status, code, sessionAgeSeconds=float(age))
+            self._finish(
+                case_id,
+                status,
+                code,
+                sessionAgeSeconds=float(age),
+                observedAgeSeconds=self._observed_age(f"session-{age}"),
+            )
             return
         if case_id.startswith("totp-") or case_id == "second-factor-limit":
             self._totp_case(case_id)
@@ -779,7 +829,12 @@ class Walk:
             self._check_stop()
             action = next_action(self.state, self.sleeper.now())
             if action["action"] == "WAIT":
-                self.sleeper.sleep_until(action["dueAt"], on_tick=lambda _now: None)
+                # The wait is interruptible: a stop requested during it is honoured
+                # at the next slice, and the checkpoint already holds the absolute
+                # due instant a resumed process waits for.
+                self.sleeper.sleep_until(
+                    action["dueAt"], on_tick=lambda _now: self._check_stop()
+                )
                 continue
             if action["action"] != "RUN":
                 return self.state

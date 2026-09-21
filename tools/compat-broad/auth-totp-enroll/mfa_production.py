@@ -31,6 +31,7 @@ import mfa_admission as admission
 import mfa_descriptor as campaign
 import mfa_gate
 import mfa_production_transport as transport
+from mfa_cases import TOTP_STEP_ROLLOVER_SECONDS
 from mfa_config_lock import VERIFIED_RESTORE_STATUSES, ConfigLock, ConfigLockError
 from mfa_provenance import compute_provenance, describe_worktree
 from mfa_timing import timing_mode
@@ -141,12 +142,17 @@ class GateSession:
     def sms_code(self) -> str:
         return self.inner.sms_code()
 
-    def _management(self, expected_kind: str, call):
-        """Charge the next closed management slot and run `call` inside it."""
+    def _management(self, expected: tuple[str, ...], call):
+        """Charge the next closed management slot and run `call` inside it.
+
+        The next declared slot must be exactly one of `expected`; a call that does
+        not match is refused before anything is sent, so a slot is never spent on
+        a request of another kind.
+        """
         if not self._management_pending():
             raise ValueError("management slot out of order: none remain")
         phase, slot_id = self._management_pending()[0]
-        if expected_kind not in slot_id:
+        if slot_id not in expected:
             raise ValueError(f"management slot out of order: next is {slot_id}")
         outcome: dict = {}
 
@@ -224,15 +230,85 @@ class GateSession:
 
     def read_config(self):
         return self._management(
-            "readback", lambda deadline: self.inner.read_config(deadline=deadline)
+            (
+                "auth-config-readback",
+                "auth-config-apply-readback",
+                "auth-config-restore-readback",
+            ),
+            lambda deadline: self.inner.read_config(deadline=deadline),
         )
 
     def patch_config(self, body, mask):
-        kind = "restore" if self.phase == "recovery" else "apply"
+        slot = (
+            "auth-config-restore" if self.phase == "recovery" else "auth-config-apply"
+        )
         return self._management(
-            kind,
+            (slot,),
             lambda deadline: self.inner.patch_config(body, mask, deadline=deadline),
         )
+
+
+def prior_state(output: Path, manifest: dict) -> dict:
+    """What an earlier process of this run left behind, read before any request.
+
+    Private files only: the collector checkpoint (owned accounts), the material
+    store and the lock record. A resumed or abandoned run reports these even when
+    it fails before it can act on them, so a receipt can never claim that nothing
+    is owned while the previous process's accounts are alive.
+    """
+    from mfa_collector import load_checkpoint
+    from mfa_config_lock import LOCK_FILE
+    from mfa_walk import CHECKPOINT_FILE, MATERIAL_FILE, _private_read
+
+    output = Path(output)
+    prior = {
+        "checkpoint": False,
+        "material": (output / MATERIAL_FILE).is_file(),
+        "lock": None,
+        "ownedAccounts": 0,
+        "outstandingAccounts": 0,
+        "pendingDueAt": [],
+    }
+    checkpoint = output / CHECKPOINT_FILE
+    if checkpoint.is_file():
+        state = load_checkpoint(_private_read(checkpoint), plan=manifest)
+        owned = [r for r in state["ownedResources"] if r["kind"] == "account"]
+        prior.update(
+            checkpoint=True,
+            ownedAccounts=len(owned),
+            outstandingAccounts=sum(
+                not (r["deleted"] and r["absenceVerified"]) for r in owned
+            ),
+            pendingDueAt=[
+                step["dueAt"]
+                for step in state["steps"]
+                if step["status"] == "pending" and step["dueAt"] is not None
+            ],
+        )
+    lock = output / LOCK_FILE
+    if lock.is_file():
+        prior["lock"] = _read_private(lock)
+    return prior
+
+
+def remaining_seconds(prior: dict, now: float, *, manifest: dict, recovery: int) -> int:
+    """What a resume still needs of its reservation: the critical path left plus recovery.
+
+    A run that has not scheduled its aged rows yet needs the whole critical path; one
+    that has needs the latest recorded due instant, the TOTP rollover behind it, and
+    the recovery reserve.
+    """
+    critical = manifest["limits"]["criticalPathSeconds"]
+    if prior["pendingDueAt"]:
+        critical = (
+            max(0.0, max(prior["pendingDueAt"]) - now) + TOTP_STEP_ROLLOVER_SECONDS
+        )
+    return int(critical) + int(recovery) + 1
+
+
+def _check(stop_requested) -> None:
+    if stop_requested is not None and stop_requested():
+        raise StopRequested("stop requested")
 
 
 def _validate_credentials(value) -> dict:
@@ -307,16 +383,37 @@ def execute(
     execution_kind = (
         PRODUCTION_EXECUTION if session_factory is None else INJECTED_EXECUTION
     )
+    prior = None
     if resume or abandon:
         run_state = _read_private(output / RUN_STATE_FILE)
         if run_state.get("inputsDigest") != inputs["inputsDigest"]:
             raise ValueError("run directory belongs to other frozen inputs")
         ticket = run_state["ticket"]
-        if ticket is not None:
-            ledger.validate(ticket, duration=13)
-        run_state["resumeCount"] += 1
-        if run_state["resumeCount"] > campaign.RESUME_ALLOWANCE:
-            raise ValueError("resume allowance exhausted")
+        # Read before any request: the accounts and the lock an earlier process
+        # left are what this run answers for, whether or not it gets to act.
+        prior = prior_state(output, manifest)
+        if resume:
+            if ticket is not None:
+                # A resume must still fit the reservation: the critical path that
+                # is left plus the recovery reserve, not a token thirteen seconds.
+                ledger.validate(
+                    ticket,
+                    duration=remaining_seconds(
+                        prior,
+                        sleeper.now(),
+                        manifest=manifest,
+                        recovery=descriptor_.recovery_seconds,
+                    ),
+                )
+            run_state["resumeCount"] += 1
+            if run_state["resumeCount"] > campaign.RESUME_ALLOWANCE:
+                raise ValueError("resume allowance exhausted")
+        else:
+            # Recovery only. The reservation deadline is not consulted: a run found
+            # dead after it must still be restored and cleaned, and the row keeps
+            # its allocation either way. The approval window is the owner's and is
+            # checked by the launcher; the owner re-mints it for a late recovery.
+            run_state["abandonCount"] = run_state.get("abandonCount", 0) + 1
     else:
         output.mkdir(mode=0o700, parents=True, exist_ok=False)
         _write_immutable(output / "inputs.json", inputs)
@@ -379,20 +476,52 @@ def execute(
             "frozen_baseline_digest": permission["authConfigBaselineDigest"],
         }
         if resume or abandon:
+            # The bearer is verified against the frozen principal again. The Gate's
+            # tokeninfo slot was spent by the first process and the shared Gate has
+            # no slot for a second one, so this call is counted by the session and
+            # recorded as not charged by the Gate.
+            stop_point = "preflight-tokeninfo"
+            status, body = inner.tokeninfo(deadline=time.monotonic() + 12.0)
+            if status != 200:
+                raise ValueError(f"tokeninfo answered {status}")
+            credential_evidence = transport.verify_tokeninfo(
+                body,
+                permission["credentialPrincipal"],
+                required_seconds=descriptor_.recovery_seconds
+                if abandon
+                else remaining_seconds(
+                    prior,
+                    sleeper.now(),
+                    manifest=manifest,
+                    recovery=descriptor_.recovery_seconds,
+                ),
+            )
+            session.management_receipts.append(
+                {
+                    "id": "resume:oauth-tokeninfo",
+                    "status": status,
+                    "chargedByGate": False,
+                }
+            )
             # The Gate's observation preflight was spent by the first process; the
             # configuration stays applied under the held lock across a pause, so a
             # resumed run continues from the lock record rather than re-reading.
-            lock = ConfigLock.resume(output, **lock_arguments)
-            session._consumed = len(mfa_gate.MANAGEMENT_OBSERVATION_IDS)
-            walk = descriptor_.collector(
-                session,
-                manifest,
-                output,
-                sleeper=sleeper,
-                resume=True,
-                stop_requested=stop_requested,
-            )
-            walk.reconcile_intents()
+            session._consumed = len(gate.snapshot()["managementUsed"])
+            stop_point = "resume-prior-state"
+            if prior["lock"] is not None:
+                lock = ConfigLock.resume(output, **lock_arguments)
+            if prior["checkpoint"]:
+                walk = descriptor_.collector(
+                    session,
+                    manifest,
+                    output,
+                    sleeper=sleeper,
+                    resume=True,
+                    stop_requested=stop_requested,
+                )
+                walk.reconcile_intents()
+            elif not abandon:
+                raise ValueError("no checkpoint to resume; abandon the run instead")
             if abandon:
                 stop_point = "cleanup"
                 raise StopRequested("abandon requested")
@@ -412,7 +541,10 @@ def execute(
             lock.preflight()
             stop_point = "config-apply"
             lock.apply()
-            sleeper.sleep_until(sleeper.now() + campaign.CONFIG_ENFORCEMENT_LAG_SECONDS)
+            sleeper.sleep_until(
+                sleeper.now() + campaign.CONFIG_ENFORCEMENT_LAG_SECONDS,
+                on_tick=lambda _now: _check(stop_requested),
+            )
             stop_point = "acquisition"
             walk = descriptor_.collector(
                 session,
@@ -436,6 +568,8 @@ def execute(
         TypeError,
     ) as error:
         failure = type(error).__name__
+    except Exception as error:  # noqa: BLE001 -- after the credential was read a receipt is always written; only the class is kept
+        failure = type(error).__name__
     finally:
         if stop_point == "cases" and walk is not None and failure is not None:
             stop_point = (
@@ -449,6 +583,21 @@ def execute(
             "complete": not resumable,
             "attempted": not resumable,
         }
+        if (
+            walk is None
+            and prior is not None
+            and (prior["checkpoint"] or prior["material"])
+        ):
+            # A resumed or abandoned run that could not act still owns what the
+            # earlier process created; nothing here was attempted or completed. A
+            # run that died before its walk wrote a checkpoint created nothing.
+            cleanup = {
+                "ownedAccounts": prior["ownedAccounts"],
+                "deleted": prior["ownedAccounts"] - prior["outstandingAccounts"],
+                "absent": prior["ownedAccounts"] - prior["outstandingAccounts"],
+                "complete": False,
+                "attempted": False,
+            }
         gate_complete = False
         gate_refusal = None
         if session is not None and not resumable:
@@ -464,8 +613,11 @@ def execute(
                 except ValueError as error:
                     gate_refusal = type(error).__name__
             session.phase = "recovery"
-            if walk is not None:
-                walk.cleanup()
+            try:
+                if walk is not None:
+                    walk.cleanup()
+            except Exception as error:  # noqa: BLE001 -- the restore behind cleanup must never be skipped
+                failure = failure or type(error).__name__
             try:
                 gate.drain_recovery()
             except ValueError as error:
@@ -543,6 +695,7 @@ def execute(
         chargedCalls=snapshot["total"],
         hostingRefusals=hosting,
         resumeCount=run_state["resumeCount"],
+        abandonCount=run_state.get("abandonCount", 0),
         wallElapsedSeconds=sleeper.now() - started_wall,
         wallBudgetSeconds=wall_seconds,
         reservationStateAtPublication="held" if ticket is not None else "unreserved",

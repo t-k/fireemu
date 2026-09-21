@@ -1,0 +1,9 @@
+Task: classify already-extracted test failure blocks by their likely cause and group duplicates.
+
+The excerpt is a parser-generated summary: each "## failure N" block has a "source:" line with the original log line range and, when captured, the assertion or panic message. For each failure block (or one finding per group of failures that share the same cause), the finding is:
+- "claim": a short cause statement, starting with the failure name(s). A cause is a candidate, not a verified root cause.
+- "category": one of "environment" (missing tool, binary, runtime or path on this machine), "missing-dependency" (a package or artifact the test expected), "assertion" (the code under test returned a different value), "timeout", "flaky-suspect" (ordering, ports, timing), "regression" (behavior changed by a code change), "unknown".
+- "path", "startLine", "endLine": the excerpt path and the lines of the failure block you are classifying.
+- "evidence": the quoted message line(s) that support the category.
+
+Report failures you could not classify in "unknowns" with their names.

@@ -13,7 +13,7 @@
   ],
   "collector": {
     "differenceFromLimits02": "Every mutating method is gated by the write-safety predicate, not PATCH alone, because this campaign sends writes over :batchWrite. The preflight prefix length is read from the plan. A row the campaign has declared it cannot predict locally is excused from the safety predicate, though its journal integrity is still checked. collector.py is byte-for-byte unchanged, so the frozen limits-02 collector source digest still resolves.",
-    "digest": "94e41aaff2441f5d3e32a64c6799297fca72e75543d31ac054e58c6799e55fe3",
+    "digest": "cb8ecc974a9e17fea6ed4f6db5a6235312093a041eba27614265f728b7231b52",
     "path": "tools/compat-broad/fs-write-limits/collector_03.py",
     "productionCollector": null,
     "scope": "REST BatchWrite per-position outcome, create-only document writes, typed readbacks and request-stage name refusals, with ownership and version bound cleanup. No configuration, index, Rules or account operation.",
@@ -23,7 +23,7 @@
   "comparator": {
     "addition": "A per-row structural field reports status, typed error code and status, the per-item BatchWrite codes and whether the document is present, with diagnostic wording removed. It is additive and never changes the classification. It is what keeps a known wording difference from hiding the answer this campaign exists to get.",
     "contract": "The limits-02 contract: both plans are regenerated from the compiler, every ordered request including its typed body is checked, a complete response journal is required, and normalized document identity and server timestamps may differ as EXPECTED_NONDETERMINISM while everything else, message text included, is significant.",
-    "digest": "1528fd6bb73c9c7228a155d4228893cda0653d2547b41042cd7a2668b091d843",
+    "digest": "ff3337dc7468d18484591450332ac076874469ab832af9da0e0d79445938658f",
     "path": "tools/compat-broad/fs-write-limits/comparator_03.py",
     "productionComparator": null,
     "status": "preparation-only"
@@ -56,12 +56,12 @@
   "localShadow": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03-local-shadow.json",
     "productionExecuted": false,
-    "sha256": "7de23361b420690596719ea21db14d1e339828c23405ddb3e20d0eb7f95e6f79",
+    "sha256": "6f3833ccd64f2c81283973c50df89a79ec00d3ac1095f09496d9a9e1bf58905b",
     "status": "recorded; Gate close refused"
   },
   "manifest": {
     "path": "spec/compatibility/broad-runs/fs-write-limits-03.json",
-    "sha256": "1b604cea2e535c4dd392124dc5bf215dab684528bb9b490853a29cd4c7a32b93"
+    "sha256": "9aa56a26a2b7d8388db6f330e576a12b679b07e3ae6f907246fb7f7c6f273157"
   },
   "o8": {
     "descriptor": "tools/compat-broad/fs-write-limits/limits_03_descriptor.py",
@@ -71,11 +71,11 @@
   },
   "productionExecuted": false,
   "source": {
-    "codeSourceHead": "b76c5d8003b52d74ead4c291068794c9b9d03a96",
-    "commit": "b76c5d8003b52d74ead4c291068794c9b9d03a96",
+    "codeSourceHead": "f7f1c636026f995dd522205bd72baea4121bfb9e",
+    "commit": "f7f1c636026f995dd522205bd72baea4121bfb9e",
     "productionArtifactSha256": null,
     "shadowArtifactSha256": {
-      "ALL": "e6bbd43c00932a0c515f5349a258a49ac725c9f82c9b68986630428d7258a8b1"
+      "ALL": "c275301b2d1f7663eb7ad691dcd61ac6a6f4cd7ec338a77c66f9fc2627e95b2b"
     }
   },
   "status": "BLOCKED_OWNER",

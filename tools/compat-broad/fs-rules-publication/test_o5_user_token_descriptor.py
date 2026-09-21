@@ -509,9 +509,12 @@ def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_l
 
 
 def test_preserved_local_runner_acquisition_remains_accepted_without_management_session() -> None:
-    raw_path = Path("/Users/tk/work/firebase-emulator/docs.local/runs/o5-rules-shadow-fd4.84Jpkk/local-shadow.json")
-    if not raw_path.is_file():
-        pytest.skip("preserved local runner receipt is unavailable")
+    configured = os.environ.get("O5_PRESERVED_LOCAL_RUNNER")
+    if not configured:
+        pytest.skip("O5_PRESERVED_LOCAL_RUNNER is not configured")
+    raw_path = Path(configured)
+    assert not raw_path.is_symlink(), "configured preserved runner must not be a symlink"
+    assert raw_path.is_file(), "configured preserved local runner receipt is unavailable"
     raw = json.loads(raw_path.read_bytes())
     recorded = raw["bundle"]["acquisition"]
     acquisition = {key: recorded[key] for key in ("environment", "campaignManifestDigest", "nonceReservation", "ownerPermission", "artifact", "principals", "window")}

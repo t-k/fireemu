@@ -68,3 +68,29 @@ New executions emit `fs-write-limits-production-receipt-v2`. Finalization record
 Saved comparison never uses today's clean checkout to reconstruct yesterday's final binding. The credential-free historical adapter recognizes only the explicitly retained production receipt and repaired local bundle by exact byte hashes and fixed audited Git commits. It executes the original read-only validators in an isolated temporary tree, with a minimal environment and network calls disabled. This preserves the normal repaired-artifact recompare path without rewriting the original receipt, approval, inputs or comparison. Historical v1 receipts do not gain retrospective final-observation fields; all newly executed acquisitions require v2 facts.
 
 The repair was independently reviewed at `0f56b3d0ddfa614666306a14909eba978487c89f`. The focused production and recompare suite passed 69 tests without skips. The retained original production receipt remains SHA-256 `ca418bcf1eed6d906baebc7d22090161752071c7d845ab19a10bd3b6ddc429a7`, with no recorded acquisition failure. A new derived comparison against the retained repaired artifact validated acquisition and reported expected nondeterminism. These are offline validation and saved-production-reference comparison results; no new production request or parent promotion occurred.
+
+## FS-WRITE-LIMITS-03 campaign and O8 boundary
+
+`FS-WRITE-LIMITS-03` lives beside the limits-02 modules and leaves them untouched. Its package and its rationale are in `docs/compatibility/fs-write-limits-campaign-preparation.md`.
+
+| File | Role |
+| --- | --- |
+| `compiler_03.py`, `expectations_03.py` | the compiled plan, its expectations, the per-slot reservations and the closed management contract |
+| `collector_03.py`, `comparator_03.py` | Gate-owned collection and the row comparator |
+| `shadow_03.py`, `shadow_03b.py` | the owned-artifact shadow on loopback |
+| `limits_03_descriptor.py` | the o8-core `CampaignDescriptor`, the budget and Ledger figures, the lock scopes and the index-exemption precondition |
+| `limits_03_admission.py` | frozen inputs, the O7 check set, the Ledger claim, stop-point classification and the receipt |
+| `limits_03_preflight.py` | the charged management preflight and postflight, including the index-exemption readback |
+| `limits_03_remote_transport.py`, `limits_03_https_worker.py` | the fixed-origin transport bound to the recompiled plan slot, and its digest-pinned worker |
+| `limits_03_production.py` | one admitted acquisition and the saved-evidence verifier |
+| `limits_03_o8.py` | the launcher: `--inputs --approval --manifest --permission --source --artifact --ledger --output --credential-fd/--credential-file`; exit 0 released, 1 held with possible or created data, 2 refused or no data |
+| `limits_03_indexes.py` | `--write-after`, `--verify before|after`, `--precondition` for the index-exemption step |
+| `package_03.py` | `freeze --shadow-run <dir>` or `freeze --keep-shadow-record`: regenerates the three published records over HEAD |
+
+```
+uv run --project tools/compat-inventory --locked --python 3.12 -m pytest -q -p no:cacheprovider tools/compat-broad/fs-write-limits
+uv run --project tools/compat-inventory --locked --python 3.12 python tools/compat-broad/fs-write-limits/shadow_03.py --output <new-private-directory>
+uv run --project tools/compat-inventory --locked --python 3.12 python tools/compat-broad/fs-write-limits/package_03.py freeze --shadow-run <that-directory>
+```
+
+No test here uses a credential, a network origin, a production project or the canonical Ledger. The `gate_accounts_the_empty_batch_item` fixture in `conftest.py` applies, to the test process only, the shared-Gate accounting rule the R3 malformed-item BatchWrite needs; the shared module is not changed by this lane.

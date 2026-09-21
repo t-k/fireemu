@@ -192,6 +192,8 @@ def exchange(
             }
     except urllib.error.HTTPError as error:
         raw = error.read(MAX_RESPONSE_BYTES + 1)
+        if time.monotonic() > deadline:
+            raise TimeoutError
         if len(raw) > MAX_RESPONSE_BYTES:
             raise ValueError("response body exceeds bound") from None
         return {
@@ -209,7 +211,7 @@ def exchange(
     ) as error:
         raise ValueError("bounded worker exchange failed") from error
     finally:
-        if time.monotonic() > deadline + 0.5:
+        if time.monotonic() > deadline:
             raise ValueError("worker walltime exceeded")
 
 

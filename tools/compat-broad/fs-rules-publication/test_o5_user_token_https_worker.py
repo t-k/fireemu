@@ -18,6 +18,13 @@ class _SlowHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"{}")
             return
+        if self.mode == "error-body":
+            self.send_response(500)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            time.sleep(0.15)
+            self.wfile.write(b"{}")
+            return
         self.send_response(200)
         self.send_header("Content-Length", "2")
         self.end_headers()
@@ -58,6 +65,10 @@ def test_slow_headers_are_fail_closed_before_eight_second_bound() -> None:
 
 def test_slow_body_is_fail_closed_before_eight_second_bound() -> None:
     _exchange("body", 0.03)
+
+
+def test_slow_http_error_body_is_fail_closed_before_deadline() -> None:
+    _exchange("error-body", 0.03)
 
 
 def test_worker_rejects_deadline_above_closed_eight_second_bound() -> None:

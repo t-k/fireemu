@@ -10,6 +10,34 @@ import pytest
 from test_o5_user_token_collector import Transport, case
 
 
+def test_unreaped_worker_failure_blocks_recovery_and_preserves_evidence():
+    plan = case()
+    calls = []
+
+    class UnreapedWorker(ValueError):
+        worker_reaped = False
+
+    def execute(request):
+        calls.append(request)
+        raise UnreapedWorker("worker reap unconfirmed")
+
+    result = module.collect(
+        plan,
+        execute,
+        role=module.ROLE_LOCAL_SHADOW,
+        run_id="unreaped-worker",
+    )
+
+    assert result["transport"]["workerReaped"] is False
+    assert result["cleanup"]["cleanupComplete"] is False
+    assert result["cleanup"]["blockedReason"] == "worker-reap-unconfirmed"
+    assert result["cleanup"]["outstandingResources"] == plan["ownedResources"]
+    assert result["cleanup"]["outstandingAccounts"] == [
+        entry["ref"] for entry in plan["ownedAccounts"]
+    ]
+    assert calls and all(request.get("phase") != "recovery" for request in calls)
+
+
 @pytest.mark.parametrize(
     "stage", ["run", "accounts", "attempt", "request", "outcome", "recovery", "close"]
 )

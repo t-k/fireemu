@@ -717,6 +717,7 @@ def collect(
     journal.record("accounts", {"refs": attempted_accounts})
     failures: list[str] = []
     abort: str | None = None
+    worker_reaped: bool | None = None
     active_ruleset: str | None = None
 
     try:
@@ -764,6 +765,9 @@ def collect(
             try:
                 raw = execute(dict(request))
             except Exception as error:  # noqa: BLE001 - type name only, no message
+                status = getattr(error, "worker_reaped", None)
+                if type(status) is bool:
+                    worker_reaped = status
                 raw, receipt_failure = None, f"transport:{type(error).__name__}"
             else:
                 raw, receipt_failure = _accept(raw, OBSERVATION_RECEIPT_KEYS)
@@ -795,7 +799,10 @@ def collect(
     finally:
         observation_finished = budget.stamp()
         try:
-            cleanup = _recover(plan, execute, budget, wire, attempted, journal)
+            if worker_reaped is False:
+                cleanup = _blocked_cleanup(plan, attempted, worker_reaped=False)
+            else:
+                cleanup = _recover(plan, execute, budget, wire, attempted, journal)
         finally:
             journal.close()
     finished = budget.stamp()
@@ -819,6 +826,7 @@ def collect(
         **wire.record(),
         "rulesetReleases": releases,
         "principalActions": actions,
+        "workerReaped": worker_reaped,
         "clock": {
             "started": budget.started,
             "observationFinished": observation_finished,
@@ -1237,6 +1245,24 @@ def _recover(
         "outstandingAccounts": outstanding_accounts,
         "unrecoveredAttempted": unrecovered,
         "cleanupComplete": not outstanding and not outstanding_accounts,
+    }
+
+
+def _blocked_cleanup(
+    plan: Mapping[str, Any], attempted: list[str], *, worker_reaped: bool
+) -> dict[str, Any]:
+    """Keep owned resources open when a worker's process group is uncertain."""
+    resources = list(plan["ownedResources"])
+    accounts = [entry["ref"] for entry in plan["ownedAccounts"]]
+    return {
+        "documentSteps": [],
+        "accountSteps": [],
+        "outstandingResources": resources,
+        "outstandingAccounts": accounts,
+        "unrecoveredAttempted": [resource for resource in attempted if resource in resources],
+        "cleanupComplete": False,
+        "blockedReason": "worker-reap-unconfirmed",
+        "workerReaped": worker_reaped,
     }
 
 

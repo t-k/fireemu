@@ -239,11 +239,11 @@ def ruleset_request(plan, label):
     ("action", "extra", "route", "method"),
     [
         ("create", {"label": "A", "sourceDigest": digest("rules-a")}, "ruleset-create", "POST"),
-        ("get", {"rulesetName": "ruleset-a"}, "ruleset-get", "GET"),
-        ("delete", {"rulesetName": "ruleset-a"}, "ruleset-delete", "DELETE"),
-        ("release-get", {"releaseName": "cloud.firestore"}, "release-get", "GET"),
-        ("release-patch", {"releaseName": "cloud.firestore", "rulesetName": "ruleset-a"}, "release-patch", "PATCH"),
-        ("release-executable", {"releaseName": "cloud.firestore"}, "release-get-executable", "GET"),
+        ("get", {"rulesetName": "projects/fireemu-35fe6/rulesets/ruleset-a"}, "ruleset-get", "GET"),
+        ("delete", {"rulesetName": "projects/fireemu-35fe6/rulesets/ruleset-a"}, "ruleset-delete", "DELETE"),
+        ("release-get", {"releaseName": "projects/fireemu-35fe6/releases/cloud.firestore"}, "release-get", "GET"),
+        ("release-patch", {"releaseName": "projects/fireemu-35fe6/releases/cloud.firestore", "rulesetName": "projects/fireemu-35fe6/rulesets/ruleset-a"}, "release-patch", "PATCH"),
+        ("release-get-executable", {"releaseName": "projects/fireemu-35fe6/releases/cloud.firestore"}, "release-get-executable", "GET"),
     ],
 )
 def test_rules_lifecycle_routes_are_closed(plan, action, extra, route, method):
@@ -414,7 +414,7 @@ def test_prepare_covers_absent_malformed_and_empty_credential_classes(plan):
 def test_prepare_rejects_wrong_phase_and_prepares_recovery_preconditions(plan):
     release = ruleset_request(plan, "A")
     release["phase"] = "arbitrary"
-    with pytest.raises(ValueError, match="phase"):
+    with pytest.raises(ValueError, match="alias"):
         remote.prepare_request(plan, release, credentials={"administrator": "fixture"})
 
     resource = plan["ownedResources"][0]

@@ -34,6 +34,30 @@ _SOURCE_FILES = (
 _PRICE_PER_DOCUMENT_READ_USD = 0.06 / 100_000
 _PRICE_PER_DOCUMENT_WRITE_USD = 0.18 / 100_000
 
+RULES_MANAGEMENT_OBSERVATION = (
+    "baseline-release-get", "baseline-ruleset-get", "baseline-executable-get",
+    "create-a", "create-a-get", "patch-a", "patch-a-get", "patch-a-executable",
+    "create-b", "create-b-get", "patch-b", "patch-b-get", "patch-b-executable",
+)
+RULES_MANAGEMENT_RECOVERY = (
+    "restore-patch", "restore-get", "restore-executable",
+    "delete-a-get", "delete-a", "delete-a-absence",
+    "delete-b-get", "delete-b", "delete-b-absence",
+)
+
+
+def rules_management_plan() -> dict[str, Any]:
+    """Compiler-owned fixed Gate slots for response-derived Rules operations."""
+    return {
+        "dispatchKind": "closed-v1",
+        "observation": [{"id": value, "timeout": 8.0} for value in RULES_MANAGEMENT_OBSERVATION],
+        "recovery": [{"id": value, "timeout": 8.0} for value in RULES_MANAGEMENT_RECOVERY],
+        "totalRequests": len(RULES_MANAGEMENT_OBSERVATION) + len(RULES_MANAGEMENT_RECOVERY),
+        "requestCostMicrousd": 1,
+        "wallClockDeadlineSeconds": 600.0,
+        "recoveryDeadlineSeconds": 900.0,
+    }
+
 OWNER_PRECONDITIONS = (
     "project and database identity confirmed by the owner",
     "a fresh nonce reserved for this campaign only",
@@ -100,9 +124,9 @@ def budget(plan: dict[str, Any]) -> dict[str, Any]:
         + sum(2 for entry in accounts if entry.get("postSignIn"))
         + 2
     )
-    # Rules: read the active release, publish two Rulesets, release each, read
-    # back each release, restore the preexisting release and read it back.
-    rules_requests = 8
+    # Rules management includes baseline reads, response-derived create/read,
+    # activation/readback, exact restore, and guarded delete/absence proof.
+    rules_requests = len(RULES_MANAGEMENT_OBSERVATION) + len(RULES_MANAGEMENT_RECOVERY)
     # Recovery: read back, delete and verify absence for every document and
     # every account.
     recovery_requests = 3 * (resources + len(accounts))

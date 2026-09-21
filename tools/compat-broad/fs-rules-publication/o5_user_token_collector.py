@@ -212,6 +212,176 @@ _JWT_SHAPE = re.compile(r"^[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*$
 # token-shaped value is.
 _SECRET_PREFIXES = ("ya29.", "AIza", "1//")
 
+RULES_MANAGEMENT_OBSERVATION = (
+    "baseline-release-get",
+    "baseline-ruleset-get",
+    "baseline-executable-get",
+    "create-a",
+    "create-a-get",
+    "patch-a",
+    "patch-a-get",
+    "patch-a-executable",
+    "create-b",
+    "create-b-get",
+    "patch-b",
+    "patch-b-get",
+    "patch-b-executable",
+)
+RULES_MANAGEMENT_RECOVERY = (
+    "restore-patch",
+    "restore-get",
+    "restore-executable",
+    "delete-a-get",
+    "delete-a",
+    "delete-a-absence",
+    "delete-b-get",
+    "delete-b",
+    "delete-b-absence",
+)
+_RULESET_RESOURCE = re.compile(r"^projects/firemu-35fe6/rulesets/[A-Za-z0-9_-]{1,128}$")
+_RELEASE_RESOURCE = re.compile(r"^projects/firemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}$")
+
+
+class RulesManagementSession:
+    """Gate-owned Rules lifecycle with response-derived resource bindings.
+
+    The callback is deliberately narrow: it receives a prepared transport
+    operation and an absolute deadline and must return the bounded worker
+    receipt. Names used after a create/read are copied only from validated
+    response bodies; no plan-time or caller-supplied resource map is trusted.
+    """
+
+    def __init__(self, *, gate, ledger, ticket, execute, plan):
+        self.gate = gate
+        self.ledger = ledger
+        self.ticket = ticket
+        self.execute = execute
+        self.plan = plan
+        self.baseline: dict[str, Any] | None = None
+        self.created: dict[str, str] = {}
+        self.active: dict[str, str] = {}
+
+    def _dispatch(self, phase: str, slot: str, operation: dict[str, Any], *, allow_status: frozenset[int] = frozenset()) -> dict[str, Any]:
+        def send(deadline: float) -> dict[str, Any]:
+            if self.ledger is not None:
+                self.ledger.validate(self.ticket, duration=8)
+            try:
+                request = {"kind": "rules-lifecycle", "phase": "ruleset", **operation}
+                raw = self.execute(request, deadline=deadline)
+            except TypeError:
+                raw = self.execute(request)
+            if not isinstance(raw, dict):
+                raise ValueError("bounded Rules worker receipt required")
+            if {"status", "complete", "workerReaped", "bodyKind", "body"} <= set(raw):
+                return raw
+            status = raw.get("status")
+            if not isinstance(status, int):
+                raise ValueError("typed Rules HTTP status required")
+            body = raw.get("body")
+            return {
+                "status": status,
+                "complete": raw.get("complete") is not False,
+                "workerReaped": raw.get("workerReaped", True) is True,
+                "bodyKind": "json",
+                "body": body,
+            }
+
+        receipt = self.gate.management_dispatch(phase, slot, send)
+        if not isinstance(receipt, dict) or receipt.get("complete") is not True or receipt.get("workerReaped") is not True:
+            raise ValueError("Rules management slot incomplete")
+        if not isinstance(receipt.get("status"), int) or not (200 <= receipt["status"] < 300 or receipt["status"] in allow_status):
+            raise ValueError("Rules management HTTP failure")
+        body = receipt.get("body")
+        if not isinstance(body, dict):
+            raise ValueError("Rules management JSON body required")
+        return body
+
+    @staticmethod
+    def _release(body: Any, expected_name: str | None = None) -> tuple[str, str]:
+        if not isinstance(body, dict) or set(body) != {"name", "rulesetName"}:
+            raise ValueError("release readback shape refused")
+        name, ruleset = body["name"], body["rulesetName"]
+        if not isinstance(name, str) or _RELEASE_RESOURCE.fullmatch(name) is None or not isinstance(ruleset, str) or _RULESET_RESOURCE.fullmatch(ruleset) is None:
+            raise ValueError("release resource binding refused")
+        if expected_name is not None and name != expected_name:
+            raise ValueError("registered release binding changed")
+        return name, ruleset
+
+    @staticmethod
+    def _ruleset(body: Any, expected_digest: str | None, expected_name: str | None = None) -> str:
+        if not isinstance(body, dict) or set(body) != {"name", "source"}:
+            raise ValueError("Ruleset readback shape refused")
+        name, source = body["name"], body["source"]
+        if not isinstance(name, str) or _RULESET_RESOURCE.fullmatch(name) is None or not isinstance(source, dict) or set(source) != {"files"}:
+            raise ValueError("Ruleset resource binding refused")
+        files = source["files"]
+        if not isinstance(files, list) or len(files) != 1 or not isinstance(files[0], dict) or set(files[0]) != {"name", "content"} or files[0]["name"] != "firestore.rules" or not isinstance(files[0]["content"], str) or (expected_digest is not None and digest(files[0]["content"]) != expected_digest):
+            raise ValueError("Ruleset source digest mismatch")
+        if expected_name is not None and name != expected_name:
+            raise ValueError("Ruleset name changed")
+        return name
+
+    def run_observation(self) -> dict[str, Any]:
+        """Capture the baseline, publish A/B, and verify each active release."""
+        release_name, baseline_ruleset = self._release(
+            self._dispatch("observation", "baseline-release-get", {"action": "release-get", "releaseName": "projects/fireemu-35fe6/releases/cloud.firestore"})
+        )
+        baseline_ruleset = self._ruleset(
+            self._dispatch("observation", "baseline-ruleset-get", {"action": "get", "rulesetName": baseline_ruleset}),
+            None,
+            baseline_ruleset,
+        )
+        executable = self._dispatch("observation", "baseline-executable-get", {"action": "release-get-executable", "releaseName": release_name})
+        if executable.get("rulesetName") != baseline_ruleset:
+            raise ValueError("baseline executable differs")
+        self.baseline = {"releaseName": release_name, "rulesetName": baseline_ruleset}
+        for label, patch_base in (("A", "a"), ("B", "b")):
+            source_digest = digest(self.plan["rulesets"][label]["source"])
+            created = self._dispatch("observation", f"create-{patch_base}", {"action": "create", "label": label, "sourceDigest": source_digest})
+            if not isinstance(created, dict) or not isinstance(created.get("name"), str) or _RULESET_RESOURCE.fullmatch(created["name"]) is None:
+                raise ValueError("created Ruleset name missing")
+            name = self._ruleset(self._dispatch("observation", f"create-{patch_base}-get", {"action": "get", "rulesetName": created["name"]}), source_digest, created["name"])
+            self.created[label] = name
+            self._dispatch("observation", f"patch-{patch_base}", {"action": "release-patch", "releaseName": release_name, "rulesetName": name})
+            active_name, active_ruleset = self._release(self._dispatch("observation", f"patch-{patch_base}-get", {"action": "release-get", "releaseName": release_name}), release_name)
+            if active_name != release_name or active_ruleset != name:
+                raise ValueError("active Ruleset binding differs")
+            executable = self._dispatch("observation", f"patch-{patch_base}-executable", {"action": "release-get-executable", "releaseName": release_name})
+            if executable.get("rulesetName") != name:
+                raise ValueError("active executable differs")
+            self.active[label] = name
+        return {"baseline": dict(self.baseline), "created": dict(self.created), "active": dict(self.active)}
+
+    def run_recovery(self) -> dict[str, Any]:
+        """Restore only the captured baseline and prove created absence."""
+        if self.baseline is None or set(self.created) != {"A", "B"} or set(self.active) != {"A", "B"}:
+            raise ValueError("Rules observation binding required before recovery")
+        release_name = self.baseline["releaseName"]
+        current_name, current_target = self._release(
+            self._dispatch("recovery", "restore-patch", {"action": "release-get", "releaseName": release_name}),
+            release_name,
+        )
+        if current_target != self.active["B"]:
+            raise ValueError("foreign current Ruleset refuses restore")
+        self._dispatch("recovery", "restore-get", {"action": "release-patch", "releaseName": release_name, "rulesetName": self.baseline["rulesetName"]})
+        restored_name, restored_target = self._release(
+            self._dispatch("recovery", "restore-executable", {"action": "release-get", "releaseName": release_name}),
+            release_name,
+        )
+        if restored_name != release_name or restored_target != self.baseline["rulesetName"]:
+            raise ValueError("restore readback differs")
+        executable = self._dispatch("recovery", "restore-executable", {"action": "release-get-executable", "releaseName": release_name})
+        if executable.get("rulesetName") != self.baseline["rulesetName"]:
+            raise ValueError("restored executable differs")
+        for label in ("A", "B"):
+            name = self.created[label]
+            source_digest = digest(self.plan["rulesets"][label]["source"])
+            self._ruleset(self._dispatch("recovery", f"delete-{label.lower()}-get", {"action": "get", "rulesetName": name}), source_digest, name)
+            self._dispatch("recovery", f"delete-{label.lower()}", {"action": "delete", "rulesetName": name})
+            self._dispatch("recovery", f"delete-{label.lower()}-absence", {"action": "get", "rulesetName": name}, allow_status=frozenset({404}))
+        return {"restored": True, "rulesetName": self.baseline["rulesetName"]}
+
+
 
 class BudgetExhausted(RuntimeError):
     """Raised internally when a bound stops further requests."""

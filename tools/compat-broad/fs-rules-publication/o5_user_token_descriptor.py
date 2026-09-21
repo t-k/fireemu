@@ -40,6 +40,7 @@ from broad_contract import digest
 from o5_user_token_campaign import (
     PERMISSION_ENVELOPE,
     admitted_manifest_digest,
+    rules_management_plan,
 )
 from o5_user_token_campaign import (
     budget as campaign_budget,
@@ -172,6 +173,8 @@ def frozen_bounds() -> dict[str, Any]:
         "perRequestTimeoutSeconds": float(estimate["perRequestTimeoutSeconds"]),
         "wallClockDeadlineSeconds": float(estimate["wallClockDeadlineSeconds"]),
         "recoveryDeadlineSeconds": float(estimate["recoveryDeadlineSeconds"]),
+        "rulesManagementRequests": int(estimate["rulesRequests"]),
+        "rulesManagement": rules_management_plan(),
     }
 
 
@@ -213,6 +216,33 @@ def cost_model() -> dict[str, Any]:
         "totalCostMicrousd": COST_CEILING_MICROUSD,
         "basis": estimate["estimateBasis"],
     }
+
+
+def gate_plan(plan: dict[str, Any], *, permission_expires_at: float | None = None) -> dict[str, Any]:
+    """Freeze the Rules management envelope consumed by ``Gate``."""
+    validate_case(plan)
+    management = rules_management_plan()
+    value = {
+        "kind": "fs-rules-user-token-gate-plan-v1",
+        "campaignId": CAMPAIGN,
+        "project": PROJECT,
+        "database": DATABASE,
+        "planDigest": plan["planDigest"],
+        "management": management,
+        "observationRequests": len(plan["observation"]) + len(management["observation"]),
+        "dataRequests": len(plan["observation"]),
+        "managementRequests": management["totalRequests"],
+        "requestCostMicrousd": management["requestCostMicrousd"],
+        "costMicrousd": management["totalRequests"],
+        "wallSeconds": 600.0,
+        "recoverySeconds": 300.0,
+        "intervalSeconds": 0.0,
+        "receiptKind": "fs-rules-management-receipt-v1",
+        "transport": "bounded-rules-worker",
+    }
+    if permission_expires_at is not None:
+        value["permissionExpiresAt"] = permission_expires_at
+    return value
 
 
 def permission_bindings(

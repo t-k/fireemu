@@ -105,15 +105,8 @@ def _route(service: Any, route: Any, method: Any, path: Any) -> None:
         return
     if (
         service == "rules"
-        and route == "ruleset-release"
+        and route == "ruleset-create"
         and method == "POST"
-        and path == _RULESET
-    ):
-        return
-    if (
-        service == "rules"
-        and route in {"ruleset-create", "ruleset-list"}
-        and method in {"POST", "GET"}
         and path == _RULESET
     ):
         return
@@ -152,6 +145,25 @@ def _bounded_body(value: Any) -> bytes | None:
     return encoded
 
 
+def _rules_body(route: str, body: Any) -> None:
+    """Validate the exact JSON shapes used by the Rules REST methods."""
+    if route == "ruleset-create":
+        if not isinstance(body, dict) or set(body) not in ({"source"}, {"source", "attachmentPoint"}):
+            raise ValueError("ruleset create body shape refused")
+        source = body.get("source")
+        files = source.get("files") if isinstance(source, dict) else None
+        if not isinstance(files, list) or len(files) != 1 or not isinstance(files[0], dict) or set(files[0]) != {"name", "content"} or files[0]["name"] != "firestore.rules" or not isinstance(files[0]["content"], str):
+            raise ValueError("ruleset source body shape refused")
+        if "attachmentPoint" in body and body["attachmentPoint"] != "projects/firemu-35fe6/databases/(default)":
+            raise ValueError("ruleset attachment body shape refused")
+    elif route == "release-patch":
+        if not isinstance(body, dict) or set(body) != {"release", "updateMask"} or body["updateMask"] != "rulesetName":
+            raise ValueError("release patch body shape refused")
+        release = body["release"]
+        if not isinstance(release, dict) or set(release) != {"name", "rulesetName"} or not _RELEASE.fullmatch("/v1/" + str(release.get("name", ""))) or not _RULESET_ITEM.fullmatch("/v1/" + str(release.get("rulesetName", ""))):
+            raise ValueError("release patch resource shape refused")
+
+
 def exchange(
     envelope: dict[str, Any], *, fixture_origin: str | None = None
 ) -> dict[str, Any]:
@@ -187,6 +199,8 @@ def exchange(
     if type(seconds) not in (int, float) or not 0 < seconds <= MAX_SECONDS:
         raise ValueError("bounded worker deadline required")
     body = _bounded_body(envelope["body"])
+    if route in {"ruleset-create", "release-patch"}:
+        _rules_body(route, envelope["body"])
     if (
         method == "GET"
         and body is not None

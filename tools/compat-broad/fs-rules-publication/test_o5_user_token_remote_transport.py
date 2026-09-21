@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import http.server
 import json
@@ -7,15 +8,23 @@ import socketserver
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import ClassVar
 from urllib.parse import quote
 
+import o5_user_token_identity_proof as identity_proof
 import o5_user_token_remote_transport as remote
 import pytest
 from broad_contract import digest
-from o5_user_token_case import compile_case
+from o5_user_token_case import compile_case, principal_actions
 from o5_user_token_collector import _request
+from o8_admission import (
+    _ACTIVE,
+    _CAPABILITY_STATE,
+    _CAPABILITY_TOKEN,
+    ProductionWireCapability,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 PORTCTL = Path("/Users/tk/.agents/skills/port-registry/scripts/portctl.py")
@@ -23,6 +32,7 @@ PORTCTL = Path("/Users/tk/.agents/skills/port-registry/scripts/portctl.py")
 
 class _FixtureHandler(http.server.BaseHTTPRequestHandler):
     requests: ClassVar[list[dict[str, object]]] = []
+    issuance_body: ClassVar[dict[str, object] | None] = None
 
     def do_POST(self) -> None:
         size = int(self.headers.get("Content-Length", "0"))
@@ -35,15 +45,18 @@ class _FixtureHandler(http.server.BaseHTTPRequestHandler):
                 "headers": dict(self.headers),
             }
         )
-        payload = json.dumps(
-            {
-                "complete": True,
-                "status": "OK",
-                "releaseName": "fixture-release",
-                "readbackKind": "release-get",
-                "readbackDigest": "d" * 64,
-            }
-        ).encode()
+        if self.path.startswith("/v1/accounts:"):
+            payload = json.dumps(self.__class__.issuance_body or {}).encode()
+        else:
+            payload = json.dumps(
+                {
+                    "complete": True,
+                    "status": "OK",
+                    "releaseName": "fixture-release",
+                    "readbackKind": "release-get",
+                    "readbackDigest": "d" * 64,
+                }
+            ).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
@@ -122,6 +135,80 @@ def account_bindings(plan):
         }
         for account in plan["ownedAccounts"]
     }
+
+
+def _fixture_token(uid, provider, tenant, claims):
+    now = int(time.time())
+    firebase = {"sign_in_provider": provider}
+    if tenant is not None:
+        firebase["tenant"] = tenant
+    payload = {
+        "iss": "https://securetoken.google.com/fireemu-35fe6",
+        "aud": "fireemu-35fe6",
+        "sub": uid,
+        "user_id": uid,
+        "iat": now - 1,
+        "auth_time": now - 1,
+        "exp": now + 3600,
+        "firebase": firebase,
+        **claims,
+    }
+    segment = lambda value: (
+        base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode())
+        .rstrip(b"=")
+        .decode()
+    )
+    return segment({"alg": "RS256", "typ": "JWT"}) + "." + segment(payload) + ".fixture"
+
+
+def _fixture_proofs(plan, fixture_origin):
+    proofs = {}
+    for account in plan["ownedAccounts"]:
+        provider = "anonymous" if account["kind"] == "anonymous" else "password"
+        claims = account["claims"]
+        token = _fixture_token(
+            "uid-" + account["ref"], provider, account["tenant"], claims
+        )
+        _FixtureHandler.issuance_body = {
+            "localId": "uid-" + account["ref"],
+            "idToken": token,
+            "expiresIn": "3600",
+        }
+        request = identity_proof.build_request(
+            "signup",
+            api_key="fixture-key",
+            email=None if provider == "anonymous" else account["email"],
+            password=None if provider == "anonymous" else "fixture-password",
+            tenant=account["tenant"],
+        )
+        proofs[account["ref"]] = identity_proof.issue_proof(
+            account["ref"],
+            request,
+            expected_provider=provider,
+            expected_tenant=account["tenant"],
+            expected_claims=claims,
+            fixture_origin=fixture_origin,
+            now=int(time.time()),
+        )
+    return proofs
+
+
+def _fixture_capability(plan, source, source_digest, frozen):
+    capability = ProductionWireCapability(
+        _CAPABILITY_TOKEN,
+        binding=source,
+        binding_digest=source_digest,
+        campaign_id=remote.CAMPAIGN,
+        window_seconds=60,
+        inputs_digest=frozen["inputsDigest"],
+        ledger_root="fixture-ledger",
+        window_starts_at=time.time() - 1,
+        window_expires_at=time.time() + 60,
+        approval_digest="f" * 64,
+        transport_bound=True,
+    )
+    _ACTIVE.add(capability)
+    return capability
 
 
 def ruleset_request(plan, label):
@@ -458,3 +545,90 @@ def test_binding_verifier_requires_exact_worker_bytes():
         remote.verify_worker_binding(source + b"x", digest, None)
     with pytest.raises(ValueError, match="worker source digest"):
         remote.verify_worker_binding(source, digest, {remote.WORKER_ENTRY: "0" * 64})
+
+
+def test_make_transport_drives_all_33_rows_and_principal_transitions(
+    plan, fixture_origin
+):
+    _FixtureHandler.requests.clear()
+    proofs = _fixture_proofs(plan, fixture_origin)
+    bindings = account_bindings(plan)
+    for ref, issued in proofs.items():
+        bindings[ref]["uid"] = issued.uid
+        bindings[ref]["authTime"] = issued.auth_time
+    credentials = {ref: issued.token for ref, issued in proofs.items()}
+    credentials["administrator"] = "fixture-administrator-token"
+    credentials.update(
+        {"unauthenticated": "", "malformed-bearer": "not-a-jwt", "empty-bearer": ""}
+    )
+    from o5_user_token_local_run import _unsigned_jwt
+
+    expired = _unsigned_jwt(
+        {
+            "aud": "fireemu-35fe6",
+            "iss": "https://securetoken.google.com/fireemu-35fe6",
+            "sub": "uid-owner-a",
+            "user_id": "uid-owner-a",
+            "iat": 1,
+            "auth_time": 1,
+            "exp": 2,
+            "firebase": {"sign_in_provider": "password"},
+        }
+    )
+    credentials["expired-token"] = expired
+    credentials["revoked-expired-token"] = expired
+    frozen = {"plan": plan, "planDigest": digest(plan)}
+    frozen["inputsDigest"] = digest(frozen)
+    source, source_digest = remote.worker_binding()
+    capability = _fixture_capability(plan, source, source_digest, frozen)
+    try:
+        transmit = remote.make_transport(
+            plan,
+            credentials=credentials,
+            account_bindings=bindings,
+            identity_proofs=proofs,
+            frozen_inputs=frozen,
+            fixture_origin=fixture_origin,
+        )
+        actions = {item["beforeIndex"]: item for item in principal_actions(plan)}
+        receipts = []
+        for index in range(33):
+            if index in actions:
+                action = {
+                    "kind": "principal-action",
+                    "phase": "principal",
+                    "principalRef": actions[index]["ref"],
+                    "action": actions[index]["action"],
+                    "credentialRef": "administrator",
+                    "credentialClass": "administrator",
+                }
+                receipts.append(
+                    transmit(
+                        action,
+                        binding=source,
+                        binding_digest=source_digest,
+                        capability=capability,
+                    )
+                )
+            receipts.append(
+                transmit(
+                    collector_request(plan, index),
+                    binding=source,
+                    binding_digest=source_digest,
+                    capability=capability,
+                )
+            )
+        assert len(_FixtureHandler.requests) == 7 + 36
+        assert [entry["wireSequence"] for entry in receipts] == list(range(1, 37))
+        assert [entry["path"] for entry in _FixtureHandler.requests[:7]] == [
+            "/v1/accounts:signUp?key=fixture-key"
+        ] * 7
+        commit_paths = [
+            entry["path"]
+            for entry in _FixtureHandler.requests
+            if entry["path"].endswith("/documents:commit")
+        ]
+        assert len(commit_paths) == 3
+    finally:
+        _ACTIVE.discard(capability)
+        _CAPABILITY_STATE.pop(capability, None)

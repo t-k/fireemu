@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -33,6 +34,8 @@ NONCE = "b" * 32
 
 class _ActionFixture(BaseHTTPRequestHandler):
     calls: list[dict] = []
+    recovery_status: int = 200
+    recovery_body: dict = {"users": []}
 
     def do_POST(self):  # noqa: N802 - stdlib handler API
         size = int(self.headers.get("Content-Length", "0"))
@@ -42,13 +45,13 @@ class _ActionFixture(BaseHTTPRequestHandler):
             suffix = "a" if body["email"].endswith("-a@example.invalid") else "b"
             response = {"localId": "uid-" + suffix, "idToken": "token-" + suffix, "refreshToken": "refresh-" + suffix}
         elif self.path.endswith("accounts:lookup"):
-            response = {"users": []}
+            response = self.recovery_body
         elif self.path.endswith("accounts:sendOobCode"):
             response = {"oobCode": "code-" + str(len(self.calls))}
         else:
             response = {}
         encoded = json.dumps(response).encode()
-        self.send_response(200)
+        self.send_response(self.recovery_status if self.path.endswith("accounts:lookup") else 200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
@@ -98,6 +101,8 @@ def _bindings():
 @pytest.fixture
 def fixture_origin():
     _ActionFixture.calls = []
+    _ActionFixture.recovery_status = 200
+    _ActionFixture.recovery_body = {"users": []}
     server = HTTPServer(("127.0.0.1", 0), _ActionFixture)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -113,6 +118,7 @@ def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp
     descriptor_, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = _artifacts(tmp_path)
     ledger_root = tmp_path / "ledger"
     ledger_root.mkdir()
+    os.chmod(ledger_root, 0o700)
     (ledger_root / "state.json").write_text('{"reservations": {}, "envelopes": {}}')
     worker = (ROOT / descriptor.WORKER_ENTRY).read_bytes()
     capability = admission.issue_production_capability(
@@ -146,15 +152,30 @@ def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp
     assert len(_ActionFixture.calls) == 32
 
 
-@pytest.mark.parametrize("body", [{"error": {"message": "bad"}}, {"unexpected": True}])
-def test_recovery_error_is_not_typed_absence(tmp_path, fixture_origin, body):
-    # The public Gate contract is exercised directly here so a malformed or
-    # client-error recovery response cannot be relabelled as an empty account.
-    import action_codes_gate as gate
-
-    plan = gate.gate_plan(descriptor.AUTHORIZED_PROJECT, NONCE)
-    gate.create(tmp_path / "gate", plan)
-    handle = gate.ActionGate(tmp_path / "gate", gate.JOB)
-    handle.claim()
-    with pytest.raises(ValueError):
-        handle.dispatch(plan["jobs"][gate.JOB]["observation"][0], False, lambda: (200, body))
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [(400, {"error": {"message": "bad"}}), (200, {"unexpected": True})],
+)
+def test_recovery_error_is_not_typed_absence(tmp_path, fixture_origin, status, body):
+    _ActionFixture.recovery_status = status
+    _ActionFixture.recovery_body = body
+    descriptor_, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = _artifacts(tmp_path)
+    ledger_root = tmp_path / "ledger"
+    ledger_root.mkdir()
+    os.chmod(ledger_root, 0o700)
+    (ledger_root / "state.json").write_text('{"reservations": {}, "envelopes": {}}')
+    worker = (ROOT / descriptor.WORKER_ENTRY).read_bytes()
+    capability = admission.issue_production_capability(
+        inputs=inputs, approval=approval, manifest=manifest,
+        manifest_bytes=manifest_bytes, manifest_path=manifest_path,
+        permission=permission, ledger_root=ledger_root,
+        artifact_path=artifact, launcher_path=launcher,
+        binding=worker, binding_digest=hashlib.sha256(worker).hexdigest(),
+    )
+    with pytest.raises(ValueError, match="typed Auth absence"):
+        production.execute(
+            capability=capability, inputs=inputs, permission=permission,
+            ledger_root=ledger_root, output=tmp_path / "output",
+            bindings=_bindings(), token="fixture-owner-token",
+            api_key="fixture-api-key", fixture_origin=fixture_origin,
+        )

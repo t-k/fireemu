@@ -105,6 +105,7 @@ def execute_reserved(
     claim = admission.reservation_claim(
         inputs, gate_path=output / "gate", gate_plan=gate_plan
     )
+    worker_sha256 = capability.binding_digest if capability is not None else None
     if capability is not None:
         capability._consume(
             campaign_id=claim["campaignId"],
@@ -159,7 +160,12 @@ def execute_reserved(
                 path.read_bytes()
             ).hexdigest()
     receipt = admission.build_receipt(
-        inputs, result, capability=capability, generation=generation, failure=failure
+        inputs,
+        result,
+        production=capability is not None,
+        worker_sha256=worker_sha256,
+        generation=generation,
+        failure=failure,
     )
     disposition = admission.classify_stop(receipt)
     supported, blocker = admission.release_supported()

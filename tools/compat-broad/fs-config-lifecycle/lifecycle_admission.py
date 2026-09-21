@@ -371,7 +371,9 @@ def classify_stop(receipt) -> dict:
     }
 
 
-def build_receipt(inputs, result, *, capability, generation, failure=None):
+def build_receipt(
+    inputs, result, *, production, worker_sha256, generation, failure=None
+):
     """The campaign receipt: digests, restore states and the typed disposition."""
     steps = (result or {}).get("steps") or {}
     return {
@@ -392,10 +394,10 @@ def build_receipt(inputs, result, *, capability, generation, failure=None):
         },
         "generation": copy.deepcopy(generation),
         "executionKind": "fixed-production-wire"
-        if capability is not None
+        if production
         else "injected-transport",
-        "productionExecuted": capability is not None,
-        "workerSha256": capability.binding_digest if capability is not None else None,
+        "productionExecuted": bool(production),
+        "workerSha256": worker_sha256,
         "stopPoint": (result or {}).get("stopPoint"),
         "failure": failure,
     }

@@ -76,16 +76,19 @@ class Admission:
         self.descriptor = campaign.descriptor()
         self.plan = campaign.plan_compiler(nonce)
         self.sources = campaign.source_map()
-        self.permission = _permission(self.plan, self.sources)
+        self.artifact_path = tmp_path / "artifact"
+        self.artifact_path.write_bytes(b"retained artifact")
+        artifact = hashlib.sha256(self.artifact_path.read_bytes()).hexdigest()
+        self.permission = _permission(self.plan, self.sources, artifact=artifact)
         admission._approve(
-            self.permission, self.plan, "0" * 40, "b" * 64, self.sources, BASELINE
+            self.permission, self.plan, "0" * 40, artifact, self.sources, BASELINE
         )
         self.inputs = o8_admission.freeze_inputs(
             self.descriptor,
             self.permission,
             self.plan,
             source_commit="0" * 40,
-            artifact_sha256="b" * 64,
+            artifact_sha256=artifact,
         )
         self.ledger = tmp_path / "ledger"
         self.manifest = {
@@ -96,8 +99,6 @@ class Admission:
         self.manifest_path = tmp_path / "manifest.json"
         self.manifest_path.write_bytes(self.manifest_bytes)
         self.manifest_path.chmod(0o600)
-        self.artifact_path = tmp_path / "artifact"
-        self.artifact_path.write_bytes(b"retained artifact")
         self.launcher_path = HERE / "lifecycle_o8.py"
         self.approval = self._approval()
 
@@ -317,7 +318,7 @@ def test_the_owner_permission_needs_the_frozen_projection_digest_and_real_identi
 ) -> None:
     built = Admission(tmp_path)
     good = built.permission
-    args = (built.plan, "0" * 40, "b" * 64, built.sources)
+    args = (built.plan, "0" * 40, good["artifactSha256"], built.sources)
     no_baseline = {k: v for k, v in good.items() if k != "databaseProjectionDigest"}
     with pytest.raises(ValueError, match="binding differs"):
         admission._approve(no_baseline, *args, BASELINE)

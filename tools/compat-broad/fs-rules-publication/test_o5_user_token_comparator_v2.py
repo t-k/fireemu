@@ -94,8 +94,8 @@ def test_two_fully_bound_agreeing_bundles_match_on_every_row() -> None:
     assert result["acquisitionValidated"] is True
     assert result["productionObserved"] is True
     assert result["promotionReady"] is True
-    assert len(result["rows"]) == 26
-    assert [row["index"] for row in result["rows"]] == list(range(26))
+    assert len(result["rows"]) == 30
+    assert [row["index"] for row in result["rows"]] == list(range(30))
     assert all(row["classification"] == MATCH for row in result["rows"])
     assert set(result["conditions"].values()) == {MATCH}
     assert set(result["conditions"]) == set(plan["conditions"])
@@ -269,7 +269,7 @@ def test_a_missing_release_is_named() -> None:
 
 def test_a_row_under_the_wrong_ruleset_label_is_named() -> None:
     production, local, plan = bound_pair()
-    production["rows"][23]["ruleset"] = "A"
+    production["rows"][27]["ruleset"] = "A"
     result = compare(production, local, plan)
     assert result["classification"] != MATCH
     assert any("ruleset-mismatch:row:" in error for error in result["errors"])
@@ -327,7 +327,8 @@ def test_identical_principals_on_both_sides_are_refused() -> None:
     result = compare(production, local, plan)
     assert result["classification"] == REFUSED
     assert (
-        "principal-shared-across-sides:owner-a,other-b,anonymous-c,tenant-d"
+        "principal-shared-across-sides:"
+        "owner-a,other-b,anonymous-c,tenant-d,revoked-e,disabled-f,deleted-g"
         in result["errors"]
     )
 
@@ -471,7 +472,7 @@ def test_a_wire_sequence_that_regresses_or_disagrees_in_count_is_named() -> None
 
 def test_a_row_outside_the_observation_span_or_deadline_is_named() -> None:
     production, local, plan = bound_pair()
-    production["rows"][25]["at"] = production["transport"]["clock"]["finished"] + 1
+    production["rows"][-1]["at"] = production["transport"]["clock"]["finished"] + 1
     result = compare(production, local, plan)
     assert result["classification"] == INDETERMINATE
     assert "production:time-contradiction:rows-outside-observation" in result["errors"]

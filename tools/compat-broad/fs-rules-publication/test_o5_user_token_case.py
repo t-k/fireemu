@@ -32,6 +32,7 @@ def test_matrix_covers_every_required_condition() -> None:
     assert set(plan["conditions"]) == {
         "atomic-multiwrite",
         "credential-refusal",
+        "credential-revocation",
         "custom-claim",
         "exists",
         "get",
@@ -193,7 +194,15 @@ def test_rules_read_a_field_the_fixtures_actually_carry() -> None:
 def test_principal_references_resolve_to_owned_accounts() -> None:
     plan = case()
     accounts = {entry["ref"] for entry in plan["ownedAccounts"]}
-    assert accounts == {"owner-a", "other-b", "anonymous-c", "tenant-d"}
+    assert accounts == {
+        "owner-a",
+        "other-b",
+        "anonymous-c",
+        "tenant-d",
+        "revoked-e",
+        "disabled-f",
+        "deleted-g",
+    }
     for entry in plan["fixtures"]:
         for value in entry["fields"].values():
             if isinstance(value, dict):
@@ -271,3 +280,66 @@ def test_validate_rejects_non_mappings() -> None:
     for value in (None, [], "plan", 3):
         with pytest.raises(ValueError):
             validate_case(value)
+
+
+def test_revocation_rows_state_the_local_decision_and_a_production_hypothesis() -> None:
+    """RULES-REVOKE-005 phase 1.
+
+    The compiled status is what the local runtime currently decides: a token
+    whose account was revoked, disabled or deleted after sign-in is refused
+    before Rules evaluation. Production is expected to keep accepting the
+    token until it expires; that is a hypothesis carried on the row, never an
+    observation, and a real comparison is expected to name these rows.
+    """
+    plan = case()
+    rows = [
+        row
+        for row in plan["observation"]
+        if row["condition"] == "credential-revocation"
+    ]
+    assert [row["principal"] for row in rows] == [
+        "revoked-e",
+        "disabled-f",
+        "deleted-g",
+        "revoked-expired-token",
+    ]
+    assert all(row["ruleset"] == "A" for row in rows)
+    assert all(row["targets"] == ["exists-guarded"] for row in rows)
+    assert all(row["expect"]["status"] == "UNAUTHENTICATED" for row in rows)
+    within_exp, control = rows[:3], rows[3]
+    for row in within_exp:
+        assert row["role"] == "primary"
+        assert row["expect"]["productionHypothesis"]["status"] == "OK"
+        assert "revocation" in row["expect"]["productionHypothesis"]["basis"]
+    assert control["role"] == "control"
+    assert control["expect"]["productionHypothesis"]["status"] == "UNAUTHENTICATED"
+    assert control["credential"]["class"] == "user-id-token"
+
+
+def test_revocation_principals_are_owned_accounts_with_a_post_sign_in_action() -> None:
+    plan = case()
+    actions = {entry["ref"]: entry.get("postSignIn") for entry in plan["ownedAccounts"]}
+    assert actions["revoked-e"] == "revoke"
+    assert actions["disabled-f"] == "disable"
+    assert actions["deleted-g"] == "delete"
+    assert all(
+        actions[ref] is None
+        for ref in ("owner-a", "other-b", "anonymous-c", "tenant-d")
+    )
+    for entry in plan["ownedAccounts"]:
+        if entry.get("postSignIn"):
+            assert entry["tenant"] is None
+            assert entry["claims"] == {}
+    principals = {row["ref"]: row for row in plan["principals"]}
+    assert principals["revoked-expired-token"]["account"] is False
+    assert principals["revoked-expired-token"]["kind"] == "expired-id-token"
+
+
+def test_the_revocation_target_admits_any_authenticated_principal() -> None:
+    plan = case()
+    for label in ("A", "B"):
+        source = plan["rulesets"][label]["source"]
+        assert "exists-guarded {" in source
+        clause = source.split("exists-guarded {", 1)[1].split("}", 1)[0]
+        assert "request.auth != null" in clause
+        assert "request.auth.uid" not in clause

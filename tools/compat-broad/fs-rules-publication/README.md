@@ -53,7 +53,7 @@ for, because an administrator bypasses Rules evaluation.
 
 | Module | Responsibility |
 | --- | --- |
-| `o5_user_token_case.py` | Compiles the 26-row matrix, both Ruleset sources, the owned documents and accounts, every frozen payload and the expected result of every row |
+| `o5_user_token_case.py` | Compiles the 30-row matrix, both Ruleset sources, the owned documents and accounts, every frozen payload and the expected result of every row; the four `credential-revocation` rows also carry a stated production hypothesis |
 | `o5_user_token_collector.py` | Runs the matrix through an injected transport under an enforced request ceiling, separate observation and recovery deadlines, an fsynced journal and version-bound cleanup of documents and accounts; in a bound run it also releases each Ruleset through a checked step and records the endpoint, wire sequence, clocks, observer digests and launcher bindings the acquisition comparator verifies |
 | `o5_user_token_campaign.py` | Freezes the inputs, the budget estimate, the permission envelope and the owner preconditions; admission always raises |
 | `o5_user_token_comparator.py` | Names why a pair of bundles is not an acquisition; it has no positive classification |
@@ -133,7 +133,7 @@ compares rows only after both sides are admitted.
 
 `compare(production, local, plan, *, manifest_digest=None)` returns
 `classification` in `MATCH`, `SEMANTIC_MISMATCH`, `INDETERMINATE`, `REFUSED`,
-the 26 per-row decisions, a per-condition summary, and `errors` naming every
+the 30 per-row decisions, a per-condition summary, and `errors` naming every
 binding that failed, prefixed with the side (`production:` or `local:`) or
 unprefixed when it concerns the pair.
 

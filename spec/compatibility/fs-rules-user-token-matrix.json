@@ -1,18 +1,18 @@
 {
   "budget": {
-    "authRequests": 8,
-    "billedDocumentReads": 44,
+    "authRequests": 14,
+    "billedDocumentReads": 51,
     "billedDocumentWrites": 28,
     "concurrencyUpperBound": 1,
     "costCeilingUsd": 1.0,
     "estimateBasis": "public Firestore Standard list prices; not a quoted tariff",
-    "estimatedCostUsd": 7.7e-05,
+    "estimatedCostUsd": 8.1e-05,
     "fixtureRequests": 10,
-    "observationRequests": 26,
+    "observationRequests": 30,
     "perRequestTimeoutSeconds": 12.0,
     "recoveryDeadlineSeconds": 900.0,
-    "recoveryRequests": 54,
-    "requestUpperBound": 106,
+    "recoveryRequests": 63,
+    "requestUpperBound": 125,
     "rulesRequests": 8,
     "wallClockDeadlineSeconds": 600.0
   },
@@ -23,6 +23,7 @@
     "conditions": [
       "atomic-multiwrite",
       "credential-refusal",
+      "credential-revocation",
       "custom-claim",
       "exists",
       "get",
@@ -856,6 +857,126 @@
         "writes": []
       },
       {
+        "caseId": "a-revoked-refresh-tokens-within-exp",
+        "condition": "credential-revocation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "revoked-e"
+        },
+        "expect": {
+          "detail": "local-refuses-a-token-issued-before-validSince",
+          "productionHypothesis": {
+            "basis": "Firebase documentation, Manage user sessions / Detect ID token revocation: an ID token stays valid until exp unless the verifier checks revocation; Rules evaluation is not documented to check it",
+            "status": "OK"
+          },
+          "status": "UNAUTHENTICATED"
+        },
+        "index": 23,
+        "method": "get",
+        "principal": "revoked-e",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-disabled-account-within-exp",
+        "condition": "credential-revocation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "disabled-f"
+        },
+        "expect": {
+          "detail": "local-refuses-a-token-of-a-disabled-account",
+          "productionHypothesis": {
+            "basis": "Firebase documentation, Manage user sessions / Detect ID token revocation: an ID token stays valid until exp unless the verifier checks revocation; Rules evaluation is not documented to check it",
+            "status": "OK"
+          },
+          "status": "UNAUTHENTICATED"
+        },
+        "index": 24,
+        "method": "get",
+        "principal": "disabled-f",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-deleted-account-within-exp",
+        "condition": "credential-revocation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "deleted-g"
+        },
+        "expect": {
+          "detail": "local-refuses-a-token-of-a-deleted-account",
+          "productionHypothesis": {
+            "basis": "Firebase documentation, Manage user sessions / Detect ID token revocation: an ID token stays valid until exp unless the verifier checks revocation; Rules evaluation is not documented to check it",
+            "status": "OK"
+          },
+          "status": "UNAUTHENTICATED"
+        },
+        "index": 25,
+        "method": "get",
+        "principal": "deleted-g",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-revoked-account-expired-token-control",
+        "condition": "credential-revocation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "revoked-expired-token"
+        },
+        "expect": {
+          "detail": "an-expired-token-is-refused-regardless-of-revocation",
+          "productionHypothesis": {
+            "basis": "an expired ID token is refused before Rules evaluation",
+            "status": "UNAUTHENTICATED"
+          },
+          "status": "UNAUTHENTICATED"
+        },
+        "index": 26,
+        "method": "get",
+        "principal": "revoked-expired-token",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+        ],
+        "role": "control",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
         "caseId": "b-owner-denied-after-ruleset-transition",
         "condition": "ruleset-transition",
         "createdDocuments": [],
@@ -867,7 +988,7 @@
           "detail": "same-principal-same-resource-decision-changes-with-the-ruleset",
           "status": "PERMISSION_DENIED"
         },
-        "index": 23,
+        "index": 27,
         "method": "get",
         "principal": "owner-a",
         "resources": [
@@ -897,7 +1018,7 @@
           },
           "status": "OK"
         },
-        "index": 24,
+        "index": 28,
         "method": "get",
         "principal": "unauthenticated",
         "resources": [
@@ -927,7 +1048,7 @@
           },
           "status": "OK"
         },
-        "index": 25,
+        "index": 29,
         "method": "get",
         "principal": "owner-a",
         "resources": [
@@ -994,6 +1115,30 @@
         "kind": "email-password",
         "ref": "tenant-d",
         "tenant": "o5-user-token-tenant"
+      },
+      {
+        "claims": {},
+        "email": "o5e-00000000000000000000000000000000@o5-user-token.invalid",
+        "kind": "email-password",
+        "postSignIn": "revoke",
+        "ref": "revoked-e",
+        "tenant": null
+      },
+      {
+        "claims": {},
+        "email": "o5f-00000000000000000000000000000000@o5-user-token.invalid",
+        "kind": "email-password",
+        "postSignIn": "disable",
+        "ref": "disabled-f",
+        "tenant": null
+      },
+      {
+        "claims": {},
+        "email": "o5g-00000000000000000000000000000000@o5-user-token.invalid",
+        "kind": "email-password",
+        "postSignIn": "delete",
+        "ref": "deleted-g",
+        "tenant": null
       }
     ],
     "ownedResources": [
@@ -1013,7 +1158,7 @@
       "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/multiwrite-y"
     ],
     "ownedScope": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases",
-    "planDigest": "9f839e8393d55a71b6170615c31b0d568845eea616befcc3360147be699fcea4",
+    "planDigest": "57a5b1f8f1661f7a2307c356d7a2b8afd0e3a577bab47c1b8b5575ecf2aadc64",
     "principals": [
       {
         "account": true,
@@ -1021,6 +1166,7 @@
           "o5role": "editor"
         },
         "kind": "email-password",
+        "postSignIn": null,
         "ref": "owner-a",
         "tenant": null
       },
@@ -1028,6 +1174,7 @@
         "account": true,
         "claims": {},
         "kind": "email-password",
+        "postSignIn": null,
         "ref": "other-b",
         "tenant": null
       },
@@ -1035,6 +1182,7 @@
         "account": true,
         "claims": {},
         "kind": "anonymous",
+        "postSignIn": null,
         "ref": "anonymous-c",
         "tenant": null
       },
@@ -1042,8 +1190,33 @@
         "account": true,
         "claims": {},
         "kind": "email-password",
+        "postSignIn": null,
         "ref": "tenant-d",
         "tenant": "o5-user-token-tenant"
+      },
+      {
+        "account": true,
+        "claims": {},
+        "kind": "email-password",
+        "postSignIn": "revoke",
+        "ref": "revoked-e",
+        "tenant": null
+      },
+      {
+        "account": true,
+        "claims": {},
+        "kind": "email-password",
+        "postSignIn": "disable",
+        "ref": "disabled-f",
+        "tenant": null
+      },
+      {
+        "account": true,
+        "claims": {},
+        "kind": "email-password",
+        "postSignIn": "delete",
+        "ref": "deleted-g",
+        "tenant": null
       },
       {
         "account": false,
@@ -1057,6 +1230,13 @@
         "claims": {},
         "kind": "expired-id-token",
         "ref": "expired-token",
+        "tenant": null
+      },
+      {
+        "account": false,
+        "claims": {},
+        "kind": "expired-id-token",
+        "ref": "revoked-expired-token",
         "tenant": null
       },
       {
@@ -1105,7 +1285,7 @@
     "accepted cost ceiling and data-retention decision for the run directory"
   ],
   "permissionEnvelope": {
-    "authScope": "four throwaway accounts created by this campaign only",
+    "authScope": "seven throwaway accounts created by this campaign only, three of which are revoked, disabled or deleted by the administrator credential after sign-in",
     "concurrency": 1,
     "firestoreScope": "the campaign nonce subtree only",
     "forbidden": [

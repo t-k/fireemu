@@ -51,7 +51,11 @@ OWNER_PRECONDITIONS = (
 PERMISSION_ENVELOPE = {
     "services": ["identitytoolkit.googleapis.com", "firestore.googleapis.com"],
     "firestoreScope": "the campaign nonce subtree only",
-    "authScope": "four throwaway accounts created by this campaign only",
+    "authScope": (
+        "seven throwaway accounts created by this campaign only, three of "
+        "which are revoked, disabled or deleted by the administrator credential "
+        "after sign-in"
+    ),
     "rulesScope": "read the active release; publish only the two campaign Rulesets",
     "forbidden": [
         "any document outside the nonce subtree",
@@ -87,8 +91,14 @@ def budget(plan: dict[str, Any]) -> dict[str, Any]:
     fixtures = len(plan["fixtures"])
     accounts = plan["ownedAccounts"]
     # Per account: sign-up, plus a claim write and a re-sign-in when it carries
-    # a custom claim. Plus one tenant create and one tenant delete.
-    auth_requests = sum(3 if entry["claims"] else 1 for entry in accounts) + 2
+    # a custom claim, plus one administrator action when the account is
+    # revoked, disabled or deleted after sign-in. Plus one tenant create and
+    # one tenant delete.
+    auth_requests = (
+        sum(3 if entry["claims"] else 1 for entry in accounts)
+        + sum(1 for entry in accounts if entry.get("postSignIn"))
+        + 2
+    )
     # Rules: read the active release, publish two Rulesets, release each, read
     # back each release, restore the preexisting release and read it back.
     rules_requests = 8

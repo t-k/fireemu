@@ -102,7 +102,7 @@ def test_a_bound_run_records_releases_wire_facts_and_observer_identity() -> None
     assert bundle["abort"] is None
     releases = bundle["transport"]["rulesetReleases"]
     assert [release["label"] for release in releases] == ["A", "B"]
-    assert [release["beforeIndex"] for release in releases] == [0, 23]
+    assert [release["beforeIndex"] for release in releases] == [0, 27]
     for release in releases:
         assert release["readback"]["kind"] == READBACK_RELEASE_GET
         assert release["readback"]["digest"] == release["sourceDigest"]
@@ -141,7 +141,7 @@ def test_a_bound_run_is_admitted_by_the_acquisition_comparator() -> None:
     result = compare(production, local, plan_for(ROLE_PRODUCTION))
     assert result["errors"] == []
     assert result["classification"] == MATCH
-    assert len(result["rows"]) == 26
+    assert len(result["rows"]) == 30
 
 
 def test_the_ruleset_release_is_requested_and_journaled_before_the_first_row(
@@ -151,9 +151,9 @@ def test_the_ruleset_release_is_requested_and_journaled_before_the_first_row(
     bundle, transport = bound(ROLE_LOCAL_SHADOW, journal_path=path)
     kinds = [request.get("phase") for request in transport.requests]
     assert kinds[0] == "ruleset"
-    assert kinds[24] == "ruleset"
+    assert kinds[28] == "ruleset"
     assert transport.requests[0]["ruleset"] == "A"
-    assert transport.requests[24]["ruleset"] == "B"
+    assert transport.requests[28]["ruleset"] == "B"
     assert transport.requests[0]["sourceDigest"] == digest(
         plan_for(ROLE_LOCAL_SHADOW)["rulesets"]["A"]["source"]
     )
@@ -306,7 +306,7 @@ def test_a_release_whose_readback_is_not_the_plan_source_stops_the_run(
         acquisition=acquisition_for(plan, ROLE_LOCAL_SHADOW),
     )
     assert bundle["abort"] == failure
-    assert len(bundle["rows"]) == 23
+    assert len(bundle["rows"]) == 27
     assert [r["label"] for r in bundle["transport"]["rulesetReleases"]] == ["A"]
     assert bundle["infrastructureFailures"] == [f"ruleset:B:{failure}"]
     assert bundle["cleanup"]["cleanupComplete"] is True
@@ -314,7 +314,7 @@ def test_a_release_whose_readback_is_not_the_plan_source_stops_the_run(
 
 def test_a_release_step_counts_against_its_own_ceiling_only() -> None:
     bundle, _ = bound(ROLE_LOCAL_SHADOW)
-    assert bundle["budget"]["observationSpent"] == 26
+    assert bundle["budget"]["observationSpent"] == 30
     assert bundle["budget"]["rulesetSpent"] == 2
     assert bundle["budget"]["recoverySpent"] == len(
         bundle["cleanup"]["documentSteps"] + bundle["cleanup"]["accountSteps"]

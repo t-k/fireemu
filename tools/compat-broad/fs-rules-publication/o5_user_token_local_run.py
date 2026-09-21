@@ -47,9 +47,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from batch_wire import NoRedirect, _read_bounded_response
 from o5_user_token_campaign import admitted_manifest_digest
 from o5_user_token_case import (
+    POST_SIGN_IN_DELETE,
+    POST_SIGN_IN_DISABLE,
+    POST_SIGN_IN_REVOKE,
     PRINCIPAL_EMPTY,
     PRINCIPAL_EXPIRED,
     PRINCIPAL_MALFORMED,
+    PRINCIPAL_REVOKED,
+    PRINCIPAL_REVOKED_EXPIRED,
     PRINCIPAL_UNAUTHENTICATED,
     compile_case,
     digest,
@@ -278,6 +283,67 @@ class LocalShadow:
         if status != 200:
             raise Refused(f"claims:{status}:{json.dumps(body)[:200]}")
 
+    def _valid_since(self, issued_at: float, token: str) -> str:
+        """A validSince strictly after the second the token was issued in.
+
+        The Admin SDK's revokeRefreshTokens sets validSince to now; a token
+        issued in the same second would not be revoked by it. A locally minted
+        token carries its auth_time, so the value is placed after it; a token
+        without that shape is placed after the second the sign-up was sent in.
+        Either way the value is at most one second ahead of the local clock,
+        and the row that depends on it runs only after every account and
+        fixture has been set up.
+        """
+        import base64
+
+        segments = token.split(".")
+        if len(segments) == 3:
+            payload = segments[1] + "=" * (-len(segments[1]) % 4)
+            try:
+                claims = json.loads(base64.urlsafe_b64decode(payload))
+            except (ValueError, json.JSONDecodeError):
+                claims = {}
+            auth_time = claims.get("auth_time", claims.get("iat"))
+            if type(auth_time) is int and auth_time >= 0:
+                return str(max(int(time.time()), auth_time + 1))
+        return str(max(int(time.time()), math.floor(issued_at) + 1))
+
+    def apply_post_sign_in(
+        self, entry: dict[str, Any], uid: str, token: str, issued_at: float
+    ) -> None:
+        """The administrator action a revocation principal receives after sign-in."""
+        action = entry.get("postSignIn")
+        if action is None:
+            return
+        prefix = self.account_prefix(entry["tenant"])
+        if action == POST_SIGN_IN_DELETE:
+            status, body = _request(
+                "POST",
+                self._identity(f"{prefix}/accounts:delete"),
+                {"localId": uid},
+                OWNER_TOKEN,
+            )
+        elif action in (POST_SIGN_IN_REVOKE, POST_SIGN_IN_DISABLE):
+            payload: dict[str, Any] = {"localId": uid}
+            if action == POST_SIGN_IN_REVOKE:
+                # What the Admin SDK's revokeRefreshTokens sets, placed strictly
+                # after the token's auth_time second so the token is revoked
+                # rather than issued in the same second as the revocation.
+                payload["validSince"] = self._valid_since(issued_at, token)
+            else:
+                payload["disableUser"] = True
+            status, body = _request(
+                "POST",
+                self._identity(f"{prefix}/accounts:update"),
+                payload,
+                OWNER_TOKEN,
+            )
+        else:
+            raise Refused("post-sign-in:unknown-action")
+        if status != 200 or "error" in body:
+            raise Refused(f"post-sign-in:{action}:{status}")
+        self._record_setup("account-post-sign-in", account=entry["ref"], action=action)
+
     def account_prefix(self, tenant: str | None) -> str:
         if tenant is None:
             return f"v1/projects/{self.project}"
@@ -356,13 +422,14 @@ class LocalShadow:
             return ""
         if ref == PRINCIPAL_MALFORMED:
             return "not-a-jwt"
-        if ref == PRINCIPAL_EXPIRED:
+        if ref in (PRINCIPAL_EXPIRED, PRINCIPAL_REVOKED_EXPIRED):
+            subject = "owner-a" if ref == PRINCIPAL_EXPIRED else PRINCIPAL_REVOKED
             return _unsigned_jwt(
                 {
                     "aud": self.project,
                     "iss": f"https://securetoken.google.com/{self.project}",
-                    "sub": self.uids.get("owner-a", "unknown"),
-                    "user_id": self.uids.get("owner-a", "unknown"),
+                    "sub": self.uids.get(subject, "unknown"),
+                    "user_id": self.uids.get(subject, "unknown"),
                     "iat": 1000,
                     "exp": 2000,
                     "firebase": {"sign_in_provider": "password", "identities": {}},
@@ -577,6 +644,7 @@ class LocalShadow:
             tenant = entry["tenant"]
             self._record_setup("account-intent", account=entry["ref"])
             self.setup_accounts.append(entry["ref"])
+            issued_at = time.time()
             uid, token = self.sign_up(entry["email"], tenant)
             if (
                 not isinstance(uid, str)
@@ -591,6 +659,7 @@ class LocalShadow:
                 self.set_claims(uid, entry["claims"], tenant)
                 token = self.sign_in(entry["email"], tenant)
             self.tokens[entry["ref"]] = token
+            self.apply_post_sign_in(entry, uid, token, issued_at)
         for fixture in self.plan["fixtures"]:
             self.create_fixture(fixture["resource"], fixture["fields"])
 

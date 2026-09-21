@@ -133,7 +133,7 @@ def test_the_frozen_inputs_cover_the_lane_and_the_shared_closure(tmp_path) -> No
         assert f"{lane.LANE_DIRECTORY}/{name}" in sources
     for name in (*lane.SHARED_SOURCES, *lane.ABORT_CLOSURE_SOURCES):
         assert sources[name] == hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-    assert inputs["bounds"]["observationRequests"] == 26
+    assert inputs["bounds"]["observationRequests"] == 30
     assert inputs["bounds"]["totalRequests"] == descriptor.budget["requests"]
     o8_admission.validate_frozen_inputs(descriptor, inputs)
     generation = o8_admission.abort_generation(descriptor, inputs)
@@ -215,7 +215,7 @@ def test_the_permission_bindings_name_the_collector_and_the_comparator(
     )
     assert permission["wallSeconds"] == 600
     assert permission["recoverySeconds"] == 300
-    assert permission["budget"]["accounts"] == 4
+    assert permission["budget"]["accounts"] == 7
     assert permission["budget"]["costMicrousd"] == 1_000_000
 
 
@@ -325,7 +325,7 @@ def test_the_comparator_member_compares_against_the_published_shadow() -> None:
     result = descriptor.comparator(production, shadow_plan)
     assert result["classification"] != REFUSED, result["errors"]
     assert result["errors"] == []
-    assert len(result["rows"]) == 26
+    assert len(result["rows"]) == 30
     assert all(
         row["production"]["status"] == row["local"]["status"] for row in result["rows"]
     )

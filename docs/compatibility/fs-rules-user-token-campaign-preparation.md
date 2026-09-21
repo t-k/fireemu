@@ -30,7 +30,7 @@ that token as its bearer credential.
 
 ## Prepared conditions
 
-Twenty-six observation rows cover ten conditions. Every condition carries at
+Thirty observation rows cover eleven conditions. Every condition carries at
 least one control, negative or post-state row.
 
 | Condition | Rows | What the rows separate |
@@ -44,6 +44,7 @@ least one control, negative or post-state row.
 | `getAfter` | 2 | An atomic commit that also writes the partner document satisfies `getAfter()`; a separate control document whose guard is never created is denied |
 | `atomic-multiwrite` | 2 | A commit pairing one allowed and one denied write is refused as a whole, and a post-state read of the pinned field value proves the allowed half was not applied |
 | `credential-refusal` | 3 | An expired token, a malformed bearer and an empty bearer are authentication refusals, not Rules denials |
+| `credential-revocation` | 4 | RULES-REVOKE-005 phase 1: an unexpired ID token whose account had its refresh tokens revoked (`validSince` advanced), was disabled, or was deleted after sign-in, reading a document that any authenticated principal may read; plus an expired token of the revoked account as the control. The compiled status is the current local decision, `UNAUTHENTICATED` for all four (fireemu refuses revoked and disabled accounts on the Rules path). The production expectation for the three within-`exp` rows is carried on the row as a hypothesis, `OK` until `exp`, from the Firebase documentation on detecting ID token revocation; it is not an observation, and a real comparison is expected to name these rows |
 | `ruleset-transition` | 3 | Under Ruleset B the owner is denied on the same resource, while the explicit-null and custom-claim clauses still allow |
 
 The anonymous rows matter because an implementation that treats an
@@ -107,10 +108,10 @@ subject that cannot be read back stays outstanding and is never force deleted.
 
 | Quantity | Value |
 | --- | --- |
-| Observation requests | 26 |
-| Fixture, Auth and Rules requests | 26 |
-| Recovery requests | 54 |
-| Request upper bound | 106 |
+| Observation requests | 30 |
+| Fixture, Auth and Rules requests | 32 |
+| Recovery requests | 63 |
+| Request upper bound | 125 |
 | Concurrency | 1 |
 | Observation deadline | 600 s |
 | Recovery deadline | 900 s |
@@ -137,10 +138,11 @@ every manifest-bound lane module that produced it, the loopback endpoint and
 wire sequence of every receipt, the two Ruleset releases with their publish
 echo readback, the monotonic and wall clocks, and a fingerprint per principal
 derived from the nonce and the assigned uid. In the current run the local
-runtime produced all twenty-six expected decisions, including the field values
-of the multiwrite post-state row, with complete recording, complete document
-and account cleanup, the tenant deleted and both origins closed afterwards.
-There are no repair tickets from it.
+runtime produced all thirty expected decisions, including the field values
+of the multiwrite post-state row and the four credential-revocation rows at
+the current local decision, with complete recording, complete document and
+account cleanup of all seven accounts, the tenant deleted and both origins
+closed afterwards. There are no repair tickets from it.
 
 That is local evidence. The local Auth emulator mints unsigned tokens, so a
 local allow proves a Rules decision and never production token verification.

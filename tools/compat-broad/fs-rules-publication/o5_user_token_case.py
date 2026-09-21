@@ -46,6 +46,15 @@ PRINCIPAL_UNAUTHENTICATED = "unauthenticated"
 PRINCIPAL_EXPIRED = "expired-token"
 PRINCIPAL_MALFORMED = "malformed-bearer"
 PRINCIPAL_EMPTY = "empty-bearer"
+# Revocation principals (RULES-REVOKE-005, phase 1). Each signs in, then an
+# administrator action is applied to the account while the ID token is still
+# unexpired: refresh tokens revoked (validSince advanced), account disabled, or
+# account deleted. The compiled expectation is the current local decision; the
+# production expectation is a stated hypothesis, not an observation.
+PRINCIPAL_REVOKED = "revoked-e"
+PRINCIPAL_DISABLED = "disabled-f"
+PRINCIPAL_DELETED = "deleted-g"
+PRINCIPAL_REVOKED_EXPIRED = "revoked-expired-token"
 
 # Principals backed by an account this campaign creates and must delete again.
 ACCOUNT_PRINCIPALS = (
@@ -53,7 +62,15 @@ ACCOUNT_PRINCIPALS = (
     PRINCIPAL_OTHER,
     PRINCIPAL_ANONYMOUS,
     PRINCIPAL_TENANT,
+    PRINCIPAL_REVOKED,
+    PRINCIPAL_DISABLED,
+    PRINCIPAL_DELETED,
 )
+
+# The administrator action applied to an account after its token was minted.
+POST_SIGN_IN_REVOKE = "revoke"
+POST_SIGN_IN_DISABLE = "disable"
+POST_SIGN_IN_DELETE = "delete"
 
 _CREDENTIAL_CLASS = {
     PRINCIPAL_OWNER: "user-id-token",
@@ -64,6 +81,25 @@ _CREDENTIAL_CLASS = {
     PRINCIPAL_EXPIRED: "user-id-token",
     PRINCIPAL_MALFORMED: "malformed",
     PRINCIPAL_EMPTY: "empty",
+    PRINCIPAL_REVOKED: "user-id-token",
+    PRINCIPAL_DISABLED: "user-id-token",
+    PRINCIPAL_DELETED: "user-id-token",
+    PRINCIPAL_REVOKED_EXPIRED: "user-id-token",
+}
+
+# What production is expected to do with an unexpired ID token whose account
+# was revoked, disabled or deleted after sign-in. Firebase verifies ID tokens
+# statelessly; revocation is detected only when a verifier asks for it
+# (`checkRevoked`, `validSince`), so Security Rules are expected to keep
+# accepting the token until `exp`. This is a hypothesis to be observed, and it
+# differs from the current local decision, which refuses such tokens.
+PRODUCTION_HYPOTHESIS_ALLOWED_UNTIL_EXP = {
+    "status": OK,
+    "basis": (
+        "Firebase documentation, Manage user sessions / Detect ID token "
+        "revocation: an ID token stays valid until exp unless the verifier "
+        "checks revocation; Rules evaluation is not documented to check it"
+    ),
 }
 
 OWNER_FIELD = "ownerUid"
@@ -221,10 +257,13 @@ def _operation(
     detail: str,
     writes: tuple[dict[str, Any], ...] = (),
     expect_fields: dict[str, Any] | None = None,
+    production_hypothesis: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     expect: dict[str, Any] = {"status": status, "detail": detail}
     if expect_fields is not None:
         expect["fields"] = expect_fields
+    if production_hypothesis is not None:
+        expect["productionHypothesis"] = dict(production_hypothesis)
     return {
         "caseId": case_id,
         "role": role,
@@ -582,6 +621,60 @@ def _matrix(nonce: str, tenant: str) -> list[dict[str, Any]]:
             )
         )
 
+    # Credential revocation within the token lifetime (RULES-REVOKE-005 phase
+    # 1). The target clause admits any authenticated principal, so the only
+    # variable is whether the runtime still honors a token whose account was
+    # revoked, disabled or deleted after it was minted. The compiled status is
+    # the current local decision; production is a stated hypothesis.
+    for principal, case_id, detail in (
+        (
+            PRINCIPAL_REVOKED,
+            "a-revoked-refresh-tokens-within-exp",
+            "local-refuses-a-token-issued-before-validSince",
+        ),
+        (
+            PRINCIPAL_DISABLED,
+            "a-disabled-account-within-exp",
+            "local-refuses-a-token-of-a-disabled-account",
+        ),
+        (
+            PRINCIPAL_DELETED,
+            "a-deleted-account-within-exp",
+            "local-refuses-a-token-of-a-deleted-account",
+        ),
+    ):
+        add(
+            _operation(
+                case_id,
+                role="primary",
+                ruleset=RULESET_A,
+                principal=principal,
+                method="get",
+                targets=("exists-guarded",),
+                condition="credential-revocation",
+                status=UNAUTHENTICATED,
+                detail=detail,
+                production_hypothesis=PRODUCTION_HYPOTHESIS_ALLOWED_UNTIL_EXP,
+            )
+        )
+    add(
+        _operation(
+            "a-revoked-account-expired-token-control",
+            role="control",
+            ruleset=RULESET_A,
+            principal=PRINCIPAL_REVOKED_EXPIRED,
+            method="get",
+            targets=("exists-guarded",),
+            condition="credential-revocation",
+            status=UNAUTHENTICATED,
+            detail="an-expired-token-is-refused-regardless-of-revocation",
+            production_hypothesis={
+                "status": UNAUTHENTICATED,
+                "basis": "an expired ID token is refused before Rules evaluation",
+            },
+        )
+    )
+
     # Ruleset transition. Only the owner clause differs between A and B.
     add(
         _operation(
@@ -657,6 +750,30 @@ def _accounts(nonce: str, tenant: str) -> list[dict[str, Any]]:
             "tenant": tenant,
             "claims": {},
         },
+        {
+            "ref": PRINCIPAL_REVOKED,
+            "kind": "email-password",
+            "email": f"o5e-{nonce}@{EMAIL_DOMAIN}",
+            "tenant": None,
+            "claims": {},
+            "postSignIn": POST_SIGN_IN_REVOKE,
+        },
+        {
+            "ref": PRINCIPAL_DISABLED,
+            "kind": "email-password",
+            "email": f"o5f-{nonce}@{EMAIL_DOMAIN}",
+            "tenant": None,
+            "claims": {},
+            "postSignIn": POST_SIGN_IN_DISABLE,
+        },
+        {
+            "ref": PRINCIPAL_DELETED,
+            "kind": "email-password",
+            "email": f"o5g-{nonce}@{EMAIL_DOMAIN}",
+            "tenant": None,
+            "claims": {},
+            "postSignIn": POST_SIGN_IN_DELETE,
+        },
     ]
 
 
@@ -669,6 +786,7 @@ def _principals(nonce: str, tenant: str) -> list[dict[str, Any]]:
             "tenant": accounts[ref]["tenant"],
             "claims": accounts[ref]["claims"],
             "account": True,
+            "postSignIn": accounts[ref].get("postSignIn"),
         }
         for ref in ACCOUNT_PRINCIPALS
     ]
@@ -677,6 +795,7 @@ def _principals(nonce: str, tenant: str) -> list[dict[str, Any]]:
         for ref, kind in (
             (PRINCIPAL_UNAUTHENTICATED, "absent"),
             (PRINCIPAL_EXPIRED, "expired-id-token"),
+            (PRINCIPAL_REVOKED_EXPIRED, "expired-id-token"),
             (PRINCIPAL_MALFORMED, "malformed"),
             (PRINCIPAL_EMPTY, "empty"),
         )

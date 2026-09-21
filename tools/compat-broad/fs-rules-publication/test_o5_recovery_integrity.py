@@ -1,4 +1,5 @@
 """An injected failure or malformed recovery cannot become release evidence."""
+
 from __future__ import annotations
 
 import math
@@ -12,24 +13,40 @@ from test_o5_user_token_collector import case, Transport
 def run(override):
     plan = case()
     transport = Transport(plan)
+
     def execute(request):
         receipt = transport(request)
         return override(request, receipt)
-    return plan, transport, collect(plan, execute, role=ROLE_LOCAL_SHADOW, run_id="integrity")
+
+    return (
+        plan,
+        transport,
+        collect(plan, execute, role=ROLE_LOCAL_SHADOW, run_id="integrity"),
+    )
 
 
-@pytest.mark.parametrize("kind", ["readback", "absence", "account-readback", "account-absence"])
-@pytest.mark.parametrize("bad", [
-    {"status": "PERMISSION_DENIED"}, {"code": "UNAVAILABLE"},
-    {"httpStatus": 500}, {"httpStatus": True},
-    {"status": "OK", "failure": "transport-interrupted"},
-])
+@pytest.mark.parametrize(
+    "kind", ["readback", "absence", "account-readback", "account-absence"]
+)
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"status": "PERMISSION_DENIED"},
+        {"code": "UNAVAILABLE"},
+        {"httpStatus": 500},
+        {"httpStatus": True},
+        {"status": "OK", "failure": "transport-interrupted"},
+    ],
+)
 def test_recovery_failure_cannot_be_proven_absence(kind, bad):
     def override(request, receipt):
         if request.get("kind") == kind:
-            present = "accountPresent" if kind.startswith("account-") else "documentPresent"
+            present = (
+                "accountPresent" if kind.startswith("account-") else "documentPresent"
+            )
             receipt = {"complete": True, present: False, **bad}
         return receipt
+
     plan, transport, bundle = run(override)
     assert bundle["cleanup"]["cleanupComplete"] is False
     assert bundle["recordingComplete"] is False
@@ -43,8 +60,11 @@ def test_recovery_failure_cannot_be_proven_absence(kind, bad):
 def test_version_or_uid_without_typed_presence_never_authorizes_delete(kind, presence):
     def override(request, receipt):
         if request.get("kind") == kind:
-            receipt["accountPresent" if kind.startswith("account-") else "documentPresent"] = presence
+            receipt[
+                "accountPresent" if kind.startswith("account-") else "documentPresent"
+            ] = presence
         return receipt
+
     _, transport, bundle = run(override)
     assert bundle["cleanup"]["cleanupComplete"] is False
     delete_kind = "account-delete" if kind.startswith("account-") else "delete"
@@ -54,8 +74,10 @@ def test_version_or_uid_without_typed_presence_never_authorizes_delete(kind, pre
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
 def test_nonfinite_receipt_field_aborts_observation_and_still_recovers(value):
     def override(request, receipt):
-        if request.get("phase") != "recovery": receipt["fields"] = {"value": value}
+        if request.get("phase") != "recovery":
+            receipt["fields"] = {"value": value}
         return receipt
+
     _, transport, bundle = run(override)
     assert bundle["recordingComplete"] is False
     assert len(bundle["rows"]) == 1
@@ -65,8 +87,10 @@ def test_nonfinite_receipt_field_aborts_observation_and_still_recovers(value):
 
 def test_complete_true_with_explicit_failure_is_not_an_observation():
     def override(request, receipt):
-        if request.get("phase") != "recovery": receipt["failure"] = "truncated-response"
+        if request.get("phase") != "recovery":
+            receipt["failure"] = "truncated-response"
         return receipt
+
     _, _, bundle = run(override)
     assert bundle["recordingComplete"] is False
     assert bundle["cleanup"]["cleanupComplete"] is True

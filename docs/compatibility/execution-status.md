@@ -2,6 +2,18 @@
 
 Plan: [execution-plan.md](execution-plan.md). Scope: [emulator-scope.md](emulator-scope.md). This page records the latest verified checkpoint, what was executed, what was pushed and what remains. Counts are not compatibility percentages.
 
+## Validated continuation checkpoint (2026-09-22)
+
+G1/G2 and all 14 parent promotions remain open. This checkpoint integrates the independently reviewed transport framing/deadline repair, complete request-byte transport provenance with an immutable historical-generation allowlist, and independently anchored MFA runtime comparison. Historical receipts were not rewritten. The separate Auth shared-resource extension and new Rules/Action production transports are not included in this checkpoint.
+
+- At `afb7d04a7`, the workspace Rust gate passed 3,165 tests with 81 configured skips and no failures; workspace Clippy passed. Rust runtime inputs are unchanged by the subsequent record and Python-test updates. This is not a claim that skipped obligations or the complete Python inventory passed.
+- SDK publication now uses an actual matching-source build at `e0d53f912`: 18 Node cases, 18 browser long-polling cases and 18 browser streaming cases completed locally. Independent validators passed 29 Python and 324 Node tests; integration binding checks passed 29 tests.
+- The fresh request-byte artifact at source `7d001e9a2` completed 241 requests across 258 logical rows, with 17 skipped deletes after the over-boundary refusal. Under/exact inputs were accepted; over-boundary input was a typed refusal. Cleanup, resource absence and source/configuration bindings were verified. The published record is local-only; its fresh packet still requires independent O7/O8 acceptance and current-source CI before production launch.
+- The MFA shadow at `5866bc5e4` completed 33 rows and 178 requests with no disagreements, verified cleanup and restored configuration. Artifact, configuration, source and run identity were independently checked. A full lane run found 574 passes and 17 new process-fixture failures caused by the new provenance subprocess interacting with an old global `Popen` patch. A test-only repair retained all lifecycle controls; independent process/binding checks passed 33 tests. A new full-lane pass is not claimed here.
+- Limits-03 was actually rerun and refrozen. Its executed source `5076c77df` was preserved in the integration ancestry rather than replacing the recorded hash after an erroneous worker amend. Package validation passed 19 tests. Rows 47–50 remain pending under the historical index configuration; an explicit local nx-exemption profile is a separate, unintegrated follow-up.
+
+There have been no new production calls or reservations in this continuation. The previous request-byte allocation remains 303 micro-USD under the same stable task. Current-artifact saved Commit replay has a candidate `MATCH`, but independent local-reference provenance review is still a gate; it is not counted as accepted production compatibility. The CI results in earlier named checkpoints below remain historical, not results for this checkpoint.
+
 ## Continuation checkpoint (2026-09-22, pushed through `8654df660`)
 
 G1 and G2 remain incomplete, with `COMPAT_VERIFIED 0 / 14`. The following are independently reviewed, integrated and pushed local results, not new production observations:

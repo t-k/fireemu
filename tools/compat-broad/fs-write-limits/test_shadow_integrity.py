@@ -10,6 +10,7 @@ import copy
 import pytest
 
 from broad_contract import digest
+from broad import INDEX_NX_LOCAL_SHA256, index_bytes_for_profile
 from collector import collect, writes_safe
 from compiler import compile_limits_plan
 from rehearsal import validate_rehearsal
@@ -25,6 +26,12 @@ from test_shadow import fixture_receipt, fixture_rows
 @pytest.fixture(scope="module")
 def plan():
     return compile_limits_plan("demo-firestore-probe", "(default)", "a" * 32)
+
+
+def test_nx_local_shadow_profile_binds_the_declared_after_digest():
+    _bytes, digest_value, source_commit = index_bytes_for_profile("nx-local")
+    assert digest_value == INDEX_NX_LOCAL_SHA256
+    assert source_commit is None
 
 
 def test_positive_local_receipt_and_rehearsal_are_preserved(plan):

@@ -50,6 +50,11 @@ CONFIG = {
     "firestore": {"edition": "standard", "apiMode": "native"},
 }
 CATALOG = ROOT / "spec/compatibility/broad-catalog.json"
+HISTORICAL_INDEX_COMMIT = "2526c61eda5fc53ac91250307786127ae3c601be"
+HISTORICAL_INDEX_SHA256 = "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c"
+INDEX_BEFORE_SHA256 = "62d5387f860555c8a966d115ea95c2619c907c498b75e4c2e7a465503b452ec7"
+INDEX_NX_LOCAL_SHA256 = "1e645c04419ac8418e9d05ebceb7a11d641f7127260de5cd1f307570cc93f332"
+INDEX_PROFILES = ("historical", "nx-local")
 
 
 def save(path, value):
@@ -59,6 +64,31 @@ def save(path, value):
 def seal_parent_manifest(report):
     unsigned = {key: value for key, value in report.items() if key != "parentManifestSha256"}
     report["parentManifestSha256"] = digest(unsigned)
+
+
+def index_bytes_for_profile(profile: str) -> tuple[bytes, str, str | None]:
+    """Return one of the two closed local index profiles."""
+    if profile not in INDEX_PROFILES:
+        raise ValueError("unknown local index profile")
+    historical = subprocess.check_output(
+        ["git", "show", f"{HISTORICAL_INDEX_COMMIT}:conformance/firestore.indexes.json"],
+        cwd=ROOT,
+    )
+    if hashlib.sha256(historical).hexdigest() != HISTORICAL_INDEX_SHA256:
+        raise ValueError("historical index bytes do not match production evidence")
+    if profile == "historical":
+        return historical, HISTORICAL_INDEX_SHA256, HISTORICAL_INDEX_COMMIT
+    baseline = (ROOT / "conformance/firestore.indexes.json").read_bytes()
+    if hashlib.sha256(baseline).hexdigest() != INDEX_BEFORE_SHA256:
+        raise ValueError("nx-local profile requires the committed before index bytes")
+    value = json.loads(baseline)
+    value.setdefault("fieldOverrides", []).append(
+        {"collectionGroup": "nx", "fieldPath": "*", "indexes": []}
+    )
+    result = (json.dumps(value, indent=2) + "\n").encode()
+    if hashlib.sha256(result).hexdigest() != INDEX_NX_LOCAL_SHA256:
+        raise ValueError("nx-local index bytes differ from the declared after digest")
+    return result, INDEX_NX_LOCAL_SHA256, None
 
 
 def source_inputs():
@@ -683,8 +713,13 @@ def run(
     recovery_grace=0.2,
     firestore_program=None,
     retain_executed_artifact=False,
+    index_profile="historical",
 ):
     require_frozen_checkout()
+    if index_profile not in INDEX_PROFILES:
+        raise ValueError("unknown local index profile")
+    if index_profile == "nx-local" and project != PROJECT:
+        raise ValueError("nx-local profile is restricted to the owned local project")
     base_config = {
         **CONFIG,
         "daemon": {"authProjectNumbers": {}},
@@ -707,17 +742,7 @@ def run(
             raise ValueError("artifact copy mismatch")
         if retain_executed_artifact:
             retain_artifact(artifact, output / "fireemu", build["artifactSha256"])
-        index_commit = "2526c61eda5fc53ac91250307786127ae3c601be"
-        index_bytes = subprocess.check_output(
-            ["git", "show", f"{index_commit}:conformance/firestore.indexes.json"],
-            cwd=ROOT,
-        )
-        index_sha = hashlib.sha256(index_bytes).hexdigest()
-        if (
-            index_sha
-            != "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c"
-        ):
-            raise ValueError("historical index bytes do not match production evidence")
+        index_bytes, index_sha, index_commit = index_bytes_for_profile(index_profile)
         index_file = private / "indexes.json"
         index_file.write_bytes(index_bytes)
         actual_config = {
@@ -757,6 +782,13 @@ def run(
         ]
         if firestore_program is not None:
             command.extend(["--firestore-program", firestore_program])
+        index_configuration = {
+            "sha256": index_sha,
+            "sourceCommit": index_commit,
+            "value": json.loads(index_bytes),
+        }
+        if index_profile == "nx-local":
+            index_configuration["profile"] = index_profile
         report.update(
             executionCommit=commit,
             artifactSha256=build["artifactSha256"],
@@ -770,11 +802,7 @@ def run(
                     "indexFile": "<owned-private-index-file>",
                 },
             },
-            indexConfiguration={
-                "sha256": index_sha,
-                "sourceCommit": index_commit,
-                "value": json.loads(index_bytes),
-            },
+            indexConfiguration=index_configuration,
             build=build,
         )
         report["supervision"] = {

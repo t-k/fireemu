@@ -10,17 +10,20 @@ import re
 from dataclasses import asdict, dataclass, field
 
 NEXTEST_STATUS = re.compile(
-    r"^\s+(?P<status>PASS|FAIL|SLOW|LEAK|TIMEOUT|SIGABRT|SIGSEGV|SIGKILL|ABORT|"
-    r"TRY \d+ (?:PASS|FAIL)|FLAKY|STRESS|SKIP|RETRY)"
+    r"^\s*(?P<status>PASS|FAIL|SLOW|LEAK|TIMEOUT|SIGABRT|SIGSEGV|SIGKILL|ABORT|EXECFAIL|"
+    r"TRY \d+ (?:PASS|FAIL)|FLAKY(?: \d+/\d+)?|STRESS|SKIP|RETRY)"
     r"\s+\[\s*(?P<seconds>[\d.]+|>\s*[\d.]+)s\]\s+"
-    r"\((?P<progress>[^)]*)\)\s+(?P<binary>\S+)\s+(?P<name>\S+)\s*$"
+    r"(?:\((?P<progress>[^)]*)\)\s+)?(?P<binary>\S+)\s+(?P<name>\S+)\s*$"
 )
 NEXTEST_SUMMARY = re.compile(
-    r"^\s+Summary\s+\[\s*[\d.]+s\]\s+(?P<run>\d+) tests? run:\s+(?P<passed>\d+) passed"
-    r"(?: \(\d+ slow\))?(?:, (?P<failed>\d+) failed)?(?:, (?P<skipped>\d+) skipped)?"
+    r"^\s*Summary\s+\[\s*[\d.]+s\]\s+(?P<run>\d+) tests? run:\s+(?P<body>.+?)\s*$"
+)
+NEXTEST_COUNT = re.compile(
+    r"(?P<count>\d+) (?P<label>passed|failed|skipped|leaky|flaky|timed out|exec failed)"
+    r"(?: \((?P<qualifiers>\d+ (?:slow|flaky|leaky)(?:, \d+ (?:slow|flaky|leaky))*)\))?"
 )
 NEXTEST_SECTION = re.compile(r"^\s+(stdout|stderr) ───\s*$")
-NEXTEST_RULE = re.compile(r"^─+\s*$")
+NEXTEST_RULE = re.compile(r"^\s*─+\s*$")
 RUST_PANIC = re.compile(
     r"^\s*thread '(?P<thread>[^']*)'.*panicked at (?P<location>\S+?):?$"
 )
@@ -28,14 +31,17 @@ RUST_NOTE = re.compile(r"^\s*note: run with `RUST_BACKTRACE=1`")
 
 PYTEST_BANNER = re.compile(r"^=+ (?P<title>.+?) =+$")
 PYTEST_BLOCK = re.compile(r"^_+ (?P<name>.+?) _+$")
-PYTEST_SHORT = re.compile(
-    r"^(?P<status>FAILED|ERROR) (?P<nodeid>\S+)(?: - (?P<message>.*))?$"
-)
+PYTEST_SHORT = re.compile(r"^(?P<status>FAILED|ERROR) (?P<rest>.+)$")
 PYTEST_FINAL = re.compile(
-    r"^(?:=+ )?(?P<body>(?:\d+ (?:failed|passed|skipped|errors?|warnings?|xfailed|xpassed|"
-    r"deselected|subtests passed)(?:, )?)+)"
-    r"(?: in [\d.]+s)?"
+    r"(?P<body>no tests ran|\d+ (?:failed|passed|skipped|errors?|warnings?|xfailed|xpassed|"
+    r"deselected|subtests passed)(?:, \d+ (?:failed|passed|skipped|errors?|warnings?|"
+    r"xfailed|xpassed|deselected|subtests passed))*)"
+    r" in [0-9]+(?:\.[0-9]+)?s(?: \([0-9]+:[0-9]{2}:[0-9]{2}\))?"
 )
+# Strip presentation escapes, never whole lines: all source positions still
+# refer to the original log, including a colorized run.
+ANSI_CSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+ANSI_LINK = re.compile(r"\x1b\]8;[^\x07\x1b]*?(?:\x07|\x1b\\)")
 PYTEST_LOCATION = re.compile(r"^(?P<path>[^\s:]+\.py):(?P<line>\d+): (?P<error>\S.*)$")
 
 MAX_MESSAGE_LINES = 40
@@ -43,7 +49,7 @@ MAX_MESSAGE_LINES = 40
 
 @dataclass
 class Failure:
-    """One failed test with its source location inside the log."""
+    """One failure/retry output block, not the overall run verdict."""
 
     name: str
     group: str
@@ -67,19 +73,121 @@ class ParsedLog:
         }
 
 
+def _plain_line(line: str) -> str:
+    return ANSI_CSI.sub("", ANSI_LINK.sub("", line))
+
+
+def _pytest_short(line: str) -> tuple[str, str, str] | None:
+    match = PYTEST_SHORT.fullmatch(line)
+    if match is None:
+        return None
+    rest = match.group("rest")
+    depth = 0
+    for index, char in enumerate(rest):
+        if char == "[":
+            depth += 1
+        elif char == "]" and depth:
+            depth -= 1
+        elif not depth and rest.startswith(" - ", index):
+            return match.group("status"), rest[:index], rest[index + 3 :]
+    return match.group("status"), rest, ""
+
+
+def _pytest_summary(line: str, line_number: int) -> dict | None:
+    banner = PYTEST_BANNER.fullmatch(line)
+    candidate = banner.group("title") if banner else line
+    match = PYTEST_FINAL.fullmatch(candidate)
+    if match is None:
+        return None
+    counts = {}
+    body = match.group("body")
+    if body != "no tests ran":
+        for part in body.split(", "):
+            number, label = part.split(" ", 1)
+            label = {"error": "errors", "warning": "warnings"}.get(label, label)
+            if label in counts:
+                return None
+            counts[label] = int(number)
+    outcomes = ("passed", "failed", "skipped", "xfailed", "xpassed")
+    # A teardown error can be reported alongside the same test's pass/failure;
+    # collection errors aren't test executions. Don't invent a unique test count.
+    run = None if counts.get("errors") else sum(counts.get(k, 0) for k in outcomes)
+    if body != "no tests ran" and not any(
+        k in counts for k in (*outcomes, "deselected", "errors")
+    ):
+        run = None
+    return {
+        "run": run,
+        "passed": counts.pop("passed", 0),
+        "failed": counts.pop("failed", 0),
+        "skipped": counts.pop("skipped", 0),
+        **counts,
+        "line": line_number,
+    }
+
+
+def _nextest_summary(line: str, line_number: int) -> dict | None:
+    match = NEXTEST_SUMMARY.fullmatch(line)
+    if match is None:
+        return None
+    # Commas in the passed count's (slow, flaky, leaky) annotation are not
+    # separators between outcome counts. Reject unrecognized tails in full.
+    parts = re.split(r", (?![^()]*\))", match.group("body"))
+    counts = {}
+    for part in parts:
+        count = NEXTEST_COUNT.fullmatch(part)
+        if count is None or count.group("label") in counts:
+            return None
+        counts[count.group("label")] = int(count.group("count"))
+    if "passed" not in counts:
+        return None
+    return {
+        "run": int(match.group("run")),
+        "passed": counts.pop("passed"),
+        "failed": counts.pop("failed", 0),
+        "skipped": counts.pop("skipped", 0),
+        **counts,
+        "line": line_number,
+    }
+
+
+def _incomplete_summary(failures: list[Failure]) -> dict:
+    # Observed blocks are not a terminal failure count: logs may be truncated
+    # and nextest retries can eventually pass. Preserve the distinction.
+    return {
+        "run": None,
+        "passed": None,
+        "failed": None,
+        "skipped": None,
+        "line": None,
+        "observedFailureBlocks": len(failures),
+    }
+
+
 def detect_format(lines: list[str]) -> str | None:
-    for line in lines:
+    # Strong runner markers take precedence over a bare pytest-like footer.
+    for raw in lines:
+        line = _plain_line(raw)
         if NEXTEST_STATUS.match(line) or NEXTEST_SUMMARY.match(line):
             return "nextest"
-        if PYTEST_BANNER.match(line) and "test session starts" in line:
+        banner = PYTEST_BANNER.match(line)
+        if banner and banner.group("title") in (
+            "test session starts",
+            "FAILURES",
+            "ERRORS",
+            "short test summary info",
+        ):
             return "pytest"
-        if PYTEST_SHORT.match(line) and "::" in line:
+        short = _pytest_short(line)
+        if short and ("::" in short[1] or short[1].endswith(".py")):
             return "pytest"
+    if any(_pytest_summary(_plain_line(line), 0) is not None for line in lines):
+        return "pytest"
     return None
 
 
 def parse_log(text: str, fmt: str = "auto") -> ParsedLog:
-    lines = text.splitlines()
+    lines = [_plain_line(line) for line in text.splitlines()]
     if fmt == "auto":
         detected = detect_format(lines)
         if detected is None:
@@ -131,15 +239,8 @@ def parse_nextest(lines: list[str]) -> ParsedLog:
         line = lines[index]
         status = NEXTEST_STATUS.match(line)
         if status is None:
-            summary_match = NEXTEST_SUMMARY.match(line)
-            if summary_match:
-                summary = {
-                    "run": int(summary_match.group("run")),
-                    "passed": int(summary_match.group("passed")),
-                    "failed": int(summary_match.group("failed") or 0),
-                    "skipped": int(summary_match.group("skipped") or 0),
-                    "line": index + 1,
-                }
+            if NEXTEST_SUMMARY.match(line):
+                summary = _nextest_summary(line, index + 1) or {}
             index += 1
             continue
         if not status.group("status").endswith("FAIL") and status.group(
@@ -151,6 +252,7 @@ def parse_nextest(lines: list[str]) -> ParsedLog:
             "SIGKILL",
             "ABORT",
             "LEAK",
+            "EXECFAIL",
         ):
             index += 1
             continue
@@ -186,13 +288,7 @@ def parse_nextest(lines: list[str]) -> ParsedLog:
         seen.add(key)
         failures.append(failure)
     if not summary:
-        summary = {
-            "run": None,
-            "passed": None,
-            "failed": len(failures),
-            "skipped": None,
-            "line": None,
-        }
+        summary = _incomplete_summary(failures)
     return ParsedLog(format="nextest", summary=summary, failures=failures)
 
 
@@ -214,10 +310,78 @@ def _pytest_message(block: list[str]) -> tuple[list[str], str | None]:
     return message, location
 
 
+def _detail_identity(name: str) -> str:
+    for prefix in ("ERROR at setup of ", "ERROR at teardown of ", "ERROR collecting "):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    if name.endswith(".py"):
+        return name  # A collection-error path is not a dotted test class name.
+    base, bracket, parameters = name.partition("[")
+    return base.replace(".", "::") + bracket + parameters
+
+
+def _join_short_summaries(
+    failures: list[Failure], short: list[tuple[str, str, int]]
+) -> None:
+    """Join unambiguously; retain a standalone summary row when detail is absent.
+
+    Same-named tests in different files must not be rebound to the last nodeid.
+    Each summary entry and detailed block is matched at most once.
+    """
+    used: set[int] = set()
+    for nodeid, message, line_number in short:
+        group, separator, name = nodeid.partition("::")
+        name = name if separator else nodeid
+        candidates = []
+        for index, failure in enumerate(failures):
+            if index in used or failure.group != "pytest":
+                continue
+            identity = _detail_identity(failure.name)
+            if identity != name and failure.name != nodeid:
+                continue
+            # A collection heading names the full source file explicitly;
+            # its traceback may point into pytest's importer instead.
+            if failure.location and identity != nodeid:
+                source = failure.location.rsplit(":", 1)[0]
+                if source != group and not source.endswith("/" + group):
+                    continue
+            candidates.append(index)
+        if len(candidates) == 1 and not failures[candidates[0]].location:
+            # One remaining display block is still ambiguous when two different
+            # files report the same name. The summary order is not provenance.
+            possible = {
+                other for other, _, _ in short if other.partition("::")[2] == name
+            }
+            if len(possible) > 1:
+                candidates = []
+        if len(candidates) == 1:
+            index = candidates[0]
+            used.add(index)
+            failure = failures[index]
+            failure.group = group
+            if message and not failure.message:
+                failure.message = [message]
+        else:
+            # --tb=no, collection errors and ambiguous display names still
+            # have actionable identity and an honest source line in -r output.
+            failures.append(
+                Failure(
+                    name=name,
+                    group=group,
+                    startLine=line_number,
+                    endLine=line_number,
+                    message=[message] if message else [],
+                )
+            )
+            used.add(len(failures) - 1)
+
+
 def parse_pytest(lines: list[str]) -> ParsedLog:
     summary: dict = {}
     failures: list[Failure] = []
-    short: dict[str, str] = {}
+    short: list[tuple[str, str, int]] = []
+    seen_short: set[tuple[str, str, str]] = set()
     in_failures = False
     block_start: int | None = None
     block_name: str | None = None
@@ -244,6 +408,14 @@ def parse_pytest(lines: list[str]) -> ParsedLog:
         block_name = None
 
     for index, line in enumerate(lines):
+        # A normal pytest final summary is itself a banner. Inspect it first,
+        # otherwise the generic banner branch consumes it and loses all counts.
+        final = _pytest_summary(line, index + 1)
+        if final is not None:
+            close_block(index)
+            in_failures = False
+            summary = final
+            continue
         banner = PYTEST_BANNER.match(line)
         if banner:
             close_block(index)
@@ -256,55 +428,17 @@ def parse_pytest(lines: list[str]) -> ParsedLog:
                 block_start = index
                 block_name = block.group("name").strip()
                 continue
-        short_match = PYTEST_SHORT.match(line)
+        short_match = _pytest_short(line)
         if short_match:
-            short[short_match.group("nodeid")] = short_match.group("message") or ""
-            continue
-        final = PYTEST_FINAL.match(line)
-        if final and ("failed" in line or "passed" in line) and not summary:
-            counts: dict[str, int | None] = {
-                "run": None,
-                "passed": 0,
-                "failed": 0,
-                "skipped": 0,
-            }
-            for part in final.group("body").split(", "):
-                number, _, label = part.partition(" ")
-                if not number.isdigit():
-                    continue
-                if label == "passed":
-                    counts["passed"] = int(number)
-                elif label == "failed":
-                    counts["failed"] = int(number)
-                elif label == "skipped":
-                    counts["skipped"] = int(number)
-                elif label.startswith("error"):
-                    counts["errors"] = int(number)
-            counts["run"] = sum(
-                v
-                for k, v in counts.items()
-                if k in ("passed", "failed", "skipped", "errors") and v
-            )
-            counts["line"] = index + 1
-            summary = counts
+            status, nodeid, message = short_match
+            key = (status, nodeid, message)
+            if key not in seen_short:
+                seen_short.add(key)
+                short.append((nodeid, message, index + 1))
     close_block(len(lines))
-    for failure in failures:
-        for nodeid, message in short.items():
-            if (
-                nodeid.endswith("::" + failure.name)
-                or nodeid.rsplit("::", 1)[-1] == failure.name
-            ):
-                failure.group = nodeid.split("::", 1)[0]
-                if message and not failure.message:
-                    failure.message = [message]
+    _join_short_summaries(failures, short)
     if not summary:
-        summary = {
-            "run": None,
-            "passed": None,
-            "failed": len(failures),
-            "skipped": None,
-            "line": None,
-        }
+        summary = _incomplete_summary(failures)
     return ParsedLog(format="pytest", summary=summary, failures=failures)
 
 
@@ -321,6 +455,12 @@ def render_excerpt(parsed: ParsedLog, source_name: str) -> str:
             skipped=summary.get("skipped"),
         )
     )
+    if summary.get("errors"):
+        out.append(f"# errors: {summary['errors']} (separate from assertion failures)")
+    if summary.get("line") is None:
+        out.append(
+            "# terminal summary unavailable; observed blocks are not a final verdict"
+        )
     out.append("")
     for number, failure in enumerate(parsed.failures, start=1):
         out.append(f"## failure {number}: {failure.group} {failure.name}")

@@ -8,7 +8,7 @@
 //! | phone verification code (SMS)   | 600              | age <= 600     | `verification_codes`  |
 //! | pending second-factor sign-in   | 3600 (declared)  | age <= 3600    | `pending_sign_ins`    |
 //! | TOTP enrollment session         | 300 (+300 grace) | age <= 300     | `pending_enrollments` |
-//! | IdP continuation (pendingToken) | 300              | age < 300      | `PendingIdpCache`     |
+//! | `IdP` continuation (`pendingToken`) | 300           | age < 300      | `PendingIdpCache`     |
 //!
 //! The matrix crosses each lifetime alone, with every other object created late enough to be
 //! inside its own lifetime at the check instant, and asserts that only the crossed object is
@@ -165,8 +165,8 @@ fn create(
         Object::Pending => into.pending = Some(s.start_mfa_sign_in(uid, now).unwrap()),
         Object::TotpEnrollment => {
             let material = s.start_totp_enrollment(uid, now).unwrap();
-            into.enrollment_session = material.session_id.clone();
             into.enrollment_secret = material.secret_for_test().to_vec();
+            into.enrollment_session = material.session_id;
         }
         Object::PendingToken => {
             into.idp_token = s
@@ -192,6 +192,7 @@ fn build(s: &mut AuthStore, uid: &LocalId, phone_factor: &str, crossed: Object) 
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
     for crossed in Object::ALL {
         let mut s = store();
@@ -671,9 +672,7 @@ fn two_threads_finalizing_one_pending_credential_succeed_exactly_once() {
     let successes = results.iter().filter(|r| r.is_ok()).count();
     assert_eq!(successes, 1, "{results:?}");
     assert!(
-        results
-            .iter()
-            .any(|r| *r == Err(MfaError::PendingSignInUnknown)),
+        results.contains(&Err(MfaError::PendingSignInUnknown)),
         "the loser sees the consumed credential as unknown: {results:?}"
     );
     let s = shared.lock().unwrap();

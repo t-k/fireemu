@@ -11,7 +11,7 @@
 //! The refusal classes asserted here are the classes fireemu returns locally. They are
 //! spec-derived hypotheses for Identity Platform, not production observations.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_http::identity_toolkit::{
     handle, handle_with, AuthQueryLimits, AuthState, FakeCustomTokenExpiry, IdpContinuationPolicy,
@@ -21,8 +21,9 @@ use fireemu_core_auth::jwt::{base64url_encode, decode_unsigned};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthRegistry, AuthStore};
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_session::tenancy::Tenancy;
 use fireemu_core_types::determinism::SplitMix64;
-use fireemu_core_types::time::LogicalInstant;
+use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
 
 const V1: &str = "/identitytoolkit.googleapis.com/v1";
@@ -442,6 +443,199 @@ fn a_tenant_refresh_token_is_refused_by_the_other_tenant_without_rotating_the_se
                 assert_eq!(renewed["refresh_token"], *refresh);
             }
         }
+    }
+}
+
+/// Regression (TP-AUTH-E-01 defect, fixed): the pinned `@firebase/auth` 1.13.5
+/// `requestStsToken` posts `grant_type=refresh_token&refresh_token=...` to
+/// `/v1/token?key=<apiKey>` without a `tenantId`, for tenant users as well (the securetoken
+/// API has no tenant parameter). The refresh token names its namespace
+/// (`rt1.<plen>.<tlen>.<project><tenant>.<entropy>`), so the API-key branch of `select_store`
+/// must route the exchange to the issuing tenant store instead of the project store. Covered
+/// with no tenancy and with the daemon's default empty `Tenancy`, in both profiles.
+#[test]
+fn sdk_shaped_refresh_without_a_tenant_selector_renews_a_tenant_session() {
+    for (profile, mut state, _registry) in profiles() {
+        for tenancy in [None, Some(Tenancy::new("demo-app"))] {
+            let tenancy_label = if tenancy.is_some() { "empty" } else { "none" };
+            state.tenancy = tenancy.map(|tenancy| Arc::new(RwLock::new(tenancy)));
+            let a = sign_up(&state, TENANT_A, &format!("{tenancy_label}@example.com"));
+            let refresh_a = a["refreshToken"].as_str().unwrap().to_owned();
+            let (status, renewed) = post(
+                &state,
+                &format!("{SECURE_TOKEN}?key={KEY}"),
+                &json!({"grant_type": "refresh_token", "refresh_token": refresh_a}),
+            );
+            assert_eq!(status, 200, "{profile} tenancy={tenancy_label}: {renewed}");
+            assert_eq!(
+                claims(renewed["id_token"].as_str().unwrap())["firebase"]["tenant"],
+                TENANT_A,
+                "{profile} tenancy={tenancy_label}"
+            );
+            assert_eq!(renewed["user_id"], a["localId"]);
+        }
+    }
+}
+
+/// The SDK-shaped exchange routes by the token's namespace only. A project user's refresh
+/// stays on the project store, every contradicting explicit selector keeps its refusal
+/// class from the matrix above, a refusal mutates no namespace, and the renewed tenant
+/// session keeps `auth_time` while `iat`/`exp` advance.
+#[test]
+fn sdk_shaped_refresh_keeps_project_refresh_and_contradicting_selectors_unchanged() {
+    for (profile, mut state, _registry) in profiles() {
+        for tenancy in [None, Some(Tenancy::new("demo-app"))] {
+            let tenancy_label = if tenancy.is_some() { "empty" } else { "none" };
+            state.tenancy = tenancy.map(|tenancy| Arc::new(RwLock::new(tenancy)));
+            let a = sign_up(&state, TENANT_A, &format!("a-{tenancy_label}@example.com"));
+            let (status, project_user) = post(
+                &state,
+                &format!("{V1}/accounts:signUp?key={KEY}"),
+                &json!({"email": format!("p-{tenancy_label}@example.com"), "password": "hunter22"}),
+            );
+            assert_eq!(status, 200, "{profile}: {project_user}");
+            let refresh_a = a["refreshToken"].as_str().unwrap().to_owned();
+            let refresh_project = project_user["refreshToken"].as_str().unwrap().to_owned();
+            let issued_at = claims(a["idToken"].as_str().unwrap())["iat"]
+                .as_i64()
+                .unwrap();
+            let before_a = snapshot(&state, Some(TENANT_A));
+            let before_b = snapshot(&state, Some(TENANT_B));
+            let before_project = snapshot(&state, None);
+
+            // A project user's SDK-shaped refresh is unchanged: project store, no tenant claim.
+            let (status, renewed) = post(
+                &state,
+                &format!("{SECURE_TOKEN}?key={KEY}"),
+                &json!({"grant_type": "refresh_token", "refresh_token": refresh_project}),
+            );
+            assert_eq!(status, 200, "{profile} tenancy={tenancy_label}: {renewed}");
+            let renewed_claims = claims(renewed["id_token"].as_str().unwrap());
+            assert_eq!(renewed_claims["firebase"]["tenant"], Value::Null);
+            assert_eq!(renewed_claims["aud"], "demo-app");
+            assert_eq!(renewed["user_id"], project_user["localId"]);
+
+            // An explicit selector that contradicts the token's namespace keeps its class.
+            for (query, body_tenant, expected) in [
+                (
+                    format!("?key={KEY}"),
+                    Some(TENANT_B),
+                    "INVALID_REFRESH_TOKEN",
+                ),
+                (
+                    format!("?key={KEY}&tenantId={TENANT_B}"),
+                    None,
+                    "TENANT_ID_MISMATCH",
+                ),
+                (format!("?tenantId={TENANT_B}"), None, "TENANT_ID_MISMATCH"),
+                (String::new(), Some(TENANT_B), "TENANT_ID_MISMATCH"),
+            ] {
+                let mut body = json!({"grant_type": "refresh_token", "refresh_token": refresh_a});
+                if let Some(tenant) = body_tenant {
+                    body["tenantId"] = Value::String(tenant.to_owned());
+                }
+                let (status, refused) = post(&state, &format!("{SECURE_TOKEN}{query}"), &body);
+                assert_eq!(
+                    status, 400,
+                    "{profile} tenancy={tenancy_label} {query} body_tenant={body_tenant:?}: {refused}"
+                );
+                assert_eq!(
+                    class(&refused),
+                    expected,
+                    "{profile} tenancy={tenancy_label} {query} body_tenant={body_tenant:?}: {refused}"
+                );
+            }
+            assert_eq!(snapshot(&state, Some(TENANT_A)), before_a, "{profile}");
+            assert_eq!(snapshot(&state, Some(TENANT_B)), before_b, "{profile}");
+            assert_eq!(snapshot(&state, None), before_project, "{profile}");
+
+            // The refusals did not rotate the tenant session; the SDK-shaped renewal keeps
+            // the sign-in time and advances the issue and expiry times.
+            state
+                .clock
+                .lock()
+                .unwrap()
+                .advance(LogicalDuration::from_seconds(7))
+                .unwrap();
+            let (status, renewed) = post(
+                &state,
+                &format!("{SECURE_TOKEN}?key={KEY}"),
+                &json!({"grant_type": "refresh_token", "refresh_token": refresh_a}),
+            );
+            assert_eq!(status, 200, "{profile} tenancy={tenancy_label}: {renewed}");
+            let renewed_claims = claims(renewed["id_token"].as_str().unwrap());
+            assert_eq!(renewed_claims["firebase"]["tenant"], TENANT_A);
+            assert_eq!(renewed_claims["auth_time"], issued_at);
+            let renewed_iat = renewed_claims["iat"].as_i64().unwrap();
+            assert!(
+                renewed_iat > issued_at,
+                "{profile}: iat {renewed_iat} <= {issued_at}"
+            );
+            assert_eq!(renewed_claims["exp"], renewed_iat + 3600);
+            assert_eq!(renewed["refresh_token"], refresh_a);
+            assert_eq!(renewed["user_id"], a["localId"]);
+        }
+    }
+}
+
+/// The API key names the project. A tenant token minted under another registered session
+/// project is not renewed by a key of a different project, even though its namespace
+/// prefix resolves; the key's own project renews it and the tenant claim survives.
+#[test]
+fn sdk_shaped_refresh_of_a_tenant_token_from_another_project_is_refused() {
+    for (profile, mut state, registry) in profiles() {
+        let mut tenancy = Tenancy::new("demo-app");
+        for (project, key) in [("worker-alpha", "alpha-key"), ("worker-beta", "beta-key")] {
+            assert!(registry.register(
+                project,
+                AuthStore::new(project, SplitMix64::new(11), TotpPolicy::default()),
+            ));
+            registry.ensure_tenant(project, "customer-a").unwrap();
+            tenancy.register(project, &[], &[key.to_owned()]).unwrap();
+        }
+        state.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+        let (status, alpha_user) = post(
+            &state,
+            &format!("{V1}/accounts:signUp?key=alpha-key"),
+            &json!({"tenantId": "customer-a", "email": "alpha@example.com", "password": "hunter22"}),
+        );
+        assert_eq!(status, 200, "{profile}: {alpha_user}");
+        let refresh_alpha = alpha_user["refreshToken"].as_str().unwrap().to_owned();
+        let alpha_snapshot = || {
+            let (status, body) = admin(
+                &state,
+                "GET",
+                &format!("{V1}/projects/worker-alpha/tenants/customer-a/accounts:batchGet?maxResults=1000"),
+                &json!({}),
+            );
+            assert_eq!(status, 200, "{body}");
+            body
+        };
+        let before_alpha = alpha_snapshot();
+
+        let (status, refused) = post(
+            &state,
+            &format!("{SECURE_TOKEN}?key=beta-key"),
+            &json!({"grant_type": "refresh_token", "refresh_token": refresh_alpha}),
+        );
+        assert_eq!(status, 400, "{profile}: {refused}");
+        assert_eq!(
+            class(&refused),
+            "INVALID_REFRESH_TOKEN",
+            "{profile}: {refused}"
+        );
+        assert_eq!(alpha_snapshot(), before_alpha, "{profile}");
+
+        let (status, renewed) = post(
+            &state,
+            &format!("{SECURE_TOKEN}?key=alpha-key"),
+            &json!({"grant_type": "refresh_token", "refresh_token": refresh_alpha}),
+        );
+        assert_eq!(status, 200, "{profile}: {renewed}");
+        let renewed_claims = claims(renewed["id_token"].as_str().unwrap());
+        assert_eq!(renewed_claims["firebase"]["tenant"], "customer-a");
+        assert_eq!(renewed_claims["aud"], "worker-alpha");
+        assert_eq!(renewed["user_id"], alpha_user["localId"]);
     }
 }
 
@@ -995,7 +1189,7 @@ fn explicit_tenant_creation_defaults_sign_in_methods_off_until_patched() {
 
 /// Local inheritance model, recorded for the bounded production observation:
 /// `client.permissions` and `emailPrivacyConfig` are copied from the project when a tenant
-/// is created and follow later project PATCHes unless the tenant overrode the field;
+/// is created and follow later project `PATCH`es unless the tenant overrode the field;
 /// `passwordPolicyConfig` is never copied from the project (a new tenant starts from the
 /// default policy) and never follows it; the sign-in method flags are tenant-only;
 /// `mfaConfig` is a constant `DISABLED` projection that refuses PATCH. Identity Platform's

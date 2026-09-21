@@ -21,6 +21,7 @@ from o5_user_token_collector import (
     collect,
     RulesManagementSession,
 )
+from o5_user_token_local_run import _validated_child_python
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "fs-write-limits"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -35,6 +36,12 @@ NONCE = "b" * 32
 
 def case() -> dict:
     return compile_case(PROJECT, "(default)", NONCE)
+
+
+def test_local_runner_child_uses_absolute_python_312() -> None:
+    executable = _validated_child_python()
+    assert executable.startswith("/")
+    assert executable.rsplit("/", 1)[-1].startswith("python")
 
 
 class Transport:

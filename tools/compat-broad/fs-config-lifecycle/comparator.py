@@ -6,15 +6,24 @@ on the rows the collector marked `role: case`, and compares HTTP status, typed e
 code and the type shape of the body: field presence, JSON types and enum spelling.
 Values are never compared; the shape already collapsed them.
 
-It can classify a comparison as MATCH only when one side executed on the fixed
-production wire. Every other pairing is PREPARATION_ONLY, so a local rehearsal
-compared against a fake or against another local run can never read as production
-evidence. Promotion is never decided here.
+It can classify a comparison as MATCH only when the production side is bound to a
+verified acquisition: a `VerifiedAcquisition` object that only
+`lifecycle_production.verify_saved` builds, after checking a saved O8 receipt
+directory (receipt, frozen inputs, gate snapshot, evidence digests, reviewed worker
+digest) against its shared Ledger reservation row. The `executionKind` label on a
+record is a claim, not evidence: a record labelled `fixed-production-wire` without
+that object, or with an object bound to some other collection, is REFUSED with a
+named reason and no rows. Two local records are PREPARATION_ONLY. So a local
+rehearsal compared against a fake, against another local run, or against a copy of
+itself relabelled as production can never read as production evidence. Promotion is
+never decided here.
 """
 
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import dataclass
 from typing import Any
 
 from .cases import compile_cases
@@ -31,6 +40,50 @@ MATCH = "MATCH"
 MISMATCH = "MISMATCH"
 INDETERMINATE = "INDETERMINATE"
 EXPECTED_LOCAL_DEVIATION = "EXPECTED_LOCAL_DEVIATION"
+REFUSED = "REFUSED"
+PREPARATION_ONLY = "PREPARATION_ONLY"
+
+# The only origin the reviewed remote transport can reach; a test pins it to
+# lifecycle_remote_transport.ORIGIN so the two cannot drift apart silently.
+PRODUCTION_ORIGIN = "https://firestore.googleapis.com"
+ACQUISITION_UNVERIFIED = "production-acquisition-unverified"
+ACQUISITION_BINDING = "production-acquisition-binding"
+_HEX64 = re.compile(r"[a-f0-9]{64}")
+
+
+@dataclass(frozen=True)
+class VerifiedAcquisition:
+    """What the O8 boundary verified about one saved production acquisition.
+
+    Built only by `lifecycle_production.verify_saved`, which checks the receipt
+    directory and the shared Ledger row before naming these values. The comparator
+    accepts nothing else on the production side: not a dict, not a label. Every
+    field is a binding the comparator re-checks against the collection it is handed.
+    """
+
+    campaign_id: str
+    execution_kind: str
+    endpoint: str
+    reservation: str
+    ledger_identity: str
+    receipt_digest: str
+    gate_digest: str
+    artifact_sha256: str
+    worker_sha256: str
+    collection_digest: str
+
+    def summary(self) -> dict[str, str]:
+        return {
+            "reservation": self.reservation,
+            "ledgerIdentity": self.ledger_identity,
+            "receiptDigest": self.receipt_digest,
+            "gateDigest": self.gate_digest,
+            "artifactSha256": self.artifact_sha256,
+            "workerSha256": self.worker_sha256,
+            "endpoint": self.endpoint,
+            "collectionDigest": self.collection_digest,
+        }
+
 
 _VALUE_NORMALIZED = (
     "earliestVersionTime",
@@ -81,8 +134,24 @@ COMPARISON_CONTRACT: dict[str, Any] = {
         "one. A refusal on both sides is compared like any other row."
     ),
     "matchRequires": (
-        "One side executed on the fixed production wire, both sides completed their "
-        "cleanup, and every case is MATCH or EXPECTED_LOCAL_DEVIATION."
+        "The production record is bound to a VerifiedAcquisition built by the O8 "
+        "boundary from a saved receipt directory and its shared Ledger row, both "
+        "sides completed their cleanup, and every case is MATCH or "
+        "EXPECTED_LOCAL_DEVIATION."
+    ),
+    "acquisitionValidated": (
+        "True only when the production collection's digest is the one the verified "
+        "acquisition names, the acquisition names this campaign, the fixed "
+        "production wire and the production origin, and the whole-run "
+        "classification is MATCH or MISMATCH. The reviewed worker digest, the "
+        "receipt, the frozen inputs, the gate snapshot and the Ledger row are "
+        "checked where the object is built. An executionKind label never "
+        "establishes it."
+    ),
+    "refused": (
+        "A production record without a VerifiedAcquisition, or with one bound to "
+        "another collection, is REFUSED with the reason named in errors and no rows; "
+        "it is never a production comparison."
     ),
 }
 
@@ -171,13 +240,54 @@ def _summary(row: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+def _acquisition_errors(acquisition: Any, collection: dict[str, Any]) -> list[str]:
+    """The comparator's own re-check of the verified acquisition against the record.
+
+    The object's identity is required (a dict is a copy, not a verification), and
+    every binding it names is compared here rather than trusted.
+    """
+    if type(acquisition) is not VerifiedAcquisition:
+        return [ACQUISITION_UNVERIFIED]
+    digests = (
+        acquisition.receipt_digest,
+        acquisition.gate_digest,
+        acquisition.artifact_sha256,
+        acquisition.worker_sha256,
+        acquisition.collection_digest,
+        acquisition.reservation,
+    )
+    if (
+        acquisition.campaign_id != CASE_ID
+        or acquisition.execution_kind != PRODUCTION_KIND
+        or acquisition.endpoint != PRODUCTION_ORIGIN
+        or not isinstance(acquisition.ledger_identity, str)
+        or not acquisition.ledger_identity
+        or any(not isinstance(v, str) or _HEX64.fullmatch(v) is None for v in digests)
+        or acquisition.collection_digest != digest(collection)
+    ):
+        return [ACQUISITION_BINDING]
+    return []
+
+
 def compare(
-    manifest: dict[str, Any], local: Any, production: Any, nonce: str
+    manifest: dict[str, Any],
+    local: Any,
+    production: Any,
+    nonce: str,
+    *,
+    acquisition: VerifiedAcquisition | None = None,
 ) -> dict[str, Any]:
-    """Compare a local record with a production record under a drift-checked manifest."""
+    """Compare a local record with a verified production record under a drift-checked
+    manifest.
+
+    `acquisition` is the object `lifecycle_production.verify_saved` returned for the
+    receipt directory `production` was read from. Without it, or with one bound to
+    another collection, the comparison is REFUSED: the production label alone is not
+    an acquisition.
+    """
     result: dict[str, Any] = {
         "kind": SCHEMA,
-        "classification": "PREPARATION_ONLY",
+        "classification": PREPARATION_ONLY,
         "promotionReady": False,
         "acquisitionValidated": False,
         "productionUnobservedConditionsReduced": 0,
@@ -205,6 +315,12 @@ def compare(
     ):
         result["errors"] = ["preparation-only"]
         return result
+    errors = _acquisition_errors(acquisition, production["collection"])
+    if errors:
+        result["classification"] = REFUSED
+        result["errors"] = errors
+        return result
+    result["acquisition"] = acquisition.summary()
     rows = compare_rows(local["collection"], production["collection"], nonce)
     result["rows"] = rows
     result["localCleanupComplete"] = local["collection"].get("cleanupComplete") is True

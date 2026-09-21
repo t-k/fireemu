@@ -4,6 +4,8 @@ import copy
 import json
 from pathlib import Path
 
+import pytest
+from fs_config_lifecycle import lifecycle_remote_transport
 from fs_config_lifecycle.comparator import (
     COMPARISON_CONTRACT,
     EXPECTED_LOCAL_DEVIATION,
@@ -12,13 +14,17 @@ from fs_config_lifecycle.comparator import (
     MATCH,
     MISMATCH,
     PRODUCTION_KIND,
+    PRODUCTION_ORIGIN,
+    REFUSED,
     SCHEMA,
+    VerifiedAcquisition,
     compare,
     compare_rows,
 )
 from fs_config_lifecycle.fake_admin import FakeAdmin
 from fs_config_lifecycle.lifecycle_collector import collect
 from fs_config_lifecycle.manifest import compile_manifest
+from fs_config_lifecycle.surface_matrix import digest
 from fs_config_lifecycle.test_fs_config_collector import _gate, _no_sleep
 
 NONCE = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
@@ -37,6 +43,26 @@ def _collection(tmp_path: Path, name: str, **admin) -> dict:
 
 def _record(kind: str, collection: dict) -> dict:
     return {"executionKind": kind, "collection": collection}
+
+
+def _acquisition(collection: dict, **overrides) -> VerifiedAcquisition:
+    """An acquisition object shaped like the one `lifecycle_production.verify_saved`
+    returns, bound to `collection`. It stands in for the O8 boundary here; the
+    boundary's own binding checks are proven in test_fs_config_o8."""
+    values = {
+        "campaign_id": "FS-CONFIG-LIFECYCLE-01",
+        "execution_kind": PRODUCTION_KIND,
+        "endpoint": PRODUCTION_ORIGIN,
+        "reservation": "c" * 64,
+        "ledger_identity": "proof",
+        "receipt_digest": "d" * 64,
+        "gate_digest": "e" * 64,
+        "artifact_sha256": "f" * 64,
+        "worker_sha256": lifecycle_remote_transport._WORKER_SHA256,
+        "collection_digest": digest(collection),
+    }
+    values.update(overrides)
+    return VerifiedAcquisition(**values)
 
 
 def test_the_comparator_refuses_a_drifted_manifest_and_an_invalid_nonce(
@@ -79,9 +105,13 @@ def test_a_forged_execution_kind_or_collection_shape_is_named(tmp_path: Path) ->
     assert result["errors"] == ["local-execution-kind", "production-collection-shape"]
 
 
-def test_identical_shapes_on_the_production_wire_classify_as_a_match(
+def test_identical_shapes_on_a_verified_acquisition_classify_as_a_match(
     tmp_path: Path,
 ) -> None:
+    """Positive control. Both collections come from FakeAdmin; what makes the right
+    side production here is the verified-acquisition object bound to it, which the
+    O8 boundary produces only from a saved receipt directory and its Ledger row. The
+    earlier version of this test asserted acquisitionValidated from the label alone."""
     manifest = compile_manifest(NONCE)
     local = _collection(tmp_path, "local")
     production = _collection(tmp_path, "production")
@@ -90,13 +120,112 @@ def test_identical_shapes_on_the_production_wire_classify_as_a_match(
         _record(LOCAL_KIND, local),
         _record(PRODUCTION_KIND, production),
         NONCE,
+        acquisition=_acquisition(production),
     )
     assert result["classification"] == MATCH
     assert {row["classification"] for row in result["rows"]} == {MATCH}
     assert len(result["rows"]) == 12
     assert result["acquisitionValidated"] is True
+    assert result["acquisition"] == {
+        "reservation": "c" * 64,
+        "ledgerIdentity": "proof",
+        "receiptDigest": "d" * 64,
+        "gateDigest": "e" * 64,
+        "artifactSha256": "f" * 64,
+        "workerSha256": lifecycle_remote_transport._WORKER_SHA256,
+        "endpoint": "https://firestore.googleapis.com",
+        "collectionDigest": digest(production),
+    }
     assert result["promotionReady"] is False
     assert result["productionUnobservedConditionsReduced"] == 0
+
+
+def test_a_relabelled_local_collection_is_refused_as_production_acquisition(
+    tmp_path: Path,
+) -> None:
+    """Owner review d7f7ce184 finding 2: an exact copy of the local collection, labelled
+    fixed-production-wire with the matching campaignId, must never read as a validated
+    production comparison. Without the O8 boundary's acquisition object the comparator
+    refuses with a named reason and computes no rows."""
+    manifest = compile_manifest(NONCE)
+    local = _collection(tmp_path, "only-local")
+    relabelled = copy.deepcopy(local)
+    assert relabelled["campaignId"] == "FS-CONFIG-LIFECYCLE-01"
+    result = compare(
+        manifest,
+        _record(LOCAL_KIND, local),
+        _record(PRODUCTION_KIND, relabelled),
+        NONCE,
+    )
+    assert result["classification"] == REFUSED
+    assert result["errors"] == ["production-acquisition-unverified"]
+    assert result["rows"] == []
+    assert result["acquisitionValidated"] is False
+    assert result["promotionReady"] is False
+    assert "acquisition" not in result
+
+
+def test_a_dict_shaped_acquisition_or_an_unbound_one_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The acquisition input must be the boundary's own object and must be bound to
+    the collection handed in; a serialized copy, another collection's binding, another
+    campaign, another endpoint or a malformed digest is refused. Whether the digests
+    name the reviewed worker, the receipt on disk and the Ledger row is the O8
+    boundary's check, proven in test_fs_config_o8."""
+    manifest = compile_manifest(NONCE)
+    local = _collection(tmp_path, "local")
+    production = _collection(tmp_path, "production")
+    other = copy.deepcopy(production)
+    other["rows"][0]["status"] = 418
+    genuine = _acquisition(production)
+    as_dict = dict(genuine.__dict__)
+    refused = [
+        (as_dict, "production-acquisition-unverified"),
+        (None, "production-acquisition-unverified"),
+        (_acquisition(other), "production-acquisition-binding"),
+        (
+            _acquisition(production, campaign_id="OTHER-01"),
+            "production-acquisition-binding",
+        ),
+        (
+            _acquisition(production, execution_kind=LOCAL_KIND),
+            "production-acquisition-binding",
+        ),
+        (
+            _acquisition(production, endpoint="http://127.0.0.1:1"),
+            "production-acquisition-binding",
+        ),
+        (
+            _acquisition(production, worker_sha256="xyz"),
+            "production-acquisition-binding",
+        ),
+        (
+            _acquisition(production, receipt_digest="short"),
+            "production-acquisition-binding",
+        ),
+        (_acquisition(production, reservation=""), "production-acquisition-binding"),
+        (_acquisition(production, gate_digest=None), "production-acquisition-binding"),
+        (
+            _acquisition(production, artifact_sha256="G" * 64),
+            "production-acquisition-binding",
+        ),
+    ]
+    for acquisition, reason in refused:
+        result = compare(
+            manifest,
+            _record(LOCAL_KIND, local),
+            _record(PRODUCTION_KIND, production),
+            NONCE,
+            acquisition=acquisition,
+        )
+        assert result["classification"] == REFUSED, reason
+        assert result["errors"] == [reason]
+        assert result["rows"] == []
+        assert result["acquisitionValidated"] is False
+    with pytest.raises((AttributeError, TypeError)):
+        genuine.collection_digest = digest(other)  # type: ignore[misc]
+    assert PRODUCTION_ORIGIN == lifecycle_remote_transport.ORIGIN
 
 
 def test_the_local_unimplemented_exemption_patch_is_an_expected_deviation(
@@ -110,6 +239,7 @@ def test_the_local_unimplemented_exemption_patch_is_an_expected_deviation(
         _record(LOCAL_KIND, local),
         _record(PRODUCTION_KIND, production),
         NONCE,
+        acquisition=_acquisition(production),
     )
     by_case = {row["case"]: row for row in result["rows"]}
     assert by_case["OC-18"]["classification"] == EXPECTED_LOCAL_DEVIATION
@@ -137,6 +267,7 @@ def test_a_differing_status_or_shape_is_a_mismatch_naming_what_differs(
         _record(LOCAL_KIND, local),
         _record(PRODUCTION_KIND, production),
         NONCE,
+        acquisition=_acquisition(production),
     )
     by_case = {row["case"]: row for row in result["rows"]}
     assert by_case["OC-15"]["classification"] == MISMATCH
@@ -157,9 +288,13 @@ def test_an_incomplete_cleanup_on_either_side_makes_the_whole_comparison_indeter
         _record(LOCAL_KIND, local),
         _record(PRODUCTION_KIND, production),
         NONCE,
+        acquisition=_acquisition(production),
     )
     assert result["classification"] == INDETERMINATE
     assert result["productionCleanupComplete"] is False
+    # The acquisition is bound and reported, but an indeterminate run is not a
+    # validated production comparison.
+    assert result["acquisition"]["collectionDigest"] == digest(production)
     assert result["acquisitionValidated"] is False
 
 
@@ -183,6 +318,7 @@ def test_the_comparator_does_not_mask_a_production_refusal_behind_an_expected_de
         _record(LOCAL_KIND, local),
         _record(PRODUCTION_KIND, same_refusal),
         NONCE,
+        acquisition=_acquisition(same_refusal),
     )
     by_case = {row["case"]: row for row in result["rows"]}
     # Both sides refused identically: a match on the refusal, visibly, not a
@@ -198,6 +334,7 @@ def test_the_comparator_does_not_mask_a_production_refusal_behind_an_expected_de
         _record(LOCAL_KIND, local),
         _record(PRODUCTION_KIND, other_refusal),
         NONCE,
+        acquisition=_acquisition(other_refusal),
     )
     by_case = {row["case"]: row for row in result["rows"]}
     assert by_case["OC-18"]["classification"] == MISMATCH

@@ -79,6 +79,42 @@ def unsigned_jwt(payload: dict[str, Any]) -> str:
     return f"{header}.{body}."
 
 
+CUSTOM_TOKEN_KINDS = ("developer", "reserved", "expired")
+
+
+def custom_token_payload(kind: str, issuer: str, uid: str, now: int) -> dict[str, Any]:
+    """The custom-token payload each signing-dependent case uses.
+
+    The same builder serves the local unsigned signer and a production signer, so
+    the two sides sign the same claims: developer claims for the ordinary sign-in, a
+    reserved claim name for the refused one, and an expired lifetime.
+    """
+    if kind == "developer":
+        claims, iat = {"role": "tester"}, now
+    elif kind == "reserved":
+        claims, iat = {"sub": "elevated"}, now
+    elif kind == "expired":
+        claims, iat = {}, now - 7200
+    else:
+        raise ValueError("unknown custom token kind")
+    return {
+        "aud": CUSTOM_TOKEN_AUDIENCE,
+        "iss": issuer,
+        "sub": issuer,
+        "uid": uid,
+        "claims": claims,
+        "iat": iat,
+        "exp": iat + 3600,
+    }
+
+
+def unsigned_signer(kind: str, payload: dict[str, Any]) -> str:
+    """The local signer: the payload as an unsigned token, whatever its kind."""
+    if kind not in CUSTOM_TOKEN_KINDS:
+        raise ValueError("unknown custom token kind")
+    return unsigned_jwt(payload)
+
+
 def _send_over_http(
     base: str, path: str, body: dict[str, Any], owner: bool, timeout: float
 ) -> tuple[int, bytes]:
@@ -158,7 +194,7 @@ def local_environment() -> dict[str, Any]:
         "password": PASSWORD,
         "resetPassword": RESET_PASSWORD,
         "customTokenIssuer": CUSTOM_TOKEN_ISSUER,
-        "signer": unsigned_jwt,
+        "signer": unsigned_signer,
         "trustRoot": "unsigned-emulator",
         "endpoints": None,
         # Whether custom tokens can be minted. Without it the signing-dependent
@@ -294,19 +330,8 @@ def run_cases(
             {"grant_type": "refresh_token", "refresh_token": refresh_token},
         )
 
-    def custom_token(claims: dict[str, Any], uid: str, *, age_seconds: int = 0) -> str:
-        now = int(time.time()) - age_seconds
-        return signer(
-            {
-                "aud": CUSTOM_TOKEN_AUDIENCE,
-                "iss": issuer,
-                "sub": issuer,
-                "uid": uid,
-                "claims": claims,
-                "iat": now,
-                "exp": now + 3600,
-            }
-        )
+    def custom_token(kind: str, uid: str) -> str:
+        return signer(kind, custom_token_payload(kind, issuer, uid, int(time.time())))
 
     def fresh_control(email: str, secret: str = password) -> dict[str, Any]:
         """A fresh sign-in exchanged once more, recorded as the row's control."""
@@ -518,7 +543,7 @@ def run_cases(
 
     # --- custom token --------------------------------------------------------
     custom_uid = f"custom-{tracker['nonce']}"
-    custom = custom_token({"role": "tester"}, custom_uid)
+    custom = custom_token("developer", custom_uid)
     intent = responsibility.begin(tracker, "custom-signin", requested_uid=custom_uid)
     status, body = send(
         budget,
@@ -553,7 +578,7 @@ def run_cases(
         },
         claims=_claims(custom_shape),
     )
-    reserved = custom_token({"sub": "elevated"}, custom_uid)
+    reserved = custom_token("reserved", custom_uid)
     status, body = send(
         budget,
         identity,
@@ -563,7 +588,7 @@ def run_cases(
     rows["custom-token-reserved-claim-rejected"] = row(
         "custom-token-reserved-claim-rejected", status, body, {}
     )
-    expired = custom_token({}, custom_uid, age_seconds=7200)
+    expired = custom_token("expired", custom_uid)
     status, body = send(
         budget,
         identity,

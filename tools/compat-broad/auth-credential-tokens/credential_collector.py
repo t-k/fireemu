@@ -82,6 +82,10 @@ BOUND_MODULES = (
     "credential_wire.py",
     "credential_process.py",
     "credential_responsibility.py",
+    "credential_gate.py",
+    "credential_preflight.py",
+    "credential_remote_transport.py",
+    "credential_https_worker.py",
     "../batch_wire.py",
 )
 

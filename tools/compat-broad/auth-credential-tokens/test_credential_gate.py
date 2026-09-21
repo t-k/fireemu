@@ -67,14 +67,15 @@ def _management_receipt(slot: str) -> dict:
             "complete": True,
             "workerReaped": True,
         }
+    elif slot.startswith("sign-"):
+        body = {"kind": "custom-token-signature-v1", "signatureBytes": 256}
     else:
         body = {"slot": slot, "baselineVerified": True}
     return {"status": 200, "complete": True, "workerReaped": True, "bodyKind": "json", "body": body}
 
 
-def _preflight(gate: CredentialGate, phase: str) -> None:
-    ids = gate_module.MANAGEMENT_OBSERVATION_IDS if phase == "observation" else gate_module.MANAGEMENT_RECOVERY_IDS
-    for slot in ids:
+def _preflight(gate: CredentialGate, phase: str, *, signing: bool = True) -> None:
+    for slot in gate_module.management_ids(signing)[phase]:
         gate.management_dispatch(phase, slot, lambda deadline, slot=slot: _management_receipt(slot))
 
 
@@ -108,7 +109,7 @@ def _hosted_run(tmp_path: Path, monkeypatch, *, signing: bool = True, service=No
     gate_module.create(tmp_path / "gate", plan)
     gate = CredentialGate(tmp_path / "gate")
     gate.claim()
-    _preflight(gate, "observation")
+    _preflight(gate, "observation", signing=signing)
     service = service or _service()
     poster = gate_poster(gate, _transmit(service))
     budget, tracker, rows = _budget(), new_tracker(NONCE), {}
@@ -126,7 +127,7 @@ def test_the_plan_freezes_every_request_the_runner_makes_in_order() -> None:
     job = plan["jobs"][gate_module.JOB]
     assert len(job["observation"]) == 34
     assert len(job["recovery"]) == 8
-    assert plan["observationRequests"] == 34 + 3
+    assert plan["observationRequests"] == 34 + 6
     assert plan["dataRequests"] == 42
     assert [op["kind"] for op in job["recovery"]] == [
         "delete", "uid-absence", "address-absence",
@@ -197,7 +198,7 @@ def test_a_hosted_run_reaches_every_case_cleans_up_and_finishes(tmp_path, monkey
         "routesAbsent": sorted(gate_module.route_resources(PROJECT)),
         "complete": True,
     }
-    assert snapshot["total"] == 42 + 4
+    assert snapshot["total"] == 42 + 7
     assert budget["requests"] == 42
     assert service["accounts"] == {}
     # The journal holds the plan and digests, never a credential this run received.
@@ -220,7 +221,7 @@ def test_a_run_without_a_signer_reaches_only_the_non_signing_cases(tmp_path, mon
     assert failure is None and problems == []
     assert set(rows) == set(gate_module.runnable_case_ids(False))
     assert len(rows) == 8
-    _preflight(gate, "recovery")
+    _preflight(gate, "recovery", signing=False)
     gate.finish()
     assert account_evidence(gate.snapshot())["createdAccounts"] == 2
     record, _exit_code = shadow.finish_record(

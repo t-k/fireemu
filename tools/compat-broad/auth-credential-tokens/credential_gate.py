@@ -84,8 +84,19 @@ REQUEST_COST_MICROUSD = 1
 DATA_SLOT_SECONDS = 5.0
 MANAGEMENT_SLOT_SECONDS = 13.0
 MANAGEMENT_DURATION_SECONDS = 12.0
-MANAGEMENT_OBSERVATION_IDS = ("oauth-tokeninfo", "project", "auth")
+#: The management slots charged before the data phase: the bearer attestation, the
+#: project identity and the Auth config readback, then, for a signing run, one
+#: signBlob slot per custom token the campaign needs. After cleanup the Auth config
+#: is read back once more.
+SHARED_MANAGEMENT_IDS = ("oauth-tokeninfo", "project", "auth")
+SIGN_MANAGEMENT_IDS = ("sign-developer", "sign-reserved", "sign-expired")
 MANAGEMENT_RECOVERY_IDS = ("auth",)
+
+
+def management_ids(signing: bool) -> dict[str, tuple[str, ...]]:
+    """The closed management slots of a run, by phase."""
+    observation = SHARED_MANAGEMENT_IDS + (SIGN_MANAGEMENT_IDS if signing else ())
+    return {"observation": observation, "recovery": MANAGEMENT_RECOVERY_IDS}
 CUSTOM_TOKEN_AUDIENCE = (
     "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit"
 )
@@ -409,6 +420,7 @@ def gate_plan(
         raise ValueError("signing capability must be declared")
     observation = observation_operations(project, nonce, signing=signing)
     recovery = recovery_operations(project, nonce, signing=signing)
+    slots = management_ids(signing)
     schedule = [
         {"phase": "observation", "index": index, "seconds": DATA_SLOT_SECONDS}
         for index in range(len(observation))
@@ -439,9 +451,9 @@ def gate_plan(
         "wallSeconds": wall_seconds,
         "recoverySeconds": recovery_seconds,
         "intervalSeconds": GATE_INTERVAL_SECONDS,
-        "observationRequests": len(observation) + len(MANAGEMENT_OBSERVATION_IDS),
+        "observationRequests": len(observation) + len(slots["observation"]),
         "dataRequests": len(observation) + len(recovery),
-        "managementRequests": len(MANAGEMENT_OBSERVATION_IDS) + len(MANAGEMENT_RECOVERY_IDS),
+        "managementRequests": len(slots["observation"]) + len(slots["recovery"]),
         "requestCostMicrousd": REQUEST_COST_MICROUSD,
         "costMicrousd": cost_microusd,
         "receiptKind": "auth-credential-acquisition-receipt-v1",
@@ -452,13 +464,13 @@ def gate_plan(
         "mintedBindings": list(MINTED_BINDINGS),
         "management": {
             "dispatchKind": "closed-v1",
-            "observation": management(MANAGEMENT_OBSERVATION_IDS),
-            "recovery": management(MANAGEMENT_RECOVERY_IDS),
+            "observation": management(slots["observation"]),
+            "recovery": management(slots["recovery"]),
             "credentialIds": ["oauth-tokeninfo"],
             "credentialSlots": ["tokeninfo"],
             "slotSeconds": MANAGEMENT_SLOT_SECONDS,
             "intervalSeconds": GATE_INTERVAL_SECONDS,
-            "totalRequests": len(MANAGEMENT_OBSERVATION_IDS) + len(MANAGEMENT_RECOVERY_IDS),
+            "totalRequests": len(slots["observation"]) + len(slots["recovery"]),
             "observationWindowSeconds": observation_window_seconds,
             "recoveryWindowSeconds": recovery_seconds,
             "principalBinding": {
@@ -852,6 +864,7 @@ __all__ = [
     "gate_environment",
     "gate_plan",
     "gate_poster",
+    "management_ids",
     "observation_operations",
     "planned_accounts",
     "recovery_operations",

@@ -990,6 +990,46 @@ class Ledger:
             row["finalGateDigest"] = digest(gate)
             self._save(state)
 
+    def attach_evidence(self, ticket, receipt_sha256, gate_digest, collection_digest):
+        """Anchor a run's observed bytes to its reservation before any terminal close.
+
+        Today the Ledger row binds only what `reserve()` recorded at admission
+        time; nothing ties the bytes a run actually produced to that row until
+        a terminal transition reads them back, and a run whose terminal close
+        never happens (a crash, an operator who stops short) leaves its
+        observed evidence known only from the run directory. Call this right
+        after the receipt is written, so the row itself is the anchor: it does
+        not depend on the run directory surviving, and it does not require a
+        terminal decision to have been made yet.
+
+        A non-terminal transition: it never changes `row["state"]`. Refused on
+        an unknown ticket (via `_row`), on a row that is not `held`, and on a
+        second attach whose triple differs from the first; the same triple
+        attached again is accepted as the idempotent republish of a receipt a
+        caller already wrote.
+        """
+        for value in (receipt_sha256, gate_digest, collection_digest):
+            _hash(value)
+        evidence = {
+            "receiptSha256": receipt_sha256,
+            "gateDigest": gate_digest,
+            "collectionDigest": collection_digest,
+            # Pinned so the row identifies the Ledger it was observed under
+            # even when read apart from the live Ledger object that wrote it.
+            "ledgerIdentity": self.identity,
+        }
+        with self._locked() as state:
+            row = self._row(state, ticket)
+            if row["state"] != "held":
+                raise ValueError("reservation is not held")
+            existing = row.get("evidence")
+            if existing is not None:
+                if existing == evidence:
+                    return
+                raise ValueError("attached evidence differs")
+            row["evidence"] = evidence
+            self._save(state)
+
     def _attestation(self, attestation, *, ticket, claim, record, owned, now):
         """The owner's signed statement that the residue is gone. Not a no-data claim."""
         if (

@@ -829,6 +829,82 @@ def test_ticket_cannot_move_to_copied_or_missing_ledger(tmp_path):
         Ledger(tmp_path / "alias")
 
 
+def test_attach_evidence_anchors_a_running_reservations_observed_bytes(tmp_path):
+    ledger = Ledger.create(tmp_path / "ledger")
+    ticket = ledger.reserve(envelope(), claim(tmp_path, "a"), plan(), now=1100)
+    receipt_sha256, gate_digest, collection_digest = digest("r"), digest("g"), digest("c")
+    ledger.attach_evidence(ticket, receipt_sha256, gate_digest, collection_digest)
+    row = ledger.snapshot()["reservations"][ticket["reservation"]]
+    assert row["state"] == "held"
+    assert row["evidence"] == {
+        "receiptSha256": receipt_sha256,
+        "gateDigest": gate_digest,
+        "collectionDigest": collection_digest,
+        "ledgerIdentity": ledger.identity,
+    }
+    # The same triple attached again (a retried publish) is idempotent.
+    before = ledger.snapshot()
+    ledger.attach_evidence(ticket, receipt_sha256, gate_digest, collection_digest)
+    assert ledger.snapshot() == before
+
+
+def test_attach_evidence_refuses_a_second_attach_with_different_digests(tmp_path):
+    ledger = Ledger.create(tmp_path / "ledger")
+    ticket = ledger.reserve(envelope(), claim(tmp_path, "a"), plan(), now=1100)
+    ledger.attach_evidence(ticket, digest("r"), digest("g"), digest("c"))
+    before = ledger.snapshot()
+    for changed in (
+        (digest("other"), digest("g"), digest("c")),
+        (digest("r"), digest("other"), digest("c")),
+        (digest("r"), digest("g"), digest("other")),
+    ):
+        with pytest.raises(ValueError, match="attached evidence differs"):
+            ledger.attach_evidence(ticket, *changed)
+    assert ledger.snapshot() == before
+
+
+def test_attach_evidence_refuses_an_unknown_ticket(tmp_path):
+    ledger = Ledger.create(tmp_path / "ledger")
+    ticket = ledger.reserve(envelope(), claim(tmp_path, "a"), plan(), now=1100)
+    forged = {**ticket, "reservation": "0" * 64}
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="exact shared reservation ticket required"):
+        ledger.attach_evidence(forged, digest("r"), digest("g"), digest("c"))
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.parametrize("malformed", ["", "not-hex", "a" * 63, "A" * 64, None])
+def test_attach_evidence_requires_bounded_sha256_digests(tmp_path, malformed):
+    ledger = Ledger.create(tmp_path / "ledger")
+    ticket = ledger.reserve(envelope(), claim(tmp_path, "a"), plan(), now=1100)
+    for triple in (
+        (malformed, digest("g"), digest("c")),
+        (digest("r"), malformed, digest("c")),
+        (digest("r"), digest("g"), malformed),
+    ):
+        with pytest.raises(ValueError, match="SHA-256"):
+            ledger.attach_evidence(ticket, *triple)
+    assert "evidence" not in ledger.snapshot()["reservations"][ticket["reservation"]]
+
+
+def test_attach_evidence_refuses_once_the_reservation_is_no_longer_held(tmp_path):
+    ledger = Ledger.create(tmp_path / "ledger")
+    c = claim(tmp_path, "a")
+    frozen = plan()
+    ticket = ledger.reserve(envelope(), c, frozen, now=1100)
+    create(Path(c["gatePath"]), frozen)
+    gate = Gate(c["gatePath"], "limits")
+    gate.claim()
+    for operation in frozen["jobs"]["limits"]["recovery"]:
+        gate.dispatch(
+            operation, True, lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}})
+        )
+    gate.finish()
+    ledger.finish(ticket)
+    with pytest.raises(ValueError, match="reservation is not held"):
+        ledger.attach_evidence(ticket, digest("r"), digest("g"), digest("c"))
+
+
 def interrupted_worker(root, connection):
     ledger = Ledger(Path(root) / "ledger")
     request = claim(Path(root), "a")
